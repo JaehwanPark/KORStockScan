@@ -50,6 +50,21 @@ CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
 SAMPLE_FLOOR_COMPLETED_LEGS = 20
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 OUTPUT_DIR = DATA_DIR / "report" / REPORT_TYPE
+PROFILE_FIRST_OPERATIONAL_DATES = {
+    "samsung_heavy_midday": date(2026, 8, 12),
+    "samsung_heavy_afternoon": date(2026, 8, 12),
+    "sk_eternix_midday": date(2026, 8, 12),
+    "mirae_asset_morning": date(2026, 8, 13),
+    "jeju_semiconductor_morning": date(2026, 8, 13),
+    "doosan_enerbility_morning": date(2026, 8, 13),
+    "hanwha_ocean_late_morning": date(2026, 8, 13),
+    "kakao_morning": date(2026, 8, 13),
+    "kakao_late_morning": date(2026, 8, 13),
+    "sk_eternix_morning": date(2026, 8, 13),
+    "sk_eternix_afternoon": date(2026, 8, 13),
+    "mirae_asset_midday": date(2026, 8, 13),
+    "kepco_afternoon": date(2026, 8, 13),
+}
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {
     "PLANNED",
@@ -82,6 +97,7 @@ METRIC_CONTRACT = {
         "held_or_unresolved_inventory_blocks_tightening",
         "observation_source_quality_audit_tuning_input_allowed",
         "target_date_krx_trading_day_for_candidate",
+        "pre_operational_profile_rows_are_not_source_gaps",
         "prebaseline_and_nontrading_reports_excluded",
         "historical_replay_not_mixed_with_actual_outcomes",
     ],
@@ -170,6 +186,45 @@ def _empty_row(profile_id: str, target_date: str, reason: str) -> dict:
         "signal_features": {},
         "legs": [],
     }
+
+
+def _pre_operational_row(profile_id: str, target_date: str) -> dict:
+    row = _empty_row(profile_id, target_date, "profile_not_yet_operational")
+    row.update(
+        {
+            "cohort": "pre_operational_not_applicable",
+            "source_quality": "not_applicable",
+            "source_quality_reasons": [],
+            "state_status": "NOT_OPERATIONAL",
+        }
+    )
+    return row
+
+
+def _profile_was_operational(profile_id: str, target_date: date) -> bool:
+    return target_date >= PROFILE_FIRST_OPERATIONAL_DATES[profile_id]
+
+
+def _historical_profile_row(
+    profile_id: str,
+    report_date: date,
+    profiles: dict[str, Any],
+) -> dict:
+    row = profiles.get(profile_id)
+    if isinstance(row, dict):
+        reasons = list(row.get("source_quality_reasons") or [])
+        if (
+            not _profile_was_operational(profile_id, report_date)
+            and row.get("source_quality") == "gap"
+            and "state_missing_or_invalid" in reasons
+            and not row.get("attempted")
+            and not row.get("legs")
+        ):
+            return _pre_operational_row(profile_id, report_date.isoformat())
+        return row
+    if not _profile_was_operational(profile_id, report_date):
+        return _pre_operational_row(profile_id, report_date.isoformat())
+    return _empty_row(profile_id, report_date.isoformat(), "prior_profile_row_missing")
 
 
 def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
@@ -353,7 +408,12 @@ def _aggregate(rows: list[dict]) -> dict:
     ev = realized_profit / attempted_notional * 100.0 if attempted_notional else None
     return {
         "eligible_days": sum(row.get("eligible_for_tuning") for row in rows),
-        "source_gap_days": sum(row.get("source_quality") != "pass" for row in rows),
+        "source_gap_days": sum(
+            row.get("source_quality") not in {"pass", "not_applicable"} for row in rows
+        ),
+        "pre_operational_days": sum(
+            row.get("cohort") == "pre_operational_not_applicable" for row in rows
+        ),
         "attempted_episodes": len(attempted_rows),
         "completed_legs": len(completed),
         "no_fill_legs": sum(leg.get("status") == "NO_FILL" for leg in legs),
@@ -423,11 +483,7 @@ def _load_history(
             }
             continue
         history[raw_date] = {
-            profile_id: (
-                profiles[profile_id]
-                if isinstance(profiles.get(profile_id), dict)
-                else _empty_row(profile_id, raw_date, "prior_profile_row_missing")
-            )
+            profile_id: _historical_profile_row(profile_id, report_date, profiles)
             for profile_id in PROFILES
         }
     return history

@@ -311,6 +311,40 @@ def test_extracts_morning_reentry_as_fixed_observation_cohort(tmp_path: Path):
     assert "SECRET" not in json.dumps(row)
 
 
+def test_morning_reentry_unmet_prerequisite_is_valid_no_op_observation(
+    tmp_path: Path,
+):
+    state_path = tmp_path / "reentry.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema": "samsung_morning_sor_reentry_two_leg_state_v1",
+                "trade_date": "2026-08-13",
+                "status": "BLOCKED",
+                "attempt_consumed": False,
+                "blocked_reason": "first_episode_both_legs_not_complete",
+                "legs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    row = extract_machine_row(
+        machine="morning_reentry",
+        state_path=state_path,
+        target_date="2026-08-13",
+        cost_pct=0.20,
+    )
+
+    assert row["cohort"] == "prerequisite_not_met"
+    assert row["source_quality"] == "pass"
+    assert row["source_quality_reasons"] == []
+    assert row["eligible_for_cumulative_tuning"] is True
+    assert row["no_signal"] is False
+    assert row["prerequisite_met"] is False
+    assert row["blocked_reason"] == "first_episode_both_legs_not_complete"
+
+
 def test_legacy_and_date_mismatch_are_excluded(tmp_path: Path):
     legacy = tmp_path / "legacy.json"
     legacy.write_text(
