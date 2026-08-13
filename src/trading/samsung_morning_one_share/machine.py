@@ -9,6 +9,10 @@ from typing import Callable
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
+from src.trading.order.episode_quantity import (
+    EPISODE_LEG_QUANTITY,
+    EPISODE_TOTAL_QUANTITY,
+)
 from src.trading.order.regular_two_leg_machine import KST, SamsungRegularTwoLegMachine
 from src.trading.samsung_morning_one_share.policy import (
     DEFAULT_POLICY,
@@ -23,7 +27,7 @@ DEFAULT_STATE_PATH = DATA_DIR / "runtime" / "samsung_morning_one_share_state.jso
 def _morning_leg(plan: dict, route: str) -> dict:
     return {
         **plan,
-        "quantity": 1,
+        "quantity": EPISODE_LEG_QUANTITY,
         "route": route,
         "status": "PLANNED",
         "buy_order_no": "",
@@ -31,10 +35,12 @@ def _morning_leg(plan: dict, route: str) -> dict:
         "buy_cancel_requested": False,
         "fill_price": 0,
         "buy_filled_at": "",
+        "buy_filled_qty": 0,
         "position_qty": 0,
         "target_price": 0,
         "target_order_no": "",
         "target_order_date": "",
+        "target_quantity": 0,
         "target_filled_qty": 0,
     }
 
@@ -86,11 +92,16 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             route=str(leg["route"]),
             order_no=order_no,
             order_date=str(leg.get(date_key) or ""),
+            expected_order_qty=(
+                int(leg.get("quantity", 0) or 0)
+                if order_key == "buy_order_no"
+                else int(leg.get("target_quantity", 0) or 0)
+            ),
         )
 
     def _submit_target(self, now: datetime, leg: dict) -> None:
         if (
-            int(leg.get("position_qty", 0) or 0) != 1
+            int(leg.get("position_qty", 0) or 0) <= 0
             or int(leg.get("fill_price", 0) or 0) <= 0
         ):
             self._block(now, f"target_requires_confirmed_leg_fill:{leg.get('leg_id')}")
@@ -103,9 +114,11 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             leg_id=leg["leg_id"],
             route=leg["route"],
             target_price=target_price,
+            quantity=int(leg["position_qty"]),
         )
+        target_quantity = int(leg["position_qty"])
         result = self.gateway.submit_limit_sell(
-            route=str(leg["route"]), price=target_price
+            route=str(leg["route"]), price=target_price, quantity=target_quantity
         )
         if result.ambiguous:
             self._block(now, f"target_submit_ambiguous:{leg['leg_id']}")
@@ -125,6 +138,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 "target_price": target_price,
                 "target_order_no": result.order_no,
                 "target_order_date": now.date().isoformat(),
+                "target_quantity": target_quantity,
             }
         )
         self._own_order(result.order_no)
@@ -134,6 +148,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             leg_id=leg["leg_id"],
             route=leg["route"],
             target_price=target_price,
+            quantity=target_quantity,
         )
 
     def _completed_bars_after_signal(self, now: datetime) -> int | None:
@@ -174,6 +189,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     "price_role": str(plan["price_role"]),
                     "entry_price": int(plan["entry_price"]),
                     "route": route,
+                    "quantity": EPISODE_LEG_QUANTITY,
                 }
                 for plan in plans
             ],
@@ -230,16 +246,25 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 error=snapshot.error,
             )
             return
-        if snapshot.found and snapshot.filled_qty == 1:
+        if snapshot.found and snapshot.filled_qty > 0:
             if not snapshot.fill_price:
                 self._block(now, f"buy_fill_price_missing:{leg['leg_id']}")
                 return
             leg.update(
                 {
-                    "position_qty": 1,
+                    "position_qty": snapshot.filled_qty,
+                    "buy_filled_qty": snapshot.filled_qty,
                     "fill_price": snapshot.fill_price,
                     "buy_filled_at": now.astimezone(KST).isoformat(),
-                    "status": "POSITION_OPEN",
+                    "status": (
+                        "POSITION_OPEN"
+                        if snapshot.remaining_qty == 0
+                        else (
+                            "BUY_CANCEL_PENDING"
+                            if leg.get("buy_cancel_requested")
+                            else "BUY_OPEN"
+                        )
+                    ),
                 }
             )
             self._record(
@@ -248,8 +273,13 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 leg_id=leg["leg_id"],
                 route=leg["route"],
                 fill_price=snapshot.fill_price,
+                filled_qty=snapshot.filled_qty,
+                remaining_qty=snapshot.remaining_qty,
             )
-            self._submit_target(now, leg)
+            if snapshot.remaining_qty == 0:
+                self._submit_target(now, leg)
+            elif not leg.get("buy_cancel_requested"):
+                self._cancel_buy(now, leg, 0)
             return
         if snapshot.found and snapshot.filled_qty == 0 and snapshot.remaining_qty == 0:
             if leg["route"] == "NXT":
@@ -380,9 +410,12 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 leg_id=leg["leg_id"],
                 route=route,
                 entry_price=leg["entry_price"],
+                quantity=leg["quantity"],
             )
             result = self.gateway.submit_limit_buy(
-                route=route, price=int(leg["entry_price"])
+                route=route,
+                price=int(leg["entry_price"]),
+                quantity=int(leg["quantity"]),
             )
             if result.ambiguous:
                 self._block(now, f"buy_submit_ambiguous:{leg['leg_id']}")
@@ -411,6 +444,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 leg_id=leg["leg_id"],
                 route=route,
                 entry_price=leg["entry_price"],
+                quantity=leg["quantity"],
             )
 
     def _consider_entry(self, now: datetime) -> dict:
@@ -465,7 +499,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     "preview": {
                         "route": route,
                         "open_price": open_price,
-                        "total_quantity": 2,
+                        "total_quantity": EPISODE_TOTAL_QUANTITY,
                         "legs": plans,
                         "operator_exclusion_ready": bool(source_owner),
                         "widget_relationship": "parallel_independent_strategy",

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
+from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_ticks
 
 
@@ -38,7 +39,7 @@ class MorningReentrySignal:
 @dataclass(frozen=True)
 class MorningOneSharePolicy:
     symbol: str = "005930"
-    quantity: int = 2
+    quantity: int = EPISODE_TOTAL_QUANTITY
     nxt: EntryWindow = EntryWindow("NXT", time(8, 0), time(8, 10), 3.0)
     sor: EntryWindow = EntryWindow("SOR", time(9, 0), time(9, 30), 0.75)
     target_ticks: int = 2
@@ -46,8 +47,8 @@ class MorningOneSharePolicy:
     runtime_policy_hash: str = ""
 
     def __post_init__(self) -> None:
-        if self.symbol != "005930" or self.quantity != 2:
-            raise ValueError("policy_is_hard_limited_to_005930_two_share")
+        if self.symbol != "005930" or self.quantity != EPISODE_TOTAL_QUANTITY:
+            raise ValueError("policy_is_hard_limited_to_005930_episode_quantity")
         if self.target_ticks <= 0:
             raise ValueError("invalid_exit_policy")
         if self.nxt.route != "NXT" or self.sor.route != "SOR":
@@ -90,7 +91,7 @@ class MorningReentryPolicy:
 
     symbol: str = "005930"
     route: str = "SOR"
-    quantity: int = 2
+    quantity: int = EPISODE_TOTAL_QUANTITY
     scan_start: time = time(9, 0)
     scan_last_bar: time = time(10, 0)
     lookback_bars: int = 15
@@ -108,8 +109,12 @@ class MorningReentryPolicy:
     )
 
     def __post_init__(self) -> None:
-        if self.symbol != "005930" or self.route != "SOR" or self.quantity != 2:
-            raise ValueError("reentry_policy_is_hard_limited_to_005930_two_share_sor")
+        if (
+            self.symbol != "005930"
+            or self.route != "SOR"
+            or self.quantity != EPISODE_TOTAL_QUANTITY
+        ):
+            raise ValueError("reentry_policy_is_hard_limited_to_episode_quantity_sor")
         if not self.scan_start <= self.scan_last_bar:
             raise ValueError("invalid_reentry_scan_window")
         if (

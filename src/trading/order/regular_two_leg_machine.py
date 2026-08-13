@@ -19,16 +19,23 @@ from zoneinfo import ZoneInfo
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
+from src.trading.order.episode_quantity import (
+    EPISODE_LEG_QUANTITY,
+    EPISODE_TOTAL_QUANTITY,
+    SUPPORTED_OWNED_LEG_QUANTITIES,
+)
 
 KST = ZoneInfo("Asia/Seoul")
 
 
 class RegularGateway(Protocol):
     def completed_sor_minute_bars(self, *, trade_date, now: datetime): ...
-    def submit_limit_buy(self, *, price: int): ...
-    def submit_limit_sell(self, *, price: int): ...
+    def submit_limit_buy(self, *, price: int, quantity: int): ...
+    def submit_limit_sell(self, *, price: int, quantity: int): ...
     def cancel_buy(self, *, order_no: str): ...
-    def execution_snapshot(self, *, order_no: str, order_date: str): ...
+    def execution_snapshot(
+        self, *, order_no: str, order_date: str, expected_order_qty: int
+    ): ...
 
 
 def _iso(now: datetime) -> str:
@@ -39,7 +46,7 @@ def _new_leg(leg_id: str, price_role: str, entry_price: int) -> dict:
     return {
         "leg_id": leg_id,
         "price_role": price_role,
-        "quantity": 1,
+        "quantity": EPISODE_LEG_QUANTITY,
         "entry_price": int(entry_price),
         "status": "PLANNED",
         "buy_order_no": "",
@@ -47,10 +54,12 @@ def _new_leg(leg_id: str, price_role: str, entry_price: int) -> dict:
         "buy_cancel_requested": False,
         "fill_price": 0,
         "buy_filled_at": "",
+        "buy_filled_qty": 0,
         "position_qty": 0,
         "target_price": 0,
         "target_order_no": "",
         "target_order_date": "",
+        "target_quantity": 0,
         "target_filled_qty": 0,
     }
 
@@ -187,6 +196,17 @@ class SamsungRegularTwoLegMachine:
         # They are reported as a source-quality gap, rather than blocking an
         # already-owned order or position during an in-place deployment.
         payload.setdefault("signal_features", {})
+        for leg in payload.get("legs", []):
+            if not isinstance(leg, dict):
+                continue
+            try:
+                inferred_filled_qty = int(leg.get("position_qty", 0) or 0) + int(
+                    leg.get("target_filled_qty", 0) or 0
+                )
+            except (TypeError, ValueError):
+                return self._invalid_loaded_state("state_leg_numeric_field_invalid")
+            leg.setdefault("buy_filled_qty", inferred_filled_qty)
+            leg.setdefault("target_quantity", inferred_filled_qty)
         return payload
 
     def _invalid_loaded_state(self, reason: str) -> dict:
@@ -316,7 +336,7 @@ class SamsungRegularTwoLegMachine:
         if self._state.get("status") not in allowed_statuses:
             self._block(now, "state_status_invalid")
             return False
-        if position_qty not in {0, 1, 2} or not isinstance(
+        if not 0 <= position_qty <= EPISODE_TOTAL_QUANTITY or not isinstance(
             self._state.get("attempt_consumed"), bool
         ):
             self._block(now, "state_quantity_or_attempt_invalid")
@@ -358,19 +378,29 @@ class SamsungRegularTwoLegMachine:
                 "COMPLETE",
                 "HELD",
             }
+            observed_leg_quantities: set[int] = set()
             for leg in legs:
                 try:
                     leg_quantity = int(leg.get("quantity", 0) or 0)
                     leg_position = int(leg.get("position_qty", 0) or 0)
+                    buy_filled_qty = int(leg.get("buy_filled_qty", 0) or 0)
+                    target_quantity = int(leg.get("target_quantity", 0) or 0)
+                    target_filled_qty = int(leg.get("target_filled_qty", 0) or 0)
                     entry_price = int(leg.get("entry_price", 0) or 0)
                     fill_price = int(leg.get("fill_price", 0) or 0)
                 except (TypeError, ValueError):
                     self._block(now, "state_leg_numeric_field_invalid")
                     return False
-                if leg_quantity != 1:
+                if leg_quantity not in SUPPORTED_OWNED_LEG_QUANTITIES:
                     self._block(now, "state_leg_quantity_invalid")
                     return False
-                if leg_position not in {0, 1}:
+                observed_leg_quantities.add(leg_quantity)
+                if not (
+                    0 <= leg_position <= leg_quantity
+                    and 0 <= buy_filled_qty <= leg_quantity
+                    and 0 <= target_quantity <= leg_quantity
+                    and 0 <= target_filled_qty <= target_quantity
+                ):
                     self._block(now, "state_leg_position_invalid")
                     return False
                 if entry_price < 0 or fill_price < 0:
@@ -380,17 +410,32 @@ class SamsungRegularTwoLegMachine:
                 if leg_status not in allowed_leg_statuses:
                     self._block(now, "state_leg_status_invalid")
                     return False
-                position_statuses = {
+                positive_position_statuses = {
                     "POSITION_OPEN",
                     "TARGET_SUBMITTING",
                     "TARGET_OPEN",
                     "HELD",
                 }
-                if (leg_status in position_statuses) != (leg_position == 1):
+                if leg_status in positive_position_statuses and leg_position <= 0:
                     self._block(now, "state_leg_position_status_mismatch")
                     return False
-                if leg_position == 1 and fill_price <= 0:
+                zero_position_statuses = {
+                    "PLANNED",
+                    "BUY_SUBMITTING",
+                    "NO_FILL",
+                    "COMPLETE",
+                }
+                if leg_status in zero_position_statuses and leg_position != 0:
+                    self._block(now, "state_leg_position_status_mismatch")
+                    return False
+                if leg_position > 0 and fill_price <= 0:
                     self._block(now, "state_leg_fill_price_missing")
+                    return False
+                if leg_position != buy_filled_qty - target_filled_qty:
+                    self._block(now, "state_leg_fill_position_mismatch")
+                    return False
+                if target_quantity and target_quantity != buy_filled_qty:
+                    self._block(now, "state_leg_target_quantity_mismatch")
                     return False
                 if (
                     leg_status in {"BUY_OPEN", "BUY_CANCEL_PENDING"}
@@ -411,6 +456,9 @@ class SamsungRegularTwoLegMachine:
                         return False
                     if order_no:
                         leg_order_nos.append(order_no)
+            if len(observed_leg_quantities) != 1:
+                self._block(now, "state_mixed_leg_quantities_invalid")
+                return False
             if len(leg_order_nos) != len(set(leg_order_nos)):
                 self._block(now, "state_leg_order_identity_collision")
                 return False
@@ -453,12 +501,18 @@ class SamsungRegularTwoLegMachine:
             "buy_order_date" if order_key == "buy_order_no" else "target_order_date"
         )
         return self.gateway.execution_snapshot(
-            order_no=order_no, order_date=str(leg.get(date_key) or "")
+            order_no=order_no,
+            order_date=str(leg.get(date_key) or ""),
+            expected_order_qty=(
+                int(leg.get("quantity", 0) or 0)
+                if order_key == "buy_order_no"
+                else int(leg.get("target_quantity", 0) or 0)
+            ),
         )
 
     def _submit_target(self, now: datetime, leg: dict) -> None:
         if (
-            int(leg.get("position_qty", 0) or 0) != 1
+            int(leg.get("position_qty", 0) or 0) <= 0
             or int(leg.get("fill_price", 0) or 0) <= 0
         ):
             self._block(now, f"target_requires_confirmed_leg_fill:{leg.get('leg_id')}")
@@ -466,9 +520,16 @@ class SamsungRegularTwoLegMachine:
         leg["status"] = "TARGET_SUBMITTING"
         target_price = self.policy.target_price(int(leg["fill_price"]))
         self._record(
-            now, "target_submit_intent", leg_id=leg["leg_id"], target_price=target_price
+            now,
+            "target_submit_intent",
+            leg_id=leg["leg_id"],
+            target_price=target_price,
+            quantity=int(leg["position_qty"]),
         )
-        result = self.gateway.submit_limit_sell(price=target_price)
+        target_quantity = int(leg["position_qty"])
+        result = self.gateway.submit_limit_sell(
+            price=target_price, quantity=target_quantity
+        )
         if result.ambiguous:
             self._block(now, f"target_submit_ambiguous:{leg['leg_id']}")
             return
@@ -487,11 +548,16 @@ class SamsungRegularTwoLegMachine:
                 "target_price": target_price,
                 "target_order_no": result.order_no,
                 "target_order_date": now.date().isoformat(),
+                "target_quantity": target_quantity,
             }
         )
         self._own_order(result.order_no)
         self._record(
-            now, "target_submitted", leg_id=leg["leg_id"], target_price=target_price
+            now,
+            "target_submitted",
+            leg_id=leg["leg_id"],
+            target_price=target_price,
+            quantity=target_quantity,
         )
 
     def _reconcile_target(self, now: datetime, leg: dict) -> None:
@@ -507,17 +573,33 @@ class SamsungRegularTwoLegMachine:
                 leg_id=leg["leg_id"],
                 error=snapshot.error,
             )
-        elif snapshot.filled_qty == 1:
-            leg.update(
-                {"position_qty": 0, "target_filled_qty": 1, "status": "COMPLETE"}
-            )
-            self._record(now, "target_fill_confirmed", leg_id=leg["leg_id"])
-        elif snapshot.filled_qty == 0 and snapshot.remaining_qty == 0:
-            leg["status"] = "HELD"
-            self._record(
-                now, "target_closed_unfilled_position_held", leg_id=leg["leg_id"]
-            )
         else:
+            target_quantity = int(leg.get("target_quantity", 0) or 0)
+            target_filled_qty = int(snapshot.filled_qty)
+            leg["target_filled_qty"] = target_filled_qty
+            leg["position_qty"] = target_quantity - target_filled_qty
+        if (
+            snapshot.source_ok
+            and snapshot.found
+            and snapshot.filled_qty == int(leg.get("target_quantity", 0) or 0)
+        ):
+            leg.update({"position_qty": 0, "status": "COMPLETE"})
+            self._record(
+                now,
+                "target_fill_confirmed",
+                leg_id=leg["leg_id"],
+                filled_qty=snapshot.filled_qty,
+            )
+        elif snapshot.source_ok and snapshot.found and snapshot.remaining_qty == 0:
+            leg["status"] = "HELD" if leg["position_qty"] > 0 else "COMPLETE"
+            self._record(
+                now,
+                "target_closed_with_position_held",
+                leg_id=leg["leg_id"],
+                filled_qty=snapshot.filled_qty,
+                position_qty=leg["position_qty"],
+            )
+        elif snapshot.source_ok and snapshot.found:
             self._record(now, "target_open_wait", leg_id=leg["leg_id"])
 
     def _source(self, now: datetime):
@@ -579,16 +661,25 @@ class SamsungRegularTwoLegMachine:
                 error=snapshot.error,
             )
             return
-        if snapshot.found and snapshot.filled_qty == 1:
+        if snapshot.found and snapshot.filled_qty > 0:
             if not snapshot.fill_price:
                 self._block(now, f"buy_fill_price_missing:{leg['leg_id']}")
                 return
             leg.update(
                 {
-                    "position_qty": 1,
+                    "position_qty": snapshot.filled_qty,
+                    "buy_filled_qty": snapshot.filled_qty,
                     "fill_price": snapshot.fill_price,
                     "buy_filled_at": _iso(now),
-                    "status": "POSITION_OPEN",
+                    "status": (
+                        "POSITION_OPEN"
+                        if snapshot.remaining_qty == 0
+                        else (
+                            "BUY_CANCEL_PENDING"
+                            if leg.get("buy_cancel_requested")
+                            else "BUY_OPEN"
+                        )
+                    ),
                 }
             )
             self._record(
@@ -596,8 +687,13 @@ class SamsungRegularTwoLegMachine:
                 "buy_fill_confirmed",
                 leg_id=leg["leg_id"],
                 fill_price=snapshot.fill_price,
+                filled_qty=snapshot.filled_qty,
+                remaining_qty=snapshot.remaining_qty,
             )
-            self._submit_target(now, leg)
+            if snapshot.remaining_qty == 0:
+                self._submit_target(now, leg)
+            elif not leg.get("buy_cancel_requested"):
+                self._cancel_buy(now, leg, elapsed or 0)
             return
         if snapshot.found and snapshot.filled_qty == 0 and snapshot.remaining_qty == 0:
             leg.update({"status": "NO_FILL", "buy_cancel_requested": False})
@@ -626,8 +722,11 @@ class SamsungRegularTwoLegMachine:
                 "buy_submit_intent",
                 leg_id=leg["leg_id"],
                 entry_price=leg["entry_price"],
+                quantity=leg["quantity"],
             )
-            result = self.gateway.submit_limit_buy(price=int(leg["entry_price"]))
+            result = self.gateway.submit_limit_buy(
+                price=int(leg["entry_price"]), quantity=int(leg["quantity"])
+            )
             if result.ambiguous:
                 self._block(now, f"buy_submit_ambiguous:{leg['leg_id']}")
                 return
@@ -653,6 +752,7 @@ class SamsungRegularTwoLegMachine:
                 "buy_submitted",
                 leg_id=leg["leg_id"],
                 entry_price=leg["entry_price"],
+                quantity=leg["quantity"],
             )
 
     def _consider_entry(self, now: datetime) -> dict:
@@ -718,7 +818,7 @@ class SamsungRegularTwoLegMachine:
                     "blocked_reason": "live_authority_disabled",
                     "preview": {
                         "signal_bar": latest_iso,
-                        "total_quantity": 2,
+                        "total_quantity": EPISODE_TOTAL_QUANTITY,
                         "legs": plans,
                         "operator_exclusion_ready": bool(source_owner),
                         "strategy_relationship": "parallel_independent_strategy",
@@ -776,6 +876,7 @@ class SamsungRegularTwoLegMachine:
                             "leg_id": str(plan["leg_id"]),
                             "price_role": str(plan["price_role"]),
                             "entry_price": int(plan["entry_price"]),
+                            "quantity": EPISODE_LEG_QUANTITY,
                         }
                         for plan in plans
                     ],

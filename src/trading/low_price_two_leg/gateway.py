@@ -12,6 +12,11 @@ import requests
 from src.engine.sniper_config import CONF
 from src.engine.trade_pause_control import is_buy_side_paused
 from src.trading.low_price_two_leg.profiles import ALLOWED_SYMBOLS, MinuteBar
+from src.trading.order.episode_quantity import (
+    EPISODE_LEG_QUANTITY,
+    validate_owned_leg_quantity,
+    validate_position_quantity,
+)
 from src.trading.order.kiwoom_episode_read_control import (
     KiwoomEpisodeReadPacer,
     SameMinuteSnapshotCache,
@@ -297,9 +302,10 @@ class KiwoomLowPriceTwoLegGateway:
             self._minute_bars_cache.put(cache_key, snapshot)
         return snapshot
 
-    def submit_limit_buy(self, *, price: int) -> SubmitResult:
+    def submit_limit_buy(self, *, price: int, quantity: int) -> SubmitResult:
         self._require_write_authority()
         price = self._validate_price(price)
+        quantity = validate_owned_leg_quantity(quantity)
         if is_buy_side_paused():
             return SubmitResult(False, return_code="TRADING_PAUSED")
         response, body = self._post(
@@ -308,7 +314,7 @@ class KiwoomLowPriceTwoLegGateway:
             payload={
                 "dmst_stex_tp": "SOR",
                 "stk_cd": self.symbol,
-                "ord_qty": "1",
+                "ord_qty": str(quantity),
                 "ord_uv": str(price),
                 "trde_tp": "0",
                 "cond_uv": "",
@@ -316,16 +322,19 @@ class KiwoomLowPriceTwoLegGateway:
         )
         return self._submit_result(response, body)
 
-    def submit_limit_sell(self, *, price: int) -> SubmitResult:
+    def submit_limit_sell(self, *, price: int, quantity: int) -> SubmitResult:
         self._require_write_authority()
         price = self._validate_price(price)
+        quantity = validate_position_quantity(quantity, maximum=EPISODE_LEG_QUANTITY)
+        if quantity == 0:
+            raise ValueError("zero_episode_sell_quantity")
         response, body = self._post(
             endpoint="/api/dostk/ordr",
             api_id="kt10001",
             payload={
                 "dmst_stex_tp": "SOR",
                 "stk_cd": self.symbol,
-                "ord_qty": "1",
+                "ord_qty": str(quantity),
                 "ord_uv": str(price),
                 "trde_tp": "0",
                 "cond_uv": "",
@@ -345,14 +354,26 @@ class KiwoomLowPriceTwoLegGateway:
                 "dmst_stex_tp": "SOR",
                 "orig_ord_no": clean_order_no,
                 "stk_cd": self.symbol,
-                "cncl_qty": "1",
+                "cncl_qty": "0",
             },
         )
         return self._submit_result(response, body)
 
     def execution_snapshot(
-        self, *, order_no: str, order_date: str
+        self, *, order_no: str, order_date: str, expected_order_qty: int
     ) -> ExecutionSnapshot:
+        try:
+            expected_order_qty = validate_position_quantity(
+                expected_order_qty, maximum=EPISODE_LEG_QUANTITY
+            )
+        except ValueError:
+            return ExecutionSnapshot(
+                False, False, 0, 0, 0, error="invalid_expected_order_quantity"
+            )
+        if expected_order_qty == 0:
+            return ExecutionSnapshot(
+                False, False, 0, 0, 0, error="invalid_expected_order_quantity"
+            )
         clean_order_no = _clean(order_no)
         clean_date = _clean(order_date).replace("-", "")
         if not clean_order_no or len(clean_date) != 8 or not clean_date.isdigit():
@@ -422,10 +443,10 @@ class KiwoomLowPriceTwoLegGateway:
         remaining_qty = _positive_int(raw_remaining)
         if (
             raw_remaining is None
-            or order_qty != 1
-            or filled_qty > 1
-            or remaining_qty > 1
-            or filled_qty + remaining_qty > 1
+            or order_qty != expected_order_qty
+            or filled_qty > expected_order_qty
+            or remaining_qty > expected_order_qty
+            or filled_qty + remaining_qty > expected_order_qty
         ):
             return ExecutionSnapshot(
                 False,
@@ -433,7 +454,7 @@ class KiwoomLowPriceTwoLegGateway:
                 filled_qty,
                 remaining_qty,
                 order_qty,
-                error="invalid_one_share_execution_contract",
+                error="invalid_episode_execution_contract",
             )
         return ExecutionSnapshot(
             True,

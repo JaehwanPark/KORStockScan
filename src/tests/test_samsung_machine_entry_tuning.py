@@ -9,6 +9,7 @@ from src.engine.monitoring.samsung_machine_entry_tuning import (
     CLEAN_WINDOW_NAME,
     REPORT_SCHEMA,
     REPORT_TYPE,
+    _aggregate_rows,
     build_policy_candidate,
     build_report,
     extract_machine_row,
@@ -171,6 +172,49 @@ def test_extracts_actual_two_leg_outcome_without_broker_identifiers(tmp_path: Pa
     serialized = json.dumps(row)
     assert "SECRET" not in serialized
     assert row["legs"][0]["equal_weight_profit_pct"] == pytest.approx(0.085714)
+
+
+def test_ten_share_partial_fill_uses_filled_quantity_for_notional_ev(
+    tmp_path: Path,
+):
+    payload = _state("midday", "2026-08-13")
+    payload["legs"][0].update(
+        {
+            "quantity": 10,
+            "buy_filled_qty": 4,
+            "target_filled_qty": 4,
+        }
+    )
+    payload["legs"][1]["quantity"] = 10
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    row = extract_machine_row(
+        machine="midday",
+        state_path=state_path,
+        target_date="2026-08-13",
+        cost_pct=0.20,
+    )
+    summary = _aggregate_rows([row])
+    completed_profit_pct = (70_200 / 70_000 - 1.0) * 100.0 - 0.20
+    expected_ev = 70_000 * 4 * completed_profit_pct / (70_000 * 10 + 69_900 * 10)
+
+    assert row["source_quality"] == "pass"
+    assert summary["notional_weighted_ev_pct"] == round(expected_ev, 6)
+
+    payload["legs"][1]["quantity"] = 1
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    mixed_row = extract_machine_row(
+        machine="midday",
+        state_path=state_path,
+        target_date="2026-08-13",
+        cost_pct=0.20,
+    )
+    assert mixed_row["source_quality"] == "gap"
+    assert (
+        "attempted_episode_two_leg_quantity_contract_invalid"
+        in mixed_row["source_quality_reasons"]
+    )
 
 
 def test_extracts_morning_reentry_as_fixed_observation_cohort(tmp_path: Path):

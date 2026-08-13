@@ -13,11 +13,12 @@ from pathlib import Path
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
+from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.trading.samsung_afternoon_one_share.machine import KST
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
-AUTHORITY_SCHEMA = "samsung_afternoon_two_leg_authority_v3"
+AUTHORITY_SCHEMA = "samsung_afternoon_two_leg_authority_v4"
 DEFAULT_AUTHORITY_PATH = (
     DATA_DIR / "runtime" / "samsung_afternoon_one_share_authority.json"
 )
@@ -80,12 +81,12 @@ def build_authority_artifact(
         "decision": asdict(decision),
         "policy": {
             "symbol": "005930",
-            "quantity": 2,
-            "allocation": "one_share_signal_close_and_one_share_minus_1tick",
+            "quantity": EPISODE_TOTAL_QUANTITY,
+            "allocation": "ten_shares_signal_close_and_ten_shares_minus_1tick",
             "market": "SOR_regular_integrated",
             "scan": "completed_1m_bars_14:00_through_14:40",
             "signal": "30bar_high_drawdown_gte_1.25pct_and_low_proximity_lte_0.20pct",
-            "entry": "two_independent_1share_legs_valid_for_next_5_completed_bars",
+            "entry": "two_independent_10share_legs_valid_for_next_5_completed_bars",
             "target": "fill_plus_2_ticks",
             "stop_loss": "none",
             "unfilled_target": "hold_position_without_forced_exit",
@@ -110,7 +111,7 @@ def build_authority_artifact(
             "widget_service_effect": "none",
         },
         "forbidden_uses": [
-            "quantity_above_two_or_leg_quantity_above_one",
+            "quantity_above_twenty_or_leg_quantity_above_ten",
             "non_sor_regular_route",
             "hard_safety_or_global_buy_pause_bypass",
             "use_morning_or_widget_orders_or_positions_as_afternoon_ledger",
@@ -169,12 +170,12 @@ def validate_authority(
         return False, "authority_independence_contract_invalid"
     expected = {
         "symbol": "005930",
-        "quantity": 2,
-        "allocation": "one_share_signal_close_and_one_share_minus_1tick",
+        "quantity": EPISODE_TOTAL_QUANTITY,
+        "allocation": "ten_shares_signal_close_and_ten_shares_minus_1tick",
         "market": "SOR_regular_integrated",
         "scan": "completed_1m_bars_14:00_through_14:40",
         "signal": "30bar_high_drawdown_gte_1.25pct_and_low_proximity_lte_0.20pct",
-        "entry": "two_independent_1share_legs_valid_for_next_5_completed_bars",
+        "entry": "two_independent_10share_legs_valid_for_next_5_completed_bars",
         "target": "fill_plus_2_ticks",
         "stop_loss": "none",
         "unfilled_target": "hold_position_without_forced_exit",

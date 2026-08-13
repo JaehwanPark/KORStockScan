@@ -112,11 +112,13 @@ class FakeGateway:
         self.sequence += 1
         return SubmitResult(True, f"{prefix}{self.sequence}", "0", "OK")
 
-    def submit_limit_buy(self, *, price):
+    def submit_limit_buy(self, *, price, quantity):
+        assert quantity in {1, 10}
         self.buy_calls.append(price)
         return self._accepted("B")
 
-    def submit_limit_sell(self, *, price):
+    def submit_limit_sell(self, *, price, quantity):
+        assert 1 <= quantity <= 10
         self.sell_calls.append(price)
         return self._accepted("T")
 
@@ -124,8 +126,22 @@ class FakeGateway:
         self.cancel_calls.append(order_no)
         return self._accepted("C")
 
-    def execution_snapshot(self, *, order_no, order_date):
-        return self.snapshots.get(order_no, ExecutionSnapshot(True, True, 0, 1, 1))
+    def execution_snapshot(self, *, order_no, order_date, expected_order_qty):
+        snapshot = self.snapshots.get(
+            order_no,
+            ExecutionSnapshot(True, True, 0, expected_order_qty, expected_order_qty),
+        )
+        if snapshot.order_qty == 1 and expected_order_qty == 10:
+            return ExecutionSnapshot(
+                snapshot.source_ok,
+                snapshot.found,
+                snapshot.filled_qty * 10,
+                snapshot.remaining_qty * 10,
+                10,
+                snapshot.fill_price,
+                snapshot.error,
+            )
+        return snapshot
 
 
 class FakeResponse:
@@ -199,7 +215,7 @@ def test_profiles_are_exact_eight_symbols_and_thirteen_independent_sessions():
         "near_low_min": 0.65,
         "near_low_max": 0.75,
     }
-    assert all(item.policy.quantity == 2 for item in PROFILES.values())
+    assert all(item.policy.quantity == 20 for item in PROFILES.values())
     assert PROFILES["mirae_asset_morning"].policy.entry_offsets_ticks == (-1, -2)
     assert PROFILES["jeju_semiconductor_morning"].policy.entry_valid_completed_bars == 3
     assert all(
@@ -450,8 +466,8 @@ def test_gateway_uses_bound_symbol_sor_and_one_share_for_every_write():
         order_authority=True,
         base_url="https://api.kiwoom.com",
     )
-    assert gateway.submit_limit_buy(price=17_000).accepted
-    assert gateway.submit_limit_sell(price=17_050).accepted
+    assert gateway.submit_limit_buy(price=17_000, quantity=10).accepted
+    assert gateway.submit_limit_sell(price=17_050, quantity=10).accepted
     assert gateway.cancel_buy(order_no="B1").accepted
     assert [call[1]["headers"]["api-id"] for call in session.calls] == [
         "kt10000",
@@ -460,9 +476,9 @@ def test_gateway_uses_bound_symbol_sor_and_one_share_for_every_write():
     ]
     assert all(call[1]["json"]["stk_cd"] == "475150" for call in session.calls)
     assert all(call[1]["json"].get("dmst_stex_tp") == "SOR" for call in session.calls)
-    assert session.calls[0][1]["json"]["ord_qty"] == "1"
-    assert session.calls[1][1]["json"]["ord_qty"] == "1"
-    assert session.calls[2][1]["json"]["cncl_qty"] == "1"
+    assert session.calls[0][1]["json"]["ord_qty"] == "10"
+    assert session.calls[1][1]["json"]["ord_qty"] == "10"
+    assert session.calls[2][1]["json"]["cncl_qty"] == "0"
 
 
 def test_gateway_minute_request_uses_integrated_sor_code_and_completed_bar_only():
@@ -788,6 +804,33 @@ def test_kakao_morning_target_transition_starts_next_date_only(tmp_path):
     )
 
 
+def test_legacy_two_share_candidate_normalizes_to_current_twenty_share_runtime(
+    tmp_path,
+):
+    source = Path(
+        "data/threshold_cycle/low_price_two_leg/candidates/"
+        "low_price_two_leg_policy_candidate_2026-08-12.json"
+    )
+    legacy = json.loads(source.read_text(encoding="utf-8"))
+    assert all(item["policy"]["quantity"] == 2 for item in legacy["profiles"].values())
+    candidate_dir = tmp_path / "candidates"
+    candidate_dir.mkdir()
+    (candidate_dir / source.name).write_text(json.dumps(legacy), encoding="utf-8")
+
+    applied, status = build_applied_policy(
+        target_date=date(2026, 8, 14), candidate_dir=candidate_dir
+    )
+
+    assert status == "candidate_applied"
+    assert all(
+        item["policy"]["quantity"] == 20 for item in applied["profiles"].values()
+    )
+    assert validate_applied(applied, target_date=date(2026, 8, 14)) == (
+        True,
+        "valid",
+    )
+
+
 def test_kakao_morning_service_consumes_applied_three_tick_target():
     transitioned = apply_operator_policy_transitions(
         BASELINE_POLICIES, target_date=date(2026, 8, 14)
@@ -890,11 +933,97 @@ def _tuning_row(profile_id: str, index: int, *, strong: bool) -> dict:
                 "completed": True,
                 "held": False,
                 "terminal": True,
+                "buy_filled_qty": 1,
                 "net_profit_pct": profit_pct,
             }
             for leg_id in profile.policy.entry_leg_ids
         ],
     }
+
+
+def test_tuning_accepts_ten_share_partial_fill_and_weights_actual_quantity(
+    tmp_path: Path,
+):
+    from src.engine.monitoring.low_price_two_leg_tuning import (
+        _aggregate,
+        extract_profile_row,
+    )
+
+    profile_id = "samsung_heavy_midday"
+    profile = PROFILES[profile_id]
+    signal_close = 20_000
+    plans = profile.policy.entry_legs(signal_close)
+    completed_plan, no_fill_plan = plans
+    completed_fill_qty = 4
+    completed_fill_price = int(completed_plan["entry_price"])
+    target_price = profile.policy.target_price(completed_fill_price)
+    payload = {
+        "schema": f"low_price_two_leg_{profile_id}_state_v1",
+        "trade_date": "2026-08-13",
+        "status": "COMPLETE",
+        "attempt_consumed": True,
+        "signal_features": {
+            "schema": "regular_two_leg_entry_signal_features_v1",
+            "strategy": profile_id,
+            "symbol": profile.symbol,
+            "signal_close": signal_close,
+        },
+        "legs": [
+            {
+                "leg_id": completed_plan["leg_id"],
+                "quantity": 10,
+                "entry_price": completed_plan["entry_price"],
+                "status": "COMPLETE",
+                "fill_price": completed_fill_price,
+                "position_qty": 0,
+                "buy_filled_qty": completed_fill_qty,
+                "target_price": target_price,
+                "target_filled_qty": completed_fill_qty,
+            },
+            {
+                "leg_id": no_fill_plan["leg_id"],
+                "quantity": 10,
+                "entry_price": no_fill_plan["entry_price"],
+                "status": "NO_FILL",
+                "fill_price": 0,
+                "position_qty": 0,
+                "buy_filled_qty": 0,
+                "target_price": 0,
+                "target_filled_qty": 0,
+            },
+        ],
+    }
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    row = extract_profile_row(
+        profile_id=profile_id,
+        state_path=state_path,
+        target_date="2026-08-13",
+        cost_pct=0.20,
+    )
+    summary = _aggregate([row])
+    completed_profit_pct = (target_price / completed_fill_price - 1.0) * 100.0 - 0.20
+    expected_ev = (
+        completed_fill_price
+        * completed_fill_qty
+        * completed_profit_pct
+        / sum(int(plan["entry_price"]) * 10 for plan in plans)
+    )
+
+    assert row["source_quality"] == "pass"
+    assert summary["notional_weighted_ev_pct"] == pytest.approx(expected_ev)
+
+    payload["legs"][1]["quantity"] = 1
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    mixed_row = extract_profile_row(
+        profile_id=profile_id,
+        state_path=state_path,
+        target_date="2026-08-13",
+        cost_pct=0.20,
+    )
+    assert mixed_row["source_quality"] == "gap"
+    assert "leg_quantity_or_status_invalid" in mixed_row["source_quality_reasons"]
 
 
 def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):

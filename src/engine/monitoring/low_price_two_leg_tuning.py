@@ -29,6 +29,7 @@ from src.trading.low_price_two_leg.policy_runtime import (
     validate_candidate,
 )
 from src.trading.low_price_two_leg.profiles import PROFILES
+from src.trading.order.episode_quantity import SUPPORTED_OWNED_LEG_QUANTITIES
 from src.trading.order.regular_two_leg_machine import KST
 from src.trading.order.samsung_entry_policy import (
     CANDIDATE_DIR as SAMSUNG_CANDIDATE_DIR,
@@ -179,22 +180,32 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     target_price = _as_int(raw.get("target_price"))
     position_qty = _as_int(raw.get("position_qty"))
     target_filled_qty = _as_int(raw.get("target_filled_qty"))
+    buy_filled_qty = _as_int(
+        raw.get("buy_filled_qty", position_qty + target_filled_qty)
+    )
     completed = (
         status == "COMPLETE"
-        and target_filled_qty == 1
+        and target_filled_qty > 0
+        and target_filled_qty == buy_filled_qty
         and position_qty == 0
         and fill_price > 0
         and target_price > fill_price
     )
-    position_statuses = {"POSITION_OPEN", "TARGET_SUBMITTING", "TARGET_OPEN", "HELD"}
-    held = status == "HELD" or position_qty == 1
+    positive_position_statuses = {
+        "POSITION_OPEN",
+        "TARGET_SUBMITTING",
+        "TARGET_OPEN",
+        "HELD",
+    }
+    held = status == "HELD" or position_qty > 0
     contract_valid = bool(
-        quantity == 1
+        quantity in SUPPORTED_OWNED_LEG_QUANTITIES
         and entry_price > 0
-        and position_qty in {0, 1}
-        and target_filled_qty in {0, 1}
-        and ((status in position_statuses) == (position_qty == 1))
-        and (status == "COMPLETE" or target_filled_qty == 0)
+        and 0 <= position_qty <= quantity
+        and 0 <= target_filled_qty <= buy_filled_qty <= quantity
+        and position_qty == buy_filled_qty - target_filled_qty
+        and (status not in positive_position_statuses or position_qty > 0)
+        and (target_filled_qty == 0 or status in {"TARGET_OPEN", "HELD", "COMPLETE"})
         and (status != "COMPLETE" or completed)
         and (
             status != "NO_FILL"
@@ -212,6 +223,7 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "fill_price": fill_price,
         "target_price": target_price,
         "position_qty": position_qty,
+        "buy_filled_qty": buy_filled_qty,
         "target_filled_qty": target_filled_qty,
         "completed": completed,
         "held": held,
@@ -260,9 +272,13 @@ def extract_profile_row(
             profile.policy.entry_leg_ids
         ):
             reasons.append("two_leg_identity_contract_invalid")
-        if any(
-            leg["quantity"] != 1 or leg["status"] not in KNOWN_LEG_STATUSES
-            for leg in legs
+        if (
+            any(
+                leg["quantity"] not in SUPPORTED_OWNED_LEG_QUANTITIES
+                or leg["status"] not in KNOWN_LEG_STATUSES
+                for leg in legs
+            )
+            or len({leg["quantity"] for leg in legs}) != 1
         ):
             reasons.append("leg_quantity_or_status_invalid")
         signal_close = _as_int(features.get("signal_close"))
@@ -324,9 +340,14 @@ def _aggregate(rows: list[dict]) -> dict:
     legs = [leg for row in attempted_rows for leg in row.get("legs", [])]
     all_legs = [leg for row in all_attempted_rows for leg in row.get("legs", [])]
     completed = [leg for leg in legs if leg.get("completed")]
-    attempted_notional = sum(_as_int(leg.get("entry_price")) for leg in legs)
+    attempted_notional = sum(
+        _as_int(leg.get("entry_price")) * _as_int(leg.get("quantity")) for leg in legs
+    )
     realized_profit = sum(
-        _as_int(leg.get("fill_price")) * float(leg["net_profit_pct"]) / 100.0
+        _as_int(leg.get("fill_price"))
+        * _as_int(leg.get("buy_filled_qty"))
+        * float(leg["net_profit_pct"])
+        / 100.0
         for leg in completed
     )
     ev = realized_profit / attempted_notional * 100.0 if attempted_notional else None

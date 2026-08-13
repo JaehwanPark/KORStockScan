@@ -11,6 +11,7 @@ from typing import Callable
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
+from src.trading.order.episode_quantity import SUPPORTED_OWNED_LEG_QUANTITIES
 from src.trading.order.regular_two_leg_machine import KST, SamsungRegularTwoLegMachine
 from src.trading.samsung_morning_one_share.machine import (
     DEFAULT_STATE_PATH as DEFAULT_FIRST_EPISODE_STATE_PATH,
@@ -38,7 +39,9 @@ def _first_episode_payload_complete(payload: object, target_date: date) -> bool:
             and all(
                 isinstance(leg, dict)
                 and leg.get("status") == "COMPLETE"
-                and int(leg.get("target_filled_qty", 0) or 0) == 1
+                and int(leg.get("target_filled_qty", 0) or 0) > 0
+                and int(leg.get("target_filled_qty", 0) or 0)
+                == int(leg.get("buy_filled_qty", leg.get("target_filled_qty", 0)) or 0)
                 for leg in legs
             )
         )
@@ -92,7 +95,7 @@ def prior_reentry_allows_new_first_episode(
             and all(
                 isinstance(leg, dict)
                 and leg.get("status") in {"COMPLETE", "NO_FILL"}
-                and int(leg.get("quantity", 0) or 0) == 1
+                and int(leg.get("quantity", 0) or 0) in SUPPORTED_OWNED_LEG_QUANTITIES
                 for leg in legs
             )
         )

@@ -91,11 +91,13 @@ class ReentryGateway:
         self.sequence += 1
         return SubmitResult(True, f"{prefix}{self.sequence}", "0", "OK")
 
-    def submit_limit_buy(self, *, price):
+    def submit_limit_buy(self, *, price, quantity):
+        assert quantity in {1, 10}
         self.buy_calls.append(price)
         return self._accepted("B")
 
-    def submit_limit_sell(self, *, price):
+    def submit_limit_sell(self, *, price, quantity):
+        assert 1 <= quantity <= 10
         self.sell_calls.append(price)
         return self._accepted("T")
 
@@ -103,8 +105,22 @@ class ReentryGateway:
         self.cancel_calls.append(order_no)
         return self._accepted("C")
 
-    def execution_snapshot(self, *, order_no, order_date):
-        return self.snapshots.get(order_no, ExecutionSnapshot(True, True, 0, 1, 1))
+    def execution_snapshot(self, *, order_no, order_date, expected_order_qty):
+        snapshot = self.snapshots.get(
+            order_no,
+            ExecutionSnapshot(True, True, 0, expected_order_qty, expected_order_qty),
+        )
+        if snapshot.order_qty == 1 and expected_order_qty == 10:
+            return ExecutionSnapshot(
+                snapshot.source_ok,
+                snapshot.found,
+                snapshot.filled_qty * 10,
+                snapshot.remaining_qty * 10,
+                10,
+                snapshot.fill_price,
+                snapshot.error,
+            )
+        return snapshot
 
 
 def test_reentry_policy_requires_low_hold_and_reclaim_then_prices_minus_one_two_ticks():
@@ -274,7 +290,7 @@ def test_reentry_targets_are_two_ticks_and_closed_unfilled_positions_are_held(tm
     filled = machine.run_once(_at(9, 19))
 
     assert filled["status"] == "TARGET_OPEN"
-    assert filled["position_qty"] == 2
+    assert filled["position_qty"] == 20
     assert gateway.sell_calls == [100_400, 100_300]
     gateway.snapshots.update(
         {
@@ -286,7 +302,7 @@ def test_reentry_targets_are_two_ticks_and_closed_unfilled_positions_are_held(tm
     held = machine.run_once(_at(9, 20))
 
     assert held["status"] == "HELD"
-    assert held["position_qty"] == 2
+    assert held["position_qty"] == 20
     assert gateway.cancel_calls == []
     assert prior_reentry_allows_new_first_episode(
         state_path, target_date=date(2026, 8, 14)

@@ -13,6 +13,7 @@ from pathlib import Path
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
+from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.trading.samsung_morning_one_share.machine import KST
 from src.trading.samsung_morning_one_share.reentry import (
     DEFAULT_REENTRY_STATE_PATH,
@@ -21,7 +22,7 @@ from src.trading.samsung_morning_one_share.reentry import (
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
-AUTHORITY_SCHEMA = "samsung_morning_two_episode_authority_v5"
+AUTHORITY_SCHEMA = "samsung_morning_two_episode_authority_v6"
 DEFAULT_AUTHORITY_PATH = (
     DATA_DIR / "runtime" / "samsung_morning_one_share_authority.json"
 )
@@ -87,9 +88,9 @@ def build_authority_artifact(
         "decision": asdict(decision),
         "policy": {
             "symbol": "005930",
-            "quantity": 2,
-            "allocation": "one_share_base_limit_and_one_share_base_plus_1tick",
-            "nxt_entry": "two_independent_1share_legs_from_08:00_open_until_08:10",
+            "quantity": EPISODE_TOTAL_QUANTITY,
+            "allocation": "ten_shares_base_limit_and_ten_shares_base_plus_1tick",
+            "nxt_entry": "two_independent_10share_legs_from_08:00_open_until_08:10",
             "sor_regular_fallback": "each_unfilled_leg_from_09:00_open_until_09:30",
             "target": "fill_plus_2_ticks",
             "unfilled_target": "hold_position_without_forced_exit",
@@ -126,7 +127,7 @@ def build_authority_artifact(
             "widget_service_effect": "none",
         },
         "forbidden_uses": [
-            "quantity_above_two_or_leg_quantity_above_one",
+            "quantity_above_twenty_or_leg_quantity_above_ten",
             "hard_safety_or_global_buy_pause_bypass",
             "provider_or_main_bot_policy_change",
             "use_for_other_symbol_or_strategy",
@@ -191,9 +192,9 @@ def validate_authority(
         return False, "authority_hold_policy_mismatch"
     expected = {
         "symbol": "005930",
-        "quantity": 2,
-        "allocation": "one_share_base_limit_and_one_share_base_plus_1tick",
-        "nxt_entry": "two_independent_1share_legs_from_08:00_open_until_08:10",
+        "quantity": EPISODE_TOTAL_QUANTITY,
+        "allocation": "ten_shares_base_limit_and_ten_shares_base_plus_1tick",
+        "nxt_entry": "two_independent_10share_legs_from_08:00_open_until_08:10",
         "sor_regular_fallback": "each_unfilled_leg_from_09:00_open_until_09:30",
         "target": "fill_plus_2_ticks",
         "widget_relationship": "parallel_independent_strategy",
