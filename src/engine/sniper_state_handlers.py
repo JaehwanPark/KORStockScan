@@ -52896,9 +52896,7 @@ def _opening_rotation_watch_slot_owner_fields(
             round(claimed_at, 6) if claimed_at > 0.0 else "-"
         ),
         "opening_rotation_watch_slot_age_sec": (
-            round(max(0.0, observed_at - claimed_at), 6)
-            if claimed_at > 0.0
-            else "-"
+            round(max(0.0, observed_at - claimed_at), 6) if claimed_at > 0.0 else "-"
         ),
     }
 
@@ -52984,9 +52982,9 @@ def sweep_expired_opening_rotation_watch_slots(
         stock
         for stock in list(targets if targets is not None else (ACTIVE_TARGETS or []))
         if isinstance(stock, dict)
-        and _opening_rotation_watch_slot_owner_fields(
-            stock, now_ts=observed_at
-        )["opening_rotation_watch_slot_owned"]
+        and _opening_rotation_watch_slot_owner_fields(stock, now_ts=observed_at)[
+            "opening_rotation_watch_slot_owned"
+        ]
     ]
     if not owned_targets:
         return {
