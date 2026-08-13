@@ -2829,7 +2829,9 @@ def _reviewed_unknown_reason_for_stage_field(
         field = str(key or "")
         if field not in {
             "post_probe_direction_state",
+            "post_probe_direction_orderbook_state",
             "prior_probe_residual_direction_state",
+            "prior_probe_residual_orderbook_state",
             "prior_probe_residual_failure_signature",
         }:
             return False
@@ -2913,11 +2915,17 @@ def _reviewed_unknown_reason_for_stage_field(
     def _is_reviewed_sizing_unknown_venue_fallback() -> bool:
         if str(key or "") not in {
             "sizing_venue_at_allocation",
+            "sizing_tier_reason_at_allocation",
             "tier_reason",
             "venue",
         }:
             return False
         if _field_text("tier_reason") != "unknown_venue_fallback":
+            return False
+        if (
+            str(key or "") == "sizing_tier_reason_at_allocation"
+            and str(value or "").strip() != _field_text("tier_reason")
+        ):
             return False
         resolved_venue = _field_text("venue").upper()
         effective_venue = _field_text("effective_venue").upper()
@@ -3363,6 +3371,7 @@ def _reviewed_unknown_reason_for_stage_field(
         if str(key or "") not in {
             "holding_context_ws_route",
             "holding_context_ai_market_snapshot",
+            "holding_context_selected_route_partition",
             "ai_market_snapshot_market_data_route",
             "ai_input_preflight_blockers",
             "holding_context_blockers",
@@ -3370,6 +3379,22 @@ def _reviewed_unknown_reason_for_stage_field(
             "holding_context_tape_route_partition_expected_key",
         }:
             return False
+        if str(key or "") == "holding_context_selected_route_partition":
+            if isinstance(value, dict):
+                route_partition_not_used = value.get("used") is False
+                route_partition_reason = str(value.get("reason") or "")
+            else:
+                route_partition_text = str(value or "").strip().lower()
+                route_partition_not_used = any(
+                    token in route_partition_text
+                    for token in ("'used': false", '"used": false')
+                )
+                route_partition_reason = route_partition_text
+            if not (
+                route_partition_not_used
+                and "route_snapshots_unavailable" in route_partition_reason
+            ):
+                return False
         result_blocked = (
             _field_text("ai_result_source") == "input_preflight_blocked"
             or _field_text("scale_in_ai_authority_input_retry_result_source")

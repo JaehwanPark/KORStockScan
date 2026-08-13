@@ -1190,6 +1190,49 @@ def test_hypothesis_plan_without_catalog_becomes_catalog_missing(monkeypatch, tm
     assert report["summary"]["catalog_missing_count"] == 1
 
 
+def test_post_baseline_lineage_excludes_pre_baseline_hypothesis_plan(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-08-13"
+    _write(
+        tmp_path
+        / "threshold_cycle"
+        / "ldm_hypothesis_observation_plans"
+        / "ldm_hypothesis_observation_plan_2026-06-02.json",
+        {
+            "source_report_date": "2026-06-01",
+            "hypotheses": [{"hypothesis_id": "archive_only_hypothesis"}],
+        },
+    )
+    _write(
+        tmp_path
+        / "threshold_cycle"
+        / "scalp_sim_policies"
+        / f"scalp_sim_policy_catalog_{target}.json",
+        {"hypothesis_observation_plan": {}},
+    )
+    _write(
+        tmp_path
+        / "threshold_cycle"
+        / "apply_plans"
+        / f"threshold_apply_{target}.json",
+        {"source_date": "2026-08-12"},
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    assert report["summary"]["catalog_missing_count"] == 0
+    assert not any(
+        row.get("source_key_id") == "archive_only_hypothesis"
+        for row in report["lineage_rows"]
+    )
+    gate = report["hypothesis_plan_clean_baseline_gate"]
+    assert gate["allowed"] is False
+    assert gate["status"] == "pre_clean_baseline_archive_only"
+    assert gate["source_report_date"] == "2026-06-01"
+
+
 def test_hypothesis_match_attempt_without_id_is_natural_match_zero(
     monkeypatch, tmp_path
 ):
@@ -2419,17 +2462,20 @@ def test_conversion_lane_marks_not_applicable_without_open_blocker():
 def test_sim_policy_catalogs_merge_latest_hypothesis_plan(monkeypatch, tmp_path):
     plan_dir = tmp_path / "threshold_cycle" / "ldm_hypothesis_observation_plans"
     _write(
-        plan_dir / "ldm_hypothesis_observation_plan_2026-06-02.json",
-        {"hypotheses": [{"hypothesis_id": "hyp_1"}]},
+        plan_dir / "ldm_hypothesis_observation_plan_2026-06-05.json",
+        {
+            "source_report_date": "2026-06-05",
+            "hypotheses": [{"hypothesis_id": "hyp_1"}],
+        },
     )
     monkeypatch.setattr(scalp_catalog, "LDM_HYPOTHESIS_PLAN_DIR", plan_dir)
     monkeypatch.setattr(swing_catalog, "LDM_HYPOTHESIS_PLAN_DIR", plan_dir)
 
     scalp = scalp_catalog.build_policy_catalog(
-        {"date": "2026-06-04", "approved_policies": []}
+        {"date": "2026-06-05", "approved_policies": []}
     )
     swing = swing_catalog.build_policy_catalog(
-        {"date": "2026-06-04", "active_arm_priority_policies": []}
+        {"date": "2026-06-05", "active_arm_priority_policies": []}
     )
 
     assert (

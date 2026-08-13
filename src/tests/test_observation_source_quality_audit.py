@@ -7839,6 +7839,7 @@ def test_observation_source_quality_reviews_explicit_no_call_and_venue_provenanc
     }
     explicit_sizing_fields = {
         **historical_sizing_fields,
+        "sizing_tier_reason_at_allocation": "unknown_venue_fallback",
         "sizing_venue_at_allocation": "UNKNOWN",
         "sizing_venue_resolution_at_allocation": ("missing_tradable_explicit_venue"),
     }
@@ -7906,6 +7907,9 @@ def test_observation_source_quality_reviews_explicit_no_call_and_venue_provenanc
         "sizing_venue_at_allocation": (
             "reviewed_explicit_sizing_unknown_venue_fallback"
         ),
+        "sizing_tier_reason_at_allocation": (
+            "reviewed_explicit_sizing_unknown_venue_fallback"
+        ),
         "tier_reason": "reviewed_explicit_sizing_unknown_venue_fallback",
     }
     assert reviewed["rising_missed_one_share_entry"] == {
@@ -7915,3 +7919,135 @@ def test_observation_source_quality_reviews_explicit_no_call_and_venue_provenanc
         "effective_venue": "reviewed_scanner_venue_fail_closed_provenance",
         "venue": "reviewed_scanner_venue_fail_closed_provenance",
     }
+
+
+def test_observation_source_quality_reviews_probe_and_holding_not_available_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    probe_fields = {
+        "post_probe_direction_orderbook_state": "unknown",
+        "prior_probe_residual_orderbook_state": "unknown",
+        "prior_probe_residual_continuation_action": "BLOCK",
+        "prior_probe_residual_abort_reason": "probe_runtime_quantity_invariant",
+        "prior_probe_residual_decision_authority": "causal_attribution_only",
+        "prior_probe_residual_source_quality_gate": (
+            "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+        ),
+        "prior_probe_residual_scale_in_recheck_authority": (
+            "evaluation_only_full_scale_in_guards_required"
+        ),
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    holding_fields = {
+        "holding_context_selected_route_partition": {
+            "used": False,
+            "reason": "route_snapshots_unavailable",
+            "selected_key": "KRX|unknown",
+        },
+        "holding_context_source_quality_status": "blocked",
+        "holding_context_blockers": "['ai_preflight:tape_missing']",
+        "ai_result_source": "input_preflight_blocked",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    _write_events(
+        tmp_path,
+        "2026-08-13",
+        [
+            _event("residual_blocked", probe_fields, record_id=1),
+            _event(
+                "post_probe_terminal_abort_recovery_observed",
+                {
+                    **probe_fields,
+                    "decision_authority": (
+                        "source_only_post_terminal_abort_recovery_observation_no_runtime_mutation"
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                },
+                record_id=2,
+            ),
+            _event("ai_holding_review", holding_fields, record_id=3),
+            _event(
+                "scale_in_ai_authority_retry",
+                {
+                    **holding_fields,
+                    "scale_in_ai_authority_input_retry_result_source": (
+                        "input_preflight_blocked"
+                    ),
+                },
+                record_id=4,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-08-13")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["residual_blocked"] == {
+        "post_probe_direction_orderbook_state": (
+            "reviewed_prior_probe_residual_source_gap"
+        ),
+        "prior_probe_residual_orderbook_state": (
+            "reviewed_prior_probe_residual_source_gap"
+        ),
+    }
+    assert reviewed["post_probe_terminal_abort_recovery_observed"] == {
+        "post_probe_direction_orderbook_state": (
+            "reviewed_prior_probe_residual_source_gap"
+        ),
+        "prior_probe_residual_orderbook_state": (
+            "reviewed_prior_probe_residual_source_gap"
+        ),
+    }
+    for stage in ("ai_holding_review", "scale_in_ai_authority_retry"):
+        assert reviewed[stage] == {
+            "holding_context_selected_route_partition": (
+                "reviewed_holding_input_preflight_blocked_provenance"
+            )
+        }
+
+
+def test_observation_source_quality_does_not_review_used_unknown_route_partition(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-08-13",
+        [
+            _event(
+                "ai_holding_review",
+                {
+                    "holding_context_selected_route_partition": {
+                        "used": True,
+                        "reason": "route_snapshots_unavailable",
+                        "selected_key": "KRX|unknown",
+                    },
+                    "holding_context_source_quality_status": "blocked",
+                    "holding_context_blockers": "['ai_preflight:tape_missing']",
+                    "ai_result_source": "input_preflight_blocked",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-08-13")
+
+    assert report["reviewed_unknown_token_findings"] == []
+    assert report["unknown_token_findings"][0]["fields"][0]["field"] == (
+        "holding_context_selected_route_partition"
+    )
