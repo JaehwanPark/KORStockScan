@@ -859,6 +859,39 @@ Conditional entry-price selection rules:
    alter provider/model routing, or bypass downstream guards.
 """.strip()
 
+DECISION_QUALITY_ENTRY_PRICE_V2_2_PROMPT_VERSION = (
+    "decision_quality_entry_price_v2_2_fill_adjusted_distinct_limit"
+)
+DECISION_QUALITY_ENTRY_PRICE_V2_2_RESPONSE_SCHEMA = (
+    DECISION_QUALITY_ENTRY_PRICE_V2_1_RESPONSE_SCHEMA
+)
+
+_DECISION_QUALITY_ENTRY_PRICE_V2_2_RULES = """
+Fill-adjusted distinct-limit rules:
+1. Preserve every V2.1 source-quality, exact-price, SKIP, and downstream-guard
+   rule. This remains an offline replay selector with no order authority.
+2. Optimize the selected limit, not the action label. When the Control submitted
+   a price, a non-defensive action is invalid if its exact selected price equals
+   control_selected_price. A Control SKIP has no selected price and is an exposure
+   change, not a same-price relabel.
+3. Treat a positive price_delta_from_cost_baseline_bp as incremental chase cost. Pay
+   that cost only for EDGE with a confirmed trigger, moderate or strong positive
+   edge, low or moderate adverse risk, and supportive trend or tape. Expected
+   upside must be at least minimum_upside_for_aggressive_basis_pct for the chosen
+   basis. If it is lower, choose the exact DEFENSIVE price instead of retrying the
+   aggressive action with an unsupported estimate.
+4. USE_REFERENCE is appropriate when its distinct exact price improves expected
+   fill-adjusted value. IMPROVE_LIMIT is reserved for a distinct RESOLVED or
+   BEST_ASK value with stronger immediate fill evidence. Do not diversify actions
+   merely to avoid a dominant-action ratio.
+5. Wide spread, thin depth, adverse tape, recovery_required, or high uncertainty
+   favors the least costly exact executable candidate. It does not by itself
+   authorize SKIP when skip_permitted=false.
+6. The evaluator compares same-snapshot limit touch, return after touch, missed
+   touch opportunity, and venue-specific results. A different action with the
+   same price has zero decision value and cannot pass the price-effect gate.
+""".strip()
+
 _DECISION_QUALITY_HOLDING_V2_3_RULES = """
 Holding decision rules:
 1. Read the canonical fields by their exact paths. position_context.buy_qty,
@@ -1136,6 +1169,17 @@ return a placeholder such as stage-specific action or entry_price_selection.
     "REFERENCE" | "RESOLVED" | "NONE"
 }}
 """.strip()
+
+
+def decision_quality_entry_price_v2_2_system_prompt() -> str:
+    """Return the offline fill-adjusted distinct-limit entry-price prompt."""
+
+    return (
+        decision_quality_entry_price_v2_1_system_prompt()
+        + "\n\n"
+        + _DECISION_QUALITY_ENTRY_PRICE_V2_2_RULES
+        + "\n\nApply these rules and return only the exact JSON object defined above."
+    )
 
 
 def decision_quality_v2_detailed_system_prompt(

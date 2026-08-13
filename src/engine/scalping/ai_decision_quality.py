@@ -158,7 +158,9 @@ HOLDING_SEMANTIC_VALIDATOR_VERSION = "holding_exact_semantic_gate_v1"
 HOLDING_FLOW_BOUNDED_DEFER_SEMANTIC_VALIDATOR_VERSION = (
     "holding_flow_bounded_defer_semantic_v1"
 )
-ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION = "entry_price_exact_semantic_gate_v1"
+ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION = (
+    "entry_price_fill_adjusted_distinct_limit_semantic_v3"
+)
 ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION = "anticipatory_reversal_offline_semantic_v1"
 BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION = (
     "bounded_opportunity_offline_semantic_v1"
@@ -5272,9 +5274,31 @@ def _entry_price_contract_facts(exact_payload: Any) -> dict[str, Any]:
 
 
 def _entry_price_response_errors(
-    response: dict[str, Any], *, exact_payload: Any
+    response: dict[str, Any],
+    *,
+    exact_payload: Any,
+    contract_facts: dict[str, Any] | None = None,
+    require_fill_adjusted_distinct_limit: bool = False,
 ) -> list[str]:
     facts = _entry_price_contract_facts(exact_payload)
+    if isinstance(contract_facts, dict):
+        control_price = _number(contract_facts.get("control_selected_price"))
+        price_cost_baseline = _number(contract_facts.get("price_cost_baseline"))
+        if control_price is not None and control_price > 0:
+            facts["control_selected_price"] = control_price
+        if price_cost_baseline is not None and price_cost_baseline > 0:
+            facts["price_cost_baseline"] = price_cost_baseline
+            facts["price_delta_from_cost_baseline_bp"] = {
+                candidate_basis: (
+                    ((candidate_price - price_cost_baseline) / price_cost_baseline)
+                    * 10000.0
+                    if candidate_price is not None
+                    else None
+                )
+                for candidate_basis, candidate_price in facts[
+                    "candidate_prices"
+                ].items()
+            }
     action = str(response.get("action") or "").strip().upper()
     basis = str(response.get("price_basis") or "").strip().upper()
     selected_price = _number(response.get("selected_price"))
@@ -5309,6 +5333,39 @@ def _entry_price_response_errors(
         errors.append("entry_price_selected_price_invalid")
     elif expected_price is None or int(selected_price) != expected_price:
         errors.append("entry_price_selected_price_not_exact_basis_value")
+    if require_fill_adjusted_distinct_limit and selected_price is not None:
+        control_price = _number(facts.get("control_selected_price"))
+        if (
+            action in {"USE_REFERENCE", "IMPROVE_LIMIT"}
+            and control_price is not None
+            and int(selected_price) == int(control_price)
+        ):
+            errors.append("entry_price_nondefensive_price_not_distinct")
+        selected_delta_bp = _number(
+            (facts.get("price_delta_from_cost_baseline_bp") or {}).get(basis)
+        )
+        if selected_delta_bp is not None and selected_delta_bp > 0:
+            edge_state = str(response.get("edge_state") or "").strip().upper()
+            evidence = response.get("evidence")
+            evidence = evidence if isinstance(evidence, dict) else {}
+            expected_upside_pct = _number(response.get("expected_upside_pct"))
+            supportive_immediacy = any(
+                str(evidence.get(key) or "").strip().lower() == "supportive"
+                for key in ("trend", "tape")
+            )
+            if not (
+                edge_state == "EDGE"
+                and str(evidence.get("positive_edge") or "").lower()
+                in {"moderate", "strong"}
+                and str(evidence.get("adverse_risk") or "").lower()
+                in {"low", "moderate"}
+                and str(evidence.get("trigger") or "").lower() == "confirmed"
+                and supportive_immediacy
+            ):
+                errors.append("entry_price_aggressive_limit_without_confirmed_edge")
+            required_upside_pct = (selected_delta_bp / 100.0) + 0.20
+            if expected_upside_pct is None or expected_upside_pct < required_upside_pct:
+                errors.append("entry_price_aggressive_limit_insufficient_edge_buffer")
     return errors
 
 
@@ -5363,6 +5420,12 @@ def validate_replay_candidate_response(
             *_entry_price_response_errors(
                 response,
                 exact_payload=request.get("exact_payload"),
+                contract_facts=(
+                    (request.get("candidate_input") or {}).get(
+                        "entry_price_exact_contract_facts_v1"
+                    )
+                ),
+                require_fill_adjusted_distinct_limit=True,
             ),
         ]
     if semantic_validator_version not in {

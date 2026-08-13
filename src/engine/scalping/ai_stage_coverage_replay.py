@@ -16,13 +16,13 @@ from statistics import fmean
 from typing import Any
 
 from src.engine.ai_prompt_contracts import (
-    DECISION_QUALITY_ENTRY_PRICE_V2_1_PROMPT_VERSION,
-    DECISION_QUALITY_ENTRY_PRICE_V2_1_RESPONSE_SCHEMA,
+    DECISION_QUALITY_ENTRY_PRICE_V2_2_PROMPT_VERSION,
+    DECISION_QUALITY_ENTRY_PRICE_V2_2_RESPONSE_SCHEMA,
     DECISION_QUALITY_HOLDING_FLOW_V2_2_PROMPT_VERSION,
     DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION,
     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
-    decision_quality_entry_price_v2_1_system_prompt,
+    decision_quality_entry_price_v2_2_system_prompt,
     decision_quality_holding_flow_v2_2_system_prompt,
     decision_quality_holding_v2_3_system_prompt,
     decision_quality_v2_8_detailed_system_prompt,
@@ -192,10 +192,10 @@ def prepare_stage_requests(
         "entry": decision_quality_v2_8_detailed_system_prompt("entry"),
         "holding": decision_quality_holding_v2_3_system_prompt(),
         "holding_flow": decision_quality_holding_flow_v2_2_system_prompt(),
-        "entry_price": decision_quality_entry_price_v2_1_system_prompt(),
+        "entry_price": decision_quality_entry_price_v2_2_system_prompt(),
     }[normalized_stage]
     response_schema = (
-        DECISION_QUALITY_ENTRY_PRICE_V2_1_RESPONSE_SCHEMA
+        DECISION_QUALITY_ENTRY_PRICE_V2_2_RESPONSE_SCHEMA
         if normalized_stage == "entry_price"
         else DECISION_QUALITY_V2_RESPONSE_SCHEMA
     )
@@ -209,7 +209,7 @@ def prepare_stage_requests(
                 else (
                     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
                     if normalized_stage == "entry"
-                    else DECISION_QUALITY_ENTRY_PRICE_V2_1_PROMPT_VERSION
+                    else DECISION_QUALITY_ENTRY_PRICE_V2_2_PROMPT_VERSION
                 )
             )
         ),
@@ -272,7 +272,12 @@ def prepare_stage_requests(
                 "captured_action": trace.get("action"),
                 "captured_score": trace.get("score"),
                 "captured_reason": trace.get("reason"),
-                "captured_selected_price": trace.get("reference_price"),
+                "captured_selected_price": (
+                    None
+                    if str(trace.get("action") or "").strip().upper() == "SKIP"
+                    else trace.get("reference_price")
+                ),
+                "captured_reference_price": trace.get("reference_price"),
                 "captured_selected_price_type": trace.get("reference_price_type"),
             },
             "candidate": dict(candidate),
@@ -307,6 +312,56 @@ def prepare_stage_requests(
             request["candidate_input_sha256"] = quality._sha256(candidate_input)
         elif normalized_stage == "entry_price":
             entry_price_facts = quality._entry_price_contract_facts(exact_payload)
+            captured_action = str(trace.get("action") or "").strip().upper()
+            control_selected_price = (
+                None
+                if captured_action == "SKIP"
+                else quality._number(trace.get("reference_price"))
+            )
+            if (
+                control_selected_price is not None
+                and control_selected_price > 0
+                and float(control_selected_price).is_integer()
+            ):
+                control_selected_price = int(control_selected_price)
+            else:
+                control_selected_price = None
+            defensive_price = quality._number(
+                entry_price_facts["candidate_prices"].get("DEFENSIVE")
+            )
+            price_cost_baseline = control_selected_price or defensive_price
+            entry_price_facts["control_selected_price"] = control_selected_price
+            entry_price_facts["control_exposure_selected"] = (
+                captured_action != "SKIP" and control_selected_price is not None
+            )
+            entry_price_facts["price_cost_baseline"] = price_cost_baseline
+            entry_price_facts["price_delta_from_cost_baseline_bp"] = {
+                basis: (
+                    ((price - price_cost_baseline) / price_cost_baseline) * 10000.0
+                    if price is not None
+                    and price_cost_baseline is not None
+                    and price_cost_baseline > 0
+                    else None
+                )
+                for basis, price in entry_price_facts["candidate_prices"].items()
+            }
+            entry_price_facts["minimum_upside_for_aggressive_basis_pct"] = {
+                basis: (
+                    (delta_bp / 100.0) + 0.20
+                    if delta_bp is not None and delta_bp > 0
+                    else 0.0
+                )
+                for basis, delta_bp in entry_price_facts[
+                    "price_delta_from_cost_baseline_bp"
+                ].items()
+            }
+            entry_price_facts["economically_distinct_bases"] = [
+                basis
+                for basis, delta_bp in entry_price_facts[
+                    "price_delta_from_cost_baseline_bp"
+                ].items()
+                if delta_bp is not None and abs(delta_bp) > 1e-9
+            ]
             candidate_input = {
                 "exact_payload": exact_payload,
                 "entry_price_exact_contract_facts_v1": entry_price_facts,
@@ -390,7 +445,11 @@ def execute_bedrock_candidate(
                 "BEST_BID only when DEFENSIVE is null. For USE_REFERENCE select "
                 "REFERENCE. For IMPROVE_LIMIT select RESOLVED or BEST_ASK. Never "
                 "return selected_price=null or price_basis=NONE for a non-SKIP "
-                "action"
+                "action. A non-defensive action must select a price distinct "
+                "from control_selected_price. A more aggressive price requires "
+                "confirmed immediate edge and expected_upside_pct at or above "
+                "minimum_upside_for_aggressive_basis_pct. Otherwise return the "
+                "exact DEFENSIVE price with USE_DEFENSIVE"
             )
         prompt += (
             "\n\nCorrection retry: the prior response violated: "
@@ -408,10 +467,25 @@ def execute_bedrock_candidate(
         ).decode("utf-8"),
         profile=profile,
     )
-    payload = dict(result.payload)
+    payload, action_canonicalization = (
+        canonicalize_entry_price_economically_equivalent_action(
+            dict(result.payload),
+            contract_facts=(
+                (request.get("candidate_input") or {}).get(
+                    "entry_price_exact_contract_facts_v1"
+                )
+            ),
+        )
+    )
     selection_errors = quality._entry_price_response_errors(
         payload,
         exact_payload=request.get("exact_payload"),
+        contract_facts=(
+            (request.get("candidate_input") or {}).get(
+                "entry_price_exact_contract_facts_v1"
+            )
+        ),
+        require_fill_adjusted_distinct_limit=True,
     )
     selection_valid = not selection_errors
     provenance = result.transport_meta()
@@ -424,11 +498,49 @@ def execute_bedrock_candidate(
             "failback_chain": [],
             "entry_price_selection_valid": selection_valid,
             "entry_price_selection_errors": selection_errors,
+            **action_canonicalization,
         }
     )
     return {
         "candidate_response": payload,
         "provider_provenance": provenance,
+    }
+
+
+def canonicalize_entry_price_economically_equivalent_action(
+    response: dict[str, Any], *, contract_facts: dict[str, Any] | None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Canonicalize only a label when Control, defensive, and selected prices match."""
+
+    payload = dict(response)
+    facts = contract_facts if isinstance(contract_facts, dict) else {}
+    action = str(payload.get("action") or "").strip().upper()
+    selected_price = quality._number(payload.get("selected_price"))
+    control_price = quality._number(facts.get("control_selected_price"))
+    candidate_prices = facts.get("candidate_prices") or {}
+    defensive_price = quality._number(candidate_prices.get("DEFENSIVE"))
+    raw_basis = str(payload.get("price_basis") or "").strip().upper()
+    raw_basis_price = quality._number(candidate_prices.get(raw_basis))
+    if not (
+        action in {"USE_REFERENCE", "IMPROVE_LIMIT"}
+        and selected_price is not None
+        and control_price is not None
+        and defensive_price is not None
+        and raw_basis_price is not None
+        and selected_price == control_price == defensive_price == raw_basis_price
+    ):
+        return payload, {"entry_price_action_canonicalization_applied": False}
+    payload["action"] = "USE_DEFENSIVE"
+    payload["price_basis"] = "DEFENSIVE"
+    return payload, {
+        "entry_price_action_canonicalization_applied": True,
+        "entry_price_action_canonicalization_reason": (
+            "economically_equivalent_control_defensive_price"
+        ),
+        "entry_price_raw_action": action,
+        "entry_price_raw_price_basis": raw_basis,
+        "entry_price_canonical_action": "USE_DEFENSIVE",
+        "entry_price_canonical_price_basis": "DEFENSIVE",
     }
 
 
@@ -443,6 +555,9 @@ def build_report(
     results: list[dict[str, Any]],
 ) -> dict[str, Any]:
     passed = [row for row in results if row.get("status") == "pass"]
+    request_by_pair = {
+        str(request.get("paired_replay_id") or ""): request for request in requests
+    }
     symbol_count = len(
         {
             str(request.get("stock_code") or "")
@@ -492,6 +607,75 @@ def build_report(
         if action_collapse_evaluable and dominant_action_ratio is not None
         else None
     )
+    entry_price_effect_rows: list[dict[str, Any]] = []
+    if stage == "entry_price":
+        for row in passed:
+            pair_id = str(row.get("paired_replay_id") or "")
+            request = request_by_pair.get(pair_id) or {}
+            control = request.get("control") or {}
+            candidate = row.get("candidate_response") or {}
+            control_price = quality._number(control.get("captured_selected_price"))
+            candidate_price = (
+                None
+                if str(candidate.get("action") or "").upper() == "SKIP"
+                else quality._number(candidate.get("selected_price"))
+            )
+            price_delta_bp = (
+                ((candidate_price - control_price) / control_price) * 10000.0
+                if candidate_price is not None
+                and control_price is not None
+                and control_price > 0
+                else None
+            )
+            action_changed = (
+                str(candidate.get("action") or "").upper()
+                != str(control.get("captured_action") or "").upper()
+            )
+            control_exposure_selected = bool(
+                str(control.get("captured_action") or "").upper() != "SKIP"
+                and control_price is not None
+            )
+            candidate_exposure_selected = bool(
+                str(candidate.get("action") or "").upper() != "SKIP"
+                and candidate_price is not None
+            )
+            exposure_selection_changed = (
+                control_exposure_selected != candidate_exposure_selected
+            )
+            entry_price_effect_rows.append(
+                {
+                    "stock_code": request.get("stock_code"),
+                    "control_price": control_price,
+                    "candidate_price": candidate_price,
+                    "price_delta_bp": price_delta_bp,
+                    "economically_distinct": bool(
+                        exposure_selection_changed
+                        or (price_delta_bp is not None and abs(price_delta_bp) > 1e-9)
+                    ),
+                    "action_only_relabel": bool(
+                        action_changed
+                        and not exposure_selection_changed
+                        and price_delta_bp is not None
+                        and abs(price_delta_bp) <= 1e-9
+                    ),
+                }
+            )
+    economically_distinct_count = sum(
+        row["economically_distinct"] for row in entry_price_effect_rows
+    )
+    action_only_relabel_count = sum(
+        row["action_only_relabel"] for row in entry_price_effect_rows
+    )
+    economically_distinct_symbol_count = len(
+        {
+            str(row.get("stock_code") or "")
+            for row in entry_price_effect_rows
+            if row["economically_distinct"] and row.get("stock_code")
+        }
+    )
+    entry_price_effect_not_collapsed = (
+        economically_distinct_count > 0 if stage == "entry_price" and passed else None
+    )
     attempts = [
         attempt
         for row in results
@@ -509,8 +693,10 @@ def build_report(
         status = "coverage_replay_incomplete"
     elif not coverage_sample_floor["pass"]:
         status = "coverage_replay_complete_sample_floor_keep_collecting"
-    elif action_not_collapsed is False:
+    elif stage != "entry_price" and action_not_collapsed is False:
         status = "coverage_replay_complete_candidate_action_collapsed"
+    elif stage == "entry_price" and entry_price_effect_not_collapsed is False:
+        status = "coverage_replay_complete_candidate_price_effect_collapsed"
     else:
         status = "coverage_replay_complete_outcome_comparison_pending"
     base_status = status
@@ -586,6 +772,11 @@ def build_report(
         "candidate_dominant_action_ratio": dominant_action_ratio,
         "candidate_action_collapse_evaluable": action_collapse_evaluable,
         "candidate_action_not_collapsed": action_not_collapsed,
+        "candidate_action_collapse_decision_authority": (
+            "diagnostic_only_price_effect_gate_owns_decision"
+            if stage == "entry_price"
+            else "quality_gate"
+        ),
         "action_transition_counts": {
             f"{control}->{candidate}": count
             for (control, candidate), count in sorted(transitions.items())
@@ -600,21 +791,20 @@ def build_report(
             )
         ),
         "entry_price_selection_complete": selection_complete,
+        "entry_price_economically_distinct_count": economically_distinct_count,
+        "entry_price_economically_distinct_unique_symbol_count": (
+            economically_distinct_symbol_count
+        ),
+        "entry_price_action_only_relabel_count": action_only_relabel_count,
+        "entry_price_effect_not_collapsed": entry_price_effect_not_collapsed,
         "entry_price_control_exact_match_count": sum(
-            quality._number((row.get("candidate_response") or {}).get("selected_price"))
-            == quality._number(
-                next(
-                    (
-                        request.get("control", {}).get("captured_selected_price")
-                        for request in requests
-                        if request.get("paired_replay_id")
-                        == row.get("paired_replay_id")
-                    ),
-                    None,
-                )
-            )
-            for row in passed
-            if stage == "entry_price"
+            row["candidate_price"] == row["control_price"]
+            for row in entry_price_effect_rows
+            if row["candidate_price"] is not None and row["control_price"] is not None
+        ),
+        "entry_price_comparable_price_count": sum(
+            row["candidate_price"] is not None and row["control_price"] is not None
+            for row in entry_price_effect_rows
         ),
         "outcome_comparison_status": "pending_mature_outcome_join",
         "performance_claim_allowed": False,
@@ -1209,6 +1399,14 @@ def build_entry_price_selection_outcome_comparison(
             best_ask=best_ask,
         )
         profit_opportunity = bool(metric.get("profit_opportunity_observed"))
+        control_exposure_selected = bool(
+            str(control.get("captured_action") or "").upper() != "SKIP"
+            and control_price is not None
+        )
+        candidate_exposure_selected = bool(
+            str(candidate.get("action") or "").upper() != "SKIP"
+            and candidate_price is not None
+        )
         rows.append(
             {
                 "decision_trace_id": trace_id,
@@ -1218,6 +1416,11 @@ def build_entry_price_selection_outcome_comparison(
                 "control_action": control.get("captured_action"),
                 "candidate_action": candidate.get("action"),
                 "candidate_price_basis": candidate.get("price_basis"),
+                "control_exposure_selected": control_exposure_selected,
+                "candidate_exposure_selected": candidate_exposure_selected,
+                "exposure_selection_changed": (
+                    control_exposure_selected != candidate_exposure_selected
+                ),
                 "reference_price": reference_price,
                 "observed_10m_mfe_pct_from_reference": quality._number(
                     metric.get("mfe_pct")
@@ -1298,6 +1501,30 @@ def build_entry_price_selection_outcome_comparison(
             "candidate_more_passive_price_count": sum(
                 value < 0 for value in price_deltas
             ),
+            "candidate_economically_distinct_price_count": sum(
+                abs(value) > 1e-9 for value in price_deltas
+            ),
+            "candidate_exposure_selection_change_count": sum(
+                row["exposure_selection_changed"] for row in values
+            ),
+            "candidate_economic_decision_change_count": sum(
+                row["exposure_selection_changed"]
+                or (
+                    quality._number(row.get("candidate_vs_control_price_bp"))
+                    is not None
+                    and abs(float(row["candidate_vs_control_price_bp"])) > 1e-9
+                )
+                for row in values
+            ),
+            "candidate_action_only_relabel_count": sum(
+                str(row.get("candidate_action") or "").upper()
+                != str(row.get("control_action") or "").upper()
+                and not row["exposure_selection_changed"]
+                and quality._number(row.get("candidate_vs_control_price_bp"))
+                is not None
+                and abs(float(row["candidate_vs_control_price_bp"])) <= 1e-9
+                for row in values
+            ),
             "control_missed_touch_opportunity_count": sum(
                 row["control_missed_touch_opportunity"] for row in values
             ),
@@ -1341,6 +1568,12 @@ def build_entry_price_selection_outcome_comparison(
             and value["delta_equal_weight_avg_10m_limit_touch_end_return_pct"] >= 0
             for value in venue_summary.values()
         ),
+        "price_selection_effect_observed": bool(
+            summary.get("candidate_economic_decision_change_count", 0) > 0
+        ),
+        "action_only_relabel_absent": bool(
+            summary.get("candidate_action_only_relabel_count", 0) == 0
+        ),
     }
     quality_gate_pass = all(quality_checks.values())
     return {
@@ -1375,6 +1608,17 @@ def build_entry_price_selection_outcome_comparison(
             "broker_or_safety_guard_bypass",
         ],
     }
+
+
+def apply_entry_price_outcome_status(
+    report: dict[str, Any], comparison: dict[str, Any]
+) -> None:
+    """Promote outcome status only after candidate execution fully completed."""
+
+    selection_status = str(comparison.get("status") or "no_comparable_rows")
+    report["entry_price_selection_outcome_status"] = selection_status
+    if report.get("status") == "coverage_replay_complete_outcome_comparison_pending":
+        report["status"] = f"coverage_replay_complete_{selection_status}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1566,10 +1810,10 @@ def main(argv: list[str] | None = None) -> int:
                     labels=labels,
                 )
             )
-            selection_status = report["entry_price_selection_outcome_comparison"].get(
-                "status"
+            apply_entry_price_outcome_status(
+                report,
+                report["entry_price_selection_outcome_comparison"],
             )
-            report["status"] = f"coverage_replay_complete_{selection_status}"
     if args.holding_flow_checkpoint_source:
         checkpoint_evidence = load_holding_flow_checkpoint_evidence(
             pipeline_path=args.holding_flow_checkpoint_source,

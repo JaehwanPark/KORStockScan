@@ -1893,6 +1893,13 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
     assert mismatched_stock["entry_split_probe_phase"] == "aborted"
     assert mismatched_stock["entry_split_probe_scale_in_forbidden"] is True
     assert mismatched_stock["probe_expand_forbidden"] is True
+    assert mismatched_stock["entry_execution_broker_route"] == "SOR"
+    assert (
+        mismatched_stock["entry_execution_broker_route_resolution"]
+        == "explicit_request"
+    )
+    assert mismatched_stock["entry_execution_route_recorded_at"] == 100.0
+    assert mismatched_stock["entry_execution_cohort"] == "KRX"
     state = split_plan._load_json(state_path)
     assert state["circuit_open"] is True
     assert state["circuit_reason"] == "probe_restart_recovery_quantity_mismatch"
@@ -1901,6 +1908,88 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
         is True
     )
     assert state["bundles"]["123456-probe-restart"]["probe_expand_forbidden"] is True
+
+
+def test_probe_submitted_restart_mismatch_keeps_confirmed_route_fail_closed(
+    monkeypatch, tmp_path
+):
+    state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", state_path)
+    now = datetime(2026, 8, 13, 12, 49, tzinfo=timezone(timedelta(hours=9)))
+    split_plan.update_probe_runtime_bundle(
+        "144960-probe-restart",
+        phase="probe_submitted",
+        now=now,
+        code="144960",
+        target_id=31480,
+        requested_qty=21,
+        submitted_at=100.0,
+        order_no="0044348",
+        broker_route="SOR",
+        broker_route_resolution="explicit_request",
+        effective_venue="KRX",
+    )
+    stock = {
+        "id": 31480,
+        "code": "144960",
+        "buy_qty": 1,
+        "status": "HOLDING",
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result == {
+        "recovered": False,
+        "reason": "probe_restart_recovery_quantity_mismatch",
+        "circuit_open": True,
+    }
+    assert stock["entry_split_probe_phase"] == "aborted"
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_execution_broker_route"] == "SOR"
+    assert stock["entry_execution_broker_route_resolution"] == "explicit_request"
+    assert stock["entry_execution_route_recorded_at"] == 100.0
+    assert stock["entry_execution_cohort"] == "KRX"
+
+
+def test_probe_restart_mismatch_does_not_overwrite_existing_execution_route(
+    monkeypatch, tmp_path
+):
+    state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", state_path)
+    now = datetime(2026, 8, 13, 12, 49, tzinfo=timezone(timedelta(hours=9)))
+    split_plan.update_probe_runtime_bundle(
+        "123456-probe-existing-route-mismatch",
+        phase="probe_submitted",
+        now=now,
+        code="123456",
+        target_id=9,
+        requested_qty=5,
+        submitted_at=100.0,
+        broker_route="SOR",
+        broker_route_resolution="explicit_request",
+        effective_venue="KRX",
+    )
+    stock = {
+        "id": 9,
+        "code": "123456",
+        "buy_qty": 1,
+        "status": "HOLDING",
+        "entry_execution_broker_route": "NXT",
+        "entry_execution_broker_route_resolution": "broker_fill_receipt",
+        "entry_execution_route_recorded_at": 90.0,
+        "entry_execution_cohort": "NXT",
+        "effective_venue": "NXT",
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result["circuit_open"] is True
+    assert stock["entry_execution_broker_route"] == "NXT"
+    assert stock["entry_execution_broker_route_resolution"] == "broker_fill_receipt"
+    assert stock["entry_execution_route_recorded_at"] == 90.0
+    assert stock["entry_execution_cohort"] == "NXT"
+    assert stock["effective_venue"] == "NXT"
 
 
 def test_probe_recovered_execution_provenance_rejects_unconfirmed_requested_route():

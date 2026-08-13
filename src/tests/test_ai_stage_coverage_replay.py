@@ -473,30 +473,35 @@ def test_prepare_entry_price_uses_conditional_selection_contract():
             },
         }
     )
+    trace = _trace("entry_price")
+    trace["reference_price"] = 99
     requests, _ = replay.prepare_stage_requests(
         stage="entry_price",
         dates=["2026-07-29"],
         max_rows=1,
         control_manifest=_control(),
         promotion={"promoted_at": "2026-07-29T08:56:00+09:00"},
-        traces=[_trace("entry_price")],
+        traces=[trace],
         payloads=[payload],
     )
 
     request = requests[0]
     facts = request["candidate_input"]["entry_price_exact_contract_facts_v1"]
     assert request["candidate"]["prompt_version"] == (
-        "decision_quality_entry_price_v2_1_conditional_selection"
+        "decision_quality_entry_price_v2_2_fill_adjusted_distinct_limit"
     )
     assert request["candidate"]["semantic_validator_version"] == (
-        "entry_price_exact_semantic_gate_v1"
+        "entry_price_fill_adjusted_distinct_limit_semantic_v3"
     )
     assert request["candidate"]["response_schema"]["selected_price"] == (
         "positive_integer_or_null"
     )
     assert facts["skip_permitted"] is False
     assert facts["would_fill_now"] is False
+    assert facts["control_selected_price"] == 99
+    assert "REFERENCE" in facts["economically_distinct_bases"]
     assert "would_fill_now=false" in request["candidate"]["system_prompt"]
+    assert "incremental chase cost" in request["candidate"]["system_prompt"]
 
 
 def test_entry_price_semantic_gate_rejects_unjustified_skip_and_basis_mismatch():
@@ -523,7 +528,30 @@ def test_entry_price_semantic_gate_rejects_unjustified_skip_and_basis_mismatch()
             },
         },
         "candidate": {
-            "semantic_validator_version": "entry_price_exact_semantic_gate_v1"
+            "semantic_validator_version": (
+                "entry_price_fill_adjusted_distinct_limit_semantic_v3"
+            )
+        },
+        "candidate_input": {
+            "entry_price_exact_contract_facts_v1": {
+                "candidate_prices": {
+                    "DEFENSIVE": 99,
+                    "REFERENCE": 100,
+                    "RESOLVED": 100,
+                    "BEST_BID": 99,
+                    "BEST_ASK": 101,
+                },
+                "skip_permitted": False,
+                "control_selected_price": 99,
+                "price_cost_baseline": 99,
+                "price_delta_from_cost_baseline_bp": {
+                    "DEFENSIVE": 0.0,
+                    "REFERENCE": 101.01,
+                    "RESOLVED": 101.01,
+                    "BEST_BID": 0.0,
+                    "BEST_ASK": 202.02,
+                },
+            }
         },
     }
     common = {
@@ -561,6 +589,142 @@ def test_entry_price_semantic_gate_rejects_unjustified_skip_and_basis_mismatch()
     assert "entry_price_action_basis_mismatch" in mismatch_errors
 
 
+def test_entry_price_semantic_gate_rejects_action_only_relabel_and_weak_chase():
+    request = {
+        "stage": "entry_price",
+        "exact_payload": {
+            "price_context": {
+                "best_bid": 100,
+                "best_ask": 102,
+                "defensive_order_price": 100,
+                "reference_target_price": 100,
+                "resolved_order_price": 101,
+            },
+            "entry_context_features": {
+                "quote_fresh_for_entry": True,
+                "quote_stale": False,
+            },
+            "ai_market_snapshot_v1": {
+                "ai_input_preflight_v1": {
+                    "allowed": True,
+                    "blockers": [],
+                    "venue_consistent": True,
+                }
+            },
+        },
+        "candidate": {
+            "semantic_validator_version": (
+                "entry_price_fill_adjusted_distinct_limit_semantic_v3"
+            )
+        },
+        "candidate_input": {
+            "entry_price_exact_contract_facts_v1": {
+                "candidate_prices": {
+                    "DEFENSIVE": 100,
+                    "REFERENCE": 100,
+                    "RESOLVED": 101,
+                    "BEST_BID": 100,
+                    "BEST_ASK": 102,
+                },
+                "skip_permitted": False,
+                "control_selected_price": 100,
+                "price_cost_baseline": 100,
+                "price_delta_from_cost_baseline_bp": {
+                    "DEFENSIVE": 0.0,
+                    "REFERENCE": 0.0,
+                    "RESOLVED": 100.0,
+                    "BEST_BID": 0.0,
+                    "BEST_ASK": 200.0,
+                },
+            }
+        },
+    }
+    response = {
+        "edge_state": "EDGE",
+        "action": "USE_REFERENCE",
+        "expected_upside_pct": 1.0,
+        "expected_downside_pct": -0.5,
+        "confidence": 70,
+        "reason_codes": ["edge_positive"],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "mixed",
+            "tape": "supportive",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "continuation",
+            "positive_edge": "moderate",
+            "adverse_risk": "moderate",
+            "trigger": "confirmed",
+        },
+        "selected_price": 100,
+        "price_basis": "REFERENCE",
+    }
+    errors = replay.quality.validate_replay_candidate_response(request, response)
+    assert "entry_price_nondefensive_price_not_distinct" in errors
+
+    weak_chase = {
+        **response,
+        "action": "IMPROVE_LIMIT",
+        "selected_price": 101,
+        "price_basis": "RESOLVED",
+        "expected_upside_pct": 0.25,
+        "evidence": {**response["evidence"], "trigger": "recovery_required"},
+    }
+    errors = replay.quality.validate_replay_candidate_response(request, weak_chase)
+    assert "entry_price_aggressive_limit_without_confirmed_edge" in errors
+    assert "entry_price_aggressive_limit_insufficient_edge_buffer" in errors
+
+
+def test_entry_price_equivalent_action_canonicalization_changes_label_only():
+    response = {
+        "action": "USE_REFERENCE",
+        "selected_price": 100,
+        "price_basis": "REFERENCE",
+        "confidence": 70,
+    }
+    canonical, provenance = (
+        replay.canonicalize_entry_price_economically_equivalent_action(
+            response,
+            contract_facts={
+                "control_selected_price": 100,
+                "candidate_prices": {"DEFENSIVE": 100, "REFERENCE": 100},
+            },
+        )
+    )
+
+    assert canonical["action"] == "USE_DEFENSIVE"
+    assert canonical["price_basis"] == "DEFENSIVE"
+    assert canonical["selected_price"] == response["selected_price"]
+    assert response["action"] == "USE_REFERENCE"
+    assert provenance["entry_price_action_canonicalization_applied"] is True
+
+
+def test_entry_price_canonicalization_does_not_hide_raw_basis_price_mismatch():
+    response = {
+        "action": "IMPROVE_LIMIT",
+        "selected_price": 100,
+        "price_basis": "RESOLVED",
+        "confidence": 70,
+    }
+
+    canonical, provenance = (
+        replay.canonicalize_entry_price_economically_equivalent_action(
+            response,
+            contract_facts={
+                "control_selected_price": 100,
+                "candidate_prices": {
+                    "DEFENSIVE": 100,
+                    "RESOLVED": 101,
+                },
+            },
+        )
+    )
+
+    assert canonical == response
+    assert provenance["entry_price_action_canonicalization_applied"] is False
+
+
 def test_entry_price_contract_facts_fail_closed_when_preflight_is_missing():
     facts = replay.quality._entry_price_contract_facts(
         {
@@ -578,6 +742,52 @@ def test_entry_price_contract_facts_fail_closed_when_preflight_is_missing():
 
     assert facts["skip_permitted"] is True
     assert "preflight_missing" in facts["source_blockers"]
+
+
+def test_prepare_entry_price_control_skip_has_no_selected_price_but_cost_baseline():
+    payload = _payload("entry_price")
+    payload["sanitized_user_input"].update(
+        {
+            "price_context": {
+                "best_bid": 99,
+                "best_ask": 101,
+                "defensive_order_price": 99,
+                "reference_target_price": 100,
+                "resolved_order_price": 100,
+            },
+            "entry_context_features": {
+                "quote_fresh_for_entry": True,
+                "quote_stale": False,
+            },
+            "ai_market_snapshot_v1": {
+                "ai_input_preflight_v1": {
+                    "allowed": True,
+                    "blockers": [],
+                    "venue_consistent": True,
+                }
+            },
+        }
+    )
+    trace = _trace("entry_price")
+    trace.update({"action": "SKIP", "reference_price": 99})
+
+    requests, _ = replay.prepare_stage_requests(
+        stage="entry_price",
+        dates=["2026-07-29"],
+        max_rows=1,
+        control_manifest=_control(),
+        promotion={"promoted_at": "2026-07-29T08:56:00+09:00"},
+        traces=[trace],
+        payloads=[payload],
+    )
+
+    control = requests[0]["control"]
+    facts = requests[0]["candidate_input"]["entry_price_exact_contract_facts_v1"]
+    assert control["captured_selected_price"] is None
+    assert control["captured_reference_price"] == 99
+    assert facts["control_selected_price"] is None
+    assert facts["control_exposure_selected"] is False
+    assert facts["price_cost_baseline"] == 99
 
 
 def test_prepare_entry_stage_uses_v2_8_and_unwraps_live_v2_7_payload():
@@ -808,7 +1018,95 @@ def test_report_marks_action_collapse_before_outcome_comparison():
     assert report["coverage_sample_floor"]["pass"] is True
     assert report["candidate_action_collapse_evaluable"] is True
     assert "candidate_input" not in report["requests"][0]
+
+
+def test_entry_price_report_rejects_action_diversity_without_price_effect():
+    requests = [
+        {
+            "paired_replay_id": f"pair-price-{index}",
+            "stock_code": f"{index:06d}",
+            "control": {
+                "captured_action": "USE_DEFENSIVE",
+                "captured_selected_price": 100,
+            },
+        }
+        for index in range(30)
+    ]
+    results = [
+        {
+            "paired_replay_id": f"pair-price-{index}",
+            "status": "pass",
+            "control_response": {"action": "USE_DEFENSIVE"},
+            "candidate_response": {
+                "action": "USE_REFERENCE" if index % 2 else "USE_DEFENSIVE",
+                "selected_price": 100,
+                "price_basis": "REFERENCE" if index % 2 else "DEFENSIVE",
+            },
+        }
+        for index in range(30)
+    ]
+
+    report = replay.build_report(
+        target_date="2026-08-13",
+        stage="entry_price",
+        dates=["2026-08-12"],
+        requested_max_rows=30,
+        source_summary={},
+        requests=requests,
+        results=results,
+    )
+
+    assert report["candidate_action_not_collapsed"] is True
+    assert report["entry_price_effect_not_collapsed"] is False
+    assert report["entry_price_action_only_relabel_count"] == 15
+    assert report["status"] == (
+        "coverage_replay_complete_candidate_price_effect_collapsed"
+    )
     assert "do-not-store" not in str(report)
+
+
+def test_entry_price_report_uses_price_effect_instead_of_action_collapse():
+    requests = [
+        {
+            "paired_replay_id": f"pair-price-effect-{index}",
+            "stock_code": f"{index:06d}",
+            "control": {
+                "captured_action": "USE_DEFENSIVE",
+                "captured_selected_price": 100,
+            },
+        }
+        for index in range(30)
+    ]
+    results = [
+        {
+            "paired_replay_id": f"pair-price-effect-{index}",
+            "status": "pass",
+            "control_response": {"action": "USE_DEFENSIVE"},
+            "candidate_response": {
+                "action": "USE_DEFENSIVE",
+                "selected_price": 99 if index == 0 else 100,
+                "price_basis": "DEFENSIVE",
+            },
+        }
+        for index in range(30)
+    ]
+
+    report = replay.build_report(
+        target_date="2026-08-13",
+        stage="entry_price",
+        dates=["2026-08-12"],
+        requested_max_rows=30,
+        source_summary={},
+        requests=requests,
+        results=results,
+    )
+
+    assert report["candidate_action_not_collapsed"] is False
+    assert report["candidate_action_collapse_decision_authority"] == (
+        "diagnostic_only_price_effect_gate_owns_decision"
+    )
+    assert report["entry_price_effect_not_collapsed"] is True
+    assert report["status"] == ("coverage_replay_complete_outcome_comparison_pending")
 
 
 def test_report_keeps_collecting_before_action_collapse_is_evaluable():
@@ -945,3 +1243,80 @@ def test_entry_price_selection_outcome_uses_selected_limit_and_not_fill_claim():
     assert report["actual_order_submitted"] is False
     assert report["quality_gate_pass"] is False
     assert report["summary"]["candidate_more_aggressive_price_count"] == 1
+    assert report["summary"]["candidate_economically_distinct_price_count"] == 1
+    assert report["summary"]["candidate_action_only_relabel_count"] == 0
+    assert report["quality_checks"]["price_selection_effect_observed"] is True
+    assert report["quality_checks"]["action_only_relabel_absent"] is True
+
+
+def test_entry_price_outcome_status_does_not_mask_incomplete_candidate_execution():
+    incomplete = {"status": "coverage_replay_incomplete"}
+    comparison = {"status": "no_comparable_rows"}
+
+    replay.apply_entry_price_outcome_status(incomplete, comparison)
+
+    assert incomplete["status"] == "coverage_replay_incomplete"
+    assert incomplete["entry_price_selection_outcome_status"] == ("no_comparable_rows")
+
+    complete = {"status": "coverage_replay_complete_outcome_comparison_pending"}
+    replay.apply_entry_price_outcome_status(
+        complete, {"status": "candidate_quality_rejected"}
+    )
+    assert complete["status"] == ("coverage_replay_complete_candidate_quality_rejected")
+
+
+def test_entry_price_outcome_treats_control_skip_as_exposure_change():
+    request = {
+        "decision_trace_id": "trace-skip",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+        "exact_payload": {
+            "price_context": {
+                "best_bid": 99,
+                "best_ask": 101,
+                "defensive_order_price": 99,
+                "reference_target_price": 100,
+                "resolved_order_price": 100,
+            }
+        },
+        "control": {
+            "captured_action": "SKIP",
+            "captured_selected_price": None,
+        },
+    }
+    result = {
+        "decision_trace_id": "trace-skip",
+        "status": "pass",
+        "same_payload_confirmed": True,
+        "candidate_response": {
+            "action": "USE_DEFENSIVE",
+            "selected_price": 99,
+            "price_basis": "DEFENSIVE",
+        },
+    }
+    label = {
+        "decision_trace_id": "trace-skip",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "reference_price": 100,
+        "horizon_metrics": {
+            "10m": {
+                "mfe_pct": 1.0,
+                "mae_pct": -1.0,
+                "end_return_pct": 0.5,
+                "profit_opportunity_observed": True,
+            }
+        },
+    }
+
+    report = replay.build_entry_price_selection_outcome_comparison(
+        requests=[request], results=[result], labels=[label]
+    )
+
+    row = report["rows"][0]
+    assert row["control_exposure_selected"] is False
+    assert row["candidate_exposure_selected"] is True
+    assert row["exposure_selection_changed"] is True
+    assert report["summary"]["candidate_exposure_selection_change_count"] == 1
+    assert report["summary"]["candidate_action_only_relabel_count"] == 0

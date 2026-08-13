@@ -687,6 +687,20 @@ def recover_probe_runtime_bundle_for_stock(
             )
         )
         if not quantity_matches:
+            # The phase/quantity disagreement must keep the probe circuit
+            # fail-closed, but it does not invalidate broker-confirmed route
+            # provenance captured from the successful submit response.  In
+            # particular, a restart can observe one filled share while the
+            # durable bundle still says ``probe_submitted``.  Dropping the
+            # confirmed route here leaves holding submit-authority Exact V2
+            # preflight permanently unable to prove its execution venue.
+            # Restore provenance only; never restore residual-submit
+            # authority from a mismatched bundle.
+            recovered_execution_provenance = {
+                key: value
+                for key, value in _probe_recovered_execution_provenance(bundle).items()
+                if stock.get(key) in (None, "")
+            }
             payload["circuit_open"] = True
             payload["circuit_reason"] = "probe_restart_recovery_quantity_mismatch"
             payload["circuit_opened_at"] = datetime.now(timezone.utc).isoformat()
@@ -707,6 +721,7 @@ def recover_probe_runtime_bundle_for_stock(
                     ),
                     "entry_split_probe_scale_in_forbidden": True,
                     "probe_expand_forbidden": True,
+                    **recovered_execution_provenance,
                 }
             )
             return {
