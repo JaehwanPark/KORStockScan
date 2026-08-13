@@ -2490,6 +2490,27 @@ _ENTRY_CONTEXT_METADATA_KEYS = (
     "external_market_context",
 )
 
+_PRE_SUBMIT_WS_CONTEXT_PRESERVE_KEYS = (
+    *_ENTRY_CONTEXT_METADATA_KEYS,
+    "venue",
+    "effective_venue",
+    "session",
+    "session_bucket",
+    "program_context",
+    "program_observed_ts",
+    "program_source",
+    "program_freshness_limit_ms",
+    "program_subscription_requested_at",
+    "program_missing_reason",
+    "investor_context",
+    "investor_observed_ts",
+    "investor_source",
+    "investor_market_suffix",
+    "investor_market_route",
+    "investor_freshness_limit_ms",
+    "investor_missing_reason",
+)
+
 
 def _entry_context_ws_data(ws_data, stock):
     """Preserve explicit scanner/DB market context for the entry candle owner.
@@ -26877,7 +26898,19 @@ def _pre_submit_refresh_real_ws_snapshot(
             "latest_snapshot_older_than_input"
         )
         return base, fields
-    refreshed = dict(latest)
+    # The manager's latest snapshot is authoritative for volatile price, BBO,
+    # tape, and their timestamps, but it is not guaranteed to repeat the
+    # venue/session inputs used to build the canonical candle bundle.  Carry
+    # only that allowlisted context forward.  In particular, an old tape,
+    # flat BBO, aggregate route, or per-realtime-type provenance field is
+    # never inherited when the manager did not return it.  Exact provenance
+    # must describe the latest event itself, not an earlier nearby event.
+    refreshed = {
+        key: base[key]
+        for key in _PRE_SUBMIT_WS_CONTEXT_PRESERVE_KEYS
+        if key in base
+    }
+    refreshed.update(latest)
     refreshed.update(fields)
     fields["pre_submit_ws_snapshot_refresh_applied"] = True
     fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_ws_snapshot_fresh"
@@ -40158,6 +40191,56 @@ def _apply_entry_ai_price_canary(
         )
         return planned_orders, False
 
+    # REST tick/candle acquisition can consume most of the exact-v2 0B/0D
+    # freshness window.  Rebase the provider payload on the live WS owner once
+    # more immediately before canonical context construction.  This does not
+    # waive source-quality checks: a missing/stale manager snapshot remains
+    # unchanged and the canonical preflight below still fails closed.
+    ws_data, entry_price_ws_refresh = _pre_submit_refresh_real_ws_snapshot(
+        code,
+        ws_data,
+        strategy,
+    )
+    entry_price_ws_refresh_fields = {
+        key.replace(
+            "pre_submit_ws_snapshot_refresh_",
+            "entry_ai_price_ws_snapshot_refresh_",
+            1,
+        ): value
+        for key, value in entry_price_ws_refresh.items()
+        if key.startswith("pre_submit_ws_snapshot_refresh_")
+    }
+    latency_gate.update(entry_price_ws_refresh_fields)
+    refreshed_current_price = _safe_int((ws_data or {}).get("curr"), 0)
+    refreshed_best_ask, refreshed_best_bid = _get_best_levels_from_ws(ws_data or {})
+    if refreshed_current_price > 0:
+        current_price = refreshed_current_price
+        curr_price = refreshed_current_price
+    if refreshed_best_bid > 0 and refreshed_best_ask >= refreshed_best_bid:
+        best_bid = refreshed_best_bid
+        best_ask = refreshed_best_ask
+    invalid_price_context_fields.update(
+        {
+            "current_price": current_price,
+            "best_bid": _coerce_int_value(best_bid),
+            "best_ask": _coerce_int_value(best_ask),
+        }
+    )
+    price_ctx = _build_entry_ai_price_context(
+        stock,
+        latency_gate,
+        curr_price=current_price,
+        best_bid=best_bid,
+        best_ask=best_ask,
+    )
+    micro_log_fields = _build_orderbook_micro_log_fields(
+        price_ctx.get("orderbook_micro")
+    )
+    candle_venue = resolve_entry_candle_venue(
+        ws_data or {},
+        session=candle_session,
+    )
+
     candle_context = None
     entry_price_preflight = {}
     if candle_axis_active:
@@ -40214,6 +40297,7 @@ def _apply_entry_ai_price_canary(
                 "ai_entry_price_provider_result_source": (
                     "deterministic_source_quality_guard"
                 ),
+                **entry_price_ws_refresh_fields,
                 **candle_log_fields,
             }
             latency_gate.update(submit_block_fields)
@@ -40296,6 +40380,7 @@ def _apply_entry_ai_price_canary(
             "ai_entry_price_provider_result_source": (
                 "deterministic_source_quality_guard"
             ),
+            **entry_price_ws_refresh_fields,
             **entry_price_input_audit,
         }
         latency_gate.update(submit_block_fields)
@@ -50253,6 +50338,79 @@ def _refresh_entry_opportunity_recheck_inputs(
     return refreshed_ws, effective_ticks, fields
 
 
+def _consume_entry_opportunity_recheck_ws_handoff(
+    stock: dict | None,
+    ws_data: dict | None,
+    runtime: dict | None,
+) -> tuple[dict, dict]:
+    """Consume one same-attempt recheck snapshot without relaxing freshness.
+
+    The handoff is transient runtime state, never persisted on the stock.  It
+    is accepted only for an armed SCALPING recheck, must carry a timestamp no
+    older than the ordinary pre-submit WS freshness limit, and must not be
+    older than the submit caller's snapshot.  The normal pre-submit refresh,
+    canonical input preflight, and submit safety guards still run afterwards.
+    """
+
+    original = dict(ws_data or {})
+    runtime = runtime if isinstance(runtime, dict) else {}
+    handoff = runtime.pop("_entry_opportunity_recheck_ws_handoff", None)
+    fields = {
+        "entry_opportunity_recheck_ws_handoff_attempted": bool(handoff),
+        "entry_opportunity_recheck_ws_handoff_applied": False,
+        "entry_opportunity_recheck_ws_handoff_reason": (
+            "handoff_missing" if not handoff else "not_evaluated"
+        ),
+        "entry_opportunity_recheck_ws_handoff_age_ms": None,
+        "entry_opportunity_recheck_ws_handoff_source": "same_attempt_runtime_memory",
+    }
+    if not isinstance(handoff, dict):
+        return original, fields
+    if str(runtime.get("strategy") or "").strip().upper() not in {
+        "SCALPING",
+        "SCALP",
+    }:
+        fields["entry_opportunity_recheck_ws_handoff_reason"] = "non_scalping"
+        return original, fields
+    if not _truthy_field((stock or {}).get("entry_opportunity_recheck_armed")):
+        fields["entry_opportunity_recheck_ws_handoff_reason"] = "recheck_not_armed"
+        return original, fields
+    snapshot = handoff.get("snapshot")
+    if not isinstance(snapshot, dict) or not snapshot:
+        fields["entry_opportunity_recheck_ws_handoff_reason"] = "snapshot_missing"
+        return original, fields
+
+    snapshot_ts = _safe_float(snapshot.get("last_ws_update_ts"), 0.0)
+    if snapshot_ts <= 0:
+        fields["entry_opportunity_recheck_ws_handoff_reason"] = "timestamp_missing"
+        return original, fields
+    observed_at = time.time()
+    age_ms = max(0.0, (observed_at - snapshot_ts) * 1000.0)
+    fields["entry_opportunity_recheck_ws_handoff_age_ms"] = round(age_ms, 3)
+    max_age_ms = _safe_int(
+        os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS"),
+        _safe_int(
+            getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700),
+            700,
+        ),
+    )
+    if age_ms > max_age_ms:
+        fields["entry_opportunity_recheck_ws_handoff_reason"] = "snapshot_stale"
+        return original, fields
+    original_ts = _safe_float(original.get("last_ws_update_ts"), 0.0)
+    if original_ts > snapshot_ts:
+        fields["entry_opportunity_recheck_ws_handoff_reason"] = (
+            "submit_input_newer_than_handoff"
+        )
+        return original, fields
+
+    fields["entry_opportunity_recheck_ws_handoff_applied"] = True
+    fields["entry_opportunity_recheck_ws_handoff_reason"] = (
+        "same_attempt_recheck_snapshot"
+    )
+    return _entry_context_ws_data(dict(snapshot), stock or {}), fields
+
+
 def _buy_recovery_probe_tick_pressure_usable(probe: dict | None) -> bool:
     probe = probe if isinstance(probe, dict) else {}
     return bool(
@@ -58519,6 +58677,16 @@ def _handle_watching_strategy_branch(
                             entry_opportunity_recheck.stage,
                             **recheck_fields,
                         )
+                        # Runtime-memory only: give the final submit owner the
+                        # exact quote/tape/canonical context that passed this
+                        # recheck.  The consumer applies the ordinary freshness
+                        # limit again and the entry-price preflight remains
+                        # fail-closed.
+                        runtime["_entry_opportunity_recheck_ws_handoff"] = {
+                            "snapshot": dict(recheck_ws_data or {}),
+                            "captured_at_epoch": time.time(),
+                            "source_stage": entry_opportunity_recheck.stage,
+                        }
                         entry_opportunity_recheck_allowed = True
                     elif bool(
                         entry_opportunity_recheck.fields.get(
@@ -59799,6 +59967,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     cooldowns = runtime["cooldowns"]
     alerted_stocks = runtime["alerted_stocks"]
     ai_engine = runtime.get("ai_engine")
+    ws_data, entry_opportunity_recheck_ws_handoff_fields = (
+        _consume_entry_opportunity_recheck_ws_handoff(stock, ws_data, runtime)
+    )
+    if entry_opportunity_recheck_ws_handoff_fields.get(
+        "entry_opportunity_recheck_ws_handoff_applied"
+    ):
+        handoff_price = _safe_int(ws_data.get("curr"), 0)
+        if handoff_price > 0:
+            curr_price = handoff_price
+            runtime["curr_price"] = handoff_price
     opening_rotation_active = bool(
         runtime.get("opening_rotation_1pct_live")
         or is_opening_rotation_position(
@@ -60605,6 +60783,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         target_buy_price=final_price if strategy == "SCALPING" else 0,
     )
     latency_gate.update(latency_ai_signal_authority_fields)
+    latency_gate.update(entry_opportunity_recheck_ws_handoff_fields)
     if opening_rotation_active:
         fresh_spread_ai_recheck_fields = {
             "fresh_spread_ai_recheck_attempted": False,

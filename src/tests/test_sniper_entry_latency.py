@@ -1193,9 +1193,27 @@ def test_real_pre_submit_ws_snapshot_refresh_uses_fresh_ws_manager_snapshot(
     class FakeWsManager:
         def get_latest_data(self, code):
             assert code == "123456"
+            observed_at = time.time()
             return {
                 "curr": 10_020,
-                "last_ws_update_ts": time.time(),
+                "last_ws_update_ts": observed_at,
+                "last_realtime_type_ts": {
+                    "0B": observed_at,
+                    "0D": observed_at,
+                },
+                "last_realtime_type_item": {
+                    "0B": "123456",
+                    "0D": "123456",
+                },
+                "last_realtime_type_market_suffix": {"0B": "", "0D": ""},
+                "last_realtime_type_market_route": {
+                    "0B": "krx_only",
+                    "0D": "krx_only",
+                },
+                "last_realtime_type_effective_venue": {
+                    "0B": "KRX",
+                    "0D": "KRX",
+                },
                 "orderbook": {
                     "asks": [{"price": 10_030, "volume": 100}],
                     "bids": [{"price": 10_020, "volume": 100}],
@@ -1207,6 +1225,19 @@ def test_real_pre_submit_ws_snapshot_refresh_uses_fresh_ws_manager_snapshot(
     stale_input = {
         "curr": 10_000,
         "last_ws_update_ts": time.time() - 3.0,
+        "market_type": "KOSPI",
+        "previous_day_levels": {"close": 9_900},
+        "last_realtime_type_ts": {"0B": time.time(), "0D": time.time()},
+        "last_realtime_type_item": {"0B": "123456", "0D": "123456"},
+        "last_realtime_type_market_suffix": {"0B": "", "0D": ""},
+        "last_realtime_type_market_route": {
+            "0B": "krx_nxt_integrated",
+            "0D": "krx_nxt_integrated",
+        },
+        "last_realtime_type_effective_venue": {"0B": "KRX", "0D": "KRX"},
+        "recent_trade_ticks": [{"price": 10_000, "time": "115958"}],
+        "best_bid": 10_000,
+        "best_ask": 10_010,
         "orderbook": {
             "asks": [{"price": 10_010, "volume": 100}],
             "bids": [{"price": 10_000, "volume": 100}],
@@ -1225,6 +1256,82 @@ def test_real_pre_submit_ws_snapshot_refresh_uses_fresh_ws_manager_snapshot(
     assert refreshed["curr"] == 10_020
     assert refreshed["orderbook"]["bids"][0]["price"] == 10_020
     assert refreshed["pre_submit_ws_snapshot_refresh_latest_price"] == 10_020
+    assert refreshed["market_type"] == "KOSPI"
+    assert refreshed["previous_day_levels"] == {"close": 9_900}
+    assert refreshed["last_realtime_type_market_route"] == {
+        "0B": "krx_only",
+        "0D": "krx_only",
+    }
+    assert "recent_trade_ticks" not in refreshed
+    assert "best_bid" not in refreshed
+    assert "best_ask" not in refreshed
+
+
+def test_entry_opportunity_recheck_ws_handoff_reuses_fresh_exact_context(
+    monkeypatch,
+):
+    now_ts = time.time()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "700")
+    runtime = {
+        "strategy": "SCALPING",
+        "_entry_opportunity_recheck_ws_handoff": {
+            "snapshot": {
+                "curr": 10_020,
+                "last_ws_update_ts": now_ts,
+                "canonical_context_schema": "entry_candle_context_v1",
+                "last_realtime_type_ts": {"0B": now_ts, "0D": now_ts},
+                "orderbook": {
+                    "asks": [{"price": 10_030, "volume": 100}],
+                    "bids": [{"price": 10_020, "volume": 100}],
+                },
+            }
+        },
+    }
+
+    effective, fields = (
+        state_handlers._consume_entry_opportunity_recheck_ws_handoff(
+            {"entry_opportunity_recheck_armed": True},
+            {"curr": 10_000, "last_ws_update_ts": now_ts - 0.2},
+            runtime,
+        )
+    )
+
+    assert fields["entry_opportunity_recheck_ws_handoff_attempted"] is True
+    assert fields["entry_opportunity_recheck_ws_handoff_applied"] is True
+    assert (
+        fields["entry_opportunity_recheck_ws_handoff_reason"]
+        == "same_attempt_recheck_snapshot"
+    )
+    assert effective["curr"] == 10_020
+    assert effective["canonical_context_schema"] == "entry_candle_context_v1"
+    assert effective["last_realtime_type_ts"] == {"0B": now_ts, "0D": now_ts}
+    assert "_entry_opportunity_recheck_ws_handoff" not in runtime
+
+
+def test_entry_opportunity_recheck_ws_handoff_rejects_stale_snapshot(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "700")
+    original = {"curr": 10_000, "last_ws_update_ts": time.time()}
+    runtime = {
+        "strategy": "SCALPING",
+        "_entry_opportunity_recheck_ws_handoff": {
+            "snapshot": {
+                "curr": 10_020,
+                "last_ws_update_ts": time.time() - 3.0,
+            }
+        },
+    }
+
+    effective, fields = (
+        state_handlers._consume_entry_opportunity_recheck_ws_handoff(
+            {"entry_opportunity_recheck_armed": True},
+            original,
+            runtime,
+        )
+    )
+
+    assert effective == original
+    assert fields["entry_opportunity_recheck_ws_handoff_applied"] is False
+    assert fields["entry_opportunity_recheck_ws_handoff_reason"] == "snapshot_stale"
 
 
 def test_entry_opportunity_recheck_refresh_uses_post_ai_quote_and_ticks(monkeypatch):

@@ -29184,6 +29184,7 @@ def test_entry_ai_price_canary_improves_live_order_price(monkeypatch):
 
 
 def test_entry_ai_price_preflight_blocks_submit_before_provider(monkeypatch):
+    events = []
     monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
     monkeypatch.setattr(
         state_handlers,
@@ -29196,12 +29197,17 @@ def test_entry_ai_price_preflight_blocks_submit_before_provider(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_tick_history_ka10003",
-        lambda *args, **kwargs: [],
+        lambda *args, **kwargs: events.append("ticks") or [],
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_minute_candles_ka10080_with_meta",
         lambda *args, **kwargs: ([], {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "fetch_entry_candles_with_meta",
+        lambda *args, **kwargs: events.append("candles") or ([], {}),
     )
     blocked_context = {
         "schema": "entry_candle_context_v1",
@@ -29227,10 +29233,40 @@ def test_entry_ai_price_preflight_blocks_submit_before_provider(monkeypatch):
             },
         },
     }
+    refreshed_ws = {
+        "curr": 10_030,
+        "last_ws_update_ts": time.time(),
+        "orderbook": {
+            "asks": [{"price": 10_040, "volume": 100}],
+            "bids": [{"price": 10_030, "volume": 100}],
+        },
+        "last_realtime_type_market_route": {
+            "0B": "krx_only",
+            "0D": "krx_only",
+        },
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda *args, **kwargs: (
+            events.append("ws_refresh") or refreshed_ws,
+            {
+                "pre_submit_ws_snapshot_refresh_applied": True,
+                "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+                "pre_submit_ws_snapshot_refresh_age_ms": 12.0,
+            },
+        ),
+    )
+
+    def fake_build_entry_candle_context(*args, **kwargs):
+        events.append("canonical_context")
+        assert args[2] is refreshed_ws
+        return blocked_context
+
     monkeypatch.setattr(
         state_handlers,
         "build_entry_candle_context",
-        lambda *args, **kwargs: blocked_context,
+        fake_build_entry_candle_context,
     )
     logs = []
     monkeypatch.setattr(
@@ -29282,6 +29318,12 @@ def test_entry_ai_price_preflight_blocks_submit_before_provider(monkeypatch):
     assert touched is True
     assert latency_gate["ai_entry_price_provider_call_count"] == 0
     assert latency_gate["ai_entry_price_canary_submit_blocked"] is True
+    assert events == ["ticks", "candles", "ws_refresh", "canonical_context"]
+    assert latency_gate["entry_ai_price_ws_snapshot_refresh_applied"] is True
+    assert (
+        latency_gate["entry_ai_price_ws_snapshot_refresh_reason"]
+        == "latest_ws_snapshot_fresh"
+    )
     assert any(stage == "entry_ai_price_input_preflight_block" for stage, _ in logs)
 
 
