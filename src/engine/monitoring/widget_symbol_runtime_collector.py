@@ -54,6 +54,8 @@ from src.utils import kiwoom_utils
 
 COLLECTION_START = clock_time(8, 57)
 COLLECTION_END = clock_time(15, 31)
+CACHE_BOUNDARY_REQUEST_CAPACITY = 52
+REQUESTS_PER_MINUTE = 64
 
 
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
@@ -254,7 +256,14 @@ class WidgetSymbolRuntimeCollector:
         self.policy_loader = policy_loader or WidgetSymbolRuntimePolicyLoader()
         self.request_session = request_session
         self.observation_dir = observation_dir
-        self.request_budget = ReadOnlyRequestBudget(max_requests_per_minute=36)
+        # Four primary symbols, four peer charts, two shared index charts, and
+        # four flow pairs produce a bounded 52-call rolling-minute overlap at
+        # cache warm-up/boundaries. The steady-state rate is lower, but 36 let
+        # a required primary chart fail before the oldest calls aged out. Keep
+        # limited headroom without creating an unbounded retry surface.
+        self.request_budget = ReadOnlyRequestBudget(
+            max_requests_per_minute=REQUESTS_PER_MINUTE
+        )
         self._active_date = ""
         self._policies: dict[str, dict[str, Any]] = {}
         self._minute_cache: dict[str, tuple[str, dict[str, Any]]] = {}
@@ -277,6 +286,7 @@ class WidgetSymbolRuntimeCollector:
         }
         self._episodes: dict[str, EpisodeState] = {}
         self._last_record_key: dict[str, str] = {}
+        self._symbol_cursor = 0
 
     def _activate_date(self, observed_at: datetime) -> None:
         day = observed_at.date().isoformat()
@@ -304,6 +314,16 @@ class WidgetSymbolRuntimeCollector:
             else:
                 self._episodes[symbol] = EpisodeState(trade_date=day)
         self._last_record_key.clear()
+        self._symbol_cursor = 0
+
+    def _ordered_policy_items(self) -> list[tuple[str, dict[str, Any]]]:
+        """Rotate the first symbol so a temporary defer cannot starve a tail."""
+        items = sorted(self._policies.items())
+        if not items:
+            return []
+        offset = self._symbol_cursor % len(items)
+        self._symbol_cursor = (self._symbol_cursor + 1) % len(items)
+        return items[offset:] + items[:offset]
 
     def _client(self) -> KiwoomReadOnlyClient:
         token = kiwoom_utils.get_cached_kiwoom_token(CONF)
@@ -511,6 +531,70 @@ class WidgetSymbolRuntimeCollector:
         )
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+    def _degraded_symbol_payload(
+        self,
+        *,
+        symbol: str,
+        policy: dict[str, Any],
+        observed_at: datetime,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Publish a fail-closed snapshot without terminating other symbols."""
+        contract = CONTRACTS[symbol]
+        episode = self._episodes[symbol]
+        episode.activate_date(observed_at)
+        payload = {
+            "schema_version": SNAPSHOT_SCHEMA_VERSION,
+            "status": "data_wait",
+            "symbol": symbol,
+            "name": contract.name,
+            "observed_at_kst": observed_at.isoformat(),
+            "current_price": None,
+            "market_venue": "KRX",
+            "market_cohort": "KRX",
+            "market_session": "krx_regular",
+            "strategy_profile": contract.STRATEGY_PROFILE,
+            "policy_id": policy["policy_id"],
+            "policy_effective_date": policy.get("effective_date"),
+            "official_reference": OFFICIAL_REFERENCE,
+            "advisory": {
+                "state": "DATA_WAIT",
+                "session": "KRX_REGULAR",
+                "observed_at": observed_at.isoformat(),
+                "source_quality": {
+                    "status": "BLOCKED",
+                    "reasons": [reason],
+                    "auxiliary_status": "LIMITED",
+                },
+                "unmet_conditions": [reason],
+                "metric_contract": METRIC_CONTRACT,
+                "strategy_profile": contract.STRATEGY_PROFILE,
+                "authority": ADVISORY_AUTHORITY,
+                "runtime_effect": False,
+            },
+            "entry_event": None,
+            "exit_event": None,
+            "episode": episode.as_dict(),
+            "latest_completed_bar": None,
+            "bbo": {},
+            "request_budget": self.request_budget.snapshot(),
+            "token_mode": "shared_cache_only_no_issue_no_refresh",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        _atomic_write(contract.DEFAULT_SNAPSHOT_PATH, payload)
+        self._record(symbol, payload)
+        return payload
+
+    @staticmethod
+    def _collection_failure_reason(exc: BaseException) -> str:
+        message = str(exc)
+        if message == "widget_request_budget_exhausted":
+            return "request_budget_deferred"
+        if message == "widget_kiwoom_429_cooldown":
+            return "kiwoom_rate_limit_cooldown"
+        return f"read_only_source_error:{type(exc).__name__}"
 
     @staticmethod
     def _carry_event(
@@ -782,16 +866,31 @@ class WidgetSymbolRuntimeCollector:
         if not self._policies:
             return {"status": "no_active_exact_date_policy", "symbols": {}}
         client = self._client()
-        results = {
-            symbol: self._collect_symbol(
-                symbol=symbol,
-                policy=policy,
-                client=client,
-                observed_at=now,
-            )
-            for symbol, policy in sorted(self._policies.items())
+        results: dict[str, dict[str, Any]] = {}
+        failures: dict[str, str] = {}
+        for symbol, policy in self._ordered_policy_items():
+            try:
+                results[symbol] = self._collect_symbol(
+                    symbol=symbol,
+                    policy=policy,
+                    client=client,
+                    observed_at=now,
+                )
+            except (RuntimeError, requests.RequestException) as exc:
+                reason = self._collection_failure_reason(exc)
+                failures[symbol] = reason
+                results[symbol] = self._degraded_symbol_payload(
+                    symbol=symbol,
+                    policy=policy,
+                    observed_at=now,
+                    reason=reason,
+                )
+        return {
+            "status": "partial_data_wait" if failures else "ok",
+            "symbols": results,
+            "failures": failures,
+            "request_budget": self.request_budget.snapshot(),
         }
-        return {"status": "ok", "symbols": results}
 
     def run_forever(self, *, interval_sec: float = 15.0) -> None:
         interval = max(10.0, float(interval_sec))

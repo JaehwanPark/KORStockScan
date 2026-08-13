@@ -418,6 +418,28 @@ class WidgetSignalAutoTrader:
                 manifest[spec.code] = spec.execution_policy_id
         return manifest
 
+    def _policy_execution_sessions(self) -> dict[str, list[str]]:
+        """Expose policy sessions eligible to open a new runtime entry."""
+        result: dict[str, list[str]] = {}
+        for spec in self.specs:
+            dated_sessions = self._dated_execution_policies.get(spec.code)
+            if dated_sessions:
+                eligible = sorted(
+                    session
+                    for session, policy in dated_sessions.items()
+                    if policy.get("new_entry_runtime_eligible") is not False
+                )
+            else:
+                legacy = _legacy_execution_policy(spec)
+                eligible = (
+                    sorted(str(value) for value in legacy["allowed_entry_sessions"])
+                    if legacy is not None
+                    else []
+                )
+            if eligible:
+                result[spec.code] = eligible
+        return result
+
     def _execution_policy(
         self,
         spec: WidgetSpec,
@@ -479,9 +501,14 @@ class WidgetSignalAutoTrader:
             "take_profit_failure_count": 0,
             "last_take_profit_attempt_at": None,
             "last_source_state": None,
+            "last_blocked_source_exit_signal_id": None,
         }
 
     def _save(self) -> None:
+        monitored_symbols = [spec.code for spec in self.specs]
+        policy_sessions = self._policy_execution_sessions()
+        runtime_sessions = policy_sessions if self.enabled else {}
+        execution_eligible_symbols = sorted(runtime_sessions)
         self._state.update(
             {
                 "schema_version": STATE_SCHEMA_VERSION,
@@ -495,7 +522,17 @@ class WidgetSignalAutoTrader:
                 "cash_precheck_performed": False,
                 "token_mode": "shared_cache_only_no_issue_no_refresh",
                 "entry_qty": self.entry_qty,
-                "enabled_symbols": [spec.code for spec in self.specs],
+                # Retain enabled_symbols for backward-compatible readers; the
+                # explicit fields below separate observation from order scope.
+                "enabled_symbols": monitored_symbols,
+                "monitored_symbols": monitored_symbols,
+                "policy_execution_eligible_symbols": sorted(policy_sessions),
+                "policy_execution_sessions": policy_sessions,
+                "execution_eligible_symbols": execution_eligible_symbols,
+                "observation_only_symbols": sorted(
+                    set(monitored_symbols) - set(execution_eligible_symbols)
+                ),
+                "runtime_execution_policy_sessions": runtime_sessions,
                 "execution_policies": self._configured_execution_policies,
                 "execution_contract": EXECUTION_CONTRACT,
             }
@@ -1807,14 +1844,17 @@ class WidgetSignalAutoTrader:
             not in {"observe_only_no_forced_sell", "sell_own_filled_quantity"}
         )
         if source_exit_action_invalid:
-            self._event(
-                "source_final_exit_blocked_invalid_policy_action",
-                spec,
-                now,
-                signal_id=exit_signal_id,
-                source_final_exit_action=source_exit_action,
-                execution_policy_id=execution_policy.get("policy_id"),
-            )
+            if exit_signal_id != symbol_state.get("last_blocked_source_exit_signal_id"):
+                symbol_state["last_blocked_source_exit_signal_id"] = exit_signal_id
+                self._save()
+                self._event(
+                    "source_final_exit_blocked_invalid_policy_action",
+                    spec,
+                    now,
+                    signal_id=exit_signal_id,
+                    source_final_exit_action=source_exit_action,
+                    execution_policy_id=execution_policy.get("policy_id"),
+                )
             exit_signal_id = None
         source_exit_observed = bool(
             exit_signal_id

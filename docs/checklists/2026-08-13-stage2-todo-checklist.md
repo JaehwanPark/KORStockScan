@@ -141,6 +141,14 @@
   - 금지: 리뷰 미종료 상태의 설치, 장전 window를 지난 소급 기동, report 원본 누락 우회, widget/다른 episode 원장 사용, 손절·target timeout·강제청산, 수량·provider·bot·cap·broker guard 변경을 허용하지 않는다.
 
 
+## 위젯 수집·자동매매 운영 보완
+
+- [x] `[WidgetRuntimeCollectorStability0813] 4종목 수집기 budget 경계·종목 격리 및 자동매매 상태 provenance 보완` (`Due: 2026-08-13`, `Slot: INTRADAY`, `TimeWindow: 10:05~10:35`, `Track: RuntimeStability`)
+  - 판정: 4종목 primary/peer/2개 index/수급 호출이 rolling-minute 캐시 경계에서 36회 한도를 초과해 required `ka10080`이 실패하고 systemd 재시작한 원인을 확인했다. 계산된 경계 overlap 52회에 제한된 여유를 둔 로컬 read-only 64회 한도와 종목별 `DATA_WAIT` fail-closed 격리·순환 시작 순서·budget provenance를 추가했다. 주문·계좌·token issue/refresh·실주문 정책은 변경하지 않았다.
+  - 자동매매 provenance: 동일 source exit의 invalid-policy 차단 이벤트는 signal ID별 1회만 기록하고, 정책 적격(`policy_execution_eligible_symbols`, `policy_execution_sessions`)과 현재 주문권한 적격(`execution_eligible_symbols`, `runtime_execution_policy_sessions`), `monitored_symbols`, `observation_only_symbols`를 분리했다. 기존 `enabled_symbols`는 호환 필드로 유지한다.
+  - Kiwoom 공식 참조: `Kiwoom-Securities/Kiwoom-REST-API` SHA `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`, 확인시각 `2026-08-13T10:18:06+09:00`, `kiwoom_docs/시세.md`, `kiwoom_docs/차트.md`, `kiwoom_docs/종목정보.md`, `kiwoom/specs.py`, `kiwoom/core`, `kiwoom/realtime`, Postman을 재확인했다. 기존 `ka10001/ka10004/ka10064/ka10080/ka20005/ka90008` 요청 계약은 변경하지 않았다.
+  - 리뷰/검증: widget consumer 확장 회귀 `271 passed`, 최종 targeted 회귀 `80 passed`, Black, Ruff, compile, checklist parser count=`30`, `git diff --check`를 통과했고 최종 미해결 finding은 `0`이다. 명시적 서비스 재기동은 수행하지 않았으나 기존 crash-loop의 systemd 자동복구가 새 collector 코드를 10:24:16 KST에 로드했고, 10:30:48까지 restart counter=`98` 고정·4종목 snapshot `PASS`를 확인했다. 장기 실행 auto-trader PID `24014`에는 provenance/dedup 보완이 아직 미반영이다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.

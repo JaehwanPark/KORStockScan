@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from src.engine.monitoring.samsung_widget_advisory import MinuteBar
 from src.engine.monitoring.samsung_widget_advisory import ExternalPoint
 from src.engine.monitoring.samsung_widget_contract import KST
 from src.engine.monitoring import widget_symbol_runtime_contract as runtime_contract
 from src.engine.monitoring.widget_symbol_runtime_collector import (
+    CACHE_BOUNDARY_REQUEST_CAPACITY,
+    CONTRACTS,
     EpisodeState,
+    REQUESTS_PER_MINUTE,
     WidgetSymbolRuntimeCollector,
     _advance_support_break_count,
     _source_quality,
@@ -175,6 +179,86 @@ def test_shared_market_payload_fetches_each_index_only_once_per_minute():
 
     assert [call[2]["inds_cd"] for call in client.calls] == ["001", "101"]
     assert all(call[1] == "ka20005" and call[3] is True for call in client.calls)
+
+
+def test_runtime_collector_budget_covers_four_symbol_cache_boundary_burst():
+    collector = WidgetSymbolRuntimeCollector()
+
+    assert REQUESTS_PER_MINUTE == 64
+    assert REQUESTS_PER_MINUTE > CACHE_BOUNDARY_REQUEST_CAPACITY
+    assert collector.request_budget.max_requests_per_minute == REQUESTS_PER_MINUTE
+
+
+def test_collect_once_isolates_source_failure_and_rotates_first_symbol(monkeypatch):
+    collector = WidgetSymbolRuntimeCollector()
+    now = datetime(2026, 8, 12, 11, 30, 5, tzinfo=KST)
+    collector._policies = {
+        "006800": {"policy_id": "A"},
+        "010140": {"policy_id": "B"},
+    }
+    monkeypatch.setattr(collector, "_activate_date", lambda _now: None)
+    monkeypatch.setattr(collector, "_client", lambda: object())
+    calls: list[str] = []
+
+    def collect_symbol(**kwargs):
+        symbol = kwargs["symbol"]
+        calls.append(symbol)
+        if symbol == "006800":
+            raise RuntimeError("widget_request_budget_exhausted")
+        return {"status": "ok", "symbol": symbol}
+
+    monkeypatch.setattr(collector, "_collect_symbol", collect_symbol)
+    monkeypatch.setattr(
+        collector,
+        "_degraded_symbol_payload",
+        lambda **kwargs: {
+            "status": "data_wait",
+            "symbol": kwargs["symbol"],
+            "reason": kwargs["reason"],
+        },
+    )
+
+    first = collector.collect_once(now)
+    second = collector.collect_once(now + timedelta(seconds=15))
+
+    assert first["status"] == "partial_data_wait"
+    assert first["failures"] == {"006800": "request_budget_deferred"}
+    assert first["symbols"]["010140"]["status"] == "ok"
+    assert calls == ["006800", "010140", "010140", "006800"]
+    assert second["status"] == "partial_data_wait"
+
+
+def test_degraded_symbol_payload_clears_actionable_events(monkeypatch, tmp_path):
+    snapshot_path = tmp_path / "snapshot.json"
+    monkeypatch.setitem(
+        CONTRACTS,
+        "999999",
+        SimpleNamespace(
+            name="test",
+            STRATEGY_PROFILE="TEST_V1",
+            DEFAULT_SNAPSHOT_PATH=snapshot_path,
+        ),
+    )
+    collector = WidgetSymbolRuntimeCollector(observation_dir=tmp_path / "observations")
+    now = datetime(2026, 8, 12, 11, 30, 5, tzinfo=KST)
+    collector._active_date = now.date().isoformat()
+    collector._episodes["999999"] = EpisodeState(trade_date=now.date().isoformat())
+
+    payload = collector._degraded_symbol_payload(
+        symbol="999999",
+        policy={"policy_id": "POLICY", "effective_date": "2026-08-12"},
+        observed_at=now,
+        reason="request_budget_deferred",
+    )
+
+    assert payload["status"] == "data_wait"
+    assert payload["advisory"]["state"] == "DATA_WAIT"
+    assert payload["advisory"]["source_quality"]["status"] == "BLOCKED"
+    assert payload["entry_event"] is None
+    assert payload["exit_event"] is None
+    assert payload["actual_order_submitted"] is False
+    assert payload["broker_order_forbidden"] is True
+    assert snapshot_path.exists()
 
 
 def test_new_symbol_snapshot_records_partial_flow_without_granting_signal_authority(

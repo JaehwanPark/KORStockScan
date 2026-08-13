@@ -37,7 +37,7 @@ POLICY_PREFIX = "widget_symbol_runtime_policy"
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-12T15:12:22+09:00",
+    "retrieved_at_kst": "2026-08-13T10:18:06+09:00",
     "inspected_paths": [
         "kiwoom_docs/종목정보.md",
         "kiwoom_docs/시세.md",

@@ -174,6 +174,7 @@ def _trader(tmp_path, monkeypatch, payload_box, *, qty=1):
         state_path=tmp_path / "state.json",
         event_recorder=recorder,
         snapshot_loader=lambda path: payload_box["payload"],
+        policy_loader=FakeDatedPolicyLoader({}),
         entry_qty=qty,
         enabled=True,
     )
@@ -818,6 +819,18 @@ def test_unknown_source_exit_action_fails_closed_without_sell_or_new_entry(
     assert gateway.sell_calls == []
     assert recorder.events[-1]["event_type"] == (
         "source_final_exit_blocked_invalid_policy_action"
+    )
+
+    trader.run_once(now.replace(second=1))
+    blocked_events = [
+        event
+        for event in recorder.events
+        if event["event_type"] == "source_final_exit_blocked_invalid_policy_action"
+    ]
+    assert len(blocked_events) == 1
+    assert (
+        trader._state["symbols"]["999999"]["last_blocked_source_exit_signal_id"]
+        == "SOURCE-EXIT"
     )
 
 
@@ -1891,7 +1904,7 @@ def test_long_running_trader_refreshes_dynamic_specs_at_trade_date_boundary(tmp_
         event_recorder=FakeRecorder([]),
         snapshot_loader=lambda path: {},
         policy_loader=DatePolicyLoader(),
-        enabled=False,
+        enabled=True,
     )
 
     trader.run_once(datetime(2026, 8, 12, 10, 0, tzinfo=KST))
@@ -1901,6 +1914,18 @@ def test_long_running_trader_refreshes_dynamic_specs_at_trade_date_boundary(tmp_
     assert trader._state["execution_policies"] == {
         "888888": {"KRX_REGULAR": "dynamic-2026-08-13"}
     }
+    assert trader._state["monitored_symbols"] == ["999999", "888888"]
+    assert trader._state["policy_execution_eligible_symbols"] == ["888888"]
+    assert trader._state["execution_eligible_symbols"] == ["888888"]
+    assert trader._state["observation_only_symbols"] == ["999999"]
+    assert trader._state["runtime_execution_policy_sessions"] == {
+        "888888": ["KRX_REGULAR"]
+    }
+    trader.enabled = False
+    trader._save()
+    assert trader._state["policy_execution_eligible_symbols"] == ["888888"]
+    assert trader._state["execution_eligible_symbols"] == []
+    assert trader._state["observation_only_symbols"] == ["888888", "999999"]
     trader.run_once(datetime(2026, 8, 14, 10, 0, tzinfo=KST))
     assert [spec.code for spec in trader.specs] == ["999999"]
 
