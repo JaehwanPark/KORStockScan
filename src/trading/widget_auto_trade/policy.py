@@ -15,12 +15,13 @@ from typing import Any
 
 from src.utils.constants import PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
+from src.trading.order.episode_quantity import EPISODE_LEG_QUANTITY
 
 POLICY_SCHEMA = "widget_auto_trade_policy_v1"
 POLICY_AUTHORITY = "postclose_widget_auto_trade_calibration_v1"
 POLICY_FILE_PREFIX = "widget_auto_trade_policy"
 DEFAULT_POLICY_DIR = PROJECT_ROOT / "data/runtime/widget_auto_trade_policy"
-WIDGET_AUTO_TRADE_LEG_QUANTITY = 10
+WIDGET_AUTO_TRADE_LEG_QUANTITY = EPISODE_LEG_QUANTITY
 CUMULATIVE_RESEARCH_GATE_SYMBOLS = frozenset({"034020", "042660"})
 STATIC_WIDGET_AUTO_TRADE_SYMBOLS = frozenset(
     {"005930", *CUMULATIVE_RESEARCH_GATE_SYMBOLS}

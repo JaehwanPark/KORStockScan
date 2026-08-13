@@ -306,6 +306,27 @@ def test_final_completed_regular_bar_is_force_flat_boundary():
     assert result["exit_reason"] == "force_flat"
 
 
+def test_entry_cap_comparison_requires_positive_fourth_and_fifth_episode_ev():
+    episodes = [
+        {
+            "trade_date": "2026-08-11",
+            "daily_entry_ordinal": cap,
+            "entry_price": 10_000,
+            "net_return_pct": value,
+            "exit_reason": "target" if value > 0 else "force_flat",
+            "entry_state": "ENTRY_READY",
+            "peak_return_pct": max(value, 0.0),
+        }
+        for cap, value in enumerate((0.4, 0.3, 0.2, 0.1, -0.1), 1)
+    ]
+
+    comparison = research._entry_cap_comparison(episodes)
+
+    assert set(comparison) == {"1", "2", "3", "4", "5"}
+    assert research._incremental_entry_cap_ready(comparison, 4) is True
+    assert research._incremental_entry_cap_ready(comparison, 5) is False
+
+
 def test_discovery_selects_on_calibration_and_can_fail_untouched_holdout(
     monkeypatch,
 ):
@@ -331,6 +352,17 @@ def test_discovery_selects_on_calibration_and_can_fail_untouched_holdout(
             "worst_episode_return_pct": -0.5,
             "average_peak_return_pct": 0.3,
         }
+        result["entry_cap_comparison"] = {
+            str(cap): {
+                "cumulative": dict(result),
+                "incremental": {
+                    "episode_count": 1,
+                    "notional_weighted_ev_pct": 0.1,
+                },
+                "incremental_ev_positive": True,
+            }
+            for cap in research.ENTRY_CAP_VALUES
+        }
         if include_episodes:
             result["episodes"] = []
         return result
@@ -339,9 +371,59 @@ def test_discovery_selects_on_calibration_and_can_fail_untouched_holdout(
 
     result = research.discover_symbol_policy([], expected_dates=expected_dates)
 
-    assert result["selected_policy"] == research.asdict(selected)
+    assert result["selected_policy"] == {
+        **research.asdict(selected),
+        "max_completed_entries_per_day": 5,
+    }
     assert result["decision"] == "holdout_failed_no_widget_runtime_promotion"
     assert result["allowed_runtime_apply"] is False
+
+
+def test_discovery_auto_expands_to_positive_fourth_episode_without_chasing_cap_ev(
+    monkeypatch,
+):
+    selected = _policy()
+    expected_dates = [date(2026, 6, 5) + timedelta(days=index) for index in range(26)]
+    grouped = {
+        item: _bars([(10_000, 10_000, 10_000, 10_000, 1)]) for item in expected_dates
+    }
+    monkeypatch.setattr(research, "_group_bars", lambda bars: grouped)
+    monkeypatch.setattr(research, "policy_grid", lambda: (selected,))
+
+    def fake_evaluate(grouped_arg, dates, policy, *, include_episodes=False):
+        del grouped_arg, dates, policy
+        cumulative_ev = {1: 0.5, 2: 0.4, 3: 0.3, 4: 0.25, 5: 0.2}
+        incremental_ev = {1: 0.5, 2: 0.3, 3: 0.1, 4: 0.05, 5: -0.1}
+        comparisons = {}
+        for cap in research.ENTRY_CAP_VALUES:
+            comparisons[str(cap)] = {
+                "cumulative": {
+                    "episode_count": 12,
+                    "target_count": 8,
+                    "notional_weighted_ev_pct": cumulative_ev[cap],
+                    "worst_episode_return_pct": -0.5,
+                },
+                "incremental": {
+                    "episode_count": 2,
+                    "notional_weighted_ev_pct": incremental_ev[cap],
+                },
+                "incremental_ev_positive": incremental_ev[cap] > 0,
+            }
+        result = {
+            **comparisons["5"]["cumulative"],
+            "entry_cap_comparison": comparisons,
+        }
+        if include_episodes:
+            result["episodes"] = []
+        return result
+
+    monkeypatch.setattr(research, "evaluate_policy", fake_evaluate)
+
+    result = research.discover_symbol_policy([], expected_dates=expected_dates)
+
+    assert result["decision"] == "holdout_pass_widget_signal_policy_candidate"
+    assert result["selected_policy"]["max_completed_entries_per_day"] == 4
+    assert result["calibration"]["notional_weighted_ev_pct"] == 0.25
 
 
 def test_report_requires_exact_sources_and_declares_cross_owner_prohibition():

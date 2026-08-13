@@ -71,6 +71,172 @@ def test_replay_does_not_use_pre_entry_high_from_same_completed_bar() -> None:
     assert trades[0]["exit_reason"] == "fixed_average_take_profit"
 
 
+def test_replay_ignores_blocked_price_rows_for_exit_evidence() -> None:
+    rows = [
+        _row(0, state="ENTRY_READY", previous_state="WATCH"),
+        {
+            **_row(1, current=102.0, high=102.0),
+            "source_quality_status": "BLOCKED",
+        },
+        _row(2, current=100.1, high=100.2),
+    ]
+    session = SessionSpec("KRX_REGULAR", "KRX", ("14:30:00",), False, (), False)
+
+    trades = _simulate_day(
+        rows,
+        session=session,
+        add_triggers_bps=(),
+        target_bps=100,
+        max_entries=1,
+        cutoff="14:30:00",
+        cooldown_minutes=5,
+    )
+
+    assert trades[0]["exit_reason"] == "right_censored"
+    assert trades[0]["exit_price"] is None
+
+
+def test_replay_does_not_use_scale_in_minute_high_after_fill() -> None:
+    rows = [
+        _row(0, state="ENTRY_READY", previous_state="WATCH"),
+        _row(1, current=99.0, high=101.0, bar_minute=0),
+        _row(2, current=99.1, high=101.0, bar_minute=1),
+        _row(3, current=99.2, high=101.0, bar_minute=2),
+    ]
+    session = SessionSpec("KRX_REGULAR", "KRX", ("14:30:00",), False, (), False)
+
+    trades = _simulate_day(
+        rows,
+        session=session,
+        add_triggers_bps=(-100,),
+        target_bps=100,
+        max_entries=1,
+        cutoff="14:30:00",
+        cooldown_minutes=5,
+    )
+
+    assert trades[0]["filled_leg_count"] == 2
+    assert trades[0]["exit_at"] == rows[3]["observed_at"].isoformat()
+    assert trades[0]["exit_reason"] == "fixed_average_take_profit"
+
+
+def test_daily_entry_caps_compare_one_through_five_and_require_positive_tail_ev() -> (
+    None
+):
+    trades = [
+        {
+            "trade_date": "2026-08-11",
+            "daily_entry_ordinal": cap,
+            "net_return_pct": value,
+            "exit_reason": "fixed_average_take_profit",
+            "filled_leg_count": 1,
+        }
+        for cap, value in enumerate((0.4, 0.3, 0.2, 0.1, -0.1), 1)
+    ]
+
+    comparison = calibration._entry_cap_comparison(trades)
+
+    assert set(comparison) == {"1", "2", "3", "4", "5"}
+    assert calibration._incremental_entry_cap_ready(comparison, 4) == (
+        True,
+        "incremental_entry_cap_ev_positive",
+    )
+    assert calibration._incremental_entry_cap_ready(comparison, 5) == (
+        False,
+        "incremental_entry_cap_5_ev_not_positive",
+    )
+    assert all(spec.max_entries_values == (1, 2, 3, 4, 5) for spec in calibration.SPECS)
+
+
+def test_summary_excludes_right_censored_rows_from_ev_denominator() -> None:
+    summary = _summary(
+        [
+            {
+                "trade_date": "2026-08-11",
+                "net_return_pct": 0.6,
+                "exit_reason": "fixed_average_take_profit",
+                "filled_leg_count": 1,
+            },
+            {
+                "trade_date": "2026-08-11",
+                "net_return_pct": None,
+                "exit_reason": "right_censored",
+                "filled_leg_count": 1,
+            },
+        ]
+    )
+
+    assert summary["source_quality_adjusted_ev_pct"] == 0.6
+    assert summary["right_censored_count"] == 1
+    assert summary["target_completion_ratio"] == 0.5
+
+
+def test_holdout_gates_calibration_selected_high_cap_without_downgrading(
+    monkeypatch,
+) -> None:
+    session = SessionSpec(
+        "KRX_REGULAR", "KRX", ("14:30:00",), True, ("15:18:00",), True
+    )
+    spec = SymbolSpec(
+        symbol="005930",
+        name="synthetic",
+        observation_dir=calibration.DEFAULT_OUTPUT_DIR,
+        prefix="synthetic",
+        sessions=(session,),
+        add_trigger_arms=((),),
+        target_bps_values=(50,),
+        max_entries_values=calibration.ENTRY_CAP_VALUES,
+        minimum_signal_dates=2,
+        minimum_trades=2,
+        analysis_start_date=date(2026, 6, 5),
+        minimum_qualified_observation_dates=0,
+    )
+    rows = []
+    for day in range(1, 6):
+        source_date = date(2026, 8, day)
+        rows.append(
+            {
+                **_row(0),
+                "trade_date": source_date,
+                "observed_at": datetime(2026, 8, day, 10, 0, 10, tzinfo=KST),
+                "bar_at": datetime(2026, 8, day, 10, 0, tzinfo=KST),
+            }
+        )
+
+    def fake_simulate(day_rows, **kwargs):
+        maximum = int(kwargs["max_entries"])
+        source_date = day_rows[0]["trade_date"]
+        calibration_values = (0.5, 0.5, 0.5, 0.1, -0.5)
+        holdout_values = (0.5, 0.5, 0.5, -0.2, -0.5)
+        values = holdout_values if source_date.day == 5 else calibration_values
+        return [
+            {
+                "trade_date": source_date.isoformat(),
+                "daily_entry_ordinal": ordinal,
+                "net_return_pct": values[ordinal - 1],
+                "exit_reason": (
+                    "fixed_average_take_profit"
+                    if values[ordinal - 1] > 0
+                    else "preclose_market_exit"
+                ),
+                "filled_leg_count": 1,
+            }
+            for ordinal in range(1, maximum + 1)
+        ]
+
+    monkeypatch.setattr(calibration, "_simulate_day", fake_simulate)
+
+    report = _calibrate_session(spec, session, rows, target_date=date(2026, 8, 5))
+
+    assert report["selected_policy"]["max_completed_entries_per_day"] == 4
+    assert report["provisional_candidate_decision"] == (
+        "independent_holdout_incremental_entry_cap_ev_not_positive"
+    )
+    assert report["decision"] == (
+        "independent_holdout_incremental_entry_cap_ev_not_positive"
+    )
+
+
 def test_replay_force_flat_resolves_unhit_target_at_preclose() -> None:
     rows = [
         _row(0, state="ENTRY_CAUTION", previous_state="WATCH"),
