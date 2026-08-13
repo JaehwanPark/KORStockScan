@@ -55,6 +55,15 @@ DEFAULT_EXECUTION_EVENT_DIR = Path("data/report/widget_signal_auto_trade_events"
 ROUND_TRIP_COST_PCT = 0.20
 ACTIONABLE_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
 POSTCLOSE_COMPLETE_TIME = time(20, 1)
+INCONCLUSIVE_HOLDOUT_DECISIONS = frozenset(
+    {"independent_holdout_signal_missing", "independent_holdout_target_missing"}
+)
+RUNTIME_READY_DECISIONS = frozenset(
+    {
+        "widget_auto_trade_policy_candidate_ready",
+        "carry_forward_previous_verified_policy",
+    }
+)
 
 METRIC_CONTRACT = {
     "metric_role": "bounded_widget_auto_trade_policy_calibration",
@@ -673,6 +682,7 @@ def _calibrate_session(
     rows: Sequence[dict[str, Any]],
     *,
     target_date: date | None = None,
+    previous_runtime_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     research_accumulation = _research_accumulation(
         spec,
@@ -825,13 +835,81 @@ def _calibrate_session(
         if selected["ready"] and holdout_ready
         else selected["reason"] if not selected["ready"] else holdout_reason
     )
+    carry_forward_policy = _carry_forward_parameters(previous_runtime_policy)
+    carry_forward_calibration_summary = None
+    carry_forward_holdout_summary = None
+    carry_forward_candidate_ready = False
+    carry_forward_candidate_reason = "previous_verified_policy_unavailable"
+    carry_forward_holdout_decision = "previous_verified_policy_unavailable"
+    if carry_forward_policy is not None and not session.force_flat:
+        carry_forward_calibration_trades = simulate_dates(
+            calibration_dates,
+            add_triggers=tuple(
+                carry_forward_policy["add_trigger_bps_from_initial_fill"]
+            ),
+            target_bps=int(carry_forward_policy["target_bps"]),
+            max_entries=int(carry_forward_policy["max_completed_entries_per_day"]),
+            cutoff=str(carry_forward_policy["new_entry_cutoff_time"]),
+            cooldown=int(carry_forward_policy["reentry_cooldown_minutes"]),
+            force_exit_time=carry_forward_policy["force_exit_time"],
+        )
+        carry_forward_calibration_summary = _summary(carry_forward_calibration_trades)
+        (
+            carry_forward_candidate_ready,
+            carry_forward_candidate_reason,
+        ) = _candidate_ready(spec, session, carry_forward_calibration_summary)
+        carry_forward_holdout_trades = simulate_dates(
+            sorted(holdout_dates),
+            add_triggers=tuple(
+                carry_forward_policy["add_trigger_bps_from_initial_fill"]
+            ),
+            target_bps=int(carry_forward_policy["target_bps"]),
+            max_entries=int(carry_forward_policy["max_completed_entries_per_day"]),
+            cutoff=str(carry_forward_policy["new_entry_cutoff_time"]),
+            cooldown=int(carry_forward_policy["reentry_cooldown_minutes"]),
+            force_exit_time=carry_forward_policy["force_exit_time"],
+        )
+        carry_forward_holdout_summary = _summary(carry_forward_holdout_trades)
+        if carry_forward_holdout_summary["signal_trade_count"] < 1:
+            carry_forward_holdout_decision = "independent_holdout_signal_missing"
+        elif carry_forward_holdout_summary["target_exit_count"] < 1:
+            carry_forward_holdout_decision = "independent_holdout_target_missing"
+        else:
+            carry_forward_holdout_decision = "independent_holdout_pass"
+    carry_forward_previous = bool(
+        not session.force_flat
+        and provisional_decision != "widget_auto_trade_policy_candidate_ready"
+        and carry_forward_candidate_ready
+        and carry_forward_holdout_decision
+        in {*INCONCLUSIVE_HOLDOUT_DECISIONS, "independent_holdout_pass"}
+        and carry_forward_policy is not None
+    )
+    runtime_decision = (
+        "carry_forward_previous_verified_policy"
+        if carry_forward_previous
+        else provisional_decision
+    )
     return {
         "decision": (
             "research_accumulation_incomplete"
             if research_accumulation["runtime_eligible"] is False
-            else provisional_decision
+            else runtime_decision
         ),
         "provisional_candidate_decision": provisional_decision,
+        "runtime_selected_policy": (
+            carry_forward_policy if carry_forward_previous else selected_parameters
+        ),
+        "carry_forward_previous_policy": carry_forward_previous,
+        "carry_forward_candidate_ready": carry_forward_candidate_ready,
+        "carry_forward_candidate_reason": carry_forward_candidate_reason,
+        "carry_forward_calibration_summary": carry_forward_calibration_summary,
+        "carry_forward_holdout_summary": carry_forward_holdout_summary,
+        "carry_forward_holdout_decision": carry_forward_holdout_decision,
+        "carry_forward_from_policy_id": (
+            str(previous_runtime_policy.get("policy_id") or "")
+            if carry_forward_previous and previous_runtime_policy is not None
+            else None
+        ),
         "candidate_count": len(candidates),
         "selected_policy": selected_parameters,
         "selected_summary": selected["summary"],
@@ -843,19 +921,93 @@ def _calibrate_session(
         "holdout_trades": holdout_trades,
         "policy_tier": "bounded_chronological_holdout",
         "rollback_condition": (
-            "next cumulative source-quality-adjusted net EV <= 0; "
-            "unresolved forced-flat path; "
-            "worst trade < -2%; source-quality/policy verification failure; or "
-            "prior-day widget-owned inventory remains"
+            (
+                "next cumulative source-quality-adjusted net EV <= 0; "
+                "unresolved forced-flat path; worst trade < -2%; "
+                "source-quality/policy verification failure; or prior-day "
+                "widget-owned inventory remains"
+            )
+            if session.force_flat
+            else (
+                "previous-policy cumulative target completions < 2; "
+                "source-quality/policy verification failure; or terminal "
+                "order/cancel failure"
+            )
         ),
         "research_accumulation": research_accumulation,
     }
 
 
-def build_report(*, target_date: date) -> dict[str, Any]:
+def _carry_forward_parameters(
+    previous_runtime_policy: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if (
+        not isinstance(previous_runtime_policy, dict)
+        or previous_runtime_policy.get("new_entry_runtime_eligible") is not True
+    ):
+        return None
+    try:
+        add_triggers = [
+            int(value)
+            for value in previous_runtime_policy["add_trigger_bps_from_initial_fill"]
+        ]
+        target_bps = int(
+            previous_runtime_policy["take_profit_bps_from_equal_share_average"]
+        )
+        max_entries = int(previous_runtime_policy["max_completed_entries_per_day"])
+        cooldown = int(previous_runtime_policy["reentry_cooldown_minutes"])
+        cutoff = str(previous_runtime_policy["new_entry_cutoff_time"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        not add_triggers
+        and previous_runtime_policy.get("add_trigger_bps_from_initial_fill") is None
+    ):
+        return None
+    return {
+        "add_trigger_bps_from_initial_fill": add_triggers,
+        "target_bps": target_bps,
+        "max_completed_entries_per_day": max_entries,
+        "new_entry_cutoff_time": cutoff,
+        "reentry_cooldown_minutes": cooldown,
+        "force_exit_time": previous_runtime_policy.get("force_exit_time"),
+    }
+
+
+def _load_previous_verified_session_policies(
+    *, effective_date: date, policy_dir: Path
+) -> dict[str, dict[str, dict[str, Any]]]:
+    previous_effective_date = previous_krx_trading_date(effective_date)
+    expected_path = policy_dir / (
+        f"{POLICY_FILE_PREFIX}_{previous_effective_date.isoformat()}.json"
+    )
+    if not expected_path.exists():
+        return {}
+    loaded = WidgetAutoTradePolicyLoader(
+        policy_dir, include_symbol_expansion=False
+    ).resolve_all(observed_date=previous_effective_date)
+    selected: dict[str, dict[str, dict[str, Any]]] = {}
+    for symbol, sessions in loaded.items():
+        for session, policy in sessions.items():
+            if (
+                isinstance(policy, dict)
+                and policy.get("new_entry_runtime_eligible") is True
+                and Path(str(policy.get("policy_path") or "")).resolve()
+                == expected_path.resolve()
+            ):
+                selected.setdefault(symbol, {})[session] = policy
+    return selected
+
+
+def build_report(
+    *,
+    target_date: date,
+    previous_session_policies: dict[str, dict[str, dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
     if target_date < CLEAN_BASELINE_DATE:
         raise ValueError("target date precedes clean baseline")
     effective_date = _next_krx_trading_date(target_date)
+    previous_session_policies = previous_session_policies or {}
     symbol_reports: dict[str, Any] = {}
     source_paths: list[str] = []
     for spec in SPECS:
@@ -868,6 +1020,9 @@ def build_report(*, target_date: date) -> dict[str, Any]:
                 session,
                 rows,
                 target_date=target_date,
+                previous_runtime_policy=previous_session_policies.get(
+                    spec.symbol, {}
+                ).get(session.session),
             )
             for session in spec.sessions
         }
@@ -888,10 +1043,17 @@ def build_report(*, target_date: date) -> dict[str, Any]:
         for symbol_report in symbol_reports.values()
         for session_report in symbol_report["sessions"].values()
     )
+    carried_forward_count = sum(
+        symbol_report["source_quality_status"] == "PASS"
+        and symbol_report["execution_quality"]["runtime_apply_allowed"] is True
+        and session_report["decision"] == "carry_forward_previous_verified_policy"
+        for symbol_report in symbol_reports.values()
+        for session_report in symbol_report["sessions"].values()
+    )
     ready_count = sum(
         symbol_report["source_quality_status"] == "PASS"
         and symbol_report["execution_quality"]["runtime_apply_allowed"] is True
-        and session_report["decision"] == "widget_auto_trade_policy_candidate_ready"
+        and session_report["decision"] in RUNTIME_READY_DECISIONS
         for symbol_report in symbol_reports.values()
         for session_report in symbol_report["sessions"].values()
     )
@@ -909,6 +1071,7 @@ def build_report(*, target_date: date) -> dict[str, Any]:
             else "BLOCKED"
         ),
         "statistically_ready_session_policy_count": statistically_ready_count,
+        "carried_forward_session_policy_count": carried_forward_count,
         "ready_session_policy_count": ready_count,
         "symbols": symbol_reports,
         "metric_contract": METRIC_CONTRACT,
@@ -935,16 +1098,19 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                 "runtime_apply_allowed", False
             ):
                 block_reason = "execution_quality_safety_veto"
-            elif calibration["decision"] != "widget_auto_trade_policy_candidate_ready":
+            elif calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 block_reason = str(calibration["decision"])
             if block_reason is not None:
                 blocked_sessions.setdefault(spec.symbol, {})[
                     session_name
                 ] = block_reason
                 continue
-            if calibration["decision"] != "widget_auto_trade_policy_candidate_ready":
+            if calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 continue
-            selected = calibration["selected_policy"]
+            selected = (
+                calibration.get("runtime_selected_policy")
+                or calibration["selected_policy"]
+            )
             session_spec = session_specs[session_name]
             research_accumulation = calibration["research_accumulation"]
             sessions[session_name] = {
@@ -977,6 +1143,10 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                     f"widget_auto_trade_policy_calibration_{target_date}.json"
                 ),
                 "policy_tier": calibration["policy_tier"],
+                "runtime_selection_decision": calibration["decision"],
+                "carry_forward_from_policy_id": calibration.get(
+                    "carry_forward_from_policy_id"
+                ),
                 "rollback_condition": calibration["rollback_condition"],
                 "execution_quality": source["execution_quality"],
                 "actual_order_submitted": False,
@@ -1138,7 +1308,15 @@ def main(argv: list[str] | None = None) -> int:
         target_date == now.date() and now.time() < POSTCLOSE_COMPLETE_TIME
     ):
         raise SystemExit("target-date must be a fully completed prior KST date")
-    report = build_report(target_date=target_date)
+    effective_date = _next_krx_trading_date(target_date)
+    previous_session_policies = _load_previous_verified_session_policies(
+        effective_date=effective_date,
+        policy_dir=args.policy_dir,
+    )
+    report = build_report(
+        target_date=target_date,
+        previous_session_policies=previous_session_policies,
+    )
     policy = build_policy(report)
     result: dict[str, Any] = {
         "status": report["status"],

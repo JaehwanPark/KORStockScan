@@ -1213,10 +1213,7 @@ def test_post_baseline_lineage_excludes_pre_baseline_hypothesis_plan(
         {"hypothesis_observation_plan": {}},
     )
     _write(
-        tmp_path
-        / "threshold_cycle"
-        / "apply_plans"
-        / f"threshold_apply_{target}.json",
+        tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json",
         {"source_date": "2026-08-12"},
     )
 

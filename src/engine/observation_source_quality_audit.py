@@ -2922,10 +2922,9 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         if _field_text("tier_reason") != "unknown_venue_fallback":
             return False
-        if (
-            str(key or "") == "sizing_tier_reason_at_allocation"
-            and str(value or "").strip() != _field_text("tier_reason")
-        ):
+        if str(key or "") == "sizing_tier_reason_at_allocation" and str(
+            value or ""
+        ).strip() != _field_text("tier_reason"):
             return False
         resolved_venue = _field_text("venue").upper()
         effective_venue = _field_text("effective_venue").upper()
