@@ -53308,6 +53308,7 @@ def _expire_opening_rotation_ttl_promotion(
             )
             return False
 
+        already_expired = False
         try:
             with DB.get_session() as session:
                 updated = (
@@ -53325,6 +53326,23 @@ def _expire_opening_rotation_ttl_promotion(
                     )
                     .update({"status": "EXPIRED"}, synchronize_session=False)
                 )
+                if updated != 1:
+                    persisted = session.get(RecommendationHistory, record_id)
+                    already_expired = bool(
+                        persisted is not None
+                        and str(persisted.stock_code or "").strip()[:6]
+                        == normalized_code
+                        and str(persisted.status or "").strip().upper() == "EXPIRED"
+                        and normalize_strategy(persisted.strategy) == "SCALPING"
+                        and normalize_position_tag(
+                            "SCALPING", persisted.position_tag
+                        )
+                        == "SCANNER"
+                        and str(persisted.scanner_promotion_id or "").strip()
+                        == normalized_promotion_id
+                        and persisted.buy_time is None
+                        and _safe_int(persisted.buy_qty, 0) == 0
+                    )
         except Exception as exc:
             log_error(
                 "[OPENING_ROTATION_TTL_RELEASE] DB expiration failed "
@@ -53332,7 +53350,7 @@ def _expire_opening_rotation_ttl_promotion(
                 f"promotion_id={normalized_promotion_id}: {exc}"
             )
             return False
-        if updated != 1:
+        if updated != 1 and not already_expired:
             log_error(
                 "[OPENING_ROTATION_TTL_RELEASE] conditional expiration rejected "
                 f"code={normalized_code} id={record_id} "
@@ -53394,6 +53412,9 @@ def _expire_opening_rotation_ttl_promotion(
         scanner_promotion_id=normalized_promotion_id,
         opening_rotation_watch_slot_released=watch_slot_released,
         opening_rotation_db_status="EXPIRED",
+        opening_rotation_db_expiration_result=(
+            "idempotent_already_expired" if already_expired else "cas_applied"
+        ),
         opening_rotation_ws_unregister_requested=ws_unregister_requested,
         metric_role="runtime_capacity_provenance",
         decision_authority="opening_rotation_watch_lifecycle_only",

@@ -120,10 +120,14 @@ class _OpeningTTLSession:
     def query(self, _model):
         return _OpeningTTLQuery(self.owner)
 
+    def get(self, _model, _record_id):
+        return self.owner.persisted_row
+
 
 class _OpeningTTLDB:
-    def __init__(self, update_result=1):
+    def __init__(self, update_result=1, persisted_row=None):
         self.update_result = update_result
+        self.persisted_row = persisted_row
         self.filter_call_count = 0
         self.updates = []
 
@@ -975,6 +979,120 @@ def test_opening_rotation_ttl_release_keeps_slot_when_db_rejects(monkeypatch):
     assert expired is False
     assert stock["status"] == "WATCHING"
     assert event_bus.events == []
+
+
+def test_opening_rotation_ttl_release_converges_when_db_is_already_expired(
+    monkeypatch,
+):
+    promotion_id = "PROMO-1"
+    stock = {
+        "id": 1,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": promotion_id,
+        "opening_rotation_watch_slot_promotion_id": promotion_id,
+        "buy_qty": 0,
+    }
+    persisted_row = SimpleNamespace(
+        stock_code="005930",
+        status="EXPIRED",
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        scanner_promotion_id=promotion_id,
+        buy_time=None,
+        buy_qty=0,
+    )
+    fake_db = _OpeningTTLDB(update_result=0, persisted_row=persisted_row)
+    event_bus = _OpeningTTLEventBus()
+    emitted = []
+    monkeypatch.setattr(handlers, "DB", fake_db)
+    monkeypatch.setattr(handlers, "ACTIVE_TARGETS", [stock])
+    monkeypatch.setattr(handlers, "EVENT_BUS", event_bus)
+    monkeypatch.setattr(
+        handlers, "should_retain_ws_subscription", lambda *_args, **_kwargs: False
+    )
+    monkeypatch.setattr(
+        handlers,
+        "should_retain_rising_missed_nxt_post_block_subscription",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: emitted.append((args[2], fields)),
+    )
+
+    expired = handlers._expire_opening_rotation_ttl_promotion(
+        stock,
+        "005930",
+        promotion_id=promotion_id,
+        now_ts=datetime(2026, 8, 13, 9, 42).timestamp(),
+    )
+
+    assert expired is True
+    assert stock["status"] == "EXPIRED"
+    assert "opening_rotation_watch_slot_promotion_id" not in stock
+    release = next(
+        fields
+        for stage, fields in emitted
+        if stage == "opening_rotation_promotion_ttl_released"
+    )
+    assert release["opening_rotation_db_expiration_result"] == (
+        "idempotent_already_expired"
+    )
+
+
+@pytest.mark.parametrize(
+    "persisted_overrides",
+    [
+        {"buy_qty": 1},
+        {"buy_time": datetime(2026, 8, 13, 9, 41)},
+        {"scanner_promotion_id": "PROMO-NEW"},
+        {"status": "HOLDING"},
+    ],
+)
+def test_opening_rotation_ttl_release_does_not_converge_unsafe_db_state(
+    monkeypatch, persisted_overrides
+):
+    promotion_id = "PROMO-1"
+    stock = {
+        "id": 1,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": promotion_id,
+        "opening_rotation_watch_slot_promotion_id": promotion_id,
+        "buy_qty": 0,
+    }
+    persisted_fields = {
+        "stock_code": "005930",
+        "status": "EXPIRED",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": promotion_id,
+        "buy_time": None,
+        "buy_qty": 0,
+        **persisted_overrides,
+    }
+    fake_db = _OpeningTTLDB(
+        update_result=0,
+        persisted_row=SimpleNamespace(**persisted_fields),
+    )
+    monkeypatch.setattr(handlers, "DB", fake_db)
+
+    expired = handlers._expire_opening_rotation_ttl_promotion(
+        stock,
+        "005930",
+        promotion_id=promotion_id,
+        now_ts=datetime(2026, 8, 13, 9, 42).timestamp(),
+    )
+
+    assert expired is False
+    assert stock["status"] == "WATCHING"
+    assert stock["opening_rotation_watch_slot_promotion_id"] == promotion_id
 
 
 def test_runtime_skips_opening_when_krx_regular_provenance_is_missing(monkeypatch):

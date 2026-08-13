@@ -82,6 +82,10 @@ _register_pattern(
     r"(?:scanner_source_identity_guard|scanner_identity_name_mismatch)",
 )
 _register_pattern(
+    "OPENING_ROTATION_TTL_RELEASE_ERROR",
+    r"(?:opening_rotation_ttl_release)",
+)
+_register_pattern(
     "UNKNOWN",
     r"(?:error|exception|critical|fatal)",
 )
