@@ -1103,6 +1103,15 @@ def capture_ai_request(
             "sim_record_id": (metadata or {}).get("sim_record_id"),
             "sim_parent_record_id": (metadata or {}).get("sim_parent_record_id"),
             "source_event_stage": (metadata or {}).get("source_event_stage"),
+            "holding_exact_replay_context_capture_status": metadata_row.get(
+                "holding_exact_replay_context_capture_status"
+            ),
+            "holding_exact_replay_context_capture_error_type": metadata_row.get(
+                "holding_exact_replay_context_capture_error_type"
+            ),
+            "holding_exact_replay_context_capture_latency_ms": metadata_row.get(
+                "holding_exact_replay_context_capture_latency_ms"
+            ),
             "payload_sha256": payload_sha256,
             "payload_bytes": len(raw_input),
             "request_envelope_sha256": request_envelope_sha256,
@@ -1153,6 +1162,15 @@ def capture_ai_request(
             "sim_record_id": (metadata or {}).get("sim_record_id"),
             "sim_parent_record_id": (metadata or {}).get("sim_parent_record_id"),
             "source_event_stage": (metadata or {}).get("source_event_stage"),
+            "holding_exact_replay_context_capture_status": metadata_row.get(
+                "holding_exact_replay_context_capture_status"
+            ),
+            "holding_exact_replay_context_capture_error_type": metadata_row.get(
+                "holding_exact_replay_context_capture_error_type"
+            ),
+            "holding_exact_replay_context_capture_latency_ms": metadata_row.get(
+                "holding_exact_replay_context_capture_latency_ms"
+            ),
             "payload_sha256": payload_sha256,
             "request_envelope_sha256": request_envelope_sha256,
             "prompt_sha256": prompt_sha256,
@@ -1203,6 +1221,8 @@ def capture_ai_request(
             "ai_request_temperature": temperature,
             "ai_request_max_output_tokens": max_output_tokens,
             "ai_request_reasoning_effort": reasoning_effort,
+            "ai_request_schema_name": str(schema_name or "-") or "-",
+            "ai_request_require_json": bool(require_json),
             "ai_input_payload_store_date": target_date,
             "ai_input_payload_redacted": bool(redacted),
             "ai_input_payload_replay_exact": not redacted,
@@ -1222,6 +1242,15 @@ def capture_ai_request(
             "sim_record_id": (metadata or {}).get("sim_record_id"),
             "sim_parent_record_id": (metadata or {}).get("sim_parent_record_id"),
             "source_event_stage": (metadata or {}).get("source_event_stage"),
+            "holding_exact_replay_context_capture_status": metadata_row.get(
+                "holding_exact_replay_context_capture_status"
+            ),
+            "holding_exact_replay_context_capture_error_type": metadata_row.get(
+                "holding_exact_replay_context_capture_error_type"
+            ),
+            "holding_exact_replay_context_capture_latency_ms": metadata_row.get(
+                "holding_exact_replay_context_capture_latency_ms"
+            ),
             "ai_trace_reference_price_type": context.get("reference_price_type"),
             "ai_trace_reference_price": context.get("reference_price"),
             "ai_trace_best_bid": context.get("best_bid"),
@@ -1593,6 +1622,16 @@ def record_ai_decision_trace(
             "openai_response_schema_mode": _optional(
                 merged, "openai_response_schema_mode"
             ),
+            "response_schema_sha256": _optional(
+                merged,
+                "openai_response_schema_sha256",
+                "response_schema_sha256",
+            ),
+            "response_schema_application": _optional(
+                merged,
+                "openai_response_schema_application",
+                "response_schema_application",
+            ),
             "openai_entry_risk_dynamic_fact_schema_applied": (
                 bool(merged.get("openai_entry_risk_dynamic_fact_schema_applied"))
                 if "openai_entry_risk_dynamic_fact_schema_applied" in merged
@@ -1634,6 +1673,40 @@ def record_ai_decision_trace(
             ),
             "request_reasoning_effort": _optional(
                 merged, "ai_request_reasoning_effort"
+            ),
+            "schema_name": _optional(
+                merged, "ai_request_schema_name", "openai_schema_name"
+            ),
+            "require_json": _safe_bool(
+                _optional(
+                    merged,
+                    "ai_request_require_json",
+                    "openai_require_json",
+                )
+            ),
+            "semantic_validator_version": _optional(
+                merged, "semantic_validator_version"
+            ),
+            "expected_semantic_validator_version": _optional(
+                merged, "expected_semantic_validator_version"
+            ),
+            "semantic_validator_applied": _safe_bool(
+                _optional(merged, "semantic_validator_applied")
+            ),
+            "semantic_validation_status": _optional(
+                merged, "semantic_validation_status"
+            ),
+            "holding_exact_replay_context_capture_status": _optional(
+                merged, "holding_exact_replay_context_capture_status"
+            ),
+            "holding_exact_replay_context_capture_error_type": _optional(
+                merged, "holding_exact_replay_context_capture_error_type"
+            ),
+            "holding_exact_replay_context_capture_latency_ms": _safe_number(
+                _optional(
+                    merged,
+                    "holding_exact_replay_context_capture_latency_ms",
+                )
             ),
             "request_capture_status": request_capture_status,
             "payload_redacted": bool(merged.get("ai_input_payload_redacted", False)),
@@ -1743,6 +1816,17 @@ def record_ai_decision_trace(
                     for error in merged.get("entry_price_v2_5_contract_errors") or []
                 ]
                 if isinstance(merged.get("entry_price_v2_5_contract_errors"), list)
+                else []
+            ),
+            "entry_price_v1_contract_status": _optional(
+                merged, "entry_price_v1_contract_status"
+            ),
+            "entry_price_v1_contract_errors": (
+                [
+                    str(error)
+                    for error in merged.get("entry_price_v1_contract_errors") or []
+                ]
+                if isinstance(merged.get("entry_price_v1_contract_errors"), list)
                 else []
             ),
             "decision_quality_contract_status": _optional(

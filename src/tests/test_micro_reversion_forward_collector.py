@@ -200,6 +200,29 @@ def test_integrated_al_item_blocks_conflicting_declared_exchange(tmp_path) -> No
     assert snapshot.missing_or_conflicting_venue_count == 1
 
 
+def test_realtime_item_symbol_must_match_callback_symbol(tmp_path) -> None:
+    collector = _collector(tmp_path, depth_capture_enabled=True)
+    depth_snapshot = _depth_snapshot()
+    depth_snapshot["last_depth_tick"]["item"] = "999999"
+    depth_snapshot["last_realtime_type_item"]["0D"] = "999999"
+    try:
+        trade_result = collector.observe_kiwoom_0b(
+            "000001",
+            _snapshot(item="999999", venue="KRX"),
+            realtime_type="0B",
+        )
+        depth_result = collector.observe_kiwoom_0d(
+            "000001",
+            depth_snapshot,
+            realtime_type="0D",
+        )
+    finally:
+        collector.close()
+
+    assert trade_result is ProducerCanaryResult.MISSING_OR_CONFLICTING_VENUE
+    assert depth_result is ProducerCanaryResult.MISSING_OR_CONFLICTING_VENUE
+
+
 def test_0b_item_does_not_fall_back_to_generic_last_ws_item(tmp_path) -> None:
     collector = _collector(tmp_path)
     snapshot_payload = _snapshot()
@@ -508,7 +531,7 @@ def test_series_gap_attributes_queue_and_invalid_envelope_losses(tmp_path) -> No
     assert runtime.unexplained_sequence_gap_count == 0
 
     invalid_collector = _collector(tmp_path / "invalid")
-    invalid_payload = _snapshot(price=-1)
+    invalid_payload = _snapshot(item="000002", price=-1)
     invalid_payload["last_trade_tick"]["best_bid"] = None
     invalid_payload["last_trade_tick"]["best_ask"] = None
     assert (
@@ -520,7 +543,11 @@ def test_series_gap_attributes_queue_and_invalid_envelope_losses(tmp_path) -> No
         is ProducerCanaryResult.INVALID_ENVELOPE
     )
     assert (
-        invalid_collector.observe_kiwoom_0b("000002", _snapshot(), realtime_type="0B")
+        invalid_collector.observe_kiwoom_0b(
+            "000002",
+            _snapshot(item="000002"),
+            realtime_type="0B",
+        )
         is ProducerCanaryResult.ENQUEUED
     )
     deadline = time.monotonic() + 1

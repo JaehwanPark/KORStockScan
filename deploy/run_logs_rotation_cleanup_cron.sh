@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+KORSTOCKSCAN_CODE_ROOT="${KORSTOCKSCAN_CODE_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 LOG_DIR="$PROJECT_DIR/logs"
 RETENTION_DAYS="${1:-${LOG_ROTATION_ARCHIVE_RETENTION_DAYS:-30}}"
 TARGET_DATE="${TARGET_DATE:-$(TZ=Asia/Seoul date +%F)}"
@@ -15,6 +16,10 @@ DATA_MAINTENANCE_ENABLED="${DATA_MAINTENANCE_ENABLED:-true}"
 TMP_MAINTENANCE_RETENTION_DAYS="${TMP_MAINTENANCE_RETENTION_DAYS:-2}"
 REFRACTOR_DRY_RUN_RETENTION_DAYS="${REFRACTOR_DRY_RUN_RETENTION_DAYS:-7}"
 RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS="${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS:-7}"
+MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED="${MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED:-true}"
+MICRO_REVERSION_STORAGE_PURGE_ENABLED="${MICRO_REVERSION_STORAGE_PURGE_ENABLED:-false}"
+MICRO_REVERSION_STORAGE_ROOT="${MICRO_REVERSION_STORAGE_ROOT:-$PROJECT_DIR/data/observations/scalp_micro_reversion_forward}"
+MICRO_REVERSION_STORAGE_NICE_LEVEL="${MICRO_REVERSION_STORAGE_NICE_LEVEL:-15}"
 PYTHON_BIN="${PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python3"
@@ -56,10 +61,22 @@ if [[ ! "$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
   echo "[LOG_CLEANUP_ERROR] raw_row_exclusion backup retention days must be integer: $RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS"
   exit 2
 fi
+if [[ ! "$MICRO_REVERSION_STORAGE_NICE_LEVEL" =~ ^([0-9]|1[0-9])$ ]]; then
+  echo "[LOG_CLEANUP_ERROR] micro-reversion storage nice level must be 0..19: $MICRO_REVERSION_STORAGE_NICE_LEVEL"
+  exit 2
+fi
+if [[ "$MICRO_REVERSION_STORAGE_PURGE_ENABLED" != "true" && "$MICRO_REVERSION_STORAGE_PURGE_ENABLED" != "false" ]]; then
+  echo "[LOG_CLEANUP_ERROR] micro-reversion storage purge enabled must be true or false: $MICRO_REVERSION_STORAGE_PURGE_ENABLED"
+  exit 2
+fi
+if [[ "$MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED" != "true" && "$MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED" != "false" ]]; then
+  echo "[LOG_CLEANUP_ERROR] micro-reversion storage maintenance enabled must be true or false: $MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED"
+  exit 2
+fi
 
 mkdir -p "$LOG_DIR"
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[START] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_log_max_bytes=${ACTIVE_LOG_MAX_BYTES} active_log_backup_count=${ACTIVE_LOG_BACKUP_COUNT} data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} started_at=${started_at}"
+echo "[START] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_log_max_bytes=${ACTIVE_LOG_MAX_BYTES} active_log_backup_count=${ACTIVE_LOG_BACKUP_COUNT} data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} micro_reversion_storage_maintenance_enabled=${MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED} micro_reversion_storage_purge_enabled=${MICRO_REVERSION_STORAGE_PURGE_ENABLED} started_at=${started_at}"
 trap 'failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"; echo "[FAIL] log_rotation_cleanup target_date=${TARGET_DATE} failed_at=${failed_at}"' ERR
 
 archive_log_find_args=(
@@ -79,9 +96,159 @@ sentinel_compressed_count=0
 snapshot_compressed_count=0
 raw_row_exclusion_deleted_count=0
 raw_row_exclusion_backup_deleted_count=0
+micro_reversion_storage_action_count=0
+micro_reversion_storage_compressed_count=0
+micro_reversion_storage_purged_count=0
+micro_reversion_storage_source_bytes=0
+micro_reversion_storage_status="disabled"
+micro_reversion_storage_purge_enabled="$MICRO_REVERSION_STORAGE_PURGE_ENABLED"
+micro_reversion_storage_purge_status="maintenance_disabled"
+micro_reversion_storage_purge_candidate_count=0
+micro_reversion_storage_purge_candidate_bytes=0
 compressed_archive_count=0
 archive_pruned_to_backup_limit_count=0
 compression_verify_failure_count=0
+
+run_micro_reversion_storage_maintenance() {
+  if [[ "$MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED" != "true" ]]; then
+    micro_reversion_storage_status="disabled"
+    micro_reversion_storage_purge_status="maintenance_disabled"
+    return 0
+  fi
+  micro_reversion_storage_purge_status="pending"
+
+  mkdir -p "$PROJECT_DIR/tmp"
+  local result_path lock_path
+  result_path="$(mktemp "$PROJECT_DIR/tmp/micro_reversion_storage_maintenance.XXXXXX.json")"
+  lock_path="$PROJECT_DIR/tmp/micro_reversion_storage_maintenance.lock"
+  exec 9>"$lock_path"
+  if ! flock -n 9; then
+    rm -f "$result_path"
+    exec 9>&-
+    micro_reversion_storage_status="lock_busy"
+    micro_reversion_storage_purge_status="not_run_lock_busy"
+    return 0
+  fi
+  if ! (
+    cd "$KORSTOCKSCAN_CODE_ROOT"
+    export PYTHONPATH="$KORSTOCKSCAN_CODE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+    maintenance_command=(
+      "$PYTHON_BIN"
+      -m src.engine.scalping.micro_reversion.storage_maintenance
+      --root "$MICRO_REVERSION_STORAGE_ROOT"
+      --as-of-date "$TARGET_DATE"
+      --apply
+    )
+    if [[ "$MICRO_REVERSION_STORAGE_PURGE_ENABLED" == "true" ]]; then
+      maintenance_command+=(--purge-expired)
+    fi
+    if command -v ionice >/dev/null 2>&1; then
+      ionice -c 3 nice -n "$MICRO_REVERSION_STORAGE_NICE_LEVEL" \
+        "${maintenance_command[@]}"
+    else
+      nice -n "$MICRO_REVERSION_STORAGE_NICE_LEVEL" \
+        "${maintenance_command[@]}"
+    fi
+  ) >"$result_path"; then
+    flock -u 9
+    exec 9>&-
+    rm -f "$result_path"
+    micro_reversion_storage_status="failed"
+    micro_reversion_storage_purge_status="execution_failed"
+    return 1
+  fi
+
+  local parsed
+  if ! parsed="$("$PYTHON_BIN" - "$result_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if payload.get("schema") != "scalp_micro_reversion_storage_maintenance_v1":
+    raise SystemExit("storage maintenance schema mismatch")
+if payload.get("mode") != "apply":
+    raise SystemExit("storage maintenance did not apply")
+if payload.get("actual_order_submitted") is not False:
+    raise SystemExit("storage maintenance order authority mismatch")
+if payload.get("broker_order_forbidden") is not True:
+    raise SystemExit("storage maintenance broker authority mismatch")
+if payload.get("trading_runtime_effect") is not False:
+    raise SystemExit("storage maintenance runtime authority mismatch")
+actions = payload.get("actions")
+if not isinstance(actions, list):
+    raise SystemExit("storage maintenance actions are invalid")
+if any(not isinstance(row, dict) or row.get("applied") is not True for row in actions):
+    raise SystemExit("storage maintenance apply action census is invalid")
+compressed = sum(
+    row.get("action") in {"compress_jsonl", "finalize_verified_compression"}
+    for row in actions
+    if isinstance(row, dict)
+)
+purged = sum(row.get("action") == "purge_trade_date" for row in actions if isinstance(row, dict))
+purge_enabled = payload.get("purge_enabled")
+purge_status = payload.get("purge_status")
+if not isinstance(purge_enabled, bool):
+    raise SystemExit("storage maintenance purge authority is invalid")
+expected_purge_status = (
+    "explicit_opt_in_apply" if purge_enabled else "disabled_no_deletion_authority"
+)
+if purge_status != expected_purge_status:
+    raise SystemExit("storage maintenance purge status is invalid")
+if not purge_enabled and purged:
+    raise SystemExit("storage maintenance purged without explicit authority")
+if int(payload.get("purge_applied_count") or 0) != purged:
+    raise SystemExit("storage maintenance purge applied census mismatch")
+deletion_performed = payload.get("deletion_performed")
+if not isinstance(deletion_performed, bool):
+    raise SystemExit("storage maintenance deletion status type is invalid")
+if deletion_performed != bool(purged):
+    raise SystemExit("storage maintenance deletion status mismatch")
+for field in ("purge_candidate_count", "purge_candidate_bytes"):
+    value = payload.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise SystemExit(f"storage maintenance {field} is invalid")
+print(
+    int(payload.get("action_count") or 0),
+    compressed,
+    purged,
+    int(payload.get("source_bytes") or 0),
+    "true" if purge_enabled else "false",
+    purge_status,
+    int(payload.get("purge_candidate_count") or 0),
+    int(payload.get("purge_candidate_bytes") or 0),
+)
+PY
+  )"; then
+    flock -u 9
+    exec 9>&-
+    rm -f "$result_path"
+    micro_reversion_storage_status="invalid_result"
+    micro_reversion_storage_purge_status="invalid_result"
+    return 1
+  fi
+  read -r \
+    micro_reversion_storage_action_count \
+    micro_reversion_storage_compressed_count \
+    micro_reversion_storage_purged_count \
+    micro_reversion_storage_source_bytes \
+    micro_reversion_storage_purge_enabled \
+    micro_reversion_storage_purge_status \
+    micro_reversion_storage_purge_candidate_count \
+    micro_reversion_storage_purge_candidate_bytes <<<"$parsed"
+  if [[ "$micro_reversion_storage_purge_enabled" != "$MICRO_REVERSION_STORAGE_PURGE_ENABLED" ]]; then
+    flock -u 9
+    exec 9>&-
+    rm -f "$result_path"
+    micro_reversion_storage_status="purge_authority_mismatch"
+    micro_reversion_storage_purge_status="authority_mismatch"
+    return 1
+  fi
+  flock -u 9
+  exec 9>&-
+  rm -f "$result_path"
+  micro_reversion_storage_status="pass"
+}
 
 compress_file_verified() {
   local source_path="$1"
@@ -407,6 +574,8 @@ PY
         -mtime "+$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS" -print0 | sort -z
     )
   fi
+
+  run_micro_reversion_storage_maintenance
 }
 
 run_data_maintenance
@@ -427,6 +596,6 @@ deleted_count="$(find "${archive_log_find_args[@]}" -mtime "+$RETENTION_DAYS" -p
 after_count="$(find "${archive_log_find_args[@]}" | wc -l | tr -d ' ')"
 after_size="$(du -sh "$LOG_DIR" | awk '{print $1}')"
 
-echo "[LOG_CLEANUP] archive_retention_days=$RETENTION_DAYS active_log_retention_days=$ACTIVE_LOG_RETENTION_DAYS active_log_compress_min_index=$ACTIVE_LOG_COMPRESS_MIN_INDEX system_metric_retention_days=$SYSTEM_METRIC_RETENTION_DAYS raw_row_exclusion_backup_retention_days=$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS active_rotated=$rotated_active_count active_deleted=$active_deleted_count archive_deleted=$deleted_count archive_compressed=$compressed_archive_count archive_pruned_to_backup_limit=$archive_pruned_to_backup_limit_count archive_before=$before_count archive_after=$after_count size_before=$before_size size_after=$after_size system_metric_retained=$system_metric_retained system_metric_pruned=$system_metric_pruned system_metric_invalid=$system_metric_invalid system_metric_size_before=$system_metric_before_size system_metric_size_after=$system_metric_after_size data_maintenance_enabled=$DATA_MAINTENANCE_ENABLED tmp_deleted=$tmp_deleted_count cache_deleted=$cache_deleted_count sentinel_compressed=$sentinel_compressed_count snapshot_compressed=$snapshot_compressed_count compression_verify_failures=$compression_verify_failure_count raw_row_exclusion_deleted=$raw_row_exclusion_deleted_count raw_row_exclusion_backup_deleted=$raw_row_exclusion_backup_deleted_count"
+echo "[LOG_CLEANUP] archive_retention_days=$RETENTION_DAYS active_log_retention_days=$ACTIVE_LOG_RETENTION_DAYS active_log_compress_min_index=$ACTIVE_LOG_COMPRESS_MIN_INDEX system_metric_retention_days=$SYSTEM_METRIC_RETENTION_DAYS raw_row_exclusion_backup_retention_days=$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS active_rotated=$rotated_active_count active_deleted=$active_deleted_count archive_deleted=$deleted_count archive_compressed=$compressed_archive_count archive_pruned_to_backup_limit=$archive_pruned_to_backup_limit_count archive_before=$before_count archive_after=$after_count size_before=$before_size size_after=$after_size system_metric_retained=$system_metric_retained system_metric_pruned=$system_metric_pruned system_metric_invalid=$system_metric_invalid system_metric_size_before=$system_metric_before_size system_metric_size_after=$system_metric_after_size data_maintenance_enabled=$DATA_MAINTENANCE_ENABLED tmp_deleted=$tmp_deleted_count cache_deleted=$cache_deleted_count sentinel_compressed=$sentinel_compressed_count snapshot_compressed=$snapshot_compressed_count compression_verify_failures=$compression_verify_failure_count raw_row_exclusion_deleted=$raw_row_exclusion_deleted_count raw_row_exclusion_backup_deleted=$raw_row_exclusion_backup_deleted_count micro_reversion_storage_status=$micro_reversion_storage_status micro_reversion_storage_actions=$micro_reversion_storage_action_count micro_reversion_storage_compressed=$micro_reversion_storage_compressed_count micro_reversion_storage_purged=$micro_reversion_storage_purged_count micro_reversion_storage_source_bytes=$micro_reversion_storage_source_bytes micro_reversion_storage_purge_enabled=$micro_reversion_storage_purge_enabled micro_reversion_storage_purge_status=$micro_reversion_storage_purge_status micro_reversion_storage_purge_candidates=$micro_reversion_storage_purge_candidate_count micro_reversion_storage_purge_candidate_bytes=$micro_reversion_storage_purge_candidate_bytes"
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[DONE] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_rotated=${rotated_active_count} active_deleted=${active_deleted_count} archive_deleted=${deleted_count} archive_compressed=${compressed_archive_count} archive_pruned_to_backup_limit=${archive_pruned_to_backup_limit_count} system_metric_pruned=${system_metric_pruned} system_metric_invalid=${system_metric_invalid} data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} tmp_deleted=${tmp_deleted_count} cache_deleted=${cache_deleted_count} sentinel_compressed=${sentinel_compressed_count} snapshot_compressed=${snapshot_compressed_count} compression_verify_failures=${compression_verify_failure_count} raw_row_exclusion_deleted=${raw_row_exclusion_deleted_count} raw_row_exclusion_backup_deleted=${raw_row_exclusion_backup_deleted_count} finished_at=${finished_at}"
+echo "[DONE] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_rotated=${rotated_active_count} active_deleted=${active_deleted_count} archive_deleted=${deleted_count} archive_compressed=${compressed_archive_count} archive_pruned_to_backup_limit=${archive_pruned_to_backup_limit_count} system_metric_pruned=${system_metric_pruned} system_metric_invalid=${system_metric_invalid} data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} tmp_deleted=${tmp_deleted_count} cache_deleted=${cache_deleted_count} sentinel_compressed=${sentinel_compressed_count} snapshot_compressed=${snapshot_compressed_count} compression_verify_failures=${compression_verify_failure_count} raw_row_exclusion_deleted=${raw_row_exclusion_deleted_count} raw_row_exclusion_backup_deleted=${raw_row_exclusion_backup_deleted_count} micro_reversion_storage_status=${micro_reversion_storage_status} micro_reversion_storage_actions=${micro_reversion_storage_action_count} micro_reversion_storage_compressed=${micro_reversion_storage_compressed_count} micro_reversion_storage_purged=${micro_reversion_storage_purged_count} micro_reversion_storage_source_bytes=${micro_reversion_storage_source_bytes} micro_reversion_storage_purge_enabled=${micro_reversion_storage_purge_enabled} micro_reversion_storage_purge_status=${micro_reversion_storage_purge_status} micro_reversion_storage_purge_candidates=${micro_reversion_storage_purge_candidate_count} micro_reversion_storage_purge_candidate_bytes=${micro_reversion_storage_purge_candidate_bytes} finished_at=${finished_at}"

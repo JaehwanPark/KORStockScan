@@ -1,4 +1,6 @@
+import hashlib
 import json
+import os
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -6,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.engine.automation import machine_microstructure_policy_approval as mod
+from src.engine.monitoring import machine_microstructure_attribution as attribution_mod
 
 
 KST = ZoneInfo("Asia/Seoul")
@@ -101,8 +104,160 @@ def _candidate(
     }
 
 
+def _objective_bound_candidate(
+    *,
+    source_date: str = "2026-08-14",
+    gap_codes: list[str] | None = None,
+) -> tuple[dict, dict]:
+    resolved_gap_codes = (
+        gap_codes
+        if gap_codes is not None
+        else [
+            "rolling_paired_policy_candidate_producer_not_implemented",
+            "speed_and_capital_occupancy_not_policy_selection_axes",
+        ]
+    )
+    candidate = _candidate(source_date=source_date)
+    candidate["objective_followup_binding"] = {
+        "schema": mod.OBJECTIVE_CANDIDATE_BINDING_SCHEMA,
+        "followup_id": mod.FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID,
+        "resolved_gap_codes": resolved_gap_codes,
+    }
+    binding = {
+        "schema": mod.OBJECTIVE_HANDOFF_BINDING_SCHEMA,
+        "followup_id": mod.FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID,
+        "candidate_id": candidate["candidate_id"],
+        "candidate_sha256": mod.candidate_sha256(candidate),
+        "required_gap_codes": resolved_gap_codes,
+        "resolved_gap_codes": resolved_gap_codes,
+    }
+    return candidate, binding
+
+
+def _objective_followup(
+    *,
+    source_date: str = "2026-08-14",
+    state: str = "IMPLEMENTATION_REQUIRED",
+    followup_required: bool = True,
+    remaining_gap_codes: list[str] | None = None,
+    completion_evidence: dict | None = None,
+    candidate_handoff_binding: dict | None = None,
+) -> dict:
+    row = {
+        "schema": mod.OBJECTIVE_FOLLOWUP_SCHEMA,
+        "followup_id": "machine_lifecycle_turnover_policy_research_v1",
+        "source_date": source_date,
+        "state": state,
+        "state_reason": "rolling_paired_research_not_implemented",
+        "followup_required": followup_required,
+        "attention_class": "code_improvement_workorder",
+        "operator_decision_required": False,
+        "current_capability": "diagnostic_observation_only",
+        "remaining_gap_codes": (
+            remaining_gap_codes
+            if remaining_gap_codes is not None
+            else [
+                "rolling_paired_policy_candidate_producer_not_implemented",
+                "speed_and_capital_occupancy_not_policy_selection_axes",
+            ]
+        ),
+        "next_action": "implement_source_only_rolling_paired_policy_research",
+        "metric_contract": {
+            "metric_role": "machine_lifecycle_objective_completion_followup",
+            "decision_authority": "postclose_followup_tracking_only",
+            "window_policy": "daily_until_implementation_evidence",
+            "sample_floor": {"policy_or_runtime_change": "not_permitted"},
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "source_quality_gate": ["exact_target_date_machine_attribution"],
+            "forbidden_uses": ["runtime_env_or_threshold_or_order_mutation"],
+        },
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    if completion_evidence is not None:
+        row["completion_evidence"] = completion_evidence
+    if candidate_handoff_binding is not None:
+        row["candidate_handoff_binding"] = candidate_handoff_binding
+    return row
+
+
+def _source_report_payload(*, objective_followups: list[object] | None = None) -> dict:
+    payload = {
+        "schema": "machine_microstructure_attribution_v1",
+        "target_date": "2026-08-14",
+        "promotion_candidate_intake_contract": {
+            "schema": mod.CANDIDATE_SCHEMA,
+            "consumer": "src.engine.automation.machine_microstructure_policy_approval",
+            "daily_report_runtime_effect": False,
+        },
+        "policy_promotion_candidates": [],
+        "authority": {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    }
+    if objective_followups is not None:
+        payload["objective_followups"] = objective_followups
+    return payload
+
+
 def _empty(now: datetime) -> dict:
     return mod._empty_queue(now=now)
+
+
+def _producer_complete_followup(source_date: str) -> dict:
+    return attribution_mod._fast_lifecycle_objective_followup(
+        target_date=source_date,
+        objective_alignment={
+            "reflected_in_real_runtime_policy": True,
+            "implementation_boundary": {
+                "speed_or_turnover_metric_changes_policy_selection": True,
+                "rolling_paired_policy_candidate_producer_present": True,
+            },
+            "remaining_gaps": [],
+        },
+        promotion_candidates=[],
+    )
+
+
+def _queue_with_objective_handoff(now: datetime) -> dict:
+    source_candidate, handoff_binding = _objective_bound_candidate(
+        source_date=now.date().isoformat()
+    )
+    queue, candidate_rejections = mod.sync_queue(
+        _empty(now),
+        source_candidates=[source_candidate],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+        apply_receipt_dir=Path("/__no_receipts__"),
+    )
+    accepted_keys = queue["last_sync"]["accepted_candidate_queue_keys"]
+    queue, followup_rejections = mod.sync_objective_followups(
+        queue,
+        source_followups=[
+            _objective_followup(
+                source_date=now.date().isoformat(),
+                state="CANDIDATE_QUEUE_HANDOFF",
+                followup_required=False,
+                remaining_gap_codes=[],
+                candidate_handoff_binding=handoff_binding,
+            )
+        ],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        accepted_candidate_queue_keys=accepted_keys,
+        now=now,
+    )
+    assert candidate_rejections == []
+    assert followup_rejections == []
+    return queue
 
 
 def test_evidence_ready_candidate_requires_registered_runtime_design() -> None:
@@ -442,7 +597,15 @@ def test_invalid_source_report_is_not_silently_treated_as_no_candidate(
     source = tmp_path / "source.json"
     source.write_text(json.dumps({"schema": "wrong"}), encoding="utf-8")
 
-    path, candidates, status = mod._load_source_candidates(
+    (
+        path,
+        candidates,
+        _followups,
+        status,
+        _objective_status,
+        _rejections,
+        source_artifact,
+    ) = mod._load_source_context_snapshot(
         target_date=date(2026, 8, 14), source_report=source
     )
     report = mod.build_status_report(
@@ -453,12 +616,174 @@ def test_invalid_source_report_is_not_silently_treated_as_no_candidate(
         source_status=status,
         intake_rejections=[],
         reminder_status="not_needed_or_duplicate",
+        source_artifact=source_artifact,
     )
 
     assert candidates == []
     assert status == "contract_invalid"
     assert report["decision"] == "source_gap_queue_preserved"
     assert report["source_status"] == "contract_invalid"
+    assert report["source_artifact"] == {
+        "schema": mod.SOURCE_ARTIFACT_PROVENANCE_SCHEMA,
+        "path": str(source),
+        "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "mtime_ns": source.stat().st_mtime_ns,
+        "size_bytes": source.stat().st_size,
+    }
+
+
+def test_source_snapshot_rejects_atomic_replacement_during_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.json"
+    original = _source_report_payload(objective_followups=[])
+    source.write_text(json.dumps(original), encoding="utf-8")
+    replacement = tmp_path / "replacement.json"
+    changed = _source_report_payload(objective_followups=[])
+    changed["policy_promotion_candidates"] = [
+        _candidate(candidate_id="replacement:005930:entry:micro_axis")
+    ]
+    replacement.write_text(json.dumps(changed), encoding="utf-8")
+    source_path_stat = mod._source_path_stat
+    replacement_performed = False
+
+    def _replace_before_path_stat(path: Path) -> os.stat_result:
+        nonlocal replacement_performed
+        if not replacement_performed:
+            os.replace(replacement, path)
+            replacement_performed = True
+        return source_path_stat(path)
+
+    monkeypatch.setattr(mod, "_source_path_stat", _replace_before_path_stat)
+
+    path, payload, status, source_artifact = mod._load_source_payload_snapshot(
+        target_date=date(2026, 8, 14), source_report=source
+    )
+
+    assert path == source
+    assert payload is None
+    assert status == "source_changed_during_snapshot"
+    assert source_artifact == {
+        "schema": mod.SOURCE_ARTIFACT_PROVENANCE_SCHEMA,
+        "path": str(source),
+        "sha256": None,
+        "mtime_ns": None,
+        "size_bytes": None,
+    }
+    assert json.loads(source.read_text(encoding="utf-8")) == changed
+
+
+def test_status_report_keeps_exact_loaded_snapshot_after_atomic_replacement(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.json"
+    original = _source_report_payload(objective_followups=[])
+    original["policy_promotion_candidates"] = [
+        _candidate(candidate_id="original:005930:entry:micro_axis")
+    ]
+    original_bytes = json.dumps(original).encode("utf-8")
+    source.write_bytes(original_bytes)
+    (
+        path,
+        candidates,
+        _followups,
+        status,
+        objective_status,
+        _rejections,
+        source_artifact,
+    ) = mod._load_source_context_snapshot(
+        target_date=date(2026, 8, 14), source_report=source
+    )
+
+    replacement = tmp_path / "replacement.json"
+    changed = _source_report_payload(objective_followups=[])
+    changed["policy_promotion_candidates"] = [
+        _candidate(candidate_id="replacement:005930:entry:micro_axis")
+    ]
+    replacement.write_text(json.dumps(changed), encoding="utf-8")
+    os.replace(replacement, source)
+    report = mod.build_status_report(
+        _empty(datetime(2026, 8, 14, 20, 30, tzinfo=KST)),
+        phase="postclose",
+        target_date=date(2026, 8, 14),
+        source_path=path,
+        source_status=status,
+        objective_followup_source_status=objective_status,
+        intake_rejections=[],
+        reminder_status="not_needed_or_duplicate",
+        source_artifact=source_artifact,
+    )
+
+    assert [row["candidate_id"] for row in candidates] == [
+        "original:005930:entry:micro_axis"
+    ]
+    assert report["source_status"] == "loaded"
+    assert (
+        report["source_artifact"]["sha256"]
+        == hashlib.sha256(original_bytes).hexdigest()
+    )
+    assert (
+        report["source_artifact"]["sha256"]
+        != hashlib.sha256(source.read_bytes()).hexdigest()
+    )
+
+
+def test_postclose_rejects_commit_when_source_is_replaced_after_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "source.json"
+    original = _source_report_payload(objective_followups=[])
+    original["policy_promotion_candidates"] = [
+        _candidate(candidate_id="original:005930:entry:micro_axis")
+    ]
+    source.write_text(json.dumps(original), encoding="utf-8")
+    replacement = tmp_path / "replacement.json"
+    changed = _source_report_payload(objective_followups=[])
+    changed["policy_promotion_candidates"] = [
+        _candidate(candidate_id="replacement:005930:entry:micro_axis")
+    ]
+    replacement.write_text(json.dumps(changed), encoding="utf-8")
+    sync_queue = mod.sync_queue
+    replacement_performed = False
+
+    def _replace_then_sync(*args: object, **kwargs: object) -> tuple[dict, list]:
+        nonlocal replacement_performed
+        if not replacement_performed:
+            os.replace(replacement, source)
+            replacement_performed = True
+        return sync_queue(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "sync_queue", _replace_then_sync)
+    queue_path = tmp_path / "queue.json"
+
+    exit_code = mod.main(
+        [
+            "--phase",
+            "postclose",
+            "--target-date",
+            "2026-08-14",
+            "--source-report",
+            str(source),
+            "--queue-path",
+            str(queue_path),
+            "--report-dir",
+            str(tmp_path / "reports"),
+            "--approval-dir",
+            str(tmp_path / "approvals"),
+            "--apply-receipt-dir",
+            str(tmp_path / "receipts"),
+            "--write",
+        ]
+    )
+
+    result = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert result["status"] == "blocked_contract_error"
+    assert result["reason"] == "source_artifact_changed_before_commit"
+    assert not queue_path.exists()
+    assert not (tmp_path / "reports").exists()
 
 
 def test_source_candidate_list_requires_the_declared_intake_contract(
@@ -496,6 +821,1137 @@ def test_source_candidate_list_requires_the_declared_intake_contract(
     )
     assert status == "candidate_rows_invalid"
     assert candidates == []
+
+
+def test_legacy_queue_load_normalizes_separate_objective_ledger(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 14, 20, 30, tzinfo=KST)
+    legacy = _empty(now)
+    legacy.pop("objective_followups")
+    path = tmp_path / "queue.json"
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    loaded = mod.load_queue(path)
+
+    assert loaded["schema"] == mod.QUEUE_SCHEMA
+    assert loaded["metric_contract"] == mod.METRIC_CONTRACT
+    assert loaded["objective_followups"] == []
+
+
+def test_persisted_queue_rejects_duplicate_objective_followup_ids(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, rejections = mod.sync_objective_followups(
+        _empty(now),
+        source_followups=[_objective_followup()],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+    queue["objective_followups"].append(dict(queue["objective_followups"][0]))
+    path = tmp_path / "queue.json"
+    path.write_text(json.dumps(queue), encoding="utf-8")
+
+    assert rejections == []
+    with pytest.raises(
+        ValueError, match="approval_queue_objective_followup_contract_invalid"
+    ):
+        mod.load_queue(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_path", None),
+        ("source_payload_sha256", "not-a-sha"),
+        ("first_seen_at_kst", "not-a-time"),
+        ("reminders", {"preopen": "2026-08-14"}),
+    ],
+)
+def test_persisted_queue_rejects_invalid_objective_provenance(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, _ = mod.sync_objective_followups(
+        _empty(now),
+        source_followups=[_objective_followup()],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+    queue["objective_followups"][0][field] = value
+    path = tmp_path / "queue.json"
+    path.write_text(json.dumps(queue), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError, match="approval_queue_objective_followup_contract_invalid"
+    ):
+        mod.load_queue(path)
+
+
+def test_source_context_loads_followup_and_rejects_authority_escalation(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(_source_report_payload(objective_followups=[_objective_followup()])),
+        encoding="utf-8",
+    )
+
+    (
+        path,
+        candidates,
+        followups,
+        status,
+        objective_status,
+        rejections,
+    ) = mod._load_source_context(target_date=date(2026, 8, 14), source_report=source)
+
+    assert path == source
+    assert candidates == []
+    assert followups == [_objective_followup()]
+    assert status == "loaded"
+    assert objective_status == "loaded"
+    assert rejections == []
+
+    source.write_text(json.dumps(_source_report_payload()), encoding="utf-8")
+    (
+        _,
+        candidates,
+        followups,
+        status,
+        objective_status,
+        rejections,
+    ) = mod._load_source_context(target_date=date(2026, 8, 14), source_report=source)
+    assert candidates == []
+    assert followups == []
+    assert status == "loaded"
+    assert objective_status == "objective_followup_list_missing_or_invalid"
+    assert rejections == [
+        {
+            "followup_id": None,
+            "errors": ["objective_followup_list_missing_or_invalid"],
+        }
+    ]
+
+    escalated = _objective_followup()
+    escalated["state"] = "ARBITRARY_RUNTIME_READY"
+    escalated["followup_required"] = 1
+    escalated["allowed_runtime_apply"] = True
+    escalated["runtime_design"] = {"runtime_family": "forged"}
+    escalated["metric_contract"]["decision_authority"] = "runtime_policy_selection"
+    source.write_text(
+        json.dumps(_source_report_payload(objective_followups=[escalated])),
+        encoding="utf-8",
+    )
+
+    (
+        _,
+        candidates,
+        followups,
+        status,
+        objective_status,
+        rejections,
+    ) = mod._load_source_context(target_date=date(2026, 8, 14), source_report=source)
+
+    assert candidates == []
+    assert followups == []
+    assert status == "loaded"
+    assert objective_status == "loaded"
+    errors = rejections[0]["errors"]
+    assert "objective_followup_state_invalid" in errors
+    assert "objective_followup_required_not_boolean" in errors
+    assert "objective_followup_metric_decision_authority_invalid" in errors
+    assert "objective_followup_allowed_runtime_apply_invalid" in errors
+    assert any(
+        value.startswith("objective_followup_candidate_authority_fields_forbidden")
+        for value in errors
+    )
+    report = mod.build_status_report(
+        _empty(datetime(2026, 8, 14, 21, 15, tzinfo=KST)),
+        phase="postclose",
+        target_date=date(2026, 8, 14),
+        source_path=source,
+        source_status="loaded",
+        intake_rejections=[],
+        objective_followup_rejections=rejections,
+        reminder_status="not_needed_or_duplicate",
+    )
+    assert report["decision"] == "objective_followup_contract_rejected"
+
+
+@pytest.mark.parametrize(
+    ("state", "followup_required"),
+    [
+        ("IMPLEMENTATION_REQUIRED", True),
+        ("EVIDENCE_ACCUMULATING", True),
+    ],
+)
+def test_objective_followup_accepts_only_producer_state_contract(
+    state: str, followup_required: bool
+) -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    row = _objective_followup(state=state, followup_required=followup_required)
+
+    queue, rejections = mod.sync_objective_followups(
+        _empty(now),
+        source_followups=[row],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+
+    assert rejections == []
+    assert queue["objective_followups"][0]["state"] == state
+
+
+def test_open_objective_cannot_preseed_candidate_handoff_binding() -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    _, handoff_binding = _objective_bound_candidate()
+
+    queue, rejections = mod.sync_objective_followups(
+        _empty(now),
+        source_followups=[
+            _objective_followup(candidate_handoff_binding=handoff_binding)
+        ],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+
+    assert queue["objective_followups"] == []
+    assert rejections[0]["errors"] == [
+        "objective_followup_source_handoff_binding_forbidden"
+    ]
+
+
+def test_objective_followup_accepts_closed_states_only_with_queue_evidence(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    source_candidate, handoff_binding = _objective_bound_candidate()
+    queued_candidate, candidate_rejections = mod.sync_queue(
+        _empty(now),
+        source_candidates=[source_candidate],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+        apply_receipt_dir=Path("/__no_receipts__"),
+    )
+    accepted_keys = queued_candidate["last_sync"]["accepted_candidate_queue_keys"]
+    handed_off, handoff_rejections = mod.sync_objective_followups(
+        queued_candidate,
+        source_followups=[
+            _objective_followup(
+                state="CANDIDATE_QUEUE_HANDOFF",
+                followup_required=False,
+                remaining_gap_codes=[],
+                candidate_handoff_binding=handoff_binding,
+            )
+        ],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        accepted_candidate_queue_keys=accepted_keys,
+        now=now,
+    )
+
+    assert candidate_rejections == []
+    assert handoff_rejections == []
+    assert handed_off["objective_followups"][0]["state"] == ("CANDIDATE_QUEUE_HANDOFF")
+    persisted_handoff = handed_off["objective_followups"][0]["handoff_evidence"]
+    assert persisted_handoff["accepted_candidate_queue_key"] == accepted_keys[0]
+    assert (
+        persisted_handoff["accepted_candidate_sha256"]
+        == (handed_off["candidates"][0]["candidate_sha256"])
+    )
+    assert persisted_handoff["verification"] == (
+        "same_run_objective_bound_candidate_intake_accepted"
+    )
+    assert persisted_handoff["objective_followup_id"] == (
+        mod.FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID
+    )
+
+    candidate = handed_off["candidates"][0]
+    candidate["state"] = mod.STATE_POST_APPLY_ATTRIBUTED
+    candidate["post_apply_attribution_receipt"] = "receipts/attributed.json"
+    producer_complete = _producer_complete_followup(now.date().isoformat())
+    assert producer_complete["state"] == "COMPLETE"
+    assert "completion_evidence" not in producer_complete
+    completed, completion_rejections = mod.sync_objective_followups(
+        handed_off,
+        source_followups=[producer_complete],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+
+    assert completion_rejections == []
+    assert completed["objective_followups"][0]["state"] == "COMPLETE"
+    persisted_completion = completed["objective_followups"][0]["completion_evidence"]
+    assert persisted_completion["candidate_queue_key"] == candidate["queue_key"]
+    assert persisted_completion["candidate_sha256"] == candidate["candidate_sha256"]
+    assert persisted_completion["post_apply_attribution_receipt"] == (
+        "receipts/attributed.json"
+    )
+    assert persisted_completion["causal_completion_verified"] is True
+    assert persisted_completion["objective_followup_id"] == (
+        mod.FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID
+    )
+    queue_path = tmp_path / "completed-queue.json"
+    queue_path.write_text(json.dumps(completed), encoding="utf-8")
+    assert mod.load_queue(queue_path)["objective_followups"][0]["state"] == ("COMPLETE")
+
+
+def test_unrelated_accepted_candidate_cannot_close_objective_handoff() -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, candidate_rejections = mod.sync_queue(
+        _empty(now),
+        source_candidates=[_candidate()],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+        apply_receipt_dir=Path("/__no_receipts__"),
+    )
+    _, handoff_binding = _objective_bound_candidate()
+
+    preserved, rejections = mod.sync_objective_followups(
+        queue,
+        source_followups=[
+            _objective_followup(
+                state="CANDIDATE_QUEUE_HANDOFF",
+                followup_required=False,
+                remaining_gap_codes=[],
+                candidate_handoff_binding=handoff_binding,
+            )
+        ],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        accepted_candidate_queue_keys=(queue.get("last_sync") or {}).get(
+            "accepted_candidate_queue_keys"
+        )
+        or [],
+        now=now,
+    )
+
+    assert candidate_rejections == []
+    assert rejections[0]["errors"] == [
+        "objective_followup_bound_candidate_not_accepted_this_run"
+    ]
+    assert preserved["objective_followups"] == []
+
+
+def test_non_handoff_gap_cannot_be_closed_by_bound_candidate() -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    source_candidate, handoff_binding = _objective_bound_candidate(
+        gap_codes=["post_apply_attribution_pending"]
+    )
+    queue, candidate_rejections = mod.sync_queue(
+        _empty(now),
+        source_candidates=[source_candidate],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+        apply_receipt_dir=Path("/__no_receipts__"),
+    )
+
+    preserved, rejections = mod.sync_objective_followups(
+        queue,
+        source_followups=[
+            _objective_followup(
+                state="CANDIDATE_QUEUE_HANDOFF",
+                followup_required=False,
+                remaining_gap_codes=[],
+                candidate_handoff_binding=handoff_binding,
+            )
+        ],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        accepted_candidate_queue_keys=(queue.get("last_sync") or {}).get(
+            "accepted_candidate_queue_keys"
+        )
+        or [],
+        now=now,
+    )
+
+    assert candidate_rejections == []
+    assert (
+        "objective_followup_non_handoff_gap_transfer_forbidden"
+        in (rejections[0]["errors"])
+    )
+    assert preserved["objective_followups"] == []
+
+
+def test_objective_complete_without_prior_handoff_preserves_open_state() -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, _ = mod.sync_queue(
+        _empty(now),
+        source_candidates=[_candidate()],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+        apply_receipt_dir=Path("/__no_receipts__"),
+    )
+    queue, _ = mod.sync_objective_followups(
+        queue,
+        source_followups=[_objective_followup()],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+    candidate = queue["candidates"][0]
+    candidate["state"] = mod.STATE_POST_APPLY_ATTRIBUTED
+    candidate["post_apply_attribution_receipt"] = "receipts/attributed.json"
+
+    preserved, rejections = mod.sync_objective_followups(
+        queue,
+        source_followups=[_producer_complete_followup(now.date().isoformat())],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+
+    assert rejections[0]["errors"] == [
+        "complete_objective_followup_handoff_evidence_missing"
+    ]
+    assert preserved["objective_followups"][0]["state"] == ("IMPLEMENTATION_REQUIRED")
+
+
+@pytest.mark.parametrize(
+    ("candidate_state", "receipt", "expected_error"),
+    [
+        (
+            mod.STATE_REVIEW_READY,
+            None,
+            "complete_objective_followup_candidate_not_post_apply_attributed",
+        ),
+        (
+            mod.STATE_POST_APPLY_ATTRIBUTED,
+            None,
+            "complete_objective_followup_attribution_receipt_missing",
+        ),
+    ],
+)
+def test_objective_complete_requires_attributed_candidate_and_receipt(
+    candidate_state: str,
+    receipt: str | None,
+    expected_error: str,
+) -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue = _queue_with_objective_handoff(now)
+    candidate = queue["candidates"][0]
+    candidate["state"] = candidate_state
+    candidate.pop("post_apply_attribution_receipt", None)
+    if receipt is not None:
+        candidate["post_apply_attribution_receipt"] = receipt
+
+    preserved, rejections = mod.sync_objective_followups(
+        queue,
+        source_followups=[_producer_complete_followup(now.date().isoformat())],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+
+    assert rejections[0]["errors"] == [expected_error]
+    assert preserved["objective_followups"][0]["state"] == ("CANDIDATE_QUEUE_HANDOFF")
+
+
+def test_objective_complete_rejects_ambiguous_handoff_candidate() -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue = _queue_with_objective_handoff(now)
+    queue["candidates"].append(dict(queue["candidates"][0]))
+
+    with pytest.raises(
+        ValueError, match="approval_queue_objective_followup_contract_invalid"
+    ):
+        mod.sync_objective_followups(
+            queue,
+            source_followups=[_producer_complete_followup(now.date().isoformat())],
+            source_path=Path("source.json"),
+            as_of_date=now.date(),
+            source_status="loaded",
+            now=now,
+        )
+
+
+def test_objective_followup_is_preserved_when_source_is_missing() -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queued, rejections = mod.sync_objective_followups(
+        _empty(now),
+        source_followups=[_objective_followup()],
+        source_path=Path("source-2026-08-14.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+    carried, missing_rejections = mod.sync_objective_followups(
+        queued,
+        source_followups=[],
+        source_path=Path("missing-2026-08-18.json"),
+        as_of_date=date(2026, 8, 18),
+        source_status="missing_or_unreadable",
+        now=datetime(2026, 8, 18, 21, 15, tzinfo=KST),
+    )
+
+    assert rejections == []
+    assert missing_rejections == []
+    assert carried["objective_followups"] == queued["objective_followups"]
+    assert carried["objective_followups"][0]["followup_required"] is True
+
+
+def test_postclose_combines_candidate_and_objective_reminder_once_per_trading_day() -> (
+    None
+):
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, _ = mod.sync_queue(
+        _empty(now),
+        source_candidates=[_candidate()],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+        apply_receipt_dir=Path("/__no_receipts__"),
+    )
+    queue, _ = mod.sync_objective_followups(
+        queue,
+        source_followups=[_objective_followup()],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+    preopen_sent: list[str] = []
+    _, preopen_status = mod.notify_pending(
+        queue,
+        phase="preopen",
+        target_date=now.date(),
+        include_objective_followups=True,
+        now=now,
+        config_loader=lambda: ("token", "admin"),
+        sender=lambda _token, _admin, message: preopen_sent.append(message),
+    )
+    sent: list[str] = []
+    notified, status = mod.notify_pending(
+        queue,
+        phase="postclose",
+        target_date=now.date(),
+        include_objective_followups=True,
+        now=now,
+        config_loader=lambda: ("token", "admin"),
+        sender=lambda _token, _admin, message: sent.append(message),
+    )
+    duplicate, duplicate_status = mod.notify_pending(
+        notified,
+        phase="postclose",
+        target_date=now.date(),
+        include_objective_followups=True,
+        now=now,
+        config_loader=lambda: ("token", "admin"),
+        sender=lambda _token, _admin, message: sent.append(message),
+    )
+    next_day, next_status = mod.notify_pending(
+        duplicate,
+        phase="postclose",
+        target_date=date(2026, 8, 18),
+        include_objective_followups=True,
+        now=datetime(2026, 8, 18, 21, 15, tzinfo=KST),
+        config_loader=lambda: ("token", "admin"),
+        sender=lambda _token, _admin, message: sent.append(message),
+    )
+
+    assert preopen_status == "sent"
+    assert "[빠른 회전 목표 후속]" not in preopen_sent[0]
+    assert status == "sent"
+    assert duplicate_status == "not_needed_or_duplicate"
+    assert next_status == "sent"
+    assert len(sent) == 2
+    assert "[빠른 회전 목표 후속]" in sent[0]
+    assert "[정책 후보 승인 대기]" in sent[0]
+    assert "정책·주문을 변경하지 않고" in sent[0]
+    assert next_day["objective_followups"][0]["reminders"]["postclose"] == "2026-08-18"
+
+
+@pytest.mark.parametrize(
+    ("target_date", "generated_at", "include_objective_followups"),
+    [
+        (date(2026, 8, 14), datetime(2026, 8, 14, 21, 15, tzinfo=KST), False),
+        (date(2026, 8, 14), datetime(2026, 8, 14, 20, 10, tzinfo=KST), True),
+        (
+            date(2026, 8, 14),
+            datetime(2026, 8, 14, 21, 14, 59, tzinfo=KST),
+            True,
+        ),
+        (date(2026, 8, 14), datetime(2026, 8, 18, 21, 15, tzinfo=KST), True),
+        (date(2026, 8, 18), datetime(2026, 8, 14, 21, 15, tzinfo=KST), True),
+        (date(2026, 8, 15), datetime(2026, 8, 15, 21, 15, tzinfo=KST), True),
+    ],
+)
+def test_objective_reminder_requires_explicit_exact_date_2115_trading_day_opt_in(
+    target_date: date,
+    generated_at: datetime,
+    include_objective_followups: bool,
+) -> None:
+    source_now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, _ = mod.sync_objective_followups(
+        _empty(source_now),
+        source_followups=[_objective_followup()],
+        source_path=Path("source.json"),
+        as_of_date=source_now.date(),
+        source_status="loaded",
+        now=source_now,
+    )
+    sent: list[str] = []
+
+    notified, status = mod.notify_pending(
+        queue,
+        phase="postclose",
+        target_date=target_date,
+        include_objective_followups=include_objective_followups,
+        now=generated_at,
+        config_loader=lambda: ("token", "admin"),
+        sender=lambda _token, _admin, message: sent.append(message),
+    )
+
+    assert status == "not_needed_or_duplicate"
+    assert sent == []
+    assert notified["objective_followups"][0]["reminders"] == {}
+
+
+def test_objective_reminder_sends_at_exact_opted_in_window() -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, _ = mod.sync_objective_followups(
+        _empty(now),
+        source_followups=[_objective_followup()],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+    sent: list[str] = []
+
+    notified, status = mod.notify_pending(
+        queue,
+        phase="postclose",
+        target_date=now.date(),
+        include_objective_followups=True,
+        now=now,
+        config_loader=lambda: ("token", "admin"),
+        sender=lambda _token, _admin, message: sent.append(message),
+    )
+
+    assert status == "sent"
+    assert len(sent) == 1
+    assert "[빠른 회전 목표 후속]" in sent[0]
+    assert notified["objective_followups"][0]["reminders"]["postclose"] == (
+        "2026-08-14"
+    )
+
+
+def test_objective_followup_status_and_markdown_remain_non_runtime() -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, _ = mod.sync_objective_followups(
+        _empty(now),
+        source_followups=[_objective_followup()],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+    report = mod.build_status_report(
+        queue,
+        phase="postclose",
+        target_date=now.date(),
+        source_path=Path("source.json"),
+        source_status="loaded",
+        objective_followup_source_status="loaded",
+        intake_rejections=[],
+        reminder_status="sent",
+        now=now,
+    )
+    markdown = mod.render_status_markdown(report)
+
+    assert report["decision"] == "objective_followup_required"
+    assert report["summary"]["actionable_candidate_count"] == 0
+    assert report["summary"]["actionable_objective_followup_count"] == 1
+    assert "objective_followups" in report
+    row = report["objective_followups"][0]
+    assert row["followup_required"] is True
+    assert row["operator_decision_required"] is False
+    assert row["allowed_runtime_apply"] is False
+    assert row["broker_order_forbidden"] is True
+    assert row["authority"] == {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    assert "Fast Lifecycle Objective Follow-up" in markdown
+    assert "implement_source_only_rolling_paired_policy_research" in markdown
+    assert "cannot be approved, scheduled, enrolled, or applied" in markdown
+
+
+def test_objective_followup_cannot_enter_decision_handoff_or_family_enrollment(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, _ = mod.sync_objective_followups(
+        _empty(now),
+        source_followups=[_objective_followup()],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+
+    with pytest.raises(ValueError, match="candidate_id_and_hash_not_uniquely_found"):
+        mod.record_operator_decision(
+            queue,
+            candidate_id="machine_lifecycle_turnover_policy_research_v1",
+            expected_candidate_sha256="a" * 64,
+            decision="approve",
+            operator_authorization_id="operator-explicit",
+            operator_instruction="attempted followup approval",
+            approval_dir=tmp_path / "approvals",
+            apply_receipt_dir=tmp_path / "receipts",
+            now=now,
+        )
+
+    scheduled, handoffs = mod.schedule_preopen_handoffs(
+        queue,
+        target_date=date(2026, 8, 18),
+        handoff_dir=tmp_path / "handoffs",
+        now=datetime(2026, 8, 18, 7, 40, tzinfo=KST),
+    )
+    reconciled, _ = mod.sync_queue(
+        scheduled,
+        source_candidates=[],
+        source_path=None,
+        as_of_date=date(2026, 8, 18),
+        source_status="not_provided",
+        now=datetime(2026, 8, 18, 7, 41, tzinfo=KST),
+        apply_receipt_dir=tmp_path / "receipts",
+    )
+
+    assert handoffs == []
+    assert reconciled["candidates"] == []
+    assert reconciled["family_enrollments"] == {}
+    assert len(reconciled["objective_followups"]) == 1
+    assert not (tmp_path / "handoffs").exists()
+
+
+def test_postclose_loads_objective_when_candidate_intake_contract_is_invalid(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    payload = _source_report_payload(objective_followups=[_objective_followup()])
+    payload["promotion_candidate_intake_contract"]["schema"] = "invalid"
+    source = tmp_path / "source.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    queue_path = tmp_path / "queue.json"
+
+    exit_code = mod.main(
+        [
+            "--phase",
+            "postclose",
+            "--target-date",
+            "2026-08-14",
+            "--source-report",
+            str(source),
+            "--queue-path",
+            str(queue_path),
+            "--report-dir",
+            str(tmp_path / "reports"),
+            "--approval-dir",
+            str(tmp_path / "approvals"),
+            "--apply-receipt-dir",
+            str(tmp_path / "receipts"),
+            "--write",
+        ]
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    queue = json.loads(queue_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert report["source_status"] == "intake_contract_invalid"
+    assert report["objective_followup_source_status"] == "loaded"
+    assert report["decision"] == "objective_followup_required"
+    assert report["summary"]["actionable_objective_followup_count"] == 1
+    assert report["objective_followups"][0]["followup_required"] is True
+    assert report["objective_followups"][0]["authority"] == {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    assert queue["candidates"] == []
+    assert queue["objective_followups"][0]["followup_required"] is True
+    assert queue["objective_followup_last_sync"]["source_status"] == "loaded"
+
+
+@pytest.mark.parametrize(
+    ("extra_args", "reason"),
+    [
+        (["--notify"], "notify_requires_write"),
+        (
+            ["--write", "--notify-objective-followups"],
+            "notify_objective_followups_requires_notify",
+        ),
+    ],
+)
+def test_notification_cli_flags_fail_closed(
+    capsys: pytest.CaptureFixture[str],
+    extra_args: list[str],
+    reason: str,
+) -> None:
+    exit_code = mod.main(
+        [
+            "--phase",
+            "postclose",
+            "--target-date",
+            "2026-08-14",
+            *extra_args,
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert output["status"] == "blocked_contract_error"
+    assert output["reason"] == reason
+
+
+def test_missing_queue_and_source_fails_visibly(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    queue_path = tmp_path / "missing" / "queue.json"
+    exit_code = mod.main(
+        [
+            "--phase",
+            "postclose",
+            "--target-date",
+            "2026-08-14",
+            "--source-report",
+            str(tmp_path / "missing-source.json"),
+            "--queue-path",
+            str(queue_path),
+            "--report-dir",
+            str(tmp_path / "reports"),
+            "--write",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert output["status"] == "blocked_contract_error"
+    assert output["reason"] == "approval_queue_and_source_unavailable"
+    assert not queue_path.exists()
+
+
+def test_future_postclose_target_fails_before_queue_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    generated = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, _ = mod.sync_objective_followups(
+        _empty(generated),
+        source_followups=[_objective_followup()],
+        source_path=Path("source-2026-08-14.json"),
+        as_of_date=generated.date(),
+        source_status="loaded",
+        now=generated,
+    )
+    queue_path = tmp_path / "queue.json"
+    queue_path.write_text(json.dumps(queue, sort_keys=True), encoding="utf-8")
+    before = queue_path.read_bytes()
+    payload = _source_report_payload(
+        objective_followups=[_objective_followup(source_date="2026-08-18")]
+    )
+    payload["target_date"] = "2026-08-18"
+    source = tmp_path / "source-2026-08-18.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(mod, "_now_kst", lambda now=None: generated)
+
+    exit_code = mod.main(
+        [
+            "--phase",
+            "postclose",
+            "--target-date",
+            "2026-08-18",
+            "--source-report",
+            str(source),
+            "--queue-path",
+            str(queue_path),
+            "--report-dir",
+            str(tmp_path / "reports"),
+            "--write",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert output["reason"] == "postclose_target_date_in_future"
+    assert queue_path.read_bytes() == before
+    assert not (tmp_path / "reports").exists()
+
+
+@pytest.mark.parametrize("failure_status", ["missing_config", "send_failed"])
+def test_objective_notification_delivery_failure_is_nonzero_and_durable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure_status: str,
+) -> None:
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(_source_report_payload(objective_followups=[_objective_followup()])),
+        encoding="utf-8",
+    )
+    queue_path = tmp_path / "queue.json"
+    report_dir = tmp_path / "reports"
+    generated = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    monkeypatch.setattr(mod, "_now_kst", lambda now=None: generated)
+    if failure_status == "missing_config":
+        monkeypatch.setattr(mod, "_load_telegram_config", lambda: (None, None))
+    else:
+        monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+
+        def _raise_send(_token: str, _admin: str, _message: str) -> None:
+            raise RuntimeError("telegram unavailable")
+
+        monkeypatch.setattr(mod, "_send_telegram", _raise_send)
+
+    exit_code = mod.main(
+        [
+            "--phase",
+            "postclose",
+            "--target-date",
+            "2026-08-14",
+            "--source-report",
+            str(source),
+            "--queue-path",
+            str(queue_path),
+            "--report-dir",
+            str(report_dir),
+            "--approval-dir",
+            str(tmp_path / "approvals"),
+            "--apply-receipt-dir",
+            str(tmp_path / "receipts"),
+            "--write",
+            "--notify",
+            "--notify-objective-followups",
+        ]
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    persisted = json.loads(queue_path.read_text(encoding="utf-8"))
+    written_report = json.loads(
+        (
+            report_dir
+            / "machine_microstructure_policy_approval_postclose_2026-08-14.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert exit_code == 3
+    assert report["summary"]["reminder_status"] == failure_status
+    assert written_report["summary"]["reminder_status"] == failure_status
+    assert persisted["objective_followups"][0]["reminders"] == {}
+
+
+def test_rejected_candidate_cannot_close_objective_handoff_and_open_state_persists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    first_seen = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, rejections = mod.sync_objective_followups(
+        _empty(first_seen),
+        source_followups=[_objective_followup()],
+        source_path=Path("source-2026-08-14.json"),
+        as_of_date=first_seen.date(),
+        source_status="loaded",
+        now=first_seen,
+    )
+    assert rejections == []
+    queue_path = tmp_path / "queue.json"
+    queue_path.write_text(json.dumps(queue), encoding="utf-8")
+
+    rejected_candidate, handoff_binding = _objective_bound_candidate(
+        source_date="2026-08-18"
+    )
+    rejected_candidate["evidence"]["observed_trading_days"] = 4
+    handoff_binding["candidate_sha256"] = mod.candidate_sha256(rejected_candidate)
+    handoff = _objective_followup(
+        source_date="2026-08-18",
+        state="CANDIDATE_QUEUE_HANDOFF",
+        followup_required=False,
+        remaining_gap_codes=[],
+        candidate_handoff_binding=handoff_binding,
+    )
+    payload = _source_report_payload(objective_followups=[handoff])
+    payload["target_date"] = "2026-08-18"
+    payload["policy_promotion_candidates"] = [rejected_candidate]
+    source = tmp_path / "source-2026-08-18.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(
+        mod,
+        "_now_kst",
+        lambda now=None: datetime(2026, 8, 18, 21, 15, tzinfo=KST),
+    )
+
+    exit_code = mod.main(
+        [
+            "--phase",
+            "postclose",
+            "--target-date",
+            "2026-08-18",
+            "--source-report",
+            str(source),
+            "--queue-path",
+            str(queue_path),
+            "--report-dir",
+            str(tmp_path / "reports"),
+            "--approval-dir",
+            str(tmp_path / "approvals"),
+            "--apply-receipt-dir",
+            str(tmp_path / "receipts"),
+            "--write",
+        ]
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    persisted = json.loads(queue_path.read_text(encoding="utf-8"))
+    errors = report["objective_followup_rejections"][0]["errors"]
+    assert exit_code == 0
+    assert report["summary"]["intake_rejection_count"] == 1
+    assert report["summary"]["objective_followup_rejection_count"] == 1
+    assert "objective_followup_candidate_handoff_not_accepted_this_run" in errors
+    assert persisted["last_sync"]["accepted_candidate_count"] == 0
+    assert persisted["objective_followups"][0]["state"] == ("IMPLEMENTATION_REQUIRED")
+    assert persisted["objective_followups"][0]["source_date"] == "2026-08-14"
+    assert persisted["objective_followups"][0]["followup_required"] is True
+
+
+def test_objective_source_date_and_state_updates_are_monotonic_trading_day_only() -> (
+    None
+):
+    first_seen = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue, _ = mod.sync_objective_followups(
+        _empty(first_seen),
+        source_followups=[_objective_followup()],
+        source_path=Path("source-2026-08-14.json"),
+        as_of_date=first_seen.date(),
+        source_status="loaded",
+        now=first_seen,
+    )
+    evidence_date = date(2026, 8, 18)
+    queue, forward_rejections = mod.sync_objective_followups(
+        queue,
+        source_followups=[
+            _objective_followup(
+                source_date=evidence_date.isoformat(),
+                state="EVIDENCE_ACCUMULATING",
+            )
+        ],
+        source_path=Path("source-2026-08-18.json"),
+        as_of_date=evidence_date,
+        source_status="loaded",
+        now=datetime(2026, 8, 18, 21, 15, tzinfo=KST),
+    )
+    stale, stale_rejections = mod.sync_objective_followups(
+        queue,
+        source_followups=[_objective_followup()],
+        source_path=Path("stale-2026-08-14.json"),
+        as_of_date=first_seen.date(),
+        source_status="loaded",
+        now=datetime(2026, 8, 18, 21, 16, tzinfo=KST),
+    )
+    regressed, transition_rejections = mod.sync_objective_followups(
+        queue,
+        source_followups=[_objective_followup(source_date="2026-08-19")],
+        source_path=Path("regressed-2026-08-19.json"),
+        as_of_date=date(2026, 8, 19),
+        source_status="loaded",
+        now=datetime(2026, 8, 19, 21, 15, tzinfo=KST),
+    )
+    weekend, weekend_rejections = mod.sync_objective_followups(
+        queue,
+        source_followups=[
+            _objective_followup(source_date="2026-08-22", state="EVIDENCE_ACCUMULATING")
+        ],
+        source_path=Path("weekend-2026-08-22.json"),
+        as_of_date=date(2026, 8, 22),
+        source_status="loaded",
+        now=datetime(2026, 8, 22, 21, 15, tzinfo=KST),
+    )
+
+    assert forward_rejections == []
+    assert "objective_followup_source_date_regression" in stale_rejections[0]["errors"]
+    assert any(
+        value.startswith("objective_followup_state_transition_forbidden:")
+        for value in transition_rejections[0]["errors"]
+    )
+    assert (
+        "objective_followup_source_date_not_krx_trading_day"
+        in (weekend_rejections[0]["errors"])
+    )
+    for rejected_queue in (stale, regressed, weekend):
+        assert rejected_queue["objective_followups"][0]["source_date"] == ("2026-08-18")
+        assert rejected_queue["objective_followups"][0]["state"] == (
+            "EVIDENCE_ACCUMULATING"
+        )
+
+
+def test_objective_complete_source_cannot_inject_attribution_receipt() -> None:
+    now = datetime(2026, 8, 14, 21, 15, tzinfo=KST)
+    queue = _queue_with_objective_handoff(now)
+    candidate = queue["candidates"][0]
+    candidate["state"] = mod.STATE_POST_APPLY_ATTRIBUTED
+    candidate["post_apply_attribution_receipt"] = "receipts/real.json"
+    completion_evidence = {
+        "candidate_queue_key": candidate["queue_key"],
+        "candidate_sha256": candidate["candidate_sha256"],
+        "candidate_state": mod.STATE_POST_APPLY_ATTRIBUTED,
+        "post_apply_attribution_receipt": "receipts/spoofed.json",
+        "causal_completion_verified": True,
+    }
+
+    preserved, rejections = mod.sync_objective_followups(
+        queue,
+        source_followups=[
+            _objective_followup(
+                state="COMPLETE",
+                followup_required=False,
+                remaining_gap_codes=[],
+                completion_evidence=completion_evidence,
+            )
+        ],
+        source_path=Path("source.json"),
+        as_of_date=now.date(),
+        source_status="loaded",
+        now=now,
+    )
+
+    assert rejections[0]["errors"] == [
+        "complete_objective_followup_source_completion_evidence_forbidden"
+    ]
+    assert preserved["objective_followups"][0]["state"] == ("CANDIDATE_QUEUE_HANDOFF")
 
 
 def test_design_required_candidate_cannot_be_approved(tmp_path: Path) -> None:

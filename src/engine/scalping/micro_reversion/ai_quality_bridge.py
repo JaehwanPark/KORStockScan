@@ -14,18 +14,25 @@ import hashlib
 import json
 import math
 import os
+import sqlite3
 import tempfile
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import existing_or_gzip_path
 
-from .contracts import CLEAN_BASELINE_DATE, normalize_symbol, normalize_venue
+from .contracts import (
+    CLEAN_BASELINE_DATE,
+    normalize_symbol,
+    normalize_venue,
+    registration_item_identity,
+)
 from .depth_join import validate_depth_row
 from .onset_quality import reconstruct_shock_onset_context
 from .p2_replay import (
@@ -39,12 +46,23 @@ from .path_journal import (
     validate_market_stream_path_provenance,
 )
 from .path_capture import PATH_CAPTURE_AUTHORITY
+from .tax import (
+    InstrumentType,
+    ListingMarket,
+    normalize_instrument_type,
+    normalize_listing_market,
+    tax_profile_for,
+)
 
 TACTICAL_EVIDENCE_SCHEMA = "tactical_micro_reversion_evidence_v1"
 LIFECYCLE_PROJECTION_SCHEMA = "micro_reversion_fast_lifecycle_projection_v1"
 OUTCOME_SCHEMA = "micro_reversion_ai_quality_outcome_v1"
 THREE_ARM_SCHEMA = "micro_reversion_ai_quality_three_arm_manifest_v1"
+THREE_ARM_REQUEST_SCHEMA = "micro_reversion_ai_quality_three_arm_requests_v1"
 REPORT_SCHEMA = "micro_reversion_ai_quality_bridge_v1"
+BRIDGE_CONFIG_SCHEMA = "micro_reversion_ai_quality_bridge_config_v1"
+BRIDGE_PRODUCER_VERSION = "micro_reversion_ai_quality_bridge_v1_3"
+COST_PROFILE_SCHEMA = "micro_reversion_reviewed_cost_profile_v1"
 
 MARKET_SCHEMAS = {
     "scalp_micro_reversion_market_stream_point_v1",
@@ -280,7 +298,6 @@ REPLAY_CANDIDATE_LEDGER_FIELDS: dict[str, frozenset[str]] = {
             "fresh_consistent_core",
             "hard_exit_guard_observed",
             "open_sell_qty",
-            "broker_reconciliation_contract_complete",
             "order_consistent",
             "position_observed",
             "position_reconciled",
@@ -322,6 +339,7 @@ class BridgeConfig:
     max_market_age_ms: int = 2_500
     max_depth_age_ms: int = 1_000
     max_quote_age_ms: int = 1_000
+    max_broker_position_age_sec: float = 60.0
     tape_capacity_window_sec: int = 10
     target_liquidation_sec: int = 10
     participation_grid: tuple[float, ...] = (0.02, 0.05, 0.10)
@@ -338,6 +356,11 @@ class BridgeConfig:
     outcome_horizons_sec: tuple[int, ...] = (1, 3, 5, 10, 20, 30, 60, 120, 180)
     cost_profile_source: str = "missing_verified_instrument_cost_profile"
     cost_profile_verified: bool = False
+    cost_profile_artifact_id: str = ""
+    cost_profile_artifact_sha256: str = ""
+    cost_profile_artifact_payload_json: str = ""
+    cost_profile_effective_date: str = ""
+    cost_profile_venues: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.context_lookback_sec <= 0 or self.active_wave_max_age_sec <= 0:
@@ -348,6 +371,13 @@ class BridgeConfig:
             or self.max_quote_age_ms < 0
         ):
             raise ValueError("freshness limits must not be negative")
+        if (
+            isinstance(self.max_broker_position_age_sec, bool)
+            or not isinstance(self.max_broker_position_age_sec, (int, float))
+            or not math.isfinite(float(self.max_broker_position_age_sec))
+            or self.max_broker_position_age_sec <= 0
+        ):
+            raise ValueError("broker position freshness limit must be positive")
         if self.tape_capacity_window_sec <= 0 or self.target_liquidation_sec <= 0:
             raise ValueError("liquidation windows must be positive")
         if (
@@ -365,21 +395,96 @@ class BridgeConfig:
             "uncertainty_buffer_bps",
             "minimum_net_profit_bps",
         ):
-            if getattr(self, field) < 0:
+            value = getattr(self, field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or value < 0
+            ):
                 raise ValueError(f"{field} must not be negative")
         if self.statutory_sell_tax_bps is not None and (
-            self.statutory_sell_tax_bps < 0
+            isinstance(self.statutory_sell_tax_bps, bool)
+            or not isinstance(self.statutory_sell_tax_bps, (int, float))
+            or not math.isfinite(float(self.statutory_sell_tax_bps))
+            or self.statutory_sell_tax_bps < 0
         ):
             raise ValueError("statutory_sell_tax_bps must not be negative")
-        if self.cost_profile_verified and (
-            self.statutory_sell_tax_bps is None
-            or not str(self.cost_profile_source or "").strip()
-            or str(self.cost_profile_source).startswith(("missing_", "operator_"))
-        ):
-            raise ValueError(
-                "verified cost profile requires complete non-operator source"
+        if self.cost_profile_verified:
+            source = str(self.cost_profile_source or "").strip()
+            artifact_id = str(self.cost_profile_artifact_id or "").strip()
+            artifact_hash = str(self.cost_profile_artifact_sha256 or "").strip()
+            artifact_payload_json = str(
+                self.cost_profile_artifact_payload_json or ""
+            ).strip()
+            effective_date = str(self.cost_profile_effective_date or "").strip()
+            normalized_venues = tuple(
+                sorted({normalize_venue(value) for value in self.cost_profile_venues})
             )
-        if self.adverse_label_bps >= 0:
+            if (
+                self.statutory_sell_tax_bps is None
+                or not source
+                or source.startswith(("missing_", "operator_"))
+                or not artifact_id
+                or len(artifact_hash) != 64
+                or any(character not in "0123456789abcdef" for character in artifact_hash)
+                or not artifact_payload_json
+                or not effective_date
+                or not normalized_venues
+                or "UNKNOWN" in normalized_venues
+            ):
+                raise ValueError(
+                    "verified cost profile requires a reviewed artifact hash, "
+                    "effective date, and venue scope"
+                )
+            try:
+                date.fromisoformat(effective_date)
+            except ValueError as exc:
+                raise ValueError("verified cost profile date is invalid") from exc
+            if tuple(self.cost_profile_venues) != normalized_venues:
+                raise ValueError("verified cost profile venues must be normalized")
+            try:
+                artifact_payload = json.loads(artifact_payload_json)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("verified cost profile artifact is invalid") from exc
+            if not isinstance(artifact_payload, dict):
+                raise ValueError("verified cost profile artifact must be an object")
+            expected_artifact_fields = {
+                "schema": COST_PROFILE_SCHEMA,
+                "artifact_id": artifact_id,
+                "effective_date": effective_date,
+                "venues": list(normalized_venues),
+                "instrument_scope": "domestic_common_or_preferred_stock",
+                "source": source,
+                "buy_fee_bps": self.buy_fee_bps,
+                "sell_fee_bps": self.sell_fee_bps,
+                "statutory_sell_tax_bps": self.statutory_sell_tax_bps,
+                "uncertainty_buffer_bps": self.uncertainty_buffer_bps,
+            }
+            if any(
+                artifact_payload.get(field) != expected
+                for field, expected in expected_artifact_fields.items()
+            ):
+                raise ValueError(
+                    "verified cost profile artifact fields do not match config"
+                )
+            computed_artifact_hash = hashlib.sha256(
+                json.dumps(
+                    artifact_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+            if computed_artifact_hash != artifact_hash:
+                raise ValueError("verified cost profile artifact hash mismatch")
+        if (
+            isinstance(self.adverse_label_bps, bool)
+            or not isinstance(self.adverse_label_bps, (int, float))
+            or not math.isfinite(float(self.adverse_label_bps))
+            or self.adverse_label_bps >= 0
+        ):
             raise ValueError("adverse_label_bps must be negative")
         if (
             self.max_outcome_endpoint_lag_ms < 0
@@ -393,6 +498,42 @@ class BridgeConfig:
             or self.outcome_horizons_sec[0] <= 0
         ):
             raise ValueError("outcome horizons must be sorted unique positive values")
+
+
+def _bridge_config_contract(config: BridgeConfig) -> dict[str, Any]:
+    body = {
+        "schema": BRIDGE_CONFIG_SCHEMA,
+        "producer_version": BRIDGE_PRODUCER_VERSION,
+        "values": asdict(config),
+    }
+    return {**body, "config_sha256": _sha256(body)}
+
+
+def _bridge_config_from_contract(contract: Mapping[str, Any]) -> BridgeConfig:
+    body = {key: value for key, value in contract.items() if key != "config_sha256"}
+    if (
+        contract.get("schema") != BRIDGE_CONFIG_SCHEMA
+        or contract.get("producer_version") != BRIDGE_PRODUCER_VERSION
+        or contract.get("config_sha256") != _sha256(body)
+    ):
+        raise ValueError("micro_context_bridge_contract_invalid")
+    values = contract.get("values")
+    if not isinstance(values, Mapping):
+        raise ValueError("micro_context_bridge_contract_invalid")
+    expected_fields = set(BridgeConfig.__dataclass_fields__)
+    if set(values) != expected_fields:
+        raise ValueError("micro_context_bridge_config_fields_invalid")
+    normalized = dict(values)
+    for field in (
+        "participation_grid",
+        "outcome_horizons_sec",
+        "cost_profile_venues",
+    ):
+        value = normalized.get(field)
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(f"micro_context_bridge_config_{field}_invalid")
+        normalized[field] = tuple(value)
+    return BridgeConfig(**normalized)
 
 
 @dataclass(frozen=True, slots=True)
@@ -611,6 +752,8 @@ def _canonical_context_findings(
     """Verify the stored context instead of trusting trace summary strings."""
 
     findings: list[str] = []
+    if not str(trace.get("decision_trace_id") or "").strip():
+        findings.append("decision_trace_id_missing")
     expected_schema = _expected_context_schema(trace)
     if expected_schema is None:
         return ("decision_stage_context_schema_unknown",)
@@ -973,9 +1116,15 @@ def exact_snapshot_watermark(
         blockers.append("snapshot_market_data_route_mismatch")
     if payload_route != trace_route:
         blockers.append("payload_trace_market_data_route_mismatch")
+    integrated_sor_route_proven = bool(
+        ("integrated" in trace_route or "sor" in trace_route)
+        and (
+            snapshot.get("integrated_sor_route_proven") is True
+            or snapshot.get("nxt_integrated_execution_view_proven") is True
+        )
+    )
     if ("integrated" in trace_route or "sor" in trace_route) and not (
-        snapshot.get("integrated_sor_route_proven") is True
-        or snapshot.get("nxt_integrated_execution_view_proven") is True
+        integrated_sor_route_proven
     ):
         blockers.append("integrated_route_proof_missing")
     trace_broker_route = str(trace.get("broker_route") or "").strip().upper()
@@ -1001,6 +1150,8 @@ def exact_snapshot_watermark(
         "stock_code": trace_symbol,
         "effective_venue": snapshot_venue,
         "session_bucket": snapshot_session,
+        "trace_market_data_route": trace_route,
+        "integrated_sor_route_proven": integrated_sor_route_proven,
         "provider_payload_semantic_hash_status": provider_semantic_hash_status,
         "exact_replay_source_semantic_status": (
             exact_replay_source_semantic_status
@@ -1012,6 +1163,13 @@ def _valid_market_row(row: Mapping[str, Any]) -> tuple[bool, str | None]:
     expected_contract = MARKET_CONTRACT_BY_SCHEMA.get(str(row.get("schema") or ""))
     if expected_contract is None or row.get("metric_contract_id") != expected_contract:
         return False, "market_schema_invalid"
+    item_symbol, item_venue = registration_item_identity(row.get("item"))
+    if (
+        not item_symbol
+        or item_symbol != normalize_symbol(row.get("symbol"))
+        or item_venue != normalize_venue(row.get("venue"))
+    ):
+        return False, "market_item_scope_conflict"
     if (
         row.get("actual_order_submitted") is not False
         or row.get("broker_order_forbidden") is not True
@@ -1263,18 +1421,18 @@ def _liquidity_projection(
     depth: Mapping[str, Any] | None,
     recent_rows: Sequence[Mapping[str, Any]],
     config: BridgeConfig,
-    upstream_quantity: Mapping[str, Any],
 ) -> dict[str, Any]:
-    upstream_qty = _nonnegative_int(upstream_quantity.get("quantity"))
     if depth is None:
         return {
             "capacity_quality_status": "depth_unavailable_not_imputed",
             "counterfactual_liquidity_qty_grid": [],
             "counterfactual_liquidity_qty_ceiling": None,
             "counterfactual_immediate_exit_qty_ceiling": None,
-            "existing_position_formula_candidate_qty": upstream_qty,
-            "existing_quantity_provenance": dict(upstream_quantity),
-            "existing_quantity_owner": "position_sizing_dynamic_formula",
+            "snapshot_depth_execution_basis": {
+                "bid_levels": [],
+                "ask_levels": [],
+                "allocator_or_order_quantity_present": False,
+            },
         }
     bid_levels = _levels(depth.get("bid_levels"))
     ask_levels = _levels(depth.get("ask_levels"))
@@ -1295,15 +1453,34 @@ def _liquidity_projection(
     )
     grid = []
     for participation in config.participation_grid:
-        roundtrip_depth_capacity = (
+        raw_roundtrip_capacity = (
             None
             if bid_capacity is None or ask_capacity is None
-            else math.floor(min(bid_capacity, ask_capacity) * participation)
+            else min(bid_capacity, ask_capacity)
         )
-        immediate_exit_capacity = (
+        roundtrip_floor = (
+            None
+            if raw_roundtrip_capacity is None
+            else math.floor(raw_roundtrip_capacity * participation)
+        )
+        roundtrip_depth_capacity = (
+            None
+            if roundtrip_floor is None
+            else (
+                max(1, roundtrip_floor)
+                if raw_roundtrip_capacity > 0
+                else 0
+            )
+        )
+        immediate_exit_floor = (
             None
             if bid_capacity is None
             else math.floor(bid_capacity * participation)
+        )
+        immediate_exit_capacity = (
+            None
+            if immediate_exit_floor is None
+            else max(1, immediate_exit_floor) if bid_capacity > 0 else 0
         )
         passive_ask_fill_support_qty = (
             None
@@ -1315,18 +1492,21 @@ def _liquidity_projection(
                 * participation
             )
         )
-        bounded_capacity = roundtrip_depth_capacity
-        if bounded_capacity is not None and upstream_qty is not None:
-            bounded_capacity = min(bounded_capacity, upstream_qty)
+        standardized_probe_qty = (
+            1
+            if roundtrip_depth_capacity is not None
+            and roundtrip_depth_capacity >= 1
+            else None
+        )
         entry_vwap = (
             None
-            if bounded_capacity is None
-            else _sweep_vwap(ask_levels, bounded_capacity)
+            if roundtrip_depth_capacity is None
+            else _sweep_vwap(ask_levels, roundtrip_depth_capacity)
         )
         exit_vwap = (
             None
-            if bounded_capacity is None
-            else _sweep_vwap(bid_levels, bounded_capacity)
+            if roundtrip_depth_capacity is None
+            else _sweep_vwap(bid_levels, roundtrip_depth_capacity)
         )
         grid.append(
             {
@@ -1336,11 +1516,30 @@ def _liquidity_projection(
                 "immediate_roundtrip_depth_capacity_qty": (
                     roundtrip_depth_capacity
                 ),
+                "strict_depth_participation_capacity_qty": roundtrip_floor,
                 "immediate_marketable_exit_capacity_qty": (
                     immediate_exit_capacity
                 ),
+                "one_share_probe_floor_applied": bool(
+                    raw_roundtrip_capacity
+                    and roundtrip_floor == 0
+                    and roundtrip_depth_capacity == 1
+                ),
+                "immediate_exit_one_share_floor_applied": bool(
+                    bid_capacity
+                    and immediate_exit_floor == 0
+                    and immediate_exit_capacity == 1
+                ),
                 "passive_ask_fill_support_qty": passive_ask_fill_support_qty,
-                "counterfactual_liquidity_bounded_qty": bounded_capacity,
+                "depth_only_roundtrip_capacity_qty": roundtrip_depth_capacity,
+                # Compatibility name retained as a depth-only quantity.  It
+                # never incorporates payload, allocator, or order quantity.
+                "counterfactual_liquidity_bounded_qty": (
+                    roundtrip_depth_capacity
+                ),
+                "standardized_one_share_probe_observation_qty": (
+                    standardized_probe_qty
+                ),
                 "counterfactual_entry_sweep_vwap": entry_vwap,
                 "counterfactual_exit_sweep_vwap": exit_vwap,
                 "counterfactual_roundtrip_execution_bps": (
@@ -1350,11 +1549,24 @@ def _liquidity_projection(
                 ),
             }
         )
-    conservative_index = min(1, len(grid) - 1)
-    ceiling = grid[conservative_index]["counterfactual_liquidity_bounded_qty"]
-    exit_ceiling = grid[conservative_index][
-        "immediate_marketable_exit_capacity_qty"
-    ]
+    conservative = next(
+        (
+            row
+            for row in grid
+            if abs(float(row["participation_rate"]) - 0.05) <= 1e-12
+        ),
+        None,
+    )
+    ceiling = (
+        None
+        if conservative is None
+        else conservative["depth_only_roundtrip_capacity_qty"]
+    )
+    exit_ceiling = (
+        None
+        if conservative is None
+        else conservative["immediate_marketable_exit_capacity_qty"]
+    )
     return {
         "capacity_quality_status": (
             "immediate_bid_ask_depth_capacity_observed"
@@ -1370,23 +1582,86 @@ def _liquidity_projection(
         "counterfactual_liquidity_qty_grid": grid,
         "counterfactual_liquidity_qty_ceiling": ceiling,
         "counterfactual_immediate_exit_qty_ceiling": exit_ceiling,
-        "existing_position_formula_candidate_qty": upstream_qty,
-        "existing_quantity_provenance": dict(upstream_quantity),
-        "existing_quantity_owner": "position_sizing_dynamic_formula",
-        "future_candidate_composition_rule": (
-            "min(existing_position_formula_qty,verified_fast_exit_capacity)"
+        "standardized_one_share_probe_observation_qty": (
+            None
+            if conservative is None
+            else conservative["standardized_one_share_probe_observation_qty"]
         ),
+        "snapshot_depth_execution_basis": {
+            "bid_levels": [list(level) for level in bid_levels],
+            "ask_levels": [list(level) for level in ask_levels],
+            "allocator_or_order_quantity_present": False,
+        },
+        "quantity_authority_status": "depth_capacity_only_no_order_authority",
     }
 
 
 def _economics(
-    *, liquidity: Mapping[str, Any], config: BridgeConfig
+    *,
+    liquidity: Mapping[str, Any],
+    config: BridgeConfig,
+    venue: str,
+    snapshot_date: str,
+    symbol_metadata: Mapping[str, Any],
 ) -> dict[str, Any]:
     grid = liquidity.get("counterfactual_liquidity_qty_grid")
     grid = grid if isinstance(grid, list) else []
-    conservative = grid[min(1, len(grid) - 1)] if grid else {}
+    conservative = next(
+        (
+            row
+            for row in grid
+            if isinstance(row, Mapping)
+            and abs(float(row.get("participation_rate") or 0.0) - 0.05)
+            <= 1e-12
+        ),
+        {},
+    )
     execution_bps = _finite_float(
         conservative.get("counterfactual_roundtrip_execution_bps")
+    )
+    normalized_venue = normalize_venue(venue)
+    try:
+        observed_date = date.fromisoformat(str(snapshot_date or ""))
+    except ValueError:
+        observed_date = None
+    try:
+        effective_date = date.fromisoformat(config.cost_profile_effective_date)
+    except ValueError:
+        effective_date = None
+    metadata_listing_market = normalize_listing_market(
+        symbol_metadata.get("listing_market")
+    )
+    metadata_instrument_type = normalize_instrument_type(
+        symbol_metadata.get("instrument_type")
+    )
+    metadata_tax_profile = (
+        None
+        if observed_date is None
+        or metadata_listing_market is ListingMarket.UNKNOWN
+        or metadata_instrument_type is InstrumentType.UNKNOWN
+        else tax_profile_for(
+            trade_date=observed_date,
+            listing_market=metadata_listing_market,
+            instrument_type=metadata_instrument_type,
+        )
+    )
+    tax_scope_matches = bool(
+        metadata_tax_profile is not None
+        and config.statutory_sell_tax_bps is not None
+        and metadata_tax_profile.statutory_sell_tax_bps
+        == config.statutory_sell_tax_bps
+        and metadata_tax_profile.instrument_tax_class.value
+        == symbol_metadata.get("instrument_tax_class")
+    )
+    verified_scope_applicable = bool(
+        config.cost_profile_verified
+        and observed_date is not None
+        and effective_date is not None
+        and observed_date >= effective_date
+        and normalized_venue in config.cost_profile_venues
+        and symbol_metadata.get("symbol_metadata_status") == "verified"
+        and symbol_metadata.get("instrument_type") == InstrumentType.EQUITY.value
+        and tax_scope_matches
     )
     cost_ready = config.statutory_sell_tax_bps is not None
     fixed_cost = (
@@ -1404,7 +1679,52 @@ def _economics(
     )
     return {
         "cost_profile_source": config.cost_profile_source,
-        "cost_profile_verified": config.cost_profile_verified,
+        "cost_profile_verified": verified_scope_applicable,
+        "cost_profile_contract_verified": config.cost_profile_verified,
+        "cost_profile_tax_scope_match": tax_scope_matches,
+        "cost_profile_scope_status": (
+            "reviewed_artifact_applicable"
+            if verified_scope_applicable
+            else (
+                "reviewed_artifact_instrument_type_unverified_or_not_covered"
+                if config.cost_profile_verified
+                and (
+                    symbol_metadata.get("symbol_metadata_status") != "verified"
+                    or symbol_metadata.get("instrument_type")
+                    != InstrumentType.EQUITY.value
+                )
+                else "reviewed_artifact_instrument_tax_scope_mismatch"
+                if config.cost_profile_verified and not tax_scope_matches
+                else "reviewed_artifact_not_applicable_to_venue_or_date"
+                if config.cost_profile_verified
+                else "unverified_research_cost_profile"
+            )
+        ),
+        "symbol_metadata_status": symbol_metadata.get("symbol_metadata_status"),
+        "symbol_metadata_record_sha256": symbol_metadata.get(
+            "symbol_metadata_record_sha256"
+        ),
+        "symbol_master_artifact_sha256": symbol_metadata.get(
+            "symbol_master_artifact_sha256"
+        ),
+        "symbol_metadata_source": symbol_metadata.get("symbol_metadata_source"),
+        "symbol_metadata_source_reference": symbol_metadata.get(
+            "symbol_metadata_source_reference"
+        ),
+        "symbol_metadata_verified_at": symbol_metadata.get(
+            "symbol_metadata_verified_at"
+        ),
+        "listing_market": symbol_metadata.get("listing_market"),
+        "instrument_type": symbol_metadata.get("instrument_type"),
+        "instrument_tax_class": symbol_metadata.get("instrument_tax_class"),
+        "cost_profile_artifact_id": config.cost_profile_artifact_id or None,
+        "cost_profile_artifact_sha256": (
+            config.cost_profile_artifact_sha256 or None
+        ),
+        "cost_profile_effective_date": (
+            config.cost_profile_effective_date or None
+        ),
+        "cost_profile_venues": list(config.cost_profile_venues),
         "buy_fee_bps": config.buy_fee_bps if cost_ready else None,
         "sell_fee_bps": config.sell_fee_bps if cost_ready else None,
         "statutory_sell_tax_bps": config.statutory_sell_tax_bps,
@@ -1422,7 +1742,7 @@ def _economics(
         ),
         "economic_source_quality_status": (
             "verified_cost_profile"
-            if cost_ready and config.cost_profile_verified
+            if cost_ready and verified_scope_applicable
             else (
                 "research_cost_assumption_not_promotion_grade"
                 if cost_ready
@@ -1441,7 +1761,9 @@ def _nested_value(source: Any, path: Sequence[str]) -> Any:
     return current
 
 
-def _position_context(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _position_context(
+    payload: Mapping[str, Any], *, max_broker_position_age_sec: float
+) -> dict[str, Any]:
     source = _stored_replay_exact_payload(payload)
     roots = [source] if isinstance(source, Mapping) else []
     nested_exact = source.get("exact_payload") if isinstance(source, Mapping) else None
@@ -1473,6 +1795,31 @@ def _position_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     lifecycle = lifecycle if isinstance(lifecycle, Mapping) else {}
     reconciliation = context.get("order_reconciliation")
     reconciliation = reconciliation if isinstance(reconciliation, Mapping) else {}
+    source_quality = context.get("source_quality")
+    source_quality = source_quality if isinstance(source_quality, Mapping) else {}
+    candidate_exit_rule = ""
+    active_hard_guard = ""
+    for root in roots:
+        decision_type = root.get("decision_type")
+        guard_state = root.get("deterministic_guard_state")
+        hard_guard_context = root.get("hard_guard_context")
+        decision_type = decision_type if isinstance(decision_type, Mapping) else {}
+        guard_state = guard_state if isinstance(guard_state, Mapping) else {}
+        hard_guard_context = (
+            hard_guard_context if isinstance(hard_guard_context, Mapping) else {}
+        )
+        candidate_exit_rule = candidate_exit_rule or str(
+            decision_type.get("candidate_exit_rule")
+            or guard_state.get("candidate_exit_rule")
+            or ""
+        ).strip()
+        active_hard_guard = active_hard_guard or str(
+            hard_guard_context.get("active_hard_guard") or ""
+        ).strip()
+    hard_exit_guard_observed = any(
+        token in f"{candidate_exit_rule} {active_hard_guard}".lower()
+        for token in ("hard", "protect", "emergency", "mandatory")
+    )
     remaining_qty = _nonnegative_int(execution.get("remaining_qty"))
     broker_qty = _nonnegative_int(lifecycle.get("broker_qty"))
     memory_qty = _nonnegative_int(lifecycle.get("memory_qty"))
@@ -1496,29 +1843,53 @@ def _position_context(payload: Mapping[str, Any]) -> dict[str, Any]:
         and isinstance(reconciliation.get("quantity_mismatch"), bool)
         and isinstance(reconciliation.get("order_or_quantity_conflict"), bool)
     )
-    order_conflict = bool(
-        not reconciliation_contract_complete
-        or reconciliation.get("cancel_pending") is True
+    broker_snapshot_age_sec = _finite_float(
+        reconciliation.get("broker_snapshot_age_sec")
+    )
+    position_reconciled = source_quality.get("position_reconciled") is True
+    position_authority_reconciled = (
+        source_quality.get("position_authority_reconciled") is True
+    )
+    simulation_position_reconciled = (
+        source_quality.get("simulation_position_reconciled") is True
+    )
+    reconciliation_mode = str(
+        source_quality.get("position_reconciliation_mode") or ""
+    ).strip()
+    broker_position_fresh = bool(
+        broker_snapshot_age_sec is not None
+        and 0.0 <= broker_snapshot_age_sec <= max_broker_position_age_sec
+    )
+    position_execution_eligible = bool(
+        reconciliation_contract_complete
+        and position_reconciled
+        and position_authority_reconciled
+        and not simulation_position_reconciled
+        and reconciliation_mode != "simulation_book"
+        and broker_position_fresh
+    )
+    explicit_order_conflict = bool(
+        reconciliation.get("cancel_pending") is True
         or reconciliation.get("exit_token_active") is True
         or quantity_conflict
         or (quantity is not None and open_sell_qty is not None and open_sell_qty > quantity)
     )
+    order_conflict = bool(not position_execution_eligible or explicit_order_conflict)
     free_to_sell_qty = (
         None
         if quantity is None or order_conflict or open_sell_qty > quantity
         else max(0, quantity - open_sell_qty)
     )
-    price = _positive_float(
-        execution.get("average_entry_price")
-        or lifecycle.get("average_entry_price")
-    )
+    execution_price = _positive_float(execution.get("average_entry_price"))
+    lifecycle_price = _positive_float(lifecycle.get("average_entry_price"))
+    price = execution_price or lifecycle_price
     return {
         "status": (
             "canonical_position_execution_conflict"
-            if order_conflict and reconciliation_contract_complete
+            if explicit_order_conflict
             else (
-                "canonical_broker_reconciliation_incomplete"
-                if not reconciliation_contract_complete
+                "canonical_broker_position_provenance_unusable"
+                if not position_execution_eligible
                 else (
                     "canonical_position_context_captured"
                     if quantity is not None and quantity > 0
@@ -1537,17 +1908,42 @@ def _position_context(payload: Mapping[str, Any]) -> dict[str, Any]:
         "broker_reconciliation_contract_complete": (
             reconciliation_contract_complete
         ),
+        "position_reconciled": position_reconciled,
+        "position_authority_reconciled": position_authority_reconciled,
+        "position_reconciliation_mode": reconciliation_mode or None,
+        "simulation_position_reconciled": simulation_position_reconciled,
+        "broker_snapshot_age_sec": broker_snapshot_age_sec,
+        "max_broker_position_age_sec": max_broker_position_age_sec,
+        "broker_position_fresh": broker_position_fresh,
+        "position_execution_eligible": position_execution_eligible,
+        "candidate_exit_rule": candidate_exit_rule or None,
+        "active_hard_guard": active_hard_guard or None,
+        "hard_exit_guard_observed": hard_exit_guard_observed,
         "cancel_pending": reconciliation.get("cancel_pending") is True,
         "exit_token_active": reconciliation.get("exit_token_active") is True,
         "quantity_conflict": quantity_conflict,
         "quantity_pointer": (
             "/holding_decision_context/position_lifecycle/broker_qty"
             if broker_qty is not None
-            else "/holding_decision_context/execution_pnl/remaining_qty"
+            else (
+                "/holding_decision_context/execution_pnl/remaining_qty"
+                if remaining_qty is not None
+                else (
+                    "/holding_decision_context/position_lifecycle/memory_qty"
+                    if memory_qty is not None
+                    else None
+                )
+            )
         ),
         "free_to_sell_quantity_formula": "total_position_minus_open_sell_qty",
         "price_pointer": (
             "/holding_decision_context/execution_pnl/average_entry_price"
+            if execution_price is not None
+            else (
+                "/holding_decision_context/position_lifecycle/average_entry_price"
+                if lifecycle_price is not None
+                else None
+            )
         ),
     }
 
@@ -1560,8 +1956,12 @@ def _lifecycle_projection(
     liquidity: Mapping[str, Any],
     economics: Mapping[str, Any],
     max_exit_sweep_slippage_bps: float,
+    max_broker_position_age_sec: float,
 ) -> dict[str, Any]:
-    position = _position_context(payload)
+    position = _position_context(
+        payload,
+        max_broker_position_age_sec=max_broker_position_age_sec,
+    )
     position_qty = _nonnegative_int(position.get("quantity"))
     free_to_sell_qty = _nonnegative_int(position.get("free_to_sell_quantity"))
     buy_price = _positive_float(position.get("average_price"))
@@ -1582,6 +1982,8 @@ def _lifecycle_projection(
         if free_to_sell_qty is None
         or bid_slippage_capacity is None
         or free_to_sell_qty > bid_slippage_capacity
+        or immediate_exit_capacity is None
+        or free_to_sell_qty > immediate_exit_capacity
         else _sweep_vwap(bid_levels, free_to_sell_qty)
     )
     gross_exit_bps = (
@@ -1660,7 +2062,11 @@ def _lifecycle_projection(
                 else net_exit_bps
                 >= float(economics.get("minimum_net_profit_bps") or 0.0)
             ),
-            "counterfactual_immediately_executable_qty": immediate_exit_capacity,
+            "counterfactual_immediately_executable_qty": (
+                None
+                if free_to_sell_qty is None or immediate_exit_capacity is None
+                else min(free_to_sell_qty, immediate_exit_capacity)
+            ),
             "hard_protect_emergency_exit_priority_unchanged": True,
             "live_sell_or_cancel_effect": False,
         },
@@ -1668,41 +2074,319 @@ def _lifecycle_projection(
     }
 
 
-def _upstream_quantity(payload: Mapping[str, Any]) -> dict[str, Any]:
-    source = _stored_replay_exact_payload(payload)
-    allowed_paths = (
-        ("position_sizing_allocator", "effective_qty"),
-        ("position_sizing", "effective_qty"),
-        ("order_plan", "effective_qty"),
-    )
-    candidates = []
-    for path in allowed_paths:
-        quantity = _nonnegative_int(_nested_value(source, path))
-        if quantity is not None and quantity > 0:
-            candidates.append((quantity, "/" + "/".join(path)))
-    unique = {(quantity, pointer) for quantity, pointer in candidates}
-    if not unique:
+def _verified_symbol_metadata_context(
+    *,
+    supplied: Mapping[str, Any] | None,
+    symbol: str,
+    snapshot_date: str,
+) -> dict[str, Any]:
+    """Validate an effective-dated symbol-master lookup for cost qualification.
+
+    The raw lookup is never copied to tactical evidence.  Only normalized
+    economics fields and immutable hashes are returned.  Missing/conflicting
+    lookups remain observation-only; a mapping that claims ``verified`` but
+    conflicts with the trace identity fails closed.
+    """
+
+    if not isinstance(supplied, Mapping):
         return {
-            "status": "allocator_quantity_unavailable_not_imputed",
-            "quantity": None,
-            "pointer": None,
-            "owner": "position_sizing_dynamic_formula",
+            "symbol_metadata_status": "missing",
+            "symbol_metadata_record_sha256": None,
+            "symbol_master_artifact_sha256": None,
+            "symbol_metadata_source": None,
+            "symbol_metadata_source_reference": None,
+            "symbol_metadata_verified_at": None,
+            "listing_market": None,
+            "instrument_type": None,
+            "instrument_tax_class": None,
         }
-    quantities = {quantity for quantity, _ in unique}
-    if len(quantities) != 1:
+    allowed_lookup_fields = {
+        "lookup_status",
+        "record",
+        "record_sha256",
+        "symbol_master_artifact_sha256",
+    }
+    if set(supplied) - allowed_lookup_fields:
+        raise ValueError("verified_symbol_metadata_lookup_fields_invalid")
+    lookup_status = str(supplied.get("lookup_status") or "").strip().lower()
+    record = supplied.get("record")
+    if lookup_status != "verified":
+        if record is not None:
+            raise ValueError("symbol_metadata_unverified_record_present")
         return {
-            "status": "allocator_quantity_conflict",
-            "quantity": None,
-            "pointer": None,
-            "owner": "position_sizing_dynamic_formula",
+            "symbol_metadata_status": lookup_status or "missing",
+            "symbol_metadata_record_sha256": None,
+            "symbol_master_artifact_sha256": None,
+            "symbol_metadata_source": None,
+            "symbol_metadata_source_reference": None,
+            "symbol_metadata_verified_at": None,
+            "listing_market": None,
+            "instrument_type": None,
+            "instrument_tax_class": None,
         }
-    quantity = next(iter(quantities))
-    pointers = sorted(pointer for _, pointer in unique)
+    if not isinstance(record, Mapping):
+        raise ValueError("verified_symbol_metadata_record_missing")
+    expected_record_fields = {
+        "symbol",
+        "listing_market",
+        "instrument_type",
+        "instrument_tax_class",
+        "effective_from",
+        "effective_to",
+        "metadata_source",
+        "source_reference",
+        "verified_at",
+        "conflict_status",
+    }
+    if set(record) != expected_record_fields:
+        raise ValueError("verified_symbol_metadata_record_fields_invalid")
+    normalized_symbol = normalize_symbol(record.get("symbol"))
+    if not normalized_symbol or normalized_symbol != normalize_symbol(symbol):
+        raise ValueError("verified_symbol_metadata_symbol_mismatch")
+    try:
+        observed_date = date.fromisoformat(str(snapshot_date or ""))
+        effective_from = date.fromisoformat(str(record.get("effective_from") or ""))
+        effective_to_raw = record.get("effective_to")
+        effective_to = (
+            None
+            if effective_to_raw in {None, ""}
+            else date.fromisoformat(str(effective_to_raw))
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("verified_symbol_metadata_effective_date_invalid") from exc
+    if observed_date < effective_from or (
+        effective_to is not None and observed_date > effective_to
+    ):
+        raise ValueError("verified_symbol_metadata_outside_effective_window")
+    if str(record.get("conflict_status") or "").strip().lower() != "clean":
+        raise ValueError("verified_symbol_metadata_conflict")
+    listing_market = normalize_listing_market(record.get("listing_market"))
+    instrument_type = normalize_instrument_type(record.get("instrument_type"))
+    if listing_market is ListingMarket.UNKNOWN:
+        raise ValueError("verified_symbol_metadata_listing_market_unknown")
+    if instrument_type is InstrumentType.UNKNOWN:
+        raise ValueError("verified_symbol_metadata_instrument_type_unknown")
+    metadata_source = str(record.get("metadata_source") or "").strip()
+    source_reference = str(record.get("source_reference") or "").strip()
+    verified_at = str(record.get("verified_at") or "").strip()
+    if not metadata_source or not source_reference:
+        raise ValueError("verified_symbol_metadata_provenance_missing")
+    verified_at_value = _parse_timestamp(verified_at)
+    if verified_at_value.tzinfo is None:
+        raise ValueError("verified_symbol_metadata_verified_at_timezone_missing")
+    expected_tax_class = tax_profile_for(
+        trade_date=observed_date,
+        listing_market=listing_market,
+        instrument_type=instrument_type,
+    ).instrument_tax_class.value
+    instrument_tax_class = str(record.get("instrument_tax_class") or "").strip()
+    if instrument_tax_class != expected_tax_class:
+        raise ValueError("verified_symbol_metadata_tax_class_mismatch")
+    normalized_record = {
+        "symbol": normalized_symbol,
+        "listing_market": listing_market.value,
+        "instrument_type": instrument_type.value,
+        "instrument_tax_class": instrument_tax_class,
+        "effective_from": effective_from.isoformat(),
+        "effective_to": None if effective_to is None else effective_to.isoformat(),
+        "metadata_source": metadata_source,
+        "source_reference": source_reference,
+        "verified_at": verified_at,
+        "conflict_status": "clean",
+    }
+    record_sha256 = _sha256(normalized_record)
+    declared_record_hash = str(supplied.get("record_sha256") or "").strip()
+    if declared_record_hash and declared_record_hash != record_sha256:
+        raise ValueError("verified_symbol_metadata_record_sha256_mismatch")
+    artifact_hash = str(
+        supplied.get("symbol_master_artifact_sha256") or ""
+    ).strip()
+    if artifact_hash and (
+        len(artifact_hash) != 64
+        or any(character not in "0123456789abcdef" for character in artifact_hash)
+    ):
+        raise ValueError("verified_symbol_metadata_artifact_sha256_invalid")
     return {
-        "status": "allocator_quantity_captured",
-        "quantity": quantity,
-        "pointer": pointers[0] if len(pointers) == 1 else pointers,
-        "owner": "position_sizing_dynamic_formula",
+        "symbol_metadata_status": "verified",
+        "symbol_metadata_record_sha256": record_sha256,
+        "symbol_master_artifact_sha256": artifact_hash or None,
+        "symbol_metadata_source": metadata_source,
+        "symbol_metadata_source_reference": source_reference,
+        "symbol_metadata_verified_at": verified_at,
+        "listing_market": listing_market.value,
+        "instrument_type": instrument_type.value,
+        "instrument_tax_class": instrument_tax_class,
+    }
+
+
+def _entry_pipeline_allocator_provenance(
+    *, evidence: Mapping[str, Any], entry_pipeline_rows: Iterable[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Join the central allocator only after provider-visible evidence exists."""
+
+    trace_id = str(evidence.get("decision_trace_id") or "").strip()
+    symbol = normalize_symbol(evidence.get("stock_code"))
+    trace_venue = _exact_venue(evidence.get("trace_effective_venue"))
+    trace_session = _session(evidence.get("trace_session_bucket"))
+    trace_route = _route(evidence.get("trace_market_data_route"))
+    try:
+        decision_ms = _timestamp_ms(evidence.get("trace_decision_ts"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("entry_pipeline_trace_decision_timestamp_invalid") from exc
+
+    def session_identity(value: Any) -> str:
+        session = _session(value)
+        return {
+            "KRX_LIKE_PREMARKET": "PREMARKET_KRX_LIKE",
+            "KRX_LIKE_AFTERMARKET": "AFTERMARKET_KRX_LIKE",
+        }.get(session, session)
+
+    def route_venue(value: Any) -> str:
+        route = _route(value)
+        if "integrated" in route or "sor" in route:
+            return "SOR"
+        if route in {"krx", "krx_only", "krx_regular"}:
+            return "KRX"
+        if route in {"nxt", "nxt_only", "nxt_regular"}:
+            return "NXT"
+        return "UNKNOWN"
+
+    expected_route_venue = route_venue(trace_route)
+    semantic_events: dict[tuple[str, int, str], dict[str, Any]] = {}
+    matching_row_count = 0
+    for row in entry_pipeline_rows:
+        if not isinstance(row, Mapping) or row.get("pipeline") != "ENTRY_PIPELINE":
+            continue
+        fields = row.get("fields")
+        if not isinstance(fields, Mapping):
+            continue
+        row_trace_id = str(fields.get("ai_decision_trace_id") or "").strip()
+        if row_trace_id != trace_id or normalize_symbol(row.get("stock_code")) != symbol:
+            continue
+        formula_version = str(fields.get("formula_version") or "").strip()
+        effective_qty = _nonnegative_int(fields.get("effective_qty"))
+        if not formula_version or effective_qty is None or effective_qty <= 0:
+            continue
+        matching_row_count += 1
+        if row.get("event_type") != "pipeline_event" or row.get(
+            "schema_version"
+        ) != 1:
+            raise ValueError("entry_pipeline_allocator_event_contract_invalid")
+        stage = str(row.get("stage") or "").strip()
+        record_id = _nonnegative_int(row.get("record_id"))
+        emitted_at = str(row.get("emitted_at") or "").strip()
+        emitted_date = str(row.get("emitted_date") or "").strip()
+        if not stage or record_id is None or record_id <= 0 or not emitted_at:
+            raise ValueError("entry_pipeline_allocator_event_identity_invalid")
+        try:
+            parsed_emitted_at = datetime.fromisoformat(emitted_at)
+            if parsed_emitted_at.tzinfo is None:
+                parsed_emitted_at = datetime.fromisoformat(f"{emitted_at}+09:00")
+            emitted_ms = int(parsed_emitted_at.timestamp() * 1_000)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "entry_pipeline_allocator_event_timestamp_invalid"
+            ) from exc
+        if emitted_date != parsed_emitted_at.date().isoformat():
+            raise ValueError("entry_pipeline_allocator_event_date_mismatch")
+        if emitted_ms < decision_ms:
+            raise ValueError("entry_pipeline_allocator_event_precedes_ai_decision")
+        row_venue = _exact_venue(
+            fields.get("effective_venue") or fields.get("venue")
+        )
+        row_session = session_identity(fields.get("market_session_bucket"))
+        row_route = (
+            fields.get("market_data_route")
+            or fields.get("entry_candle_ws_route")
+            or fields.get("rising_missed_ws_last_route")
+        )
+        if row_venue != trace_venue:
+            raise ValueError("entry_pipeline_allocator_venue_mismatch")
+        if row_session != session_identity(trace_session):
+            raise ValueError("entry_pipeline_allocator_session_mismatch")
+        if (
+            expected_route_venue == "UNKNOWN"
+            or route_venue(row_route) != expected_route_venue
+        ):
+            raise ValueError("entry_pipeline_allocator_route_mismatch")
+        owner_raw = str(
+            fields.get("quantity_owner") or fields.get("qty_source") or ""
+        ).strip()
+        if owner_raw and owner_raw not in {
+            "position_sizing_dynamic_formula",
+            "scalping_position_sizing_allocator",
+        }:
+            raise ValueError("entry_pipeline_allocator_owner_invalid")
+        owner = "position_sizing_dynamic_formula"
+        key = (formula_version, effective_qty, owner)
+        semantic = {
+            "decision_trace_id": trace_id,
+            "stock_code": symbol,
+            "formula_version": formula_version,
+            "effective_qty": effective_qty,
+            "quantity_owner": owner,
+        }
+        event_identity = {
+            "schema_version": 1,
+            "event_type": "pipeline_event",
+            "pipeline": "ENTRY_PIPELINE",
+            "stage": stage,
+            "record_id": record_id,
+            "stock_code": symbol,
+            "emitted_at": parsed_emitted_at.isoformat(),
+            "emitted_date": emitted_date,
+            "decision_trace_id": trace_id,
+            "effective_venue": row_venue,
+            "session_bucket": row_session,
+            "route_venue": expected_route_venue,
+            "formula_version": formula_version,
+            "effective_qty": effective_qty,
+            "quantity_owner": owner,
+        }
+        joined = semantic_events.setdefault(
+            key,
+            {
+                "semantic": semantic,
+                "source_event_sha256s": set(),
+                "event_timestamps_ms": [],
+            },
+        )
+        joined["source_event_sha256s"].add(_sha256(event_identity))
+        joined["event_timestamps_ms"].append(emitted_ms)
+    if not semantic_events:
+        return {
+            "status": "allocator_provenance_missing",
+            "quantity_authority": "standardized_one_share_observation_only",
+            "allocator_event_sha256": None,
+            "allocator_source_event_sha256s": [],
+            "allocator_first_event_timestamp_ms": None,
+            "allocator_last_event_timestamp_ms": None,
+            "formula_version": None,
+            "effective_qty": None,
+            "matching_row_count": 0,
+            "deduplicated_event_count": 0,
+        }
+    if len(semantic_events) != 1:
+        raise ValueError("entry_pipeline_allocator_provenance_conflict")
+    joined = next(iter(semantic_events.values()))
+    semantic = joined["semantic"]
+    source_event_sha256s = sorted(joined["source_event_sha256s"])
+    event_timestamps_ms = sorted(joined["event_timestamps_ms"])
+    allocator_event = {
+        **semantic,
+        "source_event_sha256s": source_event_sha256s,
+    }
+    return {
+        "status": "central_allocator_provenance_joined",
+        "quantity_authority": "position_sizing_dynamic_formula_outcome_only",
+        "allocator_event_sha256": _sha256(allocator_event),
+        "allocator_source_event_sha256s": source_event_sha256s,
+        "allocator_first_event_timestamp_ms": event_timestamps_ms[0],
+        "allocator_last_event_timestamp_ms": event_timestamps_ms[-1],
+        "formula_version": semantic["formula_version"],
+        "effective_qty": semantic["effective_qty"],
+        "matching_row_count": matching_row_count,
+        "deduplicated_event_count": 1,
     }
 
 
@@ -1715,6 +2399,7 @@ def build_tactical_evidence(
     event_references: Iterable[Mapping[str, Any]],
     config: BridgeConfig | None = None,
     excluded_scopes: set[tuple[str, str, str, int]] | None = None,
+    verified_symbol_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one nonfuture sidecar without changing the exact provider payload."""
 
@@ -1728,7 +2413,6 @@ def build_tactical_evidence(
     source_exact_payload_sha256 = (
         _sha256(exact_payload) if exact_payload is not None else None
     )
-    upstream_quantity = _upstream_quantity(payload)
     scope = resolve_micro_scope(trace)
     if scope.status != "resolved":
         blocker_list.append(scope.reason or "micro_scope_unresolved")
@@ -1737,6 +2421,12 @@ def build_tactical_evidence(
         blocker_list.append("trace_symbol_missing")
     watermark_ms = int((watermark or {}).get("captured_at_ms") or 0)
     watermark_us = int((watermark or {}).get("captured_at_us") or 0)
+    snapshot_date = str((watermark or {}).get("captured_at") or "")[:10]
+    symbol_metadata = _verified_symbol_metadata_context(
+        supplied=verified_symbol_metadata,
+        symbol=symbol,
+        snapshot_date=snapshot_date,
+    )
     causal_lower_us = max(
         0,
         watermark_us
@@ -1749,6 +2439,7 @@ def build_tactical_evidence(
 
     accepted_market: list[Mapping[str, Any]] = []
     rejected_market = Counter()
+    rejected_market_receive_us: list[int] = []
     for row in market_rows:
         if (
             normalize_symbol(row.get("symbol")) != symbol
@@ -1767,6 +2458,7 @@ def build_tactical_evidence(
         valid, reason = _valid_market_row(row)
         if not valid:
             rejected_market[reason or "market_invalid"] += 1
+            rejected_market_receive_us.append(received_us)
             continue
         accepted_market.append(row)
     accepted_market.sort(
@@ -1781,8 +2473,16 @@ def build_tactical_evidence(
         selected_epoch = 0
     else:
         selected_epoch = int(latest_market.get("sequence_epoch") or 0)
+        latest_market_us = _timestamp_us(
+            latest_market.get("local_receive_timestamp")
+        )
+        if any(
+            rejected_us >= latest_market_us
+            for rejected_us in rejected_market_receive_us
+        ):
+            blocker_list.append("market_invalid_row_supersedes_latest_valid")
         market_age_ms = (
-            watermark_us - _timestamp_us(latest_market.get("local_receive_timestamp"))
+            watermark_us - latest_market_us
         ) / 1_000.0
         if market_age_ms < 0:
             blocker_list.append("future_market_row_selected")
@@ -1816,6 +2516,7 @@ def build_tactical_evidence(
 
     accepted_depth: list[Mapping[str, Any]] = []
     rejected_depth = Counter()
+    rejected_depth_receive_us: list[int] = []
     for row in depth_rows:
         if _scope_key(row) != (symbol, scope.venue, scope.session_bucket, selected_epoch):
             continue
@@ -1828,6 +2529,7 @@ def build_tactical_evidence(
         valid, reason = _valid_depth_row(row)
         if not valid:
             rejected_depth[reason or "depth_invalid"] += 1
+            rejected_depth_receive_us.append(received_us)
             continue
         accepted_depth.append(row)
     accepted_depth.sort(
@@ -1844,8 +2546,18 @@ def build_tactical_evidence(
         capacity_blockers.append("same_epoch_past_depth_missing")
         depth_basis_status = "same_epoch_past_depth_missing"
     else:
+        latest_depth_us = _timestamp_us(
+            latest_depth.get("local_receive_timestamp")
+        )
+        if any(
+            rejected_us >= latest_depth_us
+            for rejected_us in rejected_depth_receive_us
+        ):
+            capacity_blockers.append("depth_invalid_row_supersedes_latest_valid")
+            capacity_depth = None
+            depth_basis_status = "invalid_latest_depth_capacity_unavailable"
         depth_age_ms = (
-            watermark_us - _timestamp_us(latest_depth.get("local_receive_timestamp"))
+            watermark_us - latest_depth_us
         ) / 1_000.0
         if depth_age_ms < 0:
             capacity_blockers.append("future_depth_row_selected")
@@ -1921,9 +2633,14 @@ def build_tactical_evidence(
         depth=capacity_depth,
         recent_rows=(),
         config=selected_config,
-        upstream_quantity=upstream_quantity,
     )
-    economics = _economics(liquidity=liquidity, config=selected_config)
+    economics = _economics(
+        liquidity=liquidity,
+        config=selected_config,
+        venue=scope.venue,
+        snapshot_date=snapshot_date,
+        symbol_metadata=symbol_metadata,
+    )
     if active_reference is not None and latest_market is not None:
         try:
             onset = reconstruct_shock_onset_context(
@@ -1952,6 +2669,7 @@ def build_tactical_evidence(
                 reference_price = onset.reference_price
                 shock_price = onset.shock_price
                 running_low = shock_price
+                running_low_row = post_rows[0]
                 confirmation_row: Mapping[str, Any] | None = None
                 confirmation_low = shock_price
                 recovery_invalidation_count = 0
@@ -1959,6 +2677,7 @@ def build_tactical_evidence(
                     price = float(row["trade_price"])
                     if price < running_low:
                         running_low = price
+                        running_low_row = row
                         if confirmation_row is not None:
                             recovery_invalidation_count += 1
                             confirmation_row = None
@@ -2024,6 +2743,38 @@ def build_tactical_evidence(
                     "recent_window_start_ms": recent_start_ms,
                     "deceleration_windows_nonoverlap": nonoverlap_windows,
                     "sell_pressure_deceleration": sell_pressure_deceleration,
+                }
+                recovery_cycle_support_rows = (
+                    []
+                    if confirmation_row is None
+                    else [
+                        row
+                        for row in post_rows
+                        if (
+                            _timestamp_us(row.get("local_receive_timestamp")),
+                            int(row.get("source_sequence") or 0),
+                        )
+                        >= (
+                            _timestamp_us(
+                                running_low_row.get("local_receive_timestamp")
+                            ),
+                            int(running_low_row.get("source_sequence") or 0),
+                        )
+                    ]
+                )
+                recovery_cycle_support_tape = _aggressor_quantities(
+                    recovery_cycle_support_rows
+                )
+                tape["latest_recovery_cycle_support"] = {
+                    **recovery_cycle_support_tape,
+                    "cycle_low_source_sequence": running_low_row.get(
+                        "source_sequence"
+                    ),
+                    "confirmation_source_sequence": (
+                        None
+                        if confirmation_row is None
+                        else confirmation_row.get("source_sequence")
+                    ),
                 }
                 event_depth_rows = [
                     row
@@ -2097,8 +2848,9 @@ def build_tactical_evidence(
                     ),
                 }
                 late_buy_support = (
-                    recent_tape.get("known_qty", 0) > 0
-                    and (recent_tape.get("buy_ratio") or 0.0) >= 0.5
+                    recovery_cycle_support_tape.get("buy_qty", 0) > 0
+                    and (recovery_cycle_support_tape.get("buy_ratio") or 0.0)
+                    >= 0.5
                 )
                 sell_decelerated = (sell_pressure_deceleration or 0.0) > 0
                 bid_supported = (
@@ -2156,10 +2908,13 @@ def build_tactical_evidence(
                     depth=capacity_depth,
                     recent_rows=recent_rows,
                     config=selected_config,
-                    upstream_quantity=upstream_quantity,
                 )
                 economics = _economics(
-                    liquidity=liquidity, config=selected_config
+                    liquidity=liquidity,
+                    config=selected_config,
+                    venue=scope.venue,
+                    snapshot_date=snapshot_date,
+                    symbol_metadata=symbol_metadata,
                 )
     if blocker_list:
         status = "source_unavailable"
@@ -2168,6 +2923,10 @@ def build_tactical_evidence(
     evidence_without_hash = {
         "schema": TACTICAL_EVIDENCE_SCHEMA,
         "evidence_version": 1,
+        "bridge_config_sha256": _bridge_config_contract(selected_config)[
+            "config_sha256"
+        ],
+        "bridge_producer_version": BRIDGE_PRODUCER_VERSION,
         "decision_trace_id": trace.get("decision_trace_id"),
         "request_id": trace.get("request_id"),
         "decision_stage": trace.get("decision_stage"),
@@ -2178,6 +2937,14 @@ def build_tactical_evidence(
         "stock_code": symbol,
         "trace_effective_venue": trace.get("effective_venue"),
         "trace_session_bucket": trace.get("session_bucket"),
+        "trace_decision_ts": trace.get("decision_ts"),
+        "trace_market_data_route": (watermark or {}).get(
+            "trace_market_data_route"
+        ),
+        "integrated_sor_route_proven": (watermark or {}).get(
+            "integrated_sor_route_proven"
+        )
+        is True,
         "micro_venue": scope.venue,
         "micro_session_bucket": scope.session_bucket,
         "sequence_epoch": selected_epoch or None,
@@ -2233,6 +3000,9 @@ def build_tactical_evidence(
         liquidity=liquidity,
         economics=economics,
         max_exit_sweep_slippage_bps=selected_config.max_exit_sweep_slippage_bps,
+        max_broker_position_age_sec=(
+            selected_config.max_broker_position_age_sec
+        ),
     )
     context_without_hash = {
         **evidence_without_hash,
@@ -2246,11 +3016,36 @@ def build_future_outcome(
     evidence: Mapping[str, Any],
     market_rows: Iterable[Mapping[str, Any]],
     depth_rows: Iterable[Mapping[str, Any]] = (),
+    entry_pipeline_rows: Iterable[Mapping[str, Any]] = (),
+    control_action: str | None = None,
     config: BridgeConfig | None = None,
 ) -> dict[str, Any]:
     """Label quantity-sweep paths after the snapshot, never prompt input."""
 
+    _validate_tactical_evidence_shape(evidence)
+    for field, expected in AUTHORITY_CONTRACT.items():
+        if evidence.get(field) is not expected:
+            raise ValueError(f"future_outcome_evidence_authority_invalid:{field}")
+    for field, expected in METRIC_CONTRACT.items():
+        if _sha256(evidence.get(field)) != _sha256(expected):
+            raise ValueError(f"future_outcome_evidence_contract_invalid:{field}")
+    stored_evidence_hash = str(evidence.get("evidence_sha256") or "")
+    evidence_without_hash = {
+        key: value for key, value in evidence.items() if key != "evidence_sha256"
+    }
+    if (
+        not stored_evidence_hash
+        or _sha256(evidence_without_hash) != stored_evidence_hash
+    ):
+        raise ValueError("future_outcome_evidence_sha256_mismatch")
     selected_config = config or BridgeConfig()
+    selected_contract = _bridge_config_contract(selected_config)
+    if (
+        evidence.get("bridge_producer_version") != BRIDGE_PRODUCER_VERSION
+        or evidence.get("bridge_config_sha256")
+        != selected_contract["config_sha256"]
+    ):
+        raise ValueError("future_outcome_bridge_config_mismatch")
     start_ms = int(evidence.get("snapshot_captured_at_ms") or 0)
     symbol = normalize_symbol(evidence.get("stock_code"))
     venue = normalize_venue(evidence.get("micro_venue"))
@@ -2263,12 +3058,12 @@ def build_future_outcome(
         )
         or ""
     ).strip().lower()
+    action = str(control_action or "").strip().upper()
     entry_like_stages = {
         "entry",
         "entry_screen",
         "gatekeeper",
         "post_probe",
-        "scale_in",
     }
     position_like_stages = {
         "holding",
@@ -2280,26 +3075,83 @@ def build_future_outcome(
         "counterfactual_liquidity_qty_grid"
     )
     grid = grid if isinstance(grid, list) else []
-    conservative = grid[min(1, len(grid) - 1)] if grid else {}
+    conservative = next(
+        (
+            row
+            for row in grid
+            if isinstance(row, Mapping)
+            and abs(float(row.get("participation_rate") or 0.0) - 0.05)
+            <= 1e-12
+        ),
+        {},
+    )
+    liquidity = evidence.get("liquidity_capacity")
+    liquidity = liquidity if isinstance(liquidity, Mapping) else {}
+    depth_execution_basis = liquidity.get("snapshot_depth_execution_basis")
+    depth_execution_basis = (
+        depth_execution_basis
+        if isinstance(depth_execution_basis, Mapping)
+        else {}
+    )
+    snapshot_ask_levels = _levels(depth_execution_basis.get("ask_levels"))
     lifecycle = evidence.get(LIFECYCLE_PROJECTION_SCHEMA)
     lifecycle = lifecycle if isinstance(lifecycle, Mapping) else {}
     holding_projection = lifecycle.get("holding_projection")
     holding_projection = (
         holding_projection if isinstance(holding_projection, Mapping) else {}
     )
+    position_provenance = holding_projection.get("position_provenance")
+    position_provenance = (
+        position_provenance if isinstance(position_provenance, Mapping) else {}
+    )
+    allocator_provenance: dict[str, Any] = {
+        "status": "not_applicable_to_stage",
+        "quantity_authority": "stage_quantity_owner_delegated",
+        "allocator_event_sha256": None,
+        "allocator_source_event_sha256s": [],
+        "allocator_first_event_timestamp_ms": None,
+        "allocator_last_event_timestamp_ms": None,
+        "formula_version": None,
+        "effective_qty": None,
+        "matching_row_count": 0,
+        "deduplicated_event_count": 0,
+    }
     if stage in entry_like_stages:
         evaluation_basis = "new_or_incremental_entry_ask_sweep_to_future_bid_sweep"
-        quantity = _nonnegative_int(
-            conservative.get("counterfactual_liquidity_bounded_qty")
+        allocator_provenance = _entry_pipeline_allocator_provenance(
+            evidence=evidence,
+            entry_pipeline_rows=entry_pipeline_rows,
         )
-        baseline_vwap = _positive_float(
-            conservative.get("counterfactual_entry_sweep_vwap")
+        depth_capacity = _nonnegative_int(
+            conservative.get("strict_depth_participation_capacity_qty")
+        )
+        allocator_qty = _nonnegative_int(
+            allocator_provenance.get("effective_qty")
+        )
+        if allocator_qty is not None and depth_capacity is not None:
+            quantity = min(allocator_qty, depth_capacity)
+            quantity_basis = (
+                "min_central_allocator_effective_qty_and_5pct_depth_capacity"
+            )
+        else:
+            quantity = _nonnegative_int(
+                conservative.get("standardized_one_share_probe_observation_qty")
+            )
+            quantity_basis = "standardized_one_share_observation_only"
+        baseline_vwap = (
+            None
+            if quantity is None
+            else _sweep_vwap(snapshot_ask_levels, quantity)
         )
         position_average_price = None
     elif stage in position_like_stages:
         evaluation_basis = (
             "hold_or_exit_incremental_future_bid_sweep_vs_snapshot_bid_sweep"
         )
+        allocator_provenance["quantity_authority"] = (
+            "broker_reconciled_free_to_sell_quantity"
+        )
+        quantity_basis = "broker_reconciled_free_to_sell_quantity"
         quantity = _nonnegative_int(
             holding_projection.get("counterfactual_free_to_sell_qty")
         )
@@ -2314,29 +3166,46 @@ def build_future_outcome(
             "entry_price_selection_evaluation_owned_by_stage_replay"
         )
         quantity = None
+        quantity_basis = "entry_price_stage_owner_delegated"
+        baseline_vwap = None
+        position_average_price = None
+    elif stage == "scale_in":
+        evaluation_basis = "scale_in_quantity_evaluation_owned_by_stage_replay"
+        quantity = None
+        quantity_basis = "scale_in_quantity_owner_delegated"
         baseline_vwap = None
         position_average_price = None
     elif stage == "overnight":
         evaluation_basis = "overnight_next_session_evaluation_owned_externally"
         quantity = None
+        quantity_basis = "overnight_stage_owner_delegated"
         baseline_vwap = None
         position_average_price = None
     else:
         evaluation_basis = "decision_stage_not_supported"
         quantity = None
+        quantity_basis = "unsupported_stage"
         baseline_vwap = None
         position_average_price = None
     rows: list[Mapping[str, Any]] = []
+    rejected_market_times_us: list[int] = []
     for row in market_rows:
-        valid, _ = _valid_market_row(row)
-        if not valid or _scope_key(row) != (symbol, venue, session, epoch):
+        if _scope_key(row) != (symbol, venue, session, epoch):
             continue
-        received_ms = _timestamp_ms(row.get("local_receive_timestamp"))
+        try:
+            received_us = _timestamp_us(row.get("local_receive_timestamp"))
+        except (TypeError, ValueError):
+            continue
+        received_ms = received_us // 1_000
         if start_ms < received_ms <= (
             start_ms
             + selected_config.outcome_horizons_sec[-1] * 1_000
             + selected_config.max_outcome_endpoint_lag_ms
         ):
+            valid, _ = _valid_market_row(row)
+            if not valid:
+                rejected_market_times_us.append(received_us)
+                continue
             rows.append(row)
     rows.sort(
         key=lambda row: (
@@ -2345,11 +3214,24 @@ def build_future_outcome(
         )
     )
     depths: list[Mapping[str, Any]] = []
+    rejected_depth_times_us: list[int] = []
     for row in depth_rows:
         if _scope_key(row) != (symbol, venue, session, epoch):
             continue
-        valid, _ = _valid_depth_row(row)
-        if valid:
+        try:
+            received_us = _timestamp_us(row.get("local_receive_timestamp"))
+        except (TypeError, ValueError):
+            continue
+        received_ms = received_us // 1_000
+        if start_ms - selected_config.max_depth_age_ms <= received_ms <= (
+            start_ms
+            + selected_config.outcome_horizons_sec[-1] * 1_000
+            + selected_config.max_outcome_endpoint_lag_ms
+        ):
+            valid, _ = _valid_depth_row(row)
+            if not valid:
+                rejected_depth_times_us.append(received_us)
+                continue
             depths.append(row)
     depths.sort(
         key=lambda row: (
@@ -2369,9 +3251,27 @@ def build_future_outcome(
         + selected_config.uncertainty_buffer_bps
     )
     outcome_eligibility_blockers: list[str] = []
+    evidence_source_quality = evidence.get("source_quality")
+    evidence_source_quality = (
+        evidence_source_quality
+        if isinstance(evidence_source_quality, Mapping)
+        else {}
+    )
+    if evidence_source_quality.get("status") != "pass":
+        outcome_eligibility_blockers.append(
+            "tactical_evidence_source_quality_not_pass"
+        )
+    if evidence_source_quality.get("liquidity_capacity_status") != "pass":
+        outcome_eligibility_blockers.append(
+            "tactical_evidence_liquidity_capacity_not_pass"
+        )
     if stage == "entry_price":
         outcome_eligibility_blockers.append(
             "entry_price_selection_evaluation_not_implemented_in_micro_bridge"
+        )
+    elif stage == "scale_in":
+        outcome_eligibility_blockers.append(
+            "scale_in_quantity_owner_not_connected"
         )
     elif stage == "overnight":
         outcome_eligibility_blockers.append(
@@ -2379,14 +3279,30 @@ def build_future_outcome(
         )
     elif stage not in entry_like_stages | position_like_stages:
         outcome_eligibility_blockers.append("outcome_decision_stage_not_supported")
+    if stage in position_like_stages:
+        if position_provenance.get("hard_exit_guard_observed") is True:
+            outcome_eligibility_blockers.append(
+                "hard_safety_control_owned_outcome_excluded"
+            )
+        if action == "TRIM":
+            outcome_eligibility_blockers.append(
+                "trim_quantity_evaluation_owned_by_stage_replay"
+            )
+        elif action not in {"HOLD", "EXIT"}:
+            outcome_eligibility_blockers.append(
+                "position_control_action_missing_or_invalid"
+            )
     if not quantity:
         outcome_eligibility_blockers.append("counterfactual_quantity_unavailable")
     if baseline_vwap is None:
         outcome_eligibility_blockers.append("snapshot_execution_basis_unavailable")
     if stage in entry_like_stages and fixed_cost is None:
         outcome_eligibility_blockers.append("roundtrip_cost_profile_unavailable")
-    executable: list[tuple[int, float, float | None]] = []
-    if quantity and baseline_vwap is not None and (
+    # observed_at, control-action diagnostic return, action-neutral endpoint
+    # return, and position cost-basis return.  Only the neutral primitive is
+    # suitable for comparing A/B/C decisions that can choose different actions.
+    executable: list[tuple[int, float, float | None, float | None]] = []
+    if not outcome_eligibility_blockers and quantity and baseline_vwap is not None and (
         stage in position_like_stages or fixed_cost is not None
     ):
         for row in rows:
@@ -2416,7 +3332,35 @@ def build_future_outcome(
                 side="bid",
                 max_slippage_bps=selected_config.max_exit_sweep_slippage_bps,
             )
-            if bid_capacity is None or bid_capacity < quantity:
+            participation_rate = _finite_float(
+                conservative.get("participation_rate")
+            )
+            if bid_capacity is None or participation_rate is None:
+                future_fast_exit_capacity = None
+            else:
+                future_participation_floor = math.floor(
+                    bid_capacity * participation_rate
+                )
+                if (
+                    stage in entry_like_stages
+                    and allocator_provenance.get("status")
+                    == "central_allocator_provenance_joined"
+                ):
+                    # Allocator-backed economics must respect the strict 5%
+                    # depth ceiling at every future executable endpoint.  The
+                    # standardized one-share floor is observation-only and
+                    # cannot manufacture allocator-backed liquidity.
+                    future_fast_exit_capacity = future_participation_floor
+                else:
+                    future_fast_exit_capacity = (
+                        max(1, future_participation_floor)
+                        if bid_capacity > 0
+                        else 0
+                    )
+            if (
+                future_fast_exit_capacity is None
+                or future_fast_exit_capacity < quantity
+            ):
                 continue
             exit_vwap = _sweep_vwap(bid_levels, quantity)
             if exit_vwap is None:
@@ -2427,13 +3371,27 @@ def build_future_outcome(
                     (exit_vwap / baseline_vwap - 1.0) * 10_000.0
                     - float(fixed_cost or 0.0)
                 )
+                action_neutral_return = (
+                    decision_quality_return
+                    if (evidence.get("economics") or {}).get(
+                        "cost_profile_verified"
+                    )
+                    is True
+                    else None
+                )
             else:
                 # Holding/exit compares future executable proceeds with the
                 # executable proceeds available at the decision snapshot.  It
                 # must never fabricate a new ask-side purchase.
-                decision_quality_return = (
+                hold_incremental_return = (
                     exit_vwap / baseline_vwap - 1.0
                 ) * 10_000.0
+                decision_quality_return = (
+                    -hold_incremental_return
+                    if action == "EXIT"
+                    else hold_incremental_return
+                )
+                action_neutral_return = hold_incremental_return
             cost_basis_net_return = (
                 None
                 if position_average_price is None or fixed_cost is None
@@ -2441,7 +3399,12 @@ def build_future_outcome(
                 - fixed_cost
             )
             executable.append(
-                (received_ms, decision_quality_return, cost_basis_net_return)
+                (
+                    received_ms,
+                    decision_quality_return,
+                    action_neutral_return,
+                    cost_basis_net_return,
+                )
             )
     horizons: list[dict[str, Any]] = []
     for horizon in selected_config.outcome_horizons_sec:
@@ -2488,6 +3451,26 @@ def build_future_outcome(
                 )
             )
         )
+        if endpoint is not None:
+            endpoint_us = endpoint[0] * 1_000
+            if any(
+                start_ms * 1_000 < value <= endpoint_us
+                for value in rejected_market_times_us
+            ):
+                horizon_findings = tuple(
+                    sorted(
+                        {*horizon_findings, "outcome_market_invalid_row_in_path"}
+                    )
+                )
+            if any(
+                start_ms * 1_000 < value <= endpoint_us
+                for value in rejected_depth_times_us
+            ):
+                horizon_findings = tuple(
+                    sorted(
+                        {*horizon_findings, "outcome_depth_invalid_row_in_path"}
+                    )
+                )
         boundary_findings: set[str] = set()
         market_anchor_sequence = _nonnegative_int(
             (evidence.get("decision_watermark") or {}).get("source_sequence")
@@ -2525,9 +3508,47 @@ def build_future_outcome(
             and not horizon_findings
         )
         decision_returns = [row[1] for row in bounded] if mature else []
-        cost_basis_returns = (
+        neutral_returns = (
             [row[2] for row in bounded if row[2] is not None] if mature else []
         )
+        cost_basis_returns = (
+            [row[3] for row in bounded if row[3] is not None] if mature else []
+        )
+        neutral_path = [
+            {"observed_at_ms": row[0], "return_bps": round(float(row[2]), 6)}
+            for row in bounded
+            if row[2] is not None
+        ]
+        neutral_target_ms = next(
+            (
+                row["observed_at_ms"]
+                for row in neutral_path
+                if row["return_bps"] >= selected_config.minimum_net_profit_bps
+            ),
+            None,
+        )
+        neutral_adverse_ms = next(
+            (
+                row["observed_at_ms"]
+                for row in neutral_path
+                if row["return_bps"] <= selected_config.adverse_label_bps
+            ),
+            None,
+        )
+        if not mature or not neutral_path:
+            neutral_first_hit = "unavailable"
+        elif neutral_target_ms is None and neutral_adverse_ms is None:
+            neutral_first_hit = "none"
+        elif neutral_target_ms is None:
+            neutral_first_hit = "adverse_first"
+        elif neutral_adverse_ms is None:
+            neutral_first_hit = "net_target_first"
+        elif neutral_target_ms < neutral_adverse_ms:
+            neutral_first_hit = "net_target_first"
+        elif neutral_adverse_ms < neutral_target_ms:
+            neutral_first_hit = "adverse_first"
+        else:
+            neutral_first_hit = "ambiguous_same_timestamp"
         horizons.append(
             {
                 "horizon_sec": horizon,
@@ -2565,6 +3586,35 @@ def build_future_outcome(
                     if not decision_returns
                     else round(min(decision_returns), 6)
                 ),
+                "action_neutral_executable_end_return_bps": (
+                    None
+                    if not mature or endpoint is None or endpoint[2] is None
+                    else round(float(endpoint[2]), 6)
+                ),
+                "action_neutral_mfe_bps": (
+                    None
+                    if not neutral_returns
+                    else round(max(neutral_returns), 6)
+                ),
+                "action_neutral_mae_bps": (
+                    None
+                    if not neutral_returns
+                    else round(min(neutral_returns), 6)
+                ),
+                "action_neutral_path_sha256": (
+                    _sha256(neutral_path) if mature and neutral_path else None
+                ),
+                "action_neutral_first_hit": neutral_first_hit,
+                "action_neutral_target_first_delay_ms": (
+                    None
+                    if not mature or neutral_target_ms is None
+                    else neutral_target_ms - start_ms
+                ),
+                "action_neutral_adverse_first_delay_ms": (
+                    None
+                    if not mature or neutral_adverse_ms is None
+                    else neutral_adverse_ms - start_ms
+                ),
                 "position_cost_basis_net_mfe_bps": (
                     None
                     if not cost_basis_returns
@@ -2590,7 +3640,7 @@ def build_future_outcome(
     target_first_ms = next(
         (
             observed_ms
-            for observed_ms, value, _ in first_hit_rows
+            for observed_ms, value, _, _ in first_hit_rows
             if value >= selected_config.minimum_net_profit_bps
         ),
         None,
@@ -2598,8 +3648,25 @@ def build_future_outcome(
     adverse_first_ms = next(
         (
             observed_ms
-            for observed_ms, value, _ in first_hit_rows
+            for observed_ms, value, _, _ in first_hit_rows
             if value <= selected_config.adverse_label_bps
+        ),
+        None,
+    )
+    neutral_target_first_ms = next(
+        (
+            observed_ms
+            for observed_ms, _, value, _ in first_hit_rows
+            if value is not None
+            and value >= selected_config.minimum_net_profit_bps
+        ),
+        None,
+    )
+    neutral_adverse_first_ms = next(
+        (
+            observed_ms
+            for observed_ms, _, value, _ in first_hit_rows
+            if value is not None and value <= selected_config.adverse_label_bps
         ),
         None,
     )
@@ -2615,26 +3682,136 @@ def build_future_outcome(
         first_hit = "adverse_first"
     else:
         first_hit = "ambiguous_same_timestamp"
+    if not first_hit_rows or all(row[2] is None for row in first_hit_rows):
+        action_neutral_first_hit = "unavailable"
+    elif neutral_target_first_ms is None and neutral_adverse_first_ms is None:
+        action_neutral_first_hit = "none"
+    elif neutral_target_first_ms is None:
+        action_neutral_first_hit = "adverse_first"
+    elif neutral_adverse_first_ms is None:
+        action_neutral_first_hit = "net_target_first"
+    elif neutral_target_first_ms < neutral_adverse_first_ms:
+        action_neutral_first_hit = "net_target_first"
+    elif neutral_adverse_first_ms < neutral_target_first_ms:
+        action_neutral_first_hit = "adverse_first"
+    else:
+        action_neutral_first_hit = "ambiguous_same_timestamp"
+    allocator_joined = (
+        allocator_provenance.get("status")
+        == "central_allocator_provenance_joined"
+    )
+    reviewed_cost_profile = bool(
+        (evidence.get("economics") or {}).get("cost_profile_verified") is True
+        and fixed_cost is not None
+    )
+    if stage in position_like_stages:
+        action_neutral_cost_treatment = (
+            "identical_proportional_exit_cost_cancels"
+        )
+        action_neutral_economic_grade = (
+            "liquidity_adjusted_incremental_exit_value"
+        )
+        cost_invariant_between_exit_timings = True
+    elif reviewed_cost_profile:
+        action_neutral_cost_treatment = "reviewed_roundtrip_cost_subtracted"
+        action_neutral_economic_grade = (
+            "reviewed_after_cost_entry_value"
+            if allocator_joined
+            else "standardized_one_share_after_cost_observation_only"
+        )
+        cost_invariant_between_exit_timings = False
+    else:
+        action_neutral_cost_treatment = "verified_roundtrip_cost_unavailable"
+        action_neutral_economic_grade = "research_only_unavailable"
+        cost_invariant_between_exit_timings = False
+    quantity_authority_eligible = bool(
+        (stage in entry_like_stages and allocator_joined)
+        or (
+            stage in position_like_stages
+            and position_provenance.get("position_execution_eligible") is True
+        )
+    )
+    notional_net_profit_eligible = bool(
+        quantity_authority_eligible
+        and reviewed_cost_profile
+        and quantity
+        and baseline_vwap is not None
+        and not outcome_eligibility_blockers
+    )
+    economic_promotion_evidence_eligible = bool(
+        notional_net_profit_eligible
+        and any(horizon.get("mature") is True for horizon in horizons)
+    )
     outcome_without_hash = {
         "schema": OUTCOME_SCHEMA,
+        "bridge_config_sha256": selected_contract["config_sha256"],
+        "bridge_producer_version": BRIDGE_PRODUCER_VERSION,
         "decision_trace_id": evidence.get("decision_trace_id"),
         "evidence_sha256": evidence.get("evidence_sha256"),
         "label_role": "counterfactual_outcome_only_never_prompt_input",
         "decision_stage": stage,
+        "control_action": action or None,
         "evaluation_basis": evaluation_basis,
-        "execution_basis": "same_epoch_fresh_0b_0d_full_quantity_sweep",
+        "execution_basis": (
+            "same_epoch_fresh_0b_0d_conservative_participation_full_quantity_sweep"
+        ),
+        "future_depth_participation_rate": _finite_float(
+            conservative.get("participation_rate")
+        ),
         "counterfactual_quantity": quantity,
+        "counterfactual_quantity_basis": quantity_basis,
+        "quantity_authority": allocator_provenance.get("quantity_authority"),
+        "allocator_event_sha256": allocator_provenance.get(
+            "allocator_event_sha256"
+        ),
+        "allocator_source_event_sha256s": allocator_provenance.get(
+            "allocator_source_event_sha256s"
+        ),
+        "allocator_first_event_timestamp_ms": allocator_provenance.get(
+            "allocator_first_event_timestamp_ms"
+        ),
+        "allocator_last_event_timestamp_ms": allocator_provenance.get(
+            "allocator_last_event_timestamp_ms"
+        ),
+        "formula_version": allocator_provenance.get("formula_version"),
+        "effective_qty": allocator_provenance.get("effective_qty"),
+        "liquidity_capped_qty": (
+            quantity if allocator_joined and stage in entry_like_stages else None
+        ),
+        "allocator_matching_row_count": allocator_provenance.get(
+            "matching_row_count"
+        ),
+        "allocator_deduplicated_event_count": allocator_provenance.get(
+            "deduplicated_event_count"
+        ),
+        "notional_net_profit_eligible": notional_net_profit_eligible,
+        "economic_promotion_evidence_eligible": (
+            economic_promotion_evidence_eligible
+        ),
+        "economic_promotion_authority": False,
+        "action_neutral_cost_treatment": action_neutral_cost_treatment,
+        "action_neutral_economic_grade": action_neutral_economic_grade,
+        "cost_invariant_between_exit_timings": (
+            cost_invariant_between_exit_timings
+        ),
         "snapshot_execution_basis_vwap": baseline_vwap,
         "position_average_price": position_average_price,
         "outcome_eligibility": (
-            "eligible" if not outcome_eligibility_blockers else "source_unavailable"
+            (
+                "eligible"
+                if allocator_joined or stage in position_like_stages
+                else "eligible_observation_only"
+            )
+            if not outcome_eligibility_blockers
+            else "source_unavailable"
         ),
         "outcome_eligibility_blockers": sorted(
             set(outcome_eligibility_blockers)
         ),
         "economic_evidence_grade": (
             "reviewed_cost_profile_offline_evaluation_only"
-            if selected_config.cost_profile_verified
+            if (evidence.get("economics") or {}).get("cost_profile_verified")
+            is True
             and fixed_cost is not None
             else "research_assumption_only"
         ),
@@ -2647,11 +3824,22 @@ def build_future_outcome(
             }
         ),
         "first_hit": first_hit,
+        "action_neutral_first_hit": action_neutral_first_hit,
         "target_first_delay_ms": (
             None if target_first_ms is None else target_first_ms - start_ms
         ),
         "adverse_first_delay_ms": (
             None if adverse_first_ms is None else adverse_first_ms - start_ms
+        ),
+        "action_neutral_target_first_delay_ms": (
+            None
+            if neutral_target_first_ms is None
+            else neutral_target_first_ms - start_ms
+        ),
+        "action_neutral_adverse_first_delay_ms": (
+            None
+            if neutral_adverse_first_ms is None
+            else neutral_adverse_first_ms - start_ms
         ),
         "horizons": horizons,
         **OUTCOME_METRIC_CONTRACT,
@@ -2665,10 +3853,14 @@ def build_future_outcome(
 
 def _control_decision_findings(
     trace: Mapping[str, Any] | None,
+    *,
+    control_contract: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
     if not isinstance(trace, Mapping):
         return ("control_trace_missing",)
     findings: list[str] = []
+    if not str(trace.get("decision_trace_id") or "").strip():
+        findings.append("control_decision_trace_id_missing")
     if trace.get("provider_called") is not True:
         findings.append("control_provider_not_called")
     if str(trace.get("provider_actual") or "none").lower() == "none":
@@ -2683,6 +3875,12 @@ def _control_decision_findings(
         findings.append("control_decision_not_evaluated")
     if trace.get("semantic_errors"):
         findings.append("control_semantic_errors_present")
+    if trace.get("semantic_validator_applied") is not True:
+        findings.append("control_semantic_validator_not_applied")
+    if str(trace.get("semantic_validation_status") or "") != "pass":
+        findings.append("control_semantic_validation_not_pass")
+    if not str(trace.get("semantic_validator_version") or "").strip():
+        findings.append("control_semantic_validator_version_missing")
     for field in (
         "endpoint",
         "prompt_version",
@@ -2701,6 +3899,48 @@ def _control_decision_findings(
         or str(trace.get("openai_response_schema_mode") or "").strip()
     ):
         findings.append("control_response_schema_contract_missing")
+    provider_actual = str(trace.get("provider_actual") or "").strip().lower()
+    response_schema_hash = str(trace.get("response_schema_sha256") or "").strip()
+    response_schema_mode = str(
+        trace.get("openai_response_schema_mode") or ""
+    ).strip()
+    response_schema_application = str(
+        trace.get("response_schema_application") or ""
+    ).strip()
+    if provider_actual == "openai":
+        if response_schema_hash:
+            if response_schema_application != "provider_enforced_openai":
+                findings.append("control_openai_response_schema_not_enforced")
+        elif (
+            response_schema_mode != "json_object"
+            or response_schema_application != "provider_json_object_openai"
+        ):
+            findings.append("control_openai_json_contract_not_enforced")
+    elif provider_actual == "bedrock":
+        if response_schema_application != (
+            "local_expected_only_not_sent_to_bedrock"
+        ):
+            findings.append("control_bedrock_local_response_contract_missing")
+    elif provider_actual:
+        findings.append("control_provider_response_contract_unsupported")
+    contract = control_contract if isinstance(control_contract, Mapping) else {}
+    for field in (
+        "schema_name",
+        "response_schema_mode",
+        "semantic_validator_version",
+    ):
+        if not str(contract.get(field) or "").strip():
+            findings.append(f"control_replay_{field}_missing")
+    if contract.get("semantic_validator_version") != trace.get(
+        "semantic_validator_version"
+    ):
+        findings.append("control_replay_semantic_validator_mismatch")
+    if _nonnegative_int(contract.get("max_output_tokens")) in (None, 0):
+        findings.append("control_replay_max_output_tokens_missing")
+    if not isinstance(contract.get("require_json"), bool):
+        findings.append("control_replay_require_json_missing")
+    if not isinstance(contract.get("response_schema_registry_used"), bool):
+        findings.append("control_replay_schema_registry_status_missing")
     stage = str(trace.get("decision_stage") or "").lower()
     actions = {
         "entry_screen": {"BUY", "WAIT", "DROP"},
@@ -2726,10 +3966,34 @@ def _control_decision_findings(
         trace.get("decision_quality_contract_status") or ""
     ) != "pass":
         findings.append("control_entry_semantic_contract_not_pass")
-    if stage == "entry_price" and str(
-        trace.get("entry_price_v2_5_contract_status") or ""
-    ) != "pass":
-        findings.append("control_entry_price_semantic_contract_not_pass")
+    if stage == "entry_price":
+        prompt_version = str(trace.get("prompt_version") or "").strip().lower()
+        schema_name = str(contract.get("schema_name") or "").strip().lower()
+        semantic_version = str(
+            trace.get("semantic_validator_version") or ""
+        ).strip().lower()
+        v2_5_contract = any(
+            "v2_5" in value
+            for value in (prompt_version, schema_name, semantic_version)
+        )
+        v1_contract = (
+            prompt_version == "entry_price_v1"
+            or schema_name == "entry_price_v1"
+        )
+        if v2_5_contract:
+            if str(trace.get("entry_price_v2_5_contract_status") or "") != "pass":
+                findings.append("control_entry_price_v2_5_contract_not_pass")
+        elif v1_contract:
+            if semantic_version != "live_entry_price_v1_schema_semantic_v1":
+                findings.append("control_entry_price_v1_validator_version_invalid")
+            if str(trace.get("entry_price_v1_contract_status") or "") != "pass":
+                findings.append("control_entry_price_v1_contract_not_pass")
+            if trace.get("entry_price_v1_contract_errors") or trace.get(
+                "entry_price_v1_forensic_errors"
+            ):
+                findings.append("control_entry_price_v1_semantic_errors_present")
+        else:
+            findings.append("control_entry_price_semantic_contract_unknown")
     return tuple(sorted(set(findings)))
 
 
@@ -2739,6 +4003,7 @@ def build_three_arm_manifest(
     control_prompt_version: str,
     control_contract: Mapping[str, Any] | None = None,
     control_trace: Mapping[str, Any] | None = None,
+    outcome: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Describe three replay arms plus a non-comparable captured reference."""
 
@@ -2758,6 +4023,14 @@ def build_three_arm_manifest(
         "model": contract.get("model"),
         "temperature": contract.get("temperature"),
         "reasoning_effort": contract.get("reasoning_effort"),
+        "transport": contract.get("transport"),
+        "schema_name": contract.get("schema_name"),
+        "require_json": contract.get("require_json"),
+        "response_schema_mode": contract.get("response_schema_mode"),
+        "response_schema_registry_used": contract.get(
+            "response_schema_registry_used"
+        ),
+        "max_output_tokens": contract.get("max_output_tokens"),
         "response_schema_sha256": contract.get("response_schema_sha256"),
         "semantic_validator_version": contract.get(
             "semantic_validator_version"
@@ -2772,8 +4045,32 @@ def build_three_arm_manifest(
         == "stored_semantic_hash_verified"
     )
     context_eligible = observation_context_eligible and semantic_identity_verified
-    control_findings = _control_decision_findings(control_trace)
+    control_findings = _control_decision_findings(
+        control_trace,
+        control_contract=locked_contract,
+    )
     control_eligible = not control_findings
+    outcome_economic_eligible = False
+    if isinstance(outcome, Mapping):
+        outcome_without_hash = {
+            key: value for key, value in outcome.items() if key != "outcome_sha256"
+        }
+        if (
+            outcome.get("schema") != OUTCOME_SCHEMA
+            or outcome.get("evidence_sha256") != evidence_hash
+            or outcome.get("decision_trace_id") != evidence.get("decision_trace_id")
+            or outcome.get("outcome_sha256") != _sha256(outcome_without_hash)
+            or any(
+                outcome.get(field) is not expected
+                for field, expected in AUTHORITY_CONTRACT.items()
+            )
+        ):
+            raise ValueError("three_arm_outcome_contract_invalid")
+        outcome_economic_eligible = bool(
+            outcome.get("notional_net_profit_eligible") is True
+            and outcome.get("economic_promotion_evidence_eligible") is True
+            and outcome.get("economic_promotion_authority") is False
+        )
     economic_eligible = bool(
         context_eligible
         and (evidence.get("source_quality") or {}).get(
@@ -2783,6 +4080,11 @@ def build_three_arm_manifest(
         and (evidence.get("economics") or {}).get("cost_profile_verified") is True
         and (evidence.get("economics") or {}).get("minimum_gross_target_bps")
         is not None
+        and outcome_economic_eligible
+        and (evidence.get("economics") or {}).get(
+            "cost_profile_artifact_sha256"
+        )
+        is not None
     )
     return {
         "schema": THREE_ARM_SCHEMA,
@@ -2790,6 +4092,18 @@ def build_three_arm_manifest(
         "captured_natural_reference": {
             "prompt_version": control_prompt_version,
             **locked_contract,
+            "action": (control_trace or {}).get("action"),
+            "score": (control_trace or {}).get("score"),
+            "reason_codes": list(
+                (control_trace or {}).get("reason_codes") or []
+            ),
+            "model_edge_state": (control_trace or {}).get(
+                "decision_quality_model_edge_state"
+            ),
+            "model_evidence": deepcopy(
+                (control_trace or {}).get("decision_quality_model_evidence")
+            ),
+            "response_sha256": (control_trace or {}).get("response_sha256"),
             "provider_user_input_sha256": evidence.get(
                 "source_provider_payload_sha256"
             ),
@@ -2826,6 +4140,20 @@ def build_three_arm_manifest(
                 "model": contract.get("model"),
                 "temperature": contract.get("temperature"),
                 "reasoning_effort": contract.get("reasoning_effort"),
+                "transport": contract.get("transport"),
+                "schema_name": contract.get("schema_name"),
+                "require_json": contract.get("require_json"),
+                "response_schema_mode": contract.get("response_schema_mode"),
+                "response_schema_registry_used": contract.get(
+                    "response_schema_registry_used"
+                ),
+                "max_output_tokens": contract.get("max_output_tokens"),
+                "response_schema_sha256": contract.get(
+                    "response_schema_sha256"
+                ),
+                "semantic_validator_version": contract.get(
+                    "semantic_validator_version"
+                ),
                 **enriched_identity,
                 "analytical_context_pair_sha256": enriched_pair_hash,
                 "actual_provider_input_identity_sha256": None,
@@ -2848,6 +4176,10 @@ def build_three_arm_manifest(
         "control_decision_eligible": control_eligible,
         "control_decision_exclusion_reasons": list(control_findings),
         "paired_decision_quality_eligible": context_eligible and control_eligible,
+        "paired_replay_materialization_eligible": (
+            context_eligible and control_eligible
+        ),
+        "paired_replay_ready": False,
         "net_economic_evaluation_eligible": economic_eligible,
         "promotion_evidence_eligible": False,
         **AUTHORITY_CONTRACT,
@@ -2858,6 +4190,8 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
     top_level = {
         "schema",
         "evidence_version",
+        "bridge_config_sha256",
+        "bridge_producer_version",
         "decision_trace_id",
         "request_id",
         "decision_stage",
@@ -2868,6 +4202,9 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
         "stock_code",
         "trace_effective_venue",
         "trace_session_bucket",
+        "trace_decision_ts",
+        "trace_market_data_route",
+        "integrated_sor_route_proven",
         "micro_venue",
         "micro_session_bucket",
         "sequence_epoch",
@@ -2931,6 +4268,7 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
         ("tape",): {
             "early",
             "recent",
+            "latest_recovery_cycle_support",
             "window_sec",
             "early_window_end_ms",
             "recent_window_start_ms",
@@ -2955,6 +4293,17 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
             "sell_ratio",
             "sample_count",
         },
+        ("tape", "latest_recovery_cycle_support"): {
+            "buy_qty",
+            "sell_qty",
+            "unknown_qty",
+            "known_qty",
+            "buy_ratio",
+            "sell_ratio",
+            "sample_count",
+            "cycle_low_source_sequence",
+            "confirmation_source_sequence",
+        },
         ("orderbook",): {
             "best_bid",
             "best_ask",
@@ -2972,6 +4321,22 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
         ("economics",): {
             "cost_profile_source",
             "cost_profile_verified",
+            "cost_profile_contract_verified",
+            "cost_profile_tax_scope_match",
+            "cost_profile_scope_status",
+            "cost_profile_artifact_id",
+            "cost_profile_artifact_sha256",
+            "cost_profile_effective_date",
+            "cost_profile_venues",
+            "symbol_metadata_status",
+            "symbol_metadata_record_sha256",
+            "symbol_master_artifact_sha256",
+            "symbol_metadata_source",
+            "symbol_metadata_source_reference",
+            "symbol_metadata_verified_at",
+            "listing_market",
+            "instrument_type",
+            "instrument_tax_class",
             "buy_fee_bps",
             "sell_fee_bps",
             "statutory_sell_tax_bps",
@@ -2992,16 +4357,14 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
             "counterfactual_liquidity_qty_grid",
             "counterfactual_liquidity_qty_ceiling",
             "counterfactual_immediate_exit_qty_ceiling",
-            "existing_position_formula_candidate_qty",
-            "existing_quantity_provenance",
-            "existing_quantity_owner",
-            "future_candidate_composition_rule",
+            "standardized_one_share_probe_observation_qty",
+            "snapshot_depth_execution_basis",
+            "quantity_authority_status",
         },
-        ("liquidity_capacity", "existing_quantity_provenance"): {
-            "status",
-            "quantity",
-            "pointer",
-            "owner",
+        ("liquidity_capacity", "snapshot_depth_execution_basis"): {
+            "bid_levels",
+            "ask_levels",
+            "allocator_or_order_quantity_present",
         },
         ("source_quality",): {
             "status",
@@ -3056,6 +4419,18 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
             "free_to_sell_quantity",
             "average_price",
             "open_sell_qty",
+            "broker_reconciliation_contract_complete",
+            "position_reconciled",
+            "position_authority_reconciled",
+            "position_reconciliation_mode",
+            "simulation_position_reconciled",
+            "broker_snapshot_age_sec",
+            "max_broker_position_age_sec",
+            "broker_position_fresh",
+            "position_execution_eligible",
+            "candidate_exit_rule",
+            "active_hard_guard",
+            "hard_exit_guard_observed",
             "cancel_pending",
             "exit_token_active",
             "quantity_conflict",
@@ -3085,6 +4460,46 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
                     + ":"
                     + ",".join(sorted(unknown))
                 )
+    if (
+        evidence.get("bridge_producer_version") != BRIDGE_PRODUCER_VERSION
+        or not str(evidence.get("bridge_config_sha256") or "")
+    ):
+        raise ValueError("micro_context_bridge_contract_invalid")
+    trace_market_data_route = _route(evidence.get("trace_market_data_route"))
+    integrated_sor_route_proven = evidence.get("integrated_sor_route_proven")
+    micro_venue = normalize_venue(evidence.get("micro_venue"))
+    source_quality = evidence.get("source_quality")
+    source_quality = (
+        source_quality if isinstance(source_quality, Mapping) else {}
+    )
+    source_blockers = set(source_quality.get("blockers") or [])
+    source_unavailable = evidence.get("state") == "source_unavailable"
+    if not isinstance(integrated_sor_route_proven, bool):
+        raise ValueError("micro_context_route_provenance_invalid")
+    if not trace_market_data_route:
+        if not source_unavailable or not {
+            "snapshot_market_data_route_mismatch",
+            "payload_trace_market_data_route_mismatch",
+        }.intersection(source_blockers):
+            raise ValueError("micro_context_route_provenance_invalid")
+    elif "integrated" in trace_market_data_route or "sor" in trace_market_data_route:
+        if micro_venue != "SOR":
+            raise ValueError("micro_context_integrated_route_proof_invalid")
+        if not integrated_sor_route_proven and (
+            not source_unavailable
+            or "integrated_route_proof_missing" not in source_blockers
+        ):
+            raise ValueError("micro_context_integrated_route_proof_invalid")
+    elif integrated_sor_route_proven:
+        raise ValueError("micro_context_integrated_route_proof_unexpected")
+    elif trace_market_data_route in {"krx", "krx_only", "krx_regular"}:
+        if micro_venue != "KRX":
+            raise ValueError("micro_context_route_venue_mismatch")
+    elif trace_market_data_route in {"nxt", "nxt_only", "nxt_regular"}:
+        if micro_venue != "NXT":
+            raise ValueError("micro_context_route_venue_mismatch")
+    elif not source_unavailable:
+        raise ValueError("micro_context_route_provenance_invalid")
     grid = (evidence.get("liquidity_capacity") or {}).get(
         "counterfactual_liquidity_qty_grid"
     )
@@ -3093,9 +4508,14 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
         "entry_ask_capacity_qty",
         "depth_only_fast_exit_capacity_qty",
         "immediate_roundtrip_depth_capacity_qty",
+        "strict_depth_participation_capacity_qty",
         "immediate_marketable_exit_capacity_qty",
+        "one_share_probe_floor_applied",
+        "immediate_exit_one_share_floor_applied",
         "passive_ask_fill_support_qty",
+        "depth_only_roundtrip_capacity_qty",
         "counterfactual_liquidity_bounded_qty",
+        "standardized_one_share_probe_observation_qty",
         "counterfactual_entry_sweep_vwap",
         "counterfactual_exit_sweep_vwap",
         "counterfactual_roundtrip_execution_bps",
@@ -3104,6 +4524,27 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
         not isinstance(row, Mapping) or set(row) - allowed_grid_fields for row in grid
     ):
         raise ValueError("micro_context_liquidity_grid_schema_invalid")
+    depth_execution_basis = (evidence.get("liquidity_capacity") or {}).get(
+        "snapshot_depth_execution_basis"
+    )
+    if not isinstance(depth_execution_basis, Mapping) or (
+        depth_execution_basis.get("allocator_or_order_quantity_present") is not False
+    ):
+        raise ValueError("micro_context_depth_basis_quantity_authority_invalid")
+    liquidity = evidence.get("liquidity_capacity") or {}
+    if any(
+        field in liquidity
+        for field in (
+            "existing_position_formula_candidate_qty",
+            "existing_quantity_provenance",
+            "existing_quantity_owner",
+            "quantity_owner_status",
+            "formula_version",
+            "effective_qty",
+            "allocator_event_sha256",
+        )
+    ):
+        raise ValueError("micro_context_allocator_authority_leak")
 
 
 def _validate_replay_candidate_ledgers(
@@ -3217,6 +4658,7 @@ def attach_micro_context_to_replay_request(
     source_event_references: Iterable[Mapping[str, Any]] = (),
     config: BridgeConfig | None = None,
     excluded_scopes: set[tuple[str, str, str, int]] | None = None,
+    verified_symbol_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Opt-in replay enrichment; default Exact V2 request remains unchanged."""
 
@@ -3252,6 +4694,12 @@ def attach_micro_context_to_replay_request(
         source_payload, Mapping
     ):
         raise ValueError("micro_context_source_rebuild_required")
+    if config is None:
+        raise ValueError("micro_context_bridge_config_required")
+    if _bridge_config_contract(config)["config_sha256"] != evidence.get(
+        "bridge_config_sha256"
+    ):
+        raise ValueError("micro_context_bridge_config_mismatch")
     rebuilt_evidence = build_tactical_evidence(
         trace=source_trace,
         payload=source_payload,
@@ -3260,6 +4708,7 @@ def attach_micro_context_to_replay_request(
         event_references=source_event_references,
         config=config,
         excluded_scopes=excluded_scopes,
+        verified_symbol_metadata=verified_symbol_metadata,
     )
     if _sha256(rebuilt_evidence) != _sha256(evidence):
         raise ValueError("micro_context_source_rebuild_mismatch")
@@ -3312,11 +4761,12 @@ def attach_micro_context_to_replay_request(
     exact_payload = request.get("exact_payload")
     if not isinstance(exact_payload, dict):
         raise ValueError("exact_payload_missing")
-    if _sha256(exact_payload) != str(
-        request.get("source_exact_payload_sha256")
-        or evidence.get("source_exact_payload_sha256")
-        or ""
-    ):
+    request_exact_hash = str(request.get("source_exact_payload_sha256") or "")
+    if not request_exact_hash:
+        raise ValueError("source_exact_payload_sha256_missing")
+    if request_exact_hash != str(evidence.get("source_exact_payload_sha256") or ""):
+        raise ValueError("source_exact_payload_sha256_mismatch")
+    if _sha256(exact_payload) != request_exact_hash:
         raise ValueError("exact_payload_sha256_mismatch")
     if str(request.get("payload_sha256") or "") != str(
         evidence.get("source_provider_payload_sha256") or ""
@@ -3441,6 +4891,315 @@ def attach_micro_context_to_replay_request(
     }
 
 
+def materialize_micro_reversion_three_arm_requests(
+    *,
+    replay_control_request: Mapping[str, Any],
+    replay_candidate_request: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    source_trace: Mapping[str, Any],
+    source_payload: Mapping[str, Any],
+    source_market_rows: Iterable[Mapping[str, Any]],
+    source_depth_rows: Iterable[Mapping[str, Any]],
+    source_event_references: Iterable[Mapping[str, Any]],
+    config: BridgeConfig,
+    excluded_scopes: set[tuple[str, str, str, int]] | None = None,
+    verified_symbol_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Materialize fair offline A/B/C requests without calling a provider.
+
+    A and B share the current prompt and exact input; B and C share the same
+    exact input plus the same micro sidecar.  The only permitted B/C change is
+    the prompt contract.  This function never performs a provider or broker
+    call and never grants runtime authority.
+    """
+
+    def prompt_contract(
+        request: Mapping[str, Any], *, stored_control: bool
+    ) -> Mapping[str, Any]:
+        value = request.get("candidate")
+        if not isinstance(value, Mapping):
+            raise ValueError("replay_prompt_contract_missing")
+        prompt = value.get("system_prompt")
+        prompt_hash = str(value.get("system_prompt_sha256") or "")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("replay_system_prompt_missing")
+        expected_prompt_hash = (
+            hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+            if stored_control
+            else _sha256(prompt)
+        )
+        if not prompt_hash or prompt_hash != expected_prompt_hash:
+            raise ValueError("replay_system_prompt_sha256_mismatch")
+        for field in ("prompt_version", "provider", "model"):
+            if not str(value.get(field) or "").strip():
+                raise ValueError(f"replay_prompt_contract_{field}_missing")
+        if not str(value.get("transport") or "").strip():
+            raise ValueError("replay_prompt_contract_transport_missing")
+        if not str(value.get("schema_name") or "").strip():
+            raise ValueError("replay_prompt_contract_schema_name_missing")
+        if not isinstance(value.get("require_json"), bool):
+            raise ValueError("replay_prompt_contract_require_json_missing")
+        if not isinstance(value.get("response_schema_registry_used"), bool):
+            raise ValueError("replay_prompt_contract_schema_registry_missing")
+        if _nonnegative_int(value.get("max_output_tokens")) in (None, 0):
+            raise ValueError("replay_prompt_contract_max_output_tokens_missing")
+        response_schema = value.get("response_schema")
+        response_schema_hash = str(value.get("response_schema_sha256") or "")
+        response_schema_mode = str(value.get("response_schema_mode") or "")
+        if isinstance(response_schema, Mapping):
+            if not response_schema_hash or response_schema_hash != _sha256(
+                response_schema
+            ):
+                raise ValueError("replay_response_schema_sha256_mismatch")
+        elif response_schema_mode != "json_object":
+            raise ValueError("replay_response_schema_contract_missing")
+        if not str(value.get("semantic_validator_version") or "").strip():
+            raise ValueError("replay_semantic_validator_version_missing")
+        return value
+
+    def base_candidate_input(request: Mapping[str, Any]) -> dict[str, Any]:
+        exact_payload = request.get("exact_payload")
+        if not isinstance(exact_payload, dict):
+            raise ValueError("exact_payload_missing")
+        candidate_input = request.get("candidate_input")
+        if candidate_input is None:
+            if request.get("candidate_input_sha256"):
+                raise ValueError("candidate_input_absent_hash_present")
+            return {"exact_payload": deepcopy(exact_payload)}
+        if not isinstance(candidate_input, dict):
+            raise ValueError("candidate_input_invalid")
+        stored_hash = str(request.get("candidate_input_sha256") or "")
+        if not stored_hash:
+            raise ValueError("candidate_input_sha256_missing")
+        if stored_hash != _sha256(candidate_input):
+            raise ValueError("candidate_input_sha256_mismatch")
+        return deepcopy(candidate_input)
+
+    control_prompt = prompt_contract(
+        replay_control_request, stored_control=True
+    )
+    candidate_prompt = prompt_contract(
+        replay_candidate_request, stored_control=False
+    )
+    source_control_contract = {
+        "prompt_version": source_trace.get("prompt_version"),
+        "system_prompt_sha256": (
+            source_trace.get("prompt_sha256") or source_payload.get("prompt_sha256")
+        ),
+        "provider": source_trace.get("provider_actual"),
+        "model": source_trace.get("model"),
+        "temperature": (
+            source_trace.get("request_temperature")
+            if source_trace.get("request_temperature") is not None
+            else source_payload.get("temperature")
+        ),
+        "reasoning_effort": (
+            source_trace.get("request_reasoning_effort")
+            or source_payload.get("reasoning_effort")
+        ),
+        "transport": source_trace.get("transport"),
+        "max_output_tokens": (
+            source_trace.get("request_max_output_tokens")
+            or source_payload.get("max_output_tokens")
+        ),
+        "schema_name": source_payload.get("schema_name"),
+        "require_json": source_payload.get("require_json"),
+        "response_schema_mode": source_trace.get("openai_response_schema_mode"),
+        "response_schema_registry_used": source_trace.get(
+            "openai_response_schema_registry_used"
+        ),
+        "semantic_validator_version": source_trace.get(
+            "semantic_validator_version"
+        ),
+        "response_schema_sha256": source_trace.get(
+            "response_schema_sha256"
+        ),
+    }
+    source_anchor_fields = tuple(source_control_contract)
+    if any(
+        control_prompt.get(field) != source_control_contract.get(field)
+        for field in source_anchor_fields
+    ):
+        raise ValueError("replay_control_source_contract_mismatch")
+    source_schema_hash = str(
+        source_control_contract.get("response_schema_sha256") or ""
+    )
+    source_schema_application = str(
+        source_trace.get("response_schema_application") or ""
+    )
+    source_provider = str(source_control_contract.get("provider") or "").lower()
+    if source_trace.get("semantic_validator_applied") is not True:
+        raise ValueError("replay_control_semantic_validator_not_applied")
+    if str(source_trace.get("semantic_validation_status") or "") != "pass":
+        raise ValueError("replay_control_semantic_validation_not_pass")
+    if source_provider == "openai":
+        if source_schema_hash and source_schema_application != (
+            "provider_enforced_openai"
+        ):
+            raise ValueError("replay_control_response_schema_not_provider_enforced")
+        if not source_schema_hash and source_control_contract.get(
+            "response_schema_mode"
+        ) != "json_object":
+            raise ValueError("replay_control_response_schema_hash_missing")
+        if (
+            not source_schema_hash
+            and source_schema_application != "provider_json_object_openai"
+        ):
+            raise ValueError("replay_control_json_contract_not_provider_enforced")
+    elif source_provider == "bedrock":
+        if source_schema_application != (
+            "local_expected_only_not_sent_to_bedrock"
+        ):
+            raise ValueError("replay_control_bedrock_local_contract_missing")
+    else:
+        raise ValueError("replay_control_provider_contract_unsupported")
+    identity_fields = (
+        "paired_replay_id",
+        "decision_trace_id",
+        "stage",
+        "endpoint",
+        "stock_code",
+        "effective_venue",
+        "session_bucket",
+        "payload_sha256",
+        "request_envelope_sha256",
+        "source_exact_payload_sha256",
+    )
+    if any(
+        replay_control_request.get(field) != replay_candidate_request.get(field)
+        for field in identity_fields
+    ):
+        raise ValueError("three_arm_request_identity_mismatch")
+    if _sha256(replay_control_request.get("exact_payload")) != _sha256(
+        replay_candidate_request.get("exact_payload")
+    ):
+        raise ValueError("three_arm_exact_payload_mismatch")
+    control_input = base_candidate_input(replay_control_request)
+    candidate_input = base_candidate_input(replay_candidate_request)
+    if _sha256(control_input) != _sha256(candidate_input):
+        raise ValueError("three_arm_base_candidate_input_mismatch")
+    execution_fields = (
+        "provider",
+        "model",
+        "temperature",
+        "reasoning_effort",
+        "transport",
+        "max_output_tokens",
+        "response_schema_mode",
+        "require_json",
+        "response_schema_registry_used",
+    )
+    if any(
+        control_prompt.get(field) != candidate_prompt.get(field)
+        for field in execution_fields
+    ):
+        raise ValueError("three_arm_execution_contract_mismatch")
+    decision_contract_fields = (
+        "prompt_version",
+        "system_prompt_sha256",
+        "schema_name",
+        "response_schema_sha256",
+        "semantic_validator_version",
+    )
+    control_decision_contract = {
+        field: control_prompt.get(field) for field in decision_contract_fields
+    }
+    candidate_decision_contract = {
+        field: candidate_prompt.get(field) for field in decision_contract_fields
+    }
+
+    parent_replay_id = str(
+        replay_control_request.get("paired_replay_id")
+        or f"micro-pair-{_sha256((evidence.get('decision_trace_id'), evidence.get('evidence_sha256')))[:24]}"
+    )
+
+    control_base = {
+        **deepcopy(dict(replay_control_request)),
+        "candidate_input": control_input,
+        "candidate_input_sha256": _sha256(control_input),
+    }
+    candidate_base = {
+        **deepcopy(dict(replay_candidate_request)),
+        "candidate_input": candidate_input,
+        "candidate_input_sha256": _sha256(candidate_input),
+    }
+    shared_attach = {
+        "evidence": evidence,
+        "source_trace": source_trace,
+        "source_payload": source_payload,
+        "source_market_rows": tuple(source_market_rows),
+        "source_depth_rows": tuple(source_depth_rows),
+        "source_event_references": tuple(source_event_references),
+        "config": config,
+        "excluded_scopes": excluded_scopes,
+        "verified_symbol_metadata": verified_symbol_metadata,
+    }
+    enriched_control = attach_micro_context_to_replay_request(
+        control_base, **shared_attach
+    )
+    enriched_candidate = attach_micro_context_to_replay_request(
+        candidate_base, **shared_attach
+    )
+    if enriched_control.get("candidate_input_sha256") != enriched_candidate.get(
+        "candidate_input_sha256"
+    ):
+        raise ValueError("three_arm_enriched_input_hash_mismatch")
+
+    exact_control = {
+        **control_base,
+        "paired_replay_parent_id": parent_replay_id,
+        "paired_replay_id": f"{parent_replay_id}:exact-control",
+        "micro_reversion_replay_arm": "replay_control_exact_no_micro",
+        "provider_call_performed": False,
+        **AUTHORITY_CONTRACT,
+    }
+    enriched_control = {
+        **enriched_control,
+        "paired_replay_parent_id": parent_replay_id,
+        "paired_replay_id": f"{parent_replay_id}:micro-control",
+        "micro_reversion_replay_arm": "replay_control_exact_plus_micro",
+        "provider_call_performed": False,
+    }
+    enriched_candidate = {
+        **enriched_candidate,
+        "paired_replay_parent_id": parent_replay_id,
+        "paired_replay_id": f"{parent_replay_id}:micro-candidate",
+        "micro_reversion_replay_arm": "replay_candidate_exact_plus_micro",
+        "provider_call_performed": False,
+    }
+    result_without_hash = {
+        "schema": THREE_ARM_REQUEST_SCHEMA,
+        "decision_trace_id": evidence.get("decision_trace_id"),
+        "source_exact_payload_sha256": evidence.get(
+            "source_exact_payload_sha256"
+        ),
+        "tactical_micro_reversion_evidence_sha256": evidence.get(
+            "evidence_sha256"
+        ),
+        "requests": [exact_control, enriched_control, enriched_candidate],
+        "micro_effect_input_hashes_differ_only_by_sidecar": True,
+        "prompt_effect_enriched_input_hashes_identical": True,
+        "candidate_comparison_axis": "prompt_and_response_contract_only",
+        "control_decision_contract_sha256": _sha256(
+            control_decision_contract
+        ),
+        "candidate_decision_contract_sha256": _sha256(
+            candidate_decision_contract
+        ),
+        "locked_execution_contract_sha256": _sha256(
+            {field: control_prompt.get(field) for field in execution_fields}
+        ),
+        "provider_call_performed": False,
+        "paired_replay_materialized": True,
+        "paired_replay_ready": True,
+        **AUTHORITY_CONTRACT,
+    }
+    return {
+        **result_without_hash,
+        "materialization_sha256": _sha256(result_without_hash),
+    }
+
+
 def _payload_indexes(
     payloads: Sequence[Mapping[str, Any]],
 ) -> tuple[
@@ -3515,6 +5274,195 @@ def _resolve_payload_for_trace(
     return None, "missing_or_ambiguous"
 
 
+class _SQLiteRelevantSourceStore:
+    """Disk-backed relevant-row index used by the broad manual CLI.
+
+    The live process never imports or instantiates this store.  It bounds peak
+    RSS by keeping the 0B/0D/reference corpus on disk and materializing only one
+    exact trace window at a time.
+    """
+
+    _KINDS = frozenset({"market", "depth", "reference"})
+
+    def __init__(
+        self,
+        path: Path | str,
+        *,
+        windows: Mapping[
+            tuple[str, str, str], tuple[tuple[int, int], ...]
+        ],
+    ) -> None:
+        self._connection = sqlite3.connect(path)
+        self._connection.execute("PRAGMA journal_mode=OFF")
+        self._connection.execute("PRAGMA synchronous=OFF")
+        self._connection.execute("PRAGMA temp_store=FILE")
+        self._connection.execute(
+            """
+            CREATE TABLE source_rows (
+                kind TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                venue TEXT NOT NULL,
+                session_bucket TEXT NOT NULL,
+                observed_us INTEGER NOT NULL,
+                source_sequence INTEGER NOT NULL,
+                payload_json TEXT NOT NULL
+            )
+            """
+        )
+        self._window_index = {
+            key: (tuple(window[0] for window in scope_windows), scope_windows)
+            for key, scope_windows in windows.items()
+        }
+        self.invalid_timestamp_counts: Counter[str] = Counter()
+        self.retained_row_counts: Counter[str] = Counter()
+        self._finalized = False
+
+    def __enter__(self) -> _SQLiteRelevantSourceStore:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._connection.close()
+
+    def _scope_and_time(
+        self,
+        row: Mapping[str, Any],
+        *,
+        reference_rows: bool,
+    ) -> tuple[tuple[str, str, str], int | None]:
+        key = (
+            normalize_symbol(row.get("symbol")),
+            normalize_venue(row.get("venue")),
+            _session(row.get("session_bucket")),
+        )
+        if reference_rows:
+            detected_at_ms = row.get("event_detected_at_ms")
+            observed_us = (
+                detected_at_ms * 1_000
+                if isinstance(detected_at_ms, int)
+                and not isinstance(detected_at_ms, bool)
+                and detected_at_ms > 0
+                else None
+            )
+        else:
+            try:
+                observed_us = _timestamp_us(row.get("local_receive_timestamp"))
+            except (TypeError, ValueError):
+                observed_us = None
+        return key, observed_us
+
+    def _is_relevant(
+        self, key: tuple[str, str, str], observed_us: int
+    ) -> bool:
+        indexed = self._window_index.get(key)
+        if indexed is None:
+            return False
+        starts, windows = indexed
+        observed_ms = observed_us // 1_000
+        index = bisect_right(starts, observed_ms) - 1
+        return index >= 0 and observed_ms <= windows[index][1]
+
+    def ingest(
+        self,
+        kind: str,
+        rows: Iterable[Mapping[str, Any]],
+        *,
+        reference_rows: bool = False,
+    ) -> None:
+        if self._finalized:
+            raise RuntimeError("source store is already finalized")
+        if kind not in self._KINDS:
+            raise ValueError(f"unsupported source kind: {kind}")
+        batch: list[tuple[str, str, str, str, int, int, str]] = []
+        for row in rows:
+            key, observed_us = self._scope_and_time(
+                row, reference_rows=reference_rows
+            )
+            if key not in self._window_index:
+                continue
+            if observed_us is None:
+                self.invalid_timestamp_counts[kind] += 1
+                continue
+            if not self._is_relevant(key, observed_us):
+                continue
+            sequence = _nonnegative_int(row.get("source_sequence")) or 0
+            batch.append(
+                (
+                    kind,
+                    key[0],
+                    key[1],
+                    key[2],
+                    observed_us,
+                    sequence,
+                    json.dumps(
+                        row,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=True,
+                        default=str,
+                    ),
+                )
+            )
+            if len(batch) >= 2_000:
+                self._flush(batch)
+                batch.clear()
+        if batch:
+            self._flush(batch)
+
+    def _flush(
+        self, rows: Sequence[tuple[str, str, str, str, int, int, str]]
+    ) -> None:
+        self._connection.executemany(
+            "INSERT INTO source_rows VALUES (?, ?, ?, ?, ?, ?, ?)", rows
+        )
+        self._connection.commit()
+        self.retained_row_counts.update(row[0] for row in rows)
+
+    def finalize(self) -> None:
+        if self._finalized:
+            return
+        self._connection.execute(
+            """
+            CREATE INDEX source_rows_scope_time
+            ON source_rows(
+                kind, symbol, venue, session_bucket, observed_us, source_sequence
+            )
+            """
+        )
+        self._connection.commit()
+        self._finalized = True
+
+    def rows(
+        self,
+        kind: str,
+        scope: tuple[str, str, str],
+        *,
+        start_us: int,
+        end_us: int,
+    ) -> list[Mapping[str, Any]]:
+        if not self._finalized:
+            raise RuntimeError("source store must be finalized before querying")
+        if kind not in self._KINDS:
+            raise ValueError(f"unsupported source kind: {kind}")
+        cursor = self._connection.execute(
+            """
+            SELECT payload_json
+            FROM source_rows
+            WHERE kind = ?
+              AND symbol = ?
+              AND venue = ?
+              AND session_bucket = ?
+              AND observed_us BETWEEN ? AND ?
+            ORDER BY observed_us, source_sequence
+            """,
+            (kind, *scope, start_us, end_us),
+        )
+        return [json.loads(row[0]) for row in cursor]
+
+
 def build_bridge_report(
     *,
     target_date: str,
@@ -3526,6 +5474,12 @@ def build_bridge_report(
     config: BridgeConfig | None = None,
     excluded_scopes: set[tuple[str, str, str, int]] | None = None,
     generated_at: datetime | None = None,
+    source_store: _SQLiteRelevantSourceStore | None = None,
+    entry_pipeline_rows: Iterable[Mapping[str, Any]] = (),
+    entry_pipeline_source: Mapping[str, Any] | None = None,
+    verified_symbol_metadata_by_trace: Mapping[
+        str, Mapping[str, Any]
+    ] | None = None,
 ) -> dict[str, Any]:
     date_value = date.fromisoformat(target_date)
     if date_value < CLEAN_BASELINE_DATE:
@@ -3533,9 +5487,231 @@ def build_bridge_report(
     selected_config = config or BridgeConfig()
     trace_rows = [row for row in traces if isinstance(row, Mapping)]
     payload_rows = [row for row in payloads if isinstance(row, Mapping)]
-    market = [row for row in market_rows if isinstance(row, Mapping)]
-    depth = [row for row in depth_rows if isinstance(row, Mapping)]
-    references = [row for row in event_references if isinstance(row, Mapping)]
+    relevant_pipeline_keys = {
+        (
+            str(trace.get("decision_trace_id") or "").strip(),
+            normalize_symbol(trace.get("stock_code")),
+        )
+        for trace in trace_rows
+        if str(trace.get("decision_trace_id") or "").strip()
+        and normalize_symbol(trace.get("stock_code"))
+    }
+    pipeline_census = Counter()
+    pipeline_rows_by_trace_symbol: dict[
+        tuple[str, str], list[Mapping[str, Any]]
+    ] = defaultdict(list)
+    for pipeline_row in entry_pipeline_rows:
+        if not isinstance(pipeline_row, Mapping):
+            continue
+        pipeline_census["json_object_row_count"] += 1
+        if pipeline_row.get("pipeline") != "ENTRY_PIPELINE":
+            continue
+        pipeline_census["entry_pipeline_row_count"] += 1
+        pipeline_fields = pipeline_row.get("fields")
+        if not isinstance(pipeline_fields, Mapping):
+            continue
+        pipeline_key = (
+            str(pipeline_fields.get("ai_decision_trace_id") or "").strip(),
+            normalize_symbol(pipeline_row.get("stock_code")),
+        )
+        if pipeline_key[0] and pipeline_key[1]:
+            if (
+                str(pipeline_fields.get("formula_version") or "").strip()
+                and (_nonnegative_int(pipeline_fields.get("effective_qty")) or 0)
+                > 0
+            ):
+                pipeline_census["allocator_contract_row_count"] += 1
+            if pipeline_key not in relevant_pipeline_keys:
+                continue
+            pipeline_census["trace_symbol_linked_row_count"] += 1
+            pipeline_rows_by_trace_symbol[pipeline_key].append(pipeline_row)
+    pipeline_source = dict(entry_pipeline_source or {})
+    pipeline_source_status = str(
+        pipeline_source.get("status")
+        or (
+            "programmatic_rows_source_unspecified"
+            if pipeline_census["json_object_row_count"]
+            else "not_supplied_observation_only"
+        )
+    )
+    if pipeline_source_status not in {
+        "available_hash_verified",
+        "missing_observation_only",
+        "programmatic_rows_source_unspecified",
+        "not_supplied_observation_only",
+    }:
+        raise ValueError("entry_pipeline_source_status_invalid")
+    pipeline_source_sha256 = str(pipeline_source.get("source_sha256") or "")
+    if pipeline_source_status == "available_hash_verified" and (
+        len(pipeline_source_sha256) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in pipeline_source_sha256
+        )
+    ):
+        raise ValueError("entry_pipeline_source_sha256_invalid")
+    if pipeline_source_status != "available_hash_verified" and pipeline_source_sha256:
+        raise ValueError("entry_pipeline_unavailable_source_has_sha256")
+    extended_source_fields = {
+        "logical_source_path",
+        "source_compression",
+        "source_bytes",
+        "source_content_sha256",
+        "source_content_bytes",
+        "source_line_count",
+        "source_nonempty_line_count",
+        "source_json_object_row_count",
+        "source_snapshot_stable",
+    }
+    has_extended_source_provenance = any(
+        field in pipeline_source for field in extended_source_fields
+    )
+    if pipeline_source_status == "available_hash_verified" and (
+        has_extended_source_provenance
+    ):
+        missing_source_fields = sorted(
+            field
+            for field in extended_source_fields
+            if field not in pipeline_source
+        )
+        if missing_source_fields:
+            raise ValueError(
+                "entry_pipeline_extended_source_provenance_incomplete:"
+                + ",".join(missing_source_fields)
+            )
+        source_content_sha256 = str(
+            pipeline_source.get("source_content_sha256") or ""
+        )
+        if len(source_content_sha256) != 64 or any(
+            character not in "0123456789abcdef"
+            for character in source_content_sha256
+        ):
+            raise ValueError("entry_pipeline_source_content_sha256_invalid")
+        source_compression = str(
+            pipeline_source.get("source_compression") or ""
+        )
+        if source_compression not in {"plain", "gzip"}:
+            raise ValueError("entry_pipeline_source_compression_invalid")
+        logical_source_path = str(
+            pipeline_source.get("logical_source_path") or ""
+        ).strip()
+        resolved_source_path = str(pipeline_source.get("source_path") or "").strip()
+        if not logical_source_path or not resolved_source_path:
+            raise ValueError("entry_pipeline_source_path_invalid")
+        if (source_compression == "gzip") != resolved_source_path.endswith(".gz"):
+            raise ValueError("entry_pipeline_source_compression_path_mismatch")
+        if pipeline_source.get("source_snapshot_stable") is not True:
+            raise ValueError("entry_pipeline_source_snapshot_unstable")
+        count_fields = (
+            "source_bytes",
+            "source_content_bytes",
+            "source_line_count",
+            "source_nonempty_line_count",
+            "source_json_object_row_count",
+        )
+        for field in count_fields:
+            value = pipeline_source.get(field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+            ):
+                raise ValueError(f"entry_pipeline_{field}_invalid")
+        if (
+            pipeline_source["source_line_count"]
+            < pipeline_source["source_nonempty_line_count"]
+            or pipeline_source["source_nonempty_line_count"]
+            < pipeline_source["source_json_object_row_count"]
+        ):
+            raise ValueError("entry_pipeline_source_census_order_invalid")
+        if (
+            pipeline_source["source_json_object_row_count"]
+            != pipeline_census["json_object_row_count"]
+        ):
+            raise ValueError("entry_pipeline_source_census_mismatch")
+    elif pipeline_source_status != "available_hash_verified" and any(
+        field in pipeline_source
+        for field in (
+            "source_content_sha256",
+            "source_content_bytes",
+            "source_line_count",
+            "source_nonempty_line_count",
+            "source_json_object_row_count",
+            "source_snapshot_stable",
+        )
+    ):
+        raise ValueError("entry_pipeline_unavailable_source_has_content_provenance")
+    verified_pipeline_rows_by_trace_symbol = (
+        pipeline_rows_by_trace_symbol
+        if pipeline_source_status == "available_hash_verified"
+        else {}
+    )
+    pipeline_source_contract = {
+        "status": pipeline_source_status,
+        "logical_source_path": (
+            str(pipeline_source.get("logical_source_path") or "") or None
+        ),
+        "source_path": str(pipeline_source.get("source_path") or "") or None,
+        "source_compression": (
+            str(pipeline_source.get("source_compression") or "") or None
+        ),
+        "source_bytes": pipeline_source.get("source_bytes"),
+        "source_sha256": pipeline_source_sha256 or None,
+        "hash_basis": (
+            "raw_file_bytes_sha256"
+            if pipeline_source_status == "available_hash_verified"
+            else None
+        ),
+        "source_content_sha256": (
+            str(pipeline_source.get("source_content_sha256") or "") or None
+        ),
+        "source_content_hash_basis": (
+            "decoded_jsonl_bytes_sha256"
+            if pipeline_source_status == "available_hash_verified"
+            and pipeline_source.get("source_content_sha256")
+            else None
+        ),
+        "source_content_bytes": pipeline_source.get("source_content_bytes"),
+        "source_line_count": pipeline_source.get("source_line_count"),
+        "source_nonempty_line_count": pipeline_source.get(
+            "source_nonempty_line_count"
+        ),
+        "source_json_object_row_count": pipeline_source.get(
+            "source_json_object_row_count"
+        ),
+        "source_snapshot_stable": pipeline_source.get("source_snapshot_stable"),
+        "json_object_row_count": pipeline_census["json_object_row_count"],
+        "entry_pipeline_row_count": pipeline_census["entry_pipeline_row_count"],
+        "allocator_contract_row_count": pipeline_census[
+            "allocator_contract_row_count"
+        ],
+        "trace_symbol_linked_row_count": pipeline_census[
+            "trace_symbol_linked_row_count"
+        ],
+        "outcome_join_mode": (
+            "central_allocator_provenance_outcome_only"
+            if verified_pipeline_rows_by_trace_symbol
+            else "standardized_one_share_observation_only"
+        ),
+        "provider_visible": False,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+    }
+    market = (
+        []
+        if source_store is not None
+        else [row for row in market_rows if isinstance(row, Mapping)]
+    )
+    depth = (
+        []
+        if source_store is not None
+        else [row for row in depth_rows if isinstance(row, Mapping)]
+    )
+    references = (
+        []
+        if source_store is not None
+        else [row for row in event_references if isinstance(row, Mapping)]
+    )
     payload_indexes = _payload_indexes(payload_rows)
     market_by_scope: dict[tuple[str, str, str], list[Mapping[str, Any]]] = (
         defaultdict(list)
@@ -3575,6 +5751,16 @@ def build_bridge_report(
             return _timestamp_us(row.get("local_receive_timestamp"))
         except (TypeError, ValueError):
             return None
+
+    def safe_reference_ms(row: Mapping[str, Any]) -> int | None:
+        value = row.get("event_detected_at_ms")
+        return (
+            value
+            if isinstance(value, int)
+            and not isinstance(value, bool)
+            and value > 0
+            else None
+        )
 
     invalid_market_by_scope: dict[
         tuple[str, str, str], tuple[Mapping[str, Any], ...]
@@ -3622,16 +5808,16 @@ def build_bridge_report(
         invalid_references_by_scope[key] = tuple(
             row
             for row in scoped_rows
-            if _nonnegative_int(row.get("event_detected_at_ms")) is None
+            if safe_reference_ms(row) is None
         )
         scoped_rows[:] = [
             row
             for row in scoped_rows
-            if _nonnegative_int(row.get("event_detected_at_ms")) is not None
+            if safe_reference_ms(row) is not None
         ]
-        scoped_rows.sort(key=lambda row: int(row.get("event_detected_at_ms") or 0))
+        scoped_rows.sort(key=lambda row: int(safe_reference_ms(row) or 0))
         reference_times_by_scope[key] = tuple(
-            int(row.get("event_detected_at_ms") or 0) * 1_000
+            int(safe_reference_ms(row) or 0) * 1_000
             for row in scoped_rows
         )
 
@@ -3648,6 +5834,7 @@ def build_bridge_report(
 
     rows = []
     exclusions = Counter()
+    processed_scope_keys: set[tuple[str, str, str]] = set()
     for trace in trace_rows:
         payload, payload_join_mode = _resolve_payload_for_trace(
             trace, indexes=payload_indexes
@@ -3661,6 +5848,7 @@ def build_bridge_report(
             resolved_scope.venue,
             resolved_scope.session_bucket,
         )
+        processed_scope_keys.add(scope_key)
         watermark, _ = exact_snapshot_watermark(trace, payload)
         watermark_us = int((watermark or {}).get("captured_at_us") or 0)
         context_start_us = max(
@@ -3676,36 +5864,56 @@ def build_bridge_report(
             selected_config.outcome_horizons_sec[-1] * 1_000
             + selected_config.max_outcome_endpoint_lag_ms
         ) * 1_000
-        scoped_market = market_by_scope.get(scope_key, ())
-        scoped_depth = depth_by_scope.get(scope_key, ())
-        scoped_references = references_by_scope.get(scope_key, ())
-        trace_market_rows = [
-            *bounded_rows(
-                scoped_market,
-                market_times_by_scope.get(scope_key, ()),
+        if source_store is not None:
+            trace_market_rows = source_store.rows(
+                "market",
+                scope_key,
                 start_us=context_start_us,
                 end_us=outcome_end_us,
-            ),
-            *invalid_market_by_scope.get(scope_key, ()),
-        ]
-        trace_depth_rows = [
-            *bounded_rows(
-                scoped_depth,
-                depth_times_by_scope.get(scope_key, ()),
+            )
+            trace_depth_rows = source_store.rows(
+                "depth",
+                scope_key,
                 start_us=context_start_us,
                 end_us=outcome_end_us,
-            ),
-            *invalid_depth_by_scope.get(scope_key, ()),
-        ]
-        trace_references = [
-            *bounded_rows(
-                scoped_references,
-                reference_times_by_scope.get(scope_key, ()),
+            )
+            trace_references = source_store.rows(
+                "reference",
+                scope_key,
                 start_us=context_start_us,
                 end_us=watermark_us,
-            ),
-            *invalid_references_by_scope.get(scope_key, ()),
-        ]
+            )
+        else:
+            scoped_market = market_by_scope.get(scope_key, ())
+            scoped_depth = depth_by_scope.get(scope_key, ())
+            scoped_references = references_by_scope.get(scope_key, ())
+            trace_market_rows = [
+                *bounded_rows(
+                    scoped_market,
+                    market_times_by_scope.get(scope_key, ()),
+                    start_us=context_start_us,
+                    end_us=outcome_end_us,
+                ),
+                *invalid_market_by_scope.get(scope_key, ()),
+            ]
+            trace_depth_rows = [
+                *bounded_rows(
+                    scoped_depth,
+                    depth_times_by_scope.get(scope_key, ()),
+                    start_us=context_start_us,
+                    end_us=outcome_end_us,
+                ),
+                *invalid_depth_by_scope.get(scope_key, ()),
+            ]
+            trace_references = [
+                *bounded_rows(
+                    scoped_references,
+                    reference_times_by_scope.get(scope_key, ()),
+                    start_us=context_start_us,
+                    end_us=watermark_us,
+                ),
+                *invalid_references_by_scope.get(scope_key, ()),
+            ]
         evidence = build_tactical_evidence(
             trace=trace,
             payload=payload,
@@ -3714,6 +5922,9 @@ def build_bridge_report(
             event_references=trace_references,
             config=selected_config,
             excluded_scopes=excluded_scopes,
+            verified_symbol_metadata=(verified_symbol_metadata_by_trace or {}).get(
+                str(trace.get("decision_trace_id") or "").strip()
+            ),
         )
         state = str(evidence.get("state") or "source_unavailable")
         wave_id = str((evidence.get("event") or {}).get("parent_wave_id") or "")
@@ -3728,6 +5939,14 @@ def build_bridge_report(
             evidence=evidence,
             market_rows=trace_market_rows,
             depth_rows=trace_depth_rows,
+            entry_pipeline_rows=verified_pipeline_rows_by_trace_symbol.get(
+                (
+                    str(trace.get("decision_trace_id") or "").strip(),
+                    normalize_symbol(trace.get("stock_code")),
+                ),
+                (),
+            ),
+            control_action=str(trace.get("action") or ""),
             config=selected_config,
         )
         row = {
@@ -3750,12 +5969,23 @@ def build_bridge_report(
                 evidence=evidence,
                 control_prompt_version=str(trace.get("prompt_version") or "unknown"),
                 control_trace=trace,
+                outcome=outcome,
                 control_contract={
                     "prompt_sha256": trace.get("prompt_sha256"),
                     "provider": trace.get("provider_actual"),
                     "model": trace.get("model"),
                     "temperature": trace.get("request_temperature"),
                     "reasoning_effort": trace.get("request_reasoning_effort"),
+                    "transport": trace.get("transport"),
+                    "schema_name": payload.get("schema_name"),
+                    "require_json": payload.get("require_json"),
+                    "response_schema_mode": trace.get(
+                        "openai_response_schema_mode"
+                    ),
+                    "response_schema_registry_used": trace.get(
+                        "openai_response_schema_registry_used"
+                    ),
+                    "max_output_tokens": payload.get("max_output_tokens"),
                     "response_schema_sha256": trace.get(
                         "response_schema_sha256"
                     ),
@@ -3880,14 +6110,34 @@ def build_bridge_report(
         and row.get("primary_mature_outcome_parent_wave_stage_row") is True
         for row in rows
     )
+    allocator_outcome_joined = sum(
+        (row.get("future_outcome") or {}).get("allocator_event_sha256")
+        is not None
+        for row in rows
+    )
+    pipeline_missing_observation_only = bool(
+        pipeline_source_status == "missing_observation_only"
+        and any(
+            str(row.get("decision_stage") or "").lower()
+            in {"entry", "entry_screen", "gatekeeper", "post_probe"}
+            for row in rows
+        )
+    )
     generated = generated_at or datetime.now().astimezone()
-    return {
+    report_without_hash = {
         "schema": REPORT_SCHEMA,
+        "bridge_contract": _bridge_config_contract(selected_config),
         "target_date": target_date,
         "generated_at": generated.isoformat(),
-        "status": "pass" if replay_context_eligible else "warning",
+        "status": (
+            "pass"
+            if replay_context_eligible and not pipeline_missing_observation_only
+            else "warning"
+        ),
         "decision": (
-            "micro_three_arm_paired_replay_ready"
+            "entry_pipeline_missing_standardized_one_share_observation_only"
+            if pipeline_missing_observation_only
+            else "micro_three_arm_paired_replay_materialization_eligible"
             if paired_eligible
             else (
                 "micro_replay_context_ready_control_response_excluded"
@@ -3934,6 +6184,10 @@ def build_bridge_report(
             "mature_outcome_eligible_primary_episode_count": (
                 mature_outcome_eligible
             ),
+            "entry_pipeline_allocator_outcome_joined_count": (
+                allocator_outcome_joined
+            ),
+            "entry_pipeline_source_status": pipeline_source_status,
             "primary_metric_denominator": (
                 "eligible_exact_trace_parent_wave_stage_rows"
             ),
@@ -3944,28 +6198,51 @@ def build_bridge_report(
             "stage_counts": dict(stage_counts),
             "exclusion_counts": dict(exclusions),
             "noncausal_source_diagnostics": {
-                "invalid_market_timestamp_row_count": sum(
-                    len(scoped_rows)
-                    for scoped_rows in invalid_market_by_scope.values()
+                "invalid_market_timestamp_row_count": (
+                    source_store.invalid_timestamp_counts["market"]
+                    if source_store is not None
+                    else sum(
+                        len(scoped_rows)
+                        for key, scoped_rows in invalid_market_by_scope.items()
+                        if key in processed_scope_keys
+                    )
                 ),
-                "invalid_depth_timestamp_row_count": sum(
-                    len(scoped_rows)
-                    for scoped_rows in invalid_depth_by_scope.values()
+                "invalid_depth_timestamp_row_count": (
+                    source_store.invalid_timestamp_counts["depth"]
+                    if source_store is not None
+                    else sum(
+                        len(scoped_rows)
+                        for key, scoped_rows in invalid_depth_by_scope.items()
+                        if key in processed_scope_keys
+                    )
                 ),
-                "invalid_event_reference_timestamp_row_count": sum(
-                    len(scoped_rows)
-                    for scoped_rows in invalid_references_by_scope.values()
+                "invalid_event_reference_timestamp_row_count": (
+                    source_store.invalid_timestamp_counts["reference"]
+                    if source_store is not None
+                    else sum(
+                        len(scoped_rows)
+                        for key, scoped_rows in invalid_references_by_scope.items()
+                        if key in processed_scope_keys
+                    )
                 ),
                 "included_in_prompt_context": False,
             },
         },
+        "report_row_count": len(rows),
         "rows": rows,
+        "entry_pipeline_source": pipeline_source_contract,
         "source_exact_payload_mutated": False,
         "future_outcomes_separate_from_prompt_context": True,
         "default_exact_v2_cohort_unchanged": True,
         "provider_call_performed": False,
+        "paired_replay_materialized": False,
+        "paired_replay_ready": False,
         **REPORT_METRIC_CONTRACT,
         **AUTHORITY_CONTRACT,
+    }
+    return {
+        **report_without_hash,
+        "report_content_sha256": _sha256(report_without_hash),
     }
 
 
@@ -4056,14 +6333,20 @@ def _filter_relevant_rows(
         if indexed_windows is None:
             continue
         starts, scope_windows = indexed_windows
-        try:
-            timestamp_ms = (
-                int(row.get("event_detected_at_ms") or 0)
-                if reference_rows
-                else _timestamp_ms(row.get("local_receive_timestamp"))
-            )
-        except (TypeError, ValueError):
-            continue
+        if reference_rows:
+            detected_at_ms = row.get("event_detected_at_ms")
+            if (
+                not isinstance(detected_at_ms, int)
+                or isinstance(detected_at_ms, bool)
+                or detected_at_ms <= 0
+            ):
+                continue
+            timestamp_ms = detected_at_ms
+        else:
+            try:
+                timestamp_ms = _timestamp_ms(row.get("local_receive_timestamp"))
+            except (TypeError, ValueError):
+                continue
         index = bisect_right(starts, timestamp_ms) - 1
         if index >= 0 and timestamp_ms <= scope_windows[index][1]:
             selected.append(row)
@@ -4098,6 +6381,126 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
             os.unlink(temporary)
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _iter_jsonl_with_content_provenance(
+    path: Path, provenance: dict[str, Any]
+) -> Iterable[dict[str, Any]]:
+    """Stream one resolved JSONL source and bind its decoded content census.
+
+    ``source_sha256`` continues to identify the bytes stored on disk (including
+    gzip framing).  ``source_content_sha256`` identifies the exact decoded
+    JSONL bytes consumed by the outcome-only allocator join.  The pre/post stat
+    check rejects a concurrently replaced or appended source instead of
+    publishing a census that is not reproducible from the declared artifact.
+    """
+
+    initial_stat = path.stat()
+    content_digest = hashlib.sha256()
+    content_bytes = 0
+    line_count = 0
+    nonempty_line_count = 0
+    json_object_row_count = 0
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rb") as handle:
+        for raw_line in handle:
+            content_digest.update(raw_line)
+            content_bytes += len(raw_line)
+            line_count += 1
+            if not raw_line.strip():
+                continue
+            nonempty_line_count += 1
+            payload = json.loads(raw_line)
+            if isinstance(payload, dict):
+                json_object_row_count += 1
+                yield payload
+    source_sha256 = _file_sha256(path)
+    final_stat = path.stat()
+    if (
+        initial_stat.st_dev,
+        initial_stat.st_ino,
+        initial_stat.st_size,
+        initial_stat.st_mtime_ns,
+    ) != (
+        final_stat.st_dev,
+        final_stat.st_ino,
+        final_stat.st_size,
+        final_stat.st_mtime_ns,
+    ):
+        raise ValueError("entry_pipeline_source_changed_during_read")
+    provenance.update(
+        {
+            "source_sha256": source_sha256,
+            "source_bytes": final_stat.st_size,
+            "source_content_sha256": content_digest.hexdigest(),
+            "source_content_bytes": content_bytes,
+            "source_line_count": line_count,
+            "source_nonempty_line_count": nonempty_line_count,
+            "source_json_object_row_count": json_object_row_count,
+            "source_snapshot_stable": True,
+        }
+    )
+
+
+def _verified_cost_config_from_path(
+    path: Path, *, target_date: date
+) -> BridgeConfig:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema") != COST_PROFILE_SCHEMA:
+        raise ValueError("verified_cost_profile_schema_invalid")
+    numeric_fields: dict[str, float] = {}
+    for field in (
+        "buy_fee_bps",
+        "sell_fee_bps",
+        "statutory_sell_tax_bps",
+        "uncertainty_buffer_bps",
+    ):
+        value = payload.get(field)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) < 0
+        ):
+            raise ValueError(f"verified_cost_profile_numeric_invalid:{field}")
+        numeric_fields[field] = float(value)
+    effective_date = date.fromisoformat(str(payload.get("effective_date") or ""))
+    if target_date < effective_date:
+        raise ValueError("verified_cost_profile_not_effective_on_target_date")
+    canonical_payload_json = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return BridgeConfig(
+        statutory_sell_tax_bps=numeric_fields["statutory_sell_tax_bps"],
+        buy_fee_bps=numeric_fields["buy_fee_bps"],
+        sell_fee_bps=numeric_fields["sell_fee_bps"],
+        uncertainty_buffer_bps=numeric_fields["uncertainty_buffer_bps"],
+        cost_profile_source=str(payload.get("source") or ""),
+        cost_profile_verified=True,
+        cost_profile_artifact_id=str(payload.get("artifact_id") or ""),
+        cost_profile_artifact_sha256=_producer_sha256(payload),
+        cost_profile_artifact_payload_json=canonical_payload_json,
+        cost_profile_effective_date=effective_date.isoformat(),
+        cost_profile_venues=tuple(
+            sorted(
+                {
+                    normalize_venue(value)
+                    for value in payload.get("venues") or []
+                }
+            )
+        ),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True)
@@ -4120,30 +6523,126 @@ def main(argv: list[str] | None = None) -> int:
         default="operator_supplied_research_assumption",
         help="Research provenance only; CLI values never become promotion grade.",
     )
+    parser.add_argument(
+        "--verified-cost-profile",
+        type=Path,
+        help=(
+            "Reviewed micro_reversion_reviewed_cost_profile_v1 artifact; "
+            "must be paired with --symbol-master."
+        ),
+    )
+    parser.add_argument(
+        "--symbol-master",
+        type=Path,
+        help=(
+            "Verified effective-dated symbol master used only to qualify "
+            "offline economics."
+        ),
+    )
+    parser.add_argument(
+        "--entry-pipeline",
+        type=Path,
+        help=(
+            "ENTRY_PIPELINE JSONL; defaults to "
+            "data/pipeline_events/pipeline_events_DATE.jsonl."
+        ),
+    )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     target = date.fromisoformat(args.date)
     if target < CLEAN_BASELINE_DATE:
         parser.error("date is before clean tuning baseline")
-    trace_path = DATA_DIR / "ai_decision_trace" / f"ai_decision_trace_{args.date}.jsonl"
-    payload_path = (
+    logical_trace_path = (
+        DATA_DIR / "ai_decision_trace" / f"ai_decision_trace_{args.date}.jsonl"
+    )
+    logical_payload_path = (
         DATA_DIR / "ai_decision_payloads" / f"ai_decision_payloads_{args.date}.jsonl"
     )
+    trace_path = existing_or_gzip_path(logical_trace_path)
+    payload_path = existing_or_gzip_path(logical_payload_path)
     if not trace_path.exists() or not payload_path.exists():
         parser.error("exact trace or payload artifact is missing")
     exclusion_payload = load_source_exclusion_manifest(args.source_exclusion_manifest)
-    config = BridgeConfig(
-        statutory_sell_tax_bps=args.statutory_sell_tax_bps,
-        buy_fee_bps=args.buy_fee_bps,
-        sell_fee_bps=args.sell_fee_bps,
-        uncertainty_buffer_bps=args.uncertainty_buffer_bps,
-        cost_profile_source=args.cost_profile_source,
-        # Verification must come from a reviewed versioned artifact in a
-        # programmatic caller.  An operator CLI flag cannot assert it.
-        cost_profile_verified=False,
-    )
+    if bool(args.verified_cost_profile) != bool(args.symbol_master):
+        parser.error(
+            "--verified-cost-profile and --symbol-master must be supplied together"
+        )
+    if args.verified_cost_profile:
+        if not args.verified_cost_profile.exists() or not args.symbol_master.exists():
+            parser.error("verified cost profile or symbol master artifact is missing")
+        try:
+            config = _verified_cost_config_from_path(
+                args.verified_cost_profile,
+                target_date=target,
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(str(exc))
+    else:
+        config = BridgeConfig(
+            statutory_sell_tax_bps=args.statutory_sell_tax_bps,
+            buy_fee_bps=args.buy_fee_bps,
+            sell_fee_bps=args.sell_fee_bps,
+            uncertainty_buffer_bps=args.uncertainty_buffer_bps,
+            cost_profile_source=args.cost_profile_source,
+            # Ad-hoc CLI values remain research-only.
+            cost_profile_verified=False,
+        )
     traces = list(_iter_jsonl((trace_path,)))
     payloads = list(_iter_jsonl((payload_path,)))
+    verified_symbol_metadata_by_trace: dict[str, dict[str, Any]] = {}
+    if args.symbol_master:
+        from .symbol_master import VerifiedSymbolMaster
+
+        try:
+            symbol_master_payload = json.loads(
+                args.symbol_master.read_text(encoding="utf-8")
+            )
+            if not isinstance(symbol_master_payload, dict):
+                raise ValueError("symbol_master_artifact_invalid")
+            symbol_master = VerifiedSymbolMaster.from_json_path(args.symbol_master)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(str(exc))
+        symbol_master_sha256 = _sha256(symbol_master_payload)
+        for trace in traces:
+            trace_id = str(trace.get("decision_trace_id") or "").strip()
+            if not trace_id:
+                continue
+            lookup = symbol_master.lookup(trace.get("stock_code"), as_of=target)
+            verified_symbol_metadata_by_trace[trace_id] = {
+                "lookup_status": lookup.status.value,
+                "record": (
+                    lookup.record.as_dict() if lookup.record is not None else None
+                ),
+                "symbol_master_artifact_sha256": symbol_master_sha256,
+            }
+    logical_entry_pipeline_path = args.entry_pipeline or (
+        DATA_DIR / "pipeline_events" / f"pipeline_events_{args.date}.jsonl"
+    )
+    entry_pipeline_path = existing_or_gzip_path(logical_entry_pipeline_path)
+    if entry_pipeline_path.exists():
+        entry_pipeline_source = {
+            "status": "available_hash_verified",
+            "logical_source_path": str(logical_entry_pipeline_path),
+            "source_path": str(entry_pipeline_path),
+            "source_compression": (
+                "gzip" if entry_pipeline_path.suffix == ".gz" else "plain"
+            ),
+        }
+        entry_pipeline_rows: Iterable[Mapping[str, Any]] = (
+            _iter_jsonl_with_content_provenance(
+                entry_pipeline_path,
+                entry_pipeline_source,
+            )
+        )
+    else:
+        entry_pipeline_rows = ()
+        entry_pipeline_source = {
+            "status": "missing_observation_only",
+            "logical_source_path": str(logical_entry_pipeline_path),
+            "source_path": str(logical_entry_pipeline_path),
+            "source_compression": None,
+            "source_sha256": None,
+        }
     windows = _relevant_windows(traces, payloads, config=config)
     market_paths = _partition_paths(
         args.observation_root, args.date, "market_stream"
@@ -4154,21 +6653,33 @@ def main(argv: list[str] | None = None) -> int:
     reference_paths = _partition_paths(
         args.observation_root, args.date, "market_stream_event_references"
     )
-    market_rows = _filter_relevant_rows(_iter_jsonl(market_paths), windows)
-    depth_rows = _filter_relevant_rows(_iter_jsonl(depth_paths), windows)
-    reference_rows = _filter_relevant_rows(
-        _iter_jsonl(reference_paths), windows, reference_rows=True
-    )
-    report = build_bridge_report(
-        target_date=args.date,
-        traces=traces,
-        payloads=payloads,
-        market_rows=market_rows,
-        depth_rows=depth_rows,
-        event_references=reference_rows,
-        config=config,
-        excluded_scopes=_excluded_scopes(exclusion_payload),
-    )
+    # sqlite's empty filename creates an OS-managed temporary database that is
+    # removed even when an outer timeout terminates the process.
+    with _SQLiteRelevantSourceStore("", windows=windows) as source_store:
+        source_store.ingest("market", _iter_jsonl(market_paths))
+        source_store.ingest("depth", _iter_jsonl(depth_paths))
+        source_store.ingest(
+            "reference",
+            _iter_jsonl(reference_paths),
+            reference_rows=True,
+        )
+        source_store.finalize()
+        report = build_bridge_report(
+            target_date=args.date,
+            traces=traces,
+            payloads=payloads,
+            market_rows=(),
+            depth_rows=(),
+            event_references=(),
+            config=config,
+            excluded_scopes=_excluded_scopes(exclusion_payload),
+            source_store=source_store,
+            entry_pipeline_rows=entry_pipeline_rows,
+            entry_pipeline_source=entry_pipeline_source,
+            verified_symbol_metadata_by_trace=(
+                verified_symbol_metadata_by_trace or None
+            ),
+        )
     output = (
         DATA_DIR
         / "report"

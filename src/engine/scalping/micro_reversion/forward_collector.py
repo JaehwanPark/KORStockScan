@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .contracts import PriceObservation, normalize_symbol
+from .contracts import PriceObservation, normalize_symbol, registration_item_identity
 from .multi_horizon import MultiHorizonShockDetector
 from .observation_adapter import (
     AdapterResult,
@@ -680,7 +680,13 @@ class ForwardObservationCollector:
                 .upper()
             )
             venue = _explicit_item_venue(item)
-            if not venue or declared_venue not in {"", venue}:
+            item_symbol, item_venue = registration_item_identity(item)
+            if (
+                not venue
+                or item_venue != venue
+                or item_symbol != normalize_symbol(symbol)
+                or declared_venue not in {"", venue}
+            ):
                 self._increment("_venue_blocks")
                 return ProducerCanaryResult.MISSING_OR_CONFLICTING_VENUE
             exchange_code = str(trade.get("exchange_code_9081") or "").strip()
@@ -808,7 +814,13 @@ class ForwardObservationCollector:
                 .upper()
             )
             venue = _explicit_item_venue(item)
-            if not venue or declared_venue not in {"", venue}:
+            item_symbol, item_venue = registration_item_identity(item)
+            if (
+                not venue
+                or item_venue != venue
+                or item_symbol != normalize_symbol(symbol)
+                or declared_venue not in {"", venue}
+            ):
                 self._increment("_venue_blocks")
                 return ProducerCanaryResult.MISSING_OR_CONFLICTING_VENUE
             received_at_ms = _positive_int(depth.get("received_at_ms"))

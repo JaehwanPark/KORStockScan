@@ -3,20 +3,29 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
+from src.engine.monitoring.machine_microstructure_attribution import (
+    resolve_completed_machine_target_date,
+)
 from src.utils.constants import PROJECT_ROOT
 from src.utils.market_day import get_krx_trading_day_status
 
 DOCS_DIR = PROJECT_ROOT / "docs"
 CHECKLIST_DIR = DOCS_DIR / "checklists"
+CHECKLIST_LOCK_DIR = PROJECT_ROOT / "data" / "runtime" / "build_next_stage2_checklist"
 EV_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "threshold_cycle_ev"
 SWING_RUNTIME_APPROVAL_DIR = PROJECT_ROOT / "data" / "report" / "swing_runtime_approval"
 CODE_IMPROVEMENT_REPORT_DIR = (
@@ -37,6 +46,40 @@ RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR = (
 MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR = (
     PROJECT_ROOT / "data" / "report" / "machine_microstructure_policy_approval"
 )
+MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_SCHEMA = (
+    "machine_microstructure_policy_approval_status_v1"
+)
+MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_DIR = (
+    PROJECT_ROOT / "data" / "report" / "machine_microstructure_attribution"
+)
+MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_SCHEMA = (
+    "machine_microstructure_attribution_v1"
+)
+MACHINE_MICROSTRUCTURE_SOURCE_ARTIFACT_SCHEMA = (
+    "machine_microstructure_policy_source_artifact_provenance_v1"
+)
+MACHINE_MICROSTRUCTURE_COMPLETED_REFRESH_MAX_AGE = timedelta(minutes=30)
+MACHINE_MICROSTRUCTURE_BUILDER_OWNED_CONDITIONAL_TASK_PREFIXES = (
+    "MachineMicroPolicyApprovalPreopen",
+    "MachineLifecycleTurnoverObjectiveFollowup",
+    "MachineMicroPolicyApprovalSourceGap",
+)
+MACHINE_MICROSTRUCTURE_OBJECTIVE_OPEN_STATES = {
+    "IMPLEMENTATION_REQUIRED",
+    "EVIDENCE_ACCUMULATING",
+}
+MACHINE_MICROSTRUCTURE_OBJECTIVE_SOURCE_GAP_STATUSES = {
+    "missing_or_unreadable",
+    "source_changed_during_snapshot",
+    "contract_invalid",
+    "objective_followup_list_missing_or_invalid",
+}
+MACHINE_MICROSTRUCTURE_NON_RUNTIME_AUTHORITY = {
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+}
 
 AUTO_START = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->"
 AUTO_END = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->"
@@ -65,6 +108,336 @@ def _load_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _machine_microstructure_predecessor_errors(
+    *,
+    approval_path: Path,
+    approval_payload: dict[str, Any],
+    attribution_path: Path,
+    source_date: str,
+    approval_not_before: datetime | None = None,
+    require_loaded_source: bool = True,
+    allow_empty_source_identity: bool = False,
+) -> list[str]:
+    errors: list[str] = []
+    generated_raw = str(approval_payload.get("generated_at_kst") or "")
+    try:
+        generated_at = datetime.fromisoformat(generated_raw)
+    except ValueError:
+        generated_at = None
+    if generated_at is None or generated_at.tzinfo is None:
+        errors.append("generated_at_kst")
+    else:
+        try:
+            source_day = date.fromisoformat(source_date)
+        except ValueError:
+            errors.append("source_date")
+        else:
+            if generated_at.date() < source_day:
+                errors.append("generated_before_source_date")
+        if (
+            approval_not_before is not None
+            and approval_not_before.tzinfo is not None
+            and generated_at < approval_not_before.astimezone(generated_at.tzinfo)
+        ):
+            errors.append("approval_generated_before_completed_refresh_window")
+
+    try:
+        approval_stat = approval_path.stat()
+    except OSError:
+        approval_stat = None
+        errors.append("approval_artifact_missing_or_unreadable")
+    if (
+        generated_at is not None
+        and generated_at.tzinfo is not None
+        and approval_stat is not None
+        and generated_at.timestamp() > approval_stat.st_mtime + 1.0
+    ):
+        errors.append("approval_generated_after_report_file")
+
+    provenance = approval_payload.get("source_artifact")
+    if not isinstance(provenance, dict):
+        return [*errors, "source_artifact"]
+    if provenance.get("schema") != MACHINE_MICROSTRUCTURE_SOURCE_ARTIFACT_SCHEMA:
+        errors.append("source_artifact_schema")
+    recorded_path = str(provenance.get("path") or "").strip()
+    try:
+        path_matches = bool(recorded_path) and Path(recorded_path).resolve() == (
+            attribution_path.resolve()
+        )
+    except OSError:
+        path_matches = False
+    if not path_matches:
+        errors.append("source_artifact_path")
+    if str(approval_payload.get("source_path") or "").strip() != recorded_path:
+        errors.append("source_path_provenance_mismatch")
+    recorded_digest = provenance.get("sha256")
+    recorded_mtime_ns = provenance.get("mtime_ns")
+    recorded_size = provenance.get("size_bytes")
+    identity_is_empty = all(
+        value is None for value in (recorded_digest, recorded_mtime_ns, recorded_size)
+    )
+    identity_is_complete = (
+        isinstance(recorded_digest, str)
+        and bool(re.fullmatch(r"[0-9a-f]{64}", recorded_digest))
+        and isinstance(recorded_mtime_ns, int)
+        and not isinstance(recorded_mtime_ns, bool)
+        and isinstance(recorded_size, int)
+        and not isinstance(recorded_size, bool)
+        and recorded_size >= 0
+    )
+    if allow_empty_source_identity and identity_is_empty:
+        return errors
+    if not identity_is_complete:
+        return [*errors, "source_artifact_identity"]
+
+    try:
+        source_bytes = attribution_path.read_bytes()
+        source_stat = attribution_path.stat()
+    except OSError:
+        return [*errors, "source_artifact_missing_or_unreadable"]
+    source_digest = hashlib.sha256(source_bytes).hexdigest()
+    if recorded_digest != source_digest:
+        errors.append("source_artifact_sha256")
+    if (
+        not isinstance(recorded_mtime_ns, int)
+        or isinstance(recorded_mtime_ns, bool)
+        or recorded_mtime_ns != source_stat.st_mtime_ns
+    ):
+        errors.append("source_artifact_mtime_ns")
+    if (
+        not isinstance(recorded_size, int)
+        or isinstance(recorded_size, bool)
+        or recorded_size != source_stat.st_size
+    ):
+        errors.append("source_artifact_size_bytes")
+    if (
+        approval_stat is not None
+        and approval_stat.st_mtime_ns < source_stat.st_mtime_ns
+    ):
+        errors.append("approval_file_older_than_source_artifact")
+    if generated_at is not None and generated_at.tzinfo is not None:
+        # Status timestamps are intentionally serialized to whole seconds.
+        # One second of tolerance preserves that representation while still
+        # rejecting a report generated before its exact predecessor.
+        if generated_at.timestamp() + 1.0 < source_stat.st_mtime:
+            errors.append("approval_generated_before_source_artifact")
+    if not require_loaded_source:
+        return errors
+    try:
+        source_payload = json.loads(source_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        source_payload = None
+    if not isinstance(source_payload, dict):
+        errors.append("source_payload_not_object")
+    else:
+        if (
+            source_payload.get("schema")
+            != MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_SCHEMA
+        ):
+            errors.append("source_payload_schema")
+        if source_payload.get("target_date") != source_date:
+            errors.append("source_payload_target_date")
+        if approval_not_before is not None and approval_not_before.tzinfo is not None:
+            not_before = approval_not_before.astimezone(ZoneInfo("Asia/Seoul"))
+            source_generated_raw = str(source_payload.get("generated_at_kst") or "")
+            try:
+                source_generated_at = datetime.fromisoformat(source_generated_raw)
+            except ValueError:
+                source_generated_at = None
+            if source_generated_at is None or source_generated_at.tzinfo is None:
+                errors.append("source_payload_generated_at_kst")
+            elif source_generated_at < not_before.astimezone(
+                source_generated_at.tzinfo
+            ):
+                errors.append(
+                    "source_payload_generated_before_completed_refresh_window"
+                )
+            if source_stat.st_mtime < not_before.timestamp():
+                errors.append("source_artifact_mtime_before_completed_refresh_window")
+        source_authority = source_payload.get("authority")
+        expected_source_authority = {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        if not isinstance(source_authority, dict) or any(
+            source_authority.get(field) is not expected
+            for field, expected in expected_source_authority.items()
+        ):
+            errors.append("source_payload_authority")
+    return errors
+
+
+def _load_machine_microstructure_approval_report(
+    path: Path,
+    *,
+    source_date: str,
+    attribution_path: Path,
+    approval_not_before: datetime | None = None,
+) -> tuple[dict[str, Any], str]:
+    if not path.exists():
+        return {}, "missing"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}, "unreadable"
+    if not isinstance(payload, dict):
+        return {}, "contract_invalid:payload_not_object"
+
+    errors: list[str] = []
+    if payload.get("schema") != MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_SCHEMA:
+        errors.append("schema")
+    if payload.get("phase") != "postclose":
+        errors.append("phase")
+    if payload.get("target_date") != source_date:
+        errors.append("target_date")
+    authority = payload.get("authority")
+    expected_authority = {
+        "runtime_effect": False,
+        "runtime_apply_performed": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    if not isinstance(authority, dict) or any(
+        authority.get(field) is not expected
+        for field, expected in expected_authority.items()
+    ):
+        errors.append("authority")
+    objective_followups = payload.get("objective_followups")
+    objective_source_status = payload.get("objective_followup_source_status")
+    source_status = payload.get("source_status")
+    if objective_source_status not in {
+        "loaded",
+        *MACHINE_MICROSTRUCTURE_OBJECTIVE_SOURCE_GAP_STATUSES,
+    }:
+        errors.append("objective_followup_source_status")
+    capture_gap_statuses = {
+        "missing_or_unreadable",
+        "source_changed_during_snapshot",
+        "contract_invalid",
+    }
+    if (
+        objective_source_status in capture_gap_statuses
+        and source_status != objective_source_status
+    ):
+        errors.append("source_status_objective_source_status_mismatch")
+    if not isinstance(objective_followups, list) or any(
+        not isinstance(row, dict) for row in objective_followups
+    ):
+        errors.append("objective_followups")
+    summary = payload.get("summary")
+    actionable_count = (
+        summary.get("actionable_objective_followup_count")
+        if isinstance(summary, dict)
+        else None
+    )
+    rejection_count = (
+        summary.get("objective_followup_rejection_count")
+        if isinstance(summary, dict)
+        else None
+    )
+    objective_followup_rejections = payload.get("objective_followup_rejections")
+    if (
+        not isinstance(rejection_count, int)
+        or isinstance(rejection_count, bool)
+        or rejection_count < 0
+        or not isinstance(objective_followup_rejections, list)
+        or any(not isinstance(row, dict) for row in objective_followup_rejections)
+        or (
+            isinstance(objective_followup_rejections, list)
+            and rejection_count != len(objective_followup_rejections)
+        )
+    ):
+        errors.append("objective_followup_rejection_count")
+        rejection_count = 0
+    allow_prior_source_date = (
+        objective_source_status in MACHINE_MICROSTRUCTURE_OBJECTIVE_SOURCE_GAP_STATUSES
+        or rejection_count > 0
+    )
+    if (
+        isinstance(objective_followups, list)
+        and all(isinstance(row, dict) for row in objective_followups)
+        and any(
+            not _machine_microstructure_objective_row_is_valid(
+                row,
+                source_date=source_date,
+                allow_prior_source_date=allow_prior_source_date,
+            )
+            for row in objective_followups
+        )
+    ):
+        errors.append("objective_followup_rows")
+    if (
+        not isinstance(actionable_count, int)
+        or isinstance(actionable_count, bool)
+        or (
+            isinstance(objective_followups, list)
+            and actionable_count != len(objective_followups)
+        )
+    ):
+        errors.append("objective_followup_count")
+    if errors:
+        return {}, "contract_invalid:" + ",".join(errors)
+    predecessor_errors = _machine_microstructure_predecessor_errors(
+        approval_path=path,
+        approval_payload=payload,
+        attribution_path=attribution_path,
+        source_date=source_date,
+        approval_not_before=approval_not_before,
+        require_loaded_source=objective_source_status == "loaded",
+        allow_empty_source_identity=objective_source_status
+        in {"missing_or_unreadable", "source_changed_during_snapshot"},
+    )
+    if predecessor_errors:
+        return {}, "predecessor_invalid:" + ",".join(predecessor_errors)
+    if objective_source_status != "loaded":
+        return payload, f"objective_source_gap:{objective_source_status}"
+    if rejection_count > 0:
+        return payload, f"objective_source_gap:rejected_rows:{rejection_count}"
+    return payload, "loaded"
+
+
+def _machine_microstructure_objective_row_is_valid(
+    row: dict[str, Any], *, source_date: str, allow_prior_source_date: bool
+) -> bool:
+    authority = row.get("authority")
+    metric_contract = row.get("metric_contract")
+    row_source_date = str(row.get("source_date") or "")
+    try:
+        row_source_day = date.fromisoformat(row_source_date)
+        report_source_day = date.fromisoformat(source_date)
+    except ValueError:
+        source_date_valid = False
+    else:
+        row_is_trading_day, _ = get_krx_trading_day_status(row_source_day)
+        source_date_valid = row_is_trading_day and (
+            row_source_day <= report_source_day
+            if allow_prior_source_date
+            else row_source_day == report_source_day
+        )
+    return (
+        row.get("schema") == "machine_fast_lifecycle_objective_followup_v1"
+        and str(row.get("followup_id") or "").strip() != ""
+        and source_date_valid
+        and row.get("followup_required") is True
+        and row.get("state") in MACHINE_MICROSTRUCTURE_OBJECTIVE_OPEN_STATES
+        and row.get("operator_decision_required") is False
+        and isinstance(metric_contract, dict)
+        and metric_contract.get("decision_authority")
+        == "postclose_followup_tracking_only"
+        and all(
+            row.get(field) is expected
+            for field, expected in MACHINE_MICROSTRUCTURE_NON_RUNTIME_AUTHORITY.items()
+        )
+        and isinstance(authority, dict)
+        and all(
+            authority.get(field) is expected
+            for field, expected in MACHINE_MICROSTRUCTURE_NON_RUNTIME_AUTHORITY.items()
+        )
+    )
 
 
 def _missing_required_postclose_artifacts(source_date: str) -> list[Path]:
@@ -415,6 +788,53 @@ def _machine_microstructure_approval_pending_summary(
     return ", ".join(rendered) + suffix + source_gap
 
 
+def _compact_inline_value(value: Any, *, fallback: str = "-") -> str:
+    rendered = " ".join(str(value or "").replace("`", "'").split()).strip()
+    return rendered[:160] if rendered else fallback
+
+
+def _machine_microstructure_objective_followup_summary(
+    report: dict[str, Any],
+) -> str:
+    rows = report.get("objective_followups")
+    if not isinstance(rows, list):
+        return ""
+
+    unresolved: list[str] = []
+    fallback_actions = {
+        "IMPLEMENTATION_REQUIRED": "implement_source_only_rolling_paired_policy_research",
+        "EVIDENCE_ACCUMULATING": "continue_exact_date_collection_and_rolling_readiness_review",
+    }
+    for row in rows:
+        if not isinstance(row, dict) or row.get("followup_required") is not True:
+            continue
+        status = _compact_inline_value(
+            row.get("status") or row.get("state"), fallback="UNKNOWN"
+        ).upper()
+        if status in {"CANDIDATE_QUEUE_HANDOFF", "COMPLETE"}:
+            continue
+        objective_id = _compact_inline_value(
+            row.get("objective_id")
+            or row.get("followup_id")
+            or row.get("id")
+            or row.get("objective"),
+            fallback="machine_lifecycle_turnover",
+        )
+        next_action = _compact_inline_value(
+            row.get("next_action") or fallback_actions.get(status),
+            fallback="inspect_unresolved_objective_and_assign_owner",
+        )
+        unresolved.append(
+            f"`{objective_id}`(status=`{status}`, next_action=`{next_action}`)"
+        )
+
+    if not unresolved:
+        return ""
+    rendered = unresolved[:5]
+    suffix = f" 외 {len(unresolved) - len(rendered)}건" if len(unresolved) > 5 else ""
+    return ", ".join(rendered) + suffix
+
+
 def _automation_trigger_decision_summary(trigger_report: dict[str, Any]) -> str:
     if not trigger_report:
         return "trigger_report_missing=`true`, required_action=`run_required_or_report_generation_check`"
@@ -499,6 +919,7 @@ def _build_tasks(
     trigger_report: dict[str, Any],
     rising_missed_report: dict[str, Any],
     machine_micro_approval_report: dict[str, Any],
+    machine_micro_approval_source_status: str,
 ) -> list[GeneratedTask]:
     mmdd = _compact_mmdd(target_date)
     ev_path = EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json"
@@ -530,6 +951,11 @@ def _build_tasks(
     rising_missed_summary = _rising_missed_scout_summary(rising_missed_report)
     machine_micro_approval_pending = _machine_microstructure_approval_pending_summary(
         machine_micro_approval_report
+    )
+    machine_micro_objective_followups = (
+        _machine_microstructure_objective_followup_summary(
+            machine_micro_approval_report
+        )
     )
     tuning_sources = f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})"
     tuning_decision_line = "판정 기준: threshold cycle EV를 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다."
@@ -615,6 +1041,70 @@ def _build_tasks(
                     f"판정 기준: 이월된 승인 대기 후보 {machine_micro_approval_pending}의 design/approval/expiry 상태와 동일 candidate hash의 명시 승인 artifact를 확인한다.",
                     "금지: `DESIGN_REQUIRED`, 변경된 candidate hash, 미등록 runtime family, same-stage 충돌, rollback/post-apply 계약 결손을 PREOPEN env 수정으로 우회하지 않는다.",
                     "다음 액션: `source_gap_repair`, `design_required`, `review_ready_request_operator_decision`, `user_approved_handoff_ready`, `preopen_scheduled`, `hold_followup`, `applied_attribution_pending`, `post_apply_attributed`, `expired_revalidate`, `rejected` 중 하나로 닫고 handoff는 family-owned apply receipt와 분리 확인한다.",
+                ),
+            )
+        )
+    if machine_micro_objective_followups:
+        machine_micro_approval_path = (
+            MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
+            / f"machine_microstructure_policy_approval_postclose_{source_date}.json"
+        )
+        tasks.append(
+            GeneratedTask(
+                task_id=f"MachineLifecycleTurnoverObjectiveFollowup{mmdd}",
+                title="위젯·episode 빠른 회전 목적의 미완료 후속 구현 확인",
+                slot="POSTCLOSE",
+                time_window="21:30~21:40",
+                track="ScalpingLogic",
+                source=(
+                    f"[machine_microstructure_policy_approval_postclose_{source_date}.json]"
+                    f"(/home/ubuntu/KORStockScan/{_rel(machine_micro_approval_path)}), "
+                    "[machine_microstructure_attribution.py]"
+                    "(/home/ubuntu/KORStockScan/src/engine/monitoring/"
+                    "machine_microstructure_attribution.py)"
+                ),
+                lines=(
+                    "판정 기준: 승인 후보 수와 무관하게 "
+                    f"`followup_required=true`인 미완료 목적 항목 {machine_micro_objective_followups}의 "
+                    "상태와 상태별 `next_action`을 확인하고 구현 또는 표본수집 경로로 닫는다.",
+                    "상태별 다음 액션: `IMPLEMENTATION_REQUIRED`는 source-only rolling paired policy 연구를 구현하고, "
+                    "`EVIDENCE_ACCUMULATING`은 exact-date floor 충족까지 수집·재검증한다. "
+                    "`CANDIDATE_QUEUE_HANDOFF|COMPLETE`는 closed 상태이므로 report에서 제외되고 다음 refresh에서 builder-owned 항목이 제거된다.",
+                    "권한 경계: 이 POSTCLOSE 후속 항목은 source-only 구현·검증 작업이며 runtime env, 실주문, target/timeout/cooldown/cap, threshold, provider/bot, hard safety 또는 broker guard 변경 권한이 없다.",
+                ),
+            )
+        )
+    if machine_micro_approval_source_status != "loaded":
+        machine_micro_approval_path = (
+            MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
+            / f"machine_microstructure_policy_approval_postclose_{source_date}.json"
+        )
+        source_status = _compact_inline_value(
+            machine_micro_approval_source_status,
+            fallback="unknown_source_gap",
+        )
+        tasks.append(
+            GeneratedTask(
+                task_id=f"MachineMicroPolicyApprovalSourceGap{mmdd}",
+                title="micro 정책 승인·목적 ledger source gap 복구",
+                slot="POSTCLOSE",
+                time_window="21:25~21:30",
+                track="RuntimeStability",
+                source=(
+                    f"[machine_microstructure_policy_approval_postclose_{source_date}.json]"
+                    f"(/home/ubuntu/KORStockScan/{_rel(machine_micro_approval_path)}), "
+                    "[machine_microstructure_policy_approval.py]"
+                    "(/home/ubuntu/KORStockScan/src/engine/automation/"
+                    "machine_microstructure_policy_approval.py), "
+                    "[widget expansion service]"
+                    "(/home/ubuntu/KORStockScan/deploy/systemd/"
+                    "korstockscan-widget-expansion-recommendation.service)"
+                ),
+                lines=(
+                    "판정 기준: 21:15 final refresh의 exact-date POSTCLOSE approval report가 "
+                    f"`source_status={source_status}`이므로 schema/phase/target-date/non-runtime authority와 generated-at/source hash·mtime predecessor 계약을 복구하고 checklist를 재생성한다.",
+                    "완료 조건: 동일 source date의 approval report가 현재 attribution source hash·mtime 이후의 exact contract로 재생성되고, 미완료 objective는 별도 POSTCLOSE followup task로 이월되며 closed objective는 제거되어야 한다.",
+                    "권한 경계: source gap 복구는 report/checklist 제어면 작업이며 runtime env, 실주문, threshold, provider/bot, hard safety 또는 broker guard 변경 권한이 없다.",
                 ),
             )
         )
@@ -865,6 +1355,7 @@ def _render_auto_block(
     trigger_report: dict[str, Any],
     rising_missed_report: dict[str, Any],
     machine_micro_approval_report: dict[str, Any],
+    machine_micro_approval_source_status: str,
     exclude_task_ids: set[str] | None = None,
 ) -> str:
     tasks = _build_tasks(
@@ -877,6 +1368,7 @@ def _render_auto_block(
         trigger_report=trigger_report,
         rising_missed_report=rising_missed_report,
         machine_micro_approval_report=machine_micro_approval_report,
+        machine_micro_approval_source_status=machine_micro_approval_source_status,
     )
     exclude_task_ids = exclude_task_ids or set()
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
@@ -1014,6 +1506,12 @@ def _task_slot_from_block(block: str, fallback_slot: str) -> str:
     return fallback_slot
 
 
+def _is_builder_owned_conditional_task(task_id: str) -> bool:
+    return task_id.startswith(
+        MACHINE_MICROSTRUCTURE_BUILDER_OWNED_CONDITIONAL_TASK_PREFIXES
+    )
+
+
 def _preserved_auto_task_blocks(
     existing: str, generated_task_ids: set[str]
 ) -> dict[str, list[str]]:
@@ -1038,7 +1536,11 @@ def _preserved_auto_task_blocks(
                     r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)]", current[0]
                 )
                 task_id = task_id_match.group(1) if task_id_match else ""
-                if task_id and task_id not in generated_task_ids:
+                if (
+                    task_id
+                    and task_id not in generated_task_ids
+                    and not _is_builder_owned_conditional_task(task_id)
+                ):
                     slot = _task_slot_from_block(block, current_slot or "POSTCLOSE")
                     preserved.setdefault(slot, []).append(block)
             current = [line]
@@ -1051,7 +1553,11 @@ def _preserved_auto_task_blocks(
                     r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)]", current[0]
                 )
                 task_id = task_id_match.group(1) if task_id_match else ""
-                if task_id and task_id not in generated_task_ids:
+                if (
+                    task_id
+                    and task_id not in generated_task_ids
+                    and not _is_builder_owned_conditional_task(task_id)
+                ):
                     slot = _task_slot_from_block(block, current_slot or "POSTCLOSE")
                     preserved.setdefault(slot, []).append(block)
                 current = []
@@ -1061,7 +1567,11 @@ def _preserved_auto_task_blocks(
         block = "\n".join(current).rstrip()
         task_id_match = re.match(r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)]", current[0])
         task_id = task_id_match.group(1) if task_id_match else ""
-        if task_id and task_id not in generated_task_ids:
+        if (
+            task_id
+            and task_id not in generated_task_ids
+            and not _is_builder_owned_conditional_task(task_id)
+        ):
             slot = _task_slot_from_block(block, current_slot or "POSTCLOSE")
             preserved.setdefault(slot, []).append(block)
     return {slot: blocks for slot, blocks in preserved.items() if blocks}
@@ -1110,13 +1620,67 @@ def _merge_preserved_auto_tasks(existing: str, auto_block: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
+@contextmanager
+def _checklist_write_lock(target_path: Path) -> Iterator[None]:
+    lock_path = CHECKLIST_LOCK_DIR / f"{target_path.name}.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write_checklist(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing_mode = path.stat().st_mode & 0o777 if path.exists() else 0o664
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary_path.chmod(existing_mode)
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def build_next_stage2_checklist(
+    source_date: str, *, machine_micro_approval_not_before: datetime | None = None
+) -> dict[str, Any]:
     source_date = str(source_date).strip()
     if not source_date:
         raise ValueError("source_date is required")
     date.fromisoformat(source_date)
     target_date = _next_krx_trading_day(source_date)
     target_path = stage2_checklist_path(target_date)
+    with _checklist_write_lock(target_path):
+        return _build_next_stage2_checklist_locked(
+            source_date=source_date,
+            target_date=target_date,
+            target_path=target_path,
+            machine_micro_approval_not_before=machine_micro_approval_not_before,
+        )
+
+
+def _build_next_stage2_checklist_locked(
+    *,
+    source_date: str,
+    target_date: str,
+    target_path: Path,
+    machine_micro_approval_not_before: datetime | None = None,
+) -> dict[str, Any]:
     missing_required = _missing_required_postclose_artifacts(source_date)
     if missing_required:
         missing = ", ".join(_rel(path) for path in missing_required)
@@ -1141,9 +1705,17 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR
         / f"rising_missed_scout_workorder_{source_date}.json"
     )
-    machine_micro_approval_report = _load_json(
-        MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-        / f"machine_microstructure_policy_approval_postclose_{source_date}.json"
+    machine_micro_approval_report, machine_micro_approval_source_status = (
+        _load_machine_microstructure_approval_report(
+            MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
+            / f"machine_microstructure_policy_approval_postclose_{source_date}.json",
+            source_date=source_date,
+            attribution_path=(
+                MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_DIR
+                / f"machine_microstructure_attribution_{source_date}.json"
+            ),
+            approval_not_before=machine_micro_approval_not_before,
+        )
     )
     existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
     exclude_task_ids = _existing_manual_task_ids(existing) if existing else set()
@@ -1157,6 +1729,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         trigger_report=trigger_report,
         rising_missed_report=rising_missed_report,
         machine_micro_approval_report=machine_micro_approval_report,
+        machine_micro_approval_source_status=machine_micro_approval_source_status,
         exclude_task_ids=exclude_task_ids,
     )
     if existing:
@@ -1169,8 +1742,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         content = _render_new_document(target_date, auto_block)
         created = True
 
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    target_path.write_text(content, encoding="utf-8")
+    _atomic_write_checklist(target_path, content)
     tasks = _build_tasks(
         source_date=source_date,
         target_date=target_date,
@@ -1181,6 +1753,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         trigger_report=trigger_report,
         rising_missed_report=rising_missed_report,
         machine_micro_approval_report=machine_micro_approval_report,
+        machine_micro_approval_source_status=machine_micro_approval_source_status,
     )
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
     tasks.sort(key=_task_sort_key)
@@ -1199,17 +1772,45 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Build next trading day's stage2 checklist from postclose outputs."
     )
-    parser.add_argument(
+    source_group = parser.add_mutually_exclusive_group()
+    source_group.add_argument(
         "--source-date",
         default="",
         help="Postclose source date in YYYY-MM-DD. Defaults to KST today.",
     )
-    args = parser.parse_args()
-    source_date = (
-        args.source_date.strip()
-        or datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    source_group.add_argument(
+        "--completed-machine-source-date",
+        nargs="?",
+        const="__resolve_completed_machine_source_date__",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help=(
+            "Use the supplied completed KRX machine target date, or resolve it "
+            "when the flag has no value. Intended for the persistent 21:15 "
+            "machine final-refresh service."
+        ),
     )
-    summary = build_next_stage2_checklist(source_date)
+    args = parser.parse_args()
+    invoked_at = datetime.now(ZoneInfo("Asia/Seoul"))
+    source_date = args.source_date.strip()
+    if args.completed_machine_source_date is not None:
+        source_date = (
+            resolve_completed_machine_target_date().isoformat()
+            if args.completed_machine_source_date
+            == "__resolve_completed_machine_source_date__"
+            else str(args.completed_machine_source_date).strip()
+        )
+        date.fromisoformat(source_date)
+    elif not source_date:
+        source_date = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    summary = build_next_stage2_checklist(
+        source_date,
+        machine_micro_approval_not_before=(
+            invoked_at - MACHINE_MICROSTRUCTURE_COMPLETED_REFRESH_MAX_AGE
+            if args.completed_machine_source_date
+            else None
+        ),
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 

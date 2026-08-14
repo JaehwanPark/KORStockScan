@@ -17,16 +17,15 @@ from typing import Any
 
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_ENTRY_PRICE_V2_5_PROMPT_VERSION,
-    DECISION_QUALITY_ENTRY_PRICE_V2_5_RESPONSE_SCHEMA,
     DECISION_QUALITY_HOLDING_FLOW_V2_2_PROMPT_VERSION,
     DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION,
     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
-    DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     decision_quality_entry_price_v2_5_system_prompt,
     decision_quality_holding_flow_v2_2_system_prompt,
     decision_quality_holding_v2_3_system_prompt,
     decision_quality_v2_8_detailed_system_prompt,
 )
+from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine.bedrock_nova_provider import (
     BedrockNovaProvider,
     qwen3_32b_profile_from_env,
@@ -210,10 +209,18 @@ def prepare_stage_requests(
         "holding_flow": decision_quality_holding_flow_v2_2_system_prompt(),
         "entry_price": decision_quality_entry_price_v2_5_system_prompt(),
     }[normalized_stage]
+    candidate_schema_name = {
+        "entry": "decision_quality_v2_entry_candidate",
+        "holding": "decision_quality_holding_v2_3_candidate",
+        "holding_flow": "decision_quality_holding_flow_v2_2_candidate",
+        "entry_price": "entry_price_explicit_fill_value_v1",
+    }[normalized_stage]
     response_schema = (
-        DECISION_QUALITY_ENTRY_PRICE_V2_5_RESPONSE_SCHEMA
+        build_openai_response_text_format(candidate_schema_name)["schema"]
         if normalized_stage == "entry_price"
-        else DECISION_QUALITY_V2_RESPONSE_SCHEMA
+        else quality._prompt_v2_openai_schema(
+            "entry" if normalized_stage == "entry" else "holding"
+        )
     )
     candidate = {
         "prompt_version": (
@@ -237,6 +244,8 @@ def prepare_stage_requests(
         "model": control.get("model"),
         "temperature": control.get("request_temperature"),
         "reasoning_effort": control.get("request_reasoning_effort"),
+        "schema_name": candidate_schema_name,
+        "require_json": True,
     }
     if normalized_stage == "holding_flow":
         candidate["semantic_validator_version"] = (
@@ -250,6 +259,10 @@ def prepare_stage_requests(
         candidate["semantic_validator_version"] = (
             quality.ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION
         )
+    else:
+        candidate["semantic_validator_version"] = (
+            quality.DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION
+        )
     candidate["contract_sha256"] = quality._candidate_contract_sha256(candidate)
     requests: list[dict[str, Any]] = []
     for row in selected:
@@ -260,6 +273,24 @@ def prepare_stage_requests(
         exact_payload = quality._replay_exact_payload(source_input)
         supplemental = bool(row.get("semantic_replay_supplemental"))
         authority_contract = SUPPLEMENTAL_CONTRACT if supplemental else CONTRACT
+        request_candidate = {
+            **candidate,
+            "transport": trace.get("transport"),
+            "max_output_tokens": payload.get("max_output_tokens"),
+            "response_schema_mode": trace.get("openai_response_schema_mode"),
+            "response_schema_application": (
+                "provider_enforced_openai"
+                if str(trace.get("provider_actual") or "").strip().lower()
+                == "openai"
+                else "local_expected_only_not_sent_to_bedrock"
+            ),
+            "response_schema_registry_used": trace.get(
+                "openai_response_schema_registry_used"
+            ),
+        }
+        request_candidate["contract_sha256"] = quality._candidate_contract_sha256(
+            request_candidate
+        )
         request = {
             "paired_replay_id": (
                 f"coverage-{quality._sha256((trace_id, trace.get('payload_sha256')))[:24]}"
@@ -277,7 +308,9 @@ def prepare_stage_requests(
             "effective_venue": trace.get("effective_venue"),
             "session_bucket": trace.get("session_bucket"),
             "payload_sha256": trace.get("payload_sha256"),
+            "request_envelope_sha256": trace.get("request_envelope_sha256"),
             "exact_payload": exact_payload,
+            "source_exact_payload_sha256": quality._sha256(exact_payload),
             "control": {
                 "prompt_version": control.get("prompt_version"),
                 "prompt_sha256": control.get("prompt_sha256"),
@@ -296,7 +329,7 @@ def prepare_stage_requests(
                 "captured_reference_price": trace.get("reference_price"),
                 "captured_selected_price_type": trace.get("reference_price_type"),
             },
-            "candidate": dict(candidate),
+            "candidate": request_candidate,
             "source_exactness": (
                 "non_exact_approved_cache_token_redaction"
                 if supplemental
@@ -513,10 +546,20 @@ def execute_bedrock_candidate(
     provenance = result.transport_meta()
     provenance.update(
         {
+            "provider": "bedrock",
             "model": "qwen3_32b",
             "model_id": result.model_id,
             "transport": "bedrock_converse_offline",
+            "source_transport_contract": candidate.get("transport"),
             "provider_none": False,
+            "provider_call_attempted": True,
+            "provider_call_succeeded": True,
+            "canonical_response_sha256": quality._sha256(payload),
+            "response_id_unavailable_reason": (
+                None
+                if provenance.get("response_id")
+                else "bedrock_transport_response_id_not_exposed"
+            ),
             "failback_chain": [],
             "entry_price_selection_valid": selection_valid,
             "entry_price_selection_errors": selection_errors,

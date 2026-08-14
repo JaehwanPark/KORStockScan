@@ -20,7 +20,7 @@ import tempfile
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from src.engine.scalping.micro_reversion.p2_replay import (
@@ -49,6 +49,17 @@ KST_SUFFIX = "+09:00"
 KST = ZoneInfo("Asia/Seoul")
 REPORT_TYPE = "machine_microstructure_attribution"
 REPORT_SCHEMA = "machine_microstructure_attribution_v1"
+OBJECTIVE_FOLLOWUP_SCHEMA = "machine_fast_lifecycle_objective_followup_v1"
+FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID = "machine_lifecycle_turnover_policy_research_v1"
+OBJECTIVE_CANDIDATE_BINDING_SCHEMA = (
+    "machine_fast_lifecycle_objective_candidate_binding_v1"
+)
+OBJECTIVE_HANDOFF_BINDING_SCHEMA = "machine_fast_lifecycle_objective_handoff_binding_v1"
+OBJECTIVE_HANDOFF_RESOLVABLE_GAP_CODES = (
+    "rolling_paired_policy_candidate_producer_not_implemented",
+    "episode_single_attempt_no_same_day_reentry_tuning_axis",
+    "speed_and_capital_occupancy_not_policy_selection_axes",
+)
 OUTPUT_DIR = DATA_DIR / "report" / REPORT_TYPE
 OBSERVATION_ROOT = DATA_DIR / "observations" / "scalp_micro_reversion_forward"
 DEFAULT_CANARY_SNAPSHOT_PATH = (
@@ -188,6 +199,25 @@ PROMOTION_CANDIDATE_INTAKE_CONTRACT = {
     ],
     "first_operator_approval_required": True,
     "daily_report_runtime_effect": False,
+}
+OBJECTIVE_FOLLOWUP_METRIC_CONTRACT = {
+    "metric_role": "machine_lifecycle_objective_completion_followup",
+    "decision_authority": "postclose_followup_tracking_only",
+    "window_policy": "daily_until_implementation_evidence_or_candidate_handoff",
+    "sample_floor": POLICY_CHANGE_READINESS_CONTRACT["required_evidence"],
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "source_quality_gate": [
+        "exact_target_date_machine_attribution",
+        "clean_baseline_only",
+        "paired_cost_aware_rolling_evidence_before_candidate_handoff",
+    ],
+    "forbidden_uses": [
+        "promotion_candidate_substitution",
+        "operator_approval_substitution",
+        "preopen_handoff_or_runtime_family_enrollment",
+        "runtime_env_or_threshold_or_order_mutation",
+        "provider_bot_cap_or_hard_safety_change",
+    ],
 }
 OWNER_DIAGNOSTIC_HANDOFF_CONTRACT = {
     "mode": "next_trading_day_owner_report_diagnostic_ingestion",
@@ -2829,6 +2859,25 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
     populated_cohorts = sum(
         row["realized_sample_count"] > 0 for row in cohort_diagnostics.values()
     )
+    implementation_boundary = {
+        "post_fill_limit_take_profit_present": True,
+        "next_trading_day_owner_report_micro_ingestion": True,
+        "owner_report_ingestion_selection_effect": False,
+        "rolling_paired_policy_candidate_producer_present": False,
+        "episode_same_day_reentry_or_timeout_tuning_axis_present": False,
+        "speed_or_turnover_metric_changes_policy_selection": False,
+    }
+    remaining_gaps: list[str] = []
+    if not implementation_boundary["rolling_paired_policy_candidate_producer_present"]:
+        remaining_gaps.append(
+            "rolling_paired_policy_candidate_producer_not_implemented"
+        )
+    if not implementation_boundary[
+        "episode_same_day_reentry_or_timeout_tuning_axis_present"
+    ]:
+        remaining_gaps.append("episode_single_attempt_no_same_day_reentry_tuning_axis")
+    if not implementation_boundary["speed_or_turnover_metric_changes_policy_selection"]:
+        remaining_gaps.append("speed_and_capital_occupancy_not_policy_selection_axes")
     return {
         "decision": "partial_alignment_source_only_lifecycle_observation",
         "contract": FAST_LIFECYCLE_OBJECTIVE_CONTRACT,
@@ -2899,19 +2948,157 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
             "policy_authority": False,
             "reason": "daily_unpaired_owner_outcome_context_only",
         },
-        "implementation_boundary": {
-            "post_fill_limit_take_profit_present": True,
-            "next_trading_day_owner_report_micro_ingestion": True,
-            "owner_report_ingestion_selection_effect": False,
-            "rolling_paired_policy_candidate_producer_present": False,
-            "speed_or_turnover_metric_changes_policy_selection": False,
-        },
-        "remaining_gaps": [
-            "rolling_paired_policy_candidate_producer_not_implemented",
-            "episode_single_attempt_no_same_day_reentry_tuning_axis",
-            "speed_and_capital_occupancy_not_policy_selection_axes",
-        ],
+        "implementation_boundary": implementation_boundary,
+        "remaining_gaps": remaining_gaps,
     }
+
+
+def _canonical_payload_sha256(value: Mapping[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _candidate_payload_sha256(candidate: Mapping[str, Any]) -> str:
+    payload = dict(candidate)
+    payload.pop("candidate_sha256", None)
+    return _canonical_payload_sha256(payload)
+
+
+def _bound_objective_candidate_handoff(
+    candidate: Mapping[str, Any], *, expected_handoff_gap_codes: Sequence[str]
+) -> dict[str, Any] | None:
+    binding = candidate.get("objective_followup_binding")
+    if not isinstance(binding, Mapping):
+        return None
+    resolved_gap_codes = binding.get("resolved_gap_codes")
+    if (
+        binding.get("schema") != OBJECTIVE_CANDIDATE_BINDING_SCHEMA
+        or binding.get("followup_id") != FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID
+        or not isinstance(resolved_gap_codes, list)
+        or any(
+            not isinstance(value, str) or not value.strip()
+            for value in resolved_gap_codes
+        )
+        or len(set(resolved_gap_codes)) != len(resolved_gap_codes)
+        or sorted(resolved_gap_codes) != sorted(expected_handoff_gap_codes)
+    ):
+        return None
+    candidate_id = str(candidate.get("candidate_id") or "").strip()
+    if not candidate_id:
+        return None
+    digest = _candidate_payload_sha256(candidate)
+    declared_digest = str(candidate.get("candidate_sha256") or "").strip()
+    if declared_digest and declared_digest != digest:
+        return None
+    return {
+        "schema": OBJECTIVE_HANDOFF_BINDING_SCHEMA,
+        "followup_id": FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID,
+        "candidate_id": candidate_id,
+        "candidate_sha256": digest,
+        "required_gap_codes": list(expected_handoff_gap_codes),
+        "resolved_gap_codes": list(resolved_gap_codes),
+    }
+
+
+def _fast_lifecycle_objective_followup(
+    *,
+    target_date: str,
+    objective_alignment: dict[str, Any],
+    promotion_candidates: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    boundary = objective_alignment.get("implementation_boundary") or {}
+    reflected_in_runtime = (
+        objective_alignment.get("reflected_in_real_runtime_policy") is True
+    )
+    turnover_selection_present = (
+        boundary.get("speed_or_turnover_metric_changes_policy_selection") is True
+    )
+    paired_producer_present = (
+        boundary.get("rolling_paired_policy_candidate_producer_present") is True
+    )
+    required_gap_codes = list(
+        dict.fromkeys(objective_alignment.get("remaining_gaps") or [])
+    )
+    expected_handoff_gap_codes = [
+        gap_code
+        for gap_code in required_gap_codes
+        if gap_code in OBJECTIVE_HANDOFF_RESOLVABLE_GAP_CODES
+    ]
+    non_handoff_gap_codes = [
+        gap_code
+        for gap_code in required_gap_codes
+        if gap_code not in OBJECTIVE_HANDOFF_RESOLVABLE_GAP_CODES
+    ]
+    matching_handoffs = [
+        handoff
+        for candidate in promotion_candidates
+        if (
+            handoff := _bound_objective_candidate_handoff(
+                candidate,
+                expected_handoff_gap_codes=expected_handoff_gap_codes,
+            )
+        )
+        is not None
+    ]
+    candidate_handoff_binding: dict[str, Any] | None = None
+    remaining_gap_codes = list(required_gap_codes)
+    completion_ready = (
+        reflected_in_runtime and turnover_selection_present and not required_gap_codes
+    )
+    if completion_ready:
+        state = "COMPLETE"
+        followup_required = False
+        attention_class = "none"
+        current_capability = "bounded_runtime_policy_with_post_apply_attribution"
+        next_action = "continue_post_apply_attribution_and_rollback_monitoring"
+    elif len(matching_handoffs) == 1 and not non_handoff_gap_codes:
+        state = "CANDIDATE_QUEUE_HANDOFF"
+        followup_required = False
+        attention_class = "candidate_queue"
+        current_capability = "rolling_paired_candidate_ready"
+        next_action = "track_candidate_in_separate_approval_queue"
+        remaining_gap_codes = []
+        candidate_handoff_binding = matching_handoffs[0]
+    elif not paired_producer_present:
+        state = "IMPLEMENTATION_REQUIRED"
+        followup_required = True
+        attention_class = "code_improvement_workorder"
+        current_capability = "diagnostic_observation_only"
+        next_action = "implement_source_only_rolling_paired_policy_research"
+    else:
+        state = "EVIDENCE_ACCUMULATING"
+        followup_required = True
+        attention_class = "evidence_collection"
+        current_capability = "rolling_paired_research_without_ready_candidate"
+        next_action = "continue_exact_date_collection_and_rolling_readiness_review"
+        if not remaining_gap_codes:
+            remaining_gap_codes.append("objective_bound_candidate_missing_or_ambiguous")
+    row = {
+        "schema": OBJECTIVE_FOLLOWUP_SCHEMA,
+        "followup_id": FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID,
+        "source_date": target_date,
+        "state": state,
+        "followup_required": followup_required,
+        "attention_class": attention_class,
+        "operator_decision_required": False,
+        "current_capability": current_capability,
+        "remaining_gap_codes": remaining_gap_codes,
+        "next_action": next_action,
+        "metric_contract": OBJECTIVE_FOLLOWUP_METRIC_CONTRACT,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    if candidate_handoff_binding is not None:
+        row["candidate_handoff_binding"] = candidate_handoff_binding
+    return row
 
 
 def build_report(
@@ -3192,6 +3379,16 @@ def build_report(
     gaps.extend(source_gaps)
     matched = sum(item["micro_context_status"] == "matched" for item in results)
     objective_alignment = _lifecycle_objective_summary(results)
+    # Daily attribution never invents a runtime candidate. A future rolling
+    # paired-policy producer may append only intake-contract-valid rows.
+    policy_promotion_candidates: list[dict[str, Any]] = []
+    objective_followups = [
+        _fast_lifecycle_objective_followup(
+            target_date=target_date,
+            objective_alignment=objective_alignment,
+            promotion_candidates=policy_promotion_candidates,
+        )
+    ]
     anchor_count_by_stage = {
         stage: sum(item.get("lifecycle_stage") == stage for item in results)
         for stage in ("entry", "exit_partial_fill", "exit")
@@ -3220,13 +3417,10 @@ def build_report(
         "decision": decision,
         "metric_contract": METRIC_CONTRACT,
         "fast_lifecycle_objective_alignment": objective_alignment,
+        "objective_followups": objective_followups,
         "policy_change_readiness": POLICY_CHANGE_READINESS_CONTRACT,
         "promotion_candidate_intake_contract": PROMOTION_CANDIDATE_INTAKE_CONTRACT,
-        # The daily attribution report does not invent a runtime candidate.
-        # A future rolling paired-policy producer may append only candidates
-        # satisfying the intake contract; the persistent approval ledger then
-        # owns reminders and explicit operator-decision tracking.
-        "policy_promotion_candidates": [],
+        "policy_promotion_candidates": policy_promotion_candidates,
         "authority": {
             "decision_authority": "postclose_diagnostic_only",
             "runtime_effect": False,
@@ -3253,6 +3447,9 @@ def build_report(
                 "lifecycle_coverage"
             ]["matched_decision_lifecycle_count"],
             "producer_consumer_gap_count": len(gaps),
+            "objective_followup_required_count": sum(
+                row["followup_required"] is True for row in objective_followups
+            ),
         },
         "consumers": {
             "widget_postclose_tuning": {
@@ -3348,6 +3545,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         lifecycle = objective.get("lifecycle_coverage") or {}
         gross = objective.get("gross_no_slippage_diagnostic") or {}
         cost_aware = objective.get("cost_aware_owner_outcome_diagnostic") or {}
+        followups = report.get("objective_followups") or []
+        followup = followups[0] if followups and isinstance(followups[0], dict) else {}
         lines.extend(
             [
                 "## Fast Lifecycle Objective",
@@ -3368,6 +3567,12 @@ def render_markdown(report: dict[str, Any]) -> str:
                     "- Gross/no-slippage average (diagnostic only): "
                     f"`{gross.get('avg_return_pct')}`; cost-aware owner average "
                     f"(daily diagnostic only): `{cost_aware.get('equal_weight_avg_profit_pct')}`."
+                ),
+                (
+                    "- Completion follow-up: "
+                    f"`{followup.get('state') or 'missing'}`; "
+                    f"next=`{followup.get('next_action') or '-'}`; "
+                    "tracked by the 21:15 approval/reminder ledger."
                 ),
                 "- Speed, target, cooldown, cap, quantity, re-entry, and forced-exit policy remain unchanged.",
                 "",

@@ -1074,6 +1074,11 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
     assert result["holding_score_model_action"] == result["action"]
     assert result["holding_score_effective_action"] == result["action"]
     assert result["holding_score_source_quality_override_applied"] is False
+    assert result["semantic_validator_version"] == (
+        "holding_score_live_normalizer_v1"
+    )
+    assert result["semantic_validator_applied"] is True
+    assert result["semantic_validation_status"] == "pass"
     assert result["holding_score_source_quality_override_reason"] == "-"
     assert result["holding_score_source_quality_override_blockers"] == []
     assert result["openai_transport_mode"] == "http"
@@ -1208,6 +1213,11 @@ def test_holding_context_is_shared_and_blocks_unsupported_continuation(monkeypat
     )
     assert "holding_decision_context_v1" in captured["holding_flow"]
     assert "holding_decision_context_v1" in captured["overnight"]
+    assert flow["semantic_validator_version"] == (
+        "holding_flow_live_schema_semantic_v1"
+    )
+    assert flow["semantic_validator_applied"] is True
+    assert flow["semantic_validation_status"] == "pass"
     assert score["score"] == 50
     assert score["action"] == "HOLD"
     assert score["reason"] == (
@@ -1460,6 +1470,7 @@ def test_holding_score_v2_payload_stays_compact_for_low_latency(monkeypatch):
 
     def _fake_call(prompt, user_input, **kwargs):
         captured["user_input"] = user_input
+        captured["kwargs"] = kwargs
         return {
             "action": "HOLD",
             "score": 72,
@@ -1510,7 +1521,7 @@ def test_holding_score_v2_payload_stays_compact_for_low_latency(monkeypatch):
         for idx in range(40)
     ]
 
-    engine.evaluate_scalping_holding_score(
+    result = engine.evaluate_scalping_holding_score(
         "테스트",
         "005930",
         ws_data,
@@ -1533,6 +1544,12 @@ def test_holding_score_v2_payload_stays_compact_for_low_latency(monkeypatch):
     )
 
     payload = json.loads(captured["user_input"])
+    assert captured["kwargs"].get("replay_context") is None
+    assert result["semantic_validator_applied"] is True
+    assert result["semantic_validation_status"] == "pass"
+    assert result["holding_score_contract_status"] == "pass"
+    assert result["holding_score_contract_errors"] == []
+    assert result["forensic_semantic_errors"] == []
     assert len(captured["user_input"]) <= 5000
     market_flow = payload["market_flow_features"]
     assert set(market_flow).issuperset(
@@ -1591,6 +1608,16 @@ def test_holding_score_v2_non_dict_response_keeps_transport_meta(monkeypatch):
     assert result["openai_transport_mode"] == "http"
     assert result["openai_endpoint_name"] == "holding_score"
     assert result["openai_schema_name"] == "holding_score_v2"
+    assert result["semantic_validator_applied"] is True
+    assert result["semantic_validation_status"] == "rejected"
+    assert result["holding_score_contract_status"] == "semantic_rejected"
+    assert result["holding_score_contract_errors"] == [
+        "holding_score_response_not_object"
+    ]
+    assert result["forensic_semantic_errors"] == [
+        "holding_score_response_not_object"
+    ]
+    assert result["ai_decision_outcome_eligible"] is False
 
 
 def test_holding_score_v2_source_quality_accepts_fresh_computed_contract():

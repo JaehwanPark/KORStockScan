@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from .contracts import normalize_symbol, normalize_venue, registration_item_identity
 from .path_journal import (
     MARKET_DEPTH_CONTRACT_ID,
     MARKET_DEPTH_SCHEMA,
@@ -171,6 +172,13 @@ def validate_depth_row(payload: object) -> None:
         or not str(payload.get("item") or "").strip()
     ):
         raise ValueError("depth realtime type or item is invalid")
+    item_symbol, item_venue = registration_item_identity(payload.get("item"))
+    if (
+        not item_symbol
+        or item_symbol != normalize_symbol(payload.get("symbol"))
+        or item_venue != normalize_venue(payload.get("venue"))
+    ):
+        raise ValueError("depth item symbol or venue conflicts with row scope")
     if (
         payload.get("actual_order_submitted") is not False
         or payload.get("broker_order_forbidden") is not True
@@ -308,6 +316,13 @@ def _validate_market_row(payload: object) -> None:
         or payload.get("realtime_type") != "0B"
     ):
         raise ValueError("unexpected market schema or contract")
+    item_symbol, item_venue = registration_item_identity(payload.get("item"))
+    if (
+        not item_symbol
+        or item_symbol != normalize_symbol(payload.get("symbol"))
+        or item_venue != normalize_venue(payload.get("venue"))
+    ):
+        raise ValueError("market item symbol or venue conflicts with row scope")
     if (
         payload.get("actual_order_submitted") is not False
         or payload.get("broker_order_forbidden") is not True

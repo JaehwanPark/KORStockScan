@@ -79,6 +79,21 @@ def normalize_venue(value: object) -> str:
     return "UNKNOWN"
 
 
+def registration_item_identity(value: object) -> tuple[str, str]:
+    """Return the symbol and explicit venue encoded by a Kiwoom WS item."""
+
+    raw = str(value or "").strip().upper()
+    if raw.endswith("_AL"):
+        base, venue = raw[:-3], "SOR"
+    elif raw.endswith("_NX"):
+        base, venue = raw[:-3], "NXT"
+    else:
+        base, venue = raw, "KRX"
+    if len(base) != 6 or not base.isdigit():
+        return "", "UNKNOWN"
+    return base, venue
+
+
 def coverage_tier_for(
     *,
     best_bid: float | None,

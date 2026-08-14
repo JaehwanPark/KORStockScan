@@ -1554,6 +1554,16 @@ def test_decision_quality_contract_rejection_is_preserved_in_trace(
             },
             "openai_response_schema_registry_used": True,
             "openai_response_schema_mode": "strict_dynamic_entry_risk",
+            "openai_response_schema_sha256": "schema-sha256",
+            "openai_response_schema_application": "provider_enforced_openai",
+            "expected_semantic_validator_version": "entry_expected_v1",
+            "semantic_validator_version": "entry_applied_v1",
+            "semantic_validator_applied": True,
+            "semantic_validation_status": "rejected",
+            "entry_price_v1_contract_status": "semantic_rejected",
+            "entry_price_v1_contract_errors": [
+                "entry_price_v1_confidence_type_invalid"
+            ],
             "openai_entry_risk_dynamic_fact_schema_applied": True,
             "entry_ai_raw_risk_verdict": "CAUTION",
             "entry_ai_raw_risk_codes": ["CONFIRMATION_MISSING"],
@@ -1585,6 +1595,16 @@ def test_decision_quality_contract_rejection_is_preserved_in_trace(
     }
     assert trace_row["openai_response_schema_registry_used"] is True
     assert trace_row["openai_response_schema_mode"] == "strict_dynamic_entry_risk"
+    assert trace_row["response_schema_sha256"] == "schema-sha256"
+    assert trace_row["response_schema_application"] == "provider_enforced_openai"
+    assert trace_row["expected_semantic_validator_version"] == "entry_expected_v1"
+    assert trace_row["semantic_validator_version"] == "entry_applied_v1"
+    assert trace_row["semantic_validator_applied"] is True
+    assert trace_row["semantic_validation_status"] == "rejected"
+    assert trace_row["entry_price_v1_contract_status"] == "semantic_rejected"
+    assert trace_row["entry_price_v1_contract_errors"] == [
+        "entry_price_v1_confidence_type_invalid"
+    ]
     assert trace_row["openai_entry_risk_dynamic_fact_schema_applied"] is True
     assert trace_row["entry_ai_raw_risk_verdict"] == "CAUTION"
     assert trace_row["entry_ai_raw_risk_codes"] == ["CONFIRMATION_MISSING"]

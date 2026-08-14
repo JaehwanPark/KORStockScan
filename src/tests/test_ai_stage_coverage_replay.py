@@ -50,6 +50,19 @@ def _control():
 def _trace(endpoint="holding_score"):
     holding = endpoint == "holding_score"
     entry = endpoint == "analyze_target"
+    schema_name = {
+        "analyze_target": "decision_quality_v2_7_entry",
+        "entry_price": "entry_price_explicit_fill_value_v1",
+        "holding_score": "holding_score_v2",
+        "holding_flow": "holding_exit_flow_v1",
+    }[endpoint]
+    response_schema = replay.build_openai_response_text_format(schema_name)["schema"]
+    semantic_validator_version = {
+        "analyze_target": replay.quality.DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION,
+        "entry_price": replay.quality.ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION,
+        "holding_score": replay.quality.HOLDING_SEMANTIC_VALIDATOR_VERSION,
+        "holding_flow": replay.quality.HOLDING_FLOW_BOUNDED_DEFER_SEMANTIC_VALIDATOR_VERSION,
+    }[endpoint]
     return {
         "decision_trace_id": f"trace-{endpoint}",
         "decision_ts": "2026-07-29T12:00:00+09:00",
@@ -82,6 +95,19 @@ def _trace(endpoint="holding_score"):
         "canonical_context_capture_status": "exact_completed_bars_captured",
         "action": "HOLD" if holding else ("DROP" if entry else "USE_DEFENSIVE"),
         "score": 60 if holding else None,
+        "result_source": "live",
+        "semantic_validator_version": semantic_validator_version,
+        "semantic_validator_applied": True,
+        "semantic_validation_status": "pass",
+        "response_schema_sha256": replay.quality._sha256(response_schema),
+        "response_schema_application": (
+            "provider_enforced_openai"
+            if holding or entry
+            else "local_expected_only_not_sent_to_bedrock"
+        ),
+        "openai_response_schema_mode": "strict_registry",
+        "openai_response_schema_registry_used": True,
+        "transport": "test_transport",
     }
 
 
@@ -125,12 +151,21 @@ def _payload(endpoint="holding_score"):
             }
         }
     )
+    schema_name = {
+        "analyze_target": "decision_quality_v2_7_entry",
+        "entry_price": "entry_price_explicit_fill_value_v1",
+        "holding_score": "holding_score_v2",
+        "holding_flow": "holding_exit_flow_v1",
+    }[endpoint]
     return {
         "endpoint": endpoint,
         "payload_sha256": f"payload-{endpoint}",
         "replay_exact": True,
         "effective_venue": "KRX",
         "session_bucket": "krx_regular",
+        "schema_name": schema_name,
+        "require_json": True,
+        "max_output_tokens": 512,
         "sanitized_user_input": context,
     }
 
@@ -158,6 +193,196 @@ def test_prepare_stage_requests_freezes_exact_holding_without_outcome():
         "fresh_consistent_core"
     ]
     assert summary["strict_eligible_count"] == 1
+
+
+def test_holding_control_and_candidate_use_distinct_response_contracts():
+    requests, _ = replay.prepare_stage_requests(
+        stage="holding",
+        dates=["2026-07-29"],
+        max_rows=1,
+        control_manifest=_control(),
+        promotion={"promoted_at": "2026-07-29T08:56:00+09:00"},
+        traces=[_trace("holding_score")],
+        payloads=[_payload("holding_score")],
+    )
+    candidate_request = requests[0]
+    candidate = candidate_request["candidate"]
+    assert candidate["schema_name"] == "decision_quality_holding_v2_3_candidate"
+    assert "edge_state" in candidate["response_schema"]["required"]
+    candidate_response = {
+        "edge_state": "EDGE",
+        "action": "HOLD",
+        "expected_upside_pct": 1.0,
+        "expected_downside_pct": -0.5,
+        "confidence": 70,
+        "reason_codes": ["edge_positive"],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "mixed",
+            "tape": "mixed",
+            "risk": "low",
+            "uncertainty": "low",
+            "setup": "continuation",
+            "positive_edge": "moderate",
+            "adverse_risk": "low",
+            "trigger": "confirmed",
+        },
+    }
+    assert not replay.quality.validate_replay_candidate_response(
+        candidate_request, candidate_response
+    )
+
+    control_request = json.loads(json.dumps(candidate_request))
+    control_request["candidate"] = {
+        **candidate,
+        "schema_name": "holding_score_v2",
+        "response_schema": replay.build_openai_response_text_format(
+            "holding_score_v2"
+        )["schema"],
+        "semantic_validator_version": "holding_score_live_normalizer_v1",
+    }
+    live_response = {
+        "action": "HOLD",
+        "score": 60,
+        "confidence": 70,
+        "position_state": "open",
+        "score_basis": "continuation intact",
+        "risk_factors": [],
+        "support_factors": ["completed trend"],
+        "data_quality": "fresh",
+        "reason": "hold",
+    }
+    assert not replay.quality.validate_replay_candidate_response(
+        control_request, live_response
+    )
+    out_of_range = {**live_response, "score": 999, "confidence": -1}
+    assert set(
+        replay.quality.validate_replay_candidate_response(
+            control_request, out_of_range
+        )
+    ) >= {
+        "holding_score_score_out_of_range",
+        "holding_score_confidence_out_of_range",
+    }
+
+
+def test_holding_flow_live_control_schema_is_not_used_for_generic_candidate():
+    candidate_schema = replay.quality._prompt_v2_openai_schema("holding")
+    assert "edge_state" in candidate_schema["required"]
+    assert "flow_state" not in candidate_schema["properties"]
+    control_schema = replay.build_openai_response_text_format(
+        "holding_exit_flow_v1"
+    )["schema"]
+    control_request = {
+        "stage": "holding",
+        "candidate": {
+            "semantic_validator_version": "holding_flow_live_schema_semantic_v1",
+            "response_schema": control_schema,
+        },
+    }
+    assert not replay.quality.validate_replay_candidate_response(
+        control_request,
+        {
+            "action": "EXIT",
+            "score": 30,
+            "flow_state": "adverse",
+            "thesis": "sell pressure",
+            "evidence": ["bid depletion"],
+            "reason": "exit",
+            "next_review_sec": 0,
+        },
+    )
+
+
+def test_legacy_entry_price_control_uses_captured_live_schema_validator():
+    schema = replay.build_openai_response_text_format("entry_price_v1")["schema"]
+    request = {
+        "stage": "entry_price",
+        "micro_reversion_replay_arm": "replay_control_exact_no_micro",
+        "candidate": {
+            "semantic_validator_version": "live_entry_price_v1_semantic_contract_v1",
+            "response_schema": schema,
+        },
+    }
+    response = {
+        "action": "USE_DEFENSIVE",
+        "order_price": 100,
+        "confidence": 70,
+        "reason": "passive price",
+        "max_wait_sec": 5,
+    }
+    assert not replay.quality.validate_replay_candidate_response(request, response)
+    invalid = {**response, "order_price": "100"}
+    assert "response_order_price_type_invalid" in (
+        replay.quality.validate_replay_candidate_response(request, invalid)
+    )
+    out_of_range = {
+        **response,
+        "order_price": -1,
+        "confidence": 101,
+        "max_wait_sec": 1_201,
+    }
+    assert set(
+        replay.quality.validate_replay_candidate_response(request, out_of_range)
+    ) >= {
+        "entry_price_v1_order_price_negative",
+        "entry_price_v1_confidence_out_of_range",
+        "entry_price_v1_max_wait_sec_out_of_range",
+    }
+    assert not replay.quality.validate_replay_candidate_response(
+        request, {**response, "max_wait_sec": 1_200}
+    )
+    assert "entry_price_v1_max_wait_sec_out_of_range" in (
+        replay.quality.validate_replay_candidate_response(
+            request, {**response, "max_wait_sec": 4}
+        )
+    )
+
+
+def test_bedrock_offline_executor_emits_canonical_provider_provenance(monkeypatch):
+    class Result:
+        payload = {"action": "SKIP"}
+        model_id = "test-qwen-model-id"
+
+        @staticmethod
+        def transport_meta():
+            return {}
+
+    class Provider:
+        @staticmethod
+        def converse(**_kwargs):
+            return Result()
+
+    monkeypatch.setattr(replay, "qwen3_32b_profile_from_env", lambda: object())
+    request = {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "exact_payload": {},
+        "candidate_input": {},
+        "control": {"provider": "bedrock", "model": "qwen3_32b"},
+        "candidate": {
+            "provider": "bedrock",
+            "model": "qwen3_32b",
+            "transport": "bedrock_converse",
+            "system_prompt": "offline test",
+        },
+    }
+
+    result = replay.execute_bedrock_candidate(request, provider=Provider())
+
+    provenance = result["provider_provenance"]
+    assert provenance["provider_call_attempted"] is True
+    assert provenance["provider_call_succeeded"] is True
+    assert provenance["provider_none"] is False
+    assert provenance["source_transport_contract"] == "bedrock_converse"
+    assert provenance["canonical_response_sha256"] == (
+        replay.quality._sha256(result["candidate_response"])
+    )
+    assert provenance["response_id_unavailable_reason"] == (
+        "bedrock_transport_response_id_not_exposed"
+    )
 
 
 def test_prepare_holding_flow_preserves_endpoint_and_extracts_marked_context():
@@ -243,6 +468,26 @@ def test_prepare_holding_flow_preserves_endpoint_and_extracts_marked_context():
     assert requests[0]["candidate_input"]["holding_exact_contract_facts_v1"][
         "bounded_defer_eligible"
     ]
+
+    structured_payload = {
+        **payload,
+        "sanitized_user_input": {
+            "holding_decision_context": holding_context,
+        },
+    }
+    structured_requests, structured_summary = replay.prepare_stage_requests(
+        stage="holding_flow",
+        dates=["2026-08-04"],
+        max_rows=1,
+        control_manifest=_control(),
+        promotion={"promoted_at": "2026-07-29T08:56:00+09:00"},
+        traces=[trace],
+        payloads=[structured_payload],
+    )
+    assert structured_summary["strict_eligible_count"] == 1
+    assert structured_requests[0]["candidate_input"]["exact_payload"] == {
+        "holding_decision_context": holding_context
+    }
 
 
 def test_holding_flow_bounded_defer_semantic_gate_preserves_hard_exit():
@@ -493,12 +738,14 @@ def test_prepare_entry_price_uses_conditional_selection_contract():
     assert request["candidate"]["semantic_validator_version"] == (
         "entry_price_explicit_fill_value_semantic_v6"
     )
-    assert request["candidate"]["response_schema"]["selected_price"] == (
-        "positive_integer_or_null"
-    )
-    assert request["candidate"]["response_schema"]["fill_adjusted_edge_pct"] == (
-        "number_or_null"
-    )
+    selected_price_schema = request["candidate"]["response_schema"]["properties"][
+        "selected_price"
+    ]
+    assert set(selected_price_schema["type"]) == {"integer", "null"}
+    fill_edge_schema = request["candidate"]["response_schema"]["properties"][
+        "fill_adjusted_edge_pct"
+    ]
+    assert set(fill_edge_schema["type"]) == {"number", "null"}
     assert '"control_fill_probability_pct"' in request["candidate"]["system_prompt"]
     assert '"fill_adjusted_edge_pct"' in request["candidate"]["system_prompt"]
     assert facts["skip_permitted"] is False

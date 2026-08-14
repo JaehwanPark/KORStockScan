@@ -28,7 +28,9 @@ def _depth_row(
         series_sequence=sequence,
         venue=venue,
         session_bucket=f"{venue}_REGULAR",
-        item="000001" if venue == "KRX" else "000001_NX",
+        item={"KRX": "000001", "NXT": "000001_NX", "SOR": "000001_AL"}[
+            venue
+        ],
         orderbook_time_raw="090000000",
         best_bid=10_000,
         best_ask=10_010,
@@ -57,6 +59,9 @@ def _market_row(
         "schema": "scalp_micro_reversion_market_stream_point_v3",
         "metric_contract_id": "scalp_micro_reversion_market_stream_contract_v3",
         "realtime_type": "0B",
+        "item": {"KRX": "000001", "NXT": "000001_NX", "SOR": "000001_AL"}[
+            venue
+        ],
         "symbol": "000001",
         "venue": venue,
         "session_bucket": f"{venue}_REGULAR",
@@ -152,6 +157,24 @@ def test_join_rejects_market_authority_drift_and_depth_quantity_conflict() -> No
             (_market_row(received="2026-08-08T09:00:00.100+09:00"),),
             (invalid_depth,),
         )
+
+
+def test_join_rejects_item_symbol_and_venue_scope_conflicts() -> None:
+    depth = _depth_row(received="2026-08-08T09:00:00.000+09:00")
+    depth["item"] = "999999"
+    with pytest.raises(ValueError, match="item symbol or venue"):
+        join_latest_past_depth(
+            (_market_row(received="2026-08-08T09:00:00.100+09:00"),),
+            (depth,),
+        )
+
+    market = _market_row(
+        received="2026-08-08T09:00:00.100+09:00",
+        venue="NXT",
+    )
+    market["item"] = "000001"
+    with pytest.raises(ValueError, match="item symbol or venue"):
+        join_latest_past_depth((market,), ())
 
 
 def test_join_rejects_duplicate_depth_sequence_and_prejoined_market_row() -> None:

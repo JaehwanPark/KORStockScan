@@ -1,8 +1,10 @@
-"""Post-session compression and bounded retention for forward observations.
+"""Post-session compression and opt-in retention for forward observations.
 
 The default CLI is dry-run.  ``--apply`` is required before any file changes.
 Only validated ``trade_date=YYYY-MM-DD`` descendants of the configured root
 are eligible, and the current trade date is never compressed or removed.
+Compression and deletion are separate authorities: expired trade-date
+partitions are removed only when ``--purge-expired`` is supplied explicitly.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ MAINTENANCE_METRIC_CONTRACT = {
     "source_quality_gate": "verified_trade_date_path_and_gzip_roundtrip_sha256",
     "forbidden_uses": [
         "current_trade_date_mutation",
+        "retention_purge_without_explicit_opt_in",
         "broker_order_submission",
         "strategy_or_threshold_change",
         "provider_or_bot_mutation",
@@ -57,43 +60,76 @@ def maintain_forward_storage(
     as_of_date: date,
     storage_policy: PathStoragePolicy | None = None,
     apply: bool = False,
+    purge_expired: bool = False,
 ) -> dict[str, object]:
+    if not isinstance(apply, bool) or not isinstance(purge_expired, bool):
+        raise TypeError("storage maintenance authorities must be native booleans")
     policy = storage_policy or PathStoragePolicy()
     root_path = Path(root).resolve()
+    runtime_trade_date = datetime.now(KST).date()
+    if apply and as_of_date > runtime_trade_date:
+        raise ValueError("storage maintenance as-of date must not be in the future")
+    protected_trade_dates = {as_of_date, runtime_trade_date}
     actions: list[StorageMaintenanceAction] = []
+    purge_candidate_count = 0
+    purge_candidate_bytes = 0
     if not root_path.exists():
-        return _result(root_path, as_of_date, apply, actions)
+        return _result(
+            root_path,
+            as_of_date,
+            runtime_trade_date,
+            apply,
+            purge_expired,
+            actions,
+            purge_candidate_count=purge_candidate_count,
+            purge_candidate_bytes=purge_candidate_bytes,
+        )
     for trade_dir in _trade_date_directories(root_path):
         trade_date = date.fromisoformat(trade_dir.name.removeprefix("trade_date="))
+        if trade_date in protected_trade_dates:
+            continue
         age_days = (as_of_date - trade_date).days
         if age_days <= 0:
             continue
         if age_days > policy.retention_days:
             source_bytes = _tree_bytes(trade_dir)
-            if apply:
-                shutil.rmtree(trade_dir)
-            actions.append(
-                StorageMaintenanceAction(
-                    action="purge_trade_date",
-                    path=str(trade_dir),
-                    trade_date=trade_date.isoformat(),
-                    source_bytes=source_bytes,
-                    applied=apply,
+            purge_candidate_count += 1
+            purge_candidate_bytes += source_bytes
+            if purge_expired:
+                if apply:
+                    shutil.rmtree(trade_dir)
+                actions.append(
+                    StorageMaintenanceAction(
+                        action="purge_trade_date",
+                        path=str(trade_dir),
+                        trade_date=trade_date.isoformat(),
+                        source_bytes=source_bytes,
+                        applied=apply,
+                    )
                 )
-            )
-            continue
+                continue
         if age_days < policy.compression_after_days:
             continue
-        compressed_any = False
         for source in sorted(trade_dir.rglob("*.jsonl")):
             source = _validated_descendant(root_path, source)
             target = source.with_suffix(f"{source.suffix}.gz")
             if target.exists():
-                raise FileExistsError(f"compressed target already exists: {target}")
+                source_bytes = source.stat().st_size
+                if apply:
+                    _finalize_verified_compression(source, target)
+                actions.append(
+                    StorageMaintenanceAction(
+                        action="finalize_verified_compression",
+                        path=str(source),
+                        trade_date=trade_date.isoformat(),
+                        source_bytes=source_bytes,
+                        applied=apply,
+                    )
+                )
+                continue
             source_bytes = source.stat().st_size
             if apply:
                 _compress_verified(source, target)
-                compressed_any = True
             actions.append(
                 StorageMaintenanceAction(
                     action="compress_jsonl",
@@ -103,9 +139,18 @@ def maintain_forward_storage(
                     applied=apply,
                 )
             )
-        if apply and compressed_any:
+        if apply:
             _refresh_compressed_manifests(trade_dir, as_of_date=as_of_date)
-    return _result(root_path, as_of_date, apply, actions)
+    return _result(
+        root_path,
+        as_of_date,
+        runtime_trade_date,
+        apply,
+        purge_expired,
+        actions,
+        purge_candidate_count=purge_candidate_count,
+        purge_candidate_bytes=purge_candidate_bytes,
+    )
 
 
 def _trade_date_directories(root: Path) -> Iterable[Path]:
@@ -174,6 +219,27 @@ def _compress_verified(source: Path, target: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _finalize_verified_compression(source: Path, target: Path) -> None:
+    """Recover an interrupted target-replace/source-unlink transition."""
+
+    source_hash = hashlib.sha256()
+    with source.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            source_hash.update(chunk)
+    restored_hash = hashlib.sha256()
+    with gzip.open(target, "rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            restored_hash.update(chunk)
+    if restored_hash.digest() != source_hash.digest():
+        raise OSError("existing compressed JSONL does not match source")
+    source.unlink()
+    directory_descriptor = os.open(source.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
 def _refresh_compressed_manifests(trade_dir: Path, *, as_of_date: date) -> None:
     """Keep writer manifests discoverable after closed-date compression."""
 
@@ -237,14 +303,40 @@ def _tree_bytes(path: Path) -> int:
 def _result(
     root: Path,
     as_of_date: date,
+    runtime_trade_date: date,
     apply: bool,
+    purge_expired: bool,
     actions: list[StorageMaintenanceAction],
+    *,
+    purge_candidate_count: int,
+    purge_candidate_bytes: int,
 ) -> dict[str, object]:
+    purge_applied_count = sum(
+        row.action == "purge_trade_date" and row.applied for row in actions
+    )
     return {
         "schema": MAINTENANCE_SCHEMA,
         "root": str(root),
         "as_of_date": as_of_date.isoformat(),
+        "runtime_trade_date": runtime_trade_date.isoformat(),
+        "protected_trade_dates": sorted(
+            {as_of_date.isoformat(), runtime_trade_date.isoformat()}
+        ),
         "mode": "apply" if apply else "dry_run",
+        "purge_enabled": purge_expired,
+        "purge_status": (
+            "explicit_opt_in_apply"
+            if purge_expired and apply
+            else (
+                "explicit_opt_in_dry_run"
+                if purge_expired
+                else "disabled_no_deletion_authority"
+            )
+        ),
+        "purge_candidate_count": purge_candidate_count,
+        "purge_candidate_bytes": purge_candidate_bytes,
+        "purge_applied_count": purge_applied_count,
+        "deletion_performed": purge_applied_count > 0,
         "action_count": len(actions),
         "source_bytes": sum(row.source_bytes for row in actions),
         "actions": [asdict(row) for row in actions],
@@ -264,11 +356,20 @@ def main() -> int:
         default=datetime.now(KST).date(),
     )
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--purge-expired",
+        action="store_true",
+        help=(
+            "Explicitly authorize removal of validated trade-date partitions "
+            "older than the configured retention window. Disabled by default."
+        ),
+    )
     args = parser.parse_args()
     result = maintain_forward_storage(
         args.root,
         as_of_date=args.as_of_date,
         apply=args.apply,
+        purge_expired=args.purge_expired,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

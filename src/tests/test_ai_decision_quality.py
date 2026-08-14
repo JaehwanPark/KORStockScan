@@ -77,6 +77,18 @@ def _trace(action="DROP"):
         "model": "gpt-test",
         "request_temperature": 0,
         "request_reasoning_effort": "medium",
+        "openai_response_schema_mode": "json_object",
+        "openai_response_schema_registry_used": False,
+        "response_schema_application": "provider_json_object_openai",
+        "semantic_validator_version": (
+            quality.DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION
+        ),
+        "expected_semantic_validator_version": (
+            quality.DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION
+        ),
+        "semantic_validator_applied": True,
+        "semantic_validation_status": "pass",
+        "result_source": "live",
         "input_preflight_mode": "exact_v2",
         "input_preflight_allowed": True,
         "venue_consistent": True,
@@ -1206,6 +1218,90 @@ def test_holding_context_contract_reads_nested_candle_bundle_and_bars():
         payloads=[payload],
     )
     assert report["status"] == "control_manifest_frozen_collect_exact_samples"
+
+
+def test_holding_flow_forensic_sidecar_is_not_a_natural_control_sample():
+    trace = {
+        **_trace(),
+        "decision_stage": "holding",
+        "endpoint": "holding_flow",
+        "holding_exact_replay_context_capture_status": "forensic_sidecar_captured",
+    }
+    payload = {
+        "payload_sha256": "payload-1",
+        "replay_exact": True,
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "sanitized_user_input": {
+            "holding_decision_context": {
+                "schema": quality.HOLDING_CONTEXT_SCHEMA,
+                "venue": "KRX",
+                "session": "krx_regular",
+                "candle": {
+                    "input_bundle_version": quality.INPUT_BUNDLE_VERSION,
+                    "bars": [
+                        {
+                            "minute": "09:00",
+                            "close": 100,
+                            "is_forming": False,
+                        }
+                    ],
+                },
+            }
+        },
+    }
+
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[trace],
+        payloads=[payload],
+    )
+
+    assert report["status"] == "control_manifest_gap_fix_required"
+    assert report["excluded_counts"] == {
+        "holding_flow_forensic_sidecar_not_natural_control": 1
+    }
+    assert payload["replay_exact"] is True
+    assert quality.replay_source_input(payload) is payload["sanitized_user_input"]
+    replay_requests = quality.prepare_paired_replay_requests(
+        control_manifest={
+            "status": "control_manifest_frozen_collect_exact_samples",
+            "controls": [
+                {
+                    "endpoint": "holding_flow",
+                    "prompt_version": trace["prompt_version"],
+                    "prompt_sha256": trace["prompt_sha256"],
+                    "provider_actual": trace["provider_actual"],
+                    "model": trace["model"],
+                    "request_temperature": trace["request_temperature"],
+                    "request_reasoning_effort": trace[
+                        "request_reasoning_effort"
+                    ],
+                }
+            ],
+        },
+        traces=[trace],
+        payloads=[payload],
+        labels=[
+            {
+                **_pending(action="HOLD"),
+                "decision_stage": "holding",
+                "label_status": "mature",
+                "source_quality_status": "pass",
+                "primary_cohort_eligible": True,
+                "horizon_metrics": {
+                    "30m": {"end_return_pct": 0.5, "first_hit": "target"}
+                },
+            }
+        ],
+    )
+    assert replay_requests == []
 
 
 def test_mature_outcome_labels_calculates_mfe_mae_first_hit_and_correlation():
@@ -5050,6 +5146,1648 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
         "candidate_action_not_collapsed": False,
     }
     assert bucket["candidate_quality_gate_pass"] is False
+
+
+def _micro_reversion_materialization_fixture():
+    control_prompt = "Current exact control prompt. Return the contracted JSON."
+    control_prompt_sha256 = quality._stored_prompt_sha256(control_prompt)
+    live_response_schema = quality.build_openai_response_text_format(
+        "decision_quality_v2_7_entry"
+    )["schema"]
+    captured_at = "2026-08-14T09:00:10.000+09:00"
+    exact_payload = {
+        "schema": "entry_payload_v1",
+        "requested_qty": 5,
+        "position_sizing_allocator": {"effective_qty": 5},
+        "entry_candle_context": {
+            "schema": quality.ENTRY_CONTEXT_SCHEMA,
+            "input_bundle_version": quality.INPUT_BUNDLE_VERSION,
+            "venue": "KRX",
+            "session": "KRX_REGULAR",
+            "bars": [{"minute": "09:00", "forming": False}],
+        },
+        "ai_market_snapshot": {
+            "schema": "ai_market_snapshot_v1",
+            "snapshot_id": "snapshot-materialize-1",
+            "captured_at": captured_at,
+            "stock_code": "000001",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "market_data_route": "krx_only",
+            "broker_route": "KRX",
+        },
+    }
+    replay_context = {
+        "input_schema": "decision_quality_v2_entry",
+        "exact_payload": exact_payload,
+        "exact_payload_analysis_v1": {"schema": "exact_payload_analysis_v1"},
+    }
+    replay_context_sha256 = quality._sha256(replay_context)
+    payload_sha256 = "provider-payload-materialize-1"
+    request_envelope_sha256 = quality._sha256(
+        {
+            "endpoint": "analyze_target",
+            "model": "gpt-test",
+            "schema_name": "decision_quality_v2_7_entry",
+            "require_json": True,
+            "temperature": 0,
+            "max_output_tokens": 900,
+            "reasoning_effort": "medium",
+            "prompt_sha256": control_prompt_sha256,
+            "user_input_sha256": payload_sha256,
+            "replay_context_sha256": replay_context_sha256,
+        }
+    )
+    trace = {
+        "schema": "ai_decision_trace_v1",
+        "decision_trace_id": "trace-materialize-1",
+        "request_id": "request-materialize-1",
+        "decision_ts": "2026-08-14T09:00:11.000+09:00",
+        "decision_stage": "entry",
+        "endpoint": "analyze_target",
+        "stock_code": "000001",
+        "instrument_type": "COMMON_STOCK",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "market_data_route": "krx_only",
+        "broker_route": "KRX",
+        "payload_replay_exact": True,
+        "request_capture_status": "captured",
+        "payload_sha256": payload_sha256,
+        "request_envelope_sha256": request_envelope_sha256,
+        "prompt_version": "current_control_v1",
+        "prompt_sha256": control_prompt_sha256,
+        "provider_actual": "openai",
+        "provider_called": True,
+        "model": "gpt-test",
+        "model_requested": "gpt-test",
+        "request_temperature": 0,
+        "request_reasoning_effort": "medium",
+        "transport": "responses_http",
+        "openai_response_schema_mode": "strict_dynamic_entry",
+        "openai_response_schema_registry_used": True,
+        "response_schema_sha256": quality._sha256(live_response_schema),
+        "response_schema_application": "provider_enforced_openai",
+        "semantic_validator_version": (
+            quality.DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION
+        ),
+        "expected_semantic_validator_version": (
+            quality.DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION
+        ),
+        "semantic_validator_applied": True,
+        "semantic_validation_status": "pass",
+        "result_source": "live",
+        "replay_context_present": True,
+        "replay_context_exact": True,
+        "replay_context_sha256": replay_context_sha256,
+        "input_preflight_mode": "exact_v2",
+        "input_preflight_allowed": True,
+        "venue_consistent": True,
+        "input_blockers": [],
+        "canonical_context_capture_status": "exact_completed_bars_captured",
+        "snapshot_id": "snapshot-materialize-1",
+        "action": "WAIT",
+    }
+    payload = {
+        "schema": "ai_decision_payload_v1",
+        "request_id": "request-materialize-1",
+        "payload_sha256": payload_sha256,
+        "request_envelope_sha256": request_envelope_sha256,
+        "endpoint": "analyze_target",
+        "model": "gpt-test",
+        "schema_name": "decision_quality_v2_7_entry",
+        "require_json": True,
+        "temperature": 0,
+        "max_output_tokens": 900,
+        "reasoning_effort": "medium",
+        "prompt_sha256": control_prompt_sha256,
+        "replay_exact": True,
+        "replay_context_present": True,
+        "replay_context_exact": True,
+        "replay_context_sha256": replay_context_sha256,
+        "replay_context_input_format": "structured",
+        "symbol": "000001",
+        "instrument_type": "COMMON_STOCK",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "market_data_route": "krx_only",
+        "broker_route": "KRX",
+        "snapshot_id": "snapshot-materialize-1",
+        "canonical_context_capture": {
+            "status": "exact_completed_bars_captured",
+            "schema": quality.ENTRY_CONTEXT_SCHEMA,
+            "input_bundle_version": quality.INPUT_BUNDLE_VERSION,
+            "raw_bar_count": 1,
+            "completed_bar_count": 1,
+        },
+        "sanitized_replay_context": replay_context,
+    }
+    label = {
+        **_pending(action="WAIT"),
+        "decision_trace_id": "trace-materialize-1",
+        "label_id": "trace-materialize-1:v1",
+        "stock_code": "000001",
+        "decision_ts": trace["decision_ts"],
+        "label_status": "mature",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "horizon_metrics": {
+            "10m": {
+                "end_return_pct": 1.0,
+                "probe_cost_adjusted_ev_pct": 0.7,
+                "mfe_pct": 1.2,
+                "mae_pct": -0.3,
+                "first_hit": "target",
+                "target_first_delay_sec": 120,
+                "position_horizon_sec": 300,
+            }
+        },
+    }
+    control_manifest = {
+        "status": "control_manifest_frozen_collect_exact_samples",
+        "controls": [
+            {
+                "endpoint": "analyze_target",
+                "prompt_version": trace["prompt_version"],
+                "prompt_sha256": trace["prompt_sha256"],
+                "provider_actual": trace["provider_actual"],
+                "model": trace["model"],
+                "request_temperature": trace["request_temperature"],
+                "request_reasoning_effort": trace["request_reasoning_effort"],
+            }
+        ],
+    }
+    prepared = quality.prepare_paired_replay_requests(
+        control_manifest=control_manifest,
+        traces=[trace],
+        payloads=[payload],
+        labels=[label],
+    )
+    assert len(prepared) == 1
+    prompt_rows = [
+        {
+            "schema": "ai_decision_prompt_v1",
+            "prompt_sha256": control_prompt_sha256,
+            "endpoint": "analyze_target",
+            "model": "gpt-test",
+            "schema_name": "decision_quality_v2_7_entry",
+            "redacted": False,
+            "replay_exact": True,
+            "sanitized_prompt": control_prompt,
+        }
+    ]
+    control_contract_artifact = (
+        quality.build_micro_reversion_control_contract_artifact(
+            target_date="2026-08-14",
+            prepared_requests=prepared,
+            traces=[trace],
+            payloads=[payload],
+            prompt_rows=prompt_rows,
+        )
+    )
+    assert control_contract_artifact["control_contract_count"] == 1
+
+    def market(
+        timestamp, *, price, side, qty, sequence, bid=None, ask=None
+    ):
+        return {
+            "schema": "scalp_micro_reversion_market_stream_point_v3",
+            "metric_contract_id": "scalp_micro_reversion_market_stream_contract_v3",
+            "realtime_type": "0B",
+            "item": "000001",
+            "symbol": "000001",
+            "venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "sequence_epoch": 123,
+            "source_sequence": sequence,
+            "series_sequence": sequence,
+            "exchange_timestamp": timestamp,
+            "local_receive_timestamp": timestamp,
+            "trade_price": price,
+            "trade_qty": qty,
+            "best_bid": bid if bid is not None else price - 10,
+            "best_ask": ask if ask is not None else price,
+            "quote_age_ms": 0.0,
+            "aggressor_side": side,
+            "path_order_status": "accept",
+            "path_consumer_eligible": True,
+            "exchange_timestamp_regression_ms": 0,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "trading_runtime_effect": False,
+        }
+
+    market_rows = [
+        market(
+            "2026-08-14T09:00:05.000+09:00",
+            price=10_000,
+            side="BUY",
+            qty=20,
+            sequence=1,
+        ),
+        market(
+            "2026-08-14T09:00:06.000+09:00",
+            price=9_900,
+            side="SELL",
+            qty=100,
+            sequence=2,
+        ),
+        market(
+            "2026-08-14T09:00:07.000+09:00",
+            price=9_880,
+            side="SELL",
+            qty=100,
+            sequence=3,
+        ),
+        market(
+            "2026-08-14T09:00:09.800+09:00",
+            price=9_960,
+            side="BUY",
+            qty=400,
+            sequence=4,
+            bid=9_950,
+            ask=9_960,
+        ),
+    ]
+    depth_rows = [
+        {
+            "schema": "scalp_micro_reversion_market_depth_point_v1",
+            "metric_contract_id": "scalp_micro_reversion_market_depth_contract_v1",
+            "realtime_type": "0D",
+            "item": "000001",
+            "symbol": "000001",
+            "venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "sequence_epoch": 123,
+            "source_sequence": 1,
+            "series_sequence": 1,
+            "exchange_timestamp": "2026-08-14T09:00:09.700+09:00",
+            "local_receive_timestamp": "2026-08-14T09:00:09.700+09:00",
+            "best_bid": 9_950,
+            "best_ask": 9_960,
+            "best_bid_qty": 100,
+            "best_ask_qty": 100,
+            "bid_depth": 1_000,
+            "ask_depth": 1_000,
+            "route_depth_totals": {
+                "KRX": {"bid": 1_000, "ask": 1_000},
+                "NXT": {"bid": 0, "ask": 0},
+                "combined": {"bid": 1_000, "ask": 1_000},
+            },
+            "bid_levels": [[1, 9_950, 100], [2, 9_940, 900]],
+            "ask_levels": [[1, 9_960, 100], [2, 9_970, 900]],
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "trading_runtime_effect": False,
+        }
+    ]
+    event_references = [
+        {
+            "schema": "scalp_micro_reversion_path_event_reference_v2",
+            "symbol": "000001",
+            "venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "sequence_epoch": 123,
+            "parent_wave_id": "wave-materialize-1",
+            "path_segment_id": "segment-materialize-1",
+            "shock_event_id": "shock-materialize-1",
+            "shock_horizon_ms": 1_000,
+            "event_sequence_in_wave": 1,
+            "event_detected_at_ms": int(
+                datetime.fromisoformat(
+                    "2026-08-14T09:00:06.000+09:00"
+                ).timestamp()
+                * 1_000
+            ),
+            "segment_event_detected_at_ms": int(
+                datetime.fromisoformat(
+                    "2026-08-14T09:00:06.000+09:00"
+                ).timestamp()
+                * 1_000
+            ),
+            "capture_started_at": "2026-08-14T09:00:05.000+09:00",
+            "capture_ended_at": "2026-08-14T09:03:06.000+09:00",
+            "decision_authority": (
+                "forward_path_observation_only_no_policy_selection"
+            ),
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "trading_runtime_effect": False,
+        }
+    ]
+    cost_profile_artifact = {
+        "schema": "micro_reversion_reviewed_cost_profile_v1",
+        "artifact_id": "verified-test-cost-profile-v1",
+        "effective_date": "2026-08-14",
+        "venues": ["KRX"],
+        "instrument_scope": "domestic_common_or_preferred_stock",
+        "source": "verified_test_profile",
+        "buy_fee_bps": 0.0,
+        "sell_fee_bps": 0.0,
+        "statutory_sell_tax_bps": 20.0,
+        "uncertainty_buffer_bps": 3.0,
+    }
+    bridge_config = {
+        "statutory_sell_tax_bps": 20.0,
+        "uncertainty_buffer_bps": 3.0,
+        "cost_profile_source": "verified_test_profile",
+        "cost_profile_verified": True,
+        "cost_profile_artifact_id": "verified-test-cost-profile-v1",
+        "cost_profile_artifact_sha256": quality._sha256(cost_profile_artifact),
+        "cost_profile_artifact_payload_json": json.dumps(
+            cost_profile_artifact,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        "cost_profile_effective_date": "2026-08-14",
+        "cost_profile_venues": ("KRX",),
+    }
+    source_bundle = quality.build_micro_reversion_source_bundle(
+        target_date="2026-08-14",
+        prepared_requests=prepared,
+        traces=[trace],
+        payloads=[payload],
+        prompt_rows=prompt_rows,
+        control_prompt_contracts=control_contract_artifact[
+            "control_prompt_contracts"
+        ],
+        market_rows=market_rows,
+        depth_rows=depth_rows,
+        event_references=event_references,
+        bridge_config=bridge_config,
+        verified_symbol_metadata_by_trace={
+            "trace-materialize-1": {
+                "lookup_status": "verified",
+                "record": {
+                    "symbol": "000001",
+                    "listing_market": "KOSPI",
+                    "instrument_type": "EQUITY",
+                    "instrument_tax_class": "ordinary_taxable_equity_20bps",
+                    "effective_from": "2026-01-01",
+                    "effective_to": None,
+                    "metadata_source": "verified_test_symbol_master",
+                    "source_reference": "test://symbol-master/000001",
+                    "verified_at": "2026-08-14T00:00:00+09:00",
+                    "conflict_status": "clean",
+                },
+                "symbol_master_artifact_sha256": "a" * 64,
+            }
+        },
+    )
+    return prepared, source_bundle
+
+
+def test_materializes_micro_reversion_requests_from_actual_prepared_output():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+
+    report = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+
+    assert report["status"] == "materialized_source_only_no_provider_calls"
+    assert report["prepared_request_count"] == 1
+    assert report["materialization_count"] == 1
+    assert report["request_count"] == 3
+    assert len(set(report["request_ids"])) == 3
+    assert [row["micro_reversion_replay_arm"] for row in report["requests"]] == [
+        "replay_control_exact_no_micro",
+        "replay_control_exact_plus_micro",
+        "replay_candidate_exact_plus_micro",
+    ]
+    assert report["requests"][0]["candidate"]["prompt_version"] == (
+        "current_control_v1"
+    )
+    assert report["requests"][2]["candidate"]["prompt_version"] == (
+        f"{quality.DECISION_QUALITY_V2_PROMPT_VERSION}_entry"
+    )
+    assert report["provider_call_performed"] is False
+    assert report["runtime_effect"] is False
+    assert report["allowed_runtime_apply"] is False
+    assert report["actual_order_submitted"] is False
+    assert report["broker_order_forbidden"] is True
+    assert report["current_control_contract_reconstructions"] == [
+        {
+            "decision_trace_id": "trace-materialize-1",
+            "status": "natural_control_contract_verified",
+            "natural_control_contract_status": "verified_exact_trace_contract",
+            "source_trace_reconstructed_fields": [],
+            "response_contract_anchor": "trace_response_schema_sha256",
+            "control_contract_sha256": source_bundle["rows"][0][
+                "current_control_prompt_contract"
+            ]["contract_sha256"],
+        }
+    ]
+
+
+def test_micro_reversion_materialization_fails_closed_without_full_control_prompt():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    source_bundle["rows"][0]["current_control_prompt_contract"].pop(
+        "system_prompt"
+    )
+    source_bundle["source_bundle_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in source_bundle.items()
+            if key != "source_bundle_content_sha256"
+        }
+    )
+
+    with pytest.raises(ValueError, match="control_system_prompt_missing"):
+        quality.materialize_micro_reversion_offline_requests(
+            prepared_requests=prepared,
+            bridge_source_bundle=source_bundle,
+        )
+
+
+def test_micro_reversion_materialize_cli_does_not_enter_provider_source_flow(
+    tmp_path, monkeypatch, capsys
+):
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    prepared_path = tmp_path / "prepared.json"
+    source_path = tmp_path / "source.json"
+    output_path = tmp_path / "materialized.json"
+    prepared_path.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-08-14",
+                "prepared_request_count": len(prepared),
+                "prepared_requests": prepared,
+            }
+        ),
+        encoding="utf-8",
+    )
+    source_path.write_text(json.dumps(source_bundle), encoding="utf-8")
+    monkeypatch.setattr(
+        quality,
+        "_default_sources",
+        lambda *args, **kwargs: pytest.fail("provider/source flow must not run"),
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_materialized_request_path",
+        lambda target_date: output_path,
+    )
+
+    assert (
+        quality.main(
+            [
+                "--date",
+                "2026-08-14",
+                "--mode",
+                "micro_reversion_materialize",
+                "--micro-reversion-prepared-requests",
+                str(prepared_path),
+                "--micro-reversion-source-bundle",
+                str(source_path),
+                "--write",
+            ]
+        )
+        == 0
+    )
+
+    printed = json.loads(capsys.readouterr().out)
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert printed["provider_call_performed"] is False
+    assert written["request_count"] == 3
+    assert written["provider_call_performed"] is False
+    assert written["runtime_effect"] is False
+    assert written["actual_order_submitted"] is False
+
+
+def test_micro_reversion_source_bundle_cli_reads_gzip_exact_journals(
+    tmp_path, monkeypatch, capsys
+):
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    source_row = source_bundle["rows"][0]
+    trace = source_row["source_trace"]
+    payload = source_row["source_payload"]
+    control_contract = source_row["current_control_prompt_contract"]
+    prompt_row = {
+        "schema": "ai_decision_prompt_v1",
+        "prompt_sha256": trace["prompt_sha256"],
+        "endpoint": trace["endpoint"],
+        "model": trace["model"],
+        "schema_name": payload["schema_name"],
+        "redacted": False,
+        "replay_exact": True,
+        "sanitized_prompt": control_contract["system_prompt"],
+    }
+    prepared_path = tmp_path / "prepared.json"
+    contract_path = tmp_path / "control_contracts.json"
+    symbol_master_path = tmp_path / "symbol_master.json"
+    prepared_path.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-08-14",
+                "prepared_request_count": len(prepared),
+                "prepared_requests": prepared,
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract_path.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-08-14",
+                "bridge_config": source_row["bridge_config"],
+                "excluded_scopes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    symbol_master_path.write_text(
+        json.dumps(
+            {
+                "schema": "scalp_micro_reversion_symbol_master_v1",
+                "decision_authority": "instrument_metadata_source_only",
+                "runtime_effect": False,
+                "records": [source_row["verified_symbol_metadata"]["record"]],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    trace_dir = tmp_path / "trace"
+    payload_dir = tmp_path / "payload"
+    prompt_dir = tmp_path / "prompt"
+    for directory, file_name, row in (
+        (trace_dir, "ai_decision_trace_2026-08-14.jsonl.gz", trace),
+        (payload_dir, "ai_decision_payloads_2026-08-14.jsonl.gz", payload),
+        (prompt_dir, "ai_decision_prompts_2026-08-14.jsonl.gz", prompt_row),
+    ):
+        directory.mkdir(parents=True)
+        with gzip.open(directory / file_name, "wt", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+
+    observation_root = tmp_path / "observations"
+    partition = (
+        observation_root
+        / "trade_date=2026-08-14"
+        / "venue=KRX"
+        / "session=KRX_REGULAR"
+    )
+    partition.mkdir(parents=True)
+    for pool_name, file_name in (
+        ("market", "market_stream.jsonl"),
+        ("depth", "market_depth_stream.jsonl"),
+        ("event_reference", "market_stream_event_references.jsonl"),
+    ):
+        rows = source_bundle["source_row_pool"][pool_name].values()
+        (partition / file_name).write_text(
+            "".join(json.dumps(row) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(quality, "TRACE_DIR", trace_dir)
+    monkeypatch.setattr(quality, "PAYLOAD_DIR", payload_dir)
+    monkeypatch.setattr(quality, "PROMPT_DIR", prompt_dir)
+
+    assert (
+        quality.main(
+            [
+                "--date",
+                "2026-08-14",
+                "--mode",
+                "micro_reversion_source_bundle",
+                "--micro-reversion-prepared-requests",
+                str(prepared_path),
+                "--micro-reversion-control-contracts",
+                str(contract_path),
+                "--micro-reversion-observation-root",
+                str(observation_root),
+                "--micro-reversion-symbol-master",
+                str(symbol_master_path),
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "bounded_source_bundle_ready_no_provider_calls"
+    assert report["eligible_row_count"] == 1
+    assert report["excluded_row_count"] == 0
+    assert report["provider_call_performed"] is False
+    assert report["runtime_effect"] is False
+    assert report["actual_order_submitted"] is False
+
+
+def _micro_reversion_execution_label(prepared):
+    request = prepared[0]
+    return {
+        "schema": "ai_decision_outcome_label_v1",
+        "label_id": request["outcome_join_key"],
+        "decision_trace_id": request["decision_trace_id"],
+        "decision_stage": request["stage"],
+        "stock_code": request["stock_code"],
+        "effective_venue": request["effective_venue"],
+        "session_bucket": request["session_bucket"],
+        "label_status": "mature",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "horizon_metrics": {
+            "10m": {
+                "end_return_pct": 1.0,
+                "mfe_pct": 1.2,
+                "mae_pct": -0.3,
+                "first_hit": "target",
+            }
+        },
+    }
+
+
+def _micro_reversion_action_neutral_bridge_fixture():
+    from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+        BridgeConfig,
+        build_bridge_report,
+    )
+
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    source_row = source_bundle["rows"][0]
+    evidence = source_row["evidence"]
+    market_rows = quality._micro_reversion_source_rows_from_pool(
+        source_bundle=source_bundle,
+        bundle_row=source_row,
+        pool_name="market",
+        reference_field="source_market_row_sha256s",
+    )
+    depth_rows = quality._micro_reversion_source_rows_from_pool(
+        source_bundle=source_bundle,
+        bundle_row=source_row,
+        pool_name="depth",
+        reference_field="source_depth_row_sha256s",
+    )
+    event_references = quality._micro_reversion_source_rows_from_pool(
+        source_bundle=source_bundle,
+        bundle_row=source_row,
+        pool_name="event_reference",
+        reference_field="source_event_reference_sha256s",
+    )
+    last_market = market_rows[-1]
+    last_depth = depth_rows[-1]
+    for offset_sec in range(1, 13):
+        timestamp = (
+            datetime.fromisoformat("2026-08-14T09:00:11+09:00")
+            .replace(microsecond=0)
+            .timestamp()
+            + offset_sec
+        )
+        observed_at = datetime.fromtimestamp(timestamp, tz=KST).isoformat()
+        market_rows.append(
+            {
+                **last_market,
+                "source_sequence": 4 + offset_sec,
+                "series_sequence": 4 + offset_sec,
+                "exchange_timestamp": observed_at,
+                "local_receive_timestamp": observed_at,
+                "trade_price": 10_060,
+                "best_bid": 10_050,
+                "best_ask": 10_060,
+                "aggressor_side": "BUY",
+            }
+        )
+        depth_rows.append(
+            {
+                **last_depth,
+                "source_sequence": 1 + offset_sec,
+                "series_sequence": 1 + offset_sec,
+                "exchange_timestamp": observed_at,
+                "local_receive_timestamp": observed_at,
+                "best_bid": 10_050,
+                "best_ask": 10_060,
+                "bid_levels": [[1, 10_050, 100], [2, 10_040, 900]],
+                "ask_levels": [[1, 10_060, 100], [2, 10_070, 900]],
+            }
+        )
+    config = BridgeConfig(**source_row["bridge_config"])
+    bridge_report = build_bridge_report(
+        target_date="2026-08-14",
+        traces=[source_row["source_trace"]],
+        payloads=[source_row["source_payload"]],
+        market_rows=market_rows,
+        depth_rows=depth_rows,
+        event_references=event_references,
+        config=config,
+        verified_symbol_metadata_by_trace={
+            prepared[0]["decision_trace_id"]: source_row[
+                "verified_symbol_metadata"
+            ]
+        },
+    )
+    assert bridge_report["rows"][0]["tactical_micro_reversion_evidence_v1"] == (
+        evidence
+    )
+    return prepared, materialized, bridge_report
+
+
+def test_micro_reversion_bridge_outcome_adapts_action_neutral_seconds_label():
+    prepared, materialized, bridge_report = (
+        _micro_reversion_action_neutral_bridge_fixture()
+    )
+
+    artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        bridge_report=bridge_report,
+        materialized_report=materialized,
+    )
+
+    assert artifact["status"] == "action_neutral_labels_ready"
+    assert artifact["eligible_label_count"] == 1
+    label = artifact["labels"][0]
+    assert label["label_id"] == prepared[0]["outcome_join_key"]
+    assert label["primary_horizon_key"] == "10s"
+    assert "10m" not in label["horizon_metrics"]
+    primary = quality._micro_reversion_primary_metric(label)
+    assert primary["first_hit"] == "net_target_first"
+    assert primary["source_quality_adjusted_ev_pct"] > 0
+    assert primary["action_neutral_path_sha256"]
+    assert label["quantity_authority"] == (
+        "standardized_one_share_observation_only"
+    )
+    assert label["notional_net_profit_eligible"] is False
+    assert label["outcome_embedded_in_provider_input"] is False
+
+
+def test_micro_reversion_bridge_outcome_rejects_unsupported_stage_per_row():
+    _, materialized, bridge_report = (
+        _micro_reversion_action_neutral_bridge_fixture()
+    )
+    for request in materialized["requests"]:
+        request["stage"] = "entry_price"
+        request["endpoint"] = "entry_price"
+    materialized["report_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in materialized.items()
+            if key != "report_content_sha256"
+        }
+    )
+
+    artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        bridge_report=bridge_report,
+        materialized_report=materialized,
+    )
+
+    assert artifact["eligible_label_count"] == 0
+    assert artifact["excluded_parent_count"] == 1
+    assert artifact["exclusions"][0]["reason"] == (
+        "micro_reversion_bridge_stage_owner_unsupported"
+    )
+
+
+def test_micro_reversion_action_neutral_label_tamper_fails_declared_hash():
+    _, materialized, bridge_report = (
+        _micro_reversion_action_neutral_bridge_fixture()
+    )
+    artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        bridge_report=bridge_report,
+        materialized_report=materialized,
+    )
+    artifact["labels"][0]["horizon_metrics"]["10s"][
+        "source_quality_adjusted_ev_pct"
+    ] = 999.0
+    artifact["artifact_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in artifact.items()
+            if key != "artifact_content_sha256"
+        }
+    )
+
+    with pytest.raises(ValueError, match="label_content_hash_mismatch"):
+        quality._validate_micro_reversion_outcome_label_artifact(artifact)
+
+
+def test_micro_reversion_bridge_report_tamper_fails_declared_hash():
+    _, materialized, bridge_report = (
+        _micro_reversion_action_neutral_bridge_fixture()
+    )
+    bridge_report["summary"]["trace_payload_join_count"] = 999
+
+    with pytest.raises(ValueError, match="bridge_report_content_hash_mismatch"):
+        quality.build_micro_reversion_action_neutral_outcome_labels(
+            bridge_report=bridge_report,
+            materialized_report=materialized,
+        )
+
+
+def test_micro_reversion_action_neutral_label_flows_into_three_arm_evaluator():
+    _, materialized, bridge_report = (
+        _micro_reversion_action_neutral_bridge_fixture()
+    )
+    artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        bridge_report=bridge_report,
+        materialized_report=materialized,
+    )
+
+    def runner(request):
+        return {
+            "candidate_response": _valid_micro_reversion_entry_response(),
+            "provider_provenance": {
+                "provider": "openai",
+                "model": "gpt-test",
+                "transport": "openai_responses_http_offline",
+                "source_transport_contract": request["candidate"]["transport"],
+                "response_id": "test-response-id",
+                "response_sha256": quality._sha256(request["paired_replay_id"]),
+                "provider_none": False,
+                "provider_call_attempted": True,
+                "provider_call_succeeded": True,
+            },
+        }
+
+    report = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=artifact["labels"],
+        execute_candidate=True,
+        candidate_runner=runner,
+        max_new_requests=3,
+    )
+
+    evaluation = report["three_arm_evaluation"]
+    assert evaluation["complete_parent_count"] == 1
+    assert evaluation["rows"][0]["cost_adjusted_outcome_pct"] > 0
+    assert evaluation["comparisons"][1][
+        "paired_metric_eligible_parent_count"
+    ] == 1
+    assert [
+        (
+            row["decision_stage"],
+            row["effective_venue"],
+            row["session_bucket"],
+        )
+        for row in evaluation["stage_venue_partitions"]
+    ] == [("entry", "KRX", "KRX_REGULAR")]
+    assert evaluation["cross_stage_venue_aggregate_promotion_forbidden"] is False
+    assert report["outcomes_embedded_in_provider_input"] is False
+
+
+def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
+    tmp_path, monkeypatch, capsys
+):
+    _, materialized, bridge_report = (
+        _micro_reversion_action_neutral_bridge_fixture()
+    )
+    materialized_path = tmp_path / "materialized.json"
+    bridge_path = tmp_path / "bridge.json"
+    output_path = tmp_path / "execution.json"
+    materialized_path.write_text(
+        json.dumps(materialized), encoding="utf-8"
+    )
+    bridge_path.write_text(json.dumps(bridge_report), encoding="utf-8")
+    monkeypatch.setattr(quality, "_offline_openai_api_keys", lambda: ["test-key"])
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_execution_result_path",
+        lambda target_date: output_path,
+    )
+
+    def fake_openai_runner(request, *, api_keys, timeout_sec):
+        assert api_keys == ["test-key"]
+        assert timeout_sec == 45.0
+        candidate = request["candidate"]
+        return {
+            "candidate_response": _valid_micro_reversion_entry_response(),
+            "provider_provenance": {
+                "provider": "openai",
+                "model": candidate["model"],
+                "transport": "openai_responses_http_offline",
+                "source_transport_contract": candidate["transport"],
+                "response_id": f"response-{request['paired_replay_id']}",
+                "response_sha256": quality._sha256(
+                    request["paired_replay_id"]
+                ),
+                "provider_none": False,
+                "provider_call_attempted": True,
+                "provider_call_succeeded": True,
+            },
+        }
+
+    monkeypatch.setattr(
+        quality, "execute_openai_prompt_v2_candidate", fake_openai_runner
+    )
+
+    assert (
+        quality.main(
+            [
+                "--date",
+                "2026-08-14",
+                "--mode",
+                "micro_reversion_execute",
+                "--micro-reversion-materialized-requests",
+                str(materialized_path),
+                "--micro-reversion-bridge-report",
+                str(bridge_path),
+                "--execute-candidate",
+                "--write",
+                "--candidate-max-new-requests",
+                "3",
+            ]
+        )
+        == 0
+    )
+
+    printed = json.loads(capsys.readouterr().out)
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert printed["status"] == "offline_three_arm_execution_complete"
+    assert written["result_count"] == 3
+    assert written["provider_call_performed"] is True
+    assert written["runtime_effect"] is False
+    assert written["actual_order_submitted"] is False
+    checkpoint_path = output_path.with_name(f"{output_path.stem}.checkpoint.json")
+    assert not checkpoint_path.exists()
+    assert not quality._micro_reversion_checkpoint_record_dir(
+        checkpoint_path
+    ).exists()
+
+
+def test_micro_reversion_execute_cli_rejects_explicit_parallel_workers(
+    tmp_path,
+):
+    materialized_path = tmp_path / "materialized.json"
+    materialized_path.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="2"):
+        quality.main(
+            [
+                "--date",
+                "2026-08-14",
+                "--mode",
+                "micro_reversion_execute",
+                "--micro-reversion-materialized-requests",
+                str(materialized_path),
+                "--execute-candidate",
+                "--write",
+                "--candidate-max-new-requests",
+                "1",
+                "--candidate-workers",
+                "2",
+            ]
+        )
+
+
+def _valid_micro_reversion_entry_response():
+    return {
+        "edge_state": "EDGE",
+        "action": "WAIT",
+        "expected_upside_pct": 1.2,
+        "expected_downside_pct": -0.5,
+        "confidence": 70,
+        "reason_codes": ["recovery_trigger_required"],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "supportive",
+            "tape": "mixed",
+            "risk": "low",
+            "uncertainty": "low",
+            "setup": "continuation",
+            "positive_edge": "moderate",
+            "adverse_risk": "low",
+            "trigger": "recovery_required",
+        },
+    }
+
+
+def test_micro_reversion_execution_defaults_to_no_provider_calls():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    calls = []
+
+    report = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        candidate_runner=lambda request: calls.append(request),
+    )
+
+    assert report["status"] == "provider_execution_not_authorized"
+    assert report["provider_call_performed"] is False
+    assert report["candidate_model_call_attempted"] is False
+    assert report["results"] == []
+    assert calls == []
+    assert all("exact_payload" not in row for row in report["request_refs"])
+    assert all("requests" not in row for row in materialized["materializations"])
+
+
+def test_micro_reversion_bedrock_holding_flow_is_explicitly_unsupported():
+    request = {
+        "stage": "holding",
+        "endpoint": "holding_flow",
+        "candidate": {
+            "provider": "bedrock",
+            "model": "nova_lite_v2",
+        },
+    }
+
+    assert quality._micro_reversion_executor_exclusion(request) == (
+        "bedrock_holding_flow_offline_executor_not_implemented"
+    )
+
+
+def test_micro_reversion_execution_joins_one_outcome_after_three_arm_calls():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    calls = []
+
+    def runner(request):
+        calls.append(request["paired_replay_id"])
+        return {
+            "candidate_response": _valid_micro_reversion_entry_response(),
+            "provider_provenance": {
+                "provider": "openai",
+                "model": "gpt-test",
+                "transport": "openai_responses_http_offline",
+                "source_transport_contract": (
+                    request["candidate"]["transport"]
+                ),
+                "response_id": "test-response-id",
+                "response_sha256": quality._sha256(request["paired_replay_id"]),
+                "provider_none": False,
+                "provider_call_attempted": True,
+                "provider_call_succeeded": True,
+            },
+        }
+
+    report = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[_micro_reversion_execution_label(prepared)],
+        execute_candidate=True,
+        candidate_runner=runner,
+        max_new_requests=3,
+    )
+
+    assert report["status"] == "offline_three_arm_execution_complete"
+    assert len(calls) == 3
+    assert report["result_count"] == 3
+    assert len(set(report["result_ids"])) == 3
+    assert report["provider_call_performed"] is True
+    assert report["provider_call_succeeded"] is True
+    assert len(report["outcome_joins"]) == 1
+    assert report["outcomes_embedded_in_provider_input"] is False
+    assert all(
+        row["replay_result"]["status"] == "pass" for row in report["results"]
+    )
+    assert report["three_arm_evaluation"]["complete_parent_count"] == 1
+    assert report["three_arm_evaluation"]["notional_net_profit_eligible"] is False
+
+
+def test_micro_reversion_execution_rejects_schema_valid_missing_provider_provenance():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+
+    report = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[_micro_reversion_execution_label(prepared)],
+        execute_candidate=True,
+        candidate_runner=lambda _request: {
+            "candidate_response": _valid_micro_reversion_entry_response(),
+            "provider_provenance": {},
+        },
+        max_new_requests=3,
+    )
+
+    assert report["status"] == (
+        "offline_three_arm_execution_complete_with_failures_or_exclusions"
+    )
+    assert report["provider_provenance_pass_count"] == 0
+    assert report["provider_call_succeeded"] is False
+    assert all(
+        row["replay_result"]["status"] == "provider_provenance_rejected"
+        for row in report["results"]
+    )
+    assert report["three_arm_evaluation"]["complete_parent_count"] == 0
+
+
+def test_micro_reversion_execution_does_not_infer_provider_success_from_hash():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+
+    def runner(request):
+        return {
+            "candidate_response": _valid_micro_reversion_entry_response(),
+            "provider_provenance": {
+                "provider": "openai",
+                "model": "gpt-test",
+                "transport": "openai_responses_http_offline",
+                "source_transport_contract": request["candidate"]["transport"],
+                "response_id": "failed-response-id",
+                "response_sha256": quality._sha256(request["paired_replay_id"]),
+                "provider_none": False,
+                "provider_call_attempted": True,
+                "provider_call_succeeded": False,
+            },
+        }
+
+    report = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[_micro_reversion_execution_label(prepared)],
+        execute_candidate=True,
+        candidate_runner=runner,
+        max_new_requests=3,
+    )
+
+    assert report["provider_call_performed"] is True
+    assert report["provider_response_hash_observed"] is True
+    assert report["provider_call_succeeded"] is False
+    assert report["provider_provenance_pass_count"] == 0
+    assert report["status"] == (
+        "offline_three_arm_execution_complete_with_failures_or_exclusions"
+    )
+
+
+def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    label = _micro_reversion_execution_label(prepared)
+    first_calls = []
+    checkpoint_path = tmp_path / "micro-execution.checkpoint.json"
+
+    def first_runner(request):
+        first_calls.append(request["paired_replay_id"])
+        return {
+            "candidate_response": _valid_micro_reversion_entry_response(),
+            "provider_provenance": {
+                "provider": "openai",
+                "model": "gpt-test",
+                "transport": "openai_responses_http_offline",
+                "source_transport_contract": request["candidate"]["transport"],
+                "response_id": "test-response-id",
+                "provider_none": False,
+                "provider_call_attempted": True,
+                "provider_call_succeeded": True,
+                "response_sha256": quality._sha256(request["paired_replay_id"]),
+            },
+        }
+
+    first = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[label],
+        execute_candidate=True,
+        candidate_runner=first_runner,
+        max_new_requests=1,
+        checkpoint_callback=lambda record: (
+            quality._write_micro_reversion_checkpoint_record(
+                checkpoint_path,
+                record,
+            )
+        ),
+    )
+
+    assert first["new_result_count"] == 1
+    assert first["deferred_request_count"] == 2
+    checkpoint = quality._load_micro_reversion_checkpoint(checkpoint_path)
+    assert checkpoint["checkpoint_record_count"] == 1
+    assert len(checkpoint["results"]) == 1
+
+    second_calls = []
+
+    def second_runner(request):
+        second_calls.append(request["paired_replay_id"])
+        return first_runner(request)
+
+    resumed = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[label],
+        execute_candidate=True,
+        candidate_runner=second_runner,
+        existing_result_artifact=checkpoint,
+        max_new_requests=2,
+    )
+
+    assert resumed["status"] == "offline_three_arm_execution_complete"
+    assert resumed["reused_result_count"] == 1
+    assert resumed["new_result_count"] == 2
+    assert resumed["deferred_request_count"] == 0
+    assert len(second_calls) == 2
+    assert len(resumed["results"]) == 3
+
+
+def test_micro_reversion_checkpoint_record_writes_scale_linearly(
+    tmp_path, monkeypatch
+):
+    original_atomic_write = quality._atomic_write_json
+    serialized_bytes = []
+
+    def measured_atomic_write(path, value):
+        serialized_bytes.append(
+            len(json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8"))
+        )
+        original_atomic_write(path, value)
+
+    monkeypatch.setattr(quality, "_atomic_write_json", measured_atomic_write)
+
+    def write_records(checkpoint_path, count):
+        before = len(serialized_bytes)
+        previous_hash = None
+        for sequence in range(1, count + 1):
+            result = {
+                "result_id": f"linear-result-{sequence:04d}",
+                "paired_replay_id": f"linear-request-{sequence:04d}",
+                "payload": "x" * 512,
+            }
+            record = quality._micro_reversion_checkpoint_record(
+                materialized_report_content_sha256="a" * 64,
+                sequence=sequence,
+                previous_record_sha256=previous_hash,
+                result=result,
+            )
+            quality._write_micro_reversion_checkpoint_record(
+                checkpoint_path,
+                record,
+            )
+            previous_hash = record["checkpoint_record_content_sha256"]
+        written = sum(serialized_bytes[before:])
+        reconstructed = quality._load_micro_reversion_checkpoint(checkpoint_path)
+        assert reconstructed["checkpoint_record_count"] == count
+        assert len(reconstructed["results"]) == count
+        return written
+
+    bytes_60 = write_records(tmp_path / "sixty.checkpoint.json", 60)
+    bytes_120 = write_records(tmp_path / "one-twenty.checkpoint.json", 120)
+
+    assert bytes_120 < bytes_60 * 2.2
+
+
+def test_micro_reversion_checkpoint_record_tamper_fails_closed(tmp_path):
+    checkpoint_path = tmp_path / "tampered.checkpoint.json"
+    record = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256="b" * 64,
+        sequence=1,
+        previous_record_sha256=None,
+        result={"result_id": "tampered-result", "payload": "original"},
+    )
+    quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+    record_path = next(
+        quality._micro_reversion_checkpoint_record_dir(checkpoint_path).glob(
+            "*.json"
+        )
+    )
+    stored = json.loads(record_path.read_text(encoding="utf-8"))
+    stored["result"]["payload"] = "tampered"
+    record_path.write_text(json.dumps(stored), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_checkpoint_record_hash_mismatch",
+    ):
+        quality._load_micro_reversion_checkpoint(checkpoint_path)
+
+
+def test_micro_reversion_checkpoint_recovers_record_written_before_manifest(
+    tmp_path,
+):
+    checkpoint_path = tmp_path / "orphan-record.checkpoint.json"
+    record = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256="c" * 64,
+        sequence=1,
+        previous_record_sha256=None,
+        result={"result_id": "orphan-result", "payload": "durable"},
+    )
+    record_dir = quality._micro_reversion_checkpoint_record_dir(checkpoint_path)
+    record_dir.mkdir(parents=True)
+    record_path = record_dir / (
+        "00000001-" + record["checkpoint_record_content_sha256"] + ".json"
+    )
+    quality._atomic_write_json(record_path, record)
+
+    reconstructed = quality._load_micro_reversion_checkpoint(
+        checkpoint_path,
+        repair_manifest=True,
+    )
+
+    assert reconstructed["checkpoint_record_count"] == 1
+    assert reconstructed["results"][0]["result_id"] == "orphan-result"
+    manifest = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert manifest["checkpoint_record_count"] == 1
+    assert manifest["checkpoint_head_sha256"] == (
+        record["checkpoint_record_content_sha256"]
+    )
+
+
+def test_micro_reversion_source_bundle_excludes_bad_row_without_aborting():
+    prepared, seed_bundle = _micro_reversion_materialization_fixture()
+    bad_request = json.loads(json.dumps(prepared[0]))
+    bad_request.update(
+        {
+            "paired_replay_id": "missing-source-row",
+            "decision_trace_id": "missing-source-trace",
+        }
+    )
+    rebuilt = quality.build_micro_reversion_source_bundle(
+        target_date="2026-08-14",
+        prepared_requests=[prepared[0], bad_request],
+        traces=[seed_bundle["rows"][0]["source_trace"]],
+        payloads=[seed_bundle["rows"][0]["source_payload"]],
+        prompt_rows=[
+            {
+                "schema": "ai_decision_prompt_v1",
+                "endpoint": "analyze_target",
+                "model": "gpt-test",
+                "schema_name": "decision_quality_v2_7_entry",
+                "prompt_sha256": seed_bundle["rows"][0][
+                    "source_trace"
+                ]["prompt_sha256"],
+                "sanitized_prompt": seed_bundle["rows"][0][
+                    "current_control_prompt_contract"
+                ]["system_prompt"],
+                "replay_exact": True,
+                "redacted": False,
+            }
+        ],
+        control_prompt_contracts=[
+            {
+                "decision_trace_id": prepared[0]["decision_trace_id"],
+                "prompt_sha256": seed_bundle["rows"][0][
+                    "source_trace"
+                ]["prompt_sha256"],
+                "prompt_contract": seed_bundle["rows"][0][
+                    "current_control_prompt_contract"
+                ],
+            }
+        ],
+        market_rows=quality._micro_reversion_source_rows_from_pool(
+            source_bundle=seed_bundle,
+            bundle_row=seed_bundle["rows"][0],
+            pool_name="market",
+            reference_field="source_market_row_sha256s",
+        ),
+        depth_rows=quality._micro_reversion_source_rows_from_pool(
+            source_bundle=seed_bundle,
+            bundle_row=seed_bundle["rows"][0],
+            pool_name="depth",
+            reference_field="source_depth_row_sha256s",
+        ),
+        event_references=quality._micro_reversion_source_rows_from_pool(
+            source_bundle=seed_bundle,
+            bundle_row=seed_bundle["rows"][0],
+            pool_name="event_reference",
+            reference_field="source_event_reference_sha256s",
+        ),
+        bridge_config=seed_bundle["rows"][0]["bridge_config"],
+        verified_symbol_metadata_by_trace={
+            prepared[0]["decision_trace_id"]: seed_bundle["rows"][0][
+                "verified_symbol_metadata"
+            ]
+        },
+    )
+
+    assert rebuilt["eligible_row_count"] == 1
+    assert rebuilt["excluded_row_count"] == 1
+    assert rebuilt["prepared_request_count"] == 2
+    assert rebuilt["exclusions"][0]["decision_trace_id"] == "missing-source-trace"
+
+
+def test_micro_reversion_source_bundle_uses_bounded_sqlite_store():
+    from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+        BridgeConfig,
+        _relevant_windows,
+        _SQLiteRelevantSourceStore,
+    )
+
+    prepared, seed_bundle = _micro_reversion_materialization_fixture()
+    seed = seed_bundle["rows"][0]
+    trace = seed["source_trace"]
+    payload = seed["source_payload"]
+    market_rows = quality._micro_reversion_source_rows_from_pool(
+        source_bundle=seed_bundle,
+        bundle_row=seed,
+        pool_name="market",
+        reference_field="source_market_row_sha256s",
+    )
+    depth_rows = quality._micro_reversion_source_rows_from_pool(
+        source_bundle=seed_bundle,
+        bundle_row=seed,
+        pool_name="depth",
+        reference_field="source_depth_row_sha256s",
+    )
+    references = quality._micro_reversion_source_rows_from_pool(
+        source_bundle=seed_bundle,
+        bundle_row=seed,
+        pool_name="event_reference",
+        reference_field="source_event_reference_sha256s",
+    )
+    config = BridgeConfig(**seed["bridge_config"])
+    windows = _relevant_windows([trace], [payload], config=config)
+
+    def synthetic_market_corpus():
+        yield from market_rows
+        for index in range(2_000):
+            yield {
+                **market_rows[0],
+                "item": "999999",
+                "symbol": "999999",
+                "source_sequence": index + 1,
+                "series_sequence": index + 1,
+            }
+
+    with _SQLiteRelevantSourceStore("", windows=windows) as source_store:
+        source_store.ingest("market", synthetic_market_corpus())
+        source_store.ingest("depth", depth_rows)
+        source_store.ingest("reference", references, reference_rows=True)
+        source_store.finalize()
+        rebuilt = quality.build_micro_reversion_source_bundle(
+            target_date="2026-08-14",
+            prepared_requests=prepared,
+            traces=[trace],
+            payloads=[payload],
+            prompt_rows=[
+                {
+                    "schema": "ai_decision_prompt_v1",
+                    "endpoint": trace["endpoint"],
+                    "model": trace["model"],
+                    "schema_name": payload["schema_name"],
+                    "prompt_sha256": trace["prompt_sha256"],
+                    "sanitized_prompt": seed[
+                        "current_control_prompt_contract"
+                    ]["system_prompt"],
+                    "replay_exact": True,
+                    "redacted": False,
+                }
+            ],
+            control_prompt_contracts=[
+                {
+                    "decision_trace_id": trace["decision_trace_id"],
+                    "prompt_sha256": trace["prompt_sha256"],
+                    "prompt_contract": seed[
+                        "current_control_prompt_contract"
+                    ],
+                }
+            ],
+            market_rows=(),
+            depth_rows=(),
+            event_references=(),
+            bridge_config=config,
+            verified_symbol_metadata_by_trace={
+                trace["decision_trace_id"]: seed["verified_symbol_metadata"]
+            },
+            source_store=source_store,
+        )
+
+    assert rebuilt["source_materialization_mode"] == "sqlite_bounded_per_trace"
+    assert rebuilt["source_materialization_diagnostics"][
+        "invalid_timestamp_rows_used_for_evidence"
+    ] is False
+    assert rebuilt["source_materialization_diagnostics"][
+        "retained_row_counts"
+    ] == {"market": 4, "depth": 1, "reference": 1}
+    assert rebuilt["eligible_row_count"] == 1
+    assert rebuilt["rows"][0]["evidence"] == seed["evidence"]
+
+
+def test_micro_reversion_source_bundle_header_tamper_fails_closed():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    source_bundle["row_count"] = 2
+
+    with pytest.raises(ValueError, match="source_bundle_content_sha256_mismatch"):
+        quality.materialize_micro_reversion_offline_requests(
+            prepared_requests=prepared,
+            bridge_source_bundle=source_bundle,
+        )
+
+
+def test_micro_reversion_excluded_scope_uses_trade_date_not_symbol():
+    assert quality._micro_reversion_excluded_scopes(
+        [
+            {
+                "trade_date": "2026-08-14",
+                "venue": "krx",
+                "session_bucket": "KRX_REGULAR",
+                "sequence_epoch": 123,
+            }
+        ]
+    ) == {("2026-08-14", "KRX", "KRX_REGULAR", 123)}
+    with pytest.raises(ValueError, match="excluded_scope_row_invalid"):
+        quality._micro_reversion_excluded_scopes(
+            [
+                {
+                    "symbol": "000001",
+                    "venue": "KRX",
+                    "session_bucket": "KRX_REGULAR",
+                    "sequence_epoch": 123,
+                }
+            ]
+        )
+
+
+def test_actual_stage_coverage_prepare_output_adapts_into_three_arm_requests():
+    from src.engine.scalping.ai_stage_coverage_replay import (
+        prepare_stage_requests,
+    )
+
+    _, seed_bundle = _micro_reversion_materialization_fixture()
+    seed = seed_bundle["rows"][0]
+    trace = seed["source_trace"]
+    payload = seed["source_payload"]
+    control_contract = seed["current_control_prompt_contract"]
+    stage_requests, summary = prepare_stage_requests(
+        stage="entry",
+        dates=["2026-08-14"],
+        max_rows=1,
+        control_manifest={
+            "controls": [
+                {
+                    "endpoint": "analyze_target",
+                    "prompt_version": trace["prompt_version"],
+                    "prompt_sha256": trace["prompt_sha256"],
+                    "provider_actual": trace["provider_actual"],
+                    "model": trace["model"],
+                    "request_temperature": trace["request_temperature"],
+                    "request_reasoning_effort": trace[
+                        "request_reasoning_effort"
+                    ],
+                }
+            ]
+        },
+        promotion={"promoted_at": "2026-08-14T08:30:00+09:00"},
+        traces=[trace],
+        payloads=[payload],
+        eligible_trace_ids={trace["decision_trace_id"]},
+    )
+    assert summary["selected_frozen_cohort_count"] == 1
+    assert stage_requests[0]["candidate"]["schema_name"] == (
+        "decision_quality_v2_entry_candidate"
+    )
+    assert stage_requests[0]["candidate"]["require_json"] is True
+    assert stage_requests[0]["candidate"]["response_schema_application"] == (
+        "provider_enforced_openai"
+    )
+    rebuilt_bundle = quality.build_micro_reversion_source_bundle(
+        target_date="2026-08-14",
+        prepared_requests=stage_requests,
+        traces=[trace],
+        payloads=[payload],
+        prompt_rows=[
+            {
+                "schema": "ai_decision_prompt_v1",
+                "prompt_sha256": trace["prompt_sha256"],
+                "endpoint": trace["endpoint"],
+                "model": trace["model"],
+                "schema_name": payload["schema_name"],
+                "redacted": False,
+                "replay_exact": True,
+                "sanitized_prompt": control_contract["system_prompt"],
+            }
+        ],
+        control_prompt_contracts=[
+            {
+                "decision_trace_id": trace["decision_trace_id"],
+                "prompt_sha256": trace["prompt_sha256"],
+                "prompt_contract": control_contract,
+            }
+        ],
+        market_rows=quality._micro_reversion_source_rows_from_pool(
+            source_bundle=seed_bundle,
+            bundle_row=seed,
+            pool_name="market",
+            reference_field="source_market_row_sha256s",
+        ),
+        depth_rows=quality._micro_reversion_source_rows_from_pool(
+            source_bundle=seed_bundle,
+            bundle_row=seed,
+            pool_name="depth",
+            reference_field="source_depth_row_sha256s",
+        ),
+        event_references=quality._micro_reversion_source_rows_from_pool(
+            source_bundle=seed_bundle,
+            bundle_row=seed,
+            pool_name="event_reference",
+            reference_field="source_event_reference_sha256s",
+        ),
+        bridge_config=seed["bridge_config"],
+        verified_symbol_metadata_by_trace={
+            trace["decision_trace_id"]: seed["verified_symbol_metadata"]
+        },
+    )
+    adapter = rebuilt_bundle["rows"][0]["candidate_contract_adapter"]
+    assert adapter["status"] == "prepared_contract_complete"
+    assert adapter["adapted_fields"] == []
+
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=stage_requests,
+        bridge_source_bundle=rebuilt_bundle,
+    )
+    assert materialized["request_count"] == 3
+    assert all(
+        row["candidate"]["schema_name"]
+        for row in materialized["requests"]
+    )
 
 
 def test_holding_paired_replay_uses_noncollapsed_prompt_and_pointer_ledger():

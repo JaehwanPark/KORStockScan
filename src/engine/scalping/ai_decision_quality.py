@@ -11,7 +11,9 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
+import shutil
 import tempfile
 import time
 from collections import Counter, defaultdict
@@ -20,7 +22,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import fmean
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from src.engine.ai_prompt_contracts import (
@@ -37,7 +39,6 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
-    DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_holding_v2_3_system_prompt,
     decision_quality_v2_detailed_system_prompt,
@@ -53,6 +54,7 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_16_sequential_recovery_system_prompt,
     decision_quality_v2_system_prompt,
 )
+from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine.scalping.ai_decision_trace import replay_source_input
 from src.engine.scalping.entry_candidate_lifecycle_state import (
     component_is_complete as candidate_lifecycle_component_is_complete,
@@ -85,6 +87,27 @@ CONTROL_SCHEMA = "ai_decision_quality_control_v1"
 LABEL_REPORT_SCHEMA = "ai_decision_outcome_labels_v1"
 BASELINE_SCHEMA = "ai_decision_quality_baseline_v1"
 PAIRED_SCHEMA = "ai_prompt_paired_replay_v1"
+MICRO_REVERSION_SOURCE_BUNDLE_SCHEMA = (
+    "ai_micro_reversion_replay_source_bundle_v1"
+)
+MICRO_REVERSION_MATERIALIZED_REQUEST_SCHEMA = (
+    "ai_micro_reversion_materialized_replay_requests_v1"
+)
+MICRO_REVERSION_EXECUTION_RESULT_SCHEMA = (
+    "ai_micro_reversion_three_arm_offline_results_v1"
+)
+MICRO_REVERSION_CHECKPOINT_RECORD_SCHEMA = (
+    "ai_micro_reversion_execution_checkpoint_record_v1"
+)
+MICRO_REVERSION_CHECKPOINT_MANIFEST_SCHEMA = (
+    "ai_micro_reversion_execution_checkpoint_manifest_v1"
+)
+MICRO_REVERSION_CHECKPOINT_RECONSTRUCTED_SCHEMA = (
+    "ai_micro_reversion_execution_checkpoint_reconstructed_v1"
+)
+MICRO_REVERSION_ACTION_NEUTRAL_LABEL_SCHEMA = (
+    "ai_micro_reversion_action_neutral_outcome_labels_v1"
+)
 DAILY_MATERIALIZATION_SCHEMA = "ai_decision_quality_daily_materialization_v1"
 DETAILED_PAIRED_SCHEMA = "ai_prompt_detailed_paired_replay_v1"
 EXACT_PAYLOAD_ANALYSIS_SCHEMA = "exact_payload_analysis_v1"
@@ -123,6 +146,7 @@ PRIMARY_HORIZON_BY_STAGE = {
 
 TRACE_DIR = DATA_DIR / "ai_decision_trace"
 PAYLOAD_DIR = DATA_DIR / "ai_decision_payloads"
+PROMPT_DIR = DATA_DIR / "ai_decision_prompts"
 OUTCOME_DIR = DATA_DIR / "ai_decision_outcomes"
 PIPELINE_DIR = DATA_DIR / "pipeline_events"
 RUNTIME_DIR = DATA_DIR / "runtime"
@@ -133,6 +157,9 @@ DETAILED_PAIRED_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_detailed_paired_re
 SCORE_CORRELATION_REPORT_DIR = DATA_DIR / "report" / "ai_score_outcome_correlation"
 RECOVERY_TRIGGER_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_recovery_trigger"
 REVERSAL_SEQUENCE_REPORT_DIR = DATA_DIR / "report" / "ai_entry_reversal_sequence_replay"
+MICRO_REVERSION_REQUEST_REPORT_DIR = (
+    DATA_DIR / "report" / "ai_micro_reversion_materialized_replay_requests"
+)
 PYRAMID_FEEDBACK_REPORT_DIR = DATA_DIR / "report" / "scalping_pyramid_intraday_feedback"
 SCALE_IN_COUNTERFACTUAL_REPORT_DIR = (
     DATA_DIR / "report" / "scale_in_incremental_counterfactual"
@@ -155,6 +182,9 @@ ANTICIPATORY_LEARNING_MIN_ROWS = 1
 ANTICIPATORY_LEARNING_MIN_SYMBOLS = 1
 CANDIDATE_SCHEMA_MAX_ATTEMPTS = 4
 HOLDING_SEMANTIC_VALIDATOR_VERSION = "holding_exact_semantic_gate_v1"
+DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION = (
+    "decision_quality_v2_response_semantic_v1"
+)
 HOLDING_FLOW_BOUNDED_DEFER_SEMANTIC_VALIDATOR_VERSION = (
     "holding_flow_bounded_defer_semantic_v1"
 )
@@ -621,6 +651,24 @@ def reversal_sequence_path(target_date: str) -> Path:
     )
 
 
+def micro_reversion_materialized_request_path(target_date: str) -> Path:
+    return MICRO_REVERSION_REQUEST_REPORT_DIR / (
+        f"ai_micro_reversion_materialized_replay_requests_{target_date}.json"
+    )
+
+
+def micro_reversion_source_bundle_path(target_date: str) -> Path:
+    return MICRO_REVERSION_REQUEST_REPORT_DIR / (
+        f"ai_micro_reversion_replay_source_bundle_{target_date}.json"
+    )
+
+
+def micro_reversion_execution_result_path(target_date: str) -> Path:
+    return MICRO_REVERSION_REQUEST_REPORT_DIR / (
+        f"ai_micro_reversion_three_arm_offline_results_{target_date}.json"
+    )
+
+
 def _canonical_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
@@ -635,6 +683,12 @@ def _sha256(value: Any) -> str:
     return hashlib.sha256(
         value if isinstance(value, bytes) else _canonical_bytes(value)
     ).hexdigest()
+
+
+def _stored_prompt_sha256(prompt: str) -> str:
+    """Match ai_decision_trace prompt-store raw UTF-8 hash semantics."""
+
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
@@ -1284,6 +1338,75 @@ def _trace_endpoint(trace: dict[str, Any]) -> str:
     return ENDPOINT_ALIASES.get(value.lower(), value)
 
 
+def _holding_flow_forensic_sidecar_only(trace: dict[str, Any]) -> bool:
+    return bool(
+        _trace_endpoint(trace) == "holding_flow"
+        and str(
+            trace.get("holding_exact_replay_context_capture_status") or ""
+        ).strip()
+        == "forensic_sidecar_captured"
+    )
+
+
+def _natural_control_contract_findings(trace: dict[str, Any]) -> list[str]:
+    findings: list[str] = []
+    semantic_validator_version = str(
+        trace.get("semantic_validator_version") or ""
+    ).strip()
+    expected_semantic_validator_version = str(
+        trace.get("expected_semantic_validator_version") or ""
+    ).strip()
+    if not semantic_validator_version:
+        findings.append("natural_control_semantic_validator_missing")
+    if trace.get("semantic_validator_applied") is not True:
+        findings.append("natural_control_semantic_validator_not_applied")
+    if str(trace.get("semantic_validation_status") or "").strip() != "pass":
+        findings.append("natural_control_semantic_validation_not_pass")
+    if (
+        expected_semantic_validator_version
+        and semantic_validator_version
+        and expected_semantic_validator_version != semantic_validator_version
+    ):
+        findings.append("natural_control_semantic_validator_expected_mismatch")
+    if str(trace.get("result_source") or "").strip().lower() != "live":
+        findings.append("natural_control_result_source_not_live")
+    if str(trace.get("action") or "").strip().upper() in {
+        "",
+        "NOT_EVALUATED",
+        "UNUSABLE",
+    }:
+        findings.append("natural_control_action_not_evaluated")
+    response_schema_sha256 = str(trace.get("response_schema_sha256") or "").strip()
+    response_schema_mode = str(
+        trace.get("openai_response_schema_mode") or ""
+    ).strip()
+    response_schema_application = str(
+        trace.get("response_schema_application") or ""
+    ).strip()
+    provider = str(trace.get("provider_actual") or "").strip().lower()
+    if provider == "openai":
+        if not response_schema_sha256 and response_schema_mode != "json_object":
+            findings.append("natural_control_response_schema_anchor_missing")
+        elif response_schema_sha256 and response_schema_application != (
+            "provider_enforced_openai"
+        ):
+            findings.append("natural_control_response_schema_not_provider_enforced")
+        elif not response_schema_sha256 and response_schema_application != (
+            "provider_json_object_openai"
+        ):
+            findings.append("natural_control_json_contract_not_provider_enforced")
+    elif provider.startswith("bedrock"):
+        if not response_schema_sha256:
+            findings.append("natural_control_local_response_schema_anchor_missing")
+        if response_schema_application != (
+            "local_expected_only_not_sent_to_bedrock"
+        ):
+            findings.append("natural_control_bedrock_local_contract_unverified")
+    else:
+        findings.append("natural_control_provider_contract_unsupported")
+    return findings
+
+
 def _exact_trace_payload_findings(
     *,
     trace: dict[str, Any],
@@ -1324,6 +1447,13 @@ def _exact_trace_payload_findings(
         or str(trace.get("position_reconciliation_mode") or "") == "simulation_book"
     ):
         findings.append("simulation_observation_not_natural_cohort")
+    if _holding_flow_forensic_sidecar_only(trace):
+        # The exact sidecar is valid offline replay context, but it is not the
+        # provider input used by the natural holding-flow control call while
+        # the structured V2 runtime is OFF.  Keep it available to the opt-in
+        # micro bridge without admitting it to natural-control/outcome cohorts.
+        findings.append("holding_flow_forensic_sidecar_not_natural_control")
+    findings.extend(_natural_control_contract_findings(trace))
     trace_venue = _venue(trace.get("effective_venue"))
     trace_session = _session(trace.get("session_bucket"))
     contract = _payload_contract(payload)
@@ -5697,6 +5827,74 @@ def _entry_price_response_errors(
     return errors
 
 
+def _validate_response_against_json_schema_subset(
+    value: Any,
+    schema: Any,
+    *,
+    path: str = "response",
+) -> list[str]:
+    """Validate the registry subset used by captured natural control schemas."""
+
+    if not isinstance(schema, dict):
+        return [f"{path}_schema_missing"]
+    declared_type = schema.get("type")
+    allowed_types = (
+        set(declared_type) if isinstance(declared_type, list) else {declared_type}
+    )
+    type_matches = {
+        "object": isinstance(value, dict),
+        "array": isinstance(value, list),
+        "string": isinstance(value, str),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+        "boolean": isinstance(value, bool),
+        "null": value is None,
+    }
+    if declared_type is not None and not any(
+        type_matches.get(str(type_name), False) for type_name in allowed_types
+    ):
+        return [f"{path}_type_invalid"]
+    if "enum" in schema and value not in schema.get("enum", []):
+        return [f"{path}_enum_invalid"]
+    errors: list[str] = []
+    if isinstance(value, dict):
+        properties = schema.get("properties")
+        properties = properties if isinstance(properties, dict) else {}
+        for field in schema.get("required") or []:
+            if field not in value:
+                errors.append(f"{path}_{field}_missing")
+        if schema.get("additionalProperties") is False:
+            errors.extend(
+                f"{path}_{field}_unexpected"
+                for field in value
+                if field not in properties
+            )
+        for field, child in value.items():
+            if field in properties:
+                errors.extend(
+                    _validate_response_against_json_schema_subset(
+                        child,
+                        properties[field],
+                        path=f"{path}_{field}",
+                    )
+                )
+    elif isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for index, child in enumerate(value):
+            errors.extend(
+                _validate_response_against_json_schema_subset(
+                    child,
+                    schema["items"],
+                    path=f"{path}_{index}",
+                )
+            )
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if schema.get("minimum") is not None and value < schema["minimum"]:
+            errors.append(f"{path}_below_minimum")
+        if schema.get("maximum") is not None and value > schema["maximum"]:
+            errors.append(f"{path}_above_maximum")
+    return list(dict.fromkeys(errors))
+
+
 def validate_replay_candidate_response(
     request: dict[str, Any],
     response: dict[str, Any],
@@ -5716,6 +5914,77 @@ def validate_replay_candidate_response(
             adjudication,
             setup_evidence=request.get("entry_setup_evidence"),
         )
+    control_arm = str(request.get("micro_reversion_replay_arm") or "") in {
+        "replay_control_exact_no_micro",
+        "replay_control_exact_plus_micro",
+    }
+    natural_schema_validator = bool(
+        control_arm
+        and (
+            semantic_validator_version.startswith("live_")
+            or semantic_validator_version
+            in {
+                "holding_score_live_normalizer_v1",
+                "holding_flow_live_schema_semantic_v1",
+            }
+        )
+    )
+    if natural_schema_validator or semantic_validator_version in {
+        "holding_score_live_normalizer_v1",
+        "holding_flow_live_schema_semantic_v1",
+    }:
+        errors = _validate_response_against_json_schema_subset(
+            response,
+            candidate.get("response_schema"),
+        )
+        if semantic_validator_version == "holding_flow_live_schema_semantic_v1":
+            score = response.get("score")
+            next_review_sec = response.get("next_review_sec")
+            if isinstance(score, int) and not isinstance(score, bool) and not (
+                0 <= score <= 100
+            ):
+                errors.append("holding_flow_score_out_of_range")
+            if (
+                isinstance(next_review_sec, int)
+                and not isinstance(next_review_sec, bool)
+                and not 0 <= next_review_sec <= 600
+            ):
+                errors.append("holding_flow_next_review_sec_out_of_range")
+        if semantic_validator_version == "holding_score_live_normalizer_v1":
+            for field in ("score", "confidence"):
+                value = response.get(field)
+                if (
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and not 0 <= value <= 100
+                ):
+                    errors.append(f"holding_score_{field}_out_of_range")
+        if semantic_validator_version in {
+            "live_entry_price_v1_schema_semantic_v1",
+            "live_entry_price_v1_semantic_contract_v1",
+        }:
+            order_price = response.get("order_price")
+            confidence = response.get("confidence")
+            max_wait_sec = response.get("max_wait_sec")
+            if (
+                isinstance(order_price, int)
+                and not isinstance(order_price, bool)
+                and order_price < 0
+            ):
+                errors.append("entry_price_v1_order_price_negative")
+            if (
+                isinstance(confidence, int)
+                and not isinstance(confidence, bool)
+                and not 0 <= confidence <= 100
+            ):
+                errors.append("entry_price_v1_confidence_out_of_range")
+            if (
+                isinstance(max_wait_sec, int)
+                and not isinstance(max_wait_sec, bool)
+                and not 5 <= max_wait_sec <= 1_200
+            ):
+                errors.append("entry_price_v1_max_wait_sec_out_of_range")
+        return list(dict.fromkeys(errors))
     errors = validate_candidate_response(
         response,
         stage=stage,
@@ -6768,6 +7037,21 @@ def _candidate_contract_sha256(candidate: dict[str, Any]) -> str:
     contract = {
         "prompt_version": candidate.get("prompt_version"),
         "system_prompt_sha256": candidate.get("system_prompt_sha256"),
+        "provider": candidate.get("provider"),
+        "model": candidate.get("model"),
+        "temperature": candidate.get("temperature"),
+        "reasoning_effort": candidate.get("reasoning_effort"),
+        "transport": candidate.get("transport"),
+        "schema_name": candidate.get("schema_name"),
+        "require_json": candidate.get("require_json"),
+        "max_output_tokens": candidate.get("max_output_tokens"),
+        "response_schema_mode": candidate.get("response_schema_mode"),
+        "response_schema_application": candidate.get(
+            "response_schema_application"
+        ),
+        "response_schema_registry_used": candidate.get(
+            "response_schema_registry_used"
+        ),
         "response_schema_sha256": candidate.get("response_schema_sha256"),
     }
     if candidate.get("response_schema_instance_policy") is not None:
@@ -7350,13 +7634,33 @@ def execute_openai_prompt_v2_candidate(
     response_schema_name = re.sub(
         r"[^A-Za-z0-9_-]",
         "_",
-        str(candidate.get("prompt_version") or DECISION_QUALITY_V2_PROMPT_VERSION),
+        str(
+            candidate.get("schema_name")
+            or candidate.get("prompt_version")
+            or DECISION_QUALITY_V2_PROMPT_VERSION
+        ),
     )[:64]
-    response_schema = _candidate_openai_schema(
-        stage=stage,
-        candidate=candidate,
-        setup_evidence=request.get("entry_setup_evidence"),
-    )
+    declared_response_schema = candidate.get("response_schema")
+    if isinstance(declared_response_schema, dict) and (
+        str(candidate.get("semantic_validator_version") or "")
+        != ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+    ):
+        declared_response_schema_sha256 = str(
+            candidate.get("response_schema_sha256") or ""
+        )
+        if (
+            not declared_response_schema_sha256
+            or declared_response_schema_sha256
+            != _sha256(declared_response_schema)
+        ):
+            raise ValueError("candidate_declared_response_schema_hash_mismatch")
+        response_schema = deepcopy(declared_response_schema)
+    else:
+        response_schema = _candidate_openai_schema(
+            stage=stage,
+            candidate=candidate,
+            setup_evidence=request.get("entry_setup_evidence"),
+        )
     response_schema_instance_sha256 = _sha256(response_schema)
     expected_schema_instance_sha256 = str(
         candidate.get("response_schema_instance_sha256") or ""
@@ -7418,13 +7722,19 @@ def execute_openai_prompt_v2_candidate(
             "model": model,
             "reasoning_effort": reasoning_effort or None,
             "transport": "openai_responses_http_offline",
+            "source_transport_contract": candidate.get("transport"),
             "response_id": str(response_id or "") or None,
+            "response_id_unavailable_reason": (
+                None if response_id else "provider_response_id_not_returned"
+            ),
             "response_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "input_tokens": _usage_value(response, "input_tokens"),
             "output_tokens": _usage_value(response, "output_tokens"),
             "total_tokens": _usage_value(response, "total_tokens"),
             "provider_none": False,
+            "provider_call_attempted": True,
+            "provider_call_succeeded": True,
             "store": False,
             "failback_chain": [],
             "parse_error": parse_error or None,
@@ -7557,6 +7867,8 @@ def prepare_paired_replay_requests(
         if (
             not label
             or not payload
+            or _holding_flow_forensic_sidecar_only(trace)
+            or bool(_natural_control_contract_findings(trace))
             or not trace.get("payload_replay_exact")
             or payload.get("replay_exact") is not True
             or label.get("primary_cohort_eligible") is not True
@@ -7586,6 +7898,21 @@ def prepare_paired_replay_requests(
             if stage == "holding"
             else decision_quality_v2_system_prompt(stage)
         )
+        candidate_schema_name = {
+            "entry": "decision_quality_v2_entry_candidate",
+            "entry_price": "entry_price_explicit_fill_value_v1",
+            "holding": "decision_quality_holding_v2_3_candidate",
+            "holding_flow": "decision_quality_holding_flow_candidate",
+        }.get(stage)
+        if not candidate_schema_name:
+            continue
+        candidate_response_schema = (
+            build_openai_response_text_format(candidate_schema_name)["schema"]
+            if stage == "entry_price"
+            else _prompt_v2_openai_schema(
+                "entry" if stage == "entry" else "holding"
+            )
+        )
         replay_payload = _replay_exact_payload(replay_source_input(payload))
         if not isinstance(replay_payload, dict):
             continue
@@ -7597,15 +7924,33 @@ def prepare_paired_replay_requests(
             ),
             "system_prompt": candidate_prompt,
             "system_prompt_sha256": _sha256(candidate_prompt),
-            "response_schema": DECISION_QUALITY_V2_RESPONSE_SCHEMA,
-            "response_schema_sha256": _sha256(DECISION_QUALITY_V2_RESPONSE_SCHEMA),
+            "response_schema": candidate_response_schema,
+            "response_schema_sha256": _sha256(candidate_response_schema),
             "provider": trace.get("provider_actual"),
             "model": trace.get("model"),
             "temperature": trace.get("request_temperature"),
             "reasoning_effort": trace.get("request_reasoning_effort"),
+            "transport": trace.get("transport"),
+            "schema_name": candidate_schema_name,
+            "require_json": payload.get("require_json"),
+            "max_output_tokens": payload.get("max_output_tokens"),
+            "response_schema_mode": trace.get("openai_response_schema_mode"),
+            "response_schema_application": (
+                "provider_enforced_openai"
+                if str(trace.get("provider_actual") or "").strip().lower()
+                == "openai"
+                else "local_expected_only_not_sent_to_bedrock"
+            ),
+            "response_schema_registry_used": trace.get(
+                "openai_response_schema_registry_used"
+            ),
         }
-        if stage == "holding":
-            candidate["semantic_validator_version"] = HOLDING_SEMANTIC_VALIDATOR_VERSION
+        candidate["semantic_validator_version"] = {
+            "entry": DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION,
+            "entry_price": ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION,
+            "holding": HOLDING_SEMANTIC_VALIDATOR_VERSION,
+            "holding_flow": HOLDING_FLOW_BOUNDED_DEFER_SEMANTIC_VALIDATOR_VERSION,
+        }[stage]
         candidate["contract_sha256"] = _candidate_contract_sha256(candidate)
         request = {
             "paired_replay_id": f"pair-{_sha256((trace_id, trace.get('payload_sha256')))[:24]}",
@@ -7623,6 +7968,7 @@ def prepare_paired_replay_requests(
             "request_envelope_sha256": trace.get("request_envelope_sha256"),
             "endpoint": endpoint,
             "exact_payload": replay_payload,
+            "source_exact_payload_sha256": _sha256(replay_payload),
             "control": {
                 "prompt_version": control.get("prompt_version"),
                 "prompt_sha256": control.get("prompt_sha256"),
@@ -7703,6 +8049,3754 @@ def prepare_paired_replay_requests(
                 },
             }
     return requests
+
+
+def _validated_micro_reversion_prompt_contract(
+    value: Any,
+    *,
+    contract_role: str,
+) -> dict[str, Any]:
+    """Validate a fully reconstructable, source-only replay prompt contract."""
+
+    if not isinstance(value, dict):
+        raise ValueError(f"micro_reversion_{contract_role}_prompt_contract_missing")
+    contract = deepcopy(value)
+    prompt = contract.get("system_prompt")
+    prompt_sha256 = str(contract.get("system_prompt_sha256") or "")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError(f"micro_reversion_{contract_role}_system_prompt_missing")
+    expected_prompt_sha256 = (
+        _stored_prompt_sha256(prompt)
+        if contract_role == "control"
+        else _sha256(prompt)
+    )
+    if not prompt_sha256 or prompt_sha256 != expected_prompt_sha256:
+        raise ValueError(
+            f"micro_reversion_{contract_role}_system_prompt_sha256_mismatch"
+        )
+    for field in (
+        "prompt_version",
+        "provider",
+        "model",
+        "transport",
+        "schema_name",
+        "response_schema_mode",
+        "response_schema_application",
+        "semantic_validator_version",
+    ):
+        if not str(contract.get(field) or "").strip():
+            raise ValueError(
+                f"micro_reversion_{contract_role}_prompt_contract_{field}_missing"
+            )
+    for field in ("temperature", "reasoning_effort"):
+        if field not in contract:
+            raise ValueError(
+                f"micro_reversion_{contract_role}_prompt_contract_{field}_missing"
+            )
+    if not isinstance(contract.get("require_json"), bool):
+        raise ValueError(
+            f"micro_reversion_{contract_role}_prompt_contract_require_json_invalid"
+        )
+    if not isinstance(contract.get("response_schema_registry_used"), bool):
+        raise ValueError(
+            "micro_reversion_"
+            f"{contract_role}_prompt_contract_response_schema_registry_used_invalid"
+        )
+    provider = str(contract.get("provider") or "").strip().lower()
+    schema_application = str(
+        contract.get("response_schema_application") or ""
+    ).strip()
+    if provider == "openai" and schema_application not in {
+        "provider_enforced_openai",
+        "provider_json_object_openai",
+    }:
+        raise ValueError(
+            f"micro_reversion_{contract_role}_openai_schema_application_invalid"
+        )
+    if provider.startswith("bedrock") and schema_application != (
+        "local_expected_only_not_sent_to_bedrock"
+    ):
+        raise ValueError(
+            f"micro_reversion_{contract_role}_bedrock_schema_application_invalid"
+        )
+    max_output_tokens = contract.get("max_output_tokens")
+    if (
+        isinstance(max_output_tokens, bool)
+        or not isinstance(max_output_tokens, int)
+        or max_output_tokens <= 0
+    ):
+        raise ValueError(
+            f"micro_reversion_{contract_role}_prompt_contract_max_output_tokens_invalid"
+        )
+    response_schema = contract.get("response_schema")
+    response_schema_sha256 = str(contract.get("response_schema_sha256") or "")
+    if isinstance(response_schema, dict):
+        if provider == "openai" and schema_application != (
+            "provider_enforced_openai"
+        ):
+            raise ValueError(
+                f"micro_reversion_{contract_role}_openai_schema_not_enforced"
+            )
+        if not response_schema_sha256 or response_schema_sha256 != _sha256(
+            response_schema
+        ):
+            raise ValueError(
+                f"micro_reversion_{contract_role}_response_schema_sha256_mismatch"
+            )
+    else:
+        if contract.get("response_schema_mode") != "json_object":
+            raise ValueError(
+                f"micro_reversion_{contract_role}_response_schema_contract_missing"
+            )
+        if provider == "openai" and schema_application != (
+            "provider_json_object_openai"
+        ):
+            raise ValueError(
+                f"micro_reversion_{contract_role}_json_object_not_declared"
+            )
+    declared_contract_sha256 = str(contract.get("contract_sha256") or "")
+    computed_contract_sha256 = _candidate_contract_sha256(contract)
+    if (
+        not declared_contract_sha256
+        or declared_contract_sha256 != computed_contract_sha256
+    ):
+        raise ValueError(
+            f"micro_reversion_{contract_role}_prompt_contract_sha256_mismatch"
+        )
+    return contract
+
+
+def _micro_reversion_bridge_config(value: Any) -> Any:
+    from src.engine.scalping.micro_reversion.ai_quality_bridge import BridgeConfig
+
+    if isinstance(value, BridgeConfig):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError("micro_reversion_bridge_config_missing")
+    allowed_fields = set(BridgeConfig.__dataclass_fields__)
+    unexpected_fields = set(value) - allowed_fields
+    if unexpected_fields:
+        raise ValueError(
+            "micro_reversion_bridge_config_unknown_fields:"
+            + ",".join(sorted(unexpected_fields))
+        )
+    normalized = dict(value)
+    for field in (
+        "participation_grid",
+        "outcome_horizons_sec",
+        "cost_profile_venues",
+    ):
+        if isinstance(normalized.get(field), list):
+            normalized[field] = tuple(normalized[field])
+    try:
+        return BridgeConfig(**normalized)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"micro_reversion_bridge_config_invalid:{exc}") from exc
+
+
+def _validate_micro_reversion_cost_profile_artifact(
+    *,
+    config: Any,
+    artifact: Any,
+    target_date: str | None,
+    effective_venue: Any,
+    evidence: dict[str, Any] | None = None,
+) -> None:
+    if config.cost_profile_verified is not True:
+        if artifact not in (None, {}):
+            raise ValueError("micro_reversion_unverified_cost_profile_artifact_present")
+        return
+    try:
+        embedded_artifact = json.loads(
+            str(config.cost_profile_artifact_payload_json or "")
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("micro_reversion_verified_cost_profile_artifact_missing") from exc
+    if not isinstance(embedded_artifact, dict) or not embedded_artifact:
+        raise ValueError("micro_reversion_verified_cost_profile_artifact_missing")
+    if artifact not in (None, {}) and artifact != embedded_artifact:
+        raise ValueError("micro_reversion_cost_profile_artifact_payload_mismatch")
+    artifact = embedded_artifact
+    if _sha256(artifact) != str(config.cost_profile_artifact_sha256 or ""):
+        raise ValueError("micro_reversion_cost_profile_artifact_sha256_mismatch")
+    artifact_id = str(artifact.get("artifact_id") or "").strip()
+    if artifact.get("instrument_scope") != (
+        "domestic_common_or_preferred_stock"
+    ):
+        raise ValueError("micro_reversion_cost_profile_instrument_scope_mismatch")
+    effective_date = str(artifact.get("effective_date") or "").strip()
+    venues = {
+        _venue(value)
+        for value in artifact.get("venues") or []
+        if _venue(value)
+    }
+    if artifact_id != str(config.cost_profile_artifact_id or ""):
+        raise ValueError("micro_reversion_cost_profile_artifact_id_mismatch")
+    if effective_date != str(config.cost_profile_effective_date or ""):
+        raise ValueError("micro_reversion_cost_profile_effective_date_mismatch")
+    if venues != {_venue(value) for value in config.cost_profile_venues}:
+        raise ValueError("micro_reversion_cost_profile_venue_scope_mismatch")
+    normalized_venue = _venue(effective_venue)
+    if not normalized_venue or normalized_venue not in venues:
+        raise ValueError("micro_reversion_cost_profile_request_venue_not_covered")
+    economics = (evidence or {}).get("economics")
+    economics = economics if isinstance(economics, dict) else {}
+    if (
+        economics.get("cost_profile_verified") is not True
+        or economics.get("cost_profile_scope_status")
+        != "reviewed_artifact_applicable"
+        or str(economics.get("instrument_type") or "").strip().upper()
+        != "EQUITY"
+    ):
+        raise ValueError(
+            "micro_reversion_cost_profile_instrument_or_economic_scope_unverified"
+        )
+    try:
+        effective_day = datetime.fromisoformat(effective_date).date()
+        target_day = (
+            datetime.fromisoformat(target_date).date() if target_date else None
+        )
+    except ValueError as exc:
+        raise ValueError("micro_reversion_cost_profile_date_invalid") from exc
+    if target_day is not None and effective_day > target_day:
+        raise ValueError("micro_reversion_cost_profile_not_yet_effective")
+    for field in (
+        "buy_fee_bps",
+        "sell_fee_bps",
+        "statutory_sell_tax_bps",
+    ):
+        if field in artifact and artifact.get(field) != getattr(config, field):
+            raise ValueError(f"micro_reversion_cost_profile_{field}_mismatch")
+
+
+def _micro_reversion_excluded_scopes(value: Any) -> set[tuple[str, str, str, int]]:
+    if value in (None, []):
+        return set()
+    if not isinstance(value, list):
+        raise ValueError("micro_reversion_excluded_scopes_invalid")
+    scopes: set[tuple[str, str, str, int]] = set()
+    for row in value:
+        if isinstance(row, dict):
+            parts = (
+                row.get("trade_date"),
+                row.get("venue"),
+                row.get("session_bucket"),
+                row.get("sequence_epoch"),
+            )
+        elif isinstance(row, (list, tuple)) and len(row) == 4:
+            parts = tuple(row)
+        else:
+            raise ValueError("micro_reversion_excluded_scope_row_invalid")
+        try:
+            scope = (
+                str(parts[0] or "").strip(),
+                _venue(parts[1]),
+                _session(parts[2]),
+                int(parts[3]),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("micro_reversion_excluded_scope_row_invalid") from exc
+        try:
+            trade_date = datetime.fromisoformat(scope[0]).date().isoformat()
+        except ValueError as exc:
+            raise ValueError("micro_reversion_excluded_scope_row_invalid") from exc
+        if not all(scope[:3]) or "UNKNOWN" in scope[1:3] or scope[3] < 0:
+            raise ValueError("micro_reversion_excluded_scope_row_invalid")
+        scopes.add((trade_date, scope[1], scope[2], scope[3]))
+    return scopes
+
+
+def build_micro_reversion_source_bundle(
+    *,
+    target_date: str,
+    prepared_requests: list[dict[str, Any]],
+    traces: list[dict[str, Any]],
+    payloads: list[dict[str, Any]],
+    prompt_rows: list[dict[str, Any]],
+    control_prompt_contracts: list[dict[str, Any]],
+    market_rows: Iterable[dict[str, Any]],
+    depth_rows: Iterable[dict[str, Any]],
+    event_references: Iterable[dict[str, Any]],
+    bridge_config: Any,
+    excluded_scopes: set[tuple[str, str, str, int]] | None = None,
+    verified_symbol_metadata_by_trace: Mapping[str, Mapping[str, Any]] | None = None,
+    source_store: Any | None = None,
+) -> dict[str, Any]:
+    """Build the bounded, hash-anchored input for three-arm materialization."""
+
+    from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+        _filter_relevant_rows,
+        build_tactical_evidence,
+        exact_snapshot_watermark,
+        normalize_symbol,
+        resolve_micro_scope,
+    )
+
+    config = _micro_reversion_bridge_config(bridge_config)
+    if not isinstance(prepared_requests, list) or not prepared_requests:
+        raise ValueError("micro_reversion_prepared_requests_missing")
+    if not isinstance(control_prompt_contracts, list):
+        raise ValueError("micro_reversion_control_contract_artifact_missing")
+    trace_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for trace in traces:
+        trace_id = str(trace.get("decision_trace_id") or "")
+        if trace_id:
+            trace_by_id[trace_id].append(trace)
+    payload_by_key, payload_by_unique_hash = _payload_indexes(payloads)
+
+    prompt_by_hash: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for prompt_row in prompt_rows:
+        prompt_hash = str(prompt_row.get("prompt_sha256") or "")
+        if prompt_hash:
+            prompt_by_hash[prompt_hash].append(prompt_row)
+    contract_by_trace: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    contract_by_prompt: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in control_prompt_contracts:
+        if not isinstance(row, dict):
+            raise ValueError("micro_reversion_control_contract_row_invalid")
+        trace_id = str(row.get("decision_trace_id") or "")
+        prompt_hash = str(row.get("prompt_sha256") or "")
+        if trace_id:
+            contract_by_trace[trace_id].append(row)
+        if prompt_hash:
+            contract_by_prompt[prompt_hash].append(row)
+
+    bindings: list[dict[str, Any]] = []
+    binding_exclusions: list[dict[str, Any]] = []
+    raw_windows: dict[tuple[str, str, str], list[tuple[int, int]]] = defaultdict(
+        list
+    )
+    prepared_trace_ids: set[str] = set()
+    for request in prepared_requests:
+        if not isinstance(request, dict):
+            raise ValueError("micro_reversion_prepared_request_invalid")
+        trace_id = str(request.get("decision_trace_id") or "")
+        if not trace_id or trace_id in prepared_trace_ids:
+            raise ValueError("micro_reversion_prepared_decision_trace_id_invalid")
+        prepared_trace_ids.add(trace_id)
+        try:
+            trace_candidates = trace_by_id.get(trace_id, [])
+            if len(trace_candidates) != 1:
+                raise ValueError("micro_reversion_source_trace_missing_or_ambiguous")
+            trace = trace_candidates[0]
+            natural_findings = _natural_control_contract_findings(trace)
+            if natural_findings:
+                raise ValueError(
+                    "micro_reversion_natural_control_contract_unverified:"
+                    + ",".join(natural_findings)
+                )
+            forensic_sidecar_supplemental = _holding_flow_forensic_sidecar_only(
+                trace
+            )
+            if forensic_sidecar_supplemental and request.get(
+                "semantic_replay_supplemental"
+            ) is not True:
+                raise ValueError(
+                    "micro_reversion_holding_flow_forensic_sidecar_natural_control_invalid"
+                )
+            payload = _payload_for_trace(
+                trace,
+                payload_by_key=payload_by_key,
+                payload_by_unique_hash=payload_by_unique_hash,
+            )
+            if not payload:
+                raise ValueError(
+                    "micro_reversion_source_payload_missing_or_ambiguous"
+                )
+            _assert_micro_reversion_source_contract(
+                request=request,
+                source_trace=trace,
+                source_payload=payload,
+            )
+
+            prompt_hash = str(trace.get("prompt_sha256") or "")
+            stored_prompt_candidates = [
+                row
+                for row in prompt_by_hash.get(prompt_hash, [])
+                if row.get("schema") == "ai_decision_prompt_v1"
+                and row.get("replay_exact") is True
+                and row.get("redacted") is False
+                and row.get("endpoint") == request.get("endpoint")
+                and str(row.get("model") or "")
+                in {
+                    str(trace.get("model") or ""),
+                    str(trace.get("model_requested") or ""),
+                }
+                and row.get("schema_name") == payload.get("schema_name")
+                and isinstance(row.get("sanitized_prompt"), str)
+                and _stored_prompt_sha256(row["sanitized_prompt"])
+                == prompt_hash
+            ]
+            prompt_bodies = {
+                str(row.get("sanitized_prompt"))
+                for row in stored_prompt_candidates
+            }
+            if len(prompt_bodies) != 1:
+                raise ValueError(
+                    "micro_reversion_prompt_store_missing_or_ambiguous"
+                )
+            stored_prompt = next(iter(prompt_bodies))
+
+            contract_candidates = contract_by_trace.get(trace_id, [])
+            if not contract_candidates:
+                contract_candidates = contract_by_prompt.get(prompt_hash, [])
+            if len(contract_candidates) != 1:
+                raise ValueError(
+                    "micro_reversion_control_contract_missing_or_ambiguous"
+                )
+            contract_row = contract_candidates[0]
+            raw_contract = contract_row.get("prompt_contract")
+            if not isinstance(raw_contract, dict):
+                raise ValueError("micro_reversion_control_prompt_contract_missing")
+            if contract_row.get("prompt_sha256") not in (None, "", prompt_hash):
+                raise ValueError(
+                    "micro_reversion_control_contract_prompt_hash_mismatch"
+                )
+            control_contract = deepcopy(raw_contract)
+            existing_prompt = control_contract.get("system_prompt")
+            if existing_prompt not in (None, stored_prompt):
+                raise ValueError(
+                    "micro_reversion_control_contract_prompt_body_mismatch"
+                )
+            control_contract["system_prompt"] = stored_prompt
+            control_contract = _validated_micro_reversion_prompt_contract(
+                control_contract,
+                contract_role="control",
+            )
+            _assert_micro_reversion_prompt_source_binding(
+                contract=control_contract,
+                source_trace=trace,
+                source_payload=payload,
+                current_control=True,
+            )
+            candidate_contract, candidate_adapted_fields = (
+                _adapt_micro_reversion_candidate_contract(
+                    candidate=request.get("candidate"),
+                    source_trace=trace,
+                    source_payload=payload,
+                    stage=request.get("stage"),
+                )
+            )
+            _assert_micro_reversion_prompt_source_binding(
+                contract=candidate_contract,
+                source_trace=trace,
+                source_payload=payload,
+                current_control=False,
+            )
+
+            watermark, watermark_findings = exact_snapshot_watermark(trace, payload)
+            if watermark is None or watermark_findings:
+                raise ValueError(
+                    "micro_reversion_exact_snapshot_unavailable:"
+                    + ",".join(watermark_findings)
+                )
+            scope = resolve_micro_scope(trace)
+            if scope.status != "resolved":
+                raise ValueError(f"micro_reversion_scope_unresolved:{scope.reason}")
+            watermark_ms = int(watermark["captured_at_ms"])
+            start_ms = watermark_ms - (
+                config.active_wave_max_age_sec + config.context_lookback_sec
+            ) * 1_000
+            scope_key = (
+                normalize_symbol(trace.get("stock_code")),
+                scope.venue,
+                scope.session_bucket,
+            )
+            raw_windows[scope_key].append((start_ms, watermark_ms))
+            bindings.append(
+                {
+                    "request": request,
+                    "trace": trace,
+                    "payload": payload,
+                    "control_contract": control_contract,
+                    "prompt_store_row_sha256": _sha256(
+                        stored_prompt_candidates[0]
+                    ),
+                    "forensic_sidecar_supplemental": (
+                        forensic_sidecar_supplemental
+                    ),
+                    "candidate_contract": candidate_contract,
+                    "candidate_contract_adapted_fields": (
+                        candidate_adapted_fields
+                    ),
+                    "scope_key": scope_key,
+                    "window": (start_ms, watermark_ms),
+                    "verified_symbol_metadata": deepcopy(
+                        (verified_symbol_metadata_by_trace or {}).get(trace_id)
+                    ),
+                }
+            )
+        except (TypeError, ValueError) as exc:
+            binding_exclusions.append(
+                {
+                    "decision_trace_id": trace_id,
+                    "paired_replay_id": request.get("paired_replay_id"),
+                    "stage": request.get("stage"),
+                    "effective_venue": request.get("effective_venue"),
+                    "session_bucket": request.get("session_bucket"),
+                    "reason": str(exc).split(":", 1)[0],
+                    "source_quality_blockers": [],
+                }
+            )
+
+    windows: dict[tuple[str, str, str], tuple[tuple[int, int], ...]] = {}
+    for scope_key, scope_windows in raw_windows.items():
+        merged: list[list[int]] = []
+        for start_ms, end_ms in sorted(scope_windows):
+            if not merged or start_ms > merged[-1][1]:
+                merged.append([start_ms, end_ms])
+            else:
+                merged[-1][1] = max(merged[-1][1], end_ms)
+        windows[scope_key] = tuple((start, end) for start, end in merged)
+    selected_market_rows = (
+        [] if source_store is not None else _filter_relevant_rows(market_rows, windows)
+    )
+    selected_depth_rows = (
+        [] if source_store is not None else _filter_relevant_rows(depth_rows, windows)
+    )
+    selected_event_references = (
+        []
+        if source_store is not None
+        else _filter_relevant_rows(
+            event_references,
+            windows,
+            reference_rows=True,
+        )
+    )
+    config_values = {
+        field: deepcopy(getattr(config, field))
+        for field in config.__dataclass_fields__
+    }
+    normalized_excluded_scopes = set(excluded_scopes or set())
+    source_row_pool: dict[str, dict[str, dict[str, Any]]] = {
+        "market": {},
+        "depth": {},
+        "event_reference": {},
+    }
+
+    def intern_source_rows(
+        pool_name: str, rows: list[dict[str, Any]]
+    ) -> list[str]:
+        pool = source_row_pool[pool_name]
+        hashes: list[str] = []
+        for row in rows:
+            row_hash = _sha256(row)
+            existing = pool.get(row_hash)
+            if existing is not None and existing != row:
+                raise ValueError("micro_reversion_source_row_hash_collision")
+            pool.setdefault(row_hash, deepcopy(row))
+            hashes.append(row_hash)
+        return hashes
+
+    bundle_rows: list[dict[str, Any]] = []
+    bundle_exclusions: list[dict[str, Any]] = list(binding_exclusions)
+    for binding in bindings:
+        trace = binding["trace"]
+        payload = binding["payload"]
+        scope_window = {binding["scope_key"]: (binding["window"],)}
+        if source_store is not None:
+            start_ms, end_ms = binding["window"]
+            trace_market_rows = list(
+                source_store.rows(
+                    "market",
+                    binding["scope_key"],
+                    start_us=start_ms * 1_000,
+                    end_us=end_ms * 1_000,
+                )
+            )
+            trace_depth_rows = list(
+                source_store.rows(
+                    "depth",
+                    binding["scope_key"],
+                    start_us=start_ms * 1_000,
+                    end_us=end_ms * 1_000,
+                )
+            )
+            trace_event_references = list(
+                source_store.rows(
+                    "reference",
+                    binding["scope_key"],
+                    start_us=start_ms * 1_000,
+                    end_us=end_ms * 1_000,
+                )
+            )
+        else:
+            trace_market_rows = list(
+                _filter_relevant_rows(selected_market_rows, scope_window)
+            )
+            trace_depth_rows = list(
+                _filter_relevant_rows(selected_depth_rows, scope_window)
+            )
+            trace_event_references = list(
+                _filter_relevant_rows(
+                    selected_event_references,
+                    scope_window,
+                    reference_rows=True,
+                )
+            )
+        evidence: dict[str, Any] = {}
+        try:
+            evidence = build_tactical_evidence(
+                trace=trace,
+                payload=payload,
+                market_rows=trace_market_rows,
+                depth_rows=trace_depth_rows,
+                event_references=trace_event_references,
+                config=config,
+                excluded_scopes=normalized_excluded_scopes,
+                verified_symbol_metadata=binding.get(
+                    "verified_symbol_metadata"
+                ),
+            )
+            if (evidence.get("source_quality") or {}).get("status") != "pass":
+                raise ValueError("micro_reversion_bounded_source_quality_not_pass")
+            if evidence.get("state") in {
+                None,
+                "not_applicable",
+                "source_unavailable",
+            }:
+                raise ValueError(
+                    "micro_reversion_bounded_evidence_not_replay_eligible"
+                )
+            _validate_micro_reversion_cost_profile_artifact(
+                config=config,
+                artifact=None,
+                target_date=target_date,
+                effective_venue=evidence.get("micro_venue"),
+                evidence=evidence,
+            )
+        except (TypeError, ValueError) as exc:
+            bundle_exclusions.append(
+                {
+                    "decision_trace_id": trace.get("decision_trace_id"),
+                    "paired_replay_id": binding["request"].get(
+                        "paired_replay_id"
+                    ),
+                    "stage": binding["request"].get("stage"),
+                    "effective_venue": binding["request"].get(
+                        "effective_venue"
+                    ),
+                    "session_bucket": binding["request"].get("session_bucket"),
+                    "reason": str(exc).split(":", 1)[0],
+                    "source_quality_blockers": list(
+                        (evidence.get("source_quality") or {}).get("blockers", [])
+                    ),
+                }
+            )
+            continue
+        bundle_rows.append(
+            {
+                "decision_trace_id": trace.get("decision_trace_id"),
+                "current_control_prompt_contract": binding["control_contract"],
+                "control_prompt_source": {
+                    "status": "hash_exact_stored_prompt",
+                    "prompt_store_row_sha256": binding[
+                        "prompt_store_row_sha256"
+                    ],
+                    "natural_control_contract_status": (
+                        "replay_only_forensic_sidecar_not_natural_control"
+                        if binding["forensic_sidecar_supplemental"]
+                        else "verified_exact_trace_contract"
+                    ),
+                },
+                "evidence": evidence,
+                "source_trace": deepcopy(trace),
+                "source_payload": deepcopy(payload),
+                "source_market_row_sha256s": intern_source_rows(
+                    "market", trace_market_rows
+                ),
+                "source_depth_row_sha256s": intern_source_rows(
+                    "depth", trace_depth_rows
+                ),
+                "source_event_reference_sha256s": intern_source_rows(
+                    "event_reference", trace_event_references
+                ),
+                "bridge_config": deepcopy(config_values),
+                "excluded_scopes": [
+                    list(scope) for scope in sorted(normalized_excluded_scopes)
+                ],
+                "semantic_replay_supplemental": binding[
+                    "forensic_sidecar_supplemental"
+                ],
+                "verified_symbol_metadata": binding.get(
+                    "verified_symbol_metadata"
+                ),
+                "candidate_contract": binding["candidate_contract"],
+                "candidate_contract_adapter": {
+                    "status": (
+                        "legacy_prepared_contract_completed"
+                        if binding["candidate_contract_adapted_fields"]
+                        else "prepared_contract_complete"
+                    ),
+                    "adapted_fields": binding[
+                        "candidate_contract_adapted_fields"
+                    ],
+                    "candidate_contract_sha256": binding[
+                        "candidate_contract"
+                    ]["contract_sha256"],
+                },
+            }
+        )
+    bundle_without_hash = {
+        "schema": MICRO_REVERSION_SOURCE_BUNDLE_SCHEMA,
+        "target_date": target_date,
+        "status": (
+            "bounded_source_bundle_ready_no_provider_calls"
+            if bundle_rows
+            else "no_micro_reversion_eligible_rows"
+        ),
+        "prepared_request_count": len(prepared_requests),
+        "eligible_row_count": len(bundle_rows),
+        "excluded_row_count": len(bundle_exclusions),
+        "row_count": len(bundle_rows),
+        "rows": bundle_rows,
+        "exclusions": bundle_exclusions,
+        "source_row_pool": source_row_pool,
+        "source_row_pool_counts": {
+            name: len(rows) for name, rows in source_row_pool.items()
+        },
+        "source_materialization_mode": (
+            "sqlite_bounded_per_trace" if source_store is not None else "in_memory_api"
+        ),
+        "source_materialization_diagnostics": (
+            {
+                "invalid_timestamp_counts": dict(
+                    getattr(source_store, "invalid_timestamp_counts", {})
+                ),
+                "retained_row_counts": dict(
+                    getattr(source_store, "retained_row_counts", {})
+                ),
+                "invalid_timestamp_rows_used_for_evidence": False,
+            }
+            if source_store is not None
+            else {
+                "invalid_timestamp_counts": {},
+                "retained_row_counts": {},
+                "invalid_timestamp_rows_used_for_evidence": False,
+            }
+        ),
+        "provider_call_performed": False,
+        **OFFLINE_CONTRACT,
+    }
+    return {
+        **bundle_without_hash,
+        "source_bundle_content_sha256": _sha256(bundle_without_hash),
+    }
+
+
+def _validate_micro_reversion_source_bundle_artifact(
+    bridge_source_bundle: dict[str, Any],
+) -> None:
+    """Validate the complete source-bundle census and offline authority."""
+
+    declared_hash = str(
+        bridge_source_bundle.get("source_bundle_content_sha256") or ""
+    )
+    content = {
+        key: value
+        for key, value in bridge_source_bundle.items()
+        if key != "source_bundle_content_sha256"
+    }
+    if not declared_hash or declared_hash != _sha256(content):
+        raise ValueError("micro_reversion_source_bundle_content_sha256_mismatch")
+    rows = bridge_source_bundle.get("rows")
+    if not isinstance(rows, list):
+        raise ValueError("micro_reversion_source_bundle_rows_missing")
+    if bridge_source_bundle.get("row_count") != len(rows):
+        raise ValueError("micro_reversion_source_bundle_row_count_mismatch")
+    exclusions = bridge_source_bundle.get("exclusions")
+    if not isinstance(exclusions, list):
+        raise ValueError("micro_reversion_source_bundle_exclusions_missing")
+    if bridge_source_bundle.get("eligible_row_count") != len(rows):
+        raise ValueError("micro_reversion_source_bundle_eligible_count_mismatch")
+    if bridge_source_bundle.get("excluded_row_count") != len(exclusions):
+        raise ValueError("micro_reversion_source_bundle_excluded_count_mismatch")
+    if bridge_source_bundle.get("prepared_request_count") != (
+        len(rows) + len(exclusions)
+    ):
+        raise ValueError("micro_reversion_source_bundle_prepared_count_mismatch")
+    trace_census = [
+        str(row.get("decision_trace_id") or "") for row in [*rows, *exclusions]
+    ]
+    if any(not value for value in trace_census) or len(set(trace_census)) != len(
+        trace_census
+    ):
+        raise ValueError("micro_reversion_source_bundle_trace_census_invalid")
+    source_row_pool = bridge_source_bundle.get("source_row_pool")
+    source_row_pool_counts = bridge_source_bundle.get("source_row_pool_counts")
+    if not isinstance(source_row_pool, dict) or not isinstance(
+        source_row_pool_counts, dict
+    ):
+        raise ValueError("micro_reversion_source_row_pool_missing")
+    for pool_name in ("market", "depth", "event_reference"):
+        pool = source_row_pool.get(pool_name)
+        if not isinstance(pool, dict) or source_row_pool_counts.get(
+            pool_name
+        ) != len(pool):
+            raise ValueError("micro_reversion_source_row_pool_count_mismatch")
+        if any(
+            not isinstance(row, dict) or row_hash != _sha256(row)
+            for row_hash, row in pool.items()
+        ):
+            raise ValueError("micro_reversion_source_row_pool_hash_mismatch")
+    if bridge_source_bundle.get("source_materialization_mode") not in {
+        "in_memory_api",
+        "sqlite_bounded_per_trace",
+    }:
+        raise ValueError("micro_reversion_source_materialization_mode_invalid")
+    diagnostics = bridge_source_bundle.get("source_materialization_diagnostics")
+    if (
+        not isinstance(diagnostics, dict)
+        or diagnostics.get("invalid_timestamp_rows_used_for_evidence") is not False
+    ):
+        raise ValueError("micro_reversion_source_materialization_diagnostics_invalid")
+    for field in ("invalid_timestamp_counts", "retained_row_counts"):
+        counts = diagnostics.get(field)
+        if not isinstance(counts, dict) or any(
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 0
+            for value in counts.values()
+        ):
+            raise ValueError(
+                "micro_reversion_source_materialization_diagnostics_invalid"
+            )
+    if bridge_source_bundle.get("provider_call_performed") is not False:
+        raise ValueError("micro_reversion_source_bundle_provider_authority_invalid")
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+    ):
+        if bridge_source_bundle.get(field) is not expected:
+            raise ValueError(
+                f"micro_reversion_source_bundle_authority_invalid:{field}"
+            )
+
+
+def _micro_reversion_source_rows_from_pool(
+    *,
+    source_bundle: dict[str, Any],
+    bundle_row: dict[str, Any],
+    pool_name: str,
+    reference_field: str,
+) -> list[dict[str, Any]]:
+    pool = (source_bundle.get("source_row_pool") or {}).get(pool_name)
+    references = bundle_row.get(reference_field)
+    if not isinstance(pool, dict) or not isinstance(references, list):
+        raise ValueError("micro_reversion_source_row_reference_missing")
+    if len(references) != len(set(references)):
+        raise ValueError("micro_reversion_source_row_reference_duplicate")
+    resolved: list[dict[str, Any]] = []
+    for row_hash in references:
+        row = pool.get(str(row_hash or ""))
+        if not isinstance(row, dict) or _sha256(row) != row_hash:
+            raise ValueError("micro_reversion_source_row_reference_invalid")
+        resolved.append(row)
+    return resolved
+
+
+def _assert_micro_reversion_source_contract(
+    *,
+    request: dict[str, Any],
+    source_trace: dict[str, Any],
+    source_payload: dict[str, Any],
+) -> None:
+    checks = {
+        "decision_trace_id": (
+            request.get("decision_trace_id"),
+            source_trace.get("decision_trace_id"),
+        ),
+        "endpoint": (
+            request.get("endpoint"),
+            source_payload.get("endpoint") or source_trace.get("endpoint"),
+        ),
+        "payload_sha256": (
+            request.get("payload_sha256"),
+            source_payload.get("payload_sha256"),
+        ),
+        "trace_payload_sha256": (
+            request.get("payload_sha256"),
+            source_trace.get("payload_sha256"),
+        ),
+        "request_envelope_sha256": (
+            request.get("request_envelope_sha256"),
+            source_payload.get("request_envelope_sha256"),
+        ),
+        "trace_request_envelope_sha256": (
+            request.get("request_envelope_sha256"),
+            source_trace.get("request_envelope_sha256"),
+        ),
+    }
+    for field, (expected, actual) in checks.items():
+        if not expected or expected != actual:
+            raise ValueError(f"micro_reversion_source_contract_{field}_mismatch")
+    exact_payload = request.get("exact_payload")
+    source_exact_payload_sha256 = str(
+        request.get("source_exact_payload_sha256") or ""
+    )
+    if (
+        not isinstance(exact_payload, dict)
+        or not source_exact_payload_sha256
+        or _sha256(exact_payload) != source_exact_payload_sha256
+    ):
+        raise ValueError("micro_reversion_source_exact_payload_sha256_mismatch")
+    if source_payload.get("replay_exact") is not True:
+        raise ValueError("micro_reversion_source_payload_not_replay_exact")
+
+
+def _assert_micro_reversion_prompt_source_binding(
+    *,
+    contract: dict[str, Any],
+    source_trace: dict[str, Any],
+    source_payload: dict[str, Any],
+    current_control: bool,
+) -> None:
+    execution_source_checks = (
+        ("provider", source_trace, "provider_actual"),
+        ("model", source_trace, "model"),
+        ("temperature", source_trace, "request_temperature"),
+        ("reasoning_effort", source_trace, "request_reasoning_effort"),
+        ("transport", source_trace, "transport"),
+        ("max_output_tokens", source_payload, "max_output_tokens"),
+    )
+    control_response_checks = (
+        ("schema_name", source_payload, "schema_name"),
+        ("require_json", source_payload, "require_json"),
+        (
+            "response_schema_mode",
+            source_trace,
+            "openai_response_schema_mode",
+        ),
+        (
+            "response_schema_registry_used",
+            source_trace,
+            "openai_response_schema_registry_used",
+        ),
+        (
+            "response_schema_application",
+            source_trace,
+            "response_schema_application",
+        ),
+    )
+    source_checks = (
+        (*execution_source_checks, *control_response_checks)
+        if current_control
+        else execution_source_checks
+    )
+    for field, owner, source_field in source_checks:
+        if source_field not in owner:
+            raise ValueError(f"micro_reversion_source_prompt_{field}_missing")
+        source_value = owner.get(source_field)
+        if contract.get(field) != source_value:
+            raise ValueError(f"micro_reversion_source_prompt_{field}_mismatch")
+    if current_control:
+        for field, source_value in (
+            ("prompt_version", source_trace.get("prompt_version")),
+            ("system_prompt_sha256", source_trace.get("prompt_sha256")),
+        ):
+            if not source_value or contract.get(field) != source_value:
+                raise ValueError(
+                    f"micro_reversion_current_control_{field}_mismatch"
+                )
+        payload_prompt_sha256 = source_payload.get("prompt_sha256")
+        if (
+            not payload_prompt_sha256
+            or contract.get("system_prompt_sha256") != payload_prompt_sha256
+        ):
+            raise ValueError("micro_reversion_control_payload_prompt_sha256_mismatch")
+    if not current_control:
+        return
+    provider = str(contract.get("provider") or "").strip().lower()
+    source_schema_hash = source_trace.get("response_schema_sha256")
+    response_schema_application = str(
+        source_trace.get("response_schema_application") or ""
+    )
+    if provider == "openai":
+        if source_schema_hash and response_schema_application != (
+            "provider_enforced_openai"
+        ):
+            raise ValueError(
+                "micro_reversion_source_response_schema_application_unverified"
+            )
+        if source_schema_hash and (
+            contract.get("response_schema_sha256") != source_schema_hash
+        ):
+            raise ValueError("micro_reversion_source_response_schema_sha256_mismatch")
+        if not source_schema_hash and (
+            contract.get("response_schema_mode") != "json_object"
+            or response_schema_application != "provider_json_object_openai"
+        ):
+            raise ValueError("micro_reversion_source_response_contract_unanchored")
+    elif provider.startswith("bedrock"):
+        if (
+            not source_schema_hash
+            or response_schema_application
+            != "local_expected_only_not_sent_to_bedrock"
+            or contract.get("response_schema_sha256") != source_schema_hash
+        ):
+            raise ValueError("micro_reversion_bedrock_local_response_contract_invalid")
+    else:
+        raise ValueError("micro_reversion_control_provider_contract_unsupported")
+    source_semantic_validator = source_trace.get("semantic_validator_version")
+    if (
+        not source_semantic_validator
+        or source_trace.get("semantic_validator_applied") is not True
+        or str(source_trace.get("semantic_validation_status") or "") != "pass"
+    ):
+        raise ValueError("micro_reversion_source_semantic_validator_missing")
+    if contract.get("semantic_validator_version") != source_semantic_validator:
+        raise ValueError("micro_reversion_source_semantic_validator_mismatch")
+
+
+def _adapt_micro_reversion_candidate_contract(
+    *,
+    candidate: Any,
+    source_trace: dict[str, Any],
+    source_payload: dict[str, Any],
+    stage: Any,
+) -> tuple[dict[str, Any], list[str]]:
+    """Complete a legacy prepared Candidate from explicit offline contracts."""
+
+    if not isinstance(candidate, dict):
+        raise ValueError("micro_reversion_candidate_prompt_contract_missing")
+    adapted = deepcopy(candidate)
+    prompt_version = str(adapted.get("prompt_version") or "")
+    provider = str(adapted.get("provider") or "").strip().lower()
+    normalized_stage = _stage(stage)
+    semantic_by_stage = {
+        "entry": DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION,
+        "entry_price": ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION,
+        "holding": HOLDING_SEMANTIC_VALIDATOR_VERSION,
+        "holding_flow": HOLDING_FLOW_BOUNDED_DEFER_SEMANTIC_VALIDATOR_VERSION,
+    }
+    defaults = {
+        "transport": source_trace.get("transport"),
+        "schema_name": re.sub(r"[^A-Za-z0-9_-]", "_", prompt_version)[:64],
+        "require_json": True,
+        "max_output_tokens": source_payload.get("max_output_tokens"),
+        "response_schema_mode": source_trace.get("openai_response_schema_mode"),
+        "response_schema_application": (
+            "provider_enforced_openai"
+            if provider == "openai"
+            else "local_expected_only_not_sent_to_bedrock"
+        ),
+        "response_schema_registry_used": (
+            source_trace.get("openai_response_schema_registry_used")
+        ),
+        "semantic_validator_version": semantic_by_stage.get(normalized_stage),
+    }
+    adapted_fields: list[str] = []
+    for field, value in defaults.items():
+        if field not in adapted or adapted.get(field) in (None, ""):
+            adapted[field] = value
+            adapted_fields.append(field)
+    adapted["contract_sha256"] = _candidate_contract_sha256(adapted)
+    return (
+        _validated_micro_reversion_prompt_contract(
+            adapted,
+            contract_role="candidate",
+        ),
+        adapted_fields,
+    )
+
+
+def build_micro_reversion_control_contract_artifact(
+    *,
+    target_date: str,
+    prepared_requests: list[dict[str, Any]],
+    traces: list[dict[str, Any]],
+    payloads: list[dict[str, Any]],
+    prompt_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build control contracts only from captured bytes and known schemas."""
+
+    trace_by_id = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in traces
+        if row.get("decision_trace_id")
+    }
+    payload_by_key, payload_by_unique_hash = _payload_indexes(payloads)
+    prompt_by_hash: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in prompt_rows:
+        if row.get("prompt_sha256"):
+            prompt_by_hash[str(row["prompt_sha256"])].append(row)
+    contracts: list[dict[str, Any]] = []
+    exclusions: list[dict[str, Any]] = []
+    for request in prepared_requests:
+        trace_id = str(request.get("decision_trace_id") or "")
+        try:
+            trace = trace_by_id.get(trace_id)
+            if not isinstance(trace, dict):
+                raise ValueError("control_contract_trace_missing")
+            findings = _natural_control_contract_findings(trace)
+            if findings:
+                raise ValueError("control_contract_natural_trace_unverified")
+            payload = _payload_for_trace(
+                trace,
+                payload_by_key=payload_by_key,
+                payload_by_unique_hash=payload_by_unique_hash,
+            )
+            if not payload:
+                raise ValueError("control_contract_payload_missing")
+            prompt_hash = str(trace.get("prompt_sha256") or "")
+            requested_models = {
+                str(trace.get("model") or ""),
+                str(trace.get("model_requested") or ""),
+            }
+            prompt_candidates = [
+                row
+                for row in prompt_by_hash.get(prompt_hash, [])
+                if row.get("schema") == "ai_decision_prompt_v1"
+                and row.get("replay_exact") is True
+                and row.get("redacted") is False
+                and row.get("endpoint") == request.get("endpoint")
+                and str(row.get("model") or "") in requested_models
+                and row.get("schema_name") == payload.get("schema_name")
+                and isinstance(row.get("sanitized_prompt"), str)
+                and _stored_prompt_sha256(row["sanitized_prompt"]) == prompt_hash
+            ]
+            prompt_bodies = {
+                str(row["sanitized_prompt"]) for row in prompt_candidates
+            }
+            if len(prompt_bodies) != 1:
+                raise ValueError("control_contract_prompt_missing_or_ambiguous")
+            schema_hash = str(trace.get("response_schema_sha256") or "")
+            response_schema = None
+            if schema_hash:
+                schema_name = str(payload.get("schema_name") or "")
+                schema_override = None
+                if schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
+                    replay_payload = _replay_exact_payload(
+                        replay_source_input(payload)
+                    )
+                    replay_payload = (
+                        replay_payload if isinstance(replay_payload, dict) else {}
+                    )
+                    schema_override = entry_risk_adjudication_openai_schema(
+                        replay_payload.get(ENTRY_SETUP_EVIDENCE_SCHEMA)
+                    )
+                try:
+                    response_format = build_openai_response_text_format(
+                        schema_name,
+                        schema_override=schema_override,
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        "control_contract_schema_registry_anchor_unknown"
+                    ) from exc
+                response_schema = response_format.get("schema")
+                if (
+                    not isinstance(response_schema, dict)
+                    or _sha256(response_schema) != schema_hash
+                ):
+                    raise ValueError("control_contract_schema_registry_hash_mismatch")
+            contract = {
+                "prompt_version": trace.get("prompt_version"),
+                "system_prompt": next(iter(prompt_bodies)),
+                "system_prompt_sha256": prompt_hash,
+                "provider": trace.get("provider_actual"),
+                "model": trace.get("model"),
+                "temperature": trace.get("request_temperature"),
+                "reasoning_effort": trace.get("request_reasoning_effort"),
+                "transport": trace.get("transport"),
+                "schema_name": payload.get("schema_name"),
+                "require_json": payload.get("require_json"),
+                "max_output_tokens": payload.get("max_output_tokens"),
+                "response_schema_mode": trace.get(
+                    "openai_response_schema_mode"
+                ),
+                "response_schema_application": trace.get(
+                    "response_schema_application"
+                ),
+                "response_schema_registry_used": trace.get(
+                    "openai_response_schema_registry_used"
+                ),
+                "response_schema": response_schema,
+                "response_schema_sha256": schema_hash or None,
+                "semantic_validator_version": trace.get(
+                    "semantic_validator_version"
+                ),
+            }
+            contract["contract_sha256"] = _candidate_contract_sha256(contract)
+            contract = _validated_micro_reversion_prompt_contract(
+                contract,
+                contract_role="control",
+            )
+            _assert_micro_reversion_prompt_source_binding(
+                contract=contract,
+                source_trace=trace,
+                source_payload=payload,
+                current_control=True,
+            )
+            contracts.append(
+                {
+                    "decision_trace_id": trace_id,
+                    "prompt_sha256": prompt_hash,
+                    "prompt_contract": contract,
+                    "producer": "captured_prompt_and_known_schema_registry",
+                }
+            )
+        except (TypeError, ValueError) as exc:
+            exclusions.append(
+                {
+                    "decision_trace_id": trace_id,
+                    "reason": str(exc).split(":", 1)[0],
+                }
+            )
+    artifact_without_hash = {
+        "schema": "ai_micro_reversion_control_contract_artifact_v1",
+        "target_date": target_date,
+        "prepared_request_count": len(prepared_requests),
+        "control_contract_count": len(contracts),
+        "exclusion_count": len(exclusions),
+        "control_prompt_contracts": contracts,
+        "exclusions": exclusions,
+        "provider_call_performed": False,
+        **OFFLINE_CONTRACT,
+    }
+    return {
+        **artifact_without_hash,
+        "artifact_content_sha256": _sha256(artifact_without_hash),
+    }
+
+
+def materialize_micro_reversion_offline_requests(
+    *,
+    prepared_requests: list[dict[str, Any]],
+    bridge_source_bundle: dict[str, Any],
+) -> dict[str, Any]:
+    """Build source-only A/B/C requests from existing Exact V2 replay requests.
+
+    This explicit opt-in consumer never invokes an AI provider.  Each bundle row
+    must supply the exact bridge evidence and its raw reconstruction sources,
+    plus the full current-control prompt text and execution contract.  Missing
+    prompt bytes, hashes, source envelope fields, or semantic contracts fail
+    closed instead of reconstructing a control prompt from a version label.
+    """
+
+    from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+        materialize_micro_reversion_three_arm_requests,
+    )
+
+    if not isinstance(prepared_requests, list) or not prepared_requests:
+        raise ValueError("micro_reversion_prepared_requests_missing")
+    if (
+        not isinstance(bridge_source_bundle, dict)
+        or bridge_source_bundle.get("schema")
+        != MICRO_REVERSION_SOURCE_BUNDLE_SCHEMA
+    ):
+        raise ValueError("micro_reversion_source_bundle_schema_invalid")
+    _validate_micro_reversion_source_bundle_artifact(bridge_source_bundle)
+    bundle_rows = bridge_source_bundle.get("rows")
+    if not isinstance(bundle_rows, list):
+        raise ValueError("micro_reversion_source_bundle_rows_missing")
+
+    request_by_trace: dict[str, dict[str, Any]] = {}
+    pair_ids: set[str] = set()
+    for request in prepared_requests:
+        if not isinstance(request, dict):
+            raise ValueError("micro_reversion_prepared_request_invalid")
+        trace_id = str(request.get("decision_trace_id") or "")
+        pair_id = str(request.get("paired_replay_id") or "")
+        if not trace_id or trace_id in request_by_trace:
+            raise ValueError("micro_reversion_prepared_decision_trace_id_invalid")
+        if not pair_id or pair_id in pair_ids:
+            raise ValueError("micro_reversion_prepared_pair_id_invalid")
+        for field, expected in (
+            ("runtime_effect", False),
+            ("allowed_runtime_apply", False),
+            ("actual_order_submitted", False),
+            ("broker_order_forbidden", True),
+        ):
+            if request.get(field) is not expected:
+                raise ValueError(
+                    f"micro_reversion_prepared_request_authority_invalid:{field}"
+                )
+        if request.get("decision_authority") not in {
+            "offline_replay_and_attribution_only",
+            "offline_replay_no_runtime_change",
+            "offline_supplemental_replay_no_runtime_change",
+        }:
+            raise ValueError(
+                "micro_reversion_prepared_request_decision_authority_invalid"
+            )
+        request_by_trace[trace_id] = request
+        pair_ids.add(pair_id)
+
+    bundle_by_trace: dict[str, dict[str, Any]] = {}
+    for row in bundle_rows:
+        if not isinstance(row, dict):
+            raise ValueError("micro_reversion_source_bundle_row_invalid")
+        trace_id = str(row.get("decision_trace_id") or "")
+        if not trace_id or trace_id in bundle_by_trace:
+            raise ValueError("micro_reversion_source_bundle_trace_id_invalid")
+        bundle_by_trace[trace_id] = row
+    source_exclusions = bridge_source_bundle.get("exclusions") or []
+    excluded_trace_ids = {
+        str(row.get("decision_trace_id") or "")
+        for row in source_exclusions
+        if isinstance(row, dict) and row.get("decision_trace_id")
+    }
+    if set(request_by_trace) != set(bundle_by_trace) | excluded_trace_ids:
+        raise ValueError("micro_reversion_request_source_bundle_census_mismatch")
+    if set(bundle_by_trace) & excluded_trace_ids:
+        raise ValueError("micro_reversion_source_bundle_census_overlap")
+
+    materializations: list[dict[str, Any]] = []
+    flat_requests: list[dict[str, Any]] = []
+    control_contract_reconstructions: list[dict[str, Any]] = []
+    seen_request_ids: set[str] = set()
+    for trace_id, bundle_row in bundle_by_trace.items():
+        prepared_request = request_by_trace[trace_id]
+        source_trace = bundle_row.get("source_trace")
+        source_payload = bundle_row.get("source_payload")
+        evidence = bundle_row.get("evidence")
+        if not isinstance(source_trace, dict) or not isinstance(source_payload, dict):
+            raise ValueError("micro_reversion_source_trace_or_payload_missing")
+        if not isinstance(evidence, dict):
+            raise ValueError("micro_reversion_evidence_missing")
+        _assert_micro_reversion_source_contract(
+            request=prepared_request,
+            source_trace=source_trace,
+            source_payload=source_payload,
+        )
+
+        adapted_candidate_contract, candidate_adapted_fields = (
+            _adapt_micro_reversion_candidate_contract(
+                candidate=prepared_request.get("candidate"),
+                source_trace=source_trace,
+                source_payload=source_payload,
+                stage=prepared_request.get("stage"),
+            )
+        )
+        candidate_contract = _validated_micro_reversion_prompt_contract(
+            bundle_row.get("candidate_contract"),
+            contract_role="candidate",
+        )
+        if candidate_contract.get("contract_sha256") != adapted_candidate_contract.get(
+            "contract_sha256"
+        ):
+            raise ValueError("micro_reversion_prepared_candidate_contract_mismatch")
+        adapter = bundle_row.get("candidate_contract_adapter")
+        if (
+            not isinstance(adapter, dict)
+            or adapter.get("adapted_fields") != candidate_adapted_fields
+            or adapter.get("candidate_contract_sha256")
+            != candidate_contract.get("contract_sha256")
+        ):
+            raise ValueError("micro_reversion_candidate_contract_adapter_mismatch")
+        _assert_micro_reversion_prompt_source_binding(
+            contract=candidate_contract,
+            source_trace=source_trace,
+            source_payload=source_payload,
+            current_control=False,
+        )
+
+        control_contract = _validated_micro_reversion_prompt_contract(
+            bundle_row.get("current_control_prompt_contract"),
+            contract_role="control",
+        )
+        control_metadata = prepared_request.get("control")
+        if not isinstance(control_metadata, dict):
+            raise ValueError("micro_reversion_prepared_control_metadata_missing")
+        for field, control_field in (
+            ("prompt_version", "prompt_version"),
+            ("system_prompt_sha256", "prompt_sha256"),
+            ("provider", "provider"),
+            ("model", "model"),
+            ("temperature", "temperature"),
+            ("reasoning_effort", "reasoning_effort"),
+        ):
+            if control_contract.get(field) != control_metadata.get(control_field):
+                raise ValueError(
+                    f"micro_reversion_current_control_metadata_{field}_mismatch"
+                )
+        _assert_micro_reversion_prompt_source_binding(
+            contract=control_contract,
+            source_trace=source_trace,
+            source_payload=source_payload,
+            current_control=True,
+        )
+        control_contract_reconstructions.append(
+            {
+                "decision_trace_id": trace_id,
+                "status": (
+                    "replay_only_supplemental_control_contract_verified"
+                    if bundle_row.get("semantic_replay_supplemental") is True
+                    else "natural_control_contract_verified"
+                ),
+                "natural_control_contract_status": (
+                    "replay_only_forensic_sidecar_not_natural_control"
+                    if bundle_row.get("semantic_replay_supplemental") is True
+                    else "verified_exact_trace_contract"
+                ),
+                "source_trace_reconstructed_fields": [],
+                "response_contract_anchor": (
+                    "trace_response_schema_sha256"
+                    if source_trace.get("response_schema_sha256")
+                    else "trace_json_object_mode"
+                ),
+                "control_contract_sha256": control_contract["contract_sha256"],
+            }
+        )
+
+        control_request = deepcopy(prepared_request)
+        control_request["candidate"] = control_contract
+        candidate_request = deepcopy(prepared_request)
+        candidate_request["candidate"] = candidate_contract
+        source_market_rows = _micro_reversion_source_rows_from_pool(
+            source_bundle=bridge_source_bundle,
+            bundle_row=bundle_row,
+            pool_name="market",
+            reference_field="source_market_row_sha256s",
+        )
+        source_depth_rows = _micro_reversion_source_rows_from_pool(
+            source_bundle=bridge_source_bundle,
+            bundle_row=bundle_row,
+            pool_name="depth",
+            reference_field="source_depth_row_sha256s",
+        )
+        source_event_references = _micro_reversion_source_rows_from_pool(
+            source_bundle=bridge_source_bundle,
+            bundle_row=bundle_row,
+            pool_name="event_reference",
+            reference_field="source_event_reference_sha256s",
+        )
+        bridge_config = _micro_reversion_bridge_config(
+            bundle_row.get("bridge_config")
+        )
+        _validate_micro_reversion_cost_profile_artifact(
+            config=bridge_config,
+            artifact=bundle_row.get("cost_profile_artifact"),
+            target_date=str(bridge_source_bundle.get("target_date") or "") or None,
+            effective_venue=evidence.get("micro_venue"),
+            evidence=evidence,
+        )
+        materialized = materialize_micro_reversion_three_arm_requests(
+            replay_control_request=control_request,
+            replay_candidate_request=candidate_request,
+            evidence=evidence,
+            source_trace=source_trace,
+            source_payload=source_payload,
+            source_market_rows=source_market_rows,
+            source_depth_rows=source_depth_rows,
+            source_event_references=source_event_references,
+            config=bridge_config,
+            excluded_scopes=_micro_reversion_excluded_scopes(
+                bundle_row.get("excluded_scopes")
+            ),
+            verified_symbol_metadata=bundle_row.get(
+                "verified_symbol_metadata"
+            ),
+        )
+        requests = materialized.get("requests")
+        if not isinstance(requests, list) or len(requests) != 3:
+            raise ValueError("micro_reversion_three_arm_materialization_invalid")
+        for request in requests:
+            if not isinstance(request, dict):
+                raise ValueError("micro_reversion_materialized_request_invalid")
+            request_id = str(request.get("paired_replay_id") or "")
+            if not request_id or request_id in seen_request_ids:
+                raise ValueError("micro_reversion_materialized_request_id_duplicate")
+            seen_request_ids.add(request_id)
+            if request.get("provider_call_performed") is not False:
+                raise ValueError("micro_reversion_provider_call_authority_invalid")
+            for field, expected in (
+                ("runtime_effect", False),
+                ("allowed_runtime_apply", False),
+                ("actual_order_submitted", False),
+                ("broker_order_forbidden", True),
+            ):
+                if request.get(field) is not expected:
+                    raise ValueError(
+                        f"micro_reversion_materialized_authority_invalid:{field}"
+                    )
+            flat_requests.append(request)
+        materializations.append(
+            {key: value for key, value in materialized.items() if key != "requests"}
+        )
+
+    report_without_hash = {
+        "schema": MICRO_REVERSION_MATERIALIZED_REQUEST_SCHEMA,
+        "generated_at": datetime.now(KST).isoformat(),
+        "status": (
+            "materialized_source_only_no_provider_calls"
+            if flat_requests
+            else "no_micro_reversion_eligible_requests"
+        ),
+        "source_bundle_content_sha256": bridge_source_bundle[
+            "source_bundle_content_sha256"
+        ],
+        "source_bundle_artifact_sha256": _sha256(bridge_source_bundle),
+        "prepared_request_census_content_sha256": _sha256(prepared_requests),
+        "prepared_request_count": len(prepared_requests),
+        "materialization_count": len(materializations),
+        "request_count": len(flat_requests),
+        "request_ids": [row["paired_replay_id"] for row in flat_requests],
+        "current_control_contract_reconstructions": (
+            control_contract_reconstructions
+        ),
+        "source_exclusion_count": len(source_exclusions),
+        "source_exclusions": deepcopy(source_exclusions),
+        "materializations": materializations,
+        "requests": flat_requests,
+        "provider_call_performed": False,
+        **OFFLINE_CONTRACT,
+    }
+    return {
+        **report_without_hash,
+        "report_content_sha256": _sha256(report_without_hash),
+    }
+
+
+def _validate_micro_reversion_materialized_report(
+    materialized_report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if (
+        not isinstance(materialized_report, dict)
+        or materialized_report.get("schema")
+        != MICRO_REVERSION_MATERIALIZED_REQUEST_SCHEMA
+    ):
+        raise ValueError("micro_reversion_materialized_report_schema_invalid")
+    declared_hash = str(materialized_report.get("report_content_sha256") or "")
+    content = {
+        key: value
+        for key, value in materialized_report.items()
+        if key != "report_content_sha256"
+    }
+    if not declared_hash or declared_hash != _sha256(content):
+        raise ValueError("micro_reversion_materialized_report_content_hash_mismatch")
+    requests = materialized_report.get("requests")
+    if not isinstance(requests, list) or not requests:
+        raise ValueError("micro_reversion_materialized_requests_missing")
+    if materialized_report.get("request_count") != len(requests):
+        raise ValueError("micro_reversion_materialized_request_count_mismatch")
+    request_ids = [str(row.get("paired_replay_id") or "") for row in requests]
+    if (
+        any(not value for value in request_ids)
+        or len(set(request_ids)) != len(request_ids)
+        or materialized_report.get("request_ids") != request_ids
+    ):
+        raise ValueError("micro_reversion_materialized_request_ids_invalid")
+    if materialized_report.get("provider_call_performed") is not False:
+        raise ValueError("micro_reversion_materialized_provider_authority_invalid")
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+    ):
+        if materialized_report.get(field) is not expected:
+            raise ValueError(
+                f"micro_reversion_materialized_report_authority_invalid:{field}"
+            )
+    return requests
+
+
+def _validate_micro_reversion_execution_request(
+    request: dict[str, Any],
+) -> None:
+    arm = str(request.get("micro_reversion_replay_arm") or "")
+    if arm not in {
+        "replay_control_exact_no_micro",
+        "replay_control_exact_plus_micro",
+        "replay_candidate_exact_plus_micro",
+    }:
+        raise ValueError("micro_reversion_execution_arm_invalid")
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+        ("provider_call_performed", False),
+    ):
+        if request.get(field) is not expected:
+            raise ValueError(f"micro_reversion_execution_authority_invalid:{field}")
+    exact_payload = request.get("exact_payload")
+    if not isinstance(exact_payload, dict) or _sha256(exact_payload) != str(
+        request.get("source_exact_payload_sha256") or ""
+    ):
+        raise ValueError("micro_reversion_execution_exact_payload_hash_mismatch")
+    candidate_input = request.get("candidate_input")
+    if not isinstance(candidate_input, dict) or _sha256(candidate_input) != str(
+        request.get("candidate_input_sha256") or ""
+    ):
+        raise ValueError("micro_reversion_execution_candidate_input_hash_mismatch")
+    if candidate_input.get("exact_payload") != exact_payload:
+        raise ValueError("micro_reversion_execution_candidate_input_exact_mismatch")
+    _validated_micro_reversion_prompt_contract(
+        request.get("candidate"),
+        contract_role=(
+            "candidate"
+            if arm == "replay_candidate_exact_plus_micro"
+            else "control"
+        ),
+    )
+
+
+def _micro_reversion_outcome_join(
+    *,
+    request: dict[str, Any],
+    labels_by_id: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    label_id = str(request.get("outcome_join_key") or "")
+    matches = labels_by_id.get(label_id, [])
+    if not label_id or len(matches) != 1:
+        raise ValueError("micro_reversion_execution_outcome_missing_or_ambiguous")
+    label = matches[0]
+    _validate_micro_reversion_action_neutral_label(label)
+    if (
+        str(label.get("decision_trace_id") or "")
+        != str(request.get("decision_trace_id") or "")
+        or _stage(label.get("decision_stage")) != _stage(request.get("stage"))
+        or _normalize_stock_code(label.get("stock_code"))
+        != _normalize_stock_code(request.get("stock_code"))
+        or _venue(label.get("effective_venue"))
+        != _venue(request.get("effective_venue"))
+        or _session(label.get("session_bucket"))
+        != _session(request.get("session_bucket"))
+    ):
+        raise ValueError("micro_reversion_execution_outcome_identity_mismatch")
+    if (
+        label.get("label_status") not in {"partial", "mature"}
+        or label.get("source_quality_status") != "pass"
+        or label.get("primary_cohort_eligible") is not True
+        or _micro_reversion_primary_metric(label) is None
+    ):
+        raise ValueError("micro_reversion_execution_outcome_not_eligible")
+    return {
+        "outcome_join_key": label_id,
+        "outcome_label_content_sha256": _sha256(label),
+        "decision_trace_id": label.get("decision_trace_id"),
+        "effective_venue": label.get("effective_venue"),
+        "session_bucket": label.get("session_bucket"),
+        "label_status": label.get("label_status"),
+        "outcome_embedded_in_provider_input": False,
+    }
+
+
+def _validate_micro_reversion_action_neutral_label(
+    label: dict[str, Any],
+) -> None:
+    if label.get("schema") != MICRO_REVERSION_ACTION_NEUTRAL_LABEL_SCHEMA:
+        return
+    declared_hash = str(label.get("label_content_sha256") or "")
+    content = {
+        key: value for key, value in label.items() if key != "label_content_sha256"
+    }
+    if not declared_hash or declared_hash != _sha256(content):
+        raise ValueError(
+            "micro_reversion_action_neutral_label_content_hash_mismatch"
+        )
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+        ("outcome_embedded_in_provider_input", False),
+    ):
+        if label.get(field) is not expected:
+            raise ValueError(
+                f"micro_reversion_action_neutral_label_authority_invalid:{field}"
+            )
+
+
+def _validate_micro_reversion_outcome_label_artifact(
+    artifact: dict[str, Any],
+) -> None:
+    if artifact.get("schema") != MICRO_REVERSION_ACTION_NEUTRAL_LABEL_SCHEMA:
+        return
+    declared_hash = str(artifact.get("artifact_content_sha256") or "")
+    content = {
+        key: value
+        for key, value in artifact.items()
+        if key != "artifact_content_sha256"
+    }
+    if not declared_hash or declared_hash != _sha256(content):
+        raise ValueError(
+            "micro_reversion_action_neutral_artifact_content_hash_mismatch"
+        )
+    labels = artifact.get("labels")
+    exclusions = artifact.get("exclusions")
+    if (
+        not isinstance(labels, list)
+        or not isinstance(exclusions, list)
+        or artifact.get("eligible_label_count") != len(labels)
+        or artifact.get("excluded_parent_count") != len(exclusions)
+        or artifact.get("prepared_parent_count") != len(labels) + len(exclusions)
+    ):
+        raise ValueError("micro_reversion_action_neutral_artifact_census_invalid")
+    for label in labels:
+        if not isinstance(label, dict):
+            raise ValueError("micro_reversion_action_neutral_label_invalid")
+        _validate_micro_reversion_action_neutral_label(label)
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+        ("provider_call_performed", False),
+        ("outcomes_embedded_in_provider_input", False),
+    ):
+        if artifact.get(field) is not expected:
+            raise ValueError(
+                f"micro_reversion_action_neutral_artifact_authority_invalid:{field}"
+            )
+
+
+def _micro_reversion_primary_metric(
+    label: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return a standard minute label or an explicit microsecond label.
+
+    Micro-reversion outcomes use seconds, so silently placing a 10-second
+    executable path in the existing ``10m`` slot would corrupt both maturity
+    and EV interpretation.  The adapter therefore declares its own primary
+    key and this accessor never guesses across the two contracts.
+    """
+
+    if label.get("schema") == MICRO_REVERSION_ACTION_NEUTRAL_LABEL_SCHEMA:
+        metrics = label.get("horizon_metrics")
+        primary_key = str(label.get("primary_horizon_key") or "")
+        metric = metrics.get(primary_key) if isinstance(metrics, dict) else None
+        return metric if isinstance(metric, dict) else None
+    return _primary_metric(label)
+
+
+def build_micro_reversion_action_neutral_outcome_labels(
+    *,
+    bridge_report: dict[str, Any],
+    materialized_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Adapt bridge future outcomes into hash-bound A/B/C evaluator labels.
+
+    The bridge outcome remains separate from every provider input.  Entry
+    labels represent an executable ask sweep followed by a future bid sweep
+    after verified costs. Holding labels represent the action-independent
+    incremental value of retaining the position until the future bid sweep.
+    The captured Control action is deliberately not used to sign the label.
+    """
+
+    from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+        OUTCOME_SCHEMA,
+        REPORT_SCHEMA,
+        TACTICAL_EVIDENCE_SCHEMA,
+    )
+
+    if bridge_report.get("schema") != REPORT_SCHEMA:
+        raise ValueError("micro_reversion_bridge_report_schema_invalid")
+    bridge_report_hash = str(bridge_report.get("report_content_sha256") or "")
+    bridge_report_content = {
+        key: value
+        for key, value in bridge_report.items()
+        if key != "report_content_sha256"
+    }
+    if (
+        not bridge_report_hash
+        or bridge_report_hash != _sha256(bridge_report_content)
+    ):
+        raise ValueError("micro_reversion_bridge_report_content_hash_mismatch")
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+        ("provider_call_performed", False),
+    ):
+        if bridge_report.get(field) is not expected:
+            raise ValueError(
+                f"micro_reversion_bridge_report_authority_invalid:{field}"
+            )
+    bridge_rows = bridge_report.get("rows")
+    if not isinstance(bridge_rows, list):
+        raise ValueError("micro_reversion_bridge_report_rows_missing")
+    if bridge_report.get("report_row_count") != len(bridge_rows):
+        raise ValueError("micro_reversion_bridge_report_row_count_mismatch")
+    requests = _validate_micro_reversion_materialized_report(
+        materialized_report
+    )
+    requests_by_trace: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for request in requests:
+        _validate_micro_reversion_execution_request(request)
+        trace_id = str(request.get("decision_trace_id") or "")
+        if trace_id:
+            requests_by_trace[trace_id].append(request)
+    bridge_rows_by_trace: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in bridge_rows:
+        if not isinstance(row, dict):
+            continue
+        trace_id = str(row.get("decision_trace_id") or "")
+        if trace_id:
+            bridge_rows_by_trace[trace_id].append(row)
+
+    labels: list[dict[str, Any]] = []
+    exclusions: list[dict[str, Any]] = []
+    for trace_id, trace_requests in requests_by_trace.items():
+        representative = trace_requests[0]
+        parent_ids = {
+            str(request.get("paired_replay_parent_id") or "")
+            for request in trace_requests
+        }
+        join_keys = {
+            str(request.get("outcome_join_key") or "")
+            for request in trace_requests
+        }
+        identity = {
+            (
+                _stage(request.get("stage"), request.get("endpoint")),
+                _normalize_stock_code(request.get("stock_code")),
+                _venue(request.get("effective_venue")),
+                _session(request.get("session_bucket")),
+            )
+            for request in trace_requests
+        }
+        try:
+            if (
+                len(trace_requests) != 3
+                or len(parent_ids) != 1
+                or len(join_keys) != 1
+                or "" in parent_ids
+                or "" in join_keys
+                or len(identity) != 1
+            ):
+                raise ValueError("micro_reversion_bridge_request_census_invalid")
+            matching_rows = bridge_rows_by_trace.get(trace_id, [])
+            if len(matching_rows) != 1:
+                raise ValueError(
+                    "micro_reversion_bridge_outcome_missing_or_ambiguous"
+                )
+            bridge_row = matching_rows[0]
+            evidence = bridge_row.get(TACTICAL_EVIDENCE_SCHEMA)
+            outcome = bridge_row.get("future_outcome")
+            if not isinstance(evidence, dict) or not isinstance(outcome, dict):
+                raise ValueError("micro_reversion_bridge_outcome_contract_missing")
+            evidence_hash = str(evidence.get("evidence_sha256") or "")
+            evidence_content = {
+                key: value
+                for key, value in evidence.items()
+                if key != "evidence_sha256"
+            }
+            if not evidence_hash or evidence_hash != _sha256(evidence_content):
+                raise ValueError("micro_reversion_bridge_evidence_hash_mismatch")
+            outcome_hash = str(outcome.get("outcome_sha256") or "")
+            outcome_content = {
+                key: value
+                for key, value in outcome.items()
+                if key != "outcome_sha256"
+            }
+            if (
+                outcome.get("schema") != OUTCOME_SCHEMA
+                or not outcome_hash
+                or outcome_hash != _sha256(outcome_content)
+                or outcome.get("evidence_sha256") != evidence_hash
+                or str(outcome.get("decision_trace_id") or "") != trace_id
+                or str(evidence.get("decision_trace_id") or "") != trace_id
+            ):
+                raise ValueError("micro_reversion_bridge_outcome_hash_mismatch")
+            embedded_evidence = [
+                (request.get("candidate_input") or {}).get(
+                    TACTICAL_EVIDENCE_SCHEMA
+                )
+                for request in trace_requests
+                if request.get("micro_reversion_replay_arm")
+                in {
+                    "replay_control_exact_plus_micro",
+                    "replay_candidate_exact_plus_micro",
+                }
+            ]
+            no_micro_requests = [
+                request
+                for request in trace_requests
+                if request.get("micro_reversion_replay_arm")
+                == "replay_control_exact_no_micro"
+            ]
+            if (
+                len(embedded_evidence) != 2
+                or any(value != evidence for value in embedded_evidence)
+                or len(no_micro_requests) != 1
+                or TACTICAL_EVIDENCE_SCHEMA
+                in (no_micro_requests[0].get("candidate_input") or {})
+            ):
+                raise ValueError(
+                    "micro_reversion_bridge_materialized_evidence_mismatch"
+                )
+            source_exact_hashes = {
+                str(request.get("source_exact_payload_sha256") or "")
+                for request in trace_requests
+            }
+            source_payload_hashes = {
+                str(request.get("payload_sha256") or "")
+                for request in trace_requests
+            }
+            if (
+                source_exact_hashes
+                != {str(evidence.get("source_exact_payload_sha256") or "")}
+                or source_payload_hashes
+                != {str(evidence.get("source_provider_payload_sha256") or "")}
+                or outcome.get("bridge_config_sha256")
+                != evidence.get("bridge_config_sha256")
+            ):
+                raise ValueError(
+                    "micro_reversion_bridge_exact_or_config_binding_mismatch"
+                )
+            for artifact_name, artifact in (
+                ("evidence", evidence),
+                ("outcome", outcome),
+            ):
+                for field, expected in (
+                    ("runtime_effect", False),
+                    ("allowed_runtime_apply", False),
+                    ("actual_order_submitted", False),
+                    ("broker_order_forbidden", True),
+                ):
+                    if artifact.get(field) is not expected:
+                        raise ValueError(
+                            "micro_reversion_bridge_"
+                            f"{artifact_name}_authority_invalid:{field}"
+                        )
+            stage, stock_code, effective_venue, session_bucket = next(
+                iter(identity)
+            )
+            if stage not in {"entry", "holding", "exit"}:
+                raise ValueError(
+                    f"micro_reversion_bridge_stage_owner_unsupported:{stage}"
+                )
+            micro_venue = _venue(evidence.get("micro_venue"))
+            trace_market_data_route = str(
+                evidence.get("trace_market_data_route") or ""
+            ).strip().lower()
+            integrated_route = bool(
+                "integrated" in trace_market_data_route
+                or "sor" in trace_market_data_route
+            )
+            integrated_route_proven = evidence.get(
+                "integrated_sor_route_proven"
+            )
+            if integrated_route:
+                route_scope_valid = bool(
+                    integrated_route_proven is True and micro_venue == "SOR"
+                )
+            elif trace_market_data_route in {
+                "krx",
+                "krx_only",
+                "krx_regular",
+            }:
+                route_scope_valid = bool(
+                    integrated_route_proven is False and micro_venue == "KRX"
+                )
+            elif trace_market_data_route in {
+                "nxt",
+                "nxt_only",
+                "nxt_regular",
+            }:
+                route_scope_valid = bool(
+                    integrated_route_proven is False and micro_venue == "NXT"
+                )
+            else:
+                route_scope_valid = False
+            if (
+                _stage(bridge_row.get("decision_stage")) != stage
+                or _stage(evidence.get("decision_stage")) != stage
+                or _stage(outcome.get("decision_stage")) != stage
+                or _normalize_stock_code(evidence.get("stock_code"))
+                != stock_code
+                or _session(evidence.get("micro_session_bucket"))
+                != session_bucket
+                or not route_scope_valid
+                or _venue(evidence.get("trace_effective_venue"))
+                != effective_venue
+                or not isinstance(evidence.get("sequence_epoch"), int)
+                or evidence.get("sequence_epoch") <= 0
+            ):
+                raise ValueError("micro_reversion_bridge_outcome_identity_mismatch")
+            if (
+                (evidence.get("source_quality") or {}).get("status") != "pass"
+                or (evidence.get("source_quality") or {}).get(
+                    "liquidity_capacity_status"
+                )
+                != "pass"
+                or outcome.get("outcome_eligibility")
+                not in {"eligible", "eligible_observation_only"}
+            ):
+                raise ValueError(
+                    "micro_reversion_bridge_economic_source_quality_not_pass"
+                )
+            if stage == "entry" and (
+                outcome.get("action_neutral_cost_treatment")
+                != "reviewed_roundtrip_cost_subtracted"
+                or outcome.get("action_neutral_economic_grade")
+                not in {
+                    "reviewed_after_cost_entry_value",
+                    "standardized_one_share_after_cost_observation_only",
+                }
+                or outcome.get("cost_invariant_between_exit_timings") is not False
+            ):
+                raise ValueError(
+                    "micro_reversion_bridge_entry_cost_contract_unverified"
+                )
+            if stage in {"holding", "exit"} and (
+                outcome.get("action_neutral_cost_treatment")
+                != "identical_proportional_exit_cost_cancels"
+                or outcome.get("action_neutral_economic_grade")
+                != "liquidity_adjusted_incremental_exit_value"
+                or outcome.get("cost_invariant_between_exit_timings") is not True
+            ):
+                raise ValueError(
+                    "micro_reversion_bridge_holding_incremental_cost_contract_unverified"
+                )
+            primary_horizon_sec = (evidence.get("liquidity_capacity") or {}).get(
+                "target_liquidation_sec"
+            )
+            if (
+                isinstance(primary_horizon_sec, bool)
+                or not isinstance(primary_horizon_sec, int)
+                or primary_horizon_sec <= 0
+            ):
+                raise ValueError(
+                    "micro_reversion_bridge_primary_horizon_contract_missing"
+                )
+            horizon_metrics: dict[str, dict[str, Any]] = {}
+            for horizon in outcome.get("horizons") or []:
+                if not isinstance(horizon, dict) or horizon.get("mature") is not True:
+                    continue
+                horizon_sec = horizon.get("horizon_sec")
+                neutral_end_bps = _number(
+                    horizon.get("action_neutral_executable_end_return_bps")
+                )
+                neutral_mfe_bps = _number(horizon.get("action_neutral_mfe_bps"))
+                neutral_mae_bps = _number(horizon.get("action_neutral_mae_bps"))
+                neutral_path_hash = str(
+                    horizon.get("action_neutral_path_sha256") or ""
+                )
+                neutral_first_hit = str(
+                    horizon.get("action_neutral_first_hit") or ""
+                )
+                if (
+                    isinstance(horizon_sec, bool)
+                    or not isinstance(horizon_sec, int)
+                    or horizon_sec <= 0
+                    or neutral_end_bps is None
+                    or neutral_mfe_bps is None
+                    or neutral_mae_bps is None
+                    or len(neutral_path_hash) != 64
+                    or neutral_first_hit
+                    not in {
+                        "net_target_first",
+                        "adverse_first",
+                        "none",
+                        "none_or_unmatured",
+                        "ambiguous_same_timestamp",
+                    }
+                    or horizon.get("source_quality_blockers") not in (None, [])
+                ):
+                    continue
+                counterfactual_quantity = _number(
+                    outcome.get("counterfactual_quantity")
+                )
+                baseline_vwap = _number(
+                    outcome.get("snapshot_execution_basis_vwap")
+                )
+                notional_eligible = bool(
+                    outcome.get("notional_net_profit_eligible") is True
+                    and counterfactual_quantity is not None
+                    and counterfactual_quantity > 0
+                    and baseline_vwap is not None
+                    and baseline_vwap > 0
+                )
+                notional_value = (
+                    baseline_vwap
+                    * counterfactual_quantity
+                    * neutral_end_bps
+                    / 10_000.0
+                    if notional_eligible
+                    else None
+                )
+                horizon_metric = {
+                    "horizon_sec": horizon_sec,
+                    "end_return_pct": neutral_end_bps / 100.0,
+                    "source_quality_adjusted_ev_pct": neutral_end_bps / 100.0,
+                    "mfe_pct": neutral_mfe_bps / 100.0,
+                    "mae_pct": neutral_mae_bps / 100.0,
+                    "first_hit": neutral_first_hit,
+                    "target_first_delay_sec": (
+                        None
+                        if _number(
+                            horizon.get(
+                                "action_neutral_target_first_delay_ms"
+                            )
+                        )
+                        is None
+                        else float(
+                            horizon["action_neutral_target_first_delay_ms"]
+                        )
+                        / 1_000.0
+                    ),
+                    "adverse_first_delay_sec": (
+                        None
+                        if _number(
+                            horizon.get(
+                                "action_neutral_adverse_first_delay_ms"
+                            )
+                        )
+                        is None
+                        else float(
+                            horizon["action_neutral_adverse_first_delay_ms"]
+                        )
+                        / 1_000.0
+                    ),
+                    "position_horizon_sec": horizon_sec,
+                    "action_neutral_path_sha256": neutral_path_hash,
+                    "counterfactual_notional_value_krw": notional_value,
+                    "notional_net_profit_eligible": notional_eligible,
+                    "outcome_sha256": outcome_hash,
+                    "counterfactual_only": True,
+                }
+                if stage == "entry":
+                    horizon_metric["cost_adjusted_end_return_pct"] = (
+                        neutral_end_bps / 100.0
+                    )
+                else:
+                    horizon_metric[
+                        "liquidity_adjusted_incremental_exit_value_pct"
+                    ] = neutral_end_bps / 100.0
+                horizon_metrics[f"{horizon_sec}s"] = horizon_metric
+            primary_key = f"{primary_horizon_sec}s"
+            if primary_key not in horizon_metrics:
+                raise ValueError(
+                    "micro_reversion_bridge_primary_horizon_not_mature"
+                )
+            label_without_hash = {
+                "schema": MICRO_REVERSION_ACTION_NEUTRAL_LABEL_SCHEMA,
+                "label_id": next(iter(join_keys)),
+                "decision_trace_id": trace_id,
+                "decision_stage": stage,
+                "endpoint": representative.get("endpoint"),
+                "stock_code": stock_code,
+                "effective_venue": effective_venue,
+                "resolved_micro_venue": _venue(evidence.get("micro_venue")),
+                "session_bucket": session_bucket,
+                "decision_ts": representative.get("decision_ts"),
+                "label_status": "mature",
+                "source_quality_status": "pass",
+                "primary_cohort_eligible": True,
+                "primary_horizon_key": primary_key,
+                "primary_horizon_sec": primary_horizon_sec,
+                "matured_horizons_sec": sorted(
+                    metric["horizon_sec"] for metric in horizon_metrics.values()
+                ),
+                "horizon_metrics": horizon_metrics,
+                "outcome_semantics": (
+                    "entry_ask_sweep_to_future_bid_sweep_after_verified_cost"
+                    if stage == "entry"
+                    else "position_action_neutral_future_bid_vs_snapshot_bid"
+                ),
+                "action_neutral_cost_treatment": outcome.get(
+                    "action_neutral_cost_treatment"
+                ),
+                "action_neutral_economic_grade": outcome.get(
+                    "action_neutral_economic_grade"
+                ),
+                "cost_invariant_between_exit_timings": outcome.get(
+                    "cost_invariant_between_exit_timings"
+                ),
+                "quantity_authority": outcome.get("quantity_authority"),
+                "notional_net_profit_eligible": outcome.get(
+                    "notional_net_profit_eligible"
+                )
+                is True,
+                "economic_promotion_evidence_eligible": outcome.get(
+                    "economic_promotion_evidence_eligible"
+                )
+                is True,
+                "evidence_sha256": evidence_hash,
+                "outcome_sha256": outcome_hash,
+                "bridge_report_content_sha256": bridge_report_hash,
+                "bridge_report_artifact_sha256": _sha256(bridge_report),
+                "outcome_embedded_in_provider_input": False,
+                "metric_role": "micro_reversion_action_neutral_executable_outcome",
+                "decision_authority": "offline_outcome_evaluation_only_no_runtime_change",
+                "window_policy": (
+                    "same_trace_symbol_resolved_venue_session_epoch_"
+                    "continuous_fresh_full_quantity_sweep"
+                ),
+                "sample_floor": "one_mature_action_neutral_primary_horizon_row",
+                "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                "source_quality_gate": (
+                    "verified_cost_exact_evidence_mature_action_neutral_path"
+                ),
+                "forbidden_uses": [
+                    "provider_prompt_input",
+                    "runtime_or_order_authority",
+                    "captured_control_action_sign_inversion",
+                    "entry_price_trim_scale_in_stage_inference",
+                ],
+                **OFFLINE_CONTRACT,
+            }
+            labels.append(
+                {
+                    **label_without_hash,
+                    "label_content_sha256": _sha256(label_without_hash),
+                }
+            )
+        except (TypeError, ValueError) as exc:
+            exclusions.append(
+                {
+                    "decision_trace_id": trace_id,
+                    "paired_replay_parent_id": representative.get(
+                        "paired_replay_parent_id"
+                    ),
+                    "stage": representative.get("stage"),
+                    "reason": str(exc).split(":", 1)[0],
+                }
+            )
+    artifact_without_hash = {
+        "schema": MICRO_REVERSION_ACTION_NEUTRAL_LABEL_SCHEMA,
+        "target_date": materialized_report.get("target_date")
+        or bridge_report.get("target_date"),
+        "status": (
+            "action_neutral_labels_ready"
+            if labels
+            else "no_action_neutral_primary_horizon_labels"
+        ),
+        "prepared_parent_count": len(requests_by_trace),
+        "eligible_label_count": len(labels),
+        "excluded_parent_count": len(exclusions),
+        "labels": labels,
+        "exclusions": exclusions,
+        "bridge_report_artifact_sha256": _sha256(bridge_report),
+        "bridge_report_content_sha256": bridge_report_hash,
+        "materialized_report_content_sha256": materialized_report.get(
+            "report_content_sha256"
+        ),
+        "outcomes_embedded_in_provider_input": False,
+        "provider_call_performed": False,
+        **OFFLINE_CONTRACT,
+    }
+    return {
+        **artifact_without_hash,
+        "artifact_content_sha256": _sha256(artifact_without_hash),
+    }
+
+
+def _micro_reversion_executor_exclusion(
+    request: dict[str, Any],
+) -> str | None:
+    candidate = request.get("candidate")
+    candidate = candidate if isinstance(candidate, dict) else {}
+    provider = str(candidate.get("provider") or "").strip().lower()
+    stage = _stage(request.get("stage"), request.get("endpoint"))
+    endpoint = str(request.get("endpoint") or "").strip().lower()
+    model = str(candidate.get("model") or "").strip()
+    if provider == "openai":
+        return None
+    if provider.startswith("bedrock") and stage == "entry_price":
+        if model == "qwen3_32b":
+            return None
+        return "bedrock_entry_price_model_not_supported"
+    if provider.startswith("bedrock") and endpoint == "holding_flow":
+        return "bedrock_holding_flow_offline_executor_not_implemented"
+    return "offline_provider_stage_executor_not_supported"
+
+
+def _micro_reversion_action_exposure(
+    stage: str,
+    action: Any,
+    response: dict[str, Any] | None = None,
+) -> tuple[str, float | None]:
+    """Separate full exposure from a standardized one-share observation."""
+
+    normalized_action = str(action or "").strip().upper()
+    normalized_stage = _stage(stage)
+    response = response if isinstance(response, dict) else {}
+    if normalized_stage == "entry":
+        if normalized_action == "BUY":
+            return "full_entry_exposure", 1.0
+        if normalized_action == "WAIT" and _decision_probe_armed(
+            stage="entry", action=normalized_action, response=response
+        ):
+            return "standardized_probe_observation_only", None
+        return "no_entry_exposure", 0.0
+    if normalized_stage in {"holding", "holding_flow", "exit"}:
+        if normalized_action == "HOLD":
+            return "existing_position_exposure", 1.0
+        if normalized_action == "EXIT":
+            return "position_exit", 0.0
+    return "economic_exposure_not_applicable", None
+
+
+def _micro_reversion_cost_adjusted_outcome(metric: dict[str, Any]) -> float | None:
+    """Use only an explicitly cost-adjusted/SQ-adjusted outcome metric."""
+
+    for field in (
+        "source_quality_adjusted_ev_pct",
+        "probe_cost_adjusted_ev_pct",
+        "cost_adjusted_end_return_pct",
+        "liquidity_adjusted_incremental_exit_value_pct",
+        "net_return_pct",
+    ):
+        value = _number(metric.get(field))
+        if value is not None:
+            return value
+    return None
+
+
+def build_micro_reversion_three_arm_evaluation(
+    *,
+    results: list[dict[str, Any]],
+    outcome_labels: list[dict[str, Any]],
+    _include_stage_venue_partitions: bool = True,
+) -> dict[str, Any]:
+    """Compare A/B micro context and B/C prompt effects on identical labels."""
+
+    labels_by_id = {
+        str(row.get("label_id") or ""): row
+        for row in outcome_labels
+        if isinstance(row, dict) and row.get("label_id")
+    }
+    grouped: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    for result in results:
+        replay_result = result.get("replay_result") or {}
+        if replay_result.get("status") != "pass":
+            continue
+        grouped[str(result.get("paired_replay_parent_id") or "")][
+            str(result.get("micro_reversion_replay_arm") or "")
+        ] = result
+    arms = (
+        "replay_control_exact_no_micro",
+        "replay_control_exact_plus_micro",
+        "replay_candidate_exact_plus_micro",
+    )
+    rows: list[dict[str, Any]] = []
+    exclusions: list[dict[str, Any]] = []
+    for parent_id, by_arm in grouped.items():
+        if set(by_arm) != set(arms):
+            exclusions.append(
+                {"paired_replay_parent_id": parent_id, "reason": "arm_incomplete"}
+            )
+            continue
+        label_id = str(next(iter(by_arm.values())).get("outcome_join_key") or "")
+        label = labels_by_id.get(label_id)
+        try:
+            if isinstance(label, dict):
+                _validate_micro_reversion_action_neutral_label(label)
+        except ValueError:
+            exclusions.append(
+                {
+                    "paired_replay_parent_id": parent_id,
+                    "reason": "outcome_declared_content_hash_invalid",
+                }
+            )
+            continue
+        if (
+            not isinstance(label, dict)
+            or any(
+                str(result.get("outcome_join_key") or "") != label_id
+                or result.get("outcome_label_content_sha256") != _sha256(label)
+                for result in by_arm.values()
+            )
+        ):
+            exclusions.append(
+                {
+                    "paired_replay_parent_id": parent_id,
+                    "reason": "outcome_hash_or_arm_identity_mismatch",
+                }
+            )
+            continue
+        metric = _micro_reversion_primary_metric(label or {})
+        if not isinstance(metric, dict):
+            exclusions.append(
+                {
+                    "paired_replay_parent_id": parent_id,
+                    "reason": "primary_outcome_missing",
+                }
+            )
+            continue
+        end_return_pct = _number(metric.get("end_return_pct"))
+        cost_adjusted_outcome_pct = _micro_reversion_cost_adjusted_outcome(metric)
+        mae_pct = _number(metric.get("mae_pct"))
+        if end_return_pct is None or mae_pct is None:
+            exclusions.append(
+                {
+                    "paired_replay_parent_id": parent_id,
+                    "reason": "outcome_ev_or_tail_missing",
+                }
+            )
+            continue
+        arm_values: dict[str, dict[str, Any]] = {}
+        for arm in arms:
+            result = by_arm[arm]
+            replay_result = result.get("replay_result") or {}
+            response = replay_result.get("candidate_response") or {}
+            action = str(response.get("action") or "UNKNOWN").upper()
+            exposure_role, exposure = _micro_reversion_action_exposure(
+                str(replay_result.get("stage") or ""), action, response
+            )
+            standardized_probe = (
+                exposure_role == "standardized_probe_observation_only"
+            )
+            economic_observation = bool(exposure) or standardized_probe
+            economic_signal_selected = exposure_role in {
+                "full_entry_exposure",
+                "standardized_probe_observation_only",
+                "existing_position_exposure",
+            }
+            notional_value_krw = _number(
+                metric.get("counterfactual_notional_value_krw")
+            )
+            notional_eligible = bool(
+                metric.get("notional_net_profit_eligible") is True
+                and exposure is not None
+                and exposure > 0
+                and notional_value_krw is not None
+            )
+            arm_values[arm] = {
+                "action": action,
+                "exposure_role": exposure_role,
+                "exposure_fraction": exposure,
+                "economic_signal_selected": economic_signal_selected,
+                "source_quality_adjusted_ev_pct": (
+                    cost_adjusted_outcome_pct * exposure
+                    if cost_adjusted_outcome_pct is not None
+                    and exposure is not None
+                    else None
+                ),
+                "standardized_probe_observation_ev_pct": (
+                    cost_adjusted_outcome_pct if standardized_probe else None
+                ),
+                "notional_net_profit_eligible": notional_eligible,
+                "notional_incremental_value_krw": (
+                    notional_value_krw * exposure
+                    if notional_eligible and exposure is not None
+                    else None
+                ),
+                "adverse_exposure": bool(economic_observation and mae_pct < 0),
+                "severe_tail_exposure": bool(
+                    economic_observation and mae_pct <= -3.0
+                ),
+                "after_cost_target_first": bool(
+                    economic_observation
+                    and cost_adjusted_outcome_pct is not None
+                    and cost_adjusted_outcome_pct > 0
+                    and (
+                        metric.get("entry_path_first_hit")
+                        or metric.get("first_hit")
+                    )
+                    in {"target", "target_first", "net_target_first"}
+                ),
+            }
+        rows.append(
+            {
+                "paired_replay_parent_id": parent_id,
+                "decision_trace_id": next(iter(by_arm.values())).get(
+                    "decision_trace_id"
+                ),
+                "outcome_join_key": label_id,
+                "outcome_label_content_sha256": _sha256(label),
+                "decision_stage": _stage(label.get("decision_stage")),
+                "effective_venue": _venue(label.get("effective_venue")),
+                "session_bucket": _session(label.get("session_bucket")),
+                "stock_code": _normalize_stock_code(label.get("stock_code")),
+                "end_return_pct": end_return_pct,
+                "cost_adjusted_outcome_pct": cost_adjusted_outcome_pct,
+                "mae_pct": mae_pct,
+                "first_hit": metric.get("entry_path_first_hit")
+                or metric.get("first_hit"),
+                "target_first_delay_sec": _number(
+                    metric.get("target_first_delay_sec")
+                    or metric.get("time_to_net_target_sec")
+                    or metric.get("time_to_target_sec")
+                ),
+                "position_horizon_sec": _number(
+                    metric.get("position_horizon_sec")
+                    or metric.get("holding_duration_sec")
+                ),
+                "decision_ts": next(iter(by_arm.values())).get("decision_ts"),
+                "arms": arm_values,
+            }
+        )
+
+    arm_metrics: dict[str, dict[str, Any]] = {}
+    for arm in arms:
+        values = [row["arms"][arm] for row in rows]
+        ev_values = [
+            value["source_quality_adjusted_ev_pct"]
+            for value in values
+            if value["source_quality_adjusted_ev_pct"] is not None
+        ]
+        probe_ev_values = [
+            value["standardized_probe_observation_ev_pct"]
+            for value in values
+            if value["standardized_probe_observation_ev_pct"] is not None
+        ]
+        notional_values = [
+            value["notional_incremental_value_krw"]
+            for value in values
+            if value["notional_incremental_value_krw"] is not None
+        ]
+        action_counts = Counter(value["action"] for value in values)
+        observed_timestamps = sorted(
+            timestamp
+            for row in rows
+            if (timestamp := _parse_ts(row.get("decision_ts"))) is not None
+        )
+        observation_span_hours = (
+            max(
+                1.0 / 3600.0,
+                (observed_timestamps[-1] - observed_timestamps[0]).total_seconds()
+                / 3600.0,
+            )
+            if observed_timestamps
+            else None
+        )
+        economic_signal_count = sum(
+            value["economic_signal_selected"] for value in values
+        )
+        target_delays = [
+            row["target_first_delay_sec"]
+            for row in rows
+            if row["target_first_delay_sec"] is not None
+            and row["arms"][arm]["after_cost_target_first"]
+        ]
+        position_horizons = [
+            row["position_horizon_sec"]
+            for row in rows
+            if row["position_horizon_sec"] is not None
+            and row["arms"][arm]["exposure_role"]
+            not in {"no_entry_exposure", "position_exit"}
+        ]
+        arm_metrics[arm] = {
+            "row_count": len(values),
+            "action_counts": dict(action_counts),
+            "action_collapse": bool(
+                len(values) >= 5
+                and max(action_counts.values(), default=0) / len(values) >= 0.95
+            ),
+            "exposure_frequency_pct": (
+                sum(bool(value["exposure_fraction"]) for value in values)
+                / len(values)
+                * 100.0
+                if values
+                else None
+            ),
+            "source_quality_adjusted_ev_pct": (
+                fmean(ev_values) if ev_values else None
+            ),
+            "standardized_probe_observation_ev_pct": (
+                fmean(probe_ev_values) if probe_ev_values else None
+            ),
+            "notional_incremental_value_eligible_count": len(notional_values),
+            "total_notional_incremental_value_krw": (
+                sum(notional_values) if notional_values else None
+            ),
+            "average_notional_incremental_value_krw": (
+                fmean(notional_values) if notional_values else None
+            ),
+            "after_cost_target_first_rate_pct": (
+                sum(value["after_cost_target_first"] for value in values)
+                / economic_signal_count
+                * 100.0
+                if economic_signal_count
+                else None
+            ),
+            "average_target_first_delay_sec": (
+                fmean(target_delays) if target_delays else None
+            ),
+            "average_position_horizon_sec": (
+                fmean(position_horizons) if position_horizons else None
+            ),
+            "observation_span_hours": observation_span_hours,
+            "eligible_signals_per_hour": (
+                economic_signal_count / observation_span_hours
+                if observation_span_hours
+                else None
+            ),
+            "standardized_probe_observation_count": sum(
+                value["exposure_role"]
+                == "standardized_probe_observation_only"
+                for value in values
+            ),
+            "adverse_exposure_count": sum(
+                value["adverse_exposure"] for value in values
+            ),
+            "severe_tail_exposure_count": sum(
+                value["severe_tail_exposure"] for value in values
+            ),
+        }
+
+    def comparison(left: str, right: str, role: str) -> dict[str, Any]:
+        left_metric = arm_metrics[left]
+        right_metric = arm_metrics[right]
+        paired_ev_deltas = [
+            right_ev - left_ev
+            for row in rows
+            if (
+                left_ev := _number(
+                    row["arms"][left].get("source_quality_adjusted_ev_pct")
+                )
+            )
+            is not None
+            and (
+                right_ev := _number(
+                    row["arms"][right].get("source_quality_adjusted_ev_pct")
+                )
+            )
+            is not None
+        ]
+        paired_probe_deltas = [
+            right_probe_value - left_probe_value
+            for row in rows
+            if row["arms"][left]["exposure_role"]
+            in {
+                "no_entry_exposure",
+                "standardized_probe_observation_only",
+            }
+            and row["arms"][right]["exposure_role"]
+            in {
+                "no_entry_exposure",
+                "standardized_probe_observation_only",
+            }
+            and (
+                row["arms"][left]["exposure_role"]
+                == "standardized_probe_observation_only"
+                or row["arms"][right]["exposure_role"]
+                == "standardized_probe_observation_only"
+            )
+            and row["cost_adjusted_outcome_pct"] is not None
+            and (
+                left_probe_value := (
+                    row["cost_adjusted_outcome_pct"]
+                    if row["arms"][left]["exposure_role"]
+                    == "standardized_probe_observation_only"
+                    else 0.0
+                )
+            )
+            is not None
+            and (
+                right_probe_value := (
+                    row["cost_adjusted_outcome_pct"]
+                    if row["arms"][right]["exposure_role"]
+                    == "standardized_probe_observation_only"
+                    else 0.0
+                )
+            )
+            is not None
+        ]
+        comparable_frequency_rows = [
+            row
+            for row in rows
+            if row["arms"][left]["exposure_role"]
+            != "economic_exposure_not_applicable"
+            and row["arms"][right]["exposure_role"]
+            != "economic_exposure_not_applicable"
+        ]
+        frequency_deltas = [
+            float(bool(row["arms"][right]["exposure_fraction"]))
+            - float(bool(row["arms"][left]["exposure_fraction"]))
+            for row in comparable_frequency_rows
+        ]
+        exploration_frequency_deltas = [
+            float(row["arms"][right]["economic_signal_selected"])
+            - float(row["arms"][left]["economic_signal_selected"])
+            for row in comparable_frequency_rows
+        ]
+        semantic_unavailable_count = sum(
+            row["arms"][left]["exposure_role"]
+            in {
+                "standardized_probe_observation_only",
+                "economic_exposure_not_applicable",
+            }
+            or row["arms"][right]["exposure_role"]
+            in {
+                "standardized_probe_observation_only",
+                "economic_exposure_not_applicable",
+            }
+            for row in rows
+        )
+        return {
+            "comparison_role": role,
+            "left_arm": left,
+            "right_arm": right,
+            "source_quality_adjusted_ev_delta_pct": (
+                fmean(paired_ev_deltas) if paired_ev_deltas else None
+            ),
+            "paired_metric_eligible_parent_count": len(paired_ev_deltas),
+            "paired_metric_excluded_parent_count": len(rows)
+            - len(paired_ev_deltas),
+            "standardized_probe_observation_ev_delta_pct": (
+                fmean(paired_probe_deltas) if paired_probe_deltas else None
+            ),
+            "paired_probe_metric_eligible_parent_count": len(
+                paired_probe_deltas
+            ),
+            "quantity_or_exposure_semantics_unavailable_count": (
+                semantic_unavailable_count
+            ),
+            "exposure_frequency_delta_pct": (
+                fmean(frequency_deltas) * 100.0 if frequency_deltas else None
+            ),
+            "bounded_exploration_frequency_delta_pct": (
+                fmean(exploration_frequency_deltas) * 100.0
+                if exploration_frequency_deltas
+                else None
+            ),
+            "severe_tail_exposure_delta_count": (
+                right_metric["severe_tail_exposure_count"]
+                - left_metric["severe_tail_exposure_count"]
+            ),
+            "action_changed_count": sum(
+                row["arms"][left]["action"] != row["arms"][right]["action"]
+                for row in rows
+            ),
+        }
+
+    unique_symbols = len(
+        {
+            str(
+                (labels_by_id.get(row["outcome_join_key"]) or {}).get(
+                    "stock_code"
+                )
+                or ""
+            )
+            for row in rows
+            if labels_by_id.get(row["outcome_join_key"])
+        }
+    )
+    learning_floor_pass = bool(
+        len(rows) >= PAIRED_LEARNING_MIN_ROWS
+        and unique_symbols >= PAIRED_LEARNING_MIN_SYMBOLS
+    )
+    promotion_floor_pass = bool(
+        len(rows) >= PAIRED_REPLAY_MIN_ROWS
+        and unique_symbols >= PAIRED_REPLAY_MIN_SYMBOLS
+    )
+    candidate_metrics = arm_metrics[arms[2]]
+    comparisons = [
+        comparison(arms[0], arms[1], "micro_context_effect"),
+        comparison(arms[1], arms[2], "prompt_contract_effect"),
+    ]
+    prompt_effect = comparisons[1]
+    prompt_effect_learning_floor_pass = bool(
+        (
+            int(prompt_effect["paired_metric_eligible_parent_count"])
+            >= PAIRED_LEARNING_MIN_ROWS
+            and prompt_effect.get("source_quality_adjusted_ev_delta_pct")
+            is not None
+        )
+        or (
+            int(prompt_effect["paired_probe_metric_eligible_parent_count"])
+            >= PAIRED_LEARNING_MIN_ROWS
+            and prompt_effect.get("standardized_probe_observation_ev_delta_pct")
+            is not None
+        )
+    )
+    if not learning_floor_pass:
+        decision = "sample_floor_keep_collecting"
+    elif candidate_metrics.get("action_collapse") is True:
+        decision = "prompt_redesign_required_action_collapse"
+    elif (
+        candidate_metrics.get("source_quality_adjusted_ev_pct") is None
+        and candidate_metrics.get("standardized_probe_observation_ev_pct")
+        is None
+    ):
+        decision = "economic_metric_unavailable_keep_research_only"
+    elif not prompt_effect_learning_floor_pass:
+        decision = "paired_economic_metric_unavailable_keep_research_only"
+    else:
+        decision = "candidate_reviewable_not_runtime_authorized"
+    aggregate_decision = decision
+    stage_venue_partitions: list[dict[str, Any]] = []
+    if _include_stage_venue_partitions and rows:
+        partition_keys = sorted(
+            {
+                (
+                    row["decision_stage"],
+                    row["effective_venue"],
+                    row["session_bucket"],
+                )
+                for row in rows
+            }
+        )
+        for stage_key, venue_key, session_key in partition_keys:
+            partition_rows = [
+                row
+                for row in rows
+                if (
+                    row["decision_stage"],
+                    row["effective_venue"],
+                    row["session_bucket"],
+                )
+                == (stage_key, venue_key, session_key)
+            ]
+            partition_parent_ids = {
+                row["paired_replay_parent_id"] for row in partition_rows
+            }
+            partition_label_ids = {
+                row["outcome_join_key"] for row in partition_rows
+            }
+            partition_report = build_micro_reversion_three_arm_evaluation(
+                results=[
+                    result
+                    for result in results
+                    if result.get("paired_replay_parent_id")
+                    in partition_parent_ids
+                ],
+                outcome_labels=[
+                    label
+                    for label in outcome_labels
+                    if label.get("label_id") in partition_label_ids
+                ],
+                _include_stage_venue_partitions=False,
+            )
+            stage_venue_partitions.append(
+                {
+                    "decision_stage": stage_key,
+                    "effective_venue": venue_key,
+                    "session_bucket": session_key,
+                    "decision": partition_report["decision"],
+                    "sample_floor": partition_report["sample_floor"],
+                    "complete_parent_count": partition_report[
+                        "complete_parent_count"
+                    ],
+                    "excluded_parent_count": partition_report[
+                        "excluded_parent_count"
+                    ],
+                    "notional_net_profit_eligible": partition_report[
+                        "notional_net_profit_eligible"
+                    ],
+                    "arm_metrics": partition_report["arm_metrics"],
+                    "comparisons": partition_report["comparisons"],
+                }
+            )
+        if len(stage_venue_partitions) > 1:
+            decision = "stage_venue_partitioned_decisions_required"
+    return {
+        "schema": "ai_micro_reversion_three_arm_evaluation_v1",
+        "status": "evaluated" if rows else "no_complete_outcome_joined_arms",
+        "decision": decision,
+        "cross_stage_venue_aggregate_decision_diagnostic": aggregate_decision,
+        "metric_role": "ai_micro_reversion_three_arm_decision_quality",
+        "decision_authority": "offline_replay_observation_only",
+        "window_policy": "same_exact_payload_same_outcome_three_arm",
+        "sample_floor": {
+            "observed_rows": len(rows),
+            "observed_unique_symbols": unique_symbols,
+            "learning_required_rows": PAIRED_LEARNING_MIN_ROWS,
+            "learning_required_unique_symbols": PAIRED_LEARNING_MIN_SYMBOLS,
+            "learning_pass": learning_floor_pass,
+            "promotion_required_rows": PAIRED_REPLAY_MIN_ROWS,
+            "promotion_required_unique_symbols": PAIRED_REPLAY_MIN_SYMBOLS,
+            "promotion_pass": promotion_floor_pass,
+        },
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "same_hash_bound_exact_payload_and_outcome_pass",
+        "quantity_authority": (
+            "standardized_probe_observation_only_unless_allocator_joined"
+        ),
+        "notional_net_profit_eligible": bool(
+            candidate_metrics.get("notional_incremental_value_eligible_count")
+        ),
+        "complete_parent_count": len(rows),
+        "excluded_parent_count": len(exclusions),
+        "arm_metrics": arm_metrics,
+        "comparisons": comparisons,
+        "stage_venue_partitions": stage_venue_partitions,
+        "cross_stage_venue_aggregate_promotion_forbidden": bool(
+            len(stage_venue_partitions) > 1
+        ),
+        "rows": rows,
+        "exclusions": exclusions,
+        "forbidden_uses": [
+            "treat_standardized_probe_as_full_buy_exposure",
+            "derive_source_quality_adjusted_ev_from_raw_end_return",
+            "claim_notional_net_profit_without_allocator_and_fill_join",
+            "runtime_prompt_or_order_authority",
+        ],
+        **OFFLINE_CONTRACT,
+    }
+
+
+def _micro_reversion_result_content(result: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in result.items() if key != "result_id"}
+
+
+def _micro_reversion_checkpoint_record(
+    *,
+    materialized_report_content_sha256: str,
+    sequence: int,
+    previous_record_sha256: str | None,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    if sequence <= 0:
+        raise ValueError("micro_reversion_checkpoint_sequence_invalid")
+    if sequence == 1 and previous_record_sha256 not in (None, ""):
+        raise ValueError("micro_reversion_checkpoint_first_record_parent_invalid")
+    if sequence > 1 and not str(previous_record_sha256 or "").strip():
+        raise ValueError("micro_reversion_checkpoint_record_parent_missing")
+    if not str(materialized_report_content_sha256 or "").strip():
+        raise ValueError("micro_reversion_checkpoint_materialized_hash_missing")
+    if not isinstance(result, dict) or not str(result.get("result_id") or ""):
+        raise ValueError("micro_reversion_checkpoint_result_invalid")
+    content = {
+        "schema": MICRO_REVERSION_CHECKPOINT_RECORD_SCHEMA,
+        "materialized_report_content_sha256": (
+            materialized_report_content_sha256
+        ),
+        "checkpoint_record_sequence": sequence,
+        "previous_checkpoint_record_sha256": previous_record_sha256,
+        "result_id": result["result_id"],
+        "result": deepcopy(result),
+        "provider_call_performed": True,
+        **OFFLINE_CONTRACT,
+    }
+    return {
+        **content,
+        "checkpoint_record_content_sha256": _sha256(content),
+    }
+
+
+def _validate_micro_reversion_checkpoint_record(
+    record: dict[str, Any],
+    *,
+    expected_materialized_hash: str | None,
+    expected_sequence: int,
+    expected_previous_hash: str | None,
+) -> tuple[str, dict[str, Any]]:
+    if (
+        isinstance(expected_sequence, bool)
+        or not isinstance(expected_sequence, int)
+        or expected_sequence <= 0
+    ):
+        raise ValueError("micro_reversion_checkpoint_sequence_invalid")
+    if record.get("schema") != MICRO_REVERSION_CHECKPOINT_RECORD_SCHEMA:
+        raise ValueError("micro_reversion_checkpoint_record_schema_invalid")
+    declared_hash = str(record.get("checkpoint_record_content_sha256") or "")
+    content = {
+        key: value
+        for key, value in record.items()
+        if key != "checkpoint_record_content_sha256"
+    }
+    if not declared_hash or declared_hash != _sha256(content):
+        raise ValueError("micro_reversion_checkpoint_record_hash_mismatch")
+    materialized_hash = str(
+        record.get("materialized_report_content_sha256") or ""
+    )
+    if not materialized_hash or (
+        expected_materialized_hash is not None
+        and materialized_hash != expected_materialized_hash
+    ):
+        raise ValueError("micro_reversion_checkpoint_materialized_hash_mismatch")
+    if record.get("checkpoint_record_sequence") != expected_sequence:
+        raise ValueError("micro_reversion_checkpoint_record_sequence_mismatch")
+    if record.get("previous_checkpoint_record_sha256") != expected_previous_hash:
+        raise ValueError("micro_reversion_checkpoint_record_chain_mismatch")
+    result = record.get("result")
+    if (
+        not isinstance(result, dict)
+        or result.get("result_id") != record.get("result_id")
+    ):
+        raise ValueError("micro_reversion_checkpoint_record_result_mismatch")
+    if record.get("provider_call_performed") is not True:
+        raise ValueError("micro_reversion_checkpoint_record_provider_state_invalid")
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+    ):
+        if record.get(field) is not expected:
+            raise ValueError(
+                f"micro_reversion_checkpoint_record_authority_invalid:{field}"
+            )
+    return declared_hash, result
+
+
+def _fsync_file_and_parent(path: Path) -> None:
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+    directory_descriptor = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
+def _micro_reversion_checkpoint_record_dir(checkpoint_path: Path) -> Path:
+    return checkpoint_path.with_name(f"{checkpoint_path.name}.records")
+
+
+def _micro_reversion_checkpoint_manifest(
+    *,
+    checkpoint_path: Path,
+    materialized_report_content_sha256: str,
+    record_count: int,
+    head_sha256: str | None,
+) -> dict[str, Any]:
+    if record_count < 0 or (record_count == 0) != (head_sha256 in (None, "")):
+        raise ValueError("micro_reversion_checkpoint_manifest_head_invalid")
+    content = {
+        "schema": MICRO_REVERSION_CHECKPOINT_MANIFEST_SCHEMA,
+        "materialized_report_content_sha256": (
+            materialized_report_content_sha256
+        ),
+        "checkpoint_record_count": record_count,
+        "checkpoint_head_sha256": head_sha256,
+        "record_directory": _micro_reversion_checkpoint_record_dir(
+            checkpoint_path
+        ).name,
+        "provider_call_performed": bool(record_count),
+        **OFFLINE_CONTRACT,
+    }
+    return {
+        **content,
+        "checkpoint_manifest_content_sha256": _sha256(content),
+    }
+
+
+def _validate_micro_reversion_checkpoint_manifest(
+    manifest: dict[str, Any], *, checkpoint_path: Path
+) -> None:
+    if manifest.get("schema") != MICRO_REVERSION_CHECKPOINT_MANIFEST_SCHEMA:
+        raise ValueError("micro_reversion_checkpoint_manifest_schema_invalid")
+    declared_hash = str(manifest.get("checkpoint_manifest_content_sha256") or "")
+    content = {
+        key: value
+        for key, value in manifest.items()
+        if key != "checkpoint_manifest_content_sha256"
+    }
+    if not declared_hash or declared_hash != _sha256(content):
+        raise ValueError("micro_reversion_checkpoint_manifest_hash_mismatch")
+    count = manifest.get("checkpoint_record_count")
+    head = manifest.get("checkpoint_head_sha256")
+    if (
+        isinstance(count, bool)
+        or not isinstance(count, int)
+        or count < 0
+        or (count == 0) != (head in (None, ""))
+    ):
+        raise ValueError("micro_reversion_checkpoint_manifest_head_invalid")
+    if manifest.get("record_directory") != (
+        _micro_reversion_checkpoint_record_dir(checkpoint_path).name
+    ):
+        raise ValueError("micro_reversion_checkpoint_record_directory_invalid")
+    if manifest.get("provider_call_performed") is not bool(count):
+        raise ValueError("micro_reversion_checkpoint_manifest_provider_state_invalid")
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+    ):
+        if manifest.get(field) is not expected:
+            raise ValueError(
+                f"micro_reversion_checkpoint_manifest_authority_invalid:{field}"
+            )
+
+
+def _write_micro_reversion_checkpoint_record(
+    checkpoint_path: Path, record: dict[str, Any]
+) -> None:
+    sequence = record.get("checkpoint_record_sequence")
+    previous_hash = record.get("previous_checkpoint_record_sha256")
+    record_hash, _ = _validate_micro_reversion_checkpoint_record(
+        record,
+        expected_materialized_hash=str(
+            record.get("materialized_report_content_sha256") or ""
+        ),
+        expected_sequence=sequence,
+        expected_previous_hash=previous_hash,
+    )
+    record_dir = _micro_reversion_checkpoint_record_dir(checkpoint_path)
+    record_dir.mkdir(parents=True, exist_ok=True)
+    existing_manifest = _load_json(checkpoint_path)
+    if existing_manifest:
+        _validate_micro_reversion_checkpoint_manifest(
+            existing_manifest, checkpoint_path=checkpoint_path
+        )
+        if (
+            existing_manifest.get("materialized_report_content_sha256")
+            != record.get("materialized_report_content_sha256")
+            or existing_manifest.get("checkpoint_record_count") != sequence - 1
+            or existing_manifest.get("checkpoint_head_sha256") != previous_hash
+        ):
+            raise ValueError("micro_reversion_checkpoint_manifest_chain_conflict")
+    elif sequence != 1:
+        raise ValueError("micro_reversion_checkpoint_manifest_missing")
+    collisions = list(record_dir.glob(f"{sequence:08d}-*.json"))
+    record_path = record_dir / f"{sequence:08d}-{record_hash}.json"
+    if collisions:
+        if collisions != [record_path] or _load_json(record_path) != record:
+            raise ValueError("micro_reversion_checkpoint_record_sequence_conflict")
+    else:
+        _atomic_write_json(record_path, record)
+        _fsync_file_and_parent(record_path)
+    manifest = _micro_reversion_checkpoint_manifest(
+        checkpoint_path=checkpoint_path,
+        materialized_report_content_sha256=str(
+            record.get("materialized_report_content_sha256") or ""
+        ),
+        record_count=sequence,
+        head_sha256=record_hash,
+    )
+    _atomic_write_json(checkpoint_path, manifest)
+    _fsync_file_and_parent(checkpoint_path)
+
+
+def _load_micro_reversion_checkpoint(
+    checkpoint_path: Path, *, repair_manifest: bool = False
+) -> dict[str, Any]:
+    manifest = _load_json(checkpoint_path)
+    if manifest and manifest.get("schema") == "ai_micro_reversion_execution_checkpoint_v1":
+        return manifest
+    if manifest:
+        _validate_micro_reversion_checkpoint_manifest(
+            manifest, checkpoint_path=checkpoint_path
+        )
+    record_dir = _micro_reversion_checkpoint_record_dir(checkpoint_path)
+    record_paths = sorted(record_dir.glob("*.json")) if record_dir.exists() else []
+    if not manifest and not record_paths:
+        return {}
+    expected_materialized_hash = (
+        str(manifest.get("materialized_report_content_sha256") or "")
+        if manifest
+        else None
+    )
+    record_hashes: list[str] = []
+    results: list[dict[str, Any]] = []
+    previous_hash: str | None = None
+    for sequence, record_path in enumerate(record_paths, start=1):
+        record = _load_json(record_path)
+        record_hash, result = _validate_micro_reversion_checkpoint_record(
+            record,
+            expected_materialized_hash=expected_materialized_hash,
+            expected_sequence=sequence,
+            expected_previous_hash=previous_hash,
+        )
+        expected_name = f"{sequence:08d}-{record_hash}.json"
+        if record_path.name != expected_name:
+            raise ValueError("micro_reversion_checkpoint_record_filename_mismatch")
+        if expected_materialized_hash is None:
+            expected_materialized_hash = str(
+                record.get("materialized_report_content_sha256") or ""
+            )
+        record_hashes.append(record_hash)
+        results.append(result)
+        previous_hash = record_hash
+    if not expected_materialized_hash:
+        raise ValueError("micro_reversion_checkpoint_materialized_hash_missing")
+    if manifest:
+        manifest_count = int(manifest["checkpoint_record_count"])
+        if manifest_count > len(record_hashes):
+            raise ValueError("micro_reversion_checkpoint_manifest_ahead_of_records")
+        manifest_head = (
+            record_hashes[manifest_count - 1] if manifest_count else None
+        )
+        if manifest.get("checkpoint_head_sha256") != manifest_head:
+            raise ValueError("micro_reversion_checkpoint_manifest_head_mismatch")
+    if repair_manifest and (
+        not manifest
+        or manifest.get("checkpoint_record_count") != len(record_hashes)
+        or manifest.get("checkpoint_head_sha256") != previous_hash
+    ):
+        _atomic_write_json(
+            checkpoint_path,
+            _micro_reversion_checkpoint_manifest(
+                checkpoint_path=checkpoint_path,
+                materialized_report_content_sha256=expected_materialized_hash,
+                record_count=len(record_hashes),
+                head_sha256=previous_hash,
+            ),
+        )
+        _fsync_file_and_parent(checkpoint_path)
+    reconstructed_content = {
+        "schema": MICRO_REVERSION_CHECKPOINT_RECONSTRUCTED_SCHEMA,
+        "materialized_report_content_sha256": expected_materialized_hash,
+        "checkpoint_record_count": len(record_hashes),
+        "checkpoint_head_sha256": previous_hash,
+        "results": results,
+        "provider_call_performed": bool(results),
+        **OFFLINE_CONTRACT,
+    }
+    return {
+        **reconstructed_content,
+        "checkpoint_reconstructed_content_sha256": _sha256(
+            reconstructed_content
+        ),
+    }
+
+
+def _remove_micro_reversion_checkpoint(checkpoint_path: Path) -> None:
+    checkpoint_path.unlink(missing_ok=True)
+    record_dir = _micro_reversion_checkpoint_record_dir(checkpoint_path)
+    if record_dir.exists():
+        shutil.rmtree(record_dir)
+
+
+def _micro_reversion_provider_provenance_findings(
+    *,
+    request: dict[str, Any],
+    replay_result: dict[str, Any],
+) -> list[str]:
+    candidate = request.get("candidate") or {}
+    declared_provider = str(candidate.get("provider") or "").strip().lower()
+    declared_model = str(candidate.get("model") or "").strip()
+    declared_transport = str(candidate.get("transport") or "").strip()
+    attempts = replay_result.get("candidate_attempts") or []
+    provider_attempts = [
+        attempt
+        for attempt in attempts
+        if isinstance(attempt, dict)
+        and str((attempt.get("provider_provenance") or {}).get("provider") or "")
+        .strip()
+        .lower()
+        not in {"", "none", "deterministic_offline_adapter"}
+    ]
+    successful = [
+        attempt
+        for attempt in provider_attempts
+        if (attempt.get("provider_provenance") or {}).get(
+            "provider_call_attempted"
+        )
+        is True
+        and (attempt.get("provider_provenance") or {}).get(
+            "provider_call_succeeded"
+        )
+        is True
+    ]
+    if not successful:
+        return ["provider_success_provenance_missing"]
+    provenance = successful[-1].get("provider_provenance") or {}
+    findings: list[str] = []
+    if str(provenance.get("provider") or "").strip().lower() != declared_provider:
+        findings.append("provider_contract_mismatch")
+    if str(provenance.get("model") or "").strip() != declared_model:
+        findings.append("provider_model_contract_mismatch")
+    if provenance.get("provider_none") is not False:
+        findings.append("provider_none_or_unset")
+    if str(provenance.get("source_transport_contract") or "").strip() != (
+        declared_transport
+    ):
+        findings.append("provider_source_transport_contract_mismatch")
+    if not str(provenance.get("transport") or "").strip():
+        findings.append("provider_offline_transport_missing")
+    if not (
+        str(provenance.get("response_sha256") or "").strip()
+        or str(provenance.get("canonical_response_sha256") or "").strip()
+    ):
+        findings.append("provider_response_hash_missing")
+    if not str(provenance.get("response_id") or "").strip() and not str(
+        provenance.get("response_id_unavailable_reason") or ""
+    ).strip():
+        findings.append("provider_response_id_provenance_missing")
+    return findings
+
+
+def _micro_reversion_reusable_results(
+    *,
+    existing_artifact: dict[str, Any] | None,
+    materialized_report: dict[str, Any],
+    requests: list[dict[str, Any]],
+    labels_by_id: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Return only PASS results bound to the exact current request/outcome."""
+
+    if not existing_artifact:
+        return []
+    schema = existing_artifact.get("schema")
+    if schema == MICRO_REVERSION_EXECUTION_RESULT_SCHEMA:
+        declared_hash = str(existing_artifact.get("report_content_sha256") or "")
+        content = {
+            key: value
+            for key, value in existing_artifact.items()
+            if key != "report_content_sha256"
+        }
+        if not declared_hash or declared_hash != _sha256(content):
+            raise ValueError("micro_reversion_existing_result_report_hash_mismatch")
+        if existing_artifact.get("materialized_report_content_sha256") != (
+            materialized_report.get("report_content_sha256")
+        ):
+            raise ValueError("micro_reversion_existing_materialized_hash_mismatch")
+    elif schema == "ai_micro_reversion_execution_checkpoint_v1":
+        declared_hash = str(existing_artifact.get("checkpoint_content_sha256") or "")
+        content = {
+            key: value
+            for key, value in existing_artifact.items()
+            if key != "checkpoint_content_sha256"
+        }
+        if not declared_hash or declared_hash != _sha256(content):
+            raise ValueError("micro_reversion_existing_checkpoint_hash_mismatch")
+        if existing_artifact.get("materialized_report_content_sha256") != (
+            materialized_report.get("report_content_sha256")
+        ):
+            raise ValueError("micro_reversion_existing_materialized_hash_mismatch")
+    elif schema == MICRO_REVERSION_CHECKPOINT_RECONSTRUCTED_SCHEMA:
+        declared_hash = str(
+            existing_artifact.get("checkpoint_reconstructed_content_sha256") or ""
+        )
+        content = {
+            key: value
+            for key, value in existing_artifact.items()
+            if key != "checkpoint_reconstructed_content_sha256"
+        }
+        if not declared_hash or declared_hash != _sha256(content):
+            raise ValueError(
+                "micro_reversion_existing_checkpoint_reconstructed_hash_mismatch"
+            )
+        if existing_artifact.get("materialized_report_content_sha256") != (
+            materialized_report.get("report_content_sha256")
+        ):
+            raise ValueError("micro_reversion_existing_materialized_hash_mismatch")
+        results = existing_artifact.get("results")
+        if (
+            not isinstance(results, list)
+            or existing_artifact.get("checkpoint_record_count") != len(results)
+            or (len(results) == 0)
+            != (existing_artifact.get("checkpoint_head_sha256") in (None, ""))
+        ):
+            raise ValueError(
+                "micro_reversion_existing_checkpoint_reconstructed_census_mismatch"
+            )
+    else:
+        raise ValueError("micro_reversion_existing_result_schema_invalid")
+
+    request_by_id = {
+        str(request.get("paired_replay_id") or ""): request for request in requests
+    }
+    reusable: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for result in existing_artifact.get("results") or []:
+        if not isinstance(result, dict):
+            continue
+        request_id = str(result.get("paired_replay_id") or "")
+        request = request_by_id.get(request_id)
+        replay_result = result.get("replay_result")
+        if not request or request_id in seen or not isinstance(replay_result, dict):
+            continue
+        result_id = str(result.get("result_id") or "")
+        if not result_id or result_id != (
+            "micro-result-" + _sha256(_micro_reversion_result_content(result))[:24]
+        ):
+            continue
+        candidate_response = replay_result.get("candidate_response")
+        if (
+            replay_result.get("status") != "pass"
+            or not isinstance(candidate_response, dict)
+            or result.get("candidate_response_content_sha256")
+            != _sha256(candidate_response)
+        ):
+            continue
+        if _micro_reversion_provider_provenance_findings(
+            request=request,
+            replay_result=replay_result,
+        ):
+            continue
+        expected_binding = {
+            "decision_trace_id": request.get("decision_trace_id"),
+            "source_exact_payload_sha256": request.get(
+                "source_exact_payload_sha256"
+            ),
+            "candidate_input_sha256": request.get("candidate_input_sha256"),
+            "prompt_sha256": (request.get("candidate") or {}).get(
+                "system_prompt_sha256"
+            ),
+            "prompt_contract_sha256": (request.get("candidate") or {}).get(
+                "contract_sha256"
+            ),
+            "outcome_join_key": request.get("outcome_join_key"),
+        }
+        if any(result.get(field) != value for field, value in expected_binding.items()):
+            continue
+        try:
+            outcome_join = _micro_reversion_outcome_join(
+                request=request,
+                labels_by_id=labels_by_id,
+            )
+        except ValueError:
+            continue
+        if result.get("outcome_label_content_sha256") != outcome_join.get(
+            "outcome_label_content_sha256"
+        ):
+            continue
+        reusable.append(deepcopy(result))
+        seen.add(request_id)
+    return reusable
+
+
+def run_micro_reversion_materialized_requests(
+    *,
+    materialized_report: dict[str, Any],
+    outcome_labels: list[dict[str, Any]] | None = None,
+    execute_candidate: bool = False,
+    candidate_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    existing_result_artifact: dict[str, Any] | None = None,
+    max_new_requests: int = 0,
+    checkpoint_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Validate or explicitly execute source-only A/B/C requests offline.
+
+    The default path validates the complete materialized census and performs no
+    provider call.  Execution requires the caller's explicit opt-in, an
+    injected offline runner, and a positive bounded request count. Hash-bound
+    PASS checkpoints may be resumed. Outcome labels are joined only after
+    execution and never enter the model request.
+    """
+
+    requests = _validate_micro_reversion_materialized_report(materialized_report)
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for request in requests:
+        if not isinstance(request, dict):
+            raise ValueError("micro_reversion_execution_request_invalid")
+        _validate_micro_reversion_execution_request(request)
+        parent_id = str(request.get("paired_replay_parent_id") or "")
+        if not parent_id:
+            raise ValueError("micro_reversion_execution_parent_id_missing")
+        grouped[parent_id].append(request)
+    expected_arms = {
+        "replay_control_exact_no_micro",
+        "replay_control_exact_plus_micro",
+        "replay_candidate_exact_plus_micro",
+    }
+    request_refs: list[dict[str, Any]] = []
+    for parent_id, rows in grouped.items():
+        arms = {str(row.get("micro_reversion_replay_arm") or "") for row in rows}
+        if len(rows) != 3 or arms != expected_arms:
+            raise ValueError("micro_reversion_execution_parent_arm_census_invalid")
+        by_arm = {
+            str(row["micro_reversion_replay_arm"]): row for row in rows
+        }
+        exact_control = by_arm["replay_control_exact_no_micro"]
+        micro_control = by_arm["replay_control_exact_plus_micro"]
+        micro_candidate = by_arm["replay_candidate_exact_plus_micro"]
+        identity_fields = (
+            "decision_trace_id",
+            "stage",
+            "endpoint",
+            "stock_code",
+            "effective_venue",
+            "session_bucket",
+            "payload_sha256",
+            "request_envelope_sha256",
+            "source_exact_payload_sha256",
+            "outcome_join_key",
+        )
+        if any(
+            len({str(row.get(field)) for row in rows}) != 1
+            for field in identity_fields
+        ):
+            raise ValueError("micro_reversion_execution_parent_identity_mismatch")
+        if exact_control.get("candidate_input_sha256") == micro_control.get(
+            "candidate_input_sha256"
+        ):
+            raise ValueError("micro_reversion_execution_micro_input_not_distinct")
+        if micro_control.get("candidate_input_sha256") != micro_candidate.get(
+            "candidate_input_sha256"
+        ):
+            raise ValueError("micro_reversion_execution_enriched_input_mismatch")
+        if (exact_control.get("candidate") or {}).get("contract_sha256") != (
+            micro_control.get("candidate") or {}
+        ).get("contract_sha256"):
+            raise ValueError("micro_reversion_execution_control_contract_mismatch")
+        request_refs.extend(
+            {
+                "paired_replay_parent_id": parent_id,
+                "paired_replay_id": row["paired_replay_id"],
+                "micro_reversion_replay_arm": row["micro_reversion_replay_arm"],
+                "decision_trace_id": row.get("decision_trace_id"),
+                "candidate_input_sha256": row.get("candidate_input_sha256"),
+                "prompt_sha256": (row.get("candidate") or {}).get(
+                    "system_prompt_sha256"
+                ),
+                "prompt_contract_sha256": (row.get("candidate") or {}).get(
+                    "contract_sha256"
+                ),
+            }
+            for row in rows
+        )
+
+    labels_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for label in outcome_labels or []:
+        if isinstance(label, dict) and label.get("label_id"):
+            labels_by_id[str(label["label_id"])].append(label)
+    if execute_candidate and candidate_runner is None:
+        raise ValueError("micro_reversion_execution_runner_missing")
+    if execute_candidate and not labels_by_id:
+        raise ValueError("micro_reversion_execution_outcome_labels_missing")
+    if execute_candidate and (
+        isinstance(max_new_requests, bool)
+        or not isinstance(max_new_requests, int)
+        or max_new_requests <= 0
+    ):
+        raise ValueError("micro_reversion_execution_positive_bound_required")
+    if not execute_candidate and max_new_requests:
+        raise ValueError("micro_reversion_execution_bound_without_execution")
+
+    execution_exclusions = [
+        {
+            "paired_replay_parent_id": request.get("paired_replay_parent_id"),
+            "paired_replay_id": request.get("paired_replay_id"),
+            "micro_reversion_replay_arm": request.get(
+                "micro_reversion_replay_arm"
+            ),
+            "stage": request.get("stage"),
+            "provider": (request.get("candidate") or {}).get("provider"),
+            "model": (request.get("candidate") or {}).get("model"),
+            "reason": exclusion,
+        }
+        for request in requests
+        if (exclusion := _micro_reversion_executor_exclusion(request)) is not None
+    ]
+    excluded_request_ids = {
+        str(row.get("paired_replay_id") or "") for row in execution_exclusions
+    }
+
+    results = _micro_reversion_reusable_results(
+        existing_artifact=existing_result_artifact,
+        materialized_report=materialized_report,
+        requests=requests,
+        labels_by_id=labels_by_id,
+    )
+    checkpoint_record_count = (
+        int(existing_result_artifact.get("checkpoint_record_count") or 0)
+        if isinstance(existing_result_artifact, dict)
+        and existing_result_artifact.get("schema")
+        == MICRO_REVERSION_CHECKPOINT_RECONSTRUCTED_SCHEMA
+        else 0
+    )
+    checkpoint_head_sha256 = (
+        str(existing_result_artifact.get("checkpoint_head_sha256") or "") or None
+        if checkpoint_record_count
+        else None
+    )
+    reused_request_ids = {
+        str(result.get("paired_replay_id") or "") for result in results
+    }
+    pending_requests = [
+        request
+        for request in requests
+        if str(request.get("paired_replay_id") or "") not in excluded_request_ids
+        and str(request.get("paired_replay_id") or "") not in reused_request_ids
+    ]
+    selected_requests = (
+        pending_requests[:max_new_requests] if execute_candidate else []
+    )
+    deferred_requests = pending_requests[len(selected_requests) :]
+    new_result_ids: list[str] = []
+    outcome_joins: dict[str, dict[str, Any]] = {}
+    request_by_id = {
+        str(request.get("paired_replay_id") or ""): request for request in requests
+    }
+    for result in results:
+        request = request_by_id.get(str(result.get("paired_replay_id") or ""))
+        if request is None:
+            continue
+        outcome_join = _micro_reversion_outcome_join(
+            request=request,
+            labels_by_id=labels_by_id,
+        )
+        outcome_joins[outcome_join["outcome_join_key"]] = outcome_join
+    if execute_candidate:
+        for request in selected_requests:
+            outcome_join = _micro_reversion_outcome_join(
+                request=request,
+                labels_by_id=labels_by_id,
+            )
+            outcome_joins[outcome_join["outcome_join_key"]] = outcome_join
+            replay_result = run_paired_replay(
+                [request],
+                control_runner=lambda _request: {
+                    "result_source": "offline_three_arm_execution_no_natural_control"
+                },
+                candidate_runner=candidate_runner,
+            )[0]
+            provider_provenance_findings = (
+                _micro_reversion_provider_provenance_findings(
+                    request=request,
+                    replay_result=replay_result,
+                )
+            )
+            if replay_result.get("status") == "pass" and (
+                provider_provenance_findings
+            ):
+                replay_result = {
+                    **replay_result,
+                    "status": "provider_provenance_rejected",
+                    "provider_provenance_findings": (
+                        provider_provenance_findings
+                    ),
+                }
+            result_content = {
+                "paired_replay_parent_id": request["paired_replay_parent_id"],
+                "paired_replay_id": request["paired_replay_id"],
+                "micro_reversion_replay_arm": request[
+                    "micro_reversion_replay_arm"
+                ],
+                "decision_trace_id": request.get("decision_trace_id"),
+                "decision_ts": request.get("decision_ts"),
+                "stage": request.get("stage"),
+                "source_exact_payload_sha256": request.get(
+                    "source_exact_payload_sha256"
+                ),
+                "candidate_input_sha256": request.get("candidate_input_sha256"),
+                "prompt_sha256": (request.get("candidate") or {}).get(
+                    "system_prompt_sha256"
+                ),
+                "prompt_contract_sha256": (request.get("candidate") or {}).get(
+                    "contract_sha256"
+                ),
+                "outcome_join_key": outcome_join["outcome_join_key"],
+                "outcome_label_content_sha256": outcome_join[
+                    "outcome_label_content_sha256"
+                ],
+                "replay_result": replay_result,
+                "candidate_response_content_sha256": _sha256(
+                    replay_result.get("candidate_response") or {}
+                ),
+                **OFFLINE_CONTRACT,
+            }
+            result = {
+                "result_id": "micro-result-" + _sha256(result_content)[:24],
+                **result_content,
+            }
+            results.append(result)
+            new_result_ids.append(result["result_id"])
+            if checkpoint_callback is not None:
+                checkpoint_record = _micro_reversion_checkpoint_record(
+                    materialized_report_content_sha256=materialized_report[
+                        "report_content_sha256"
+                    ],
+                    sequence=checkpoint_record_count + 1,
+                    previous_record_sha256=checkpoint_head_sha256,
+                    result=result,
+                )
+                checkpoint_callback(checkpoint_record)
+                checkpoint_record_count += 1
+                checkpoint_head_sha256 = checkpoint_record[
+                    "checkpoint_record_content_sha256"
+                ]
+    request_order = {
+        str(request.get("paired_replay_id") or ""): index
+        for index, request in enumerate(requests)
+    }
+    results.sort(
+        key=lambda result: request_order.get(
+            str(result.get("paired_replay_id") or ""), len(request_order)
+        )
+    )
+    provider_attempts = [
+        attempt
+        for result in results
+        for attempt in (result.get("replay_result") or {}).get(
+            "candidate_attempts", []
+        )
+        if isinstance(attempt, dict)
+        and str((attempt.get("provider_provenance") or {}).get("provider") or "")
+        not in {"", "none", "deterministic_offline_adapter"}
+    ]
+    provider_call_attempted = bool(provider_attempts)
+    provider_call_performed = any(
+        (attempt.get("provider_provenance") or {}).get(
+            "provider_call_attempted"
+        )
+        is True
+        or attempt.get("status") in {"pass", "schema_rejected", "provider_failed"}
+        for attempt in provider_attempts
+    )
+    provider_call_succeeded = any(
+        (attempt.get("provider_provenance") or {}).get(
+            "provider_call_succeeded"
+        )
+        is True
+        for attempt in provider_attempts
+    )
+    provider_response_hash_observed = any(
+        bool(
+            (attempt.get("provider_provenance") or {}).get("response_sha256")
+            or (attempt.get("provider_provenance") or {}).get(
+                "canonical_response_sha256"
+            )
+        )
+        for attempt in provider_attempts
+    )
+    execution_failed_count = sum(
+        (result.get("replay_result") or {}).get("status") != "pass"
+        for result in results
+    )
+    provider_provenance_pass_count = sum(
+        not _micro_reversion_provider_provenance_findings(
+            request=request_by_id[str(result.get("paired_replay_id") or "")],
+            replay_result=result.get("replay_result") or {},
+        )
+        for result in results
+        if str(result.get("paired_replay_id") or "") in request_by_id
+    )
+    three_arm_evaluation = build_micro_reversion_three_arm_evaluation(
+        results=results,
+        outcome_labels=outcome_labels or [],
+    )
+    three_arm_evaluation = {
+        **three_arm_evaluation,
+        "evaluation_content_sha256": _sha256(three_arm_evaluation),
+    }
+    report_without_hash = {
+        "schema": MICRO_REVERSION_EXECUTION_RESULT_SCHEMA,
+        "generated_at": datetime.now(KST).isoformat(),
+        "target_date": materialized_report.get("target_date"),
+        "status": (
+            "offline_three_arm_execution_complete"
+            if (
+                execute_candidate
+                and execution_failed_count == 0
+                and not execution_exclusions
+                and not deferred_requests
+                and provider_provenance_pass_count == len(results)
+                and len(results) == len(requests)
+            )
+            else (
+                "offline_three_arm_execution_complete_with_failures_or_exclusions"
+                if execute_candidate
+                else "provider_execution_not_authorized"
+            )
+        ),
+        "materialized_report_content_sha256": materialized_report[
+            "report_content_sha256"
+        ],
+        "materialized_report_artifact_sha256": _sha256(materialized_report),
+        "parent_count": len(grouped),
+        "request_count": len(requests),
+        "request_refs": request_refs,
+        "result_count": len(results),
+        "result_ids": [row["result_id"] for row in results],
+        "results": results,
+        "new_result_count": len(new_result_ids),
+        "new_result_ids": new_result_ids,
+        "reused_result_count": len(reused_request_ids),
+        "deferred_request_count": len(deferred_requests),
+        "deferred_request_ids": [
+            row.get("paired_replay_id") for row in deferred_requests
+        ],
+        "max_new_requests": max_new_requests if execute_candidate else 0,
+        "outcome_joins": list(outcome_joins.values()),
+        "execution_exclusion_count": len(execution_exclusions),
+        "execution_exclusions": execution_exclusions,
+        "outcomes_embedded_in_provider_input": False,
+        "execution_requested": execute_candidate,
+        "candidate_model_call_attempted": bool(
+            execute_candidate and selected_requests
+        ),
+        "provider_call_attempted": provider_call_attempted,
+        "provider_call_performed": provider_call_performed,
+        "provider_call_succeeded": provider_call_succeeded,
+        "provider_response_hash_observed": provider_response_hash_observed,
+        "provider_provenance_pass_count": provider_provenance_pass_count,
+        "execution_failed_count": execution_failed_count,
+        "three_arm_evaluation": three_arm_evaluation,
+        **OFFLINE_CONTRACT,
+    }
+    return {
+        **report_without_hash,
+        "report_content_sha256": _sha256(report_without_hash),
+    }
 
 
 def recover_same_trace_outcome_labels_from_paired_reports(
@@ -15694,6 +19788,9 @@ def main(argv: list[str] | None = None) -> int:
             "recovery",
             "reversal_sequence",
             "reattribute",
+            "micro_reversion_source_bundle",
+            "micro_reversion_materialize",
+            "micro_reversion_execute",
         ),
         required=True,
     )
@@ -15746,14 +19843,26 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--candidate-timeout-sec", type=float, default=45.0)
-    parser.add_argument("--candidate-workers", type=int, default=4)
+    parser.add_argument(
+        "--candidate-workers",
+        type=int,
+        default=None,
+        help=(
+            "Offline provider worker count. Defaults to 1 for bounded "
+            "micro_reversion_execute and 4 for the existing paired/detailed "
+            "replay modes. Micro-reversion execution rejects an explicitly "
+            "requested value other than 1."
+        ),
+    )
     parser.add_argument(
         "--candidate-max-new-requests",
         type=int,
         default=0,
         help=(
             "Optional offline checkpoint limit for newly executed requests. "
-            "Zero executes every pending request; existing valid results are reused."
+            "Zero executes every pending request in the existing paired/detailed "
+            "modes; bounded micro_reversion_execute requires a positive value. "
+            "Existing valid results are reused."
         ),
     )
     parser.add_argument(
@@ -15812,12 +19921,92 @@ def main(argv: list[str] | None = None) -> int:
             "with --mode reattribute when current request construction drifted."
         ),
     )
+    parser.add_argument(
+        "--micro-reversion-prepared-requests",
+        type=Path,
+        help=(
+            "Existing exact prepared-request artifact containing a "
+            "prepared_requests list. Valid only with --mode "
+            "micro_reversion_materialize; no provider is called."
+        ),
+    )
+    parser.add_argument(
+        "--micro-reversion-source-bundle",
+        type=Path,
+        help=(
+            "Hash-bound micro-reversion evidence/source bundle, including the "
+            "full current-control prompt contract. Valid only with --mode "
+            "micro_reversion_materialize."
+        ),
+    )
+    parser.add_argument(
+        "--micro-reversion-materialized-requests",
+        type=Path,
+        help=(
+            "Validated A/B/C request artifact. Valid only with --mode "
+            "micro_reversion_execute. The default validates without provider "
+            "calls; execution additionally requires --execute-candidate --write."
+        ),
+    )
+    parser.add_argument(
+        "--micro-reversion-outcome-labels",
+        type=Path,
+        help=(
+            "Explicit outcome-label artifact for post-response joins in "
+            "micro_reversion_execute. It is never included in provider input."
+        ),
+    )
+    parser.add_argument(
+        "--micro-reversion-bridge-report",
+        type=Path,
+        help=(
+            "Hash-bound micro-reversion bridge report whose action-neutral "
+            "future bid-sweep outcomes are adapted for evaluation only. "
+            "Mutually exclusive with --micro-reversion-outcome-labels and "
+            "valid only with --mode micro_reversion_execute."
+        ),
+    )
+    parser.add_argument(
+        "--micro-reversion-control-contracts",
+        type=Path,
+        help=(
+            "Reviewed bridge configuration/cost artifact used with --mode "
+            "micro_reversion_source_bundle. Control contracts are generated "
+            "from the hash-exact trace, payload, prompt journal, and immutable "
+            "response-schema registry; supplied control contracts are ignored."
+        ),
+    )
+    parser.add_argument(
+        "--micro-reversion-observation-root",
+        type=Path,
+        help=(
+            "Partitioned 0B/0D/reference root for bounded source-bundle "
+            "construction. Valid only with --mode micro_reversion_source_bundle."
+        ),
+    )
+    parser.add_argument(
+        "--micro-reversion-symbol-master",
+        type=Path,
+        help=(
+            "Verified effective-dated symbol-master artifact used only to "
+            "qualify offline cost economics. Raw records are not sent to the "
+            "provider. Valid only with --mode micro_reversion_source_bundle."
+        ),
+    )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
+    if args.candidate_workers is None:
+        args.candidate_workers = (
+            1 if args.mode == "micro_reversion_execute" else 4
+        )
     if args.execute_candidate and (
-        args.mode not in {"paired", "detailed"} or not args.write
+        args.mode not in {"paired", "detailed", "micro_reversion_execute"}
+        or not args.write
     ):
-        parser.error("--execute-candidate requires --mode paired|detailed --write")
+        parser.error(
+            "--execute-candidate requires --mode "
+            "paired|detailed|micro_reversion_execute --write"
+        )
     if args.stage and args.mode != "paired":
         parser.error("--stage requires --mode paired")
     if (args.venue or args.session_bucket) and args.mode not in {
@@ -15847,12 +20036,127 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--outcome-recovery-report requires --mode detailed")
     if args.prepared_request_snapshot and args.mode != "reattribute":
         parser.error("--prepared-request-snapshot requires --mode reattribute")
+    micro_reversion_paths_supplied = bool(
+        args.micro_reversion_prepared_requests
+        or args.micro_reversion_source_bundle
+        or args.micro_reversion_materialized_requests
+        or args.micro_reversion_outcome_labels
+        or args.micro_reversion_bridge_report
+        or args.micro_reversion_control_contracts
+        or args.micro_reversion_observation_root
+        or args.micro_reversion_symbol_master
+    )
+    if args.mode == "micro_reversion_materialize" and not (
+        args.micro_reversion_prepared_requests
+        and args.micro_reversion_source_bundle
+    ):
+        parser.error(
+            "--mode micro_reversion_materialize requires "
+            "--micro-reversion-prepared-requests and "
+            "--micro-reversion-source-bundle"
+        )
+    if args.mode == "micro_reversion_source_bundle" and not (
+        args.micro_reversion_prepared_requests
+        and args.micro_reversion_control_contracts
+    ):
+        parser.error(
+            "--mode micro_reversion_source_bundle requires "
+            "--micro-reversion-prepared-requests and "
+            "--micro-reversion-control-contracts"
+        )
+    if (
+        args.mode == "micro_reversion_execute"
+        and not args.micro_reversion_materialized_requests
+    ):
+        parser.error(
+            "--mode micro_reversion_execute requires "
+            "--micro-reversion-materialized-requests"
+        )
+    if args.mode == "micro_reversion_execute" and any(
+        (
+            args.micro_reversion_prepared_requests,
+            args.micro_reversion_source_bundle,
+            args.micro_reversion_control_contracts,
+            args.micro_reversion_observation_root,
+            args.micro_reversion_symbol_master,
+        )
+    ):
+        parser.error(
+            "micro_reversion source/materialization inputs cannot be mixed "
+            "with --mode micro_reversion_execute"
+        )
+    if (
+        args.mode == "micro_reversion_materialize"
+        and (
+            args.micro_reversion_control_contracts
+            or args.micro_reversion_observation_root
+            or args.micro_reversion_symbol_master
+        )
+    ):
+        parser.error(
+            "--micro-reversion-control-contracts/--micro-reversion-observation-root/"
+            "--micro-reversion-symbol-master "
+            "require --mode micro_reversion_source_bundle"
+        )
+    if (
+        args.mode == "micro_reversion_source_bundle"
+        and args.micro_reversion_source_bundle
+    ):
+        parser.error(
+            "--micro-reversion-source-bundle is an input for "
+            "--mode micro_reversion_materialize"
+        )
+    if args.mode not in {
+        "micro_reversion_materialize",
+        "micro_reversion_source_bundle",
+        "micro_reversion_execute",
+    } and micro_reversion_paths_supplied:
+        parser.error(
+            "micro-reversion artifact paths require a micro_reversion_* mode"
+        )
+    if args.mode != "micro_reversion_execute" and (
+        args.micro_reversion_materialized_requests
+        or args.micro_reversion_outcome_labels
+        or args.micro_reversion_bridge_report
+    ):
+        parser.error(
+            "--micro-reversion-materialized-requests/"
+            "--micro-reversion-outcome-labels/"
+            "--micro-reversion-bridge-report require "
+            "--mode micro_reversion_execute"
+        )
+    if (
+        args.micro_reversion_outcome_labels
+        and args.micro_reversion_bridge_report
+    ):
+        parser.error(
+            "--micro-reversion-outcome-labels and "
+            "--micro-reversion-bridge-report are mutually exclusive"
+        )
     if args.mode == "reattribute" and not (args.venue and args.session_bucket):
         parser.error("--mode reattribute requires --venue and --session-bucket")
     if args.candidate_max_new_requests < 0:
         parser.error("--candidate-max-new-requests must be zero or positive")
     if args.candidate_max_new_requests and not args.execute_candidate:
         parser.error("--candidate-max-new-requests requires --execute-candidate")
+    if (
+        args.mode == "micro_reversion_execute"
+        and args.execute_candidate
+        and args.candidate_max_new_requests <= 0
+    ):
+        parser.error(
+            "micro_reversion provider execution requires a positive "
+            "--candidate-max-new-requests checkpoint bound"
+        )
+    if (
+        args.mode == "micro_reversion_execute"
+        and args.execute_candidate
+        and args.candidate_workers != 1
+    ):
+        parser.error(
+            "micro_reversion checkpoint execution currently requires "
+            "--candidate-workers 1"
+        )
     if args.mode != "control" and args.control_prompt_version:
         parser.error("--control-prompt-version requires --mode control")
     try:
@@ -15861,6 +20165,411 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
+    if args.mode == "micro_reversion_source_bundle":
+        from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+            _SQLiteRelevantSourceStore,
+            _iter_jsonl as iter_micro_reversion_jsonl,
+            _partition_paths as micro_reversion_partition_paths,
+            _relevant_windows as micro_reversion_relevant_windows,
+        )
+
+        prepared_artifact = _load_json(args.micro_reversion_prepared_requests)
+        contract_artifact = _load_json(args.micro_reversion_control_contracts)
+        for artifact_name, artifact in (
+            ("prepared", prepared_artifact),
+            ("control_contract", contract_artifact),
+        ):
+            artifact_date = artifact.get("target_date")
+            if artifact_date is not None and artifact_date != args.date:
+                raise RuntimeError(
+                    f"micro_reversion_{artifact_name}_target_date_mismatch"
+                )
+        prepared_requests = prepared_artifact.get("prepared_requests")
+        if not isinstance(prepared_requests, list) or not prepared_requests:
+            raise RuntimeError("micro_reversion_prepared_artifact_requests_missing")
+        bridge_config = contract_artifact.get("bridge_config")
+        if not isinstance(bridge_config, dict):
+            raise RuntimeError("micro_reversion_bridge_config_missing")
+        observation_root = (
+            args.micro_reversion_observation_root
+            or DATA_DIR / "observations" / "scalp_micro_reversion_forward"
+        )
+        trace_path = TRACE_DIR / f"ai_decision_trace_{args.date}.jsonl"
+        payload_path = PAYLOAD_DIR / f"ai_decision_payloads_{args.date}.jsonl"
+        prompt_path = PROMPT_DIR / f"ai_decision_prompts_{args.date}.jsonl"
+        exact_journal_paths = tuple(
+            existing_or_gzip_path(path)
+            for path in (trace_path, payload_path, prompt_path)
+        )
+        if not all(path.exists() for path in exact_journal_paths):
+            raise RuntimeError("micro_reversion_exact_source_journal_missing")
+        trace_path, payload_path, prompt_path = exact_journal_paths
+        traces = _load_jsonl(trace_path)
+        payloads = _load_jsonl(payload_path)
+        prompt_rows = _load_jsonl(prompt_path)
+        verified_symbol_metadata_by_trace: dict[str, dict[str, Any]] = {}
+        if args.micro_reversion_symbol_master:
+            from src.engine.scalping.micro_reversion.symbol_master import (
+                VerifiedSymbolMaster,
+            )
+
+            symbol_master_payload = _load_json(
+                args.micro_reversion_symbol_master
+            )
+            symbol_master = VerifiedSymbolMaster.from_json_path(
+                args.micro_reversion_symbol_master
+            )
+            symbol_master_sha256 = _sha256(symbol_master_payload)
+            trace_by_id = {
+                str(trace.get("decision_trace_id") or ""): trace
+                for trace in traces
+                if trace.get("decision_trace_id")
+            }
+            lookup_date = datetime.fromisoformat(args.date).date()
+            for request in prepared_requests:
+                trace_id = str(request.get("decision_trace_id") or "")
+                trace = trace_by_id.get(trace_id)
+                if not isinstance(trace, dict):
+                    continue
+                lookup = symbol_master.lookup(
+                    trace.get("stock_code"), as_of=lookup_date
+                )
+                verified_symbol_metadata_by_trace[trace_id] = {
+                    "lookup_status": lookup.status.value,
+                    "record": (
+                        lookup.record.as_dict()
+                        if lookup.record is not None
+                        else None
+                    ),
+                    "symbol_master_artifact_sha256": symbol_master_sha256,
+                }
+        generated_control_artifact = (
+            build_micro_reversion_control_contract_artifact(
+                target_date=args.date,
+                prepared_requests=prepared_requests,
+                traces=traces,
+                payloads=payloads,
+                prompt_rows=prompt_rows,
+            )
+        )
+        control_contracts = generated_control_artifact[
+            "control_prompt_contracts"
+        ]
+        selected_trace_ids = {
+            str(request.get("decision_trace_id") or "")
+            for request in prepared_requests
+        }
+        selected_traces = [
+            trace
+            for trace in traces
+            if str(trace.get("decision_trace_id") or "")
+            in selected_trace_ids
+        ]
+        selected_config = _micro_reversion_bridge_config(bridge_config)
+        source_windows = micro_reversion_relevant_windows(
+            selected_traces,
+            payloads,
+            config=selected_config,
+        )
+        market_paths = micro_reversion_partition_paths(
+            observation_root, args.date, "market_stream"
+        )
+        depth_paths = micro_reversion_partition_paths(
+            observation_root, args.date, "market_depth_stream"
+        )
+        reference_paths = micro_reversion_partition_paths(
+            observation_root,
+            args.date,
+            "market_stream_event_references",
+        )
+        # An empty sqlite filename is an OS-managed temporary database.  The
+        # broad observation corpus stays disk-backed and only one exact trace
+        # window is materialized in memory at a time.
+        with _SQLiteRelevantSourceStore(
+            "", windows=source_windows
+        ) as source_store:
+            source_store.ingest(
+                "market", iter_micro_reversion_jsonl(market_paths)
+            )
+            source_store.ingest(
+                "depth", iter_micro_reversion_jsonl(depth_paths)
+            )
+            source_store.ingest(
+                "reference",
+                iter_micro_reversion_jsonl(reference_paths),
+                reference_rows=True,
+            )
+            source_store.finalize()
+            report = build_micro_reversion_source_bundle(
+                target_date=args.date,
+                prepared_requests=prepared_requests,
+                traces=traces,
+                payloads=payloads,
+                prompt_rows=prompt_rows,
+                control_prompt_contracts=control_contracts,
+                market_rows=(),
+                depth_rows=(),
+                event_references=(),
+                bridge_config=selected_config,
+                excluded_scopes=_micro_reversion_excluded_scopes(
+                    contract_artifact.get("excluded_scopes")
+                ),
+                verified_symbol_metadata_by_trace=(
+                    verified_symbol_metadata_by_trace
+                ),
+                source_store=source_store,
+            )
+        path = micro_reversion_source_bundle_path(args.date)
+        if args.write:
+            _atomic_write_json(path, report)
+            printable = {
+                "schema": report["schema"],
+                "status": report["status"],
+                "target_date": args.date,
+                "artifact_path": str(path),
+                "prepared_request_count": report["prepared_request_count"],
+                "row_count": report["row_count"],
+                "provider_call_performed": False,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+            }
+        else:
+            printable = report
+        print(json.dumps(printable, ensure_ascii=False))
+        return 0
+    if args.mode == "micro_reversion_materialize":
+        prepared_artifact = _load_json(args.micro_reversion_prepared_requests)
+        source_bundle = _load_json(args.micro_reversion_source_bundle)
+        for artifact_name, artifact in (
+            ("prepared", prepared_artifact),
+            ("source_bundle", source_bundle),
+        ):
+            artifact_date = artifact.get("target_date")
+            if artifact_date is not None and artifact_date != args.date:
+                raise RuntimeError(
+                    f"micro_reversion_{artifact_name}_target_date_mismatch"
+                )
+        prepared_requests = prepared_artifact.get("prepared_requests")
+        if not isinstance(prepared_requests, list) or not prepared_requests:
+            raise RuntimeError("micro_reversion_prepared_artifact_requests_missing")
+        declared_prepared_count = prepared_artifact.get("prepared_request_count")
+        if (
+            declared_prepared_count is not None
+            and declared_prepared_count != len(prepared_requests)
+        ):
+            raise RuntimeError("micro_reversion_prepared_artifact_count_mismatch")
+        report = materialize_micro_reversion_offline_requests(
+            prepared_requests=prepared_requests,
+            bridge_source_bundle=source_bundle,
+        )
+        report_without_hash = {
+            key: value
+            for key, value in report.items()
+            if key != "report_content_sha256"
+        }
+        report_without_hash.update(
+            {
+                "target_date": args.date,
+                "prepared_request_artifact_path": str(
+                    args.micro_reversion_prepared_requests
+                ),
+                "prepared_request_artifact_sha256": _sha256(prepared_artifact),
+                "source_bundle_path": str(args.micro_reversion_source_bundle),
+            }
+        )
+        report = {
+            **report_without_hash,
+            "report_content_sha256": _sha256(report_without_hash),
+        }
+        path = micro_reversion_materialized_request_path(args.date)
+        if args.write:
+            _atomic_write_json(path, report)
+            printable = {
+                "schema": report["schema"],
+                "status": report["status"],
+                "target_date": args.date,
+                "artifact_path": str(path),
+                "prepared_request_count": report["prepared_request_count"],
+                "materialization_count": report["materialization_count"],
+                "request_count": report["request_count"],
+                "provider_call_performed": False,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+            }
+        else:
+            printable = report
+        print(json.dumps(printable, ensure_ascii=False))
+        return 0
+    if args.mode == "micro_reversion_execute":
+        materialized_report = _load_json(
+            args.micro_reversion_materialized_requests
+        )
+        artifact_date = materialized_report.get("target_date")
+        if artifact_date is not None and artifact_date != args.date:
+            raise RuntimeError("micro_reversion_materialized_target_date_mismatch")
+        outcome_path = (
+            args.micro_reversion_bridge_report
+            or args.micro_reversion_outcome_labels
+            or label_report_path(args.date)
+        )
+        if args.execute_candidate and args.micro_reversion_bridge_report:
+            bridge_report = _load_json(args.micro_reversion_bridge_report)
+            if bridge_report.get("target_date") not in (None, args.date):
+                raise RuntimeError(
+                    "micro_reversion_bridge_report_target_date_mismatch"
+                )
+            outcome_artifact = (
+                build_micro_reversion_action_neutral_outcome_labels(
+                    bridge_report=bridge_report,
+                    materialized_report=materialized_report,
+                )
+            )
+        else:
+            outcome_artifact = (
+                _load_json(outcome_path) if args.execute_candidate else {}
+            )
+        if args.execute_candidate:
+            _validate_micro_reversion_outcome_label_artifact(
+                outcome_artifact
+            )
+        outcome_labels = outcome_artifact.get("labels") or []
+        if args.execute_candidate:
+            if not isinstance(outcome_labels, list) or not outcome_labels:
+                raise RuntimeError("micro_reversion_outcome_labels_missing")
+            requests = materialized_report.get("requests") or []
+            needs_openai = any(
+                str(((request.get("candidate") or {}).get("provider")) or "")
+                .strip()
+                .lower()
+                == "openai"
+                for request in requests
+                if isinstance(request, dict)
+            )
+            api_keys = _offline_openai_api_keys() if needs_openai else []
+            if needs_openai and not api_keys:
+                raise RuntimeError("openai_api_key_unavailable")
+
+            def micro_reversion_candidate_runner(
+                request: dict[str, Any],
+            ) -> dict[str, Any]:
+                provider = str(
+                    ((request.get("candidate") or {}).get("provider")) or ""
+                ).strip().lower()
+                if provider.startswith("bedrock"):
+                    from src.engine.scalping.ai_stage_coverage_replay import (
+                        execute_bedrock_candidate,
+                    )
+
+                    return execute_bedrock_candidate(request)
+                return execute_openai_prompt_v2_candidate(
+                    request,
+                    api_keys=api_keys,
+                    timeout_sec=args.candidate_timeout_sec,
+                )
+
+        else:
+            micro_reversion_candidate_runner = None
+        path = micro_reversion_execution_result_path(args.date)
+        checkpoint_path = path.with_name(
+            f"{path.stem}.checkpoint.json"
+        )
+        existing_result_artifact = None
+        if args.execute_candidate:
+            checkpoint_record_dir = _micro_reversion_checkpoint_record_dir(
+                checkpoint_path
+            )
+            if checkpoint_path.exists() or checkpoint_record_dir.exists():
+                existing_result_artifact = _load_micro_reversion_checkpoint(
+                    checkpoint_path,
+                    repair_manifest=True,
+                )
+            elif path.exists():
+                existing_result_artifact = _load_json(path)
+
+        def write_micro_reversion_checkpoint(
+            checkpoint_record: dict[str, Any],
+        ) -> None:
+            _write_micro_reversion_checkpoint_record(
+                checkpoint_path,
+                checkpoint_record,
+            )
+
+        report = run_micro_reversion_materialized_requests(
+            materialized_report=materialized_report,
+            outcome_labels=outcome_labels,
+            execute_candidate=args.execute_candidate,
+            candidate_runner=micro_reversion_candidate_runner,
+            existing_result_artifact=existing_result_artifact,
+            max_new_requests=(
+                args.candidate_max_new_requests if args.execute_candidate else 0
+            ),
+            checkpoint_callback=(
+                write_micro_reversion_checkpoint
+                if args.execute_candidate and args.write
+                else None
+            ),
+        )
+        report_without_hash = {
+            key: value
+            for key, value in report.items()
+            if key != "report_content_sha256"
+        }
+        report_without_hash.update(
+            {
+                "target_date": args.date,
+                "materialized_artifact_path": str(
+                    args.micro_reversion_materialized_requests
+                ),
+                "outcome_label_artifact_path": (
+                    str(outcome_path) if args.execute_candidate else None
+                ),
+                "outcome_label_artifact_sha256": (
+                    _sha256(outcome_artifact) if args.execute_candidate else None
+                ),
+                "action_neutral_bridge_outcome_adapter": (
+                    {
+                        "status": outcome_artifact.get("status"),
+                        "artifact_content_sha256": outcome_artifact.get(
+                            "artifact_content_sha256"
+                        ),
+                        "eligible_label_count": outcome_artifact.get(
+                            "eligible_label_count"
+                        ),
+                        "excluded_parent_count": outcome_artifact.get(
+                            "excluded_parent_count"
+                        ),
+                    }
+                    if args.execute_candidate
+                    and args.micro_reversion_bridge_report
+                    else None
+                ),
+            }
+        )
+        report = {
+            **report_without_hash,
+            "report_content_sha256": _sha256(report_without_hash),
+        }
+        if args.write:
+            _atomic_write_json(path, report)
+            if report.get("status") == "offline_three_arm_execution_complete":
+                _fsync_file_and_parent(path)
+                _remove_micro_reversion_checkpoint(checkpoint_path)
+            printable = {
+                "schema": report["schema"],
+                "status": report["status"],
+                "target_date": args.date,
+                "artifact_path": str(path),
+                "parent_count": report["parent_count"],
+                "request_count": report["request_count"],
+                "result_count": report["result_count"],
+                "provider_call_performed": report["provider_call_performed"],
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+            }
+        else:
+            printable = report
+        print(json.dumps(printable, ensure_ascii=False))
+        return 0
     if args.mode == "reattribute":
         report, path = rematerialize_detailed_replay_attribution(
             target_date=args.date,

@@ -5,6 +5,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from src.engine.monitoring.machine_microstructure_attribution import (
+    FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID,
+    OBJECTIVE_CANDIDATE_BINDING_SCHEMA,
+    OBJECTIVE_FOLLOWUP_METRIC_CONTRACT,
+    _fast_lifecycle_objective_followup,
     _lifecycle_objective_summary,
     _validate_stream_row,
     archive_exact_date_canary_snapshot,
@@ -438,6 +442,30 @@ def test_held_episode_keeps_diagnostic_anchors_but_never_tuning_authority(tmp_pa
         == report["summary"]["anchor_count"]
     )
     assert report["policy_promotion_candidates"] == []
+    assert report["summary"]["objective_followup_required_count"] == 1
+    assert report["objective_followups"] == [
+        {
+            "schema": "machine_fast_lifecycle_objective_followup_v1",
+            "followup_id": "machine_lifecycle_turnover_policy_research_v1",
+            "source_date": target_date,
+            "state": "IMPLEMENTATION_REQUIRED",
+            "followup_required": True,
+            "attention_class": "code_improvement_workorder",
+            "operator_decision_required": False,
+            "current_capability": "diagnostic_observation_only",
+            "remaining_gap_codes": [
+                "rolling_paired_policy_candidate_producer_not_implemented",
+                "episode_single_attempt_no_same_day_reentry_tuning_axis",
+                "speed_and_capital_occupancy_not_policy_selection_axes",
+            ],
+            "next_action": "implement_source_only_rolling_paired_policy_research",
+            "metric_contract": OBJECTIVE_FOLLOWUP_METRIC_CONTRACT,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+    ]
 
 
 def test_multi_day_episode_reconciliation_emits_target_date_exit_anchor(tmp_path):
@@ -1972,6 +2000,152 @@ def test_lifecycle_summary_separates_actual_and_counterfactual_cohorts():
         ]["gross_no_slippage_avg_return_pct"]
         == 0.5
     )
+
+
+def _objective_bound_candidate(
+    candidate_id: str,
+    resolved_gap_codes: list[str],
+    *,
+    followup_id: str = FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID,
+) -> dict:
+    return {
+        "candidate_id": candidate_id,
+        "objective_followup_binding": {
+            "schema": OBJECTIVE_CANDIDATE_BINDING_SCHEMA,
+            "followup_id": followup_id,
+            "resolved_gap_codes": resolved_gap_codes,
+        },
+    }
+
+
+def test_fast_lifecycle_followup_requires_one_exact_bound_candidate():
+    objective = _lifecycle_objective_summary([])
+    implementation = _fast_lifecycle_objective_followup(
+        target_date="2026-08-14",
+        objective_alignment=objective,
+        promotion_candidates=[],
+    )
+    assert implementation["state"] == "IMPLEMENTATION_REQUIRED"
+    assert implementation["followup_required"] is True
+    assert implementation["operator_decision_required"] is False
+
+    accumulating_objective = json.loads(json.dumps(objective))
+    accumulating_objective["implementation_boundary"][
+        "rolling_paired_policy_candidate_producer_present"
+    ] = True
+    accumulating = _fast_lifecycle_objective_followup(
+        target_date="2026-08-14",
+        objective_alignment=accumulating_objective,
+        promotion_candidates=[{"candidate_id": "unbound-candidate"}],
+    )
+    assert accumulating["state"] == "EVIDENCE_ACCUMULATING"
+    assert accumulating["followup_required"] is True
+    assert "candidate_handoff_binding" not in accumulating
+
+    unrelated = _fast_lifecycle_objective_followup(
+        target_date="2026-08-14",
+        objective_alignment=objective,
+        promotion_candidates=[
+            _objective_bound_candidate(
+                "unrelated",
+                list(objective["remaining_gaps"]),
+                followup_id="other_objective",
+            )
+        ],
+    )
+    assert unrelated["state"] == "IMPLEMENTATION_REQUIRED"
+
+    required_gaps = list(objective["remaining_gaps"])
+    objective_candidate = _objective_bound_candidate(
+        "fast-lifecycle-bound-candidate", required_gaps
+    )
+    handoff = _fast_lifecycle_objective_followup(
+        target_date="2026-08-14",
+        objective_alignment=objective,
+        promotion_candidates=[objective_candidate],
+    )
+    assert handoff["state"] == "CANDIDATE_QUEUE_HANDOFF"
+    assert handoff["followup_required"] is False
+    assert handoff["remaining_gap_codes"] == []
+    assert handoff["candidate_handoff_binding"]["candidate_id"] == (
+        "fast-lifecycle-bound-candidate"
+    )
+    assert handoff["candidate_handoff_binding"]["required_gap_codes"] == (required_gaps)
+    assert len(handoff["candidate_handoff_binding"]["candidate_sha256"]) == 64
+
+    ambiguous = _fast_lifecycle_objective_followup(
+        target_date="2026-08-14",
+        objective_alignment=objective,
+        promotion_candidates=[
+            objective_candidate,
+            _objective_bound_candidate("second-bound-candidate", required_gaps),
+        ],
+    )
+    assert ambiguous["state"] == "IMPLEMENTATION_REQUIRED"
+    assert ambiguous["followup_required"] is True
+    assert "candidate_handoff_binding" not in ambiguous
+
+
+def test_fast_lifecycle_followup_allows_only_explicit_empty_gap_binding():
+    objective = _lifecycle_objective_summary([])
+    no_gap_objective = json.loads(json.dumps(objective))
+    no_gap_objective["implementation_boundary"][
+        "rolling_paired_policy_candidate_producer_present"
+    ] = True
+    no_gap_objective["remaining_gaps"] = []
+
+    missing_binding = _fast_lifecycle_objective_followup(
+        target_date="2026-08-14",
+        objective_alignment=no_gap_objective,
+        promotion_candidates=[{"candidate_id": "unbound-empty-gap-candidate"}],
+    )
+    assert missing_binding["state"] == "EVIDENCE_ACCUMULATING"
+    assert missing_binding["followup_required"] is True
+
+    handoff = _fast_lifecycle_objective_followup(
+        target_date="2026-08-14",
+        objective_alignment=no_gap_objective,
+        promotion_candidates=[_objective_bound_candidate("bound-empty-gap", [])],
+    )
+    assert handoff["state"] == "CANDIDATE_QUEUE_HANDOFF"
+    assert handoff["candidate_handoff_binding"]["required_gap_codes"] == []
+
+
+def test_fast_lifecycle_followup_does_not_transfer_non_handoff_runtime_gap():
+    objective = _lifecycle_objective_summary([])
+    objective["implementation_boundary"][
+        "rolling_paired_policy_candidate_producer_present"
+    ] = True
+    objective["remaining_gaps"] = ["post_apply_attribution_pending"]
+
+    followup = _fast_lifecycle_objective_followup(
+        target_date="2026-08-14",
+        objective_alignment=objective,
+        promotion_candidates=[_objective_bound_candidate("bound-candidate", [])],
+    )
+
+    assert followup["state"] == "EVIDENCE_ACCUMULATING"
+    assert followup["followup_required"] is True
+    assert followup["remaining_gap_codes"] == ["post_apply_attribution_pending"]
+    assert "candidate_handoff_binding" not in followup
+
+
+def test_fast_lifecycle_complete_is_source_declared_without_queue_evidence():
+    completed_objective = _lifecycle_objective_summary([])
+
+    completed_objective["reflected_in_real_runtime_policy"] = True
+    completed_objective["implementation_boundary"][
+        "speed_or_turnover_metric_changes_policy_selection"
+    ] = True
+    completed_objective["remaining_gaps"] = []
+    completed = _fast_lifecycle_objective_followup(
+        target_date="2026-08-14",
+        objective_alignment=completed_objective,
+        promotion_candidates=[],
+    )
+    assert completed["state"] == "COMPLETE"
+    assert completed["followup_required"] is False
+    assert "completion_evidence" not in completed
 
 
 def test_wrong_schema_exact_date_owner_report_is_not_consumed(tmp_path):

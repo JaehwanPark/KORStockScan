@@ -66,6 +66,10 @@ from src.engine.scalping.ai_decision_trace import (  # noqa: E402
     record_ai_decision_trace,
 )
 from src.engine.scalping.ai_decision_quality import (  # noqa: E402
+    BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION,
+    DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION,
+    ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION,
+    ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION,
     build_entry_price_explicit_fill_value_contract,
     build_exact_payload_analysis_v1,
     build_v2_13_recovery_confirmation_analysis_v1,
@@ -131,6 +135,200 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
     decision_quality_entry_price_v2_5_live_krx_system_prompt,
 )
+
+
+def _expected_semantic_contract_version(schema_name):
+    schema = str(schema_name or "").strip()
+    known = {
+        ENTRY_RISK_ADJUDICATION_SCHEMA: (
+            ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+        ),
+        "decision_quality_v2_7_entry": (
+            BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+        ),
+        "entry_price_explicit_fill_value_v1": (
+            ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION
+        ),
+        "entry_price_v1": "live_entry_price_v1_schema_semantic_v1",
+        "holding_score_v2": "holding_score_live_normalizer_v1",
+        "holding_exit_flow_v1": "holding_flow_live_schema_semantic_v1",
+    }
+    return known.get(schema, f"live_{schema or 'json'}_semantic_contract_v1")
+
+
+def _response_schema_sha256(request, *, registry_used, entry_setup_evidence):
+    """Hash the exact JSON schema sent to OpenAI, when one exists."""
+
+    if not registry_used or not request.schema_name:
+        return None
+    schema_override = None
+    if request.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
+        schema_override = entry_risk_adjudication_openai_schema(
+            entry_setup_evidence or None
+        )
+    response_format = build_openai_response_text_format(
+        request.schema_name,
+        schema_override=schema_override,
+    )
+    schema = response_format.get("schema")
+    if not isinstance(schema, dict):
+        return None
+    return hashlib.sha256(
+        json.dumps(
+            schema,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _holding_flow_response_contract_errors(value):
+    """Validate the local contract that Bedrock cannot enforce on transport."""
+
+    if not isinstance(value, dict):
+        return ["holding_flow_response_not_object"]
+    errors = []
+    required = {
+        "action": str,
+        "score": int,
+        "flow_state": str,
+        "thesis": str,
+        "evidence": list,
+        "reason": str,
+        "next_review_sec": int,
+    }
+    for field_name, expected_type in required.items():
+        raw = value.get(field_name)
+        if field_name not in value:
+            errors.append(f"holding_flow_{field_name}_missing")
+        elif expected_type is int:
+            if not isinstance(raw, int) or isinstance(raw, bool):
+                errors.append(f"holding_flow_{field_name}_type_invalid")
+        elif not isinstance(raw, expected_type):
+            errors.append(f"holding_flow_{field_name}_type_invalid")
+    action = value.get("action")
+    if isinstance(action, str) and action not in {"HOLD", "TRIM", "EXIT"}:
+        errors.append("holding_flow_action_invalid")
+    score = value.get("score")
+    if isinstance(score, int) and not isinstance(score, bool) and not 0 <= score <= 100:
+        errors.append("holding_flow_score_out_of_range")
+    evidence = value.get("evidence")
+    if isinstance(evidence, list) and any(
+        not isinstance(item, str) for item in evidence
+    ):
+        errors.append("holding_flow_evidence_item_type_invalid")
+    next_review_sec = value.get("next_review_sec")
+    if (
+        isinstance(next_review_sec, int)
+        and not isinstance(next_review_sec, bool)
+        and not 0 <= next_review_sec <= 600
+    ):
+        errors.append("holding_flow_next_review_sec_out_of_range")
+    return list(dict.fromkeys(errors))
+
+
+def _holding_score_response_contract_errors(value):
+    """Validate a holding-score response before permissive normalization."""
+
+    if not isinstance(value, dict):
+        return ["holding_score_response_not_object"]
+    errors = []
+    required = {
+        "action": str,
+        "score": int,
+        "confidence": int,
+        "position_state": str,
+        "score_basis": str,
+        "risk_factors": list,
+        "support_factors": list,
+        "data_quality": str,
+        "reason": str,
+    }
+    for field_name, expected_type in required.items():
+        raw = value.get(field_name)
+        if field_name not in value:
+            errors.append(f"holding_score_{field_name}_missing")
+        elif expected_type is int:
+            if not isinstance(raw, int) or isinstance(raw, bool):
+                errors.append(f"holding_score_{field_name}_type_invalid")
+        elif not isinstance(raw, expected_type):
+            errors.append(f"holding_score_{field_name}_type_invalid")
+    action = value.get("action")
+    if isinstance(action, str) and action not in {"HOLD", "TRIM", "EXIT"}:
+        errors.append("holding_score_action_invalid")
+    for field_name in ("score", "confidence"):
+        raw = value.get(field_name)
+        if isinstance(raw, int) and not isinstance(raw, bool) and not 0 <= raw <= 100:
+            errors.append(f"holding_score_{field_name}_out_of_range")
+    for field_name in ("risk_factors", "support_factors"):
+        raw = value.get(field_name)
+        if isinstance(raw, list) and any(not isinstance(item, str) for item in raw):
+            errors.append(f"holding_score_{field_name}_item_type_invalid")
+    data_quality = value.get("data_quality")
+    if isinstance(data_quality, str) and data_quality not in {
+        "fresh",
+        "stale",
+        "partial",
+        "insufficient",
+    }:
+        errors.append("holding_score_data_quality_invalid")
+    return list(dict.fromkeys(errors))
+
+
+def _entry_price_v1_response_contract_errors(value):
+    """Validate the legacy entry-price contract before live normalization."""
+
+    if not isinstance(value, dict):
+        return ["entry_price_v1_response_not_object"]
+    errors = []
+    required = {
+        "action": str,
+        "order_price": int,
+        "confidence": int,
+        "reason": str,
+        "max_wait_sec": int,
+    }
+    for field_name, expected_type in required.items():
+        raw = value.get(field_name)
+        if field_name not in value:
+            errors.append(f"entry_price_v1_{field_name}_missing")
+        elif expected_type is int:
+            if not isinstance(raw, int) or isinstance(raw, bool):
+                errors.append(f"entry_price_v1_{field_name}_type_invalid")
+        elif not isinstance(raw, expected_type):
+            errors.append(f"entry_price_v1_{field_name}_type_invalid")
+    action = value.get("action")
+    if isinstance(action, str) and action not in {
+        "USE_DEFENSIVE",
+        "USE_REFERENCE",
+        "IMPROVE_LIMIT",
+        "SKIP",
+    }:
+        errors.append("entry_price_v1_action_invalid")
+    order_price = value.get("order_price")
+    if (
+        isinstance(order_price, int)
+        and not isinstance(order_price, bool)
+        and order_price < 0
+    ):
+        errors.append("entry_price_v1_order_price_negative")
+    confidence = value.get("confidence")
+    if (
+        isinstance(confidence, int)
+        and not isinstance(confidence, bool)
+        and not 0 <= confidence <= 100
+    ):
+        errors.append("entry_price_v1_confidence_out_of_range")
+    max_wait_sec = value.get("max_wait_sec")
+    if (
+        isinstance(max_wait_sec, int)
+        and not isinstance(max_wait_sec, bool)
+        and not 5 <= max_wait_sec <= 1_200
+    ):
+        errors.append("entry_price_v1_max_wait_sec_out_of_range")
+    return list(dict.fromkeys(errors))
 
 
 def _refresh_transmitted_multi_timeframe_hash(payload):
@@ -3191,11 +3389,14 @@ class GPTSniperEngine:
                         "ai_input_payload_",
                         "ai_request_",
                         "ai_trace_",
+                        "holding_exact_replay_",
                     )
                 )
                 or key_text == "ai_decision_trace_id"
                 or key_text == "provider_response_id"
                 or key_text == "provider"
+                or key_text.startswith("semantic_")
+                or key_text == "expected_semantic_validator_version"
             ):
                 target_payload[key] = value
         return target_payload
@@ -4209,6 +4410,11 @@ class GPTSniperEngine:
             schema_name=request.schema_name,
         )
         entry_setup_schema_evidence = request.entry_setup_evidence()
+        response_schema_sha256 = _response_schema_sha256(
+            request,
+            registry_used=response_schema_registry_used,
+            entry_setup_evidence=entry_setup_schema_evidence,
+        )
         transport_meta = {
             "openai_transport_mode": "http",
             "openai_transport_requested_mode": requested_transport_mode,
@@ -4221,7 +4427,13 @@ class GPTSniperEngine:
             "openai_request_id": request.request_id,
             "openai_endpoint_name": request.endpoint_name,
             "openai_schema_name": request.schema_name or "-",
+            "openai_require_json": bool(request.require_json),
+            "expected_semantic_validator_version": _expected_semantic_contract_version(
+                request.schema_name
+            ),
             "openai_response_schema_registry_used": bool(response_schema_registry_used),
+            "openai_response_schema_sha256": response_schema_sha256,
+            "openai_response_schema_application": "pending_provider_route",
             "openai_response_schema_mode": (
                 "strict_dynamic_entry_risk"
                 if (
@@ -4414,6 +4626,11 @@ class GPTSniperEngine:
             transport_meta.update(result.timing_meta)
         if getattr(result, "usage_meta", None):
             transport_meta.update(result.usage_meta)
+        transport_meta["openai_response_schema_application"] = (
+            "provider_enforced_openai"
+            if response_schema_registry_used
+            else "provider_json_object_openai"
+        )
         self._set_last_transport_meta(transport_meta)
         if isinstance(result.payload, dict):
             return result.payload
@@ -4621,6 +4838,9 @@ class GPTSniperEngine:
                     "bedrock_fallback_used": True,
                     "bedrock_fallback_family": profile.family,
                     "bedrock_failback_used": False,
+                    "openai_response_schema_application": (
+                        "local_expected_only_not_sent_to_bedrock"
+                    ),
                 }
             )
             self._set_last_transport_meta(transport_meta)
@@ -4750,6 +4970,9 @@ class GPTSniperEngine:
                     "openai_ws_roundtrip_ms": int(result.latency_ms),
                     "bedrock_primary_used": True,
                     "bedrock_failback_used": False,
+                    "openai_response_schema_application": (
+                        "local_expected_only_not_sent_to_bedrock"
+                    ),
                 }
             )
             self._set_last_transport_meta(transport_meta)
@@ -4878,6 +5101,9 @@ class GPTSniperEngine:
                     "bedrock_failback_used": False,
                     "bedrock_model_family": primary_profile.family,
                     "bedrock_primary_family": primary_profile.family,
+                    "openai_response_schema_application": (
+                        "local_expected_only_not_sent_to_bedrock"
+                    ),
                 }
             )
             self._set_last_transport_meta(transport_meta)
@@ -4927,6 +5153,9 @@ class GPTSniperEngine:
                     {
                         "bedrock_model_family": failback_profile.family,
                         "bedrock_failback_family": failback_profile.family,
+                        "openai_response_schema_application": (
+                            "local_expected_only_not_sent_to_bedrock"
+                        ),
                         "bedrock_failback_used": True,
                         "bedrock_primary_error_type": primary_error_type,
                     }
@@ -4970,6 +5199,9 @@ class GPTSniperEngine:
                         "bedrock_model_family": failback_profile.family,
                         "bedrock_primary_family": primary_profile.family,
                         "bedrock_failback_family": failback_profile.family,
+                        "openai_response_schema_application": (
+                            "local_expected_only_not_sent_to_bedrock"
+                        ),
                     }
                 )
                 self._set_last_transport_meta(transport_meta)
@@ -7356,6 +7588,20 @@ class GPTSniperEngine:
                     exact_payload=exact_payload,
                     contract_facts=entry_price_contract_facts,
                 )
+                result.update(
+                    {
+                        "semantic_validator_version": (
+                            ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION
+                        ),
+                        "expected_semantic_validator_version": (
+                            ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION
+                        ),
+                        "semantic_validator_applied": True,
+                        "semantic_validation_status": (
+                            "rejected" if semantic_errors else "pass"
+                        ),
+                    }
+                )
                 if semantic_errors:
                     defensive = normalize_scalping_entry_price_result(
                         {
@@ -7458,9 +7704,36 @@ class GPTSniperEngine:
                     result_source="live",
                     input_contract_fields=input_contract_fields,
                 )
+            legacy_semantic_errors = _entry_price_v1_response_contract_errors(
+                result
+            )
             normalized = normalize_scalping_entry_price_result(
                 result, fallback_price=fallback_price
             )
+            normalized.update(
+                {
+                    "semantic_validator_version": (
+                        "live_entry_price_v1_schema_semantic_v1"
+                    ),
+                    "expected_semantic_validator_version": (
+                        "live_entry_price_v1_schema_semantic_v1"
+                    ),
+                    "semantic_validator_applied": True,
+                    "semantic_validation_status": (
+                        "rejected" if legacy_semantic_errors else "pass"
+                    ),
+                    "entry_price_v1_contract_status": (
+                        "semantic_rejected" if legacy_semantic_errors else "pass"
+                    ),
+                    "entry_price_v1_contract_errors": legacy_semantic_errors,
+                    "forensic_semantic_errors": legacy_semantic_errors,
+                }
+            )
+            if legacy_semantic_errors:
+                # Preserve the established normalized live price/action while
+                # excluding malformed local-provider responses from quality
+                # and replay cohorts.
+                normalized["ai_decision_outcome_eligible"] = False
             self._copy_ai_transport_trace_metadata(normalized, result)
             normalized["ai_model"] = self._get_tier2_model()
             self._mark_successful_ai_call(update_last_call_time=False)
@@ -8393,6 +8666,34 @@ class GPTSniperEngine:
                     feature_packet=feature_packet,
                 )
                 result["ai_model"] = target_model
+
+                if decision_quality_v2_7_selected:
+                    semantic_version = (
+                        ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+                        if decision_quality_v2_14_selected
+                        else (
+                            BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+                            if decision_quality_v2_13_selected
+                            else DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION
+                        )
+                    )
+                    contract_status = str(
+                        result.get("decision_quality_contract_status") or ""
+                    )
+                    semantic_status = (
+                        "pass" if contract_status == "pass" else "rejected"
+                    )
+                else:
+                    semantic_version = "scalping_action_live_normalizer_v1"
+                    semantic_status = "pass"
+                result.update(
+                    {
+                        "semantic_validator_version": semantic_version,
+                        "expected_semantic_validator_version": semantic_version,
+                        "semantic_validator_applied": True,
+                        "semantic_validation_status": semantic_status,
+                    }
+                )
 
             result = _merge_runtime_fields(result)
             result["openai_min_interval_wait_ms"] = min_interval_wait_ms
@@ -9516,12 +9817,43 @@ class GPTSniperEngine:
                 symbol=stock_code,
                 metadata_extra=metadata_extra,
             )
+            holding_score_semantic_errors = _holding_score_response_contract_errors(
+                result
+            )
             transport_meta = self._consume_last_transport_meta()
             if isinstance(result, dict) and transport_meta:
                 result.update(transport_meta)
             normalized = self._normalize_holding_score_result(
                 result, source_quality=source_quality
             )
+            normalized.update(
+                {
+                    "semantic_validator_version": (
+                        "holding_score_live_normalizer_v1"
+                    ),
+                    "expected_semantic_validator_version": (
+                        "holding_score_live_normalizer_v1"
+                    ),
+                    "semantic_validator_applied": True,
+                    "semantic_validation_status": (
+                        "rejected" if holding_score_semantic_errors else "pass"
+                    ),
+                    "holding_score_contract_status": (
+                        "semantic_rejected"
+                        if holding_score_semantic_errors
+                        else "pass"
+                    ),
+                    "holding_score_contract_errors": (
+                        holding_score_semantic_errors
+                    ),
+                    "forensic_semantic_errors": holding_score_semantic_errors,
+                }
+            )
+            if holding_score_semantic_errors:
+                # Quality provenance only: keep the established normalized live
+                # action, but exclude malformed local-fallback responses from
+                # natural-control and outcome cohorts.
+                normalized["ai_decision_outcome_eligible"] = False
             model_holding_score = dict(normalized)
             model_holding_score_data_quality = (
                 self._normalize_holding_score_data_quality(
@@ -10186,10 +10518,15 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             lifecycle_ai_runtime = build_lifecycle_ai_runtime_context(
                 prompt_profile="holding", stage="holding"
             )
-            if bool(
+            holding_flow_v2_enabled = bool(
                 getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False)
-            ):
-                user_input = self._build_scalping_holding_flow_v2_context(
+            )
+            structured_holding_flow_input = None
+            replay_capture_started = time.perf_counter()
+            replay_capture_status = "provider_input_is_structured_exact"
+            replay_capture_error_type = None
+            if holding_flow_v2_enabled:
+                structured_holding_flow_input = self._build_scalping_holding_flow_v2_context(
                     stock_name,
                     stock_code,
                     ws_data or {},
@@ -10202,6 +10539,36 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     lifecycle_ai_runtime=lifecycle_ai_runtime,
                     holding_context=holding_context,
                 )
+            else:
+                # Do not build or synchronously persist an observation-only
+                # sidecar ahead of the established plain-text provider call.
+                # Request capture runs before transport and consumes the same
+                # deadline, so that work would be an unintended holding/exit
+                # latency mutation. Exact holding-flow replay remains available
+                # when the structured V2 input is the provider input itself.
+                replay_capture_status = (
+                    "forensic_sidecar_disabled_to_preserve_live_latency"
+                )
+            replay_capture_latency_ms = round(
+                (time.perf_counter() - replay_capture_started) * 1_000.0,
+                3,
+            )
+            metadata_extra = dict(metadata_extra or {})
+            metadata_extra.update(
+                {
+                    "holding_exact_replay_context_capture_status": (
+                        replay_capture_status
+                    ),
+                    "holding_exact_replay_context_capture_error_type": (
+                        replay_capture_error_type
+                    ),
+                    "holding_exact_replay_context_capture_latency_ms": (
+                        replay_capture_latency_ms
+                    ),
+                }
+            )
+            if holding_flow_v2_enabled:
+                user_input = structured_holding_flow_input
             else:
                 user_input = self._format_scalping_holding_flow_context(
                     stock_name,
@@ -10224,20 +10591,12 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 user_input,
                 default_schema=(
                     "holding_flow_v2"
-                    if bool(
-                        getattr(
-                            TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False
-                        )
-                    )
+                    if holding_flow_v2_enabled
                     else "holding_flow_text_v1"
                 ),
                 default_mode=(
                     "structured_json"
-                    if bool(
-                        getattr(
-                            TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False
-                        )
-                    )
+                    if holding_flow_v2_enabled
                     else "plain_text"
                 ),
             )
@@ -10269,9 +10628,40 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 transport_mode_override="http",
             )
             result = self._merge_last_transport_meta(result)
+            holding_flow_semantic_errors = _holding_flow_response_contract_errors(
+                result
+            )
             normalized = self._normalize_holding_flow_result(
                 result, decision_kind=decision_kind
             )
+            normalized.update(
+                {
+                    "semantic_validator_version": (
+                        "holding_flow_live_schema_semantic_v1"
+                    ),
+                    "expected_semantic_validator_version": (
+                        "holding_flow_live_schema_semantic_v1"
+                    ),
+                    "semantic_validator_applied": True,
+                    "semantic_validation_status": (
+                        "rejected" if holding_flow_semantic_errors else "pass"
+                    ),
+                    "holding_flow_contract_status": (
+                        "semantic_rejected"
+                        if holding_flow_semantic_errors
+                        else "pass"
+                    ),
+                    "holding_flow_contract_errors": (
+                        holding_flow_semantic_errors
+                    ),
+                    "forensic_semantic_errors": holding_flow_semantic_errors,
+                }
+            )
+            if holding_flow_semantic_errors:
+                # This validator is provenance-only. Existing live holding/exit
+                # behavior stays unchanged; the row is excluded from the AI
+                # decision-quality cohort until the local contract passes.
+                normalized["ai_decision_outcome_eligible"] = False
             self._copy_ai_transport_trace_metadata(normalized, result)
             normalized = merge_holding_exit_matrix_result_fields(
                 normalized,

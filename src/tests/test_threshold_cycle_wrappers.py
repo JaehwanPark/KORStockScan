@@ -1,7 +1,9 @@
-from pathlib import Path
 import json
 import os
 import subprocess
+from pathlib import Path
+
+import pytest
 
 
 def test_postclose_daily_ev_receives_disabled_report_scope():
@@ -215,16 +217,185 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     widget_expansion_service = Path(
         "deploy/systemd/korstockscan-widget-expansion-recommendation.service"
     ).read_text(encoding="utf-8")
-    expansion_idx = widget_expansion_service.index(
+    assert widget_expansion_service.count("ExecStart=") == 1
+    assert (
+        "ExecStart=/home/ubuntu/KORStockScan/deploy/"
+        "run_machine_microstructure_final_refresh.sh" in widget_expansion_service
+    )
+    assert "KORSTOCKSCAN_WIDGET_EXPANSION_TELEGRAM_ENABLED=true" in (
+        widget_expansion_service
+    )
+
+    final_refresh = Path(
+        "deploy/run_machine_microstructure_final_refresh.sh"
+    ).read_text(encoding="utf-8")
+    # Match the child commands, not the earlier Python import used only to
+    # resolve the completed-machine target date.
+    expansion_refresh_idx = final_refresh.index(
+        '"$PYTHON_BIN" -m '
         "src.engine.monitoring.widget_collector_expansion_recommendation"
     )
-    refresh_idx = widget_expansion_service.index(
-        "src.engine.monitoring.machine_microstructure_attribution"
+    attribution_refresh_idx = final_refresh.index(
+        '"$PYTHON_BIN" -m src.engine.monitoring.machine_microstructure_attribution'
     )
-    approval_refresh_idx = widget_expansion_service.index(
-        "src.engine.automation.machine_microstructure_policy_approval"
+    approval_refresh_idx = final_refresh.index(
+        '"$PYTHON_BIN" -m src.engine.automation.machine_microstructure_policy_approval'
     )
-    assert expansion_idx < refresh_idx < approval_refresh_idx
+    checklist_refresh_idx = final_refresh.index(
+        '"$PYTHON_BIN" -m src.engine.build_next_stage2_checklist'
+    )
+    assert (
+        expansion_refresh_idx
+        < attribution_refresh_idx
+        < approval_refresh_idx
+        < checklist_refresh_idx
+    )
+    assert "--source-wait-sec 900" in final_refresh
+    assert "--source-poll-sec 30" in final_refresh
+    assert "--notify-objective-followups" in final_refresh
+    assert "--completed-machine-source-date" in final_refresh
+
+
+def _run_machine_microstructure_final_refresh(
+    tmp_path,
+    *,
+    expansion_rc=0,
+    attribution_rc=0,
+    policy_rc=0,
+    builder_rc=0,
+    target_date_rc=0,
+    completed_target_date="2026-08-14",
+):
+    fake_python = tmp_path / "fake-python"
+    call_log = tmp_path / "calls.log"
+    fake_python.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'case "$*" in',
+                '  *"resolve_completed_machine_target_date"*)',
+                '    printf "%s\\n" "${FAKE_COMPLETED_TARGET_DATE-2026-08-14}"',
+                '    exit "${FAKE_TARGET_DATE_RC:-0}" ;;',
+                "esac",
+                'printf "%s\\n" "$*" >> "$FINAL_REFRESH_CALL_LOG"',
+                'case "$*" in',
+                '  *"widget_collector_expansion_recommendation"*)',
+                '    exit "${FAKE_EXPANSION_RC:-0}" ;;',
+                '  *"machine_microstructure_attribution"*)',
+                '    exit "${FAKE_ATTRIBUTION_RC:-0}" ;;',
+                '  *"machine_microstructure_policy_approval"*)',
+                '    exit "${FAKE_POLICY_RC:-0}" ;;',
+                '  *"build_next_stage2_checklist"*)',
+                '    exit "${FAKE_BUILDER_RC:-0}" ;;',
+                "esac",
+                "exit 99",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    env = {
+        **os.environ,
+        "KORSTOCKSCAN_PROJECT_DIR": str(Path.cwd()),
+        "KORSTOCKSCAN_PYTHON_BIN": str(fake_python),
+        "FINAL_REFRESH_CALL_LOG": str(call_log),
+        "FAKE_EXPANSION_RC": str(expansion_rc),
+        "FAKE_ATTRIBUTION_RC": str(attribution_rc),
+        "FAKE_POLICY_RC": str(policy_rc),
+        "FAKE_BUILDER_RC": str(builder_rc),
+        "FAKE_COMPLETED_TARGET_DATE": completed_target_date,
+        "FAKE_TARGET_DATE_RC": str(target_date_rc),
+    }
+
+    result = subprocess.run(
+        ["deploy/run_machine_microstructure_final_refresh.sh"],
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    calls = (
+        call_log.read_text(encoding="utf-8").splitlines() if call_log.exists() else []
+    )
+    return result, calls
+
+
+def test_machine_microstructure_final_refresh_success_order_and_flags(tmp_path):
+    result, calls = _run_machine_microstructure_final_refresh(tmp_path)
+
+    assert result.returncode == 0
+    assert len(calls) == 4
+    assert "widget_collector_expansion_recommendation" in calls[0]
+    assert "--target-date 2026-08-14" in calls[0]
+    assert "--write --notify --source-wait-sec 900 --source-poll-sec 30" in calls[0]
+    assert "machine_microstructure_attribution" in calls[1]
+    assert "--target-date 2026-08-14" in calls[1]
+    assert "--write --print-summary" in calls[1]
+    assert "machine_microstructure_policy_approval" in calls[2]
+    assert "--target-date 2026-08-14" in calls[2]
+    assert "--notify-objective-followups" in calls[2]
+    assert "build_next_stage2_checklist" in calls[3]
+    assert "--completed-machine-source-date 2026-08-14" in calls[3]
+    assert "expansion_rc=0 attribution_rc=0 policy_rc=0 builder_rc=0" in (result.stderr)
+
+
+def test_machine_microstructure_final_refresh_fails_before_children_when_date_resolution_fails(
+    tmp_path,
+):
+    result, calls = _run_machine_microstructure_final_refresh(
+        tmp_path,
+        target_date_rc=6,
+        completed_target_date="",
+    )
+
+    assert result.returncode == 6
+    assert calls == []
+    assert "target_date=unresolved target_date_rc=6" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("expansion_rc", "attribution_rc", "policy_rc", "expected_rc"),
+    [
+        (5, 0, 0, 5),
+        (5, 4, 0, 4),
+        (5, 4, 3, 3),
+    ],
+)
+def test_machine_microstructure_final_refresh_continues_after_upstream_failure(
+    tmp_path,
+    expansion_rc,
+    attribution_rc,
+    policy_rc,
+    expected_rc,
+):
+    result, calls = _run_machine_microstructure_final_refresh(
+        tmp_path,
+        expansion_rc=expansion_rc,
+        attribution_rc=attribution_rc,
+        policy_rc=policy_rc,
+    )
+
+    assert result.returncode == expected_rc
+    assert len(calls) == 4
+    assert "widget_collector_expansion_recommendation" in calls[0]
+    assert "machine_microstructure_attribution" in calls[1]
+    assert "machine_microstructure_policy_approval" in calls[2]
+    assert "build_next_stage2_checklist" in calls[3]
+
+
+def test_machine_microstructure_final_refresh_prioritizes_builder_failure(tmp_path):
+    result, calls = _run_machine_microstructure_final_refresh(
+        tmp_path,
+        expansion_rc=5,
+        attribution_rc=4,
+        policy_rc=3,
+        builder_rc=7,
+    )
+
+    assert result.returncode == 7
+    assert len(calls) == 4
+    assert "expansion_rc=5 attribution_rc=4 policy_rc=3 builder_rc=7" in (result.stderr)
 
 
 def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_without_bedrock_lite_shadow():
@@ -1575,7 +1746,8 @@ def test_run_bot_auto_renews_allowlisted_override_without_renewing_removed_famil
         [
             "bash",
             "-c",
-            function_block + """
+            function_block
+            + """
 export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-07-30
@@ -1666,7 +1838,8 @@ def test_run_bot_does_not_auto_renew_without_explicit_operator_authority():
         [
             "bash",
             "-c",
-            function_block + """
+            function_block
+            + """
 export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED=false
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-07-30
@@ -1693,7 +1866,8 @@ def test_run_bot_expiry_uses_tp1_source_gap_relief_own_active_date():
         [
             "bash",
             "-c",
-            function_block + """
+            function_block
+            + """
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-08-03
 export KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED=true
@@ -1727,7 +1901,8 @@ def test_run_bot_preserves_existing_daily_entry_split_contract_and_disables_expi
         [
             "bash",
             "-c",
-            function_block + f"""
+            function_block
+            + f"""
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED=true
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE=DAILY
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE={policy_path}
@@ -1764,7 +1939,8 @@ def test_run_bot_disables_daily_entry_split_when_baseline_policy_is_missing(tmp_
         [
             "bash",
             "-c",
-            function_block + f"""
+            function_block
+            + f"""
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED=true
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE=DAILY
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE={missing_policy_path}

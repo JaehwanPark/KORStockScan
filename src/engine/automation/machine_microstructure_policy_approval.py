@@ -26,6 +26,11 @@ from urllib import parse, request
 from zoneinfo import ZoneInfo
 
 from src.engine.monitoring.machine_microstructure_attribution import (
+    FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID,
+    OBJECTIVE_CANDIDATE_BINDING_SCHEMA,
+    OBJECTIVE_FOLLOWUP_SCHEMA,
+    OBJECTIVE_HANDOFF_BINDING_SCHEMA,
+    OBJECTIVE_HANDOFF_RESOLVABLE_GAP_CODES,
     resolve_completed_machine_target_date,
 )
 from src.engine.scalping.micro_reversion.contracts import CLEAN_BASELINE_DATE
@@ -39,6 +44,9 @@ CANDIDATE_SCHEMA = "machine_microstructure_policy_promotion_candidate_v1"
 APPROVAL_SCHEMA = "machine_microstructure_policy_operator_decision_v1"
 HANDOFF_SCHEMA = "machine_microstructure_policy_preopen_handoff_v1"
 APPLY_RECEIPT_SCHEMA = "machine_microstructure_policy_family_apply_receipt_v1"
+SOURCE_ARTIFACT_PROVENANCE_SCHEMA = (
+    "machine_microstructure_policy_source_artifact_provenance_v1"
+)
 
 SOURCE_REPORT_DIR = DATA_DIR / "report" / "machine_microstructure_attribution"
 QUEUE_DIR = DATA_DIR / "runtime" / "machine_microstructure_policy_approval"
@@ -99,9 +107,52 @@ VALID_DECISIONS = {"approve", "hold", "reject"}
 VALID_PHASES = {"postclose", "preopen"}
 VALID_STAGES = {"entry", "submit", "holding", "scale_in", "exit"}
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+OBJECTIVE_FOLLOWUP_STATES = {
+    "IMPLEMENTATION_REQUIRED",
+    "EVIDENCE_ACCUMULATING",
+    "CANDIDATE_QUEUE_HANDOFF",
+    "COMPLETE",
+}
+OBJECTIVE_FOLLOWUP_CLOSED_STATES = {"CANDIDATE_QUEUE_HANDOFF", "COMPLETE"}
+OBJECTIVE_FOLLOWUP_ALLOWED_TRANSITIONS = {
+    "IMPLEMENTATION_REQUIRED": {
+        "IMPLEMENTATION_REQUIRED",
+        "EVIDENCE_ACCUMULATING",
+        "CANDIDATE_QUEUE_HANDOFF",
+        "COMPLETE",
+    },
+    "EVIDENCE_ACCUMULATING": {
+        "EVIDENCE_ACCUMULATING",
+        "CANDIDATE_QUEUE_HANDOFF",
+        "COMPLETE",
+    },
+    "CANDIDATE_QUEUE_HANDOFF": {"CANDIDATE_QUEUE_HANDOFF", "COMPLETE"},
+    "COMPLETE": {"COMPLETE"},
+}
+OBJECTIVE_METRIC_CONTRACT_FIELDS = {
+    "metric_role",
+    "decision_authority",
+    "window_policy",
+    "sample_floor",
+    "primary_decision_metric",
+    "source_quality_gate",
+    "forbidden_uses",
+}
+OBJECTIVE_FOLLOWUP_FORBIDDEN_FIELDS = {
+    "candidate_id",
+    "candidate_sha256",
+    "runtime_design",
+    "runtime_family",
+    "preopen_consumer",
+    "bounded_values",
+    "operator_authorization_id",
+    "operator_decision_artifact",
+    "preopen_handoff",
+}
 # This ledger has no trusted per-candidate venue scope.  Use the earliest
 # supported market open (NXT 08:00 KST) as the common fail-closed cutoff.
 PREOPEN_HANDOFF_CUTOFF_KST = time(hour=8)
+OBJECTIVE_FOLLOWUP_REMINDER_CUTOFF_KST = time(hour=21, minute=15)
 
 DECISION_ALLOWED_STATES = {
     "approve": {
@@ -264,6 +315,83 @@ def _canonical_json(value: Any) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _empty_source_artifact_provenance(path: Path | None) -> dict[str, Any]:
+    return {
+        "schema": SOURCE_ARTIFACT_PROVENANCE_SCHEMA,
+        "path": str(path) if path else None,
+        "sha256": None,
+        "mtime_ns": None,
+        "size_bytes": None,
+    }
+
+
+def _source_path_stat(path: Path) -> os.stat_result:
+    """Return the pathname stat used to verify an opened source snapshot."""
+
+    return path.stat()
+
+
+def _source_stat_identity(stat: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_size,
+        stat.st_mtime_ns,
+        stat.st_ctime_ns,
+    )
+
+
+def _capture_source_artifact(
+    path: Path,
+) -> tuple[dict[str, Any] | None, dict[str, Any], str]:
+    """Read and identify one stable source snapshot without pathname re-reads.
+
+    The parsed payload and provenance digest are derived from the same bytes. The
+    descriptor and pathname identities are compared so an in-place write or atomic
+    replacement during capture fails closed instead of mixing queue input with a
+    different status-report artifact.
+    """
+
+    provenance = _empty_source_artifact_provenance(path)
+    try:
+        with path.open("rb") as handle:
+            stat_before = os.fstat(handle.fileno())
+            raw = handle.read()
+            stat_after = os.fstat(handle.fileno())
+        pathname_stat = _source_path_stat(path)
+    except OSError:
+        return None, provenance, "missing_or_unreadable"
+    if (
+        _source_stat_identity(stat_before) != _source_stat_identity(stat_after)
+        or _source_stat_identity(stat_after) != _source_stat_identity(pathname_stat)
+        or len(raw) != stat_after.st_size
+    ):
+        return None, provenance, "source_changed_during_snapshot"
+    provenance.update(
+        {
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "mtime_ns": stat_after.st_mtime_ns,
+            "size_bytes": stat_after.st_size,
+        }
+    )
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, provenance, "missing_or_unreadable"
+    if not isinstance(payload, dict):
+        return None, provenance, "missing_or_unreadable"
+    return payload, provenance, "loaded"
+
+
+def _source_artifact_snapshot_is_current(
+    path: Path, expected_provenance: Mapping[str, Any]
+) -> bool:
+    """Confirm that the canonical path still names the captured source snapshot."""
+
+    _payload, current_provenance, _status = _capture_source_artifact(path)
+    return current_provenance == dict(expected_provenance)
 
 
 def candidate_sha256(candidate: Mapping[str, Any]) -> str:
@@ -541,6 +669,7 @@ def _empty_queue(*, now: datetime) -> dict[str, Any]:
             "broker_order_forbidden": True,
         },
         "candidates": [],
+        "objective_followups": [],
         "family_enrollments": {},
     }
 
@@ -558,9 +687,839 @@ def load_queue(
         or payload.get("metric_contract") != METRIC_CONTRACT
         or not isinstance(payload.get("candidates"), list)
         or not isinstance(payload.get("family_enrollments"), dict)
+        or not isinstance(payload.get("objective_followups", []), list)
     ):
         raise ValueError("approval_queue_contract_invalid")
-    return payload
+    # Keep the v1 queue and metric contract compatible with ledgers written
+    # before objective follow-ups existed.  The new collection is deliberately
+    # separate from candidates and therefore cannot enter approval/apply code.
+    objective_followups = payload.get("objective_followups", [])
+    objective_followup_ids = [
+        str(row.get("followup_id") or "")
+        for row in objective_followups
+        if isinstance(row, Mapping)
+    ]
+    persisted_candidates = [
+        row for row in payload.get("candidates", []) if isinstance(row, Mapping)
+    ]
+    if any(
+        not isinstance(row, Mapping)
+        or _persisted_objective_followup_errors(row)
+        or _objective_handoff_queue_evidence_errors(
+            row, queue_candidates=persisted_candidates
+        )
+        or _objective_completion_evidence_errors(
+            row, queue_candidates=persisted_candidates
+        )
+        for row in objective_followups
+    ) or any(count != 1 for count in Counter(objective_followup_ids).values()):
+        raise ValueError("approval_queue_objective_followup_contract_invalid")
+    return {**payload, "objective_followups": list(objective_followups)}
+
+
+def _objective_authority_value(row: Mapping[str, Any], field: str) -> Any:
+    nested = row.get("authority")
+    nested_value = nested.get(field) if isinstance(nested, Mapping) else None
+    top_present = field in row
+    nested_present = isinstance(nested, Mapping) and field in nested
+    if top_present and nested_present and row.get(field) != nested_value:
+        return "__conflicting_authority__"
+    if top_present:
+        return row.get(field)
+    if nested_present:
+        return nested_value
+    return None
+
+
+def _objective_gap_codes(value: Any, *, allow_empty: bool = False) -> list[str] | None:
+    if (
+        not isinstance(value, list)
+        or (not value and not allow_empty)
+        or any(not isinstance(item, str) or not item.strip() for item in value)
+        or len(set(value)) != len(value)
+    ):
+        return None
+    return list(value)
+
+
+def _objective_candidate_binding_errors(
+    candidate: Mapping[str, Any],
+    *,
+    followup_id: str,
+    expected_resolved_gap_codes: Sequence[str],
+) -> list[str]:
+    binding = candidate.get("objective_followup_binding")
+    if not isinstance(binding, Mapping):
+        return ["objective_candidate_binding_missing"]
+    errors: list[str] = []
+    if binding.get("schema") != OBJECTIVE_CANDIDATE_BINDING_SCHEMA:
+        errors.append("objective_candidate_binding_schema_invalid")
+    if binding.get("followup_id") != followup_id:
+        errors.append("objective_candidate_binding_followup_id_mismatch")
+    resolved_gap_codes = _objective_gap_codes(
+        binding.get("resolved_gap_codes"), allow_empty=True
+    )
+    if resolved_gap_codes is None:
+        errors.append("objective_candidate_binding_gap_codes_invalid")
+    elif sorted(resolved_gap_codes) != sorted(expected_resolved_gap_codes):
+        errors.append("objective_candidate_binding_gap_codes_mismatch")
+    return errors
+
+
+def _objective_handoff_binding_errors(row: Mapping[str, Any]) -> list[str]:
+    if row.get("state") != "CANDIDATE_QUEUE_HANDOFF":
+        return []
+    binding = row.get("candidate_handoff_binding")
+    if not isinstance(binding, Mapping):
+        return ["objective_followup_candidate_handoff_binding_missing"]
+    errors: list[str] = []
+    if binding.get("schema") != OBJECTIVE_HANDOFF_BINDING_SCHEMA:
+        errors.append("objective_followup_candidate_handoff_binding_schema_invalid")
+    if binding.get("followup_id") != row.get("followup_id"):
+        errors.append("objective_followup_candidate_handoff_binding_id_mismatch")
+    if not str(binding.get("candidate_id") or "").strip():
+        errors.append("objective_followup_bound_candidate_id_missing")
+    if not SHA256_PATTERN.fullmatch(str(binding.get("candidate_sha256") or "")):
+        errors.append("objective_followup_bound_candidate_sha256_invalid")
+    required_gap_codes = _objective_gap_codes(
+        binding.get("required_gap_codes"), allow_empty=True
+    )
+    resolved_gap_codes = _objective_gap_codes(
+        binding.get("resolved_gap_codes"), allow_empty=True
+    )
+    if required_gap_codes is None:
+        errors.append("objective_followup_required_gap_codes_invalid")
+    if resolved_gap_codes is None:
+        errors.append("objective_followup_resolved_gap_codes_invalid")
+    if (
+        required_gap_codes is not None
+        and resolved_gap_codes is not None
+        and sorted(required_gap_codes) != sorted(resolved_gap_codes)
+    ):
+        errors.append("objective_followup_required_gaps_not_fully_resolved")
+    if required_gap_codes is not None and any(
+        gap_code not in OBJECTIVE_HANDOFF_RESOLVABLE_GAP_CODES
+        for gap_code in required_gap_codes
+    ):
+        errors.append("objective_followup_non_handoff_gap_transfer_forbidden")
+    return errors
+
+
+def objective_followup_errors(
+    row: Mapping[str, Any],
+    *,
+    target_date: date,
+    require_consumer_completion_evidence: bool = False,
+) -> list[str]:
+    errors: list[str] = []
+    if row.get("schema") != OBJECTIVE_FOLLOWUP_SCHEMA:
+        errors.append("objective_followup_schema_invalid")
+    if not str(row.get("followup_id") or "").strip():
+        errors.append("objective_followup_id_missing")
+    elif row.get("followup_id") != FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID:
+        errors.append("objective_followup_id_invalid")
+    if str(row.get("source_date") or "") != target_date.isoformat():
+        errors.append("objective_followup_source_date_not_target_date")
+    if not is_krx_trading_day(target_date):
+        errors.append("objective_followup_source_date_not_krx_trading_day")
+    state = str(row.get("state") or "").strip()
+    if state not in OBJECTIVE_FOLLOWUP_STATES:
+        errors.append("objective_followup_state_invalid")
+    followup_required = row.get("followup_required")
+    if followup_required is not True and followup_required is not False:
+        errors.append("objective_followup_required_not_boolean")
+    if state in OBJECTIVE_FOLLOWUP_CLOSED_STATES:
+        if followup_required is not False:
+            errors.append("closed_objective_followup_still_required")
+    elif followup_required is not True:
+        errors.append("open_objective_followup_not_required")
+    if not str(row.get("attention_class") or "").strip():
+        errors.append("objective_followup_attention_class_missing")
+    if row.get("operator_decision_required") is not False:
+        errors.append("objective_followup_operator_decision_authority_forbidden")
+    if not str(row.get("next_action") or "").strip():
+        errors.append("objective_followup_next_action_missing")
+    metric_contract = row.get("metric_contract")
+    if not isinstance(metric_contract, Mapping):
+        errors.append("objective_followup_metric_contract_missing")
+    else:
+        missing_metric_fields = sorted(
+            OBJECTIVE_METRIC_CONTRACT_FIELDS.difference(metric_contract)
+        )
+        if missing_metric_fields:
+            errors.append(
+                "objective_followup_metric_contract_fields_missing:"
+                + ",".join(missing_metric_fields)
+            )
+        if (
+            metric_contract.get("decision_authority")
+            != "postclose_followup_tracking_only"
+        ):
+            errors.append("objective_followup_metric_decision_authority_invalid")
+        for field in (
+            "metric_role",
+            "window_policy",
+            "primary_decision_metric",
+        ):
+            if not str(metric_contract.get(field) or "").strip():
+                errors.append(f"objective_followup_metric_{field}_invalid")
+        for field in ("source_quality_gate", "forbidden_uses"):
+            value = metric_contract.get(field)
+            if (
+                not isinstance(value, list)
+                or not value
+                or any(not isinstance(item, str) or not item.strip() for item in value)
+            ):
+                errors.append(f"objective_followup_metric_{field}_invalid")
+        if metric_contract.get("sample_floor") is None:
+            errors.append("objective_followup_metric_sample_floor_invalid")
+    gap_codes = row.get("remaining_gap_codes")
+    if not isinstance(gap_codes, list) or any(
+        not isinstance(value, str) or not value.strip() for value in gap_codes
+    ):
+        errors.append("objective_followup_gap_codes_invalid")
+    elif followup_required is True and not gap_codes:
+        errors.append("open_objective_followup_gap_codes_empty")
+    if state == "CANDIDATE_QUEUE_HANDOFF":
+        if gap_codes:
+            errors.append("handoff_objective_followup_gap_codes_not_empty")
+        errors.extend(_objective_handoff_binding_errors(row))
+    elif row.get("candidate_handoff_binding") is not None and (
+        state != "COMPLETE" or not require_consumer_completion_evidence
+    ):
+        errors.append("objective_followup_source_handoff_binding_forbidden")
+    if state == "COMPLETE":
+        if gap_codes:
+            errors.append("complete_objective_followup_gap_codes_not_empty")
+        completion_evidence = row.get("completion_evidence")
+        if not require_consumer_completion_evidence:
+            if "completion_evidence" in row:
+                errors.append(
+                    "complete_objective_followup_source_completion_evidence_forbidden"
+                )
+        elif not isinstance(completion_evidence, Mapping):
+            errors.append("complete_objective_followup_evidence_missing")
+        else:
+            if not str(completion_evidence.get("candidate_queue_key") or "").strip():
+                errors.append("complete_objective_followup_candidate_queue_key_missing")
+            if not str(completion_evidence.get("candidate_id") or "").strip():
+                errors.append("complete_objective_followup_candidate_id_missing")
+            if not SHA256_PATTERN.fullmatch(
+                str(completion_evidence.get("candidate_sha256") or "")
+            ):
+                errors.append("complete_objective_followup_candidate_sha256_invalid")
+            if (
+                completion_evidence.get("candidate_state")
+                != STATE_POST_APPLY_ATTRIBUTED
+            ):
+                errors.append("complete_objective_followup_candidate_state_invalid")
+            if not str(
+                completion_evidence.get("post_apply_attribution_receipt") or ""
+            ).strip():
+                errors.append("complete_objective_followup_attribution_receipt_missing")
+            if completion_evidence.get("causal_completion_verified") is not True:
+                errors.append(
+                    "complete_objective_followup_causal_completion_not_verified"
+                )
+            if completion_evidence.get("objective_followup_id") != row.get(
+                "followup_id"
+            ):
+                errors.append("complete_objective_followup_objective_binding_mismatch")
+            if (
+                completion_evidence.get("verification")
+                != "consumer_queue_handoff_and_attribution_receipt_match"
+            ):
+                errors.append("complete_objective_followup_verification_invalid")
+    expected_authority = {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    for field, expected in expected_authority.items():
+        if _objective_authority_value(row, field) is not expected:
+            errors.append(f"objective_followup_{field}_invalid")
+    forbidden_present = sorted(
+        field for field in OBJECTIVE_FOLLOWUP_FORBIDDEN_FIELDS if field in row
+    )
+    if forbidden_present:
+        errors.append(
+            "objective_followup_candidate_authority_fields_forbidden:"
+            + ",".join(forbidden_present)
+        )
+    return errors
+
+
+def _persisted_objective_followup_errors(row: Mapping[str, Any]) -> list[str]:
+    try:
+        source_date = date.fromisoformat(str(row.get("source_date") or ""))
+    except ValueError:
+        return ["objective_followup_source_date_invalid"]
+    errors = objective_followup_errors(
+        row,
+        target_date=source_date,
+        require_consumer_completion_evidence=True,
+    )
+    source_path = row.get("source_path")
+    if not isinstance(source_path, str) or not source_path.strip():
+        errors.append("objective_followup_source_path_invalid")
+    if not SHA256_PATTERN.fullmatch(str(row.get("source_payload_sha256") or "")):
+        errors.append("objective_followup_source_payload_sha256_invalid")
+    first_seen = _aware_datetime(row.get("first_seen_at_kst"))
+    last_seen = _aware_datetime(row.get("last_seen_at_kst"))
+    if first_seen is None:
+        errors.append("objective_followup_first_seen_at_kst_invalid")
+    if last_seen is None:
+        errors.append("objective_followup_last_seen_at_kst_invalid")
+    if first_seen is not None and last_seen is not None and first_seen > last_seen:
+        errors.append("objective_followup_seen_at_order_invalid")
+    reminders = row.get("reminders")
+    if not isinstance(reminders, Mapping):
+        errors.append("objective_followup_reminders_invalid")
+    else:
+        for phase, reminder_date_raw in reminders.items():
+            if phase != "postclose":
+                errors.append("objective_followup_reminder_phase_invalid")
+                continue
+            try:
+                reminder_date = date.fromisoformat(str(reminder_date_raw or ""))
+            except ValueError:
+                errors.append("objective_followup_reminder_date_invalid")
+                continue
+            if not is_krx_trading_day(reminder_date):
+                errors.append("objective_followup_reminder_date_not_krx_trading_day")
+    handoff_evidence = row.get("handoff_evidence")
+    if row.get("state") == "CANDIDATE_QUEUE_HANDOFF" or handoff_evidence is not None:
+        if not isinstance(handoff_evidence, Mapping):
+            errors.append("objective_followup_handoff_evidence_missing")
+        else:
+            if not str(
+                handoff_evidence.get("accepted_candidate_queue_key") or ""
+            ).strip():
+                errors.append("objective_followup_handoff_queue_key_missing")
+            if not SHA256_PATTERN.fullmatch(
+                str(handoff_evidence.get("accepted_candidate_sha256") or "")
+            ):
+                errors.append("objective_followup_handoff_candidate_sha256_invalid")
+            if not str(handoff_evidence.get("accepted_candidate_id") or "").strip():
+                errors.append("objective_followup_handoff_candidate_id_missing")
+            if not str(handoff_evidence.get("source_path") or "").strip():
+                errors.append("objective_followup_handoff_source_path_missing")
+            try:
+                handoff_source_date = date.fromisoformat(
+                    str(handoff_evidence.get("source_date") or "")
+                )
+            except ValueError:
+                errors.append("objective_followup_handoff_source_date_invalid")
+            else:
+                if handoff_source_date > source_date:
+                    errors.append("objective_followup_handoff_source_date_after_state")
+                if not is_krx_trading_day(handoff_source_date):
+                    errors.append(
+                        "objective_followup_handoff_source_date_not_krx_trading_day"
+                    )
+            if (
+                handoff_evidence.get("verification")
+                != "same_run_objective_bound_candidate_intake_accepted"
+            ):
+                errors.append("objective_followup_handoff_verification_invalid")
+            if handoff_evidence.get("objective_followup_id") != row.get("followup_id"):
+                errors.append("objective_followup_handoff_objective_id_mismatch")
+            handoff_gap_codes = _objective_gap_codes(
+                handoff_evidence.get("resolved_gap_codes"), allow_empty=True
+            )
+            if handoff_gap_codes is None:
+                errors.append("objective_followup_handoff_gap_codes_invalid")
+            source_binding = row.get("candidate_handoff_binding")
+            if not isinstance(source_binding, Mapping):
+                errors.append("objective_followup_persisted_binding_missing")
+            else:
+                if handoff_evidence.get("accepted_candidate_id") != source_binding.get(
+                    "candidate_id"
+                ):
+                    errors.append("objective_followup_handoff_bound_candidate_mismatch")
+                if handoff_evidence.get(
+                    "accepted_candidate_sha256"
+                ) != source_binding.get("candidate_sha256"):
+                    errors.append("objective_followup_handoff_bound_sha256_mismatch")
+                if handoff_gap_codes is not None and sorted(
+                    handoff_gap_codes
+                ) != sorted(source_binding.get("resolved_gap_codes") or []):
+                    errors.append("objective_followup_handoff_bound_gaps_mismatch")
+    return errors
+
+
+def _objective_handoff_queue_evidence_errors(
+    row: Mapping[str, Any], *, queue_candidates: Sequence[Mapping[str, Any]]
+) -> list[str]:
+    handoff_evidence = row.get("handoff_evidence")
+    if not isinstance(handoff_evidence, Mapping):
+        return []
+    matching = [
+        candidate
+        for candidate in queue_candidates
+        if candidate.get("queue_key")
+        == handoff_evidence.get("accepted_candidate_queue_key")
+        and candidate.get("candidate_sha256")
+        == handoff_evidence.get("accepted_candidate_sha256")
+    ]
+    if len(matching) != 1:
+        return ["objective_followup_handoff_candidate_not_uniquely_found"]
+    candidate = matching[0]
+    errors: list[str] = []
+    if candidate.get("candidate_id") != handoff_evidence.get("accepted_candidate_id"):
+        errors.append("objective_followup_handoff_candidate_id_mismatch")
+    if candidate.get("source_date") != handoff_evidence.get("source_date"):
+        errors.append("objective_followup_handoff_candidate_source_date_mismatch")
+    source_binding = row.get("candidate_handoff_binding")
+    source_candidate = candidate.get("candidate")
+    if not isinstance(source_binding, Mapping):
+        errors.append("objective_followup_persisted_binding_missing")
+    elif not isinstance(source_candidate, Mapping):
+        errors.append("objective_followup_queued_source_candidate_missing")
+    else:
+        if candidate.get("candidate_id") != source_binding.get("candidate_id"):
+            errors.append("objective_followup_queued_candidate_binding_id_mismatch")
+        if candidate.get("candidate_sha256") != source_binding.get("candidate_sha256"):
+            errors.append("objective_followup_queued_candidate_binding_sha_mismatch")
+        errors.extend(
+            _objective_candidate_binding_errors(
+                source_candidate,
+                followup_id=str(row.get("followup_id") or ""),
+                expected_resolved_gap_codes=list(
+                    source_binding.get("resolved_gap_codes") or []
+                ),
+            )
+        )
+    return errors
+
+
+def _objective_completion_evidence_errors(
+    row: Mapping[str, Any], *, queue_candidates: Sequence[Mapping[str, Any]]
+) -> list[str]:
+    if row.get("state") != "COMPLETE":
+        return []
+    completion_evidence = row.get("completion_evidence")
+    if not isinstance(completion_evidence, Mapping):
+        return []
+    queue_key = str(completion_evidence.get("candidate_queue_key") or "")
+    candidate_sha256_value = str(completion_evidence.get("candidate_sha256") or "")
+    matching = [
+        candidate
+        for candidate in queue_candidates
+        if str(candidate.get("queue_key") or "") == queue_key
+        and str(candidate.get("candidate_sha256") or "") == candidate_sha256_value
+    ]
+    if len(matching) != 1:
+        return ["complete_objective_followup_candidate_not_uniquely_found"]
+    candidate = matching[0]
+    errors: list[str] = []
+    if candidate.get("state") != STATE_POST_APPLY_ATTRIBUTED:
+        errors.append("complete_objective_followup_candidate_not_post_apply_attributed")
+    if str(candidate.get("post_apply_attribution_receipt") or "") != str(
+        completion_evidence.get("post_apply_attribution_receipt") or ""
+    ):
+        errors.append("complete_objective_followup_attribution_receipt_mismatch")
+    if completion_evidence.get("objective_followup_id") != row.get("followup_id"):
+        errors.append("complete_objective_followup_objective_binding_mismatch")
+    handoff_evidence = row.get("handoff_evidence")
+    if not isinstance(handoff_evidence, Mapping):
+        errors.append("complete_objective_followup_handoff_evidence_missing")
+    elif (
+        handoff_evidence.get("accepted_candidate_queue_key") != queue_key
+        or handoff_evidence.get("accepted_candidate_sha256") != candidate_sha256_value
+        or handoff_evidence.get("accepted_candidate_id")
+        != completion_evidence.get("candidate_id")
+        or handoff_evidence.get("source_date")
+        != completion_evidence.get("handoff_source_date")
+    ):
+        errors.append("complete_objective_followup_handoff_candidate_mismatch")
+    source_binding = row.get("candidate_handoff_binding")
+    source_candidate = candidate.get("candidate")
+    if not isinstance(source_binding, Mapping):
+        errors.append("complete_objective_followup_candidate_binding_missing")
+    elif not isinstance(source_candidate, Mapping):
+        errors.append("complete_objective_followup_source_candidate_missing")
+    else:
+        errors.extend(
+            _objective_candidate_binding_errors(
+                source_candidate,
+                followup_id=str(row.get("followup_id") or ""),
+                expected_resolved_gap_codes=list(
+                    source_binding.get("resolved_gap_codes") or []
+                ),
+            )
+        )
+    return errors
+
+
+def _derive_objective_completion_evidence(
+    row: Mapping[str, Any],
+    *,
+    existing: Mapping[str, Any] | None,
+    queue_candidates: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any] | None, list[str]]:
+    if row.get("state") != "COMPLETE":
+        return None, []
+    handoff_evidence = (
+        existing.get("handoff_evidence")
+        if isinstance(existing, Mapping)
+        and isinstance(existing.get("handoff_evidence"), Mapping)
+        else None
+    )
+    if not isinstance(handoff_evidence, Mapping):
+        return None, ["complete_objective_followup_handoff_evidence_missing"]
+    if handoff_evidence.get("objective_followup_id") != row.get("followup_id"):
+        return None, ["complete_objective_followup_handoff_objective_id_mismatch"]
+    candidate_handoff_binding = (
+        existing.get("candidate_handoff_binding")
+        if isinstance(existing, Mapping)
+        and isinstance(existing.get("candidate_handoff_binding"), Mapping)
+        else None
+    )
+    if not isinstance(candidate_handoff_binding, Mapping):
+        return None, ["complete_objective_followup_candidate_binding_missing"]
+    queue_key = str(handoff_evidence.get("accepted_candidate_queue_key") or "").strip()
+    candidate_sha256_value = str(
+        handoff_evidence.get("accepted_candidate_sha256") or ""
+    ).strip()
+    candidate_id = str(handoff_evidence.get("accepted_candidate_id") or "").strip()
+    matching = [
+        candidate
+        for candidate in queue_candidates
+        if str(candidate.get("queue_key") or "") == queue_key
+        and str(candidate.get("candidate_sha256") or "") == candidate_sha256_value
+        and str(candidate.get("candidate_id") or "") == candidate_id
+    ]
+    if len(matching) != 1:
+        return None, ["complete_objective_followup_causal_candidate_not_unique"]
+    candidate = matching[0]
+    if (
+        candidate_handoff_binding.get("candidate_id") != candidate_id
+        or candidate_handoff_binding.get("candidate_sha256") != candidate_sha256_value
+    ):
+        return None, ["complete_objective_followup_handoff_binding_mismatch"]
+    source_candidate = candidate.get("candidate")
+    if not isinstance(source_candidate, Mapping):
+        return None, ["complete_objective_followup_source_candidate_missing"]
+    candidate_binding_errors = _objective_candidate_binding_errors(
+        source_candidate,
+        followup_id=str(row.get("followup_id") or ""),
+        expected_resolved_gap_codes=list(
+            candidate_handoff_binding.get("resolved_gap_codes") or []
+        ),
+    )
+    if candidate_binding_errors:
+        return None, candidate_binding_errors
+    if candidate.get("state") != STATE_POST_APPLY_ATTRIBUTED:
+        return None, ["complete_objective_followup_candidate_not_post_apply_attributed"]
+    receipt = str(candidate.get("post_apply_attribution_receipt") or "").strip()
+    if not receipt:
+        return None, ["complete_objective_followup_attribution_receipt_missing"]
+    return (
+        {
+            "objective_followup_id": str(row.get("followup_id") or ""),
+            "candidate_queue_key": queue_key,
+            "candidate_id": candidate_id,
+            "candidate_sha256": candidate_sha256_value,
+            "candidate_state": STATE_POST_APPLY_ATTRIBUTED,
+            "post_apply_attribution_receipt": receipt,
+            "handoff_source_date": handoff_evidence.get("source_date"),
+            "causal_completion_verified": True,
+            "verification": "consumer_queue_handoff_and_attribution_receipt_match",
+        },
+        [],
+    )
+
+
+def _normalized_objective_followup(
+    row: Mapping[str, Any],
+    *,
+    source_path: Path | None,
+    generated: datetime,
+    existing: Mapping[str, Any] | None,
+    handoff_evidence: Mapping[str, Any] | None = None,
+    completion_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    first_seen = (
+        existing.get("first_seen_at_kst")
+        if isinstance(existing, Mapping)
+        else generated.isoformat(timespec="seconds")
+    )
+    reminders = (
+        dict(existing.get("reminders") or {}) if isinstance(existing, Mapping) else {}
+    )
+    authority = {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    existing_handoff_evidence = (
+        existing.get("handoff_evidence")
+        if isinstance(existing, Mapping)
+        and isinstance(existing.get("handoff_evidence"), Mapping)
+        else None
+    )
+    existing_candidate_handoff_binding = (
+        existing.get("candidate_handoff_binding")
+        if isinstance(existing, Mapping)
+        and isinstance(existing.get("candidate_handoff_binding"), Mapping)
+        else None
+    )
+    source_candidate_handoff_binding = (
+        row.get("candidate_handoff_binding")
+        if isinstance(row.get("candidate_handoff_binding"), Mapping)
+        else None
+    )
+    return {
+        "schema": OBJECTIVE_FOLLOWUP_SCHEMA,
+        "followup_id": str(row.get("followup_id") or "").strip(),
+        "source_date": str(row.get("source_date") or ""),
+        "source_path": str(source_path) if source_path else None,
+        "source_payload_sha256": hashlib.sha256(_canonical_json(row)).hexdigest(),
+        "first_seen_at_kst": first_seen,
+        "last_seen_at_kst": generated.isoformat(timespec="seconds"),
+        "state": str(row.get("state") or "").strip(),
+        "state_reason": str(row.get("state_reason") or "").strip() or None,
+        "followup_required": row.get("followup_required"),
+        "attention_class": str(row.get("attention_class") or "").strip(),
+        "operator_decision_required": False,
+        "objective": str(row.get("objective") or "").strip() or None,
+        "current_capability": str(row.get("current_capability") or "").strip() or None,
+        "remaining_gap_codes": list(row.get("remaining_gap_codes") or []),
+        "next_action": str(row.get("next_action") or "").strip(),
+        "metric_contract": dict(row.get("metric_contract") or {}),
+        "completion_conditions": list(row.get("completion_conditions") or []),
+        "completion_evidence": (
+            dict(completion_evidence) if completion_evidence is not None else None
+        ),
+        "candidate_handoff_binding": (
+            dict(source_candidate_handoff_binding)
+            if row.get("state") == "CANDIDATE_QUEUE_HANDOFF"
+            and source_candidate_handoff_binding is not None
+            else dict(existing_candidate_handoff_binding)
+            if existing_candidate_handoff_binding is not None
+            else None
+        ),
+        "handoff_evidence": (
+            dict(existing_handoff_evidence)
+            if existing_handoff_evidence is not None
+            else dict(handoff_evidence)
+            if handoff_evidence is not None
+            else None
+        ),
+        **authority,
+        "authority": authority,
+        "reminders": reminders,
+    }
+
+
+def sync_objective_followups(
+    queue: Mapping[str, Any],
+    *,
+    source_followups: Sequence[Mapping[str, Any]],
+    source_path: Path | None,
+    as_of_date: date,
+    source_status: str = "not_provided",
+    accepted_candidate_queue_keys: Sequence[str] = (),
+    now: datetime | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    generated = _now_kst(now)
+    raw_entries = queue.get("objective_followups", [])
+    queue_candidates = [
+        row for row in queue.get("candidates", []) if isinstance(row, Mapping)
+    ]
+    if not isinstance(raw_entries, list) or any(
+        not isinstance(row, Mapping)
+        or _persisted_objective_followup_errors(row)
+        or _objective_handoff_queue_evidence_errors(
+            row, queue_candidates=queue_candidates
+        )
+        or _objective_completion_evidence_errors(row, queue_candidates=queue_candidates)
+        for row in raw_entries
+    ):
+        raise ValueError("approval_queue_objective_followup_contract_invalid")
+    entries = [dict(row) for row in raw_entries if isinstance(row, Mapping)]
+    existing_id_counts = Counter(str(row.get("followup_id") or "") for row in entries)
+    if any(count != 1 for count in existing_id_counts.values()):
+        raise ValueError("approval_queue_objective_followup_contract_invalid")
+    by_id = {
+        str(row.get("followup_id") or ""): row
+        for row in entries
+        if str(row.get("followup_id") or "")
+    }
+    rejections: list[dict[str, Any]] = []
+    accepted_candidate_keys = {
+        str(value).strip()
+        for value in accepted_candidate_queue_keys
+        if str(value).strip()
+    }
+    accepted_candidates = sorted(
+        (
+            row
+            for row in queue_candidates
+            if str(row.get("queue_key") or "") in accepted_candidate_keys
+            and row.get("source_date") == as_of_date.isoformat()
+            and row.get("source_path") == (str(source_path) if source_path else None)
+            and row.get("last_seen_at_kst") == generated.isoformat(timespec="seconds")
+        ),
+        key=lambda row: str(row.get("queue_key") or ""),
+    )
+    # Missing, stale, or invalid sources never erase a durable work item.  A
+    # follow-up closes only through a valid exact-date handoff/complete row.
+    if source_status == "loaded":
+        source_id_counts = Counter(
+            str(raw.get("followup_id") or "").strip()
+            for raw in source_followups
+            if isinstance(raw, Mapping)
+        )
+        for raw in source_followups:
+            errors = objective_followup_errors(raw, target_date=as_of_date)
+            handoff_evidence: dict[str, Any] | None = None
+            completion_evidence: dict[str, Any] | None = None
+            followup_id = str(raw.get("followup_id") or "").strip()
+            if followup_id and source_id_counts[followup_id] != 1:
+                errors.append("objective_followup_id_duplicate")
+            existing = by_id.get(followup_id)
+            if existing is not None:
+                try:
+                    existing_source_date = date.fromisoformat(
+                        str(existing.get("source_date") or "")
+                    )
+                except ValueError:
+                    errors.append("persisted_objective_followup_source_date_invalid")
+                else:
+                    if as_of_date < existing_source_date:
+                        errors.append("objective_followup_source_date_regression")
+                previous_state = str(existing.get("state") or "")
+                next_state = str(raw.get("state") or "")
+                if next_state not in OBJECTIVE_FOLLOWUP_ALLOWED_TRANSITIONS.get(
+                    previous_state, set()
+                ):
+                    errors.append(
+                        "objective_followup_state_transition_forbidden:"
+                        f"{previous_state}->{next_state}"
+                    )
+            if (
+                raw.get("state") == "CANDIDATE_QUEUE_HANDOFF"
+                and not accepted_candidate_keys
+            ):
+                errors.append(
+                    "objective_followup_candidate_handoff_not_accepted_this_run"
+                )
+            elif raw.get("state") == "CANDIDATE_QUEUE_HANDOFF":
+                source_binding = raw.get("candidate_handoff_binding")
+                source_required_gap_codes = (
+                    _objective_gap_codes(source_binding.get("required_gap_codes"))
+                    if isinstance(source_binding, Mapping)
+                    else None
+                )
+                if (
+                    source_required_gap_codes is not None
+                    and isinstance(existing, Mapping)
+                    and existing.get("state") not in OBJECTIVE_FOLLOWUP_CLOSED_STATES
+                    and sorted(source_required_gap_codes)
+                    != sorted(existing.get("remaining_gap_codes") or [])
+                ):
+                    errors.append(
+                        "objective_followup_handoff_prior_gap_binding_mismatch"
+                    )
+                bound_candidates = (
+                    [
+                        candidate
+                        for candidate in accepted_candidates
+                        if isinstance(source_binding, Mapping)
+                        and candidate.get("candidate_id")
+                        == source_binding.get("candidate_id")
+                        and candidate.get("candidate_sha256")
+                        == source_binding.get("candidate_sha256")
+                    ]
+                    if isinstance(source_binding, Mapping)
+                    else []
+                )
+                if len(bound_candidates) != 1:
+                    errors.append(
+                        "objective_followup_bound_candidate_not_accepted_this_run"
+                    )
+                else:
+                    accepted_candidate = bound_candidates[0]
+                    queued_source_candidate = accepted_candidate.get("candidate")
+                    if not isinstance(queued_source_candidate, Mapping):
+                        errors.append(
+                            "objective_followup_bound_source_candidate_missing"
+                        )
+                    else:
+                        candidate_binding_errors = _objective_candidate_binding_errors(
+                            queued_source_candidate,
+                            followup_id=followup_id,
+                            expected_resolved_gap_codes=list(
+                                source_binding.get("resolved_gap_codes") or []
+                            ),
+                        )
+                        errors.extend(candidate_binding_errors)
+                    if not errors:
+                        handoff_evidence = {
+                            "objective_followup_id": followup_id,
+                            "accepted_candidate_queue_key": accepted_candidate.get(
+                                "queue_key"
+                            ),
+                            "accepted_candidate_id": accepted_candidate.get(
+                                "candidate_id"
+                            ),
+                            "accepted_candidate_sha256": accepted_candidate.get(
+                                "candidate_sha256"
+                            ),
+                            "resolved_gap_codes": list(
+                                source_binding.get("resolved_gap_codes") or []
+                            ),
+                            "source_date": as_of_date.isoformat(),
+                            "source_path": str(source_path) if source_path else None,
+                            "verification": (
+                                "same_run_objective_bound_candidate_intake_accepted"
+                            ),
+                        }
+            completion_evidence, completion_errors = (
+                _derive_objective_completion_evidence(
+                    raw,
+                    existing=existing,
+                    queue_candidates=queue_candidates,
+                )
+            )
+            errors.extend(completion_errors)
+            if errors:
+                rejections.append(
+                    {"followup_id": followup_id or None, "errors": errors}
+                )
+                continue
+            normalized = _normalized_objective_followup(
+                raw,
+                source_path=source_path,
+                generated=generated,
+                existing=existing,
+                handoff_evidence=handoff_evidence,
+                completion_evidence=completion_evidence,
+            )
+            if followup_id in by_id:
+                entries[entries.index(by_id[followup_id])] = normalized
+            else:
+                entries.append(normalized)
+            by_id[followup_id] = normalized
+    output = {
+        **dict(queue),
+        "objective_followups": sorted(
+            entries, key=lambda row: str(row.get("followup_id") or "")
+        ),
+        "objective_followup_last_sync": {
+            "as_of_date": as_of_date.isoformat(),
+            "source_path": str(source_path) if source_path else None,
+            "source_status": source_status,
+            "source_followup_count": len(source_followups),
+            "accepted_candidate_count": len(accepted_candidate_keys),
+            "rejection_count": len(rejections),
+        },
+    }
+    return output, rejections
 
 
 def _queue_key(candidate_id: str, digest: str) -> str:
@@ -1238,6 +2197,8 @@ def sync_queue(
             "source_path": str(source_path) if source_path else None,
             "source_status": source_status,
             "source_candidate_count": len(source_candidates),
+            "accepted_candidate_count": len(accepted_queue_keys),
+            "accepted_candidate_queue_keys": sorted(accepted_queue_keys),
             "intake_rejection_count": len(intake_rejections),
         },
         "candidates": sorted(entries, key=lambda row: str(row.get("queue_key") or "")),
@@ -1514,13 +2475,34 @@ def _send_telegram(token: str, admin_id: str, message: str) -> None:
 
 
 def build_reminder_message(
-    entries: Sequence[Mapping[str, Any]], *, phase: str, target_date: date
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    phase: str,
+    target_date: date,
+    objective_followups: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     lines = [
         "🔔 [Micro 정책 후속 확인]",
         f"기준: {target_date.isoformat()} {phase.upper()}",
-        "정책은 자동 변경되지 않으며 승인·PREOPEN handoff만 추적합니다.",
+        "이 알림은 정책·주문을 변경하지 않고 연구 후속과 승인 상태만 추적합니다.",
     ]
+    if objective_followups:
+        lines.extend(["", "[빠른 회전 목표 후속]"])
+        for index, followup in enumerate(objective_followups[:5], start=1):
+            lines.append(
+                f"R{index}. {followup.get('followup_id')} [{followup.get('state')}]"
+            )
+            lines.append(
+                f"   current={followup.get('current_capability') or 'diagnostic_only'}"
+            )
+            gap_codes = followup.get("remaining_gap_codes") or []
+            if gap_codes:
+                lines.append("   gaps=" + ",".join(str(value) for value in gap_codes))
+            lines.append(f"   next={followup.get('next_action') or '-'}")
+        if len(objective_followups) > 5:
+            lines.append(f"연구 후속 외 {len(objective_followups) - 5}건")
+    if entries:
+        lines.extend(["", "[정책 후보 승인 대기]"])
     for index, entry in enumerate(entries[:5], start=1):
         candidate = entry.get("candidate") or {}
         design = candidate.get("runtime_design") or {}
@@ -1539,8 +2521,11 @@ def build_reminder_message(
                 "   design_gap=" + ",".join(entry.get("runtime_design_errors") or [])
             )
     if len(entries) > 5:
-        lines.append(f"외 {len(entries) - 5}건")
-    lines.append("상태별로 설계·승인·exact-date 적용·사후 귀속을 닫아주세요.")
+        lines.append(f"정책 후보 외 {len(entries) - 5}건")
+    lines.append(
+        "후속은 source-only 연구로 닫고, 실제 정책은 별도 설계·명시 승인·"
+        "exact-date PREOPEN·사후 귀속 전까지 그대로 유지합니다."
+    )
     return "\n".join(lines)
 
 
@@ -1549,40 +2534,97 @@ def notify_pending(
     *,
     phase: str,
     target_date: date,
-    config_loader: ConfigLoader = _load_telegram_config,
-    sender: Sender = _send_telegram,
+    include_objective_followups: bool = False,
+    now: datetime | None = None,
+    config_loader: ConfigLoader | None = None,
+    sender: Sender | None = None,
 ) -> tuple[dict[str, Any], str]:
     if phase not in VALID_PHASES:
         raise ValueError("phase_invalid")
+    generated = _now_kst(now)
     entries = [
         dict(row) for row in queue.get("candidates", []) if isinstance(row, dict)
     ]
-    pending = [
+    objective_followups = [
+        dict(row)
+        for row in queue.get("objective_followups", [])
+        if isinstance(row, Mapping)
+    ]
+    pending_candidates = [
         row
         for row in entries
         if row.get("state") in REMINDER_STATES
         and (row.get("reminders") or {}).get(phase) != target_date.isoformat()
     ]
-    if not pending:
-        return {**dict(queue), "candidates": entries}, "not_needed_or_duplicate"
+    pending_followups = (
+        [
+            row
+            for row in objective_followups
+            if row.get("followup_required") is True
+            and row.get("state") not in OBJECTIVE_FOLLOWUP_CLOSED_STATES
+            and (row.get("reminders") or {}).get("postclose") != target_date.isoformat()
+        ]
+        if (
+            include_objective_followups
+            and phase == "postclose"
+            and target_date == generated.date()
+            and is_krx_trading_day(target_date)
+            and generated.timetz().replace(tzinfo=None)
+            >= OBJECTIVE_FOLLOWUP_REMINDER_CUTOFF_KST
+        )
+        else []
+    )
+    if not pending_candidates and not pending_followups:
+        return {
+            **dict(queue),
+            "candidates": entries,
+            "objective_followups": objective_followups,
+        }, "not_needed_or_duplicate"
+    config_loader = config_loader or _load_telegram_config
+    sender = sender or _send_telegram
     token, admin_id = config_loader()
     if not token or not admin_id:
-        return {**dict(queue), "candidates": entries}, "missing_config"
+        return {
+            **dict(queue),
+            "candidates": entries,
+            "objective_followups": objective_followups,
+        }, "missing_config"
     try:
         sender(
             token,
             admin_id,
-            build_reminder_message(pending, phase=phase, target_date=target_date),
+            build_reminder_message(
+                pending_candidates,
+                phase=phase,
+                target_date=target_date,
+                objective_followups=pending_followups,
+            ),
         )
     except Exception:
-        return {**dict(queue), "candidates": entries}, "send_failed"
-    pending_keys = {str(row.get("queue_key") or "") for row in pending}
+        return {
+            **dict(queue),
+            "candidates": entries,
+            "objective_followups": objective_followups,
+        }, "send_failed"
+    pending_keys = {str(row.get("queue_key") or "") for row in pending_candidates}
     for entry in entries:
         if str(entry.get("queue_key") or "") in pending_keys:
             reminders = dict(entry.get("reminders") or {})
             reminders[phase] = target_date.isoformat()
             entry["reminders"] = reminders
-    return {**dict(queue), "candidates": entries}, "sent"
+    pending_followup_ids = {
+        str(row.get("followup_id") or "") for row in pending_followups
+    }
+    for followup in objective_followups:
+        if str(followup.get("followup_id") or "") in pending_followup_ids:
+            reminders = dict(followup.get("reminders") or {})
+            reminders["postclose"] = target_date.isoformat()
+            followup["reminders"] = reminders
+    return {
+        **dict(queue),
+        "candidates": entries,
+        "objective_followups": objective_followups,
+    }, "sent"
 
 
 def build_status_report(
@@ -1595,15 +2637,35 @@ def build_status_report(
     reminder_status: str,
     queue_path: Path = DEFAULT_QUEUE_PATH,
     source_status: str = "not_provided",
+    objective_followup_source_status: str = "not_provided",
     handoff_paths: Sequence[Path] = (),
+    objective_followup_rejections: Sequence[Mapping[str, Any]] = (),
+    source_artifact: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     entries = [row for row in queue.get("candidates", []) if isinstance(row, Mapping)]
     counts = Counter(str(row.get("state") or "UNKNOWN") for row in entries)
     actionable = [row for row in entries if row.get("state") in REMINDER_STATES]
+    objective_followups = [
+        row for row in queue.get("objective_followups", []) if isinstance(row, Mapping)
+    ]
+    actionable_objective_followups = (
+        [
+            row
+            for row in objective_followups
+            if row.get("followup_required") is True
+            and row.get("state") not in OBJECTIVE_FOLLOWUP_CLOSED_STATES
+        ]
+        if phase == "postclose"
+        else []
+    )
     decision = (
         "operator_attention_required"
         if actionable
+        else "objective_followup_required"
+        if actionable_objective_followups
+        else "objective_followup_contract_rejected"
+        if objective_followup_rejections
         else "source_gap_queue_preserved"
         if source_status not in {"loaded", "not_applicable_preopen", "not_provided"}
         else "no_operator_attention_required"
@@ -1617,13 +2679,20 @@ def build_status_report(
         "decision": decision,
         "metric_contract": METRIC_CONTRACT,
         "source_path": str(source_path) if source_path else None,
+        "source_artifact": dict(source_artifact)
+        if isinstance(source_artifact, Mapping)
+        else _empty_source_artifact_provenance(source_path),
         "source_status": source_status,
+        "objective_followup_source_status": objective_followup_source_status,
         "queue_path": str(queue_path),
         "summary": {
             "candidate_count": len(entries),
             "actionable_candidate_count": len(actionable),
+            "objective_followup_count": len(objective_followups),
+            "actionable_objective_followup_count": len(actionable_objective_followups),
             "state_counts": dict(sorted(counts.items())),
             "intake_rejection_count": len(intake_rejections),
+            "objective_followup_rejection_count": len(objective_followup_rejections),
             "preopen_handoff_count": len(handoff_paths),
             "reminder_status": reminder_status,
         },
@@ -1642,7 +2711,35 @@ def build_status_report(
             }
             for row in actionable
         ],
+        "objective_followups": [
+            {
+                "schema": row.get("schema"),
+                "followup_id": row.get("followup_id"),
+                "source_date": row.get("source_date"),
+                "state": row.get("state"),
+                "state_reason": row.get("state_reason"),
+                "followup_required": row.get("followup_required"),
+                "attention_class": row.get("attention_class"),
+                "operator_decision_required": False,
+                "current_capability": row.get("current_capability"),
+                "remaining_gap_codes": list(row.get("remaining_gap_codes") or []),
+                "next_action": row.get("next_action"),
+                "metric_contract": dict(row.get("metric_contract") or {}),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "authority": {
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            }
+            for row in actionable_objective_followups
+        ],
         "intake_rejections": list(intake_rejections),
+        "objective_followup_rejections": list(objective_followup_rejections),
         "preopen_handoffs": [str(path) for path in handoff_paths],
         "authority": {
             "runtime_effect": False,
@@ -1662,13 +2759,52 @@ def render_status_markdown(report: Mapping[str, Any]) -> str:
         f"- Phase: `{report.get('phase')}`",
         f"- Decision: `{report.get('decision')}`",
         f"- Source status: `{report.get('source_status')}`",
+        (
+            "- Objective follow-up source status: "
+            f"`{report.get('objective_followup_source_status')}`"
+        ),
         f"- Actionable: `{summary.get('actionable_candidate_count', 0)}`",
+        (
+            "- Objective follow-ups: "
+            f"`{summary.get('actionable_objective_followup_count', 0)}`"
+        ),
+        (
+            "- Objective follow-up rejections: "
+            f"`{summary.get('objective_followup_rejection_count', 0)}`"
+        ),
         f"- Reminder: `{summary.get('reminder_status')}`",
         "- Runtime apply performed: `false`",
         "",
-        "## Pending",
+        "## Fast Lifecycle Objective Follow-up",
         "",
     ]
+    objective_rows = report.get("objective_followups") or []
+    if not objective_rows:
+        lines.append("- None")
+    else:
+        lines.extend(
+            [
+                "| Follow-up | State | Current capability | Gaps | Next action |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for row in objective_rows:
+            lines.append(
+                f"| {row.get('followup_id')} | {row.get('state')} | "
+                f"{row.get('current_capability') or '-'} | "
+                f"{','.join(row.get('remaining_gap_codes') or []) or '-'} | "
+                f"{row.get('next_action') or '-'} |"
+            )
+    lines.extend(
+        [
+            "",
+            "Objective follow-ups are research/workorder reminders only. They cannot be "
+            "approved, scheduled, enrolled, or applied as runtime policy.",
+            "",
+            "## Pending",
+            "",
+        ]
+    )
     rows = report.get("actionable_candidates") or []
     if not rows:
         lines.append("- None")
@@ -1705,15 +2841,15 @@ def status_report_paths(
     return report_dir / f"{stem}.json", report_dir / f"{stem}.md"
 
 
-def _load_source_candidates(
+def _load_source_payload_snapshot(
     *, target_date: date, source_report: Path | None
-) -> tuple[Path, list[Mapping[str, Any]], str]:
+) -> tuple[Path, dict[str, Any] | None, str, dict[str, Any]]:
     path = source_report or SOURCE_REPORT_DIR / (
         f"machine_microstructure_attribution_{target_date.isoformat()}.json"
     )
-    payload = _load_json(path)
+    payload, source_artifact, capture_status = _capture_source_artifact(path)
     if payload is None:
-        return path, [], "missing_or_unreadable"
+        return path, None, capture_status, source_artifact
     if (
         payload.get("schema") != "machine_microstructure_attribution_v1"
         or payload.get("target_date") != target_date.isoformat()
@@ -1722,7 +2858,25 @@ def _load_source_candidates(
         or (payload.get("authority") or {}).get("actual_order_submitted") is not False
         or (payload.get("authority") or {}).get("broker_order_forbidden") is not True
     ):
-        return path, [], "contract_invalid"
+        return path, None, "contract_invalid", source_artifact
+    return path, payload, "loaded", source_artifact
+
+
+def _load_source_payload(
+    *, target_date: date, source_report: Path | None
+) -> tuple[Path, dict[str, Any] | None, str]:
+    """Compatibility wrapper for payload-only callers and tests."""
+
+    path, payload, status, _source_artifact = _load_source_payload_snapshot(
+        target_date=target_date,
+        source_report=source_report,
+    )
+    return path, payload, status
+
+
+def _candidate_rows_from_source_payload(
+    payload: Mapping[str, Any],
+) -> tuple[list[Mapping[str, Any]], str]:
     intake_contract = payload.get("promotion_candidate_intake_contract")
     if (
         not isinstance(intake_contract, Mapping)
@@ -1731,13 +2885,144 @@ def _load_source_candidates(
         != "src.engine.automation.machine_microstructure_policy_approval"
         or intake_contract.get("daily_report_runtime_effect") is not False
     ):
-        return path, [], "intake_contract_invalid"
+        return [], "intake_contract_invalid"
     rows = payload.get("policy_promotion_candidates")
     if not isinstance(rows, list):
-        return path, [], "candidate_list_missing_or_invalid"
+        return [], "candidate_list_missing_or_invalid"
     if any(not isinstance(row, Mapping) for row in rows):
-        return path, [], "candidate_rows_invalid"
-    return path, list(rows), "loaded"
+        return [], "candidate_rows_invalid"
+    return list(rows), "loaded"
+
+
+def _load_source_candidates(
+    *, target_date: date, source_report: Path | None
+) -> tuple[Path, list[Mapping[str, Any]], str]:
+    """Compatibility loader for candidate-only callers and tests."""
+
+    path, payload, status = _load_source_payload(
+        target_date=target_date,
+        source_report=source_report,
+    )
+    if payload is None:
+        return path, [], status
+    rows, candidate_status = _candidate_rows_from_source_payload(payload)
+    return path, rows, candidate_status
+
+
+def _objective_rows_from_source_payload(
+    payload: Mapping[str, Any], *, target_date: date
+) -> tuple[list[Mapping[str, Any]], str, list[dict[str, Any]]]:
+    raw_rows = payload.get("objective_followups")
+    if not isinstance(raw_rows, list):
+        return (
+            [],
+            "objective_followup_list_missing_or_invalid",
+            [
+                {
+                    "followup_id": None,
+                    "errors": ["objective_followup_list_missing_or_invalid"],
+                }
+            ],
+        )
+    rows: list[Mapping[str, Any]] = []
+    rejections: list[dict[str, Any]] = []
+    followup_id_counts = Counter(
+        str(raw.get("followup_id") or "").strip()
+        for raw in raw_rows
+        if isinstance(raw, Mapping)
+    )
+    for raw in raw_rows:
+        if not isinstance(raw, Mapping):
+            rejections.append(
+                {
+                    "followup_id": None,
+                    "errors": ["objective_followup_row_not_object"],
+                }
+            )
+            continue
+        errors = objective_followup_errors(raw, target_date=target_date)
+        followup_id = str(raw.get("followup_id") or "").strip()
+        if followup_id and followup_id_counts[followup_id] != 1:
+            errors.append("objective_followup_id_duplicate")
+        if errors:
+            rejections.append(
+                {
+                    "followup_id": followup_id or None,
+                    "errors": errors,
+                }
+            )
+            continue
+        rows.append(raw)
+    return rows, "loaded", rejections
+
+
+def _load_source_context_snapshot(
+    *, target_date: date, source_report: Path | None
+) -> tuple[
+    Path,
+    list[Mapping[str, Any]],
+    list[Mapping[str, Any]],
+    str,
+    str,
+    list[dict[str, Any]],
+    dict[str, Any],
+]:
+    path, payload, status, source_artifact = _load_source_payload_snapshot(
+        target_date=target_date,
+        source_report=source_report,
+    )
+    if payload is None:
+        return path, [], [], status, status, [], source_artifact
+    candidates, candidate_status = _candidate_rows_from_source_payload(payload)
+    objective_followups, objective_status, rejections = (
+        _objective_rows_from_source_payload(
+            payload,
+            target_date=target_date,
+        )
+    )
+    return (
+        path,
+        candidates,
+        objective_followups,
+        candidate_status,
+        objective_status,
+        rejections,
+        source_artifact,
+    )
+
+
+def _load_source_context(
+    *, target_date: date, source_report: Path | None
+) -> tuple[
+    Path,
+    list[Mapping[str, Any]],
+    list[Mapping[str, Any]],
+    str,
+    str,
+    list[dict[str, Any]],
+]:
+    """Compatibility wrapper for source-context callers and tests."""
+
+    (
+        path,
+        candidates,
+        objective_followups,
+        candidate_status,
+        objective_status,
+        rejections,
+        _source_artifact,
+    ) = _load_source_context_snapshot(
+        target_date=target_date,
+        source_report=source_report,
+    )
+    return (
+        path,
+        candidates,
+        objective_followups,
+        candidate_status,
+        objective_status,
+        rejections,
+    )
 
 
 @contextmanager
@@ -1754,15 +3039,35 @@ def _queue_lock(queue_path: Path) -> Iterator[None]:
 
 def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
     target_date = date.fromisoformat(args.target_date)
+    generated = _now_kst()
+    if args.phase == "postclose" and target_date > generated.date():
+        raise ValueError("postclose_target_date_in_future")
     source_path: Path | None = None
     source_candidates: list[Mapping[str, Any]] = []
+    source_objective_followups: list[Mapping[str, Any]] = []
+    objective_followup_rejections: list[dict[str, Any]] = []
     source_status = "not_applicable_preopen"
+    objective_followup_source_status = "not_applicable_preopen"
+    source_artifact = _empty_source_artifact_provenance(None)
     if args.phase == "postclose":
-        source_path, source_candidates, source_status = _load_source_candidates(
-            target_date=target_date,
-            source_report=args.source_report,
+        (
+            source_path,
+            source_candidates,
+            source_objective_followups,
+            source_status,
+            objective_followup_source_status,
+            objective_followup_rejections,
+            source_artifact,
+        ) = _load_source_context_snapshot(
+            target_date=target_date, source_report=args.source_report
         )
     with _queue_lock(args.queue_path):
+        if (
+            not args.queue_path.exists()
+            and source_status != "loaded"
+            and objective_followup_source_status != "loaded"
+        ):
+            raise ValueError("approval_queue_and_source_unavailable")
         queue = load_queue(args.queue_path)
         queue, rejections = sync_queue(
             queue,
@@ -1772,13 +3077,35 @@ def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
             source_status=source_status,
             approval_artifacts=_approval_artifacts(args.approval_dir),
             apply_receipt_dir=args.apply_receipt_dir,
+            now=generated,
         )
+        accepted_candidate_queue_keys = (queue.get("last_sync") or {}).get(
+            "accepted_candidate_queue_keys"
+        ) or []
+        queue, sync_followup_rejections = sync_objective_followups(
+            queue,
+            source_followups=source_objective_followups,
+            source_path=source_path,
+            as_of_date=target_date,
+            source_status=objective_followup_source_status,
+            accepted_candidate_queue_keys=accepted_candidate_queue_keys,
+            now=generated,
+        )
+        objective_followup_rejections.extend(sync_followup_rejections)
+        if (
+            args.phase == "postclose"
+            and args.write
+            and source_path is not None
+            and not _source_artifact_snapshot_is_current(source_path, source_artifact)
+        ):
+            raise ValueError("source_artifact_changed_before_commit")
         handoff_paths: list[Path] = []
         if args.phase == "preopen":
             queue, handoff_paths = schedule_preopen_handoffs(
                 queue,
                 target_date=target_date,
                 handoff_dir=args.handoff_dir,
+                now=generated,
             )
         reminder_status = "not_requested"
         if args.notify:
@@ -1786,6 +3113,10 @@ def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
                 queue,
                 phase=args.phase,
                 target_date=target_date,
+                include_objective_followups=getattr(
+                    args, "notify_objective_followups", False
+                ),
+                now=generated,
             )
         report = build_status_report(
             queue,
@@ -1794,11 +3125,23 @@ def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
             source_path=source_path,
             queue_path=args.queue_path,
             source_status=source_status,
+            objective_followup_source_status=objective_followup_source_status,
             intake_rejections=rejections,
             reminder_status=reminder_status,
             handoff_paths=handoff_paths,
+            objective_followup_rejections=objective_followup_rejections,
+            source_artifact=source_artifact,
+            now=generated,
         )
         if args.write:
+            if (
+                args.phase == "postclose"
+                and source_path is not None
+                and not _source_artifact_snapshot_is_current(
+                    source_path, source_artifact
+                )
+            ):
+                raise ValueError("source_artifact_changed_before_commit")
             _atomic_write_json(args.queue_path, queue)
             json_path, md_path = status_report_paths(
                 target_date=target_date,
@@ -1847,6 +3190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--apply-receipt-dir", type=Path, default=APPLY_RECEIPT_DIR)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--notify", action="store_true")
+    parser.add_argument("--notify-objective-followups", action="store_true")
     parser.add_argument("--record-decision", choices=sorted(VALID_DECISIONS))
     parser.add_argument("--candidate-id", default="")
     parser.add_argument("--candidate-sha256", default="")
@@ -1861,6 +3205,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     try:
         date.fromisoformat(args.target_date)
+        if args.notify and not args.write:
+            raise ValueError("notify_requires_write")
+        if args.notify_objective_followups and not args.notify:
+            raise ValueError("notify_objective_followups_requires_notify")
         if args.record_decision:
             if not args.candidate_id or not args.candidate_sha256:
                 parser.error("--candidate-id and --candidate-sha256 are required")
@@ -1883,6 +3231,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    if args.notify_objective_followups and (result.get("summary") or {}).get(
+        "reminder_status"
+    ) in {"missing_config", "send_failed"}:
+        return 3
     return 0
 
 

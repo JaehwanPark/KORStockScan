@@ -259,6 +259,181 @@ def test_log_rotation_cleanup_verifies_sentinel_and_snapshot_gzip(tmp_path):
     assert "compression_verify_failures=0" in result.stdout
 
 
+def test_log_rotation_cleanup_maintains_bounded_micro_reversion_storage(tmp_path):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    source = (
+        project_root
+        / "data"
+        / "observations"
+        / "scalp_micro_reversion_forward"
+        / "trade_date=2026-05-21"
+        / "venue=KRX"
+        / "session=KRX_REGULAR"
+        / "market_stream.jsonl"
+    )
+    log_dir.mkdir(parents=True)
+    source.parent.mkdir(parents=True)
+    original = '{"schema":"stream","series_sequence":1}\n'
+    source.write_text(original, encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "PYTHON_BIN": str(Path(__file__).resolve().parents[2] / ".venv/bin/python"),
+            "TARGET_DATE": "2026-05-22",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    compressed = source.with_suffix(".jsonl.gz")
+    assert not source.exists()
+    with gzip.open(compressed, "rt", encoding="utf-8") as handle:
+        assert handle.read() == original
+    assert "micro_reversion_storage_status=pass" in result.stdout
+    assert "micro_reversion_storage_actions=1" in result.stdout
+    assert "micro_reversion_storage_compressed=1" in result.stdout
+    assert "micro_reversion_storage_purged=0" in result.stdout
+    assert "micro_reversion_storage_purge_enabled=false" in result.stdout
+    assert (
+        "micro_reversion_storage_purge_status=disabled_no_deletion_authority"
+        in result.stdout
+    )
+
+
+def test_log_rotation_cleanup_does_not_purge_expired_micro_storage_by_default(
+    tmp_path,
+):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    trade_dir = (
+        project_root
+        / "data"
+        / "observations"
+        / "scalp_micro_reversion_forward"
+        / "trade_date=2026-04-01"
+    )
+    source = trade_dir / "venue=KRX" / "session=KRX_REGULAR" / "market_stream.jsonl"
+    log_dir.mkdir(parents=True)
+    source.parent.mkdir(parents=True)
+    source.write_text("{}\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "PYTHON_BIN": str(Path(__file__).resolve().parents[2] / ".venv/bin/python"),
+            "TARGET_DATE": "2026-05-22",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert trade_dir.exists()
+    assert not source.exists()
+    assert source.with_suffix(".jsonl.gz").exists()
+    assert "micro_reversion_storage_purged=0" in result.stdout
+    assert "micro_reversion_storage_purge_candidates=1" in result.stdout
+    assert "micro_reversion_storage_purge_enabled=false" in result.stdout
+
+
+def test_log_rotation_cleanup_purges_micro_storage_only_with_explicit_opt_in(
+    tmp_path,
+):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    trade_dir = (
+        project_root
+        / "data"
+        / "observations"
+        / "scalp_micro_reversion_forward"
+        / "trade_date=2026-04-01"
+    )
+    source = trade_dir / "venue=KRX" / "session=KRX_REGULAR" / "market_stream.jsonl"
+    log_dir.mkdir(parents=True)
+    source.parent.mkdir(parents=True)
+    source.write_text("{}\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "PYTHON_BIN": str(Path(__file__).resolve().parents[2] / ".venv/bin/python"),
+            "TARGET_DATE": "2026-05-22",
+            "MICRO_REVERSION_STORAGE_PURGE_ENABLED": "true",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert not trade_dir.exists()
+    assert "micro_reversion_storage_purged=1" in result.stdout
+    assert "micro_reversion_storage_purge_enabled=true" in result.stdout
+    assert "micro_reversion_storage_purge_status=explicit_opt_in_apply" in result.stdout
+
+
+def test_log_rotation_cleanup_can_disable_micro_reversion_storage_maintenance(
+    tmp_path,
+):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    source = (
+        project_root
+        / "data"
+        / "observations"
+        / "scalp_micro_reversion_forward"
+        / "trade_date=2026-05-21"
+        / "venue=KRX"
+        / "session=KRX_REGULAR"
+        / "market_stream.jsonl"
+    )
+    log_dir.mkdir(parents=True)
+    source.parent.mkdir(parents=True)
+    source.write_text("{}\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "TARGET_DATE": "2026-05-22",
+            "MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED": "false",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert source.exists()
+    assert not source.with_suffix(".jsonl.gz").exists()
+    assert "micro_reversion_storage_status=disabled" in result.stdout
+    assert "micro_reversion_storage_purge_status=maintenance_disabled" in result.stdout
+
+
 def test_log_rotation_cleanup_prunes_archived_and_stale_active_logs(tmp_path):
     project_root = tmp_path / "project"
     log_dir = project_root / "logs"
