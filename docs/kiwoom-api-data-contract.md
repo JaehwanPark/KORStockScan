@@ -129,10 +129,14 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   order API, cash-bypass, and scale-in-forbidden provenance for the position
   lifecycle. Rollback is
   `KORSTOCKSCAN_GENERAL_ENTRY_MARGIN_ONE_SHARE_ENABLED=false`; rollback restores
-  cash-only general entry and does not alter Opening Rotation's separate
-  one-share margin contract.
+  cash-only general entry. The former Opening Rotation margin contract was
+  retired on 2026-08-14 and has no active authority.
 
-### 2026-08-10 Opening Rotation Margin Orderability Gate
+### Archived 2026-08-10 Opening Rotation Margin Orderability Gate
+
+This section is protocol/audit history only. `opening_rotation_full_retirement_20260814`
+removed its new-order and margin authority; none of the fields below can
+reactivate it.
 
 - Rechecked at `2026-08-10T18:35:18+09:00` from upstream commit
   `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
@@ -146,7 +150,7 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   the matching `profa_{20|30|40|50|60|100}ord_alow_amt/q` fields provide KRW
   orderable amount and one-share quantity. `min_ord_alow_amt/q` remains the
   explicitly non-margin orderable capacity.
-- Opening Rotation may replace its cash-only sizing input with the applied
+- While active, Opening Rotation could replace its cash-only sizing input with the applied
   `20/30/40/50/60%` bucket only when the exact symbol/price response has
   `return_code=0`, a recognized bucket, orderable quantity at least one, and
   orderable amount at least the checked unit price. It rechecks the most

@@ -38,6 +38,7 @@ from src.engine.scalping.limit_down_watch import (  # noqa: E402
 )
 from src.engine.scalping.opening_rotation import (
     EntryConfig as OpeningRotationConfig,
+    RETIRED as OPENING_ROTATION_RETIRED,
     load_active_runtime_policy as load_active_opening_rotation_runtime_policy,
 )
 from src.engine.sniper_time import (
@@ -404,6 +405,8 @@ def _scanner_watch_budget_reallocation_enabled():
 
 
 def _scanner_watch_budget_opening_config():
+    if OPENING_ROTATION_RETIRED:
+        return OpeningRotationConfig(enabled=False)
     try:
         runtime_policy = load_active_opening_rotation_runtime_policy()
     except (OSError, ValueError, TypeError) as exc:
