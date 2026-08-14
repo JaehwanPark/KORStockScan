@@ -441,29 +441,23 @@ def test_held_episode_keeps_diagnostic_anchors_but_never_tuning_authority(tmp_pa
     )
     assert report["policy_promotion_candidates"] == []
     assert report["summary"]["objective_followup_required_count"] == 1
-    assert report["objective_followups"] == [
-        {
-            "schema": "machine_fast_lifecycle_objective_followup_v1",
-            "followup_id": "machine_lifecycle_turnover_policy_research_v1",
-            "source_date": target_date,
-            "state": "IMPLEMENTATION_REQUIRED",
-            "followup_required": True,
-            "attention_class": "code_improvement_workorder",
-            "operator_decision_required": False,
-            "current_capability": "diagnostic_observation_only",
-            "remaining_gap_codes": [
-                "rolling_paired_policy_candidate_producer_not_implemented",
-                "episode_single_attempt_no_same_day_reentry_tuning_axis",
-                "speed_and_capital_occupancy_not_policy_selection_axes",
-            ],
-            "next_action": "implement_source_only_rolling_paired_policy_research",
-            "metric_contract": OBJECTIVE_FOLLOWUP_METRIC_CONTRACT,
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-        }
+    followup = report["objective_followups"][0]
+    assert followup["state"] == "EVIDENCE_ACCUMULATING"
+    assert followup["followup_required"] is True
+    assert followup["attention_class"] == "evidence_collection"
+    assert followup["operator_decision_required"] is False
+    assert followup["remaining_gap_codes"] == [
+        "no_policy_eligible_paired_lifecycle_observed"
     ]
+    assert followup["next_action"] == (
+        "continue_exact_date_collection_and_rolling_readiness_review"
+    )
+    assert followup["metric_contract"] == OBJECTIVE_FOLLOWUP_METRIC_CONTRACT
+    assert report["rolling_paired_policy_research"]["implementation_boundary"] == {
+        "rolling_paired_policy_candidate_producer_present": True,
+        "episode_same_day_reentry_or_timeout_tuning_axis_present": True,
+        "speed_or_turnover_metric_changes_policy_selection": True,
+    }
 
 
 def test_multi_day_episode_reconciliation_emits_target_date_exit_anchor(tmp_path):
@@ -1096,6 +1090,7 @@ def test_prospective_widget_and_episode_target_date_episodes_create_anchors(tmp_
         {
             "schema": "low_price_two_leg_expanded_candidate_research_v5",
             "target_date": target_date,
+            "cost_pct": 0.2,
             "profiles": {
                 "candidate_222222_morning": {
                     "profile_id": "candidate_222222_morning",
@@ -1181,6 +1176,19 @@ def test_prospective_widget_and_episode_target_date_episodes_create_anchors(tmp_
         "prospective_episode_research_target_fill",
     }
     assert episode["micro_context_status"] == "matched"
+    episode_fill = next(
+        anchor
+        for anchor in episode["anchor_results"]
+        if anchor["anchor_role"] == "prospective_episode_research_buy_fill"
+    )
+    assert episode_fill["owner_round_trip_cost_pct"] == 0.2
+    assert episode_fill["owner_round_trip_cost_provenance"] == (
+        "low_price_two_leg_expanded_candidate_research.cost_pct"
+    )
+    assert episode_fill["owner_outcome"]["entry_notional_krw"] == 20_000
+    assert episode_fill["owner_outcome"]["quantity_basis"] == (
+        "one_share_normalized_source_only"
+    )
 
 
 def test_depth_context_is_past_only_and_session_exact(tmp_path):

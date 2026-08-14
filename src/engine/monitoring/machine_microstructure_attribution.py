@@ -41,6 +41,9 @@ from src.engine.scalping.micro_reversion.collection_targets import (
     build_collection_targets,
     write_collection_targets,
 )
+from src.engine.monitoring.machine_lifecycle_turnover_policy_research import (
+    build_rolling_paired_policy_research,
+)
 from src.trading.low_price_two_leg.profiles import PROFILES
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
@@ -71,6 +74,8 @@ CANARY_DAILY_SNAPSHOT_DIR = (
 PRE_WINDOW_SEC = 30
 POST_WINDOW_SEC = 180
 DEPTH_CONTEXT_MAX_AGE_SEC = 5
+TIMEOUT_RESEARCH_HORIZONS_SEC = (60, 120, 180)
+TIMEOUT_RESEARCH_MAX_QUOTE_AGE_SEC = 5
 CANARY_COMPLETE_AFTER_KST = time(20, 0)
 GROSS_PROFIT_TOUCH_BPS = (1, 3, 5, 10, 20, 30, 50)
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
@@ -517,6 +522,9 @@ def _widget_inventory(
     expansion = _read_target_json(
         expansion_path, target_date, expected_schemas=expansion_schemas
     )
+    widget_round_trip_cost_pct = _finite_float(
+        (calibration or {}).get("round_trip_cost_pct")
+    )
     symbols: dict[str, dict[str, Any]] = {}
     anchors: list[dict[str, Any]] = []
 
@@ -669,6 +677,10 @@ def _widget_inventory(
                             "owner_target_price": owner_target_price,
                             "lifecycle_stage": "entry",
                             "anchor_role": "counterfactual_calibration_entry",
+                            "owner_round_trip_cost_pct": widget_round_trip_cost_pct,
+                            "owner_round_trip_cost_provenance": (
+                                "widget_auto_trade_policy_calibration.round_trip_cost_pct"
+                            ),
                             "owner_outcome": {
                                 "exit_at": exit_at.isoformat() if exit_at else None,
                                 "exit_price": exit_price,
@@ -680,6 +692,8 @@ def _widget_inventory(
                                 "cost_aware_net_return_pct": _finite_float(
                                     trade.get("net_return_pct")
                                 ),
+                                "entry_notional_krw": entry_price,
+                                "quantity_basis": "one_share_normalized",
                                 "realized": resolved_exit_valid,
                             },
                             "owner_lifecycle_contract_valid": (
@@ -704,6 +718,12 @@ def _widget_inventory(
                                 "owner_target_price": None,
                                 "lifecycle_stage": "exit",
                                 "anchor_role": "counterfactual_calibration_exit",
+                                "owner_round_trip_cost_pct": (
+                                    widget_round_trip_cost_pct
+                                ),
+                                "owner_round_trip_cost_provenance": (
+                                    "widget_auto_trade_policy_calibration.round_trip_cost_pct"
+                                ),
                                 "owner_outcome": {
                                     "entry_at": entry_at.isoformat(),
                                     "holding_duration_ms": holding_duration_ms,
@@ -714,6 +734,8 @@ def _widget_inventory(
                                     "cost_aware_net_return_pct": _finite_float(
                                         trade.get("net_return_pct")
                                     ),
+                                    "entry_notional_krw": entry_price,
+                                    "quantity_basis": "one_share_normalized",
                                     "realized": True,
                                 },
                                 "owner_lifecycle_contract_valid": True,
@@ -838,6 +860,8 @@ def _widget_inventory(
                     "cost_aware_net_return_pct": _finite_float(
                         episode.get("net_return_pct")
                     ),
+                    "entry_notional_krw": entry_price,
+                    "quantity_basis": "one_share_normalized",
                     "realized": resolved_exit_valid,
                 }
                 common_anchor = {
@@ -851,6 +875,10 @@ def _widget_inventory(
                     "actual_order_submitted": False,
                     "owner_lifecycle_contract_valid": (
                         not resolved_exit_requested or resolved_exit_valid
+                    ),
+                    "owner_round_trip_cost_pct": widget_round_trip_cost_pct,
+                    "owner_round_trip_cost_provenance": (
+                        "widget_auto_trade_policy_calibration.round_trip_cost_pct"
                     ),
                 }
                 anchors.append(
@@ -1003,6 +1031,14 @@ def _episode_inventory(
     expansion = _read_target_json(
         expansion_path, target_date, expected_schemas=expansion_schemas
     )
+    episode_round_trip_cost_pct = _finite_float((tuning or {}).get("cost_pct"))
+    episode_round_trip_cost_provenance = "low_price_two_leg_tuning.cost_pct"
+    prospective_episode_round_trip_cost_pct = _finite_float(
+        (expansion or {}).get("cost_pct")
+    )
+    prospective_episode_round_trip_cost_provenance = (
+        "low_price_two_leg_expanded_candidate_research.cost_pct"
+    )
     profiles: dict[str, dict[str, Any]] = {}
     anchors: list[dict[str, Any]] = []
 
@@ -1130,6 +1166,10 @@ def _episode_inventory(
                         ),
                         "lifecycle_stage": "entry",
                         "anchor_role": "episode_signal_bar",
+                        "owner_round_trip_cost_pct": episode_round_trip_cost_pct,
+                        "owner_round_trip_cost_provenance": (
+                            episode_round_trip_cost_provenance
+                        ),
                         "owner_lifecycle_contract_valid": True,
                         "owner_policy_tuning_eligible": owner_row_eligible,
                         "owner_source_quality": payload.get("source_quality"),
@@ -1242,6 +1282,12 @@ def _episode_inventory(
                                 "owner_target_price": target_price,
                                 "lifecycle_stage": "entry",
                                 "anchor_role": "episode_buy_fill_confirmed",
+                                "owner_round_trip_cost_pct": (
+                                    episode_round_trip_cost_pct
+                                ),
+                                "owner_round_trip_cost_provenance": (
+                                    episode_round_trip_cost_provenance
+                                ),
                                 "owner_outcome": {
                                     "leg_id": leg_id,
                                     "holding_duration_ms": holding_duration_ms,
@@ -1251,6 +1297,9 @@ def _episode_inventory(
                                     "cost_aware_net_return_pct": _finite_float(
                                         leg.get("net_profit_pct")
                                     ),
+                                    "entry_notional_krw": (fill_price * buy_filled_qty),
+                                    "quantity": buy_filled_qty,
+                                    "quantity_basis": "broker_confirmed_fill",
                                     "realized": realized,
                                 },
                                 "owner_lifecycle_contract_valid": True,
@@ -1282,6 +1331,12 @@ def _episode_inventory(
                                     "exit" if realized else "exit_partial_fill"
                                 ),
                                 "anchor_role": target_anchor_role,
+                                "owner_round_trip_cost_pct": (
+                                    episode_round_trip_cost_pct
+                                ),
+                                "owner_round_trip_cost_provenance": (
+                                    episode_round_trip_cost_provenance
+                                ),
                                 "owner_outcome": {
                                     "leg_id": leg_id,
                                     "buy_filled_at": (
@@ -1296,6 +1351,9 @@ def _episode_inventory(
                                     "cost_aware_net_return_pct": _finite_float(
                                         leg.get("net_profit_pct")
                                     ),
+                                    "entry_notional_krw": (fill_price * buy_filled_qty),
+                                    "quantity": buy_filled_qty,
+                                    "quantity_basis": "broker_confirmed_fill",
                                     "realized": realized,
                                 },
                                 "owner_lifecycle_contract_valid": True,
@@ -1475,6 +1533,10 @@ def _episode_inventory(
                             "exit" if realized else "exit_partial_fill"
                         ),
                         "anchor_role": target_anchor_role,
+                        "owner_round_trip_cost_pct": episode_round_trip_cost_pct,
+                        "owner_round_trip_cost_provenance": (
+                            episode_round_trip_cost_provenance
+                        ),
                         "owner_original_source_date": source_date,
                         "owner_outcome": {
                             "leg_id": leg_id,
@@ -1489,6 +1551,12 @@ def _episode_inventory(
                             "cost_aware_net_return_pct": _finite_float(
                                 leg.get("net_profit_pct")
                             ),
+                            "entry_notional_krw": (
+                                (_finite_float(leg.get("fill_price")) or 0.0)
+                                * int(buy_filled_qty_value)
+                            ),
+                            "quantity": int(buy_filled_qty_value),
+                            "quantity_basis": "broker_confirmed_fill",
                             "realized": realized,
                         },
                         "owner_lifecycle_contract_valid": True,
@@ -1588,6 +1656,12 @@ def _episode_inventory(
                     "expected_session_buckets": ["SOR_REGULAR"],
                     "actual_order_submitted": False,
                     "owner_lifecycle_contract_valid": True,
+                    "owner_round_trip_cost_pct": (
+                        prospective_episode_round_trip_cost_pct
+                    ),
+                    "owner_round_trip_cost_provenance": (
+                        prospective_episode_round_trip_cost_provenance
+                    ),
                 }
                 anchors.append(
                     {
@@ -1680,6 +1754,8 @@ def _episode_inventory(
                         "cost_aware_net_return_pct": _finite_float(
                             leg.get("net_profit_pct")
                         ),
+                        "entry_notional_krw": entry_price,
+                        "quantity_basis": "one_share_normalized_source_only",
                         "realized": target_valid,
                     }
                     anchors.append(
@@ -2341,7 +2417,9 @@ def _micro_context(
         if is_excluded(payload):
             inventory[symbol]["source_excluded_row_count"] += 1
             continue
-        valid_depth, timestamp, _, _, _, _ = _validate_depth_row(payload)
+        valid_depth, timestamp, bid_depth, _, depth_best_bid, _ = _validate_depth_row(
+            payload
+        )
         if (
             valid_depth
             and timestamp is not None
@@ -2369,7 +2447,13 @@ def _micro_context(
             ):
                 windows[anchor["anchor_id"]]["depth_rows"] += 1
                 windows[anchor["anchor_id"]]["depth_points"].append(
-                    (int(payload["sequence_epoch"]), timestamp)
+                    {
+                        "sequence_epoch": int(payload["sequence_epoch"]),
+                        "timestamp": timestamp,
+                        "best_bid": depth_best_bid,
+                        "best_bid_qty": int(payload["best_bid_qty"]),
+                        "bid_depth": bid_depth,
+                    }
                 )
 
     for payload in _iter_relevant_rows(
@@ -2478,11 +2562,13 @@ def _anchor_result(
     clean_baseline_allowed: bool,
 ) -> dict[str, Any]:
     rows = sorted(window["rows"], key=lambda row: row["timestamp"])
-    depth_timestamps_by_epoch: dict[int, list[datetime]] = defaultdict(list)
-    for sequence_epoch, timestamp in window.get("depth_points") or []:
-        depth_timestamps_by_epoch[int(sequence_epoch)].append(timestamp)
-    for timestamps in depth_timestamps_by_epoch.values():
-        timestamps.sort()
+    depth_points_by_epoch: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for point in window.get("depth_points") or []:
+        if not isinstance(point, dict):
+            continue
+        depth_points_by_epoch[int(point["sequence_epoch"])].append(point)
+    for points in depth_points_by_epoch.values():
+        points.sort(key=lambda point: point["timestamp"])
     anchor_at = _parse_ts(anchor["anchor_at"])
     post = [
         row for row in rows if anchor_at is not None and row["timestamp"] >= anchor_at
@@ -2521,15 +2607,47 @@ def _anchor_result(
             sequence_epoch = int(row.get("sequence_epoch"))
         except (TypeError, ValueError):
             return False
-        depth_timestamps = depth_timestamps_by_epoch.get(sequence_epoch) or []
-        if not depth_timestamps:
+        depth_points = depth_points_by_epoch.get(sequence_epoch) or []
+        if not depth_points:
             return False
         timestamp = row["timestamp"]
+        depth_timestamps = [point["timestamp"] for point in depth_points]
         index = bisect_right(depth_timestamps, timestamp) - 1
         if index < 0:
             return False
         age_sec = (timestamp - depth_timestamps[index]).total_seconds()
         return 0.0 <= age_sec <= DEPTH_CONTEXT_MAX_AGE_SEC
+
+    def fillable_depth_context(row: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            sequence_epoch = int(row.get("sequence_epoch"))
+        except (TypeError, ValueError):
+            return None
+        depth_points = depth_points_by_epoch.get(sequence_epoch) or []
+        if not depth_points:
+            return None
+        timestamps = [point["timestamp"] for point in depth_points]
+        index = bisect_right(timestamps, row["timestamp"]) - 1
+        if index < 0:
+            return None
+        point = depth_points[index]
+        age_sec = (row["timestamp"] - point["timestamp"]).total_seconds()
+        if not 0.0 <= age_sec <= DEPTH_CONTEXT_MAX_AGE_SEC:
+            return None
+        if point.get("best_bid") != row.get("best_bid"):
+            return None
+        return point
+
+    outcome = anchor.get("owner_outcome")
+    required_exit_quantity = (
+        _finite_float(outcome.get("quantity")) if isinstance(outcome, dict) else None
+    )
+    if (
+        required_exit_quantity is None
+        and isinstance(outcome, dict)
+        and str(outcome.get("quantity_basis") or "").startswith("one_share_normalized")
+    ):
+        required_exit_quantity = 1.0
 
     depth_context_count = sum(depth_context_present(row) for row in rows)
     metrics: dict[str, Any] = {
@@ -2555,6 +2673,27 @@ def _anchor_result(
         "time_to_first_positive_trade_ms": None,
         "owner_target_touched": None,
         "time_to_owner_target_ms": None,
+        "fillable_owner_target_touch": {
+            "touched": None,
+            "time_ms": None,
+            "gross_return_bps": None,
+            "required_exit_quantity": required_exit_quantity,
+            "available_best_bid_quantity": None,
+            "depth_backed": None,
+        },
+        "fillable_bid_exit_horizons": {
+            str(horizon): {
+                "observed": None,
+                "bid_price": None,
+                "gross_return_bps": None,
+                "observation_offset_ms": None,
+                "quote_age_from_horizon_ms": None,
+                "required_exit_quantity": required_exit_quantity,
+                "available_best_bid_quantity": None,
+                "depth_backed": None,
+            }
+            for horizon in TIMEOUT_RESEARCH_HORIZONS_SEC
+        },
         "gross_no_slippage_profit_touch": {
             str(threshold): {"touched": None, "time_ms": None}
             for threshold in GROSS_PROFIT_TOUCH_BPS
@@ -2575,6 +2714,95 @@ def _anchor_result(
             and owner_target > reference
             else None
         )
+        fillable_owner_target_hit = (
+            next(
+                (
+                    row
+                    for row in post
+                    if row.get("best_bid") is not None
+                    and row["best_bid"] >= owner_target
+                    and required_exit_quantity is not None
+                    and (
+                        (depth_point := fillable_depth_context(row)) is not None
+                        and int(depth_point["best_bid_qty"]) >= required_exit_quantity
+                    )
+                ),
+                None,
+            )
+            if anchor.get("lifecycle_stage") == "entry"
+            and owner_target is not None
+            and owner_target > reference
+            else None
+        )
+        fillable_bid_exit_horizons: dict[str, dict[str, Any]] = {}
+        for horizon_sec in TIMEOUT_RESEARCH_HORIZONS_SEC:
+            deadline = (
+                anchor_at + timedelta(seconds=horizon_sec)
+                if anchor_at is not None
+                else None
+            )
+            eligible_bid_rows = (
+                [
+                    row
+                    for row in post
+                    if deadline is not None
+                    and row["timestamp"] <= deadline
+                    and row.get("best_bid") is not None
+                ]
+                if anchor.get("lifecycle_stage") == "entry"
+                else []
+            )
+            horizon_row = eligible_bid_rows[-1] if eligible_bid_rows else None
+            quote_age_ms = (
+                round((deadline - horizon_row["timestamp"]).total_seconds() * 1000.0)
+                if deadline is not None and horizon_row is not None
+                else None
+            )
+            observed = bool(
+                horizon_row is not None
+                and quote_age_ms is not None
+                and 0 <= quote_age_ms <= TIMEOUT_RESEARCH_MAX_QUOTE_AGE_SEC * 1000
+            )
+            horizon_depth = (
+                fillable_depth_context(horizon_row)
+                if observed and horizon_row is not None
+                else None
+            )
+            depth_backed = bool(
+                horizon_depth is not None
+                and required_exit_quantity is not None
+                and int(horizon_depth["best_bid_qty"]) >= required_exit_quantity
+            )
+            observed = bool(observed and depth_backed)
+            fillable_bid_exit_horizons[str(horizon_sec)] = {
+                "observed": observed,
+                "bid_price": (
+                    round(float(horizon_row["best_bid"]), 6) if observed else None
+                ),
+                "gross_return_bps": (
+                    round(
+                        (float(horizon_row["best_bid"]) / reference - 1.0) * 10000.0,
+                        6,
+                    )
+                    if observed
+                    else None
+                ),
+                "observation_offset_ms": (
+                    round(
+                        (horizon_row["timestamp"] - anchor_at).total_seconds() * 1000.0
+                    )
+                    if observed and anchor_at is not None
+                    else None
+                ),
+                "quote_age_from_horizon_ms": quote_age_ms if observed else None,
+                "required_exit_quantity": required_exit_quantity,
+                "available_best_bid_quantity": (
+                    int(horizon_depth["best_bid_qty"])
+                    if observed and horizon_depth is not None
+                    else None
+                ),
+                "depth_backed": depth_backed,
+            }
         profit_touches: dict[str, dict[str, Any]] = {}
         for threshold in GROSS_PROFIT_TOUCH_BPS:
             hit = (
@@ -2641,6 +2869,46 @@ def _anchor_result(
                     if owner_target_hit is not None and anchor_at is not None
                     else None
                 ),
+                "fillable_owner_target_touch": {
+                    "touched": (
+                        fillable_owner_target_hit is not None
+                        if anchor.get("lifecycle_stage") == "entry"
+                        and owner_target is not None
+                        and owner_target > reference
+                        else None
+                    ),
+                    "time_ms": (
+                        round(
+                            (
+                                fillable_owner_target_hit["timestamp"] - anchor_at
+                            ).total_seconds()
+                            * 1000.0
+                        )
+                        if fillable_owner_target_hit is not None
+                        and anchor_at is not None
+                        else None
+                    ),
+                    "gross_return_bps": (
+                        round((owner_target / reference - 1.0) * 10000.0, 6)
+                        if fillable_owner_target_hit is not None
+                        and owner_target is not None
+                        else None
+                    ),
+                    "required_exit_quantity": required_exit_quantity,
+                    "available_best_bid_quantity": (
+                        int(
+                            fillable_depth_context(fillable_owner_target_hit)[
+                                "best_bid_qty"
+                            ]
+                        )
+                        if fillable_owner_target_hit is not None
+                        and fillable_depth_context(fillable_owner_target_hit)
+                        is not None
+                        else None
+                    ),
+                    "depth_backed": fillable_owner_target_hit is not None,
+                },
+                "fillable_bid_exit_horizons": fillable_bid_exit_horizons,
                 "gross_no_slippage_profit_touch": profit_touches,
             }
         )
@@ -3081,6 +3349,12 @@ def _fast_lifecycle_objective_followup(
         attention_class = "code_improvement_workorder"
         current_capability = "diagnostic_observation_only"
         next_action = "implement_source_only_rolling_paired_policy_research"
+    elif "current_attribution_source_contract_invalid" in required_gap_codes:
+        state = "EVIDENCE_ACCUMULATING"
+        followup_required = True
+        attention_class = "source_quality"
+        current_capability = "rolling_paired_research_source_quality_blocked"
+        next_action = "repair_current_attribution_source_contract_and_rerun"
     else:
         state = "EVIDENCE_ACCUMULATING"
         followup_required = True
@@ -3406,9 +3680,54 @@ def build_report(
     gaps.extend(source_gaps)
     matched = sum(item["micro_context_status"] == "matched" for item in results)
     objective_alignment = _lifecycle_objective_summary(results)
-    # Daily attribution never invents a runtime candidate. A future rolling
-    # paired-policy producer may append only intake-contract-valid rows.
-    policy_promotion_candidates: list[dict[str, Any]] = []
+    rolling_policy_source_contract = {
+        "ready": bool(clean_baseline_allowed and source_contract_gap is None),
+        "gap": source_contract_gap,
+        "required": (
+            "clean_baseline_and_exact_date_partition_manifest_canary_stream_contract"
+        ),
+    }
+    research_input_report = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "clean_baseline_allowed": clean_baseline_allowed,
+        "authority": {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+        "rolling_policy_source_contract": rolling_policy_source_contract,
+        "consumers": {
+            "widget_postclose_tuning": {"symbols": widget_symbols},
+            "episode_machine_postclose_tuning": {"profiles": episode_profiles},
+        },
+    }
+    rolling_paired_policy_research = build_rolling_paired_policy_research(
+        target_date=target_date,
+        current_report=research_input_report,
+        report_dir=report_root / REPORT_TYPE,
+    )
+    research_boundary = (
+        rolling_paired_policy_research.get("implementation_boundary") or {}
+    )
+    objective_alignment["implementation_boundary"].update(research_boundary)
+    objective_alignment["remaining_gaps"] = list(
+        rolling_paired_policy_research.get("remaining_gap_codes") or []
+    )
+    research_status = str(rolling_paired_policy_research.get("status") or "")
+    objective_alignment["decision"] = (
+        "source_only_rolling_paired_candidate_ready"
+        if rolling_paired_policy_research.get("policy_promotion_candidates")
+        else (
+            "source_only_rolling_paired_research_source_quality_blocked"
+            if research_status == "source_quality_blocked"
+            else "source_only_rolling_paired_research_evidence_accumulating"
+        )
+    )
+    policy_promotion_candidates = list(
+        rolling_paired_policy_research.get("policy_promotion_candidates") or []
+    )
     objective_followups = [
         _fast_lifecycle_objective_followup(
             target_date=target_date,
@@ -3443,7 +3762,9 @@ def build_report(
         "status": "pass" if not gaps else "warning",
         "decision": decision,
         "metric_contract": METRIC_CONTRACT,
+        "rolling_policy_source_contract": rolling_policy_source_contract,
         "fast_lifecycle_objective_alignment": objective_alignment,
+        "rolling_paired_policy_research": rolling_paired_policy_research,
         "objective_followups": objective_followups,
         "policy_change_readiness": POLICY_CHANGE_READINESS_CONTRACT,
         "promotion_candidate_intake_contract": PROMOTION_CANDIDATE_INTAKE_CONTRACT,
@@ -3477,6 +3798,10 @@ def build_report(
             "objective_followup_required_count": sum(
                 row["followup_required"] is True for row in objective_followups
             ),
+            "rolling_paired_policy_cohort_count": rolling_paired_policy_research[
+                "summary"
+            ]["cohort_count"],
+            "policy_promotion_candidate_count": len(policy_promotion_candidates),
         },
         "consumers": {
             "widget_postclose_tuning": {
@@ -3602,6 +3927,33 @@ def render_markdown(report: dict[str, Any]) -> str:
                     "tracked by the 21:15 approval/reminder ledger."
                 ),
                 "- Speed, target, cooldown, cap, quantity, re-entry, and forced-exit policy remain unchanged.",
+                "",
+            ]
+        )
+    research = report.get("rolling_paired_policy_research")
+    if isinstance(research, dict):
+        research_summary = research.get("summary") or {}
+        lines.extend(
+            [
+                "## Rolling Paired Turnover Policy Research",
+                "",
+                f"- Status: `{research.get('status')}`; decision: `{research.get('decision')}`.",
+                (
+                    "- Cohorts: "
+                    f"`{research_summary.get('cohort_count', 0)}`; ready candidates: "
+                    f"`{research_summary.get('policy_promotion_candidate_count', 0)}`."
+                ),
+                (
+                    "- Axis: source-only target timeout `60/120/180s`; ranking requires "
+                    "positive cost-aware rolling EV/net profit, p10 and HELD guards, then "
+                    "capital-efficiency improvement."
+                ),
+                (
+                    "- Remaining evidence gaps: `"
+                    + ",".join(research.get("remaining_gap_codes") or [])
+                    + "`."
+                ),
+                "- Runtime family registration, PREOPEN apply, orders, and current owner policy remain unchanged.",
                 "",
             ]
         )
