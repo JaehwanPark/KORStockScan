@@ -532,27 +532,11 @@ def _is_resolved_pattern_lab_code_improvement_pending_source_only_gap(
     item: dict[str, Any],
     context: dict[str, Any],
 ) -> bool:
-    final_state = str(item.get("final_state") or "")
-    review_id = str(item.get("review_id") or "").strip().lower()
-    if (
-        review_id == "code_improvement_workorder_root_cause_open"
-        and final_state == "automation_handoff_gap"
-    ):
-        source = _source_summary(context, "code_improvement_workorder")
-        summary = _nested_report_summary(source)
-        return (
-            _source_label_status_closed(context, "code_improvement_workorder")
-            and _safe_int(summary.get("implementation_required_count")) == 0
-            and _safe_int(summary.get("needs_followup_workorder_count")) == 0
-            and _safe_int(
-                summary.get("selected_unimplemented_runtime_effect_false_count")
-            )
-            == 0
-        )
-    if final_state != "code_patch_required":
+    if str(item.get("final_state") or "") != "code_patch_required":
         return False
     if str(item.get("final_decision") or "") == "keep":
         return False
+    review_id = str(item.get("review_id") or "").strip().lower()
     reason = str(item.get("reason") or "").lower()
     generic_instrumentation_gap = review_id == "instrumentation_gap" and any(
         token in reason
@@ -1310,7 +1294,6 @@ def _source_maturity_resolution(
     if review_id in {
         "lifecycle_decision_matrix_all_stage_below_sample_floor",
         "lifecycle_decision_matrix_all_policy_entries_below_sample_floor",
-        "lifecycle_decision_matrix_policy_maturity",
     }:
         source = _source_summary(context, "lifecycle_decision_matrix")
         summary = _nested_report_summary(source)
@@ -1320,26 +1303,11 @@ def _source_maturity_resolution(
             if isinstance(source.get("policy_sample_maturity"), dict)
             else {}
         )
-        collection_priority = (
-            maturity.get("collection_priority")
-            if isinstance(maturity.get("collection_priority"), list)
-            else []
-        )
-        has_observed_maturity_hold = any(
-            isinstance(row, dict)
-            and (
-                str(row.get("source_quality_gate") or "") == "hold_sample"
-                or _safe_int(row.get("sample_deficit")) > 0
-                or _safe_int(row.get("joined_sample_deficit")) > 0
-            )
-            for row in collection_priority
-        )
-        maturity_review_contract = (
-            review_id == "lifecycle_decision_matrix_policy_maturity"
-            and has_observed_maturity_hold
-        )
-        legacy_all_stage_contract = (
-            "all_stage_policy_entries_below_sample_floor" in warnings
+        if (
+            source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is not True
+            and "all_stage_policy_entries_below_sample_floor" in warnings
+            and _safe_int(summary.get("total_rows")) > 0
             and (
                 review_id == "lifecycle_decision_matrix_all_stage_below_sample_floor"
                 or (
@@ -1347,12 +1315,6 @@ def _source_maturity_resolution(
                     and _safe_int(maturity.get("policy_pass_count")) == 0
                 )
             )
-        )
-        if (
-            source.get("runtime_effect") is False
-            and source.get("allowed_runtime_apply") is not True
-            and _safe_int(summary.get("total_rows")) > 0
-            and (maturity_review_contract or legacy_all_stage_contract)
         ):
             return (
                 "resolved_as_observed_sample_maturity_hold",
@@ -1371,7 +1333,7 @@ def _source_maturity_resolution(
                     ),
                     "policy_entry_count": _safe_int(maturity.get("policy_entry_count")),
                     "policy_pass_count": _safe_int(maturity.get("policy_pass_count")),
-                    "collection_priority": collection_priority,
+                    "collection_priority": maturity.get("collection_priority") or [],
                     "window_policy": maturity.get("window_policy"),
                     "root_cause_closure_status": "evidence_collection_open",
                     "runtime_effect": False,

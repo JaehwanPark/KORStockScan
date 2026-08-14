@@ -36125,17 +36125,6 @@ def test_protection_price_triggers_sell_before_add(monkeypatch):
             or {"return_code": "0", "ord_no": "S1"}
         ),
     )
-    monkeypatch.setattr(
-        state_handlers,
-        "_resolve_holding_sell_dmst_stex_tp",
-        lambda *args, **kwargs: {
-            "blocked": False,
-            "dmst_stex_tp": "SOR",
-            "nxt_enabled": None,
-            "nxt_flag_source": "test_fixture",
-            "reason": "test_regular_session",
-        },
-    )
 
     stock = {
         "id": 10,

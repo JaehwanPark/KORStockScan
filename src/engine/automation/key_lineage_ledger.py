@@ -612,24 +612,6 @@ def _event_field_values(
                         for item in explicit_matched_seed_ids
                         if str(item).strip()
                     }
-                    match_source = str(
-                        fields.get("active_seed_match_source") or ""
-                    ).strip()
-                    if matched == "false" and match_source in {
-                        "no_match",
-                        "inactive_seed_blocked",
-                        "policy_stale_source_date_mismatch",
-                        "policy_source_date_missing",
-                    }:
-                        # A refreshed follow-up could retain yesterday's seed
-                        # fields even though the authoritative match result was
-                        # explicitly false.  Keep prefix/no-match diagnostics,
-                        # but do not ingest those stale ids into lineage keys.
-                        seed_id = ""
-                        matched_seed_ids = set()
-                        fields = dict(fields)
-                        fields.pop("active_seed_id", None)
-                        fields.pop("active_seed_matched_ids", None)
                     if matched == "true":
                         matched_seed_ids.update(inferred_parent_seed_ids)
                     for matched_seed_id in sorted(matched_seed_ids):

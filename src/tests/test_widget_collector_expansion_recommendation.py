@@ -513,14 +513,6 @@ def test_systemd_service_waits_for_postclose_label_contract():
     service = Path(
         "deploy/systemd/korstockscan-widget-expansion-recommendation.service"
     ).read_text(encoding="utf-8")
-    final_refresh = Path(
-        "deploy/run_machine_microstructure_final_refresh.sh"
-    ).read_text(encoding="utf-8")
 
-    assert (
-        "ExecStart=/home/ubuntu/KORStockScan/deploy/"
-        "run_machine_microstructure_final_refresh.sh" in service
-    )
-    assert "--source-wait-sec 900" in final_refresh
-    assert "--source-poll-sec 30" in final_refresh
+    assert "--source-wait-sec 900 --source-poll-sec 30" in service
     assert "TimeoutStartSec=1200" in service

@@ -79,11 +79,6 @@
   - 결과: 실행 중 원본 wrapper 교체로 서로 다른 revision의 line이 섞이지 않도록 시작 시 구문 검증된 sibling snapshot을 `exec`하고 즉시 unlink한다. shell parse 실패와 혼합 revision `command not found`는 status fail 및 controller 재실행 대상으로 유지한다.
   - 권한 경계: 운영 wrapper 안정화만 수행하며 runtime/order/provider/threshold/quantity/cap/hard-safety 권한을 변경하지 않는다.
 
-- [x] `[SmoothingReferenceBuyPriceCompaction0814] smoothing exact-path 기준 매수가 compact source에서 보존` (`Due: 2026-08-14`, `Slot: POSTCLOSE`, `TimeWindow: 22:30~22:50`, `Track: RuntimeStability`)
-  - Source: [daily threshold report](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [postclose verifier](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [runtime producer](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
-  - 결과: raw event의 양수 `reference_buy_price`를 memory-bounded compact allowlist에 보존하고, 명시적 `no_match` 재검증에서는 전일 stale active-seed id 전체를 제거해 비소비 행이 handoff 소비로 오판되지 않게 했다.
-  - 권한 경계: report/provenance 수정이며 `runtime_effect=false`; 실주문, threshold, provider, 수량, bot 상태를 변경하지 않는다.
-
 - [ ] `[PostcloseSourceQualityGateReview0814] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-08-14`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
   - Source: [observation_source_quality_audit_2026-08-14.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-08-14.json), [threshold_cycle_ev_2026-08-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-08-14.json), [code_improvement_workorder_2026-08-14.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-08-14.json), [threshold_cycle_postclose_verification_2026-08-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-08-14.json)
   - 판정 기준: postclose EV/report 소비 전후 `observation_source_quality_audit`의 hard block, row exclusion, clean baseline, unknown-token review warning을 확인한다. `hard_blocking_contract_gap_count>0`이면 결손 row/window 제외 또는 `source_quality_blocked` 산출 여부를 확인하고, `unknown_token_stage_count>0`이면 source-quality producer-fix workorder가 생성됐는지 확인한다.

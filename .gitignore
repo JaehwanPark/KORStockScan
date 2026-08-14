@@ -86,8 +86,6 @@ data/runtime/samsung_*_one_share_state.lock
 data/runtime/samsung_morning_manual_addon_*.lock
 data/runtime/samsung_widget_manual_orders.lock
 data/runtime/low_price_two_leg/*.lock
-# Runtime/process lock receipts are ephemeral coordination state, never evidence.
-data/runtime/**/*.lock
 
 # ==========================================
 # 💻 OS 및 IDE 설정

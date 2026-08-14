@@ -325,7 +325,7 @@ def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
     assert '"${VERIFY_DISABLED_STAGE_ARGS[@]}"' in script
 
 
-def test_automation_trigger_decision_cache_updates_state_without_subshell(tmp_path):
+def test_automation_trigger_decision_cache_survives_command_substitution(tmp_path):
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     function_text = "\n".join(
         [
@@ -337,7 +337,6 @@ def test_automation_trigger_decision_cache_updates_state_without_subshell(tmp_pa
     fake_python = tmp_path / "fake_python.sh"
     report_path = tmp_path / "automation_chain_trigger_decision.json"
     marker_path = tmp_path / "automation_trigger_decision.cached"
-    output_path = tmp_path / "automation_trigger_decision.out"
     count_path = tmp_path / "write_count"
     real_python = os.environ.get("PYTHON", "python3")
     fake_python.write_text(
@@ -363,7 +362,6 @@ def test_automation_trigger_decision_cache_updates_state_without_subshell(tmp_pa
     fake_python.chmod(0o755)
     shell = f"""
 set -euo pipefail
-run_postclose_cmd() {{ "$@"; }}
 {function_text}
 TARGET_DATE=2026-06-17
 FORCE_LIFECYCLE_BUCKET_WINDOWS=false
@@ -372,13 +370,10 @@ FORCE_WORKORDER_BRANCH=false
 VENV_PY={fake_python}
 AUTOMATION_TRIGGER_DECISION_REPORT_JSON={report_path}
 AUTOMATION_TRIGGER_DECISION_CACHE_MARKER={marker_path}
-AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP={output_path}
 WRITE_COUNT_PATH={count_path}
 export AUTOMATION_TRIGGER_DECISION_REPORT_JSON WRITE_COUNT_PATH
-automation_trigger_decision "skip_step"
-first="$AUTOMATION_TRIGGER_DECISION_RESULT"
-automation_trigger_decision "skip_step"
-second="$AUTOMATION_TRIGGER_DECISION_RESULT"
+first="$(automation_trigger_decision "skip_step")"
+second="$(automation_trigger_decision "skip_step")"
 reason="$(automation_trigger_reason "skip_step")"
 source="$(automation_trigger_source)"
 printf '%s|%s|%s|%s|%s\\n' "$first" "$second" "$reason" "$source" "$(cat "$WRITE_COUNT_PATH")"

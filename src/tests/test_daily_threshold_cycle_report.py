@@ -4837,20 +4837,6 @@ def test_smoothing_source_only_reports_non_revive_exact_coverage_gap():
     assert phase["registration_status_counts"] == {"registration_callback_error": 1}
 
 
-def test_threshold_event_compaction_keeps_smoothing_reference_buy_price():
-    compact = report_mod._compact_threshold_cycle_event(
-        {
-            "stage": "smoothing_source_only_path_armed",
-            "fields": {
-                "journal_arm_id": "sj-reference-price",
-                "reference_buy_price": "12140",
-            },
-        }
-    )
-
-    assert compact["fields"]["reference_buy_price"] == "12140"
-
-
 def test_smoothing_source_only_reports_sim_terminal_registration_gap_by_arm_id():
     lineage = {
         "journal_arm_id": "sj-soft-sim-terminal-gap",
