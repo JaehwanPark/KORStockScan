@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, time as dt_time
 from concurrent.futures import ThreadPoolExecutor
 import json
+from threading import Lock
 import time
 from types import SimpleNamespace
 
@@ -320,6 +321,9 @@ class _DummySession:
         return self
 
     def filter_by(self, **kwargs):
+        return self
+
+    def filter(self, *args, **kwargs):
         return self
 
     def update(self, *args, **kwargs):
@@ -15465,7 +15469,7 @@ def test_rising_missed_scout_upgrade_receipt_keeps_partial_entry_pending(monkeyp
         code="123456",
         order_no="UP1",
         exec_price=10100,
-        exec_qty=1,
+        exec_qty=5,
         now=datetime(2026, 6, 29, 10, 6, 0),
     )
 
@@ -18752,6 +18756,7 @@ def test_add_execution_rebases_highest_price_after_pyramid(monkeypatch):
 def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypatch):
     class DetachedRecord:
         def __init__(self):
+            self.status = "HOLDING"
             self.buy_price = 10000
             self.buy_qty = 5
             self.add_count = 1
@@ -18789,6 +18794,20 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
 
         def first(self):
             return self._record
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def update(self, values, synchronize_session=False):
+            if self._record.status != "HOLDING":
+                return 0
+            if self._record.buy_qty is not None and self._record.buy_qty >= int(
+                values["buy_qty"]
+            ):
+                return 0
+            for key, value in values.items():
+                setattr(self._record, key, value)
+            return 1
 
     class DummySession:
         def __init__(self, record):
@@ -18862,6 +18881,116 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
     )
     assert "추가 체결: 3주" in receipts.event_bus.published[0][1]["message"]
     assert "누적 추가매수: 2회" in receipts.event_bus.published[0][1]["message"]
+
+
+def test_update_db_for_add_is_monotonic_and_terminal_safe(monkeypatch):
+    class Record:
+        def __init__(self):
+            self.status = "HOLDING"
+            self.buy_price = 10_000
+            self.buy_qty = 10
+            self.add_count = 0
+            self.avg_down_count = 0
+            self.pyramid_count = 0
+            self.initial_buy_qty = 10
+            self.scale_in_filled_qty = 0
+            self.last_add_type = None
+            self.last_add_reason = None
+            self.last_add_at = None
+            self.shallow_volatility_avg_down_count = 0
+            self.shallow_volatility_avg_down_last_at = None
+            self.scale_in_locked = False
+            self.trailing_stop_price = None
+            self.hard_stop_price = None
+
+    class Query:
+        def __init__(self, record):
+            self.record = record
+
+        def filter_by(self, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return self.record
+
+        def update(self, values, synchronize_session=False):
+            if self.record.status != "HOLDING":
+                return 0
+            if self.record.buy_qty is not None and self.record.buy_qty >= int(
+                values["buy_qty"]
+            ):
+                return 0
+            for key, value in values.items():
+                setattr(self.record, key, value)
+            return 1
+
+    class Session:
+        def __init__(self, record):
+            self.record = record
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def query(self, *args, **kwargs):
+            return Query(self.record)
+
+    class DB:
+        def __init__(self, record):
+            self.record = record
+
+        def get_session(self):
+            return Session(self.record)
+
+    record = Record()
+    notifications = []
+    monkeypatch.setattr(receipts, "DB", DB(record))
+    monkeypatch.setattr(
+        receipts,
+        "_publish_add_execution_notification",
+        lambda *args, **kwargs: notifications.append((args, kwargs)) or True,
+    )
+    monkeypatch.setattr(receipts, "event_bus", object())
+
+    def apply(qty, avg, add_count):
+        receipts._update_db_for_add(
+            target_id=1,
+            exec_price=int(avg),
+            exec_qty=max(0, qty - 10),
+            now=datetime(2026, 8, 15, 10, 0, add_count),
+            receipt_snapshot={
+                "code": "123456",
+                "name": "TEST",
+                "buy_price": avg,
+                "buy_qty": qty,
+                "add_count": add_count,
+                "avg_down_count": add_count,
+                "pyramid_count": 0,
+                "scale_in_filled_qty": max(0, qty - 10),
+            },
+            add_type="AVG_DOWN",
+            count_increment=True,
+        )
+
+    apply(15, 9_800, 2)
+    apply(12, 9_900, 1)
+    assert record.buy_qty == 15
+    assert record.buy_price == 9_800
+    assert record.add_count == 2
+    assert record.avg_down_count == 2
+    assert len(notifications) == 1
+
+    record.status = "COMPLETED"
+    apply(18, 9_700, 3)
+    assert record.status == "COMPLETED"
+    assert record.buy_qty == 15
+    assert record.add_count == 2
+    assert len(notifications) == 1
 
 
 def test_add_multi_leg_notification_waits_for_completed_bundle(monkeypatch):
@@ -33604,7 +33733,7 @@ def test_execution_ignore_context_includes_active_target_and_terminal_bridge():
     assert "terminal_entry_bridge=False" in context
 
 
-def test_order_notice_backfills_missing_entry_order_number(monkeypatch):
+def test_order_notice_cannot_prebind_missing_entry_order_number(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
     receipts._get_fast_state = lambda code: None
@@ -33659,12 +33788,24 @@ def test_order_notice_backfills_missing_entry_order_number(monkeypatch):
         {"code": "123456", "type": "BUY", "order_no": "O1", "status": "접수"}
     )
 
-    assert stock["odno"] == "O1"
-    assert stock["pending_entry_orders"][0]["ord_no"] == "O1"
-    assert stock["pending_entry_orders"][0]["notice_status"] == "접수"
+    assert stock.get("odno") in (None, "")
+    assert stock["pending_entry_orders"][0]["ord_no"] == ""
+    assert "notice_status" not in stock["pending_entry_orders"][0]
 
     receipts.handle_real_execution(
-        {"code": "123456", "type": "BUY", "order_no": "O1", "price": 10000, "qty": 3}
+        {
+            "code": "123456",
+            "type": "BUY",
+            "order_no": "O1",
+            "price": 10000,
+            "qty": 3,
+            "order_qty": 3,
+            "remaining_qty": 0,
+            "cumulative_exec_amount": 30_000,
+            "execution_no": "E1",
+            "unit_exec_price": 10_000,
+            "unit_exec_qty": 3,
+        }
     )
 
     assert stock["buy_qty"] == 3
@@ -33703,6 +33844,105 @@ def test_cancel_order_notice_does_not_bind_as_buy_order():
     assert "notice_status" not in stock["pending_entry_orders"][0]
 
 
+def test_unknown_order_notice_without_entry_leg_does_not_bind():
+    stock = {
+        "id": 41,
+        "code": "123456",
+        "name": "TEST",
+        "status": "BUY_ORDERED",
+        "pending_entry_orders": [],
+    }
+    receipts.ACTIVE_TARGETS = [stock]
+
+    receipts.handle_order_notice(
+        {"code": "123456", "type": "BUY", "order_no": "UNKNOWN", "status": "접수"}
+    )
+
+    assert stock.get("odno") in (None, "")
+
+
+def test_order_notice_does_not_choose_between_multiple_unbound_entry_legs():
+    stock = {
+        "id": 42,
+        "code": "123456",
+        "name": "TEST",
+        "status": "BUY_ORDERED",
+        "pending_entry_orders": [
+            {"tag": "leg1", "qty": 10, "ord_no": "", "status": "OPEN"},
+            {"tag": "leg2", "qty": 10, "ord_no": "", "status": "OPEN"},
+        ],
+    }
+    receipts.ACTIVE_TARGETS = [stock]
+
+    receipts.handle_order_notice(
+        {"code": "123456", "type": "BUY", "order_no": "UNKNOWN", "status": "접수"}
+    )
+
+    assert stock.get("odno") in (None, "")
+    assert [order["ord_no"] for order in stock["pending_entry_orders"]] == ["", ""]
+
+
+def test_entry_receipt_invalid_prebind_does_not_poison_order_identity():
+    stock = {
+        "id": 43,
+        "code": "123456",
+        "name": "TEST",
+        "status": "BUY_ORDERED",
+        "entry_requested_qty": 50,
+        "pending_entry_orders": [
+            {"tag": "leg1", "qty": 50, "ord_no": "", "status": "OPEN"},
+        ],
+    }
+
+    zero_order_qty = receipts._resolve_entry_effective_fill_qty(
+        target_stock=stock,
+        code="123456",
+        order_no="X1",
+        exec_price=10_000,
+        exec_qty=28,
+        order_qty=0,
+        remaining_qty=22,
+        cumulative_exec_amount=280_000,
+    )
+    remaining_conflict = receipts._resolve_entry_effective_fill_qty(
+        target_stock=stock,
+        code="123456",
+        order_no="X1",
+        exec_price=10_000,
+        exec_qty=28,
+        order_qty=50,
+        remaining_qty=21,
+        cumulative_exec_amount=280_000,
+    )
+
+    assert zero_order_qty["status"] == "invalid"
+    assert remaining_conflict["status"] == "invalid"
+    assert stock.get("odno") in (None, "")
+    assert stock["pending_entry_orders"][0]["ord_no"] == ""
+
+
+def test_terminal_entry_bridge_rejects_completed_position_late_duplicate():
+    entry_state.TERMINAL_ENTRY_ORDERS.clear()
+    stock = {
+        "id": 44,
+        "code": "123456",
+        "name": "TEST",
+        "status": "BUY_ORDERED",
+        "entry_bundle_id": "B44",
+        "pending_entry_orders": [
+            {"tag": "normal", "qty": 50, "ord_no": "O44", "status": "FILLED"},
+        ],
+    }
+    entry_state.move_orders_to_terminal(stock, reason="entry_bundle_filled")
+    stock["status"] = "COMPLETED"
+    stock["buy_qty"] = 50
+    receipts.ACTIVE_TARGETS = [stock]
+
+    assert receipts._find_execution_target("123456", "BUY", "O44") is None
+    assert stock["status"] == "COMPLETED"
+    assert stock["buy_qty"] == 50
+
+
 def test_order_execution_notice_parses_cancel_side_separately():
     manager = KiwoomWSManager.__new__(KiwoomWSManager)
 
@@ -33712,11 +33952,164 @@ def test_order_execution_notice_parses_cancel_side_separately():
             "9001": "A123456",
             "9203": "C1",
             "905": "매수취소",
+            "900": "10",
+            "902": "8",
+            "903": "20,020",
+            "909": "E-1",
+            "910": "10,010",
+            "911": "2",
+            "914": "10,010",
+            "915": "2",
+            "908": "090102",
+            "2134": "2",
+            "2135": "NXT",
+            "2136": "Y",
         }
     )
 
     assert notice["exec_type"] == "BUY_CANCEL"
     assert notice["order_type_str"] == "매수취소"
+    assert notice["order_qty"] == 10
+    assert notice["remaining_qty"] == 8
+    assert notice["cumulative_exec_amount"] == 20_020
+    assert notice["execution_no"] == "E-1"
+    assert notice["exec_price"] == 10_010
+    assert notice["exec_qty"] == 2
+    assert notice["unit_exec_price"] == 10_010
+    assert notice["unit_exec_qty"] == 2
+    assert notice["broker_execution_time_raw"] == "090102"
+    assert notice["actual_execution_venue"] == "NXT"
+    assert notice["actual_exchange_code"] == "2"
+    assert notice["actual_exchange_name"] == "NXT"
+    assert notice["sor_flag"] == "Y"
+
+
+def test_order_execution_notice_preserves_missing_optional_fill_fields():
+    manager = KiwoomWSManager.__new__(KiwoomWSManager)
+
+    notice = manager._parse_order_execution_notice(
+        {
+            "913": "체결",
+            "9001": "A123456",
+            "9203": "S1",
+            "905": "매도",
+            "910": "10010",
+            "911": "2",
+        }
+    )
+
+    assert notice["order_qty"] is None
+    assert notice["remaining_qty"] is None
+    assert notice["cumulative_exec_amount"] is None
+    assert notice["unit_exec_price"] is None
+    assert notice["unit_exec_qty"] is None
+    assert notice["broker_execution_time_raw"] == ""
+    assert notice["actual_execution_venue"] == ""
+
+
+def test_fast_sell_receipts_apply_only_cumulative_quantity_and_amount_delta(
+    monkeypatch,
+):
+    state = {
+        "lock": Lock(),
+        "sell_ord_no": "S1",
+        "pending_cancel_ord_no": "",
+        "cum_buy_qty": 10,
+        "cum_sell_qty": 0,
+        "cum_sell_amount": 0,
+        "avg_sell_price": 0,
+    }
+    monkeypatch.setattr(receipts, "_get_fast_state", lambda _code: state)
+    monkeypatch.setattr(receipts, "_now_ts", lambda: 1.0)
+
+    first = {
+        "code": "123456",
+        "type": "SELL",
+        "order_no": "S1",
+        "price": 10_010,
+        "qty": 2,
+        "order_qty": 10,
+        "remaining_qty": 8,
+        "cumulative_exec_amount": 20_020,
+        "execution_no": "E1",
+        "unit_exec_price": 10_010,
+        "unit_exec_qty": 2,
+    }
+    final = {
+        "code": "123456",
+        "type": "SELL",
+        "order_no": "S1",
+        "price": 10_020,
+        "qty": 10,
+        "order_qty": 10,
+        "remaining_qty": 0,
+        "cumulative_exec_amount": 100_180,
+        "execution_no": "E2",
+        "unit_exec_price": 10_020,
+        "unit_exec_qty": 8,
+    }
+
+    receipts.handle_real_execution(first)
+    receipts.handle_real_execution(final)
+    receipts.handle_real_execution(final)
+
+    assert state["cum_sell_qty"] == 10
+    assert state["cum_sell_amount"] == 100_180
+    assert state["avg_sell_price"] == 10_018
+    assert state["sell_receipts_by_order_no"]["S1"]["cumulative_qty"] == 10
+    assert state["sell_receipts_by_order_no"]["S1"]["cumulative_amount"] == 100_180
+    assert state["sell_receipt_position_complete"] is True
+
+
+def test_fast_buy_rejects_reused_execution_number_with_changed_payload(monkeypatch):
+    state = {
+        "lock": Lock(),
+        "buy_ord_no": "B1",
+        "req_buy_qty": 10,
+        "cum_buy_qty": 0,
+        "cum_buy_amount": 0,
+        "avg_buy_price": 0,
+    }
+    monkeypatch.setattr(receipts, "_get_fast_state", lambda _code: state)
+    monkeypatch.setattr(receipts, "_now_ts", lambda: 1.0)
+
+    receipts.handle_real_execution(
+        {
+            "code": "123456",
+            "type": "BUY",
+            "order_no": "B1",
+            "price": 10_010,
+            "qty": 2,
+            "order_qty": 10,
+            "remaining_qty": 8,
+            "cumulative_exec_amount": 20_020,
+            "execution_no": "E1",
+            "unit_exec_price": 10_010,
+            "unit_exec_qty": 2,
+        }
+    )
+    receipts.handle_real_execution(
+        {
+            "code": "123456",
+            "type": "BUY",
+            "order_no": "B1",
+            "price": 10_010,
+            "qty": 4,
+            "order_qty": 10,
+            "remaining_qty": 6,
+            "cumulative_exec_amount": 40_040,
+            "execution_no": "E1",
+            "unit_exec_price": 10_010,
+            "unit_exec_qty": 2,
+        }
+    )
+
+    assert state["cum_buy_qty"] == 2
+    assert state["cum_buy_amount"] == 20_020
+    assert (
+        state["buy_receipt_source_gap"]
+        == "receipt_execution_number_reused_with_changed_payload"
+    )
 
 
 def test_stage_buy_order_submission_preserves_early_fill_state(monkeypatch):
@@ -34153,15 +34546,20 @@ def test_post_submit_db_persistence_skips_terminal_runtime_state(
     assert logs and "[ENTRY_DB_STATE_PRESERVED]" in logs[-1]
 
 
-def test_entry_receipt_caps_cumulative_or_duplicate_qty_to_requested_leg(monkeypatch):
+def test_entry_receipt_normalizes_observed_28_33_34_35_50_cumulative_sequence(
+    monkeypatch,
+):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
     receipts._get_fast_state = lambda code: None
     receipts.DB = _DummyDB()
     entry_state.TERMINAL_ENTRY_ORDERS.clear()
 
+    db_snapshots = []
+    pipeline_events = []
+
     class DummyThread:
-        def __init__(self, target=None, args=(), daemon=None):
+        def __init__(self, target=None, args=(), daemon=None, **_kwargs):
             self._target = target
             self._args = args
 
@@ -34170,7 +34568,18 @@ def test_entry_receipt_caps_cumulative_or_duplicate_qty_to_requested_leg(monkeyp
                 self._target(*self._args)
 
     monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
-    monkeypatch.setattr(receipts, "_update_db_for_buy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        receipts,
+        "_update_db_for_buy",
+        lambda _target_id, _price, _now, snapshot: db_snapshots.append(snapshot),
+    )
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda name, code, target_id, stage, **fields: pipeline_events.append(
+            (stage, fields)
+        ),
+    )
 
     stock = {
         "id": 11742,
@@ -34181,11 +34590,12 @@ def test_entry_receipt_caps_cumulative_or_duplicate_qty_to_requested_leg(monkeyp
         "position_tag": "SCANNER",
         "buy_price": 0,
         "buy_qty": 0,
-        "entry_requested_qty": 323,
+        "entry_requested_qty": 50,
+        "requested_buy_qty": 50,
         "pending_entry_orders": [
             {
                 "tag": "normal",
-                "qty": 323,
+                "qty": 50,
                 "ord_no": "0034430",
                 "status": "OPEN",
                 "filled_qty": 0,
@@ -34194,22 +34604,97 @@ def test_entry_receipt_caps_cumulative_or_duplicate_qty_to_requested_leg(monkeyp
     }
     receipts.ACTIVE_TARGETS.append(stock)
 
-    for qty in (38, 45, 60, 263, 323):
+    receipts_by_cumulative_qty = (
+        (28, 22, 280_000, 10_000, 28),
+        (33, 17, 330_050, 10_010, 5),
+        (34, 16, 340_070, 10_020, 1),
+        (35, 15, 350_100, 10_030, 1),
+    )
+    for cumulative_qty, remaining_qty, cumulative_amount, unit_price, unit_qty in (
+        receipts_by_cumulative_qty
+    ):
         receipts.handle_real_execution(
             {
                 "code": "279570",
                 "type": "BUY",
                 "order_no": "0034430",
-                "price": 7180,
-                "qty": qty,
+                "price": round(cumulative_amount / cumulative_qty),
+                "qty": cumulative_qty,
+                "order_qty": 50,
+                "remaining_qty": remaining_qty,
+                "cumulative_exec_amount": cumulative_amount,
+                "unit_exec_price": unit_price,
+                "unit_exec_qty": unit_qty,
             }
         )
 
-    assert stock["buy_qty"] == 323
-    assert stock["buy_price"] == 7180
+    # Exact duplicate and an out-of-order receipt must not mutate runtime/DB/lifecycle.
+    receipts.handle_real_execution(
+        {
+            "code": "279570",
+            "type": "BUY",
+            "order_no": "0034430",
+            "price": 10_003,
+            "qty": 35,
+            "order_qty": 50,
+            "remaining_qty": 15,
+            "cumulative_exec_amount": 350_100,
+            "unit_exec_price": 10_030,
+            "unit_exec_qty": 1,
+        }
+    )
+    receipts.handle_real_execution(
+        {
+            "code": "279570",
+            "type": "BUY",
+            "order_no": "0034430",
+            "price": 10_002,
+            "qty": 34,
+            "order_qty": 50,
+            "remaining_qty": 16,
+            "cumulative_exec_amount": 340_070,
+            "unit_exec_price": 10_020,
+            "unit_exec_qty": 1,
+        }
+    )
+    receipts.handle_real_execution(
+        {
+            "code": "279570",
+            "type": "BUY",
+            "order_no": "0034430",
+            "price": 10_014,
+            "qty": 50,
+            "order_qty": 50,
+            "remaining_qty": 0,
+            "cumulative_exec_amount": 500_700,
+            "unit_exec_price": 10_040,
+            "unit_exec_qty": 15,
+        }
+    )
+
+    assert stock["buy_qty"] == 50
+    assert stock["buy_price"] == pytest.approx(10_014.0)
     assert stock["status"] == "HOLDING"
-    assert stock["_entry_receipt_filled_by_order_no"]["0034430"] == 323
-    assert stock["_entry_receipt_requested_by_order_no"]["0034430"] == 323
+    assert stock["_entry_receipt_filled_by_order_no"]["0034430"] == 50
+    assert stock["_entry_receipt_filled_amount_by_order_no"]["0034430"] == 500_700
+    assert stock["_entry_receipt_requested_by_order_no"]["0034430"] == 50
+    assert [snapshot["buy_qty"] for snapshot in db_snapshots] == [28, 33, 34, 35, 50]
+    fill_events = [
+        fields
+        for stage, fields in pipeline_events
+        if stage == "position_rebased_after_fill"
+    ]
+    assert [event["fill_qty"] for event in fill_events] == [28, 5, 1, 1, 15]
+    assert [event["fill_quality"] for event in fill_events] == [
+        "PARTIAL_FILL",
+        "PARTIAL_FILL",
+        "PARTIAL_FILL",
+        "PARTIAL_FILL",
+        "FULL_FILL",
+    ]
+    assert all(event["receipt_economics_complete"] for event in fill_events)
+    assert all(event["receipt_quantity_contract_complete"] for event in fill_events)
+    assert all(event["receipt_unit_fill_consistent"] for event in fill_events)
 
 
 def test_buy_execution_thread_receives_snapshot_and_clears_live_notify_state(
@@ -34237,6 +34722,7 @@ def test_buy_execution_thread_receives_snapshot_and_clears_live_notify_state(
         "name": "TEST",
         "status": "BUY_ORDERED",
         "strategy": "KOSPI_ML",
+        "odno": "B1",
         "buy_price": 0,
         "buy_qty": 0,
         "pending_buy_msg": "그물망 투척!",
@@ -34261,6 +34747,61 @@ def test_buy_execution_thread_receives_snapshot_and_clears_live_notify_state(
     stock["buy_qty"] = 999
     assert snapshot["buy_qty"] == 1
 
+
+def test_buy_db_receipt_update_is_monotonic_and_terminal_safe(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.database.models import RecommendationHistory
+
+    engine = create_engine("sqlite:///:memory:")
+    RecommendationHistory.__table__.create(engine)
+    session_factory = sessionmaker(bind=engine)
+
+    class DB:
+        def get_session(self):
+            return session_factory.begin()
+
+    monkeypatch.setattr(receipts, "DB", DB())
+    monkeypatch.setattr(receipts, "event_bus", None)
+    with session_factory.begin() as session:
+        session.add(
+            RecommendationHistory(
+                id=91,
+                rec_date=date(2026, 8, 15),
+                stock_code="123456",
+                stock_name="TEST",
+                status="BUY_ORDERED",
+                buy_price=10_000,
+                buy_qty=50,
+            )
+        )
+
+    def snapshot(qty, price):
+        return {
+            "code": "123456",
+            "name": "TEST",
+            "buy_qty": qty,
+            "buy_price": price,
+            "buy_execution_notified": True,
+        }
+
+    receipts._update_db_for_buy(91, 10_010, datetime.now(), snapshot(33, 10_010))
+    receipts._update_db_for_buy(91, 10_000, datetime.now(), snapshot(28, 10_000))
+    with session_factory() as session:
+        record = session.get(RecommendationHistory, 91)
+        assert record.status == "HOLDING"
+        assert record.buy_qty == 33
+        assert record.buy_price == 10_010
+
+    with session_factory.begin() as session:
+        session.get(RecommendationHistory, 91).status = "SELL_ORDERED"
+    receipts._update_db_for_buy(91, 10_020, datetime.now(), snapshot(50, 10_020))
+    with session_factory() as session:
+        record = session.get(RecommendationHistory, 91)
+        assert record.status == "SELL_ORDERED"
+        assert record.buy_qty == 33
+        assert record.buy_price == 10_010
 
 def test_split_entry_partial_fill_defers_buy_execution_telegram_until_bundle_full(
     monkeypatch,
@@ -34651,7 +35192,18 @@ def test_sell_execution_thread_receives_snapshot_and_clears_live_notify_state(
     receipts.ACTIVE_TARGETS.append(stock)
 
     receipts.handle_real_execution(
-        {"code": "123456", "type": "SELL", "order_no": "S1", "price": 10100, "qty": 3}
+        {
+            "code": "123456",
+            "type": "SELL",
+            "order_no": "S1",
+            "price": 10100,
+            "qty": 3,
+            "order_qty": 3,
+            "remaining_qty": 0,
+            "cumulative_exec_amount": 30_300,
+            "unit_exec_price": 10_100,
+            "unit_exec_qty": 3,
+        }
     )
 
     assert stock["status"] == "COMPLETED"
@@ -35596,10 +36148,28 @@ def test_add_receipt_with_order_no_matches_pending_add_before_ordno_bind(monkeyp
     receipts.ACTIVE_TARGETS.append(target_stock)
 
     receipts.handle_real_execution(
-        {"code": "123456", "type": "BUY", "order_no": "A1", "price": 9500, "qty": 16}
+        {
+            "code": "123456",
+            "type": "BUY",
+            "order_no": "A1",
+            "price": 9500,
+            "qty": 16,
+            "order_qty": 16,
+            "remaining_qty": 0,
+            "cumulative_exec_amount": 152_000,
+        }
     )
     receipts.handle_real_execution(
-        {"code": "123456", "type": "BUY", "order_no": "A1", "price": 9500, "qty": 16}
+        {
+            "code": "123456",
+            "type": "BUY",
+            "order_no": "A1",
+            "price": 9500,
+            "qty": 16,
+            "order_qty": 16,
+            "remaining_qty": 0,
+            "cumulative_exec_amount": 152_000,
+        }
     )
 
     assert target_stock["buy_qty"] == 30
@@ -35741,7 +36311,7 @@ def test_add_execution_marks_above_average_fill_as_recovery_add(monkeypatch):
     assert float(event["post_add_avg_price"]) > 60_867
 
 
-def test_order_notice_for_pending_add_binds_ordno_without_entry_odno(monkeypatch):
+def test_order_notice_for_pending_add_cannot_prebind_unrelated_ordno(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
     receipts._get_fast_state = lambda code: None
@@ -35766,10 +36336,27 @@ def test_order_notice_for_pending_add_binds_ordno_without_entry_odno(monkeypatch
         {"code": "123456", "type": "BUY", "order_no": "A1", "status": "접수"}
     )
 
-    assert target_stock["pending_add_ord_no"] == "A1"
-    assert target_stock["add_odno"] == "A1"
+    assert target_stock["pending_add_ord_no"] == ""
+    assert "add_odno" not in target_stock
     assert "odno" not in target_stock
-    assert target_stock["pending_add_notice_by_order_no"]["A1"]["status"] == "접수"
+    assert "pending_add_notice_by_order_no" not in target_stock
+
+    receipt = receipts._resolve_add_effective_fill(
+        target_stock=target_stock,
+        code="123456",
+        order_no="A1",
+        exec_price=10_000,
+        exec_qty=2,
+        order_qty=33,
+        remaining_qty=31,
+        cumulative_exec_amount=20_000,
+        execution_no="AE1",
+        unit_exec_price=10_000,
+        unit_exec_qty=2,
+    )
+
+    assert receipt["status"] == "partial"
+    assert target_stock["pending_add_ord_no"] == "A1"
 
 
 def test_add_execution_preserves_request_qty_on_final_fill(monkeypatch):
@@ -35964,6 +36551,11 @@ def test_add_receipt_normalizes_cumulative_partial_fill(monkeypatch):
             "order_no": "0061569",
             "price": 27800,
             "qty": 37,
+            "order_qty": 59,
+            "remaining_qty": 22,
+            "cumulative_exec_amount": 1_028_600,
+            "unit_exec_price": 27_800,
+            "unit_exec_qty": 37,
         }
     )
     receipts.handle_real_execution(
@@ -35973,6 +36565,11 @@ def test_add_receipt_normalizes_cumulative_partial_fill(monkeypatch):
             "order_no": "0061569",
             "price": 27819,
             "qty": 59,
+            "order_qty": 59,
+            "remaining_qty": 0,
+            "cumulative_exec_amount": 1_641_322,
+            "unit_exec_price": 27_851,
+            "unit_exec_qty": 22,
         }
     )
     receipts.handle_real_execution(
@@ -35982,6 +36579,11 @@ def test_add_receipt_normalizes_cumulative_partial_fill(monkeypatch):
             "order_no": "0061569",
             "price": 27819,
             "qty": 59,
+            "order_qty": 59,
+            "remaining_qty": 0,
+            "cumulative_exec_amount": 1_641_322,
+            "unit_exec_price": 27_851,
+            "unit_exec_qty": 22,
         }
     )
 
@@ -35996,6 +36598,13 @@ def test_add_receipt_normalizes_cumulative_partial_fill(monkeypatch):
     ]
     assert [event["fill_qty"] for event in scale_in_events] == [37, 22]
     assert scale_in_events[-1]["new_buy_qty"] == 60
+    assert [event["pre_add_avg_price"] for event in scale_in_events] == [
+        "29300.00",
+        "29300.00",
+    ]
+    assert [event["pre_add_qty"] for event in scale_in_events] == [1, 1]
+    assert target_stock["pre_add_avg_price"] == 29300
+    assert target_stock["pre_add_qty"] == 1
 
 
 def test_add_execution_keeps_original_buy_time(monkeypatch):
@@ -36658,6 +37267,161 @@ def test_scalp_preset_tp_hard_stop_does_not_avg_down_intercept(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize(
+    ("confirmation_state", "source", "expected_status", "expected_stage"),
+    (
+        (
+            "unknown",
+            "inventory_lookup_failed",
+            "HOLDING",
+            "sell_cancel_inventory_confirmation_deferred",
+        ),
+        (
+            "verified_zero",
+            "kt00018_all_venues_position_absent",
+            "SELL_ORDERED",
+            "sell_cancel_verified_zero_receipt_pending",
+        ),
+    ),
+)
+def test_preset_exit_inventory_confirmation_never_submits_phantom_order(
+    monkeypatch,
+    confirmation_state,
+    source,
+    expected_status,
+    expected_stage,
+):
+    from src.engine.sniper_trade_utils import BrokerRemainingQty
+
+    state_handlers.DB = _DummyDB()
+    pipeline_logs = []
+    sell_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_sell_side_open_time_block_fields",
+        lambda **kwargs: {"sell_time_block_applied": False},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_confirm_cancel_or_reload_remaining",
+        lambda *args, **kwargs: BrokerRemainingQty(
+            0,
+            confirmation_state=confirmation_state,
+            source=source,
+            successful_exchanges=("KRX", "NXT")
+            if confirmation_state == "verified_zero"
+            else (),
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_send_exit_best_ioc",
+        lambda *args, **kwargs: sell_calls.append((args, kwargs)),
+    )
+    stock = {
+        "id": 13,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "preset_tp_ord_no": "TP1",
+    }
+
+    state_handlers._dispatch_scalp_preset_exit(
+        stock=stock,
+        code="123456",
+        now_ts=1_000,
+        curr_p=99,
+        buy_p=100,
+        profit_rate=-1.0,
+        peak_profit=0.0,
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        reason="test inventory confirmation",
+        exit_rule="scalp_preset_hard_stop_pct",
+    )
+
+    assert stock["status"] == expected_status
+    assert stock["sell_cancel_reconciliation_required"] is True
+    assert sell_calls == []
+    assert any(stage == expected_stage for stage, _ in pipeline_logs)
+    if confirmation_state == "unknown":
+        assert stock["exit_requested"] is False
+        assert "sell_odno" not in stock
+    else:
+        assert stock["exit_requested"] is True
+        assert stock["sell_odno"] == "TP1"
+
+
+def test_sell_cancel_inventory_zero_row_requires_all_venue_confirmation(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_my_inventory",
+        lambda token: ([{"code": "123456", "qty": 0}], {"KRX"}),
+    )
+
+    quantity, source = state_handlers._broker_position_qty_for_sell_reconciliation(
+        "123456"
+    )
+
+    assert quantity is None
+    assert source == "kt00018_partial_venue_zero_row"
+
+
+def test_deferred_sell_cancel_inventory_retries_before_releasing_holding(monkeypatch):
+    state_handlers.DB = _DummyDB()
+    broker_results = iter(
+        (
+            (None, "kt00018_partial_venue_confirmation"),
+            (10, "kt00018_position_found"),
+        )
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_broker_position_qty_for_sell_reconciliation",
+        lambda code, stock: next(broker_results),
+    )
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *a, **k: None)
+    stock = {
+        "id": 13,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "sell_cancel_reconciliation_required": True,
+        "sell_cancel_reconciliation_retry_at": 0.0,
+    }
+
+    assert (
+        state_handlers._sell_cancel_reconciliation_blocks_holding(
+            stock, "123456", now_ts=1_000.0
+        )
+        is True
+    )
+    retry_at = stock["sell_cancel_reconciliation_retry_at"]
+    assert retry_at > 1_000.0
+    assert stock["sell_cancel_reconciliation_required"] is True
+
+    assert (
+        state_handlers._sell_cancel_reconciliation_blocks_holding(
+            stock, "123456", now_ts=retry_at + 1.0
+        )
+        is True
+    )
+    assert stock["status"] == "HOLDING"
+    assert stock["buy_qty"] == 10
+    assert "sell_cancel_reconciliation_required" not in stock
+    assert "sell_odno" not in stock
+
+
 def test_legacy_preset_tp_position_flows_to_scalp_trailing(monkeypatch):
     state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
     state_handlers.COOLDOWNS = {}
@@ -37199,7 +37963,7 @@ def test_late_loss_avg_down_quote_recovery_defer_ignores_non_quote_block(monkeyp
     assert "late_loss_avg_down_quote_recovery_until" not in stock
 
 
-def test_sell_reject_with_positive_sellable_qty_keeps_holding(monkeypatch):
+def test_sell_reject_with_positive_sellable_qty_requires_exact_receipt(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
     state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
@@ -37257,10 +38021,11 @@ def test_sell_reject_with_positive_sellable_qty_keeps_holding(monkeypatch):
     fail_logs = [
         fields for stage, fields in pipeline_logs if stage == "sell_order_failed"
     ]
-    assert stock["status"] == "HOLDING"
-    assert stock["buy_qty"] == 125
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["buy_qty"] == 145
+    assert stock["sell_cancel_reconciliation_required"] is True
     assert fail_logs
-    assert fail_logs[-1]["new_status"] == "HOLDING"
+    assert fail_logs[-1]["new_status"] == "SELL_ORDERED"
     assert fail_logs[-1]["sellable_qty"] == 125
 
 
@@ -37540,13 +38305,16 @@ def test_nxt_rising_missed_tp1_defers_without_fresh_bid_depth(monkeypatch):
     assert deferred[-1]["actual_order_submitted"] is False
 
 
-def test_nxt_rising_missed_tp1_partial_receipts_restore_holding_runner(monkeypatch):
+def test_nxt_rising_missed_tp1_partial_receipts_restore_holding_runner(
+    monkeypatch, tmp_path
+):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
     receipts._get_fast_state = lambda code: None
     emitted = []
 
     class SellRecord:
+        id = 143
         buy_price = 10000.0
         strategy = "SCALPING"
         buy_qty = 10
@@ -37576,6 +38344,7 @@ def test_nxt_rising_missed_tp1_partial_receipts_restore_holding_runner(monkeypat
             return SellSession()
 
     receipts.DB = SellDB()
+    monkeypatch.setattr(receipts, "SELL_RECEIPT_RECOVERY_DIR", tmp_path)
     receipt_messages = []
     receipts.event_bus = SimpleNamespace(
         publish=lambda name, payload: receipt_messages.append((name, payload))
@@ -37615,7 +38384,58 @@ def test_nxt_rising_missed_tp1_partial_receipts_restore_holding_runner(monkeypat
         }
     )
     assert stock["status"] == "SELL_ORDERED"
+    assert stock["buy_qty"] == 10
+
+    receipts.handle_real_execution(
+        {
+            "code": "123456",
+            "type": "SELL",
+            "order_no": "NXT-TP1-2",
+            "price": 10140,
+            "qty": 2,
+            "order_qty": 5,
+            "remaining_qty": 3,
+            "cumulative_exec_amount": 20_280,
+            "execution_no": "NXT-E1",
+            "unit_exec_price": 10_140,
+            "unit_exec_qty": 2,
+            "broker_execution_time_raw": "170001",
+            "actual_execution_venue": "NXT",
+            "actual_exchange_code": "2",
+            "actual_exchange_name": "NXT",
+            "sor_flag": "Y",
+        }
+    )
+    assert stock["status"] == "SELL_ORDERED"
     assert stock["buy_qty"] == 8
+    journal_state, journal_reason = receipts.load_sell_receipt_recovery(
+        target_id=143,
+        code="123456",
+        position_qty=10,
+        broker_remaining_qty=8,
+    )
+    assert journal_reason == "journal_exact_match"
+    assert journal_state["partial_order_kind"] == "nxt_rising_missed_tp1"
+
+    restored_target = {
+        "id": 143,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "buy_qty": 10,
+    }
+    restored_state, restored_reason = sniper_sync._restore_sell_receipt_recovery(
+        target_stock=restored_target,
+        record=record,
+        code="123456",
+        broker_remaining_qty=8,
+    )
+    assert restored_reason == "journal_exact_match"
+    assert restored_state is not None
+    assert restored_target["status"] == "SELL_ORDERED"
+    assert restored_target["nxt_rising_missed_tp1_partial_pending"] is True
+    assert restored_target["nxt_rising_missed_tp1_partial_filled_qty"] == 2
+    assert restored_target["sell_odno"] == "NXT-TP1-2"
 
     receipts.handle_real_execution(
         {
@@ -37623,7 +38443,18 @@ def test_nxt_rising_missed_tp1_partial_receipts_restore_holding_runner(monkeypat
             "type": "SELL",
             "order_no": "NXT-TP1-2",
             "price": 10150,
-            "qty": 3,
+            "qty": 5,
+            "order_qty": 5,
+            "remaining_qty": 0,
+            "cumulative_exec_amount": 50_730,
+            "execution_no": "NXT-E2",
+            "unit_exec_price": 10_150,
+            "unit_exec_qty": 3,
+            "broker_execution_time_raw": "170002",
+            "actual_execution_venue": "NXT",
+            "actual_exchange_code": "2",
+            "actual_exchange_name": "NXT",
+            "sor_flag": "Y",
         }
     )
 
@@ -37632,7 +38463,17 @@ def test_nxt_rising_missed_tp1_partial_receipts_restore_holding_runner(monkeypat
     assert stock["nxt_rising_missed_tp1_partial_applied"] is True
     assert stock["nxt_rising_missed_tp1_partial_pending"] is False
     assert record.status == "HOLDING"
-    assert record.buy_qty == 5
+    assert record.buy_qty == 10
+    assert stock["scale_in_locked"] is True
+    assert stock["sell_partial_exit_carry_active"] is True
+    assert state_handlers._scale_in_exit_authority_block_reason(stock) == (
+        "partial_sell_receipt_reconciliation_active"
+    )
+    stock.pop("sell_partial_exit_carry_active")
+    stock.pop(receipts._SELL_EXECUTION_RECEIPT_STATE_KEY)
+    assert state_handlers._scale_in_exit_authority_block_reason(stock) == (
+        "partial_sell_receipt_reconciliation_active"
+    )
     completed = [
         row
         for row in emitted
@@ -37640,6 +38481,8 @@ def test_nxt_rising_missed_tp1_partial_receipts_restore_holding_runner(monkeypat
     ]
     assert completed[-1]["fields"]["sold_qty"] == 5
     assert completed[-1]["fields"]["runner_qty"] == 5
+    assert completed[-1]["fields"]["sell_receipt_economics_complete"] is True
+    assert completed[-1]["fields"]["broker_actual_execution_venue"] == "NXT"
 
 
 def test_sell_reject_retry_backoff_suppresses_burst(monkeypatch):
@@ -37725,7 +38568,7 @@ def test_sell_reject_retry_backoff_suppresses_burst(monkeypatch):
     assert backoff[-1]["retry_backoff_remaining_sec"] >= 20
 
 
-def test_sell_reject_with_zero_sellable_qty_marks_completed(monkeypatch):
+def test_sell_reject_with_zero_sellable_qty_requires_exact_receipt(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
     state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
@@ -37783,13 +38626,15 @@ def test_sell_reject_with_zero_sellable_qty_marks_completed(monkeypatch):
     fail_logs = [
         fields for stage, fields in pipeline_logs if stage == "sell_order_failed"
     ]
-    assert stock["status"] == "COMPLETED"
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["buy_qty"] == 10
+    assert stock["sell_cancel_reconciliation_required"] is True
     assert "sell_order_time" not in stock
     assert "sell_odno" not in stock
     assert "pending_sell_msg" not in stock
     assert "sell_target_price" not in stock
     assert fail_logs
-    assert fail_logs[-1]["new_status"] == "COMPLETED"
+    assert fail_logs[-1]["new_status"] == "SELL_ORDERED"
     assert fail_logs[-1]["sellable_qty"] == 0
 
 

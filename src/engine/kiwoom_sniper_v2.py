@@ -955,6 +955,9 @@ def _ensure_state_handler_deps():
         "send_exit_best_ioc": _send_exit_best_ioc,
         "dual_persona_engine": DUAL_PERSONA_ENGINE,
         "scanner_generation_submit_guard": _scanner_generation_submit_guard,
+        "broker_snapshot_refresh_callback": (
+            _request_broker_snapshot_refresh_after_execution
+        ),
     }
     if any(_STATE_HANDLER_DEPS.get(k) is not v for k, v in snapshot.items()):
         bind_state_dependencies(**snapshot)
@@ -11100,13 +11103,24 @@ def run_sniper(is_test_mode=False):
         return
     # Ensure sync module has the token before any balance calls.
     bind_sync_dependencies(kiwoom_token=KIWOOM_TOKEN, conf=CONF)
-    bind_state_dependencies(kiwoom_token=KIWOOM_TOKEN)
+    bind_state_dependencies(
+        kiwoom_token=KIWOOM_TOKEN,
+        broker_snapshot_refresh_callback=(
+            _request_broker_snapshot_refresh_after_execution
+        ),
+    )
     bind_execution_dependencies(kiwoom_token=KIWOOM_TOKEN)
     bind_overnight_dependencies(kiwoom_token=KIWOOM_TOKEN)
     bind_trade_pause_event_bus(event_bus)
 
     radar = SniperRadar(KIWOOM_TOKEN)
     log_info(f"[DEBUG] radar 객체 생성 완료: {radar}")
+    # Load and bind runtime targets before the first broker/DB reconciliation.
+    # Partial SELL recovery needs the exact target id/order identity in memory;
+    # reloading this list after sync would discard a restored durable ledger.
+    ACTIVE_TARGETS = DB.get_active_targets() or []
+    bind_sync_dependencies(active_targets=ACTIVE_TARGETS)
+    bind_execution_dependencies(active_targets=ACTIVE_TARGETS)
     sync_balance_with_db()
     init_market_regime_service()
 
@@ -11329,7 +11343,6 @@ def run_sniper(is_test_mode=False):
         db=DB,
     )
 
-    ACTIVE_TARGETS = DB.get_active_targets() or []
     bind_sync_dependencies(active_targets=ACTIVE_TARGETS)
     bind_condition_dependencies(active_targets=ACTIVE_TARGETS)
     bind_analysis_dependencies(active_targets=ACTIVE_TARGETS)

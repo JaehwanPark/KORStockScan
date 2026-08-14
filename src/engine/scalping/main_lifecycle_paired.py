@@ -332,6 +332,52 @@ def _pipeline_text(value: Any) -> str:
     return "" if normalized.lower() in {"", "-", "none", "null"} else normalized
 
 
+def _exact_broker_execution_provenance(
+    fields: Mapping[str, Any], *, stage: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Validate official execution time/venue before source-only promotion."""
+
+    reason_prefix = f"pipeline_{stage}_broker_execution"
+    if _pipeline_bool(fields.get("broker_execution_provenance_complete")) is not True:
+        return None, f"{reason_prefix}_provenance_incomplete"
+    actual_venue = _pipeline_text(
+        fields.get("broker_actual_execution_venue")
+    ).upper()
+    if actual_venue not in {"KRX", "NXT"}:
+        return None, f"{reason_prefix}_actual_venue_invalid"
+    time_source = _pipeline_text(fields.get("broker_execution_time_source"))
+    if time_source != "official_fid_908":
+        return None, f"{reason_prefix}_time_source_invalid"
+    raw_execution_time = _pipeline_text(fields.get("broker_execution_time_raw"))
+    try:
+        if not raw_execution_time.isdigit() or len(raw_execution_time) != 6:
+            raise ValueError("FID 908 requires HHMMSS")
+        datetime.strptime(raw_execution_time[:6], "%H%M%S")
+    except ValueError:
+        return None, f"{reason_prefix}_time_value_invalid"
+    return (
+        {
+            "broker_actual_execution_venue": actual_venue,
+            "broker_execution_time_source": time_source,
+            "broker_execution_time_raw": raw_execution_time,
+            "broker_sor_flag": _pipeline_text(fields.get("broker_sor_flag")),
+        },
+        None,
+    )
+
+
+def _exact_broker_execution_number(
+    fields: Mapping[str, Any], *, stage: str
+) -> tuple[str | None, str | None]:
+    execution_no = _pipeline_text(
+        fields.get("execution_no")
+        or fields.get("sell_execution_execution_no")
+    )
+    if not execution_no:
+        return None, f"pipeline_{stage}_broker_execution_number_missing"
+    return execution_no, None
+
+
 def _pipeline_scale_in_decision(
     source_stage: str, fields: Mapping[str, Any]
 ) -> str | None:
@@ -399,12 +445,60 @@ def _pipeline_transition_data(
         if not broker_order_no:
             return None, "pipeline_submit_broker_order_no_missing"
         data["broker_order_no"] = broker_order_no
+        broker_order_no_list = _pipeline_text(fields.get("broker_order_no_list"))
+        if broker_order_no_list:
+            broker_order_nos = [
+                value.strip()
+                for value in broker_order_no_list.split(",")
+                if value.strip()
+            ]
+            if (
+                not broker_order_nos
+                or broker_order_no not in broker_order_nos
+                or len(set(broker_order_nos)) != len(broker_order_nos)
+            ):
+                return None, "pipeline_submit_broker_order_no_list_invalid"
+            data["broker_order_no_list"] = ",".join(broker_order_nos)
         requested_qty = _finite_number(fields.get("requested_qty"), positive=True)
         if requested_qty is None:
             return None, "pipeline_submit_requested_qty_invalid"
         data["requested_qty"] = requested_qty
 
     if lifecycle_stage == "fill":
+        if "receipt_economics_complete" not in fields:
+            return None, "pipeline_fill_receipt_economics_contract_missing"
+        if _pipeline_bool(fields.get("receipt_economics_complete")) is not True:
+            return None, "pipeline_fill_receipt_economics_incomplete"
+        if "receipt_quantity_contract_complete" not in fields:
+            return None, "pipeline_fill_receipt_quantity_contract_missing"
+        if (
+            _pipeline_bool(fields.get("receipt_quantity_contract_complete"))
+            is not True
+        ):
+            return None, "pipeline_fill_receipt_quantity_contract_incomplete"
+        if "receipt_unit_fill_consistent" not in fields:
+            return None, "pipeline_fill_receipt_unit_contract_missing"
+        if _pipeline_bool(fields.get("receipt_unit_fill_consistent")) is not True:
+            return None, "pipeline_fill_receipt_unit_fill_inconsistent"
+        provenance, provenance_reason = _exact_broker_execution_provenance(
+            fields, stage="fill"
+        )
+        if provenance_reason:
+            return None, provenance_reason
+        assert provenance is not None
+        data.update(provenance)
+        execution_no, execution_number_reason = _exact_broker_execution_number(
+            fields, stage="fill"
+        )
+        if execution_number_reason:
+            return None, execution_number_reason
+        data["broker_execution_no"] = execution_no
+        execution_order_no = _pipeline_text(
+            fields.get("order_no") or fields.get("ord_no")
+        )
+        if not execution_order_no:
+            return None, "pipeline_fill_broker_order_no_missing"
+        data["broker_execution_order_no"] = execution_order_no
         fill_state = _pipeline_text(fields.get("fill_state")).lower()
         if not fill_state:
             fill_quality = _pipeline_text(fields.get("fill_quality")).upper()
@@ -437,7 +531,62 @@ def _pipeline_transition_data(
         if decision is None:
             return None, "pipeline_scale_in_decision_unmapped"
         data["scale_in_decision"] = decision
+        if source_stage == "scale_in_order_submitted":
+            if _pipeline_bool(fields.get("actual_order_submitted")) is not True:
+                return None, "pipeline_scale_in_submit_not_broker_submitted"
+            broker_order_no = _pipeline_text(
+                fields.get("broker_order_no")
+                or fields.get("order_no")
+                or fields.get("ord_no")
+            )
+            if not broker_order_no:
+                return None, "pipeline_scale_in_submit_broker_order_no_missing"
+            data["actual_broker_order_submitted"] = True
+            data["broker_order_no"] = broker_order_no
+            requested_qty = _finite_number(
+                fields.get("requested_qty"), positive=True
+            )
+            if requested_qty is None:
+                return None, "pipeline_scale_in_submit_requested_qty_invalid"
+            data["requested_qty"] = requested_qty
         if source_stage == "scale_in_executed":
+            if "receipt_economics_complete" not in fields:
+                return None, "pipeline_scale_in_receipt_economics_contract_missing"
+            if _pipeline_bool(fields.get("receipt_economics_complete")) is not True:
+                return None, "pipeline_scale_in_receipt_economics_incomplete"
+            if "receipt_quantity_contract_complete" not in fields:
+                return None, "pipeline_scale_in_receipt_quantity_contract_missing"
+            if (
+                _pipeline_bool(fields.get("receipt_quantity_contract_complete"))
+                is not True
+            ):
+                return None, "pipeline_scale_in_receipt_quantity_contract_incomplete"
+            if "receipt_unit_fill_consistent" not in fields:
+                return None, "pipeline_scale_in_receipt_unit_contract_missing"
+            if (
+                _pipeline_bool(fields.get("receipt_unit_fill_consistent"))
+                is not True
+            ):
+                return None, "pipeline_scale_in_receipt_unit_fill_inconsistent"
+            provenance, provenance_reason = _exact_broker_execution_provenance(
+                fields, stage="scale_in"
+            )
+            if provenance_reason:
+                return None, provenance_reason
+            assert provenance is not None
+            data.update(provenance)
+            execution_no, execution_number_reason = _exact_broker_execution_number(
+                fields, stage="scale_in"
+            )
+            if execution_number_reason:
+                return None, execution_number_reason
+            data["broker_execution_no"] = execution_no
+            execution_order_no = _pipeline_text(
+                fields.get("order_no") or fields.get("ord_no")
+            )
+            if not execution_order_no:
+                return None, "pipeline_scale_in_broker_order_no_missing"
+            data["broker_execution_order_no"] = execution_order_no
             fill_qty = _finite_number(fields.get("fill_qty"), positive=True)
             fill_price = _finite_number(fields.get("fill_price"), positive=True)
             if fill_qty is None or fill_price is None:
@@ -445,11 +594,85 @@ def _pipeline_transition_data(
             data.update({"fill_qty": fill_qty, "fill_price": fill_price})
 
     execution_exit_stages = {
+        "sell_partial_fill_progress",
         "nxt_rising_missed_tp1_partial_fill_progress",
         "nxt_rising_missed_tp1_partial_sell_completed",
         "sell_completed",
     }
+    if lifecycle_stage == "exit" and source_stage == "sell_order_sent":
+        if _pipeline_bool(fields.get("actual_order_submitted")) is not True:
+            return None, "pipeline_exit_submit_not_broker_submitted"
+        broker_order_no = _pipeline_text(
+            fields.get("broker_order_no")
+            or fields.get("order_no")
+            or fields.get("ord_no")
+        )
+        if not broker_order_no:
+            return None, "pipeline_exit_submit_broker_order_no_missing"
+        data["actual_broker_order_submitted"] = True
+        data["broker_order_no"] = broker_order_no
+        requested_qty = _finite_number(fields.get("requested_qty"), positive=True)
+        if requested_qty is None:
+            requested_qty = _finite_number(fields.get("qty"), positive=True)
+        if requested_qty is None:
+            return None, "pipeline_exit_submit_requested_qty_invalid"
+        data["requested_qty"] = requested_qty
     if lifecycle_stage == "exit" and source_stage in execution_exit_stages:
+        receipt_economics_keys = (
+            "sell_receipt_economics_complete",
+            "sell_execution_receipt_economics_complete",
+        )
+        present_economics_keys = [
+            key for key in receipt_economics_keys if key in fields
+        ]
+        if not present_economics_keys:
+            return None, "pipeline_exit_receipt_economics_contract_missing"
+        for receipt_economics_key in present_economics_keys:
+            if _pipeline_bool(fields.get(receipt_economics_key)) is not True:
+                return None, "pipeline_exit_receipt_economics_incomplete"
+        receipt_contract_keys = (
+            "sell_receipt_quantity_contract_complete",
+            "sell_execution_receipt_quantity_contract_complete",
+        )
+        present_contract_keys = [
+            key for key in receipt_contract_keys if key in fields
+        ]
+        if not present_contract_keys:
+            return None, "pipeline_exit_receipt_quantity_contract_missing"
+        for receipt_contract_key in present_contract_keys:
+            if _pipeline_bool(fields.get(receipt_contract_key)) is not True:
+                return None, "pipeline_exit_receipt_quantity_contract_incomplete"
+        unit_consistency_keys = (
+            "sell_receipt_unit_fill_consistent",
+            "sell_execution_receipt_unit_fill_consistent",
+        )
+        present_unit_keys = [
+            key for key in unit_consistency_keys if key in fields
+        ]
+        if not present_unit_keys:
+            return None, "pipeline_exit_receipt_unit_contract_missing"
+        for unit_consistency_key in present_unit_keys:
+            if _pipeline_bool(fields.get(unit_consistency_key)) is not True:
+                return None, "pipeline_exit_receipt_unit_fill_inconsistent"
+        provenance, provenance_reason = _exact_broker_execution_provenance(
+            fields, stage="exit"
+        )
+        if provenance_reason:
+            return None, provenance_reason
+        assert provenance is not None
+        data.update(provenance)
+        execution_no, execution_number_reason = _exact_broker_execution_number(
+            fields, stage="exit"
+        )
+        if execution_number_reason:
+            return None, execution_number_reason
+        data["broker_execution_no"] = execution_no
+        execution_order_no = _pipeline_text(
+            fields.get("order_no") or fields.get("ord_no")
+        )
+        if not execution_order_no:
+            return None, "pipeline_exit_broker_order_no_missing"
+        data["broker_execution_order_no"] = execution_order_no
         if (
             "main_lifecycle_exit_qty" not in fields
             or "main_lifecycle_exit_price" not in fields
@@ -702,6 +925,8 @@ class _LifecycleAccumulator:
     economics_fields_seen: set[str] = field(default_factory=set)
     observed_actual_broker_order_submitted: bool = False
     event_content_by_id: dict[str, str] = field(default_factory=dict)
+    execution_content_by_identity: dict[str, str] = field(default_factory=dict)
+    submitted_broker_order_nos: set[str] = field(default_factory=set)
 
     @classmethod
     def from_transition(cls, row: Mapping[str, Any]) -> _LifecycleAccumulator:
@@ -790,6 +1015,41 @@ class _LifecycleAccumulator:
         if len(self.event_content_by_id) >= _EVENT_ID_LIMIT_PER_LIFECYCLE:
             return "transition_event_identity_limit_exceeded"
         self.event_content_by_id[event_id] = content_hash
+        return None
+
+    def _execution_identity_error(self, row: Mapping[str, Any]) -> str | None:
+        data = row.get("data")
+        if not isinstance(data, dict):
+            return None
+        execution_no = str(data.get("broker_execution_no") or "").strip()
+        if not execution_no:
+            return None
+        execution_order_no = str(data.get("broker_execution_order_no") or "").strip()
+        execution_venue = str(data.get("broker_actual_execution_venue") or "").strip()
+        identity = (
+            f"{row.get('stage')}:{execution_venue}:"
+            f"{execution_order_no}:{execution_no}"
+        )
+        # Receive timestamps and envelope event IDs may differ on an exact
+        # at-least-once replay.  Broker execution identity is bound to the
+        # stage payload itself; only a changed execution payload is a conflict.
+        content_hash = hashlib.sha256(
+            json.dumps(
+                {
+                    "stage": str(row.get("stage") or ""),
+                    "data": data,
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        previous = self.execution_content_by_identity.get(identity)
+        if previous is not None:
+            if previous == content_hash:
+                return "duplicate_broker_execution_identity"
+            return "broker_execution_identity_content_conflict"
+        self.execution_content_by_identity[identity] = content_hash
         return None
 
     def _integrate_capital(self, timestamp: datetime) -> bool:
@@ -945,11 +1205,38 @@ class _LifecycleAccumulator:
             return
         duplicate_error = self._duplicate_event_error(row)
         if duplicate_error is not None:
+            if duplicate_error == "duplicate_transition_event":
+                return
             self._invalid(duplicate_error)
             return
         stage_error = self._stage_contract_error(row)
         if stage_error is not None:
             self._invalid(stage_error)
+            return
+        data = row.get("data")
+        assert isinstance(data, dict)
+        submitted_order_no = str(data.get("broker_order_no") or "").strip()
+        if data.get("actual_broker_order_submitted") is True and submitted_order_no:
+            self.submitted_broker_order_nos.add(submitted_order_no)
+            self.submitted_broker_order_nos.update(
+                value.strip()
+                for value in str(data.get("broker_order_no_list") or "").split(",")
+                if value.strip()
+            )
+        execution_order_no = str(
+            data.get("broker_execution_order_no") or ""
+        ).strip()
+        if (
+            execution_order_no
+            and execution_order_no not in self.submitted_broker_order_nos
+        ):
+            self._invalid("broker_execution_order_not_submitted_in_lifecycle")
+            return
+        execution_identity_error = self._execution_identity_error(row)
+        if execution_identity_error is not None:
+            if execution_identity_error == "duplicate_broker_execution_identity":
+                return
+            self._invalid(execution_identity_error)
             return
         try:
             timestamp = _aware_datetime(row.get("observed_at"))
