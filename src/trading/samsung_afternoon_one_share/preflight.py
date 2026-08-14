@@ -14,6 +14,10 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
+from src.trading.order.samsung_entry_policy import (
+    effective_target_ticks,
+    operator_target_override,
+)
 from src.trading.samsung_afternoon_one_share.machine import KST
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
@@ -70,6 +74,13 @@ def build_authority_artifact(
     if not decision.ready:
         raise ValueError("preflight_not_ready")
     observed_at = observed_at.astimezone(KST)
+    target_date = date.fromisoformat(decision.target_date)
+    target_ticks = effective_target_ticks(
+        "afternoon", target_date=target_date, as_of=observed_at
+    )
+    target_override = operator_target_override(
+        target_date=target_date, as_of=observed_at
+    )
     return {
         "schema": AUTHORITY_SCHEMA,
         "status": "ready",
@@ -87,7 +98,8 @@ def build_authority_artifact(
             "scan": "completed_1m_bars_14:00_through_14:40",
             "signal": "30bar_high_drawdown_gte_1.25pct_and_low_proximity_lte_0.20pct",
             "entry": "two_independent_10share_legs_valid_for_next_5_completed_bars",
-            "target": "fill_plus_2_ticks",
+            "target": f"fill_plus_{target_ticks}_ticks",
+            "operator_target_override": target_override,
             "stop_loss": "none",
             "unfilled_target": "hold_position_without_forced_exit",
             "entry_tuning": "preopen_exact_date_bounded_policy_artifact",
@@ -168,6 +180,9 @@ def validate_authority(
         or decision.get("independent_order_ledger_required") is not True
     ):
         return False, "authority_independence_contract_invalid"
+    target_ticks = effective_target_ticks(
+        "afternoon", target_date=now.date(), as_of=now
+    )
     expected = {
         "symbol": "005930",
         "quantity": EPISODE_TOTAL_QUANTITY,
@@ -176,7 +191,10 @@ def validate_authority(
         "scan": "completed_1m_bars_14:00_through_14:40",
         "signal": "30bar_high_drawdown_gte_1.25pct_and_low_proximity_lte_0.20pct",
         "entry": "two_independent_10share_legs_valid_for_next_5_completed_bars",
-        "target": "fill_plus_2_ticks",
+        "target": f"fill_plus_{target_ticks}_ticks",
+        "operator_target_override": operator_target_override(
+            target_date=now.date(), as_of=now
+        ),
         "stop_loss": "none",
         "unfilled_target": "hold_position_without_forced_exit",
         "morning_relationship": "parallel_independent_strategy",

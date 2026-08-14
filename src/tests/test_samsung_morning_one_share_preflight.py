@@ -86,6 +86,24 @@ def test_authority_artifact_is_same_day_and_never_controls_widget(tmp_path):
     assert "timeout_target_cancel_or_forced_exit" in artifact["forbidden_uses"]
 
 
+def test_authority_uses_target3_after_operator_override(tmp_path):
+    now = datetime(2026, 8, 14, 9, 22, tzinfo=KST)
+    decision = evaluate_preflight(
+        target_date=now.date(),
+        main_bot_active=True,
+        shared_token_available=True,
+        operator_exclusion_source="manual_operator",
+    )
+    artifact = build_authority_artifact(decision, observed_at=now)
+    path = tmp_path / "authority.json"
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    assert artifact["policy"]["target"] == "fill_plus_3_ticks"
+    assert artifact["policy"]["operator_target_override"]["before"] == 2
+    assert artifact["policy"]["operator_target_override"]["after"] == 3
+    assert validate_authority(path, now=now) == (True, "ready")
+
+
 def test_authority_rejects_other_trade_date(tmp_path):
     artifact = build_authority_artifact(
         _ready_decision(),

@@ -647,7 +647,15 @@ def test_live_service_runs_reentry_only_after_first_episode_complete(monkeypatch
 
     class FakeFirstMachine:
         def __init__(self, **kwargs):
-            calls.append("first_initialized")
+            policy = kwargs["policy"]
+            calls.append(
+                (
+                    "first_initialized",
+                    policy.target_ticks,
+                    policy.runtime_policy_source,
+                    policy.runtime_policy_hash,
+                )
+            )
 
         def run_until_terminal(self, *, interval_sec):
             calls.append("first_complete")
@@ -655,7 +663,15 @@ def test_live_service_runs_reentry_only_after_first_episode_complete(monkeypatch
 
     class FakeReentryMachine:
         def __init__(self, **kwargs):
-            calls.append("reentry_initialized")
+            policy = kwargs["policy"]
+            calls.append(
+                (
+                    "reentry_initialized",
+                    policy.target_ticks,
+                    policy.runtime_policy_source,
+                    policy.runtime_policy_hash,
+                )
+            )
 
         def run_until_terminal(self, *, interval_sec):
             calls.append("reentry_terminal")
@@ -674,9 +690,13 @@ def test_live_service_runs_reentry_only_after_first_episode_complete(monkeypatch
         service_module,
         "load_applied_machine_policy",
         lambda machine, target_date: (
-            {"nxt_drawdown_pct": 3.0, "sor_drawdown_pct": 0.75},
+            {
+                "nxt_drawdown_pct": 3.0,
+                "sor_drawdown_pct": 0.75,
+                "target_ticks": 3,
+            },
             "policy-hash",
-            "ready",
+            "ready_operator_override",
         ),
     )
     monkeypatch.setattr(service_module, "_acquire_lock", lambda path: object())
@@ -696,9 +716,19 @@ def test_live_service_runs_reentry_only_after_first_episode_complete(monkeypatch
 
     assert result == 0
     assert calls == [
-        "first_initialized",
+        (
+            "first_initialized",
+            3,
+            service_module.OPERATOR_OVERRIDE_RUNTIME_SOURCE,
+            "policy-hash",
+        ),
         "first_complete",
-        "reentry_initialized",
+        (
+            "reentry_initialized",
+            3,
+            service_module.OPERATOR_OVERRIDE_RUNTIME_SOURCE,
+            "policy-hash",
+        ),
         "reentry_terminal",
     ]
 

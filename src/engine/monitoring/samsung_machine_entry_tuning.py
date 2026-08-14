@@ -24,6 +24,7 @@ from src.trading.order.samsung_entry_policy import (
     BASELINE_POLICIES,
     CANDIDATE_DIR,
     CANDIDATE_SCHEMA,
+    OPERATOR_OVERRIDE_RUNTIME_SOURCE,
     atomic_write_json,
     candidate_policies_with_current_baselines,
     load_applied_machine_policy,
@@ -501,27 +502,38 @@ def _signal_feature_contract_valid(machine: str, features: dict[str, Any]) -> bo
         return False
     if machine == "morning_reentry":
         prerequisite = features.get("prerequisite")
+        legacy_target_provenance = bool(
+            features.get("runtime_policy_source")
+            == "user_approved_sor_reentry_2026-08-12"
+            and features.get("runtime_policy_hash")
+            == "6135da3fa280aa8188ade85c62463cc9f7c144cb4c911b68a89be41e9c6b909a"
+            and _as_int(features.get("target_ticks")) == 2
+        )
+        override_target_provenance = bool(
+            features.get("runtime_policy_source") == OPERATOR_OVERRIDE_RUNTIME_SOURCE
+            and len(str(features.get("runtime_policy_hash") or "")) == 64
+            and _as_int(features.get("target_ticks")) == 3
+        )
         return bool(
             features.get("schema") == "samsung_morning_sor_reentry_signal_features_v1"
             and features.get("strategy") == "morning_sor_reentry"
             and features.get("source") == "kiwoom_ka10080_005930_AL_completed_1m"
-            and features.get("runtime_policy_source")
-            == "user_approved_sor_reentry_2026-08-12"
-            and features.get("runtime_policy_hash")
-            == "6135da3fa280aa8188ade85c62463cc9f7c144cb4c911b68a89be41e9c6b909a"
+            and (legacy_target_provenance or override_target_provenance)
             and features.get("family") == "low_hold_reclaim_passive_split"
             and _as_int(features.get("lookback_bars")) == 15
             and _as_int(features.get("confirmation_bars")) == 2
             and _as_int(features.get("reclaim_ticks")) == 1
             and _as_int(features.get("entry_offset_ticks")) == 1
             and _as_int(features.get("entry_valid_completed_bars")) == 3
-            and _as_int(features.get("target_ticks")) == 2
             and isinstance(prerequisite, dict)
             and prerequisite.get("first_episode_status") == "COMPLETE"
             and _as_int(prerequisite.get("required_completed_leg_count")) == 2
             and prerequisite.get("first_episode_completed_at")
         )
-    if features.get("runtime_policy_source") != "preopen_applied_policy":
+    if features.get("runtime_policy_source") not in {
+        "preopen_applied_policy",
+        OPERATOR_OVERRIDE_RUNTIME_SOURCE,
+    }:
         return False
     if machine == "morning":
         routes = features.get("routes")
@@ -561,6 +573,30 @@ def _signal_feature_contract_valid(machine: str, features: dict[str, Any]) -> bo
         and (_as_float(features.get("observed_near_low_pct")) is not None)
         and features.get("signal_bar")
     )
+
+
+def _signal_policy_as_of(
+    features: dict[str, Any], target_date: date
+) -> datetime | None:
+    raw = str(features.get("signal_bar") or "")
+    parsed: datetime | None = None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        for pattern in ("%Y%m%d%H%M%S", "%Y%m%d%H%M"):
+            try:
+                parsed = datetime.strptime(raw, pattern)
+                break
+            except ValueError:
+                continue
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=KST)
+    observed_at = parsed.astimezone(KST)
+    if observed_at.date() != target_date:
+        return None
+    return observed_at
 
 
 def extract_machine_row(
@@ -632,15 +668,19 @@ def extract_machine_row(
     if attempted and not _signal_feature_contract_valid(machine, signal_features):
         reasons.append("attempted_episode_signal_features_missing_or_invalid")
     parsed_target_date = date.fromisoformat(target_date)
-    if (
-        attempted
-        and machine != "morning_reentry"
-        and parsed_target_date >= APPLIED_POLICY_PROVENANCE_REQUIRED_DATE
-    ):
+    if attempted and parsed_target_date >= APPLIED_POLICY_PROVENANCE_REQUIRED_DATE:
+        policy_machine = "morning" if machine == "morning_reentry" else machine
+        policy_as_of = _signal_policy_as_of(signal_features, parsed_target_date)
+        if policy_as_of is None:
+            reasons.append("signal_feature_policy_timestamp_invalid")
+            policy_as_of = datetime.combine(
+                parsed_target_date, datetime.max.time(), tzinfo=KST
+            )
         applied_policy, applied_hash, applied_reason = load_applied_machine_policy(
-            machine,
+            policy_machine,
             target_date=parsed_target_date,
             applied_dir=applied_dir,
+            as_of=policy_as_of,
         )
         if applied_policy is None:
             reasons.append(f"exact_date_applied_policy_invalid:{applied_reason}")
@@ -678,6 +718,11 @@ def extract_machine_row(
                     )
                     in {None, expected_fields["sor_drawdown_pct"]}
                 )
+            elif machine == "morning_reentry":
+                observed_matches = bool(
+                    _as_int(signal_features.get("target_ticks"))
+                    == expected_fields["target_ticks"]
+                )
             else:
                 observed_matches = bool(
                     _as_int(signal_features.get("target_ticks"))
@@ -691,9 +736,26 @@ def extract_machine_row(
                     and _as_int(signal_features.get("entry_valid_completed_bars"))
                     == int(applied_policy["entry_valid_completed_bars"])
                 )
+            legacy_reentry_policy = bool(
+                machine == "morning_reentry" and applied_reason == "ready"
+            )
+            expected_runtime_source = (
+                "user_approved_sor_reentry_2026-08-12"
+                if legacy_reentry_policy
+                else (
+                    OPERATOR_OVERRIDE_RUNTIME_SOURCE
+                    if applied_reason == "ready_operator_override"
+                    else "preopen_applied_policy"
+                )
+            )
+            expected_runtime_hash = (
+                "6135da3fa280aa8188ade85c62463cc9f7c144cb4c911b68a89be41e9c6b909a"
+                if legacy_reentry_policy
+                else applied_hash
+            )
             if (
-                signal_features.get("runtime_policy_source") != "preopen_applied_policy"
-                or signal_features.get("runtime_policy_hash") != applied_hash
+                signal_features.get("runtime_policy_source") != expected_runtime_source
+                or signal_features.get("runtime_policy_hash") != expected_runtime_hash
                 or not observed_matches
             ):
                 reasons.append("signal_feature_exact_date_applied_policy_mismatch")

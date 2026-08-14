@@ -14,7 +14,7 @@
 | 2 | SOR 정규장 | KRX 09:00 첫 1분봉 시가를 가격 기준점으로 사용 | NXT 미체결 leg별 10주: -0.75% base 또는 base +1호가 | 09:30 |
 | 3 | SOR 정규장 추가 episode | 첫 episode 두 leg 목표 청산 후 15봉 저점 유지·회복 신호의 확인종가 | 10주: 확인종가 -1호가, 10주: 확인종가 -2호가 | 신호 후 완료봉 3개 |
 
-각 leg 전량 체결 후 실제 평균 체결가에서 +2호가 동일 수량 지정가 매도를 별도로 낸다. 1~9주 부분체결이면 그 주문번호의 남은 매수수량만 취소·재확인한 뒤 최종 확인 체결수량만 목표 주문으로 낸다. 목표 주문 부분체결도 잔여 보유수량에 반영한다. 목표 주문에는 시간청산과 손절이 없다. 브로커에서 목표 미체결 종료가 확인되면 해당 잔여수량을 그대로 보유한다. 하나만 체결되거나 하나만 목표 청산돼도 다른 leg의 주문·보유 귀속은 독립적으로 유지한다. 목표 주문 취소, 최우선 지정가 강제매도, 다음 날 자동 목표 재주문, 보유 중 신규 episode는 하지 않는다.
+각 leg 전량 체결 후 실제 평균 체결가에서 동일 수량 지정가 매도를 별도로 낸다. 기존 baseline은 +2호가였고, 2026-08-14 09:21:07 KST 사용자 오버라이드 이후 새로 생성하는 오전·추가 episode 목표는 +3호가다. 이미 접수된 목표 주문은 취소·교체하지 않는다. 1~9주 부분체결이면 그 주문번호의 남은 매수수량만 취소·재확인한 뒤 최종 확인 체결수량만 목표 주문으로 낸다. 목표 주문 부분체결도 잔여 보유수량에 반영한다. 목표 주문에는 시간청산과 손절이 없다. 브로커에서 목표 미체결 종료가 확인되면 해당 잔여수량을 그대로 보유한다. 하나만 체결되거나 하나만 목표 청산돼도 다른 leg의 주문·보유 귀속은 독립적으로 유지한다. 목표 주문 취소, 최우선 지정가 강제매도, 다음 날 자동 목표 재주문, 보유 중 신규 episode는 하지 않는다.
 
 09:00 이후 `SOR`는 주문 라우트다. `ka10080`의 기본 `005930` 09:00 봉은 정규장 가격 기준점으로만 사용하며, 이를 SOR 통합 체결 스트림이라고 해석하지 않는다.
 
@@ -30,7 +30,7 @@
 | 2026-06-05~08-10 | clean baseline | 44 | 35 | 35 | 79.55% | 100.00% | 0.3576% | 0.1576% | 1분 |
 | 전체 참고 | 혼합, live 근거 금지 | 64 | 49 | 49 | 76.56% | 100.00% | 0.3558% | 0.1558% | 1분 |
 
-`+1호가`는 두 기간 모두 도달률 100%였지만 비용 0.20% 가정 후 평균이 clean -0.0212%, archive -0.0244%였다. `+3호가`는 clean 91.43%, archive 92.86%로 도달 안정성이 낮아졌다. 따라서 큰 수익보다 비용 여유와 반복성을 우선하는 현재 목적에는 `+2호가`가 가장 균형적이다.
+`+1호가`는 두 기간 모두 도달률 100%였지만 비용 0.20% 가정 후 평균이 clean -0.0212%, archive -0.0244%였다. `+3호가`는 clean 91.43%, archive 92.86%로 도달 안정성이 낮아졌다. 최초 선정 시점에는 비용 여유와 반복성의 균형을 위해 `+2호가`를 baseline으로 선택했다. 2026-08-14에 사용자가 삼성전자의 clean `+3호가` 도달률 91.43%를 감당 가능한 위험으로 판단하고 비용·슬리피지 여유를 늘리도록 명시적 오버라이드했다.
 
 추가 월의 2026-05-26 NXT 08:00 봉은 297,000원 시가, 240,000원 저가, 거래량 227주이고 다음 봉은 08:04에 시작해 297,000원 이상으로 복귀했다. 지정가 체결을 288,000원으로 가정할 때 분봉상 최대 불리폭은 -16.67%다. 이는 +2호가 도달 여부와 별개로 NXT 초기 유동성·분봉 순서 및 무손절 보유 위험이 매우 크다는 증거다. 사용자의 명시적 무손절·미청산 보유 및 2026-08-13 수량 변경 원칙을 적용해 신규 주문은 총 20주·leg당 10주 상한을 유지한다.
 
@@ -55,7 +55,7 @@
 - 첫 episode 두 leg가 모두 `COMPLETE`인 뒤에만 1회 탐색한다.
 - 최근 연속 15개 완료봉의 고가 대비 종가 하락률이 0.75% 이상이고, 저가 대비 종가 거리가 0.35% 이하여야 한다.
 - setup 저가를 다음 완료봉 2개가 깨지 않고, 두 번째 확인봉 종가가 setup 종가보다 1호가 이상 회복해야 한다. 신호 탐색 종료는 10:00이다.
-- 주문 기준점은 두 번째 확인봉 종가다. 1주는 기준점 -1호가, 1주는 -2호가에 놓고 다음 완료봉부터 3개 봉까지만 체결 가능성을 판정한다. 체결 leg별 목표는 +2호가이며 손절·시간청산은 없고, 목표 미청산은 그대로 보유한다.
+- 주문 기준점은 두 번째 확인봉 종가다. 기준점 -1호가와 -2호가에 각각 10주를 놓고 다음 완료봉부터 3개 봉까지만 체결 가능성을 판정한다. 체결 leg별 baseline 목표는 +2호가였으나 2026-08-14 09:21:07 KST 이후 신규 episode는 +3호가를 쓴다. 손절·시간청산은 없고, 목표 미청산은 그대로 보유한다.
 
 28일 보정 구간은 17 episode·34 주문시도 중 완료 32leg, 미체결 2leg, 보유 0leg, 비용 0.20% 차감 `notional_weighted_ev_pct +0.113550%`였다. 마지막 16일은 12 episode·24 주문시도 중 완료 19leg, 미체결 5leg, 보유 0leg, `notional_weighted_ev_pct +0.170116%`였다. 전체 44일은 29 episode·58 주문시도 중 완료 51leg, 미체결 7leg, 보유 0leg다.
 
@@ -99,13 +99,13 @@ preflight 서비스는 메인 봇의 사용자 tmux 소켓을 확인해야 하�
 
 ## 장후 진입 기준 누적 관찰
 
-라이브 episode가 arm될 때 state의 `signal_features`에 NXT/SOR route, 실제 opening price, 적용 drawdown, 진입창, 두 leg 지정가와 +2호가 정책을 고정한다. 20:10 `samsung_machine_entry_tuning` report는 당일 state와 자기 이전 일별 report만 읽으며 시세나 과거 원천을 재조회하지 않는다. 실제 주문·체결·목표 결과만 leg별로 누적하고 주문번호와 audit는 복사하지 않는다. 신규 목표주문 대사는 broker `kt00007.cntr_uv` 매도 체결단가를 state에 보존하며, 과거 목표가 proxy 표본은 진단용으로만 남아 후보 표본 하한을 충족하지 못한다. 오전은 route별 현재 drawdown 정책의 실제 결과만 관찰하며, 신호가 없던 날의 미관측 가격을 이용한 완화 threshold 반사실은 만들지 않는다.
+라이브 episode가 arm될 때 state의 `signal_features`에 NXT/SOR route, 실제 opening price, 적용 drawdown, 진입창, 두 leg 지정가와 해당 신호시각의 목표 호가·runtime source·policy hash를 고정한다. 2026-08-14 09:21:07 KST 이전 신호는 기존 +2호가 exact-date hash, 이후 신규 신호는 +3호가 operator-overlay hash로 별도 귀속한다. 20:10 `samsung_machine_entry_tuning` report는 당일 state와 자기 이전 일별 report만 읽으며 시세나 과거 원천을 재조회하지 않는다. 실제 주문·체결·목표 결과만 leg별로 누적하고 주문번호와 audit는 복사하지 않는다. 신규 목표주문 대사는 broker `kt00007.cntr_uv` 매도 체결단가를 state에 보존하며, 과거 목표가 proxy 표본은 진단용으로만 남아 후보 표본 하한을 충족하지 못한다. 오전은 route별 현재 drawdown 정책의 실제 결과만 관찰하며, 신호가 없던 날의 미관측 가격을 이용한 완화 threshold 반사실은 만들지 않는다.
 
 report 자체는 `runtime_effect=false`, `allowed_runtime_apply=false`이고, clean v2 complete episode/leg 표본, source-quality preflight, rolling/cumulative EV, `HELD`·열린 주문 guard를 통과한 결과만 다음 PREOPEN candidate로 넘긴다. 오전은 관찰된 대안 정책이 없으므로 현재 NXT 3.0%·SOR 0.75% baseline만 carry-forward한다.
 
 2026-08-13부터 `samsung_machine_entry_tuning_report_v4`는 추가 episode 상태를 `morning_reentry` cohort로 별도 수집한다. 실제 제출·체결·목표·`HELD`만 누적하고 첫 episode나 다른 시간대 표본과 합치지 않는다. 이 cohort의 fixed user-approved 정책은 관찰 전용이며 기존 morning/midday/afternoon threshold 자동변경 후보에 섞지 않는다.
 
-preflight wrapper는 정확일자 applied artifact를 먼저 생성하고 service는 schema/hash가 검증된 오전 policy만 읽는다. 후보 없음/기간 만료는 baseline으로 닫고, 최신 후보 또는 이미 생성된 당일 artifact가 손상되면 broker gateway 생성 전에 기동을 차단한다. 당일 유효 artifact는 덮어쓰지 않고 재사용한다. 무손절·미청산 보유, 신규 leg별 10주 두 개, +2호가, 독립 주문원장, provider/bot/cap/broker guard는 튜닝 축이 아니다. 배포 전부터 소유한 1주 leg는 호환 custody로 유지하며 10주로 소급 확대하거나 매도수량을 바꾸지 않는다.
+preflight wrapper는 정확일자 applied artifact를 먼저 생성하고 service는 schema/hash가 검증된 오전 policy만 읽는다. 후보 없음/기간 만료는 baseline으로 닫고, 최신 후보 또는 이미 생성된 당일 artifact가 손상되면 broker gateway 생성 전에 기동을 차단한다. 당일 기본 artifact는 덮어쓰지 않고, 2026-08-14 09:21:07 KST 후부터는 명시적 사용자 오버라이드를 시간 제한 overlay로 결합해 신규 목표만 +3호가로 검증한다. 무손절·미청산 보유, 신규 leg별 10주 두 개, 독립 주문원장, provider/bot/cap/broker guard는 튜닝 축이 아니다. 목표 호가도 postclose 자동 튜닝 축은 아니며, 명시적 사용자 지시와 before/after·효력시각·rollback 기록으로만 변경한다. 배포 전부터 소유한 1주 leg는 호환 custody로 유지하며 10주로 소급 확대하거나 매도수량을 바꾸지 않는다.
 
 ```bash
 sudo systemctl disable --now korstockscan-samsung-morning-one-share.timer korstockscan-samsung-one-share-preflight.timer

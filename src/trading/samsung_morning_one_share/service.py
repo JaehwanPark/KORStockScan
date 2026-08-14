@@ -16,13 +16,19 @@ from src.trading.samsung_morning_one_share.machine import (
     KST,
     SamsungMorningOneShareMachine,
 )
-from src.trading.samsung_morning_one_share.policy import DEFAULT_POLICY
+from src.trading.samsung_morning_one_share.policy import (
+    DEFAULT_POLICY,
+    DEFAULT_REENTRY_POLICY,
+)
 from src.trading.samsung_morning_one_share.reentry import (
     DEFAULT_REENTRY_STATE_PATH,
     SamsungMorningSORReentryMachine,
     runtime_ledgers_allow_service_start,
 )
-from src.trading.order.samsung_entry_policy import load_applied_machine_policy
+from src.trading.order.samsung_entry_policy import (
+    OPERATOR_OVERRIDE_RUNTIME_SOURCE,
+    load_applied_machine_policy,
+)
 from src.trading.samsung_morning_one_share.preflight import (
     DEFAULT_AUTHORITY_PATH,
     validate_authority,
@@ -95,6 +101,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"live prior reentry state blocked: {rollover_reason}")
             return 6
     policy = DEFAULT_POLICY
+    applied: dict | None = None
+    applied_hash = ""
+    applied_policy_source = "preopen_applied_policy"
     if live_enabled:
         target_date = datetime.now(tz=KST).date()
         applied, applied_hash, applied_reason = load_applied_machine_policy(
@@ -103,6 +112,11 @@ def main(argv: list[str] | None = None) -> int:
         if applied is None:
             print(f"live applied entry policy blocked: {applied_reason}")
             return 5
+        applied_policy_source = (
+            OPERATOR_OVERRIDE_RUNTIME_SOURCE
+            if applied_reason == "ready_operator_override"
+            else "preopen_applied_policy"
+        )
         policy = replace(
             DEFAULT_POLICY,
             nxt=replace(
@@ -113,7 +127,8 @@ def main(argv: list[str] | None = None) -> int:
                 DEFAULT_POLICY.sor,
                 drawdown_pct=float(applied["sor_drawdown_pct"]),
             ),
-            runtime_policy_source="preopen_applied_policy",
+            target_ticks=int(applied["target_ticks"]),
+            runtime_policy_source=applied_policy_source,
             runtime_policy_hash=applied_hash,
         )
     state_path = args.state_path or (
@@ -141,10 +156,17 @@ def main(argv: list[str] | None = None) -> int:
         first_terminal = machine.run_until_terminal(interval_sec=args.interval_sec)
         result = {"first_episode": first_terminal, "reentry_episode": None}
         if first_terminal.get("status") == "COMPLETE":
+            reentry_policy = replace(
+                DEFAULT_REENTRY_POLICY,
+                target_ticks=int(applied["target_ticks"]),
+                runtime_policy_source=applied_policy_source,
+                runtime_policy_hash=applied_hash,
+            )
             reentry = SamsungMorningSORReentryMachine(
                 gateway=gateway,
                 state_path=DEFAULT_REENTRY_STATE_PATH,
                 first_episode_state_path=DEFAULT_STATE_PATH,
+                policy=reentry_policy,
                 live_enabled=True,
             )
             result["reentry_episode"] = reentry.run_until_terminal(
