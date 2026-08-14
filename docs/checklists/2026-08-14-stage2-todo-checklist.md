@@ -107,6 +107,12 @@
   - 경계: 수량·50:50 leg·진입·validity·무손절·미청산 보유·provider/bot/cap/broker guard는 변경하지 않았고 widget·메인 봇·삼성중공업은 대상이 아니다.
   - Rollback: 장후 broker-priced attribution 검토 후 사용자가 명시적으로 지시하면 이후 신규 목표만 +2로 복원하며 이미 접수된 목표주문은 유지한다.
 
+- [x] `[ThebornMorningSourceOnlyObservation0814] 더본코리아 morning 고정 에피소드 후보 누적관찰 구현` (`Due: 2026-08-14`, `Slot: INTRADAY`, `TimeWindow: 10:30~13:12`, `Track: ScalpingLogic`)
+  - Source: [expanded candidate research](/home/ubuntu/KORStockScan/src/engine/monitoring/low_price_two_leg_expanded_candidate_research.py), [entry-spot research](/home/ubuntu/KORStockScan/src/engine/monitoring/low_price_two_leg_entry_spot_research.py), [lower-price machine runbook](/home/ubuntu/KORStockScan/docs/low-price-two-leg-machines.md)
+  - 판정: `2026-06-05~2026-08-13` integrated-SOR 49거래일의 33일 calibration/16일 untouched OOS에서 `09:40~09:59`, L20, DD0.50, NL0.35, `(0,-1)` 2-leg, 5봉 유효, `+4호가`가 calibration 7회·14leg 완료·EV `+0.067163%`, OOS 1회·2leg 완료·EV `+0.091227%`였으나 OOS `3회·4leg` floor 미달이다.
+  - 구현: 동일 exact policy만 매일 clean-baseline expanding calibration/latest-16-day OOS로 재평가하는 `source_only_keep_collecting` 관찰 프로필을 장후 후보 연구 체인에 고정했다. moving-grid 재최적화는 차단하고 report/Telegram에 OOS floor 진행도를 표시한다.
+  - 경계: `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`, `machine_created=false`, `service_started=false`이며 실기계·timer·PREOPEN policy·계좌/주문·provider/bot/cap/threshold/broker guard는 변경하지 않는다. 분봉 OOS floor를 충족하더라도 fresh-BBO spread·passive-fill·spread/fee 차감 EV 계약이 별도 구현·검증되기 전에는 machine recommendation 목록으로 승격하지 않는다.
+
 - [ ] `[RiskyMicroEpisodeExecutableOutcomeJoin0814] risky rising-missed micro episode 실행가능 결과 결합 및 rolling EV 자격 확인` (`Due: 2026-08-14`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~20:20`, `Track: ScalpingLogic`)
   - Source: [risky_micro_episode policy](/home/ubuntu/KORStockScan/src/engine/scalping/risky_micro_episode/policy.py), [rising_missed_intraday_feedback.py](/home/ubuntu/KORStockScan/src/engine/monitoring/rising_missed_intraday_feedback.py), [pipeline_events_2026-08-14.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-08-14.jsonl)
   - 판정 기준: source candidate를 동일 후보의 실행가능 BBO 기준 passive fill 가능성·3/10/20/30초 target/adverse first-hit·timeout·비용 차감 결과와 결합하고, clean baseline 이후 rolling 30 resolved episode·10 symbols·3 trade dates를 충족한 경우에만 `source_quality_adjusted_ev_pct` 후보를 만든다.

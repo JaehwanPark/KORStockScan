@@ -82,6 +82,7 @@ REVIEWED_SYMBOLS = {
     "035720": "카카오",
     "042660": "한화오션",
     "080220": "제주반도체",
+    "475560": "더본코리아",
 }
 IMPLEMENTED_SYMBOLS = {
     profile.symbol: profile.name for profile in LIVE_PROFILES.values()
@@ -159,6 +160,96 @@ class ResearchProfile:
     session: str
     policy: ResearchPolicy
     discovery_lane: str
+    fixed_observation: bool = False
+
+
+OPERATOR_OBSERVATION_PROFILE_SPECS = {
+    "candidate_475560_morning": {
+        "candidate_id": "theborn_morning_0940_0959_l20_dd0p5_nl0p35_t4_v1",
+        "policy": ResearchPolicy(
+            time(9, 40),
+            time(9, 59),
+            lookback_bars=20,
+            rolling_high_drawdown_pct=0.50,
+            rolling_low_proximity_pct=0.35,
+            entry_offsets_ticks=(0, -1),
+            entry_valid_completed_bars=5,
+            target_ticks=4,
+        ),
+        "status": "source_only_keep_collecting",
+    }
+}
+
+
+def _operator_observation_contract(profile: ResearchProfile) -> dict[str, Any] | None:
+    spec = OPERATOR_OBSERVATION_PROFILE_SPECS.get(profile.profile_id)
+    if not spec or not profile.fixed_observation:
+        return None
+    holdout_sample_floor = {
+        "signal_episodes": METRIC_CONTRACT["sample_floor"]["holdout_signal_episodes"],
+        "completed_legs": METRIC_CONTRACT["sample_floor"]["holdout_completed_legs"],
+    }
+    observation_metric_contract = {
+        "metric_role": "fixed_episode_candidate_holdout_observation",
+        "decision_authority": "source_only_observation_no_runtime_authority",
+        "window_policy": (
+            "clean_baseline_expanding_calibration_latest_16_trading_days_holdout"
+        ),
+        "sample_floor": holdout_sample_floor,
+        "primary_decision_metric": "notional_weighted_ev_pct",
+        "source_quality_gate": [
+            "official_ka10080_success",
+            "requested_start_date_fully_bracketed",
+            "valid_unique_completed_sor_regular_ohlc",
+            "fixed_policy_identity_match",
+            "completed_legs_only_for_ev",
+            "active_unrealized_separated_from_completed_ev",
+        ],
+        "missing_execution_evidence": [
+            "prospective_fresh_bbo_spread",
+            "passive_fill_feasibility",
+            "spread_and_fee_adjusted_target_ev",
+        ],
+        "forbidden_uses": [
+            "daily_policy_reoptimization",
+            "automatic_machine_implementation_or_service_start",
+            "automatic_runtime_or_preopen_policy_promotion",
+            "minute_bar_holdout_pass_as_machine_recommendation_without_bbo_economics",
+            "account_or_order_api",
+            "real_order_submission",
+            "provider_bot_cap_threshold_or_broker_guard_change",
+            "stop_loss_or_forced_exit_creation",
+            "thin_oos_or_diagnostic_win_rate_as_live_authority",
+        ],
+    }
+    return {
+        "candidate_id": spec["candidate_id"],
+        "profile_id": profile.profile_id,
+        "symbol": profile.symbol,
+        "name": profile.name,
+        "session": profile.session,
+        "policy": baseline_candidate(profile).public(),
+        "status": spec["status"],
+        "holdout_sample_floor": holdout_sample_floor,
+        "metric_contract": observation_metric_contract,
+        "decision_authority": "source_only_observation_no_runtime_authority",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "machine_created": False,
+        "service_started": False,
+    }
+
+
+def _operator_observation_inventory(
+    profiles: dict[str, ResearchProfile],
+) -> dict[str, dict[str, Any]]:
+    return {
+        profile_id: contract
+        for profile_id, profile in profiles.items()
+        if (contract := _operator_observation_contract(profile)) is not None
+    }
 
 
 def _new_symbol_profiles(
@@ -168,13 +259,19 @@ def _new_symbol_profiles(
     for symbol, name in (candidate_symbols or CANDIDATE_SYMBOLS).items():
         for session, window in SESSION_WINDOWS.items():
             profile_id = f"candidate_{symbol}_{session}"
+            observation_spec = OPERATOR_OBSERVATION_PROFILE_SPECS.get(profile_id)
             result[profile_id] = ResearchProfile(
                 profile_id=profile_id,
                 symbol=symbol,
                 name=name,
                 session=session,
-                policy=ResearchPolicy(window[0], window[1]),
+                policy=(
+                    observation_spec["policy"]
+                    if observation_spec is not None
+                    else ResearchPolicy(window[0], window[1])
+                ),
                 discovery_lane="new_symbol",
+                fixed_observation=observation_spec is not None,
             )
     return result
 
@@ -413,6 +510,11 @@ def _recommendation_rows(
         profile = profile_inventory.get(profile_id)
         if profile is None:
             raise ResearchError("recommendation_profile_contract_unknown")
+        if profile.fixed_observation:
+            # Fixed operator observations accumulate one immutable policy only.
+            # Even after their holdout floor matures, they must not enter the
+            # generic implementation-recommendation or notifier path.
+            continue
         if (
             item.get("symbol") != profile.symbol
             or item.get("name") != profile.name
@@ -691,6 +793,7 @@ def build_report(
         raise ResearchError("all_research_symbols_source_quality_blocked")
     profiles: dict[str, dict[str, Any]] = {}
     for profile_id, profile in selected_profiles.items():
+        observation_contract = _operator_observation_contract(profile)
         if profile.symbol not in contexts_by_symbol:
             profiles[profile_id] = {
                 "profile_id": profile.profile_id,
@@ -703,6 +806,7 @@ def build_report(
                 "source_quality_reason": source_quarantine.get(
                     profile.symbol, "source_unavailable"
                 ),
+                "observation_candidate": observation_contract,
                 "runtime_effect": False,
             }
             continue
@@ -722,6 +826,7 @@ def build_report(
             profile.symbol,
             profile.session,
         ) in ACTIVE_SYMBOL_SESSIONS
+        selected["observation_candidate"] = observation_contract
         if profile.discovery_lane == "existing_symbol_logic_improvement":
             active_profile_id = profile.profile_id.removeprefix("logic_")
             policy_snapshot = (applied_policy_snapshots or {}).get(
@@ -809,9 +914,16 @@ def build_report(
                 "name": profile.name,
                 "session": profile.session,
                 "discovery_lane": profile.discovery_lane,
+                "fixed_observation": profile.fixed_observation,
             }
             for profile_id, profile in selected_profiles.items()
         },
+        "operator_observation_candidate_count": len(
+            _operator_observation_inventory(selected_profiles)
+        ),
+        "operator_observation_candidate_inventory": (
+            _operator_observation_inventory(selected_profiles)
+        ),
         "source_meta": source_meta,
         "profiles": profiles,
         "recommendations": recommendations,
@@ -902,9 +1014,16 @@ def build_source_quality_blocked_report(
                 "name": profile.name,
                 "session": profile.session,
                 "discovery_lane": profile.discovery_lane,
+                "fixed_observation": profile.fixed_observation,
             }
             for profile_id, profile in RESEARCH_PROFILES.items()
         },
+        "operator_observation_candidate_count": len(
+            _operator_observation_inventory(RESEARCH_PROFILES)
+        ),
+        "operator_observation_candidate_inventory": (
+            _operator_observation_inventory(RESEARCH_PROFILES)
+        ),
         "source_meta": {},
         "profiles": {},
         "recommendations": [],
@@ -973,6 +1092,32 @@ def render_markdown(report: dict[str, Any]) -> str:
                 "",
             ]
         )
+    lines.extend(["## Operator source-only observation candidates", ""])
+    observation_inventory = report.get("operator_observation_candidate_inventory") or {}
+    if not observation_inventory:
+        lines.append("No fixed operator observation candidate.")
+    for profile_id, contract in observation_inventory.items():
+        profile_result = (report.get("profiles") or {}).get(profile_id) or {}
+        if (
+            report.get("status") == "source_quality_blocked"
+            or profile_result.get("decision")
+            == "source_quality_quarantined_no_evaluation"
+        ):
+            lines.append(
+                f"- `{contract['candidate_id']}`: observation input "
+                "source-quality blocked; no zero-signal inference."
+            )
+            continue
+        holdout = (profile_result.get("baseline") or {}).get("holdout") or {}
+        floor = contract["holdout_sample_floor"]
+        lines.append(
+            f"- `{contract['candidate_id']}`: `{contract['name']}` "
+            f"`{contract['session']}`; OOS episodes "
+            f"`{holdout.get('signal_episodes', 0)}/{floor['signal_episodes']}`; "
+            f"completed legs `{holdout.get('completed_legs', 0)}/"
+            f"{floor['completed_legs']}`; source-only, no runtime/order authority."
+        )
+    lines.append("")
     lines.extend(
         [
             "| Lane | Symbol | Name | Session | Decision | Recommended spot | Holdout episodes | Completed | Held | Candidate EV | Baseline EV |",
@@ -1071,6 +1216,30 @@ def build_telegram_message(report: dict[str, Any]) -> str:
         )
     elif not recommendations:
         lines.append("오늘 신규 구현 추천 기준을 통과한 종목·시간대가 없습니다.")
+    observation_inventory = report.get("operator_observation_candidate_inventory") or {}
+    if observation_inventory:
+        lines.append("[고정 누적 관찰]")
+        for profile_id, contract in observation_inventory.items():
+            profile_result = (report.get("profiles") or {}).get(profile_id) or {}
+            if (
+                report.get("status") == "source_quality_blocked"
+                or profile_result.get("decision")
+                == "source_quality_quarantined_no_evaluation"
+            ):
+                lines.append(
+                    f"- {contract['name']}({contract['symbol']}) "
+                    f"{contract['session']} 관찰 입력 차단(source-quality)"
+                )
+                continue
+            holdout = (profile_result.get("baseline") or {}).get("holdout") or {}
+            floor = contract["holdout_sample_floor"]
+            lines.append(
+                f"- {contract['name']}({contract['symbol']}) {contract['session']} "
+                f"OOS {holdout.get('signal_episodes', 0)}/"
+                f"{floor['signal_episodes']}회·완료 "
+                f"{holdout.get('completed_legs', 0)}/"
+                f"{floor['completed_legs']}leg (source-only)"
+            )
     lane_sections = (
         ("신규 종목", report["new_symbol_recommendations"]),
         (
@@ -1207,6 +1376,7 @@ class CandidateRecommendationNotifier:
         recommendations = report.get("recommendations")
         candidate_symbols = report.get("candidate_symbols")
         profile_inventory = report.get("research_profile_inventory")
+        observation_inventory = report.get("operator_observation_candidate_inventory")
         basic_valid = bool(
             report.get("schema") == REPORT_SCHEMA
             and report.get("report_type") == REPORT_TYPE
@@ -1288,6 +1458,9 @@ class CandidateRecommendationNotifier:
             | set(report.get("source_quarantine") or {})
             == set(candidate_symbols) | set(IMPLEMENTED_SYMBOLS)
             and isinstance(profile_inventory, dict)
+            and isinstance(observation_inventory, dict)
+            and report.get("operator_observation_candidate_count")
+            == len(observation_inventory)
             and isinstance(report.get("profiles"), dict)
             and (
                 (
@@ -1305,6 +1478,25 @@ class CandidateRecommendationNotifier:
             )
         )
         if not basic_valid:
+            return False
+        expected_observation_inventory = _operator_observation_inventory(
+            _new_symbol_profiles(candidate_symbols)
+        )
+        if observation_inventory != expected_observation_inventory:
+            return False
+        if any(
+            not isinstance(item, dict)
+            or item.get("fixed_observation")
+            is not (profile_id in observation_inventory)
+            for profile_id, item in profile_inventory.items()
+        ):
+            return False
+        if report.get("status") != "source_quality_blocked" and any(
+            not isinstance(item, dict)
+            or item.get("observation_candidate")
+            != observation_inventory.get(profile_id)
+            for profile_id, item in (report.get("profiles") or {}).items()
+        ):
             return False
         try:
             start_date = date.fromisoformat(str(report.get("start_date") or ""))

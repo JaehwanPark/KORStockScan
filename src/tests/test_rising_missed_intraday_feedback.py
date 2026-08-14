@@ -213,7 +213,7 @@ def test_risky_micro_episode_joins_passive_fill_and_executable_short_path(tmp_pa
     )
     assert (
         report["summary"]["risky_micro_episode_ev_decision_authority"]
-        == "daily_source_only_diagnostic_not_promotion_authority"
+        == "rolling_source_only_sample_floor_pending_no_runtime_apply"
     )
     outcome_contract = report["metric_contracts"][
         "risky_micro_episode_executable_outcome"
@@ -344,8 +344,247 @@ def test_risky_micro_episode_never_joins_cross_venue_bbo(tmp_path):
 
     _, outcomes = mod._build_risky_micro_episode_source_candidates(pipeline_path)
 
-    assert outcomes[0]["outcome_join_status"] == "resolved_not_filled"
+    assert outcomes[0]["outcome_join_status"] == "pending_fill_horizon"
     assert outcomes[0]["matching_fresh_bbo_observation_count"] == 0
+    assert outcomes[0]["matching_fresh_bbo_watermark"] is None
+
+
+def test_risky_micro_episode_resolves_not_filled_only_with_matching_bbo_watermark(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    candidate = _event(
+        "micro-no-fill",
+        "475560",
+        "THEBORN",
+        "risky_micro_episode_source_candidate_observed",
+        {
+            "risky_micro_episode_status": "source_only_candidate",
+            "risky_micro_episode_reason": "fresh_passive_cost_aware_episode_candidate",
+            "risky_micro_episode_source_stage": "latency_block",
+            "risky_micro_episode_hypothetical_entry_price": 10_010,
+            "risky_micro_episode_hypothetical_target_price": 10_040,
+            "risky_micro_episode_hypothetical_adverse_price": 9_970,
+            "risky_micro_episode_conservative_total_cost_bps": 23,
+            "risky_micro_episode_passive_ttl_sec": 3,
+            "risky_micro_episode_max_hold_sec": 20,
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:00:00+09:00",
+    )
+    matching_bbo = _event(
+        "micro-no-fill",
+        "475560",
+        "THEBORN",
+        "market_data_observed",
+        {
+            "market_data_effective_best_bid": 10_020,
+            "market_data_effective_best_ask": 10_030,
+            "market_data_effective_quote_age_ms": 10,
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:00:04+09:00",
+    )
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in (candidate, matching_bbo)),
+        encoding="utf-8",
+    )
+
+    _, outcomes = mod._build_risky_micro_episode_source_candidates(pipeline_path)
+
+    assert outcomes[0]["outcome_join_status"] == "resolved_not_filled"
+    assert outcomes[0]["matching_fresh_bbo_observation_count"] == 1
+    assert outcomes[0]["matching_fresh_bbo_watermark"] == ("2026-08-14T09:00:04+09:00")
+
+
+def test_risky_micro_episode_derives_tp1_block_source_without_runtime_authority(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    tp1_block = _event(
+        "tp1-derived",
+        "475560",
+        "THEBORN",
+        "rising_missed_tp1_candidate_blocked",
+        {
+            "forced_entry_reason": "rising_missed_one_share_entry",
+            "rising_missed_tp1_evaluation_id": "tp1-eval-1",
+            "rising_missed_tp1_candidate_reason": (
+                "rising_missed_tp1_lane_not_eligible"
+            ),
+            "rising_missed_tp1_positive_support_count": 2,
+            "rising_missed_tp1_true_ofi_ewma": 0.1,
+            "rising_missed_tp1_top_depth_ratio": 1.5,
+            "rising_missed_tp1_tick_acceleration": 1.2,
+            "rising_missed_tp1_tick_acceleration_fresh": True,
+            "rising_missed_tp1_ws_momentum_window_span_sec": 5,
+            "rising_missed_tp1_hard_negative_reasons": "-",
+            "market_data_effective_best_bid": 10_000,
+            "market_data_effective_best_ask": 10_020,
+            "market_data_effective_quote_age_ms": 20,
+            "rising_missed_effective_venue": "KRX",
+            "rising_missed_market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:00:00+09:00",
+    )
+    fill = _event(
+        "tp1-derived",
+        "475560",
+        "THEBORN",
+        "market_data_observed",
+        {
+            "market_data_effective_best_bid": 10_000,
+            "market_data_effective_best_ask": 10_010,
+            "market_data_effective_quote_age_ms": 20,
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:00:01+09:00",
+    )
+    target = _event(
+        "tp1-derived",
+        "475560",
+        "THEBORN",
+        "market_data_observed",
+        {
+            "market_data_effective_best_bid": 10_050,
+            "market_data_effective_best_ask": 10_060,
+            "market_data_effective_quote_age_ms": 20,
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:00:10+09:00",
+    )
+    watermark = _event(
+        "tp1-derived",
+        "475560",
+        "THEBORN",
+        "market_data_observed",
+        {},
+        emitted_at="2026-08-14T09:00:31+09:00",
+    )
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in (tp1_block, fill, target, watermark)),
+        encoding="utf-8",
+    )
+
+    summary, outcomes = mod._build_risky_micro_episode_source_candidates(pipeline_path)
+
+    derived = next(row for row in outcomes if row["source_category"] == "tp1")
+    assert derived["source_projection_origin"] == (
+        "postclose_existing_block_event_adapter"
+    )
+    assert derived["outcome_join_status"] == "resolved_target_first"
+    assert derived["runtime_effect"] is False
+    assert derived["broker_order_forbidden"] is True
+    assert summary["risky_micro_episode_source_instrumentation_complete"] is True
+    assert "tp1" not in summary["risky_micro_episode_natural_sample_absent_categories"]
+
+
+def test_risky_micro_rolling_requires_30_resolved_10_symbols_3_dates(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    def rows_for(trade_date):
+        return [
+            {
+                "trade_date": trade_date,
+                "ts": f"{trade_date}T09:00:{index:02d}+09:00",
+                "stock_code": f"{index:06d}",
+                "stock_name": f"symbol-{index}",
+                "effective_venue": "KRX",
+                "market_session_bucket": "KRX_REGULAR",
+                "source_category": "tp1",
+                "source_stage": "tp1:rising_missed_tp1_candidate_blocked",
+                "outcome_join_status": "resolved_target_first",
+                "fill_feasible": True,
+                "net_return_bps": 10,
+                "metric_role": "source_only_counterfactual_outcome",
+                "decision_authority": "source_only_no_runtime_apply",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "rolling_eligible_daily_cap_applied": True,
+            }
+            for index in range(10)
+        ]
+
+    for report_date in ("2026-08-12", "2026-08-13"):
+        payload = {
+            "report_type": "rising_missed_intraday_feedback",
+            "target_date": report_date,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "risky_micro_episode_rolling_eligible_rows": rows_for(report_date),
+        }
+        (report_dir / f"rising_missed_intraday_feedback_{report_date}.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+
+    summary, rolling_rows = mod._clean_baseline_rolling_risky_micro_outcomes(
+        "2026-08-14",
+        rows_for("2026-08-14"),
+    )
+
+    assert len(rolling_rows) == 30
+    assert summary["risky_micro_episode_rolling_resolved_episode_count"] == 30
+    assert summary["risky_micro_episode_rolling_unique_symbol_count"] == 10
+    assert summary["risky_micro_episode_rolling_trade_date_count"] == 3
+    assert summary["risky_micro_episode_promotion_review_sample_floor_met"] is True
+    assert summary["risky_micro_episode_rolling_decision"] == (
+        "outcome_join_ready_positive_ev"
+    )
+    assert summary["risky_micro_episode_source_quality_adjusted_ev_pct"] == 0.1
+    assert "no_runtime_apply" in summary["risky_micro_episode_ev_decision_authority"]
+
+
+def test_risky_micro_rolling_excludes_truncated_legacy_daily_outcomes(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    legacy_row = {
+        "ts": "2026-08-13T09:00:00+09:00",
+        "stock_code": "475560",
+        "stock_name": "THEBORN",
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+        "source_category": "tp1",
+        "source_stage": "tp1:rising_missed_tp1_candidate_blocked",
+        "outcome_join_status": "resolved_target_first",
+        "net_return_bps": 25,
+        "outcome_evaluation_role": "eligible_source_candidate",
+    }
+    payload = {
+        "report_type": "rising_missed_intraday_feedback",
+        "target_date": "2026-08-13",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "summary": {"risky_micro_episode_observation_count": 201},
+        "risky_micro_episode_source_candidate_rows": [legacy_row] * 200,
+    }
+    (report_dir / "rising_missed_intraday_feedback_2026-08-13.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+    summary, rolling_rows = mod._clean_baseline_rolling_risky_micro_outcomes(
+        "2026-08-14",
+        [],
+    )
+
+    assert rolling_rows == []
+    assert summary["risky_micro_episode_rolling_resolved_episode_count"] == 0
+    assert summary["risky_micro_episode_rolling_window"]["excluded_reports"] == [
+        {"target_date": "2026-08-13", "reason": "truncated_daily_outcomes"}
+    ]
+    assert summary["risky_micro_episode_source_quality_adjusted_ev_pct"] is None
 
 
 def test_tp1_label_projection_preserves_plain_counterfactual_provenance():

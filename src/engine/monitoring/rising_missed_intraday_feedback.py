@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from src.engine.scalping.risky_micro_episode import evaluate_risky_micro_episode
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -41,6 +42,10 @@ RISKY_MICRO_HORIZONS_SEC = (3, 10, 20, 30)
 RISKY_MICRO_MAX_ENDPOINT_LAG_SEC = 5.0
 RISKY_MICRO_MAX_INTERNAL_GAP_SEC = 10.0
 RISKY_MICRO_MAX_QUOTE_AGE_MS = 1_000.0
+RISKY_MICRO_ROLLING_REPORT_DAYS = 20
+RISKY_MICRO_ROLLING_MIN_RESOLVED_EPISODES = 30
+RISKY_MICRO_ROLLING_MIN_UNIQUE_SYMBOLS = 10
+RISKY_MICRO_ROLLING_MIN_TRADE_DATES = 3
 RISKY_MICRO_EXPECTED_SOURCE_CATEGORIES = (
     "scanner_candidate",
     "tp1",
@@ -50,6 +55,17 @@ RISKY_MICRO_EXPECTED_SOURCE_CATEGORIES = (
     "tick_speed",
     "entry_price",
 )
+RISKY_MICRO_DERIVED_SOURCE_STAGES = {
+    "rising_missed_one_share_entry_blocked": "scanner_candidate",
+    "rising_missed_scout_quality_guard_blocked": "scanner_candidate",
+    "rising_missed_tp1_candidate_blocked": "tp1",
+    "rising_missed_tp1_candidate_deferred": "tp1",
+    "pre_submit_entry_ai_authority_guard_block": "entry_ai",
+    "real_weak_ai_micro_entry_block": "entry_ai",
+    "blocked_liquidity": "liquidity_micro",
+    "entry_price_canary_submit_block": "entry_price",
+    "entry_ai_price_input_preflight_block": "entry_price",
+}
 TP1_GROSS_TARGET_PCT = 1.30
 TP1_ADVERSE_STOP_PCT = -0.70
 TP1_COST_RESERVE_PCT = 0.30
@@ -4475,6 +4491,197 @@ def _risky_micro_source_category(source_stage: str) -> str:
     return "other"
 
 
+def _first_risky_micro_float(fields: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = _safe_float(fields.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _risky_micro_quote_age_ms(fields: dict[str, Any]) -> float | None:
+    return _first_risky_micro_float(
+        fields,
+        "market_data_effective_quote_age_ms",
+        "quote_age_at_submit_ms",
+        "quote_age_ms",
+        "ws_age_ms",
+        "pre_submit_effective_quote_age_ms",
+        "observed_mark_gap_fresh_quote_age_ms",
+    )
+
+
+def _risky_micro_has_rising_missed_lineage(row: dict[str, Any]) -> bool:
+    fields = _fields(row)
+    stage = str(row.get("stage") or "")
+    return bool(
+        _is_forced_rising_missed(row)
+        or _boolish(fields.get("rising_missed_entry_lineage"))
+        or (
+            stage.startswith("rising_missed_")
+            and bool(fields.get("rising_missed_tp1_evaluation_id"))
+        )
+    )
+
+
+def _risky_micro_projection_from_block_event(
+    row: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Project an existing rising-missed blocker into source-only research.
+
+    This adapter intentionally runs only in the report consumer.  It does not
+    add an entry owner, retry a blocked order, or mutate the live pipeline.
+    """
+
+    stage = str(row.get("stage") or "")
+    source_category = RISKY_MICRO_DERIVED_SOURCE_STAGES.get(stage)
+    if source_category is None or not _risky_micro_has_rising_missed_lineage(row):
+        return None
+    fields = _fields(row)
+    bid, ask, bbo_source = _event_executable_bbo(row)
+    quote_age_ms = _risky_micro_quote_age_ms(fields)
+    tick_acceleration_ratio = _first_risky_micro_float(
+        fields,
+        "rising_missed_tp1_tick_acceleration",
+        "rising_missed_tp1_submit_context_tick_acceleration",
+        "rising_missed_tp1_ws_tick_acceleration",
+        "tick_acceleration_ratio",
+    )
+    tick_window_span_sec = _first_risky_micro_float(
+        fields,
+        "rising_missed_tp1_ws_momentum_window_span_sec",
+        "rising_missed_tp1_submit_context_tick_window_span_sec",
+        "tick_window_span_sec",
+    )
+    if source_category == "tp1" and not any(
+        _boolish(fields.get(key))
+        for key in (
+            "rising_missed_tp1_tick_acceleration_fresh",
+            "rising_missed_tp1_submit_context_tick_acceleration_fresh",
+            "rising_missed_tp1_ws_tick_acceleration_fresh",
+        )
+    ):
+        tick_acceleration_ratio = None
+        tick_window_span_sec = None
+    tick_context_source = str(
+        fields.get("rising_missed_tp1_tick_acceleration_source")
+        or fields.get("rising_missed_tp1_submit_context_tick_acceleration_source")
+        or fields.get("rising_missed_tp1_ws_tick_acceleration_source")
+        or fields.get("tick_context_source")
+        or "missing"
+    )
+    true_ofi = _first_risky_micro_float(
+        fields,
+        "rising_missed_tp1_true_ofi_ewma",
+        "rising_missed_tp1_submit_context_true_ofi_ewma",
+        "rising_missed_micro_estimator_true_ofi_ewma",
+        "orderbook_micro_ofi_norm",
+    )
+    depth_ratio = _first_risky_micro_float(
+        fields,
+        "rising_missed_tp1_top_depth_ratio",
+        "rising_missed_tp1_submit_context_top_depth_ratio",
+    )
+    quote_imbalance = _first_risky_micro_float(fields, "orderbook_micro_qi")
+    support_count = _first_risky_micro_float(
+        fields,
+        "rising_missed_tp1_positive_support_count",
+        "rising_missed_tp1_submit_context_support_count",
+    )
+    orderbook_state = str(fields.get("orderbook_micro_state") or "").lower()
+    hard_negative_reasons = (
+        str(fields.get("rising_missed_tp1_hard_negative_reasons") or "").strip().lower()
+    )
+    large_sell_detected = any(
+        _boolish(fields.get(key))
+        for key in (
+            "large_sell_print_detected",
+            "signed_tape_sell_dominated",
+            "market_data_signed_tape_sell_dominated",
+        )
+    )
+    adverse_micro_detected = bool(
+        large_sell_detected
+        or hard_negative_reasons not in {"", "-", "none", "not_applicable"}
+        or orderbook_state in {"bearish", "strong_bearish"}
+        or (
+            true_ofi is not None
+            and true_ofi < 0.0
+            and (
+                (depth_ratio is not None and depth_ratio < 0.5)
+                or (quote_imbalance is not None and quote_imbalance < 0.25)
+            )
+        )
+    )
+    positive_micro_support = bool(
+        not adverse_micro_detected
+        and (
+            (support_count is not None and support_count >= 2.0)
+            or orderbook_state in {"bullish", "strong_bullish"}
+            or (
+                true_ofi is not None
+                and true_ofi > 0.0
+                and depth_ratio is not None
+                and depth_ratio >= 1.0
+            )
+            or (
+                true_ofi is not None
+                and true_ofi > 0.0
+                and quote_imbalance is not None
+                and quote_imbalance >= 0.5
+            )
+        )
+    )
+    source_block_reason = str(
+        fields.get("block_reason")
+        or fields.get("reason")
+        or fields.get("rising_missed_tp1_candidate_reason")
+        or fields.get("entry_ai_submit_authority_reason")
+        or stage
+    )
+    projected = evaluate_risky_micro_episode(
+        rising_missed_lineage=True,
+        source_stage=f"{source_category}:{stage}",
+        source_block_reason=source_block_reason,
+        best_bid=int(bid or 0),
+        best_ask=int(ask or 0),
+        quote_age_ms=quote_age_ms,
+        tick_acceleration_ratio=tick_acceleration_ratio,
+        tick_window_span_sec=tick_window_span_sec,
+        positive_micro_support=positive_micro_support,
+        adverse_micro_detected=adverse_micro_detected,
+        large_sell_detected=large_sell_detected,
+    )
+    projected.update(
+        {
+            "effective_venue": (
+                fields.get("rising_missed_effective_venue")
+                or fields.get("effective_venue")
+                or fields.get("venue")
+                or "unknown"
+            ),
+            "market_session_bucket": (
+                fields.get("rising_missed_market_session_bucket")
+                or fields.get("market_session_bucket")
+                or "unknown"
+            ),
+            "risky_micro_episode_source_event_stage": stage,
+            "risky_micro_episode_source_category": source_category,
+            "risky_micro_episode_source_projection_origin": (
+                "postclose_existing_block_event_adapter"
+            ),
+            "risky_micro_episode_source_bbo_provenance": bbo_source,
+            "risky_micro_episode_tick_context_source": tick_context_source,
+            "risky_micro_episode_source_observation_id": str(
+                fields.get("rising_missed_tp1_evaluation_id")
+                or fields.get("entry_price_ai_decision_trace_id")
+                or f"{stage}:{_event_ts(row)}"
+            ),
+        }
+    )
+    return projected
+
+
 def _risky_micro_ts(value: Any) -> datetime | None:
     """Normalize source timestamps before executable-path comparisons."""
 
@@ -4514,12 +4721,7 @@ def _risky_micro_fresh_executable_bbo(
 ) -> tuple[float | None, float | None, str]:
     fields = _fields(row)
     bid, ask, source = _event_executable_bbo(row)
-    quote_age_ms = _safe_float(
-        fields.get("market_data_effective_quote_age_ms")
-        or fields.get("quote_age_ms")
-        or fields.get("ws_age_ms")
-        or fields.get("pre_submit_effective_quote_age_ms")
-    )
+    quote_age_ms = _risky_micro_quote_age_ms(fields)
     if bid is None or ask is None:
         bid = _safe_float(fields.get("risky_micro_episode_best_bid"))
         ask = _safe_float(fields.get("risky_micro_episode_best_ask"))
@@ -4604,8 +4806,6 @@ def _risky_micro_horizon_measurement(
 def _join_risky_micro_executable_outcome(
     candidate: dict[str, Any],
     observations: list[dict[str, Any]],
-    *,
-    observation_watermark: datetime | None,
 ) -> dict[str, Any]:
     candidate_ts = _risky_micro_ts(candidate.get("ts"))
     entry_price = _safe_float(candidate.get("hypothetical_entry_price"))
@@ -4647,7 +4847,16 @@ def _join_risky_micro_executable_outcome(
     }
     if candidate.get("status") == "source_quality_blocked":
         return {**base, "outcome_join_status": "source_quality_blocked"}
-    if candidate_ts is None or entry_price is None or entry_price <= 0:
+    if (
+        candidate_ts is None
+        or entry_price is None
+        or entry_price <= 0
+        or target_price is None
+        or target_price <= entry_price
+        or adverse_price is None
+        or adverse_price >= entry_price
+        or total_cost_bps <= 0
+    ):
         return {**base, "outcome_join_status": "source_quality_blocked_input_missing"}
     candidate_venue = str(candidate.get("effective_venue") or "UNKNOWN").upper()
     candidate_session = str(candidate.get("market_session_bucket") or "UNKNOWN").upper()
@@ -4673,7 +4882,11 @@ def _join_risky_micro_executable_outcome(
         None,
     )
     if fill is None:
-        matured = bool(observation_watermark and observation_watermark >= ttl_end)
+        matching_watermark = max(
+            (item["ts"] for item in matching),
+            default=None,
+        )
+        matured = bool(matching_watermark and matching_watermark >= ttl_end)
         return {
             **base,
             "outcome_join_status": (
@@ -4682,6 +4895,9 @@ def _join_risky_micro_executable_outcome(
             "fill_feasible": False if matured else None,
             "passive_ttl_end": ttl_end.isoformat(),
             "matching_fresh_bbo_observation_count": len(matching),
+            "matching_fresh_bbo_watermark": (
+                matching_watermark.isoformat() if matching_watermark else None
+            ),
             "net_return_bps": 0.0 if matured else None,
         }
     fill_ts = fill["ts"]
@@ -4770,26 +4986,37 @@ def _build_risky_micro_episode_source_candidates(
     source_stage_counts: Counter[str] = Counter()
     source_category_counts: Counter[str] = Counter()
     unique_symbols: set[str] = set()
-    seen: set[tuple[str, str, str, str]] = set()
+    seen: set[tuple[str, str, str, str, str]] = set()
     rows: list[dict[str, Any]] = []
-    observation_watermark: datetime | None = None
     for row in iter_jsonl(pipeline_path):
-        row_ts = _risky_micro_ts(_event_ts(row))
-        if row_ts is not None and (
-            observation_watermark is None or row_ts > observation_watermark
-        ):
-            observation_watermark = row_ts
-        if (
-            str(row.get("stage") or "")
-            != "risky_micro_episode_source_candidate_observed"
-        ):
+        event_stage = str(row.get("stage") or "")
+        explicit_candidate = (
+            event_stage == "risky_micro_episode_source_candidate_observed"
+        )
+        projected_fields = (
+            None
+            if explicit_candidate
+            else _risky_micro_projection_from_block_event(row)
+        )
+        if not explicit_candidate and projected_fields is None:
             continue
-        fields = _fields(row)
+        fields = _fields(row) if explicit_candidate else projected_fields
+        assert isinstance(fields, dict)
         code = _event_code(row)
         status = str(fields.get("risky_micro_episode_status") or "unknown")
         reason = str(fields.get("risky_micro_episode_reason") or "unknown")
         source_stage = str(fields.get("risky_micro_episode_source_stage") or "unknown")
-        dedupe_key = (str(row.get("record_id") or ""), code, source_stage, status)
+        source_observation_id = str(
+            fields.get("risky_micro_episode_source_observation_id")
+            or ("explicit_daily_stage_status" if explicit_candidate else _event_ts(row))
+        )
+        dedupe_key = (
+            str(row.get("record_id") or ""),
+            code,
+            source_stage,
+            status,
+            source_observation_id,
+        )
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
@@ -4811,6 +5038,21 @@ def _build_risky_micro_episode_source_candidates(
                 "status": status,
                 "reason": reason,
                 "source_stage": source_stage,
+                "source_category": fields.get(
+                    "risky_micro_episode_source_category",
+                    _risky_micro_source_category(source_stage),
+                ),
+                "source_event_stage": fields.get(
+                    "risky_micro_episode_source_event_stage", event_stage
+                ),
+                "source_projection_origin": fields.get(
+                    "risky_micro_episode_source_projection_origin",
+                    "runtime_explicit_candidate_event",
+                ),
+                "source_observation_id": source_observation_id,
+                "source_bbo_provenance": fields.get(
+                    "risky_micro_episode_source_bbo_provenance", "runtime_event_payload"
+                ),
                 "source_block_reason": fields.get(
                     "risky_micro_episode_source_block_reason", "-"
                 ),
@@ -4917,7 +5159,6 @@ def _build_risky_micro_episode_source_candidates(
         outcome = _join_risky_micro_executable_outcome(
             candidate,
             observations,
-            observation_watermark=observation_watermark,
         )
         candidate.update(outcome)
         outcome_status = str(outcome.get("outcome_join_status") or "unknown")
@@ -4943,6 +5184,14 @@ def _build_risky_micro_episode_source_candidates(
         if resolved_eligible_count
         else None
     )
+    instrumented_categories = {
+        *RISKY_MICRO_DERIVED_SOURCE_STAGES.values(),
+        "latency",
+        "tick_speed",
+    }
+    projection_origin_counts = Counter(
+        str(row.get("source_projection_origin") or "unknown") for row in rows
+    )
     return {
         "risky_micro_episode_observation_count": len(rows),
         "risky_micro_episode_unique_symbol_count": len(unique_symbols),
@@ -4967,6 +5216,18 @@ def _build_risky_micro_episode_source_candidates(
         ),
         "risky_micro_episode_unobserved_source_categories": unobserved_categories,
         "risky_micro_episode_source_coverage_complete": not unobserved_categories,
+        "risky_micro_episode_natural_sample_absent_categories": (unobserved_categories),
+        "risky_micro_episode_instrumented_source_categories": sorted(
+            instrumented_categories
+        ),
+        "risky_micro_episode_source_instrumentation_complete": all(
+            category in instrumented_categories
+            for category in RISKY_MICRO_EXPECTED_SOURCE_CATEGORIES
+        ),
+        "risky_micro_episode_projection_origin_counts": [
+            {"origin": key, "count": value}
+            for key, value in projection_origin_counts.most_common()
+        ],
         "risky_micro_episode_source_only_candidate_count": status_counts.get(
             "source_only_candidate", 0
         ),
@@ -4991,6 +5252,203 @@ def _build_risky_micro_episode_source_candidates(
         "risky_micro_episode_promotion_review_sample_floor_met": False,
         "risky_micro_episode_promotion_review_sample_floor_reason": "rolling_30_resolved_10_symbols_3_dates_not_owned_by_intraday_daily_report",
     }, rows
+
+
+def _risky_micro_daily_rolling_eligible_rows(
+    trade_date: str,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep at most one resolved eligible episode per symbol and trade date."""
+
+    eligible: list[dict[str, Any]] = []
+    seen_symbols: set[str] = set()
+    for row in sorted(rows, key=lambda item: str(item.get("ts") or "")):
+        code = str(row.get("stock_code") or "").strip()
+        outcome_status = str(row.get("outcome_join_status") or "")
+        net_return_bps = _safe_float(row.get("net_return_bps"))
+        venue = str(row.get("effective_venue") or "").strip().upper()
+        session = str(row.get("market_session_bucket") or "").strip().upper()
+        if (
+            not code
+            or code in seen_symbols
+            or (
+                row.get("outcome_evaluation_role") != "eligible_source_candidate"
+                and not _boolish(row.get("rolling_eligible_daily_cap_applied"))
+            )
+            or not outcome_status.startswith("resolved_")
+            or net_return_bps is None
+            or venue not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+            or session in {"", "UNKNOWN"}
+        ):
+            continue
+        seen_symbols.add(code)
+        eligible.append(
+            {
+                "trade_date": trade_date,
+                "ts": row.get("ts"),
+                "stock_code": code,
+                "stock_name": row.get("stock_name"),
+                "effective_venue": venue,
+                "market_session_bucket": session,
+                "source_category": row.get("source_category")
+                or _risky_micro_source_category(str(row.get("source_stage") or "")),
+                "source_stage": row.get("source_stage"),
+                "outcome_join_status": outcome_status,
+                "fill_feasible": row.get("fill_feasible"),
+                "net_return_bps": round(net_return_bps, 6),
+                "metric_role": "source_only_counterfactual_outcome",
+                "decision_authority": "source_only_no_runtime_apply",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "rolling_eligible_daily_cap_applied": True,
+            }
+        )
+    return eligible
+
+
+def _clean_baseline_rolling_risky_micro_outcomes(
+    target_date: str,
+    current_daily_rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Aggregate clean-baseline source-only outcomes without live authority."""
+
+    source_rows = [dict(row) for row in current_daily_rows]
+    inspected_dates = {target_date}
+    excluded_reports: list[dict[str, str]] = []
+    prefix = "rising_missed_intraday_feedback_"
+    eligible_paths: list[Path] = []
+    for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
+        report_date = path.stem.removeprefix(prefix)
+        if CLEAN_BASELINE_DATE <= report_date < target_date:
+            eligible_paths.append(path)
+    prior_limit = max(0, RISKY_MICRO_ROLLING_REPORT_DAYS - 1)
+    for path in eligible_paths[-prior_limit:] if prior_limit else []:
+        report_date = path.stem.removeprefix(prefix)
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            excluded_reports.append(
+                {"target_date": report_date, "reason": "report_unreadable"}
+            )
+            continue
+        if not isinstance(payload, dict) or (
+            payload.get("report_type") != "rising_missed_intraday_feedback"
+            or payload.get("target_date") != report_date
+            or bool(payload.get("runtime_effect"))
+            or bool(payload.get("allowed_runtime_apply"))
+        ):
+            excluded_reports.append(
+                {"target_date": report_date, "reason": "report_contract_invalid"}
+            )
+            continue
+        daily_rows = payload.get("risky_micro_episode_rolling_eligible_rows")
+        if not isinstance(daily_rows, list):
+            candidate_rows = payload.get("risky_micro_episode_source_candidate_rows")
+            if not isinstance(candidate_rows, list):
+                excluded_reports.append(
+                    {"target_date": report_date, "reason": "daily_outcomes_missing"}
+                )
+                continue
+            payload_summary = payload.get("summary")
+            payload_summary = (
+                payload_summary if isinstance(payload_summary, dict) else {}
+            )
+            reported_observation_count = _safe_int(
+                payload_summary.get("risky_micro_episode_observation_count")
+            )
+            if reported_observation_count > len(candidate_rows):
+                excluded_reports.append(
+                    {
+                        "target_date": report_date,
+                        "reason": "truncated_daily_outcomes",
+                    }
+                )
+                continue
+            daily_rows = _risky_micro_daily_rolling_eligible_rows(
+                report_date,
+                [row for row in candidate_rows if isinstance(row, dict)],
+            )
+        else:
+            daily_rows = _risky_micro_daily_rolling_eligible_rows(
+                report_date,
+                [row for row in daily_rows if isinstance(row, dict)],
+            )
+        inspected_dates.add(report_date)
+        source_rows.extend(daily_rows)
+
+    source_rows = sorted(
+        source_rows,
+        key=lambda item: (
+            str(item.get("trade_date") or ""),
+            str(item.get("ts") or ""),
+            str(item.get("stock_code") or ""),
+        ),
+    )
+    resolved_count = len(source_rows)
+    unique_symbols = {
+        str(row.get("stock_code") or "") for row in source_rows if row.get("stock_code")
+    }
+    trade_dates = {
+        str(row.get("trade_date") or "") for row in source_rows if row.get("trade_date")
+    }
+    net_values = [
+        value
+        for value in (_safe_float(row.get("net_return_bps")) for row in source_rows)
+        if value is not None
+    ]
+    diagnostic_ev_pct = (
+        round(sum(net_values) / len(net_values) / 100.0, 6) if net_values else None
+    )
+    sample_floor_met = bool(
+        resolved_count >= RISKY_MICRO_ROLLING_MIN_RESOLVED_EPISODES
+        and len(unique_symbols) >= RISKY_MICRO_ROLLING_MIN_UNIQUE_SYMBOLS
+        and len(trade_dates) >= RISKY_MICRO_ROLLING_MIN_TRADE_DATES
+    )
+    if not sample_floor_met:
+        decision = "sample_floor_pending"
+    elif diagnostic_ev_pct is not None and diagnostic_ev_pct > 0.0:
+        decision = "outcome_join_ready_positive_ev"
+    else:
+        decision = "outcome_join_ready_non_positive_ev"
+    outcome_counts = Counter(
+        str(row.get("outcome_join_status") or "unknown") for row in source_rows
+    )
+    return {
+        "risky_micro_episode_rolling_decision": decision,
+        "risky_micro_episode_rolling_resolved_episode_count": resolved_count,
+        "risky_micro_episode_rolling_unique_symbol_count": len(unique_symbols),
+        "risky_micro_episode_rolling_trade_date_count": len(trade_dates),
+        "risky_micro_episode_rolling_trade_dates": sorted(trade_dates),
+        "risky_micro_episode_rolling_diagnostic_ev_pct": diagnostic_ev_pct,
+        "risky_micro_episode_source_quality_adjusted_ev_pct": (
+            diagnostic_ev_pct if sample_floor_met else None
+        ),
+        "risky_micro_episode_promotion_review_sample_floor_met": sample_floor_met,
+        "risky_micro_episode_promotion_review_sample_floor_reason": (
+            "rolling_30_resolved_10_symbols_3_dates_met"
+            if sample_floor_met
+            else "rolling_30_resolved_10_symbols_3_dates_pending"
+        ),
+        "risky_micro_episode_rolling_outcome_status_counts": [
+            {"status": key, "count": value}
+            for key, value in outcome_counts.most_common()
+        ],
+        "risky_micro_episode_rolling_window": {
+            "clean_baseline_date": CLEAN_BASELINE_DATE,
+            "report_days": RISKY_MICRO_ROLLING_REPORT_DAYS,
+            "inspected_source_dates": sorted(inspected_dates),
+            "excluded_reports": excluded_reports,
+            "per_symbol_daily_episode_cap": 1,
+        },
+        "risky_micro_episode_ev_decision_authority": (
+            "rolling_source_only_review_candidate_no_runtime_apply"
+            if sample_floor_met
+            else "rolling_source_only_sample_floor_pending_no_runtime_apply"
+        ),
+    }, source_rows
 
 
 def build_report(
@@ -5126,6 +5584,16 @@ def build_report(
     )
     risky_micro_episode_summary, risky_micro_episode_rows = (
         _build_risky_micro_episode_source_candidates(pipeline_path)
+    )
+    risky_micro_episode_daily_rolling_rows = _risky_micro_daily_rolling_eligible_rows(
+        target_date,
+        risky_micro_episode_rows,
+    )
+    risky_micro_episode_rolling_summary, risky_micro_episode_rolling_rows = (
+        _clean_baseline_rolling_risky_micro_outcomes(
+            target_date,
+            risky_micro_episode_daily_rolling_rows,
+        )
     )
     if first_touch_source_quality_counts["first_touch_ai_provenance_missing_count"]:
         source_quality_status = "first_touch_ai_provenance_missing"
@@ -5569,6 +6037,7 @@ def build_report(
             ),
             **adverse_micro_recovery_summary,
             **risky_micro_episode_summary,
+            **risky_micro_episode_rolling_summary,
             "code_improvement_order_count": len(code_improvement_orders),
             "consumer_readiness": {
                 "scout_workorder_input_ready": bool(forced),
@@ -5611,6 +6080,10 @@ def build_report(
         ],
         "rising_missed_adverse_micro_recovery_rows": adverse_micro_recovery_rows[-200:],
         "risky_micro_episode_source_candidate_rows": risky_micro_episode_rows[-200:],
+        "risky_micro_episode_rolling_eligible_rows": (
+            risky_micro_episode_daily_rolling_rows
+        ),
+        "risky_micro_episode_rolling_outcome_rows": risky_micro_episode_rolling_rows,
         "code_improvement_orders": code_improvement_orders,
     }
 
@@ -5815,6 +6288,10 @@ def write_outputs(
         f"{summary.get('risky_micro_episode_unobserved_source_categories')}",
         f"- risky_micro_episode_source_coverage_complete: "
         f"{summary.get('risky_micro_episode_source_coverage_complete')}",
+        f"- risky_micro_episode_source_instrumentation_complete: "
+        f"{summary.get('risky_micro_episode_source_instrumentation_complete')}",
+        f"- risky_micro_episode_natural_sample_absent_categories: "
+        f"{summary.get('risky_micro_episode_natural_sample_absent_categories')}",
         f"- risky_micro_episode_outcome_join_status_counts: "
         f"{summary.get('risky_micro_episode_outcome_join_status_counts')}",
         f"- risky_micro_episode_resolved_eligible_episode_count: "
@@ -5823,6 +6300,18 @@ def write_outputs(
         f"{summary.get('risky_micro_episode_daily_source_quality_adjusted_ev_pct')}",
         f"- risky_micro_episode_ev_decision_authority: "
         f"{summary.get('risky_micro_episode_ev_decision_authority')}",
+        f"- risky_micro_episode_rolling_decision: "
+        f"{summary.get('risky_micro_episode_rolling_decision')}",
+        f"- risky_micro_episode_rolling_resolved_episode_count: "
+        f"{summary.get('risky_micro_episode_rolling_resolved_episode_count')}",
+        f"- risky_micro_episode_rolling_unique_symbol_count: "
+        f"{summary.get('risky_micro_episode_rolling_unique_symbol_count')}",
+        f"- risky_micro_episode_rolling_trade_date_count: "
+        f"{summary.get('risky_micro_episode_rolling_trade_date_count')}",
+        f"- risky_micro_episode_rolling_diagnostic_ev_pct: "
+        f"{summary.get('risky_micro_episode_rolling_diagnostic_ev_pct')}",
+        f"- risky_micro_episode_source_quality_adjusted_ev_pct: "
+        f"{summary.get('risky_micro_episode_source_quality_adjusted_ev_pct')}",
         f"- risky_micro_episode_promotion_review_sample_floor_met: "
         f"{summary.get('risky_micro_episode_promotion_review_sample_floor_met')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
@@ -5892,6 +6381,7 @@ def write_outputs(
             lines.append(
                 "- ts={ts} code={stock_code} name={stock_name} status={status} "
                 "reason={reason} source_stage={source_stage} block={source_block_reason} "
+                "origin={source_projection_origin} source_event={source_event_stage} "
                 "venue={effective_venue} session={market_session_bucket} "
                 "bbo={best_bid}/{best_ask} spread_bps={spread_bps} "
                 "tick_accel={tick_acceleration_ratio} tick_span={tick_window_span_sec} "

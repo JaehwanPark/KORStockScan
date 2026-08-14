@@ -385,6 +385,11 @@ def _window_grid(profile: MachineProfile) -> tuple[tuple[int, int], ...]:
 
 
 def candidate_grid(profile: MachineProfile) -> tuple[SpotCandidate, ...]:
+    if bool(getattr(profile, "fixed_observation", False)):
+        # A fixed observation candidate must accumulate evidence for one
+        # immutable policy. Re-optimizing it every day would turn the latest
+        # 16-day holdout into a moving selection target.
+        return (baseline_candidate(profile),)
     baseline_plan = (
         tuple(profile.policy.entry_offsets_ticks),
         int(profile.policy.entry_valid_completed_bars),

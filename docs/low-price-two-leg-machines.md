@@ -218,6 +218,23 @@ targets, stops, providers, the main bot, caps, or broker guards. A recommended
 profile still requires a separate user instruction, implementation, and review
 gate.
 
+The fixed reviewed universe also contains the operator-directed source-only
+observation candidate `candidate_475560_morning` for 더본코리아. Its immutable
+policy is `09:40~09:59`, lookback `20`, drawdown `0.50%`, near-low `0.35%`,
+entries `(signal close, signal close - 1 tick)`, five completed-bar validity,
+and a `+4 tick` target. The postclose report accumulates the same candidate
+against the latest 16 trading-day holdout and reports progress toward three
+episodes and four completed legs. It cannot be re-optimized, installed, started,
+or promoted to the machine-recommendation list or real orders by this observation
+contract. Its primary decision metric is completed-leg
+`notional_weighted_ev_pct`; official-history success, the complete clean-baseline
+date window, exact fixed-policy identity, valid SOR OHLC, and separation of active
+unrealized legs are mandatory source gates. Completed-minute evidence does not
+prove fresh-BBO spread, passive-fill feasibility, or spread-and-fee-adjusted
+target EV. Those prospective checks require a separate reviewed
+execution-quality contract. Thin OOS evidence and diagnostic win rate cannot
+become live authority.
+
 ## Episode market-data request control
 
 All live lower-price profiles share the episode-only `ka10080` read controller.

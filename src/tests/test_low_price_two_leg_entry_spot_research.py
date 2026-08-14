@@ -67,6 +67,23 @@ def test_logic_improvement_grid_expands_execution_plan_without_live_authority():
     assert all(len(item.entry_offsets_ticks) == 2 for item in candidate_grid(profile))
 
 
+def test_fixed_operator_observation_grid_never_reoptimizes_the_policy():
+    profile = RESEARCH_PROFILES["candidate_475560_morning"]
+    grid = candidate_grid(profile)
+
+    assert len(grid) == 1
+    assert grid[0].public() == {
+        "scan_start": "09:40",
+        "scan_end": "09:59",
+        "lookback_bars": 20,
+        "rolling_high_drawdown_pct": 0.5,
+        "rolling_low_proximity_pct": 0.35,
+        "entry_offsets_ticks": [0, -1],
+        "entry_valid_completed_bars": 5,
+        "target_ticks": 4,
+    }
+
+
 def test_target_cannot_complete_on_the_same_bar_as_fill():
     started = datetime(2026, 8, 10, 13, 16, tzinfo=KST)
     fill = _bar(started, low=19_900, high=20_100)

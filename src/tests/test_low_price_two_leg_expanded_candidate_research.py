@@ -66,6 +66,101 @@ def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions()
     )
 
 
+def test_theborn_morning_is_fixed_source_only_operator_observation_candidate():
+    profile = expanded.NEW_SYMBOL_PROFILES["candidate_475560_morning"]
+    contract = expanded._operator_observation_contract(profile)
+
+    assert expanded.CANDIDATE_SYMBOLS["475560"] == "더본코리아"
+    assert profile.fixed_observation is True
+    assert profile.policy.scan_start.strftime("%H:%M") == "09:40"
+    assert profile.policy.scan_last_bar.strftime("%H:%M") == "09:59"
+    assert profile.policy.lookback_bars == 20
+    assert profile.policy.rolling_high_drawdown_pct == pytest.approx(0.50)
+    assert profile.policy.rolling_low_proximity_pct == pytest.approx(0.35)
+    assert profile.policy.entry_offsets_ticks == (0, -1)
+    assert profile.policy.entry_valid_completed_bars == 5
+    assert profile.policy.target_ticks == 4
+    assert contract is not None
+    assert contract["status"] == "source_only_keep_collecting"
+    assert contract["runtime_effect"] is False
+    assert contract["actual_order_submitted"] is False
+    assert contract["broker_order_forbidden"] is True
+    assert contract["metric_contract"] == {
+        "metric_role": "fixed_episode_candidate_holdout_observation",
+        "decision_authority": "source_only_observation_no_runtime_authority",
+        "window_policy": (
+            "clean_baseline_expanding_calibration_latest_16_trading_days_holdout"
+        ),
+        "sample_floor": {"signal_episodes": 3, "completed_legs": 4},
+        "primary_decision_metric": "notional_weighted_ev_pct",
+        "source_quality_gate": [
+            "official_ka10080_success",
+            "requested_start_date_fully_bracketed",
+            "valid_unique_completed_sor_regular_ohlc",
+            "fixed_policy_identity_match",
+            "completed_legs_only_for_ev",
+            "active_unrealized_separated_from_completed_ev",
+        ],
+        "missing_execution_evidence": [
+            "prospective_fresh_bbo_spread",
+            "passive_fill_feasibility",
+            "spread_and_fee_adjusted_target_ev",
+        ],
+        "forbidden_uses": [
+            "daily_policy_reoptimization",
+            "automatic_machine_implementation_or_service_start",
+            "automatic_runtime_or_preopen_policy_promotion",
+            "minute_bar_holdout_pass_as_machine_recommendation_without_bbo_economics",
+            "account_or_order_api",
+            "real_order_submission",
+            "provider_bot_cap_threshold_or_broker_guard_change",
+            "stop_loss_or_forced_exit_creation",
+            "thin_oos_or_diagnostic_win_rate_as_live_authority",
+        ],
+    }
+
+
+def test_fixed_operator_observation_never_enters_implementation_recommendations():
+    profile = expanded.NEW_SYMBOL_PROFILES["candidate_475560_morning"]
+    profiles = {
+        profile.profile_id: {
+            "decision": "holdout_pass_source_only_early_candidate",
+            "symbol": profile.symbol,
+            "name": profile.name,
+            "session": profile.session,
+            "recommended_spot": expanded.baseline_candidate(profile).public(),
+            "selected": {
+                "holdout": {
+                    "signal_episodes": 10,
+                    "completed_legs": 20,
+                    "held_legs": 0,
+                    "held_leg_rate_per_filled_leg": 0.0,
+                    "notional_weighted_ev_pct": 1.0,
+                }
+            },
+            "baseline": {
+                "holdout": {
+                    "notional_weighted_ev_pct": 1.0,
+                }
+            },
+        }
+    }
+    source_meta = {
+        profile.symbol: {
+            "latest_close_price": 30_000,
+        }
+    }
+
+    assert (
+        expanded._recommendation_rows(
+            profiles,
+            source_meta,
+            research_profiles={profile.profile_id: profile},
+        )
+        == []
+    )
+
+
 def test_fetch_expanded_symbol_requires_explicit_research_allowlist():
     symbol = next(iter(expanded.CANDIDATE_SYMBOLS))
     started = date(2026, 6, 5)
@@ -179,6 +274,10 @@ def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
     )
     assert report["recommendation_count"] == 0
     assert report["runtime_effect"] is False
+    assert report["operator_observation_candidate_count"] == 1
+    assert set(report["operator_observation_candidate_inventory"]) == {
+        "candidate_475560_morning"
+    }
 
 
 def test_expanded_report_quarantines_one_bad_symbol_without_blocking_others(
@@ -660,10 +759,24 @@ def _notification_report(recommendations: list[dict] | None = None) -> dict:
                 "name": profile.name,
                 "session": profile.session,
                 "discovery_lane": profile.discovery_lane,
+                "fixed_observation": profile.fixed_observation,
             }
             for profile_id, profile in expanded.RESEARCH_PROFILES.items()
         },
-        "profiles": {profile_id: {} for profile_id in expanded.RESEARCH_PROFILES},
+        "operator_observation_candidate_count": len(
+            expanded._operator_observation_inventory(expanded.RESEARCH_PROFILES)
+        ),
+        "operator_observation_candidate_inventory": (
+            expanded._operator_observation_inventory(expanded.RESEARCH_PROFILES)
+        ),
+        "profiles": {
+            profile_id: {
+                "observation_candidate": expanded._operator_observation_inventory(
+                    expanded.RESEARCH_PROFILES
+                ).get(profile_id)
+            }
+            for profile_id in expanded.RESEARCH_PROFILES
+        },
         "recommendation_count": len(rows),
         "recommendations": rows,
         "new_symbol_recommendations": new_rows,
@@ -769,6 +882,12 @@ def test_admin_notifier_fails_closed_for_invalid_authority(tmp_path):
     report["start_date"] = "2026-06-08"
     assert notifier.notify(report) == "invalid_report"
 
+    report = _notification_report()
+    report["operator_observation_candidate_inventory"]["candidate_475560_morning"][
+        "policy"
+    ]["target_ticks"] = 2
+    assert notifier.notify(report) == "invalid_report"
+
 
 def test_admin_notifier_exposes_exhausted_delivery_retries(tmp_path):
     attempts = []
@@ -823,6 +942,8 @@ def test_source_quality_blocked_result_is_reported_to_admin_without_recommendati
     assert notifier.notify(report) == "sent"
     assert "source-quality 문제로 신규 추천을 산출하지 않았습니다" in sent[0]
     assert "015760_source_quality_fail" in sent[0]
+    assert "관찰 입력 차단(source-quality)" in sent[0]
+    assert "OOS 0/3" not in sent[0]
 
 
 def test_telegram_transport_requires_explicit_ok_response(monkeypatch):
