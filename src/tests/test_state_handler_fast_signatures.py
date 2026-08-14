@@ -3399,6 +3399,17 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
             "holding_score_preflight_source_quality": "stale",
             "holding_score_preflight_source_quality_reason": "tick_context_stale,tick_context_quality:stale_tick",
             "holding_score_raw_score_non50_neutralized": True,
+            "holding_score_model_action": "EXIT",
+            "holding_score_model_score": 23,
+            "holding_score_model_confidence": 81,
+            "holding_score_model_reason": "support failed",
+            "holding_score_model_data_quality": "fresh",
+            "holding_score_effective_action": "HOLD",
+            "holding_score_source_quality_override_applied": True,
+            "holding_score_source_quality_override_reason": "holding_context_blocked",
+            "holding_score_source_quality_override_blockers": [
+                "microstructure_missing_or_stale"
+            ],
             "holding_score_timeout_like": True,
             "holding_score_transport_fail_closed": True,
             "holding_score_transport_fail_closed_reason": "OpenAI Responses HTTP timeout budget exhausted",
@@ -3471,6 +3482,19 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
         == "tick_context_stale,tick_context_quality:stale_tick"
     )
     assert fields["holding_score_raw_score_non50_neutralized"] is True
+    assert fields["holding_score_model_action"] == "EXIT"
+    assert fields["holding_score_model_score"] == 23
+    assert fields["holding_score_model_confidence"] == 81
+    assert fields["holding_score_model_reason"] == "support failed"
+    assert fields["holding_score_model_data_quality"] == "fresh"
+    assert fields["holding_score_effective_action"] == "HOLD"
+    assert fields["holding_score_source_quality_override_applied"] is True
+    assert fields["holding_score_source_quality_override_reason"] == (
+        "holding_context_blocked"
+    )
+    assert fields["holding_score_source_quality_override_blockers"] == [
+        "microstructure_missing_or_stale"
+    ]
     assert fields["holding_score_timeout_like"] is True
     assert fields["holding_score_transport_fail_closed"] is True
     assert (

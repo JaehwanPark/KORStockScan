@@ -9522,15 +9522,42 @@ class GPTSniperEngine:
             normalized = self._normalize_holding_score_result(
                 result, source_quality=source_quality
             )
+            model_holding_score = dict(normalized)
+            model_holding_score_data_quality = (
+                self._normalize_holding_score_data_quality(
+                    (
+                        model_holding_score.get("raw")
+                        if isinstance(model_holding_score.get("raw"), dict)
+                        else {}
+                    ).get("data_quality"),
+                    fallback=model_holding_score["data_quality"],
+                )
+            )
             holding_payload = holding_decision_context_model_payload(holding_context)
             holding_quality = (
                 holding_payload.get("source_quality")
                 if isinstance(holding_payload.get("source_quality"), dict)
                 else {}
             )
-            if holding_payload.get("enabled") and not bool(
-                holding_quality.get("hold_defer_allowed", False)
-            ):
+            raw_holding_context_blockers = holding_quality.get("blockers", [])
+            holding_context_blockers = (
+                [
+                    str(blocker)
+                    for blocker in raw_holding_context_blockers
+                    if str(blocker).strip()
+                ]
+                if isinstance(raw_holding_context_blockers, list)
+                else []
+            )
+            holding_source_quality_override_applied = bool(
+                holding_payload.get("enabled")
+                and not bool(holding_quality.get("hold_defer_allowed", False))
+            )
+            if holding_source_quality_override_applied:
+                override_reason = (
+                    "holding_context_source_quality_unusable_"
+                    "defer_to_deterministic_guards"
+                )
                 normalized.update(
                     {
                         "action": "HOLD",
@@ -9539,7 +9566,7 @@ class GPTSniperEngine:
                         "position_state": "stale_or_insufficient",
                         "data_quality": "stale",
                         "score_basis": "holding_context_source_quality_blocked",
-                        "reason": "Holding context cannot authorize continuation support",
+                        "reason": override_reason,
                     }
                 )
                 normalized["risk_factors"] = list(
@@ -9547,10 +9574,12 @@ class GPTSniperEngine:
                         list(normalized.get("risk_factors") or [])
                         + [
                             f"holding_context:{blocker}"
-                            for blocker in holding_quality.get("blockers", [])
+                            for blocker in holding_context_blockers
                         ]
                     )
                 )
+            else:
+                override_reason = "-"
             normalized.update(feature_audit_fields)
             meta_source = result if isinstance(result, dict) else transport_meta
             self._copy_ai_transport_trace_metadata(normalized, meta_source)
@@ -9568,20 +9597,52 @@ class GPTSniperEngine:
                     "holding_score_data_quality": normalized["data_quality"],
                     "holding_score_confidence": normalized["confidence"],
                     "holding_score_basis": normalized["score_basis"],
-                    "holding_score_raw": normalized["score"],
+                    "holding_score_raw": model_holding_score["score"],
                     "holding_score_effective": normalized["score"],
                     "holding_score_source": "live",
                     "holding_score_raw_source": "live",
-                    "holding_score_raw_data_quality": normalized["data_quality"],
-                    "holding_score_effective_source": "live",
+                    "holding_score_raw_data_quality": model_holding_score[
+                        "data_quality"
+                    ],
+                    "holding_score_effective_source": (
+                        "source_quality_override"
+                        if holding_source_quality_override_applied
+                        else "live"
+                    ),
                     "holding_score_effective_from_prior": False,
                     "holding_score_age_sec": 0,
                     "holding_score_effective_usable": normalized["data_quality"]
                     in {"fresh", "partial"},
                     "holding_score_excluded_reason": (
-                        "-"
-                        if normalized["data_quality"] in {"fresh", "partial"}
-                        else normalized["data_quality"]
+                        "holding_context_source_quality_blocked"
+                        if holding_source_quality_override_applied
+                        else (
+                            "-"
+                            if normalized["data_quality"] in {"fresh", "partial"}
+                            else normalized["data_quality"]
+                        )
+                    ),
+                    "holding_score_model_action": model_holding_score["action"],
+                    "holding_score_model_score": model_holding_score["score"],
+                    "holding_score_model_confidence": model_holding_score[
+                        "confidence"
+                    ],
+                    "holding_score_model_reason": model_holding_score["reason"],
+                    "holding_score_model_data_quality": (
+                        model_holding_score_data_quality
+                    ),
+                    "holding_score_effective_action": normalized["action"],
+                    "holding_score_source_quality_override_applied": (
+                        holding_source_quality_override_applied
+                    ),
+                    "holding_score_source_quality_override_reason": override_reason,
+                    "holding_score_source_quality_override_blockers": (
+                        holding_context_blockers
+                    ),
+                    "holding_score_raw_score_non50_neutralized": bool(
+                        holding_source_quality_override_applied
+                        and model_holding_score["score"] != 50
+                        and normalized["score"] == 50
                     ),
                     "holding_score_source_quality_reason": source_quality.get(
                         "source_quality_reason", "-"

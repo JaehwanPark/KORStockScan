@@ -1329,6 +1329,65 @@ def test_no_provider_holding_trace_uses_canonical_logical_endpoint(
     assert row["provider_actual"] is None
 
 
+def test_holding_trace_preserves_model_decision_before_source_quality_override(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    trace.record_ai_decision_trace(
+        {
+            "action": "HOLD",
+            "score": 50,
+            "confidence": 0,
+            "reason": (
+                "holding_context_source_quality_unusable_"
+                "defer_to_deterministic_guards"
+            ),
+            "holding_score_model_action": "EXIT",
+            "holding_score_model_score": 23,
+            "holding_score_model_confidence": 81,
+            "holding_score_model_reason": "support failed",
+            "holding_score_model_data_quality": "fresh",
+            "holding_score_effective_action": "HOLD",
+            "holding_score_source_quality_override_applied": True,
+            "holding_score_source_quality_override_reason": (
+                "holding_context_source_quality_unusable_"
+                "defer_to_deterministic_guards"
+            ),
+            "holding_score_source_quality_override_blockers": [
+                "microstructure_missing_or_stale"
+            ],
+            "provider_called": True,
+            "provider": "openai",
+            "ai_parse_ok": True,
+        },
+        prompt_type="scalping_holding_score",
+        prompt_version="holding_score_v2",
+        result_source="live",
+        stock_code="005930",
+        provider_called=True,
+    )
+
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["action"] == "HOLD"
+    assert row["score"] == 50
+    assert row["holding_score_model_action"] == "EXIT"
+    assert row["holding_score_model_score"] == 23
+    assert row["holding_score_model_confidence"] == 81
+    assert row["holding_score_model_reason"] == "support failed"
+    assert row["holding_score_model_data_quality"] == "fresh"
+    assert row["holding_score_effective_action"] == "HOLD"
+    assert row["holding_score_source_quality_override_applied"] is True
+    assert row["holding_score_source_quality_override_blockers"] == [
+        "microstructure_missing_or_stale"
+    ]
+    outcome = _rows(trace._outcome_path(trace._date_text()))[0]
+    assert outcome["holding_score_model_action"] == "EXIT"
+    assert outcome["holding_score_model_score"] == 23
+    assert outcome["holding_score_effective_action"] == "HOLD"
+    assert outcome["holding_score_source_quality_override_applied"] is True
+
+
 def test_string_false_preflight_contract_cannot_create_outcome_label(
     monkeypatch, tmp_path
 ):

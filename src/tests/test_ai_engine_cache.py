@@ -1070,6 +1070,12 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
     assert result["holding_score_effective_usable"] is True
     assert result["holding_score_raw_source"] == "live"
     assert result["holding_score_effective_source"] == "live"
+    assert result["holding_score_raw"] == result["holding_score_effective"]
+    assert result["holding_score_model_action"] == result["action"]
+    assert result["holding_score_effective_action"] == result["action"]
+    assert result["holding_score_source_quality_override_applied"] is False
+    assert result["holding_score_source_quality_override_reason"] == "-"
+    assert result["holding_score_source_quality_override_blockers"] == []
     assert result["openai_transport_mode"] == "http"
     assert result["openai_endpoint_name"] == "holding_score"
     assert result["openai_schema_name"] == "holding_score_v2"
@@ -1203,6 +1209,27 @@ def test_holding_context_is_shared_and_blocks_unsupported_continuation(monkeypat
     assert "holding_decision_context_v1" in captured["holding_flow"]
     assert "holding_decision_context_v1" in captured["overnight"]
     assert score["score"] == 50
+    assert score["action"] == "HOLD"
+    assert score["reason"] == (
+        "holding_context_source_quality_unusable_defer_to_deterministic_guards"
+    )
+    assert score["holding_score_model_action"] == "HOLD"
+    assert score["holding_score_model_score"] == 88
+    assert score["holding_score_model_confidence"] == 90
+    assert score["holding_score_model_reason"] == "hold"
+    assert score["holding_score_model_data_quality"] == "fresh"
+    assert score["holding_score_raw"] == 88
+    assert score["holding_score_raw_data_quality"] == "stale"
+    assert score["holding_score_effective"] == 50
+    assert score["holding_score_effective_action"] == "HOLD"
+    assert score["holding_score_effective_source"] == "source_quality_override"
+    assert score["holding_score_effective_usable"] is False
+    assert score["holding_score_source_quality_override_applied"] is True
+    assert score["holding_score_source_quality_override_reason"] == (
+        "holding_context_source_quality_unusable_defer_to_deterministic_guards"
+    )
+    assert score["holding_score_source_quality_override_blockers"]
+    assert score["holding_score_raw_score_non50_neutralized"] is True
     assert score["holding_context_hold_defer_allowed"] is False
     assert flow["action"] == "HOLD"
     assert flow["holding_context_hold_defer_allowed"] is False

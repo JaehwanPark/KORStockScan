@@ -1965,6 +1965,43 @@ def record_ai_decision_trace(
             "confidence": _safe_number(_optional(merged, "confidence")),
             "reason": str(_optional(merged, "reason", "report") or "")[:500],
             "reason_codes": _reason_codes(merged),
+            "holding_score_model_action": _optional(
+                merged, "holding_score_model_action"
+            ),
+            "holding_score_model_score": _safe_number(
+                merged.get("holding_score_model_score")
+            ),
+            "holding_score_model_confidence": _safe_number(
+                merged.get("holding_score_model_confidence")
+            ),
+            "holding_score_model_reason": str(
+                merged.get("holding_score_model_reason") or ""
+            )[:500],
+            "holding_score_model_data_quality": _optional(
+                merged, "holding_score_model_data_quality"
+            ),
+            "holding_score_effective_action": _optional(
+                merged, "holding_score_effective_action"
+            ),
+            "holding_score_source_quality_override_applied": _safe_bool(
+                merged.get("holding_score_source_quality_override_applied")
+            ),
+            "holding_score_source_quality_override_reason": _optional(
+                merged, "holding_score_source_quality_override_reason"
+            ),
+            "holding_score_source_quality_override_blockers": (
+                [
+                    str(blocker)
+                    for blocker in merged.get(
+                        "holding_score_source_quality_override_blockers", []
+                    )
+                ]
+                if isinstance(
+                    merged.get("holding_score_source_quality_override_blockers"),
+                    list,
+                )
+                else []
+            ),
             "decision_result_sha256": decision_result_sha256,
             "parent_decision_trace_id": _optional(
                 merged, "ai_decision_parent_trace_id"
@@ -2050,6 +2087,28 @@ def record_ai_decision_trace(
             "score": trace_row["score"],
             "confidence": trace_row["confidence"],
             "reason_codes": trace_row["reason_codes"],
+            "holding_score_model_action": trace_row[
+                "holding_score_model_action"
+            ],
+            "holding_score_model_score": trace_row["holding_score_model_score"],
+            "holding_score_model_confidence": trace_row[
+                "holding_score_model_confidence"
+            ],
+            "holding_score_model_data_quality": trace_row[
+                "holding_score_model_data_quality"
+            ],
+            "holding_score_effective_action": trace_row[
+                "holding_score_effective_action"
+            ],
+            "holding_score_source_quality_override_applied": trace_row[
+                "holding_score_source_quality_override_applied"
+            ],
+            "holding_score_source_quality_override_reason": trace_row[
+                "holding_score_source_quality_override_reason"
+            ],
+            "holding_score_source_quality_override_blockers": trace_row[
+                "holding_score_source_quality_override_blockers"
+            ],
             "entry_setup_family": trace_row["entry_setup_family"],
             "entry_setup_state": trace_row["entry_setup_state"],
             "entry_structure_phase": trace_row["entry_structure_phase"],

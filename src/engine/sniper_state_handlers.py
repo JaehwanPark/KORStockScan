@@ -44845,6 +44845,11 @@ def _build_ai_ops_log_fields(
         "holding_score_transport_fail_closed_reason",
         "holding_score_action",
         "holding_score_position_state",
+        "holding_score_model_action",
+        "holding_score_model_reason",
+        "holding_score_model_data_quality",
+        "holding_score_effective_action",
+        "holding_score_source_quality_override_reason",
         "entry_candle_context_schema",
         "entry_candle_venue",
         "entry_candle_session",
@@ -44954,6 +44959,7 @@ def _build_ai_ops_log_fields(
         "holding_score_transport_fail_closed",
         "holding_score_preflight_blocked",
         "holding_score_raw_score_non50_neutralized",
+        "holding_score_source_quality_override_applied",
         "entry_candle_context_enabled",
         "entry_candle_forming_bar_present",
         "entry_setup_live_policy_runtime_effect",
@@ -45058,6 +45064,8 @@ def _build_ai_ops_log_fields(
         "holding_score_raw",
         "holding_score_effective",
         "holding_score_confidence",
+        "holding_score_model_score",
+        "holding_score_model_confidence",
         "holding_score_age_sec",
     ):
         if field_name in payload:
@@ -45066,6 +45074,13 @@ def _build_ai_ops_log_fields(
         out["holding_score_effective_usable"] = bool(
             payload.get("holding_score_effective_usable")
         )
+    if isinstance(payload.get("holding_score_source_quality_override_blockers"), list):
+        out["holding_score_source_quality_override_blockers"] = [
+            str(blocker)
+            for blocker in payload.get(
+                "holding_score_source_quality_override_blockers", []
+            )
+        ]
     for field_name in (
         "holding_score_effective_from_prior",
         "holding_score_negative_exit_usable",
@@ -78142,7 +78157,9 @@ def handle_holding_state(
                                 "ai_result_source": "engine_missing_method",
                                 "ai_fallback_score_50": True,
                             }
-                        raw_ai_score = ai_decision.get("score", 50)
+                        raw_ai_score = ai_decision.get(
+                            "holding_score_raw", ai_decision.get("score", 50)
+                        )
                         ai_cache_hit = bool(ai_decision.get("cache_hit", False))
                         ai_result_source = (
                             "fallback_score_50"
