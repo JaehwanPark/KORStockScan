@@ -79,9 +79,6 @@ from src.engine.scalping.watch_budget import (
 from src.engine.scalping.limit_down_watch import (  # noqa: E402
     LIMIT_DOWN_OBSERVATION_REGISTRY,
 )
-from src.engine.scalping.upper_limit_watch import (  # noqa: E402
-    UPPER_LIMIT_OBSERVATION_REGISTRY,
-)
 from src.engine.scalping.market_data_enrichment import build_market_data_enrichment
 from src.engine.scalping.position_sizing_allocator import (
     ScalpingSizingContext,
@@ -5295,7 +5292,6 @@ def _scalping_watch_budget_policy_fields(targets, now_ts):
     opening_active = _scalping_watch_budget_opening_window_active(now_ts)
     policy = watch_budget_limits(total, opening_window_active=opening_active)
     active_limit_down_observation_code = LIMIT_DOWN_OBSERVATION_REGISTRY.active_code()
-    active_upper_limit_observation_code = UPPER_LIMIT_OBSERVATION_REGISTRY.active_code()
     observation_handoff_present = bool(
         active_limit_down_observation_code
         and any(
@@ -5303,15 +5299,6 @@ def _scalping_watch_budget_policy_fields(targets, now_ts):
             == active_limit_down_observation_code
             and _scalping_watch_budget_owner(target, now_ts=now_ts)
             == LIMIT_DOWN_ROTATION
-            for target in targets or []
-        )
-    )
-    upper_observation_handoff_present = bool(
-        active_upper_limit_observation_code
-        and any(
-            str((target or {}).get("code") or "").strip()[:6]
-            == active_upper_limit_observation_code
-            and _scalping_watch_budget_owner(target, now_ts=now_ts) == RISING_MISSED
             for target in targets or []
         )
     )
@@ -5323,12 +5310,7 @@ def _scalping_watch_budget_policy_fields(targets, now_ts):
             if active_limit_down_observation_code and not observation_handoff_present
             else 0
         ),
-        RISING_MISSED: (
-            1
-            if active_upper_limit_observation_code
-            and not upper_observation_handoff_present
-            else 0
-        ),
+        RISING_MISSED: 0,
     }
     for target in targets or []:
         owner = _scalping_watch_budget_owner(target, now_ts=now_ts)
@@ -7780,29 +7762,6 @@ def _scanner_runtime_context_updates(payload):
         "limit_down_same_day_reentry_allowed",
         "limit_down_overnight_allowed",
         "limit_down_normal_scalping_guards_required",
-        "upper_limit_live_policy_key",
-        "upper_limit_live_policy_matched",
-        "upper_limit_live_policy_source_date",
-        "upper_limit_live_policy_version",
-        "upper_limit_live_policy_sample_count",
-        "upper_limit_live_trigger_type",
-        "upper_limit_trigger_confirmed_epoch",
-        "upper_limit_last_tick_epoch",
-        "upper_limit_last_quote_epoch",
-        "upper_limit_prior_close",
-        "upper_limit_current_limit_price",
-        "upper_limit_best_ask",
-        "upper_limit_best_bid",
-        "upper_limit_entry_spread_pct",
-        "upper_limit_max_entry_spread_pct",
-        "upper_limit_cohort",
-        "upper_limit_price_band",
-        "upper_limit_risk_max_daily_entries",
-        "upper_limit_scale_in_allowed",
-        "upper_limit_same_day_reentry_allowed",
-        "upper_limit_overnight_allowed",
-        "upper_limit_normal_scalping_guards_required",
-        "upper_limit_entry_proximity_guard_required",
     ):
         value = payload.get(key)
         if value not in (None, ""):

@@ -201,6 +201,7 @@ Unorganized report-only/legacy artifacts are managed by `calibration_source_bund
 3. Operational automation evidence such as cron, wrapper, manifest, parser, and report freshness is separate from strategy effect or live approval evidence.
 5. `combined` sim+real diagnostics may be used for operational observation, but not for real execution quality or real-order approval.
 6. New report-only artifacts are not automation-chain inputs unless they have source bundle consumer, metric contract, and forbidden uses. If the user declares a separate `operator_runtime_override`, record artifact output and runtime env override separately, with rollback env and safety guard priority.
+7. The previous-limit-up rotation observation family (`upper_limit_watch`, its candidate/report/counterfactual/bounded-live artifacts, and `UPPER_LIMIT_LIVE_RECLAIM`) was retired on `2026-08-14` by explicit operator direction. Historical artifacts are archive/audit evidence only and have no producer, verifier, runtime slot, scanner handoff, live-auto promotion, or reactivation path. A future previous-limit-up strategy requires a new workorder, namespace, evidence contract, and runtime guards.
 
 ## 9. Delta/Q&A Routing
 

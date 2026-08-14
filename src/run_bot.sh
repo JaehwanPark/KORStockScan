@@ -364,9 +364,6 @@ while true; do
     # not own this lane; an explicit operator/daily override may still set it
     # false as the documented rollback.
     export KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED="${KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED:-true}"
-    # Previous-limit-up observation borrows one rising slot only when it has a
-    # candidate. An explicit false remains the immediate rollback authority.
-    export KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED="${KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED:-true}"
     export KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws
     export KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true
     export KORSTOCKSCAN_OPENAI_RESPONSES_WS_POOL_SIZE=2

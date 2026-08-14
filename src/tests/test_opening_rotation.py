@@ -3354,7 +3354,7 @@ def test_opening_rotation_bypasses_only_declared_duplicate_submit_alpha_guards(
         "opening_quote_tick_1s_freshness",
         "late_entry_price_drift",
         "pre_submit_price",
-        "lower_upper_limit_live",
+        "lower_limit_live",
         "account_order_quantity",
         "margin_exact_price",
         "scanner_generation",
@@ -3427,7 +3427,6 @@ def test_opening_rotation_duplicate_guard_bypass_is_wired_before_common_blocks()
         "_is_standard_stale_submit_block",
         "_evaluate_caution_stale_negative_micro_submit_block",
         "_limit_down_live_pre_submit_guard",
-        "_upper_limit_live_pre_submit_guard",
         "_stage_buy_order_submission",
     ):
         assert hard_guard_call in submit_source

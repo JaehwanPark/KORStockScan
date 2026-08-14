@@ -696,6 +696,7 @@ def test_ws_raw_sink_receives_every_tick_before_latest_tick_coalescing(monkeypat
     manager._tick_lock = threading.Lock()
     manager._pending_tick_events = {}
     manager._tick_dispatch_event = threading.Event()
+    manager._micro_reversion_forward_collector = None
 
     manager._queue_tick_event("000010", {"curr": 2800})
     manager._queue_tick_event("000010", {"curr": 2900}, realtime_type="0D")
