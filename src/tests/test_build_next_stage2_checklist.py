@@ -21,6 +21,9 @@ def _patch_dirs(monkeypatch, tmp_path):
         tmp_path / "data" / "report" / "automation_chain_trigger_decision"
     )
     rising_missed = tmp_path / "data" / "report" / "rising_missed_scout_workorder"
+    machine_micro_approval = (
+        tmp_path / "data" / "report" / "machine_microstructure_policy_approval"
+    )
     for path in (
         docs,
         ev,
@@ -31,6 +34,7 @@ def _patch_dirs(monkeypatch, tmp_path):
         tuning_performance,
         trigger_decision,
         rising_missed,
+        machine_micro_approval,
     ):
         path.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(mod, "DOCS_DIR", docs)
@@ -43,6 +47,11 @@ def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "TUNING_PERFORMANCE_REPORT_DIR", tuning_performance)
     monkeypatch.setattr(mod, "AUTOMATION_TRIGGER_DECISION_REPORT_DIR", trigger_decision)
     monkeypatch.setattr(mod, "RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR", rising_missed)
+    monkeypatch.setattr(
+        mod,
+        "MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR",
+        machine_micro_approval,
+    )
     return docs, ev, openai, swing, code
 
 
@@ -412,6 +421,50 @@ def test_runtime_apply_gap_pending_is_surfaced_in_preopen_task(monkeypatch, tmp_
     assert "post_apply_attribution_pending" in text
     assert "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22" in text
     assert "runtime_gap_pending_not_consumed" in text
+
+
+def test_machine_microstructure_policy_approval_is_surfaced_in_preopen_task(
+    monkeypatch, tmp_path
+):
+    docs, ev_dir, _, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
+    approval_dir = mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
+    _write_json(
+        ev_dir / "threshold_cycle_ev_2026-05-22.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    _write_json(
+        swing_dir / "swing_runtime_approval_2026-05-22.json",
+        {"approval_requests": []},
+    )
+    _write_json(
+        code_dir / "code_improvement_workorder_2026-05-22.json",
+        {"summary": {"selected_order_count": 0}},
+    )
+    _write_json(
+        approval_dir
+        / "machine_microstructure_policy_approval_postclose_2026-05-22.json",
+        {
+            "summary": {"actionable_candidate_count": 1},
+            "actionable_candidates": [
+                {
+                    "candidate_id": "widget:005930:entry:micro_axis",
+                    "candidate_sha256": "a" * 64,
+                    "state": "REVIEW_READY",
+                }
+            ],
+        },
+    )
+
+    mod.build_next_stage2_checklist("2026-05-22")
+
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
+        encoding="utf-8"
+    )
+    assert "[MachineMicroPolicyApprovalPreopen0526]" in text
+    assert "widget:005930:entry:micro_axis" in text
+    assert "REVIEW_READY" in text
+    assert "aaaaaaaaaaaaaaaa" in text
+    assert "미등록 runtime family" in text
 
 
 def test_runtime_apply_gap_codex_directives_are_surfaced_as_postclose_task(

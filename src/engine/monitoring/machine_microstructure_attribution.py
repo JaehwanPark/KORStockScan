@@ -105,6 +105,24 @@ POLICY_CHANGE_READINESS_CONTRACT = {
         ),
     },
 }
+PROMOTION_CANDIDATE_INTAKE_CONTRACT = {
+    "schema": "machine_microstructure_policy_promotion_candidate_v1",
+    "producer_boundary": (
+        "rolling_paired_policy_research_after_all_policy_change_readiness_gates"
+    ),
+    "consumer": ("src.engine.automation.machine_microstructure_policy_approval"),
+    "initial_state": "DESIGN_REQUIRED_or_REVIEW_READY",
+    "required_runtime_design": [
+        "one_registered_bounded_runtime_family",
+        "one_same_stage_axis",
+        "bounded_before_after_values",
+        "rollback_guard",
+        "preopen_consumer",
+        "post_apply_attribution",
+    ],
+    "first_operator_approval_required": True,
+    "daily_report_runtime_effect": False,
+}
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -888,6 +906,12 @@ def build_report(
         "decision": decision,
         "metric_contract": METRIC_CONTRACT,
         "policy_change_readiness": POLICY_CHANGE_READINESS_CONTRACT,
+        "promotion_candidate_intake_contract": PROMOTION_CANDIDATE_INTAKE_CONTRACT,
+        # The daily attribution report does not invent a runtime candidate.
+        # A future rolling paired-policy producer may append only candidates
+        # satisfying the intake contract; the persistent approval ledger then
+        # owns reminders and explicit operator-decision tracking.
+        "policy_promotion_candidates": [],
         "authority": {
             "decision_authority": "postclose_diagnostic_only",
             "runtime_effect": False,

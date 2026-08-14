@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+import hashlib
+import json
 
 import pytest
 
@@ -10,6 +12,7 @@ from src.engine.scalping.micro_reversion.ai_quality_bridge import (
     LIFECYCLE_PROJECTION_SCHEMA,
     TACTICAL_EVIDENCE_SCHEMA,
     BridgeConfig,
+    _relevant_windows,
     attach_micro_context_to_replay_request,
     build_bridge_report,
     build_future_outcome,
@@ -23,30 +26,114 @@ def _ms(value: str) -> int:
     return int(datetime.fromisoformat(value).timestamp() * 1_000)
 
 
+def _replay_context(captured_at: str) -> dict:
+    return {
+        "input_schema": "decision_quality_v2_14_entry",
+        "exact_payload": {
+            "schema": "entry_payload_v1",
+            "requested_qty": 50,
+            "position_sizing_allocator": {"effective_qty": 50},
+            "entry_candle_context": {
+                "schema": "entry_candle_context_v1",
+                "input_bundle_version": "scalping_multi_timeframe_context_v1",
+                "venue": "KRX",
+                "session": "KRX_REGULAR",
+                "bars": [{"minute": "09:00", "forming": False}],
+            },
+            "ai_market_snapshot": {
+                "schema": "ai_market_snapshot_v1",
+                "snapshot_id": "snapshot-1",
+                "captured_at": captured_at,
+                "stock_code": "000001",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "market_data_route": "krx_only",
+                "broker_route": "KRX",
+            },
+        },
+        "exact_payload_analysis_v1": {"schema": "exact_payload_analysis_v1"},
+    }
+
+
+def _producer_hash(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _request_envelope_hash(
+    *, payload_sha256: str, replay_context_sha256: str
+) -> str:
+    return _producer_hash(
+        {
+            "endpoint": "analyze_target",
+            "model": "gpt-5.4-nano",
+            "schema_name": "entry_decision_v2",
+            "require_json": True,
+            "temperature": 0.1,
+            "max_output_tokens": 900,
+            "reasoning_effort": "low",
+            "prompt_sha256": "prompt-hash",
+            "user_input_sha256": payload_sha256,
+            "replay_context_sha256": replay_context_sha256,
+        }
+    )
+
+
 def _trace(
     *,
     trace_id: str = "trace-1",
     request_id: str = "request-1",
     payload_sha256: str = "provider-payload-hash",
-    request_envelope_sha256: str = "request-envelope-hash",
+    request_envelope_sha256: str | None = None,
+    captured_at: str = "2026-08-14T09:00:10.000+09:00",
 ) -> dict:
+    replay_context_sha256 = _producer_hash(_replay_context(captured_at))
+    request_envelope_sha256 = request_envelope_sha256 or _request_envelope_hash(
+        payload_sha256=payload_sha256,
+        replay_context_sha256=replay_context_sha256,
+    )
     return {
         "schema": "ai_decision_trace_v1",
         "decision_trace_id": trace_id,
         "request_id": request_id,
         "decision_ts": "2026-08-14T09:00:11.000+09:00",
         "decision_stage": "entry_screen",
+        "endpoint": "analyze_target",
         "stock_code": "000001",
         "effective_venue": "KRX",
         "session_bucket": "KRX_REGULAR",
         "market_data_route": "krx_only",
+        "broker_route": "KRX",
         "provider_actual": "openai",
+        "provider_called": True,
+        "timeout": False,
+        "parse_ok": True,
+        "result_source": "live",
+        "decision_evaluation_status": "evaluated",
+        "semantic_errors": [],
+        "action": "WAIT",
+        "decision_quality_contract_status": "pass",
         "prompt_version": "decision_quality_v2_14",
+        "prompt_sha256": "prompt-hash",
+        "model": "gpt-5.4-nano",
+        "model_requested": "gpt-5.4-nano",
+        "transport": "responses_http",
+        "response_sha256": "response-hash",
+        "provider_response_id": "resp-test",
+        "openai_response_schema_mode": "strict_dynamic_entry_risk",
         "payload_sha256": payload_sha256,
         "request_envelope_sha256": request_envelope_sha256,
         "request_capture_status": "captured",
         "replay_context_present": True,
         "replay_context_exact": True,
+        "replay_context_sha256": replay_context_sha256,
         "payload_replay_exact": True,
         "input_preflight_mode": "exact_v2",
         "input_preflight_allowed": True,
@@ -61,19 +148,38 @@ def _payload(
     *,
     request_id: str = "request-1",
     payload_sha256: str = "provider-payload-hash",
-    request_envelope_sha256: str = "request-envelope-hash",
+    request_envelope_sha256: str | None = None,
     captured_at: str = "2026-08-14T09:00:10.000+09:00",
 ) -> dict:
+    replay_context = _replay_context(captured_at)
+    replay_context_sha256 = _producer_hash(replay_context)
+    request_envelope_sha256 = request_envelope_sha256 or _request_envelope_hash(
+        payload_sha256=payload_sha256,
+        replay_context_sha256=replay_context_sha256,
+    )
     return {
         "schema": "ai_decision_payload_v1",
         "request_id": request_id,
         "payload_sha256": payload_sha256,
         "request_envelope_sha256": request_envelope_sha256,
+        "endpoint": "analyze_target",
+        "model": "gpt-5.4-nano",
+        "schema_name": "entry_decision_v2",
+        "require_json": True,
+        "temperature": 0.1,
+        "max_output_tokens": 900,
+        "reasoning_effort": "low",
+        "prompt_sha256": "prompt-hash",
         "replay_exact": True,
         "replay_context_present": True,
         "replay_context_exact": True,
+        "replay_context_sha256": replay_context_sha256,
+        "replay_context_input_format": "structured",
+        "symbol": "000001",
         "effective_venue": "KRX",
         "session_bucket": "KRX_REGULAR",
+        "market_data_route": "krx_only",
+        "broker_route": "KRX",
         "snapshot_id": "snapshot-1",
         "canonical_context_capture": {
             "status": "exact_completed_bars_captured",
@@ -82,29 +188,7 @@ def _payload(
             "raw_bar_count": 1,
             "completed_bar_count": 1,
         },
-        "sanitized_replay_context": {
-            "input_schema": "decision_quality_v2_14_entry",
-            "exact_payload": {
-                "schema": "entry_payload_v1",
-                "requested_qty": 50,
-                "entry_candle_context": {
-                    "schema": "entry_candle_context_v1",
-                    "input_bundle_version": "scalping_multi_timeframe_context_v1",
-                    "venue": "KRX",
-                    "session": "KRX_REGULAR",
-                    "bars": [{"minute": "09:00", "forming": False}],
-                },
-                "ai_market_snapshot": {
-                    "schema": "ai_market_snapshot_v1",
-                    "snapshot_id": "snapshot-1",
-                    "captured_at": captured_at,
-                    "stock_code": "000001",
-                    "effective_venue": "KRX",
-                    "session_bucket": "KRX_REGULAR",
-                },
-            },
-            "exact_payload_analysis_v1": {"schema": "exact_payload_analysis_v1"},
-        },
+        "sanitized_replay_context": replay_context,
     }
 
 
@@ -150,7 +234,12 @@ def _market(
 
 
 def _depth(
-    timestamp: str = "2026-08-14T09:00:09.700+09:00", *, epoch: int = 123
+    timestamp: str = "2026-08-14T09:00:09.700+09:00",
+    *,
+    epoch: int = 123,
+    sequence: int = 1,
+    bid: float = 9_950.0,
+    ask: float = 9_960.0,
 ) -> dict:
     return {
         "schema": "scalp_micro_reversion_market_depth_point_v1",
@@ -161,12 +250,12 @@ def _depth(
         "venue": "KRX",
         "session_bucket": "KRX_REGULAR",
         "sequence_epoch": epoch,
-        "source_sequence": 1,
-        "series_sequence": 1,
+        "source_sequence": sequence,
+        "series_sequence": sequence,
         "exchange_timestamp": timestamp,
         "local_receive_timestamp": timestamp,
-        "best_bid": 9_950.0,
-        "best_ask": 9_960.0,
+        "best_bid": bid,
+        "best_ask": ask,
         "best_bid_qty": 100,
         "best_ask_qty": 100,
         "bid_depth": 1_000,
@@ -176,8 +265,8 @@ def _depth(
             "NXT": {"bid": 0, "ask": 0},
             "combined": {"bid": 1_000, "ask": 1_000},
         },
-        "bid_levels": [[1, 9_950.0, 100], [2, 9_940.0, 900]],
-        "ask_levels": [[1, 9_960.0, 100], [2, 9_970.0, 900]],
+        "bid_levels": [[1, bid, 100], [2, bid - 10.0, 900]],
+        "ask_levels": [[1, ask, 100], [2, ask + 10.0, 900]],
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "trading_runtime_effect": False,
@@ -197,6 +286,10 @@ def _reference(*, epoch: int = 123, parent_wave: str = "wave-1") -> dict:
         "shock_horizon_ms": 1_000,
         "event_sequence_in_wave": 1,
         "event_detected_at_ms": _ms("2026-08-14T09:00:06.000+09:00"),
+        "segment_event_detected_at_ms": _ms("2026-08-14T09:00:06.000+09:00"),
+        "capture_started_at": "2026-08-14T09:00:05.000+09:00",
+        "capture_ended_at": "2026-08-14T09:03:06.000+09:00",
+        "decision_authority": "forward_path_observation_only_no_policy_selection",
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "trading_runtime_effect": False,
@@ -244,6 +337,19 @@ def _verified_config() -> BridgeConfig:
         uncertainty_buffer_bps=3.0,
         cost_profile_source="verified_test_profile",
         cost_profile_verified=True,
+    )
+
+
+def _attach(request: dict, evidence: dict) -> dict:
+    return attach_micro_context_to_replay_request(
+        request,
+        evidence,
+        source_trace=_trace(),
+        source_payload=_payload(),
+        source_market_rows=_past_market_rows(),
+        source_depth_rows=[_depth()],
+        source_event_references=[_reference()],
+        config=_verified_config(),
     )
 
 
@@ -300,8 +406,12 @@ def test_cross_epoch_depth_and_future_depth_are_not_joined() -> None:
         config=_verified_config(),
     )
 
-    assert evidence["state"] == "source_unavailable"
-    assert "same_epoch_past_depth_missing" in evidence["source_quality"]["blockers"]
+    assert evidence["state"] == "reversion_confirmed"
+    assert evidence["source_quality"]["status"] == "pass"
+    assert evidence["source_quality"]["liquidity_capacity_status"] == "blocked"
+    assert "same_epoch_past_depth_missing" in evidence["source_quality"][
+        "liquidity_capacity_blockers"
+    ]
     assert evidence["liquidity_capacity"][
         "counterfactual_liquidity_qty_ceiling"
     ] is None
@@ -356,7 +466,23 @@ def test_future_outcome_is_separate_and_uses_executable_bid_after_cost() -> None
     ]
 
     outcome = build_future_outcome(
-        evidence=evidence, market_rows=future, config=_verified_config()
+        evidence=evidence,
+        market_rows=future,
+        depth_rows=[
+            _depth(
+                "2026-08-14T09:00:10.500+09:00",
+                sequence=2,
+                bid=10_020.0,
+                ask=10_030.0,
+            ),
+            _depth(
+                "2026-08-14T09:00:11.500+09:00",
+                sequence=3,
+                bid=9_790.0,
+                ask=9_800.0,
+            ),
+        ],
+        config=_verified_config(),
     )
 
     assert outcome["label_role"] == "counterfactual_outcome_only_never_prompt_input"
@@ -375,15 +501,26 @@ def test_opt_in_replay_enrichment_preserves_exact_payload_and_three_arm_parity()
         config=_verified_config(),
     )
     exact_payload = deepcopy(_payload()["sanitized_replay_context"]["exact_payload"])
+    candidate_input = {"exact_payload": exact_payload}
     request = {
         "decision_trace_id": "trace-1",
+        "decision_authority": "offline_replay_no_runtime_change",
+        "stage": "entry",
+        "endpoint": "analyze_target",
+        "stock_code": "000001",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
         "exact_payload": exact_payload,
         "source_exact_payload_sha256": evidence["source_exact_payload_sha256"],
-        "candidate_input": {"exact_payload": exact_payload, "other_ledger": {}},
+        "payload_sha256": evidence["source_provider_payload_sha256"],
+        "request_envelope_sha256": evidence["source_request_envelope_sha256"],
+        "candidate_input": candidate_input,
+        "candidate_input_sha256": _producer_hash(candidate_input),
+        **AUTHORITY_CONTRACT,
     }
     original = deepcopy(request)
 
-    enriched = attach_micro_context_to_replay_request(request, evidence)
+    enriched = _attach(request, evidence)
     manifest = build_three_arm_manifest(
         evidence=evidence, control_prompt_version="decision_quality_v2_14"
     )
@@ -391,11 +528,43 @@ def test_opt_in_replay_enrichment_preserves_exact_payload_and_three_arm_parity()
     assert request == original
     assert enriched["exact_payload"] == exact_payload
     assert enriched["candidate_input"][TACTICAL_EVIDENCE_SCHEMA] == evidence
-    assert manifest["arms"][1]["input_identity_sha256"] == manifest["arms"][2][
-        "input_identity_sha256"
-    ]
-    assert manifest["arms"][0]["tactical_micro_reversion_evidence_sha256"] is None
+    assert manifest["replay_arms"][1]["analytical_context_pair_sha256"] == manifest[
+        "replay_arms"
+    ][2]["analytical_context_pair_sha256"]
+    assert "tactical_micro_reversion_evidence_sha256" not in manifest[
+        "replay_arms"
+    ][0]
     assert manifest["provider_call_performed"] is False
+
+
+def test_replay_enrichment_rejects_unregistered_candidate_ledger() -> None:
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+    )
+    exact_payload = deepcopy(_payload()["sanitized_replay_context"]["exact_payload"])
+    request = {
+        "decision_trace_id": "trace-1",
+        "decision_authority": "offline_replay_no_runtime_change",
+        "stage": "entry",
+        "endpoint": "analyze_target",
+        "stock_code": "000001",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "exact_payload": exact_payload,
+        "source_exact_payload_sha256": evidence["source_exact_payload_sha256"],
+        "payload_sha256": evidence["source_provider_payload_sha256"],
+        "request_envelope_sha256": evidence["source_request_envelope_sha256"],
+        "candidate_input": {"exact_payload": exact_payload, "other_ledger": {}},
+        **AUTHORITY_CONTRACT,
+    }
+
+    with pytest.raises(ValueError, match="candidate_input_unknown_ledger"):
+        _attach(request, evidence)
 
 
 def test_premarket_scope_requires_explicit_route_mapping() -> None:
@@ -424,12 +593,11 @@ def test_report_deduplicates_same_parent_wave_per_stage() -> None:
         trace_id="trace-2",
         request_id="request-2",
         payload_sha256="provider-payload-hash-2",
-        request_envelope_sha256="request-envelope-hash-2",
+        captured_at="2026-08-14T09:00:10.100+09:00",
     )
     second_payload = _payload(
         request_id="request-2",
         payload_sha256="provider-payload-hash-2",
-        request_envelope_sha256="request-envelope-hash-2",
         captured_at="2026-08-14T09:00:10.100+09:00",
     )
     report = build_bridge_report(
@@ -449,6 +617,27 @@ def test_report_deduplicates_same_parent_wave_per_stage() -> None:
     assert report["future_outcomes_separate_from_prompt_context"] is True
 
 
+def test_envelope_join_supports_trace_without_request_id_in_report_and_prefilter() -> None:
+    trace = _trace()
+    trace.pop("request_id")
+    payload = _payload()
+
+    windows = _relevant_windows([trace], [payload], config=_verified_config())
+    assert ("000001", "KRX", "KRX_REGULAR") in windows
+
+    report = build_bridge_report(
+        target_date="2026-08-14",
+        traces=[trace],
+        payloads=[payload],
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+    )
+    assert report["summary"]["trace_payload_join_count"] == 1
+    assert report["rows"][0]["payload_join_mode"] == "request_envelope_sha256"
+
+
 def test_replay_enrichment_rejects_outcome_leakage() -> None:
     evidence = build_tactical_evidence(
         trace=_trace(),
@@ -463,15 +652,17 @@ def test_replay_enrichment_rejects_outcome_leakage() -> None:
         "decision_trace_id": "trace-1",
         "exact_payload": exact_payload,
         "source_exact_payload_sha256": evidence["source_exact_payload_sha256"],
+        "payload_sha256": evidence["source_provider_payload_sha256"],
+        "request_envelope_sha256": evidence["source_request_envelope_sha256"],
     }
     leaking = {**evidence, "future_outcome": {"mfe": 1.0}}
 
     with pytest.raises(ValueError, match="future_outcome"):
-        attach_micro_context_to_replay_request(request, leaking)
+        _attach(request, leaking)
 
     nested_leaking = {**evidence, "diagnostic": {"horizons": [{"mfe": 1.0}]}}
     with pytest.raises(ValueError, match="future_outcome"):
-        attach_micro_context_to_replay_request(request, nested_leaking)
+        _attach(request, nested_leaking)
 
 
 def test_market_provenance_requires_native_boolean_and_integer_types() -> None:

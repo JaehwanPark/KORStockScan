@@ -16,7 +16,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from .path_journal import MARKET_DEPTH_CONTRACT_ID, MARKET_DEPTH_SCHEMA
+from .path_journal import (
+    MARKET_DEPTH_CONTRACT_ID,
+    MARKET_DEPTH_SCHEMA,
+    MARKET_STREAM_CONTRACT_ID,
+    MARKET_STREAM_SCHEMA,
+    validate_market_stream_path_provenance,
+)
 
 DEPTH_JOIN_SCHEMA = "scalp_micro_reversion_depth_join_v1"
 DEPTH_JOIN_METRIC_CONTRACT = {
@@ -92,10 +98,17 @@ def join_latest_past_depth(
     receive_times: dict[tuple[str, str, str, int], tuple[int, ...]] = {}
     for key, values in by_series.items():
         values.sort(key=lambda row: (row[0], int(row[1].get("series_sequence") or 0)))
+        sequences = [int(row[1].get("series_sequence") or 0) for row in values]
+        if any(
+            right != left + 1
+            for left, right in zip(sequences, sequences[1:], strict=False)
+        ):
+            raise ValueError("depth series sequence gap or regression")
         receive_times[key] = tuple(value[0] for value in values)
 
     joined: list[dict[str, Any]] = []
     for market in market_rows:
+        _validate_market_row(market)
         payload = dict(market)
         if payload.get("bid_depth") is not None or payload.get("ask_depth") is not None:
             raise ValueError("canonical 0B row must not contain prejoined depth")
@@ -191,7 +204,13 @@ def validate_depth_row(payload: object) -> None:
     ):
         raise ValueError("depth source and series sequences must match")
     for field in ("best_bid", "best_ask"):
-        if float(payload.get(field) or 0) <= 0:
+        value = payload.get(field)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0
+        ):
             raise ValueError("depth best quotes must be positive")
     if float(payload["best_ask"]) < float(payload["best_bid"]):
         raise ValueError("depth best quotes are crossed")
@@ -200,6 +219,13 @@ def validate_depth_row(payload: object) -> None:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError("depth totals must be nonnegative integers")
     for side in ("bid", "ask"):
+        best_quantity = payload.get(f"best_{side}_qty")
+        if (
+            isinstance(best_quantity, bool)
+            or not isinstance(best_quantity, int)
+            or best_quantity < 0
+        ):
+            raise ValueError(f"depth best {side} quantity is invalid")
         raw_levels = payload.get(f"{side}_levels")
         if not isinstance(raw_levels, (list, tuple)) or not raw_levels:
             raise ValueError(f"depth {side} levels must not be empty")
@@ -236,6 +262,10 @@ def validate_depth_row(payload: object) -> None:
             raise ValueError("depth bid prices must decrease")
         if levels[0][1] != float(payload[f"best_{side}"]):
             raise ValueError(f"depth best {side} conflicts with level one")
+        if levels[0][2] != best_quantity:
+            raise ValueError(
+                f"depth best {side} quantity conflicts with level one"
+            )
         if int(payload[f"{side}_depth"]) < sum(row[2] for row in levels):
             raise ValueError(f"depth {side} total does not cover retained levels")
     route_totals = payload.get("route_depth_totals")
@@ -257,16 +287,71 @@ def validate_depth_row(payload: object) -> None:
                 or quantity < 0
             ):
                 raise ValueError("depth route total is invalid")
+    components = [
+        totals
+        for route, totals in route_totals.items()
+        if route != "combined" and isinstance(totals, dict)
+    ]
+    for side in ("bid", "ask"):
+        component_values = [totals.get(side) for totals in components]
+        if component_values and all(value is not None for value in component_values):
+            if sum(component_values) != combined.get(side):
+                raise ValueError("depth component route totals do not reconcile")
+
+
+def _validate_market_row(payload: object) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("market row must be an object")
+    if (
+        payload.get("schema") != MARKET_STREAM_SCHEMA
+        or payload.get("metric_contract_id") != MARKET_STREAM_CONTRACT_ID
+        or payload.get("realtime_type") != "0B"
+    ):
+        raise ValueError("unexpected market schema or contract")
+    if (
+        payload.get("actual_order_submitted") is not False
+        or payload.get("broker_order_forbidden") is not True
+        or payload.get("trading_runtime_effect") is not False
+    ):
+        raise ValueError("market authority contract is invalid")
+    source_sequence = payload.get("source_sequence")
+    series_sequence = payload.get("series_sequence")
+    if (
+        isinstance(source_sequence, bool)
+        or not isinstance(source_sequence, int)
+        or source_sequence <= 0
+        or isinstance(series_sequence, bool)
+        or not isinstance(series_sequence, int)
+        or series_sequence != source_sequence
+    ):
+        raise ValueError("market source and series sequences must be positive and equal")
+    _series_key(payload)
+    exchange_us = _timestamp_us(payload.get("exchange_timestamp"))
+    receive_us = _timestamp_us(payload.get("local_receive_timestamp"))
+    if receive_us < exchange_us:
+        raise ValueError("market receive timestamp precedes exchange timestamp")
+    _, consumer_eligible, _ = validate_market_stream_path_provenance(
+        path_order_status=payload.get("path_order_status"),
+        path_consumer_eligible=payload.get("path_consumer_eligible"),
+        exchange_timestamp_regression_ms=payload.get(
+            "exchange_timestamp_regression_ms"
+        ),
+    )
+    if not consumer_eligible:
+        raise ValueError("market path is not consumer eligible")
 
 
 def _series_key(payload: dict[str, Any]) -> tuple[str, str, str, int]:
     symbol = str(payload.get("symbol") or "").strip().upper()
     venue = str(payload.get("venue") or "").strip().upper()
     session_bucket = str(payload.get("session_bucket") or "").strip().upper()
-    try:
-        sequence_epoch = int(payload.get("sequence_epoch") or 0)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("depth join sequence_epoch is invalid") from exc
+    sequence_epoch = payload.get("sequence_epoch")
+    if (
+        isinstance(sequence_epoch, bool)
+        or not isinstance(sequence_epoch, int)
+        or sequence_epoch <= 0
+    ):
+        raise ValueError("depth join sequence_epoch is invalid")
     if not all((symbol, venue, session_bucket)) or sequence_epoch <= 0:
         raise ValueError(
             "depth join requires symbol, venue, session, and sequence_epoch"

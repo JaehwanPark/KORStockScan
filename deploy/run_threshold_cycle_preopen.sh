@@ -152,6 +152,19 @@ cd "$PROJECT_DIR"
 
 echo "[START] threshold-cycle preopen target_date=$TARGET_DATE apply_mode=$APPLY_MODE auto_apply=$AUTO_APPLY require_ai=$REQUIRE_AI"
 
+# The microstructure approval ledger is a supplemental control plane.  It may
+# remind the operator and emit a family-owned PREOPEN authorization handoff,
+# but it cannot mutate this wrapper's threshold env.  A ledger incident is
+# therefore surfaced without blocking unrelated, already-approved families.
+if ! PYTHONPATH=. "$VENV_PY" \
+  -m src.engine.automation.machine_microstructure_policy_approval \
+  --phase preopen \
+  --target-date "$TARGET_DATE" \
+  --write \
+  --notify; then
+  echo "[WARN] machine microstructure policy approval ledger failed target_date=$TARGET_DATE runtime_apply_unchanged=true"
+fi
+
 args=(--date "$TARGET_DATE" --apply-mode "$APPLY_MODE")
 if [ -n "$SOURCE_DATE" ]; then
   args+=(--source-date "$SOURCE_DATE")

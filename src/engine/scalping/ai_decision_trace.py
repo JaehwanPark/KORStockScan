@@ -1018,6 +1018,9 @@ def capture_ai_request(
         ).hexdigest()
         input_format, parsed_input = _parse_user_input(user_input)
         sanitized_input, redacted = _sanitize(parsed_input)
+        sanitized_user_input_sha256 = hashlib.sha256(
+            _json_bytes(sanitized_input)
+        ).hexdigest()
         if replay_context_present:
             replay_input_format, parsed_replay_context = _parse_user_input(
                 replay_context
@@ -1025,10 +1028,14 @@ def capture_ai_request(
             sanitized_replay_context, replay_context_redacted = _sanitize(
                 parsed_replay_context
             )
+            sanitized_replay_context_sha256 = hashlib.sha256(
+                _json_bytes(sanitized_replay_context)
+            ).hexdigest()
         else:
             replay_input_format = None
             parsed_replay_context = None
             sanitized_replay_context = None
+            sanitized_replay_context_sha256 = None
             replay_context_redacted = False
         sanitized_prompt, prompt_redacted = _sanitize(str(prompt or ""))
         context = _request_context(
@@ -1049,6 +1056,9 @@ def capture_ai_request(
                 "replay_context_redacted": bool(replay_context_redacted),
                 "replay_context_exact": not replay_context_redacted,
                 "sanitized_replay_context": sanitized_replay_context,
+                "sanitized_replay_context_sha256": (
+                    sanitized_replay_context_sha256
+                ),
             }
             if replay_context_present
             else {}
@@ -1058,6 +1068,9 @@ def capture_ai_request(
                 "replay_context_sha256": replay_context_sha256,
                 "replay_context_redacted": bool(replay_context_redacted),
                 "replay_context_exact": not replay_context_redacted,
+                "sanitized_replay_context_sha256": (
+                    sanitized_replay_context_sha256
+                ),
             }
             if replay_context_present
             else {}
@@ -1069,6 +1082,9 @@ def capture_ai_request(
                 "ai_replay_context_bytes": len(replay_context_bytes),
                 "ai_replay_context_redacted": bool(replay_context_redacted),
                 "ai_replay_context_exact": not replay_context_redacted,
+                "ai_replay_context_semantic_sha256": (
+                    sanitized_replay_context_sha256
+                ),
             }
             if replay_context_present
             else {}
@@ -1102,6 +1118,7 @@ def capture_ai_request(
             "redacted": bool(redacted),
             "replay_exact": not redacted,
             "sanitized_user_input": sanitized_input,
+            "sanitized_user_input_sha256": sanitized_user_input_sha256,
             **replay_payload_fields,
             "canonical_context_capture": canonical_context,
             **STORAGE_SECURITY_CONTRACT,
@@ -1140,6 +1157,7 @@ def capture_ai_request(
             "request_envelope_sha256": request_envelope_sha256,
             "prompt_sha256": prompt_sha256,
             "payload_redacted": bool(redacted),
+            "sanitized_user_input_sha256": sanitized_user_input_sha256,
             **replay_request_fields,
             "prompt_redacted": bool(prompt_redacted),
             "canonical_context_capture": canonical_context,
@@ -1188,6 +1206,7 @@ def capture_ai_request(
             "ai_input_payload_store_date": target_date,
             "ai_input_payload_redacted": bool(redacted),
             "ai_input_payload_replay_exact": not redacted,
+            "ai_input_payload_semantic_sha256": sanitized_user_input_sha256,
             **replay_result_fields,
             "ai_trace_stock_code": context.get("stock_code") or symbol or None,
             "ai_trace_record_id": context.get("record_id"),
@@ -1601,6 +1620,9 @@ def record_ai_decision_trace(
             "prompt_redacted": bool(merged.get("ai_prompt_redacted", False)),
             "prompt_replay_exact": bool(merged.get("ai_prompt_replay_exact", False)),
             "payload_sha256": _optional(merged, "ai_input_payload_sha256"),
+            "payload_semantic_sha256": _optional(
+                merged, "ai_input_payload_semantic_sha256"
+            ),
             "payload_bytes": _safe_number(_optional(merged, "ai_input_payload_bytes")),
             "payload_store_date": _optional(merged, "ai_input_payload_store_date"),
             "request_envelope_sha256": _optional(merged, "ai_request_envelope_sha256"),
@@ -1622,6 +1644,9 @@ def record_ai_decision_trace(
                 merged.get("ai_replay_context_present", False)
             ),
             "replay_context_sha256": _optional(merged, "ai_replay_context_sha256"),
+            "replay_context_semantic_sha256": _optional(
+                merged, "ai_replay_context_semantic_sha256"
+            ),
             "replay_context_bytes": _safe_number(
                 _optional(merged, "ai_replay_context_bytes")
             ),

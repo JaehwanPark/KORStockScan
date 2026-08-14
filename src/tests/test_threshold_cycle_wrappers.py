@@ -194,6 +194,20 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     assert 'wait_for_postclose_resources "machine_microstructure_attribution"' in script
     assert "machine_microstructure_attribution_${TARGET_DATE}.json" in script
     assert (
+        'RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL="${THRESHOLD_CYCLE_RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL:-true}"'
+        in script
+    )
+    approval_idx = script.index(
+        "-m src.engine.automation.machine_microstructure_policy_approval"
+    )
+    assert attribution_idx < approval_idx
+    assert "--phase postclose" in script
+    assert (
+        "machine_microstructure_policy_approval_postclose_${TARGET_DATE}.json" in script
+    )
+    assert "[STATUS] machine_microstructure_policy_approval" in script
+    assert "runtime_effect=false" in script
+    assert (
         "machine_microstructure_attribution=$RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION"
         in script
     )
@@ -207,7 +221,10 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     refresh_idx = widget_expansion_service.index(
         "src.engine.monitoring.machine_microstructure_attribution"
     )
-    assert expansion_idx < refresh_idx
+    approval_refresh_idx = widget_expansion_service.index(
+        "src.engine.automation.machine_microstructure_policy_approval"
+    )
+    assert expansion_idx < refresh_idx < approval_refresh_idx
 
 
 def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_without_bedrock_lite_shadow():
@@ -1775,6 +1792,9 @@ def test_preopen_wrapper_uses_lock_to_avoid_duplicate_bootstrap_run():
     assert "threshold_cycle_preopen.lock" in script
     assert "flock -n 9" in script
     assert "threshold-cycle preopen already running" in script
+    assert "src.engine.automation.machine_microstructure_policy_approval" in script
+    assert "--phase preopen" in script
+    assert "runtime_apply_unchanged=true" in script
 
 
 def test_preopen_wrapper_treats_operator_lock_ready_manifest_as_succeeded():

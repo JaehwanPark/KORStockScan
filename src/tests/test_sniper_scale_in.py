@@ -28349,7 +28349,13 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
         state_handlers.kiwoom_orders,
         "send_buy_order",
         lambda *args, **kwargs: (
-            sent_orders.append(args) or {"return_code": "0", "ord_no": "O1"}
+            sent_orders.append(args)
+            or {
+                "return_code": "0",
+                "ord_no": "O1",
+                "broker_route": "SOR",
+                "broker_route_resolution": "test_explicit_krx_session_route",
+            }
         ),
     )
     monkeypatch.setattr(
@@ -28886,6 +28892,11 @@ def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
         state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {})
     )
     monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+    monkeypatch.setattr(
+        state_handlers,
+        "build_entry_candle_context",
+        lambda *args, **kwargs: {},
+    )
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_tick_history_ka10003",

@@ -47,17 +47,32 @@ def _depth_row(
 
 
 def _market_row(
-    *, received: str, venue: str = "KRX", sequence_epoch: int = 123
+    *,
+    received: str,
+    venue: str = "KRX",
+    sequence_epoch: int = 123,
+    sequence: int = 1,
 ) -> dict:
     return {
+        "schema": "scalp_micro_reversion_market_stream_point_v3",
+        "metric_contract_id": "scalp_micro_reversion_market_stream_contract_v3",
+        "realtime_type": "0B",
         "symbol": "000001",
         "venue": venue,
         "session_bucket": f"{venue}_REGULAR",
         "local_receive_timestamp": received,
         "exchange_timestamp": received,
         "sequence_epoch": sequence_epoch,
+        "source_sequence": sequence,
+        "series_sequence": sequence,
         "bid_depth": None,
         "ask_depth": None,
+        "path_order_status": "accept",
+        "path_consumer_eligible": True,
+        "exchange_timestamp_regression_ms": 0,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
         "decision_authority": "canonical_market_stream_observation_only",
     }
 
@@ -111,6 +126,32 @@ def test_join_never_crosses_sequence_epoch() -> None:
 
     assert joined["depth_join_status"] == "missing_same_series_depth"
     assert "depth_context" not in joined
+
+
+def test_join_preserves_sub_millisecond_causality() -> None:
+    depth = _depth_row(received="2026-08-08T09:00:00.100900+09:00")
+    market = _market_row(received="2026-08-08T09:00:00.100100+09:00")
+
+    joined = join_latest_past_depth((market,), (depth,), max_age_ms=500)[0]
+
+    assert joined["depth_join_status"] == "missing_same_series_depth"
+
+
+def test_join_rejects_market_authority_drift_and_depth_quantity_conflict() -> None:
+    depth = _depth_row(received="2026-08-08T09:00:00.000+09:00")
+    market = _market_row(received="2026-08-08T09:00:00.100+09:00")
+    market["actual_order_submitted"] = True
+
+    with pytest.raises(ValueError, match="market authority"):
+        join_latest_past_depth((market,), (depth,))
+
+    invalid_depth = dict(depth)
+    invalid_depth["best_bid_qty"] = 199
+    with pytest.raises(ValueError, match="quantity conflicts"):
+        join_latest_past_depth(
+            (_market_row(received="2026-08-08T09:00:00.100+09:00"),),
+            (invalid_depth,),
+        )
 
 
 def test_join_rejects_duplicate_depth_sequence_and_prejoined_market_row() -> None:

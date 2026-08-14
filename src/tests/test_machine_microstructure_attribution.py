@@ -109,6 +109,11 @@ def test_dynamic_widget_symbol_is_matched_without_changing_owner_policy(tmp_path
     assert row["anchor_results"][0]["metrics"]["mfe_bps"] == 100.0
     assert report["authority"]["runtime_effect"] is False
     assert report["authority"]["allowed_runtime_apply"] is False
+    assert report["policy_promotion_candidates"] == []
+    assert (
+        report["promotion_candidate_intake_contract"]["consumer"]
+        == "src.engine.automation.machine_microstructure_policy_approval"
+    )
 
 
 def test_new_episode_symbol_without_micro_is_explicit_gap_not_zero_return(tmp_path):

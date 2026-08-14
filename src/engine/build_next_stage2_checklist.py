@@ -34,6 +34,9 @@ AUTOMATION_TRIGGER_DECISION_REPORT_DIR = (
 RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR = (
     PROJECT_ROOT / "data" / "report" / "rising_missed_scout_workorder"
 )
+MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR = (
+    PROJECT_ROOT / "data" / "report" / "machine_microstructure_policy_approval"
+)
 
 AUTO_START = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->"
 AUTO_END = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->"
@@ -369,6 +372,49 @@ def _rising_missed_scout_summary(rising_missed_report: dict[str, Any]) -> str:
     )
 
 
+def _machine_microstructure_approval_pending_summary(
+    report: dict[str, Any],
+) -> str:
+    if not report:
+        return ""
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    try:
+        actionable_count = int(summary.get("actionable_candidate_count") or 0)
+    except (TypeError, ValueError):
+        actionable_count = 0
+    if actionable_count <= 0:
+        source_status = str(report.get("source_status") or "").strip()
+        return (
+            f"`source_gap`({source_status})"
+            if source_status
+            and source_status not in {"loaded", "not_applicable_preopen"}
+            else ""
+        )
+    rows = report.get("actionable_candidates")
+    rendered: list[str] = []
+    if isinstance(rows, list):
+        for row in rows[:5]:
+            if not isinstance(row, dict):
+                continue
+            rendered.append(
+                f"`{row.get('candidate_id') or '-'}`"
+                f"({row.get('state') or '-'}, hash="
+                f"{str(row.get('candidate_sha256') or '')[:16] or '-'})"
+            )
+    suffix = (
+        f" 외 {actionable_count - len(rendered)}건"
+        if actionable_count > len(rendered)
+        else ""
+    )
+    source_status = str(report.get("source_status") or "").strip()
+    source_gap = (
+        f"; `source_gap`({source_status})"
+        if source_status and source_status not in {"loaded", "not_applicable_preopen"}
+        else ""
+    )
+    return ", ".join(rendered) + suffix + source_gap
+
+
 def _automation_trigger_decision_summary(trigger_report: dict[str, Any]) -> str:
     if not trigger_report:
         return "trigger_report_missing=`true`, required_action=`run_required_or_report_generation_check`"
@@ -452,6 +498,7 @@ def _build_tasks(
     runtime_gap_report: dict[str, Any],
     trigger_report: dict[str, Any],
     rising_missed_report: dict[str, Any],
+    machine_micro_approval_report: dict[str, Any],
 ) -> list[GeneratedTask]:
     mmdd = _compact_mmdd(target_date)
     ev_path = EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json"
@@ -481,6 +528,9 @@ def _build_tasks(
     )
     trigger_decision_summary = _automation_trigger_decision_summary(trigger_report)
     rising_missed_summary = _rising_missed_scout_summary(rising_missed_report)
+    machine_micro_approval_pending = _machine_microstructure_approval_pending_summary(
+        machine_micro_approval_report
+    )
     tuning_sources = f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})"
     tuning_decision_line = "판정 기준: threshold cycle EV를 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다."
     if tuning_performance_path.exists():
@@ -542,6 +592,32 @@ def _build_tasks(
             ),
         ),
     ]
+    if machine_micro_approval_pending:
+        machine_micro_approval_path = (
+            MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
+            / f"machine_microstructure_policy_approval_postclose_{source_date}.json"
+        )
+        tasks.append(
+            GeneratedTask(
+                task_id=f"MachineMicroPolicyApprovalPreopen{mmdd}",
+                title="micro 기반 기계 정책 승인 대기열 및 PREOPEN handoff 확인",
+                slot="PREOPEN",
+                time_window="08:45~08:50",
+                track="ScalpingLogic",
+                source=(
+                    f"[machine_microstructure_policy_approval_postclose_{source_date}.json]"
+                    f"(/home/ubuntu/KORStockScan/{_rel(machine_micro_approval_path)}), "
+                    "[machine_microstructure_policy_approval.py]"
+                    "(/home/ubuntu/KORStockScan/src/engine/automation/"
+                    "machine_microstructure_policy_approval.py)"
+                ),
+                lines=(
+                    f"판정 기준: 이월된 승인 대기 후보 {machine_micro_approval_pending}의 design/approval/expiry 상태와 동일 candidate hash의 명시 승인 artifact를 확인한다.",
+                    "금지: `DESIGN_REQUIRED`, 변경된 candidate hash, 미등록 runtime family, same-stage 충돌, rollback/post-apply 계약 결손을 PREOPEN env 수정으로 우회하지 않는다.",
+                    "다음 액션: `source_gap_repair`, `design_required`, `review_ready_request_operator_decision`, `user_approved_handoff_ready`, `preopen_scheduled`, `hold_followup`, `applied_attribution_pending`, `post_apply_attributed`, `expired_revalidate`, `rejected` 중 하나로 닫고 handoff는 family-owned apply receipt와 분리 확인한다.",
+                ),
+            )
+        )
     if _has_approval_request(ev_report, swing_report):
         tasks.append(
             GeneratedTask(
@@ -788,6 +864,7 @@ def _render_auto_block(
     runtime_gap_report: dict[str, Any],
     trigger_report: dict[str, Any],
     rising_missed_report: dict[str, Any],
+    machine_micro_approval_report: dict[str, Any],
     exclude_task_ids: set[str] | None = None,
 ) -> str:
     tasks = _build_tasks(
@@ -799,6 +876,7 @@ def _render_auto_block(
         runtime_gap_report=runtime_gap_report,
         trigger_report=trigger_report,
         rising_missed_report=rising_missed_report,
+        machine_micro_approval_report=machine_micro_approval_report,
     )
     exclude_task_ids = exclude_task_ids or set()
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
@@ -1063,6 +1141,10 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR
         / f"rising_missed_scout_workorder_{source_date}.json"
     )
+    machine_micro_approval_report = _load_json(
+        MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
+        / f"machine_microstructure_policy_approval_postclose_{source_date}.json"
+    )
     existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
     exclude_task_ids = _existing_manual_task_ids(existing) if existing else set()
     auto_block = _render_auto_block(
@@ -1074,6 +1156,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         runtime_gap_report=runtime_gap_report,
         trigger_report=trigger_report,
         rising_missed_report=rising_missed_report,
+        machine_micro_approval_report=machine_micro_approval_report,
         exclude_task_ids=exclude_task_ids,
     )
     if existing:
@@ -1097,6 +1180,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         runtime_gap_report=runtime_gap_report,
         trigger_report=trigger_report,
         rising_missed_report=rising_missed_report,
+        machine_micro_approval_report=machine_micro_approval_report,
     )
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
     tasks.sort(key=_task_sort_key)
