@@ -8,3 +8,4 @@
 080220 # manual_operator jeju_semiconductor_low_price_two_leg_owner
 035720 # manual_operator kakao_low_price_two_leg_owner
 015760 # manual_operator kepco_low_price_two_leg_owner
+476060 # auto_open_loss KRX_OPEN profit=-2.16% stop=-1.40%

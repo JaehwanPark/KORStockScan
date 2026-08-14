@@ -163,6 +163,157 @@ def test_unfilled_order_snapshot_ka10075_preserves_exchange_fields(monkeypatch):
     assert rows[0]["sor_yn"] == "N"
 
 
+def test_unfilled_order_snapshot_ignores_zero_execution_price_placeholder(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "oso": [
+                    {
+                        "stk_cd": "005930",
+                        "io_tp_nm": "+매수",
+                        "ord_qty": "5",
+                        "oso_qty": "5",
+                        "cntr_pric": "0",
+                        "ord_pric": "276000",
+                        "ord_no": "0004596",
+                    }
+                ],
+                "return_code": 0,
+            }
+        ],
+    )
+
+    rows = kiwoom_utils.get_unfilled_order_snapshot_ka10075("token")
+
+    assert rows[0]["unit_price"] == 276000
+
+
+def test_unfilled_order_snapshot_uses_order_price_for_partial_fill_identity(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "oso": [
+                    {
+                        "stk_cd": "005930",
+                        "io_tp_nm": "+매수",
+                        "ord_qty": "5",
+                        "oso_qty": "3",
+                        "cntr_pric": "275500",
+                        "ord_pric": "276000",
+                        "ord_no": "0004596",
+                    }
+                ],
+                "return_code": 0,
+            }
+        ],
+    )
+
+    rows = kiwoom_utils.get_unfilled_order_snapshot_ka10075("token")
+
+    assert rows[0]["unit_price"] == 276000
+    assert rows[0]["remaining_qty"] == 3
+
+
+def test_kt00007_preserves_open_quantity_and_official_original_order_key(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "acnt_ord_cntr_prps_dtl": [
+                    {
+                        "stk_cd": "A005930",
+                        "io_tp_nm": "현금매수",
+                        "ord_qty": "5",
+                        "ord_remnq": "5",
+                        "cntr_uv": "0",
+                        "ord_uv": "274500",
+                        "ord_no": "0004597",
+                        "ori_ord": "0001234",
+                    }
+                ],
+                "return_code": 0,
+            }
+        ],
+    )
+
+    rows = kiwoom_utils.get_order_reference_snapshot_kt00007("token")
+
+    assert rows[0]["unit_price"] == 274500
+    assert rows[0]["remaining_qty"] == 5
+    assert rows[0]["orig_ord_no"] == "0001234"
+
+
+def test_kt00007_partial_fill_uses_order_price_for_open_order_identity(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "acnt_ord_cntr_prps_dtl": [
+                    {
+                        "stk_cd": "A005930",
+                        "io_tp_nm": "현금매수",
+                        "ord_qty": "5",
+                        "cntr_qty": "2",
+                        "ord_remnq": "3",
+                        "cntr_uv": "275500",
+                        "ord_uv": "276000",
+                        "ord_no": "0004597",
+                        "ori_ord": "0001234",
+                    }
+                ],
+                "return_code": 0,
+            }
+        ],
+    )
+
+    rows = kiwoom_utils.get_order_reference_snapshot_kt00007("token")
+
+    assert rows[0]["unit_price"] == 276000
+    assert rows[0]["remaining_qty"] == 3
+
+
+def test_kt00007_completed_fill_keeps_execution_price_identity(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "acnt_ord_cntr_prps_dtl": [
+                    {
+                        "stk_cd": "A005930",
+                        "io_tp_nm": "현금매수",
+                        "ord_qty": "5",
+                        "cntr_qty": "5",
+                        "ord_remnq": "0",
+                        "cntr_uv": "275500",
+                        "ord_uv": "276000",
+                        "ord_no": "0004597",
+                        "ori_ord": "0001234",
+                    }
+                ],
+                "return_code": 0,
+            }
+        ],
+    )
+
+    rows = kiwoom_utils.get_order_reference_snapshot_kt00007("token")
+
+    assert rows[0]["unit_price"] == 275500
+    assert rows[0]["remaining_qty"] == 0
+
+
 def test_unfilled_order_snapshot_meta_distinguishes_empty_success_from_failure(
     monkeypatch,
 ):

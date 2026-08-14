@@ -743,4 +743,6 @@ def test_systemd_live_unit_uses_exact_two_leg_confirmation():
     ).read_text(encoding="utf-8")
     assert "PrivateTmp=true" not in preflight_unit
     assert "PrivateTmp=true" in live_unit
+    assert "Requires=korstockscan-samsung-one-share-preflight.service" in live_unit
+    assert "RestartPreventExitStatus=4 5 6" in live_unit
     assert service_module.LIVE_CONFIRMATION in live_unit

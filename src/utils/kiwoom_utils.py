@@ -985,6 +985,15 @@ def _pick_first(item, keys):
     return ""
 
 
+def _pick_first_positive_int(item, keys):
+    """Return the first positive numeric value without letting a zero placeholder win."""
+    for key in keys:
+        value = _to_int_safe(item.get(key))
+        if value > 0:
+            return value
+    return 0
+
+
 def _normalize_side(value):
     raw = str(value or "").strip().upper()
     compact = raw.replace("+", "").replace("-", "").replace(" ", "")
@@ -1039,22 +1048,58 @@ def _normalize_order_history_rows(*, results, source_api):
                     ("qty", "ord_qty", "cntr_qty", "exct_qty", "cnfm_qty", "oso_qty"),
                 )
             )
-            unit_price = _to_int_safe(
+            remaining_qty = _to_int_safe(
                 _pick_first(
                     item,
-                    (
-                        "unp",
-                        "cntr_prc",
-                        "cntr_uv",
-                        "cntr_pric",
-                        "exec_pric",
-                        "ord_prc",
-                        "ord_uv",
-                        "ord_pric",
-                        "prc",
-                    ),
+                    ("oso_qty", "osop_qty", "ord_remnq", "remaining_qty"),
                 )
             )
+            if source_api == "ka10075":
+                # Open-order reconciliation owns the submitted limit price.  A
+                # partial fill price is execution evidence, not order identity.
+                unit_price_keys = (
+                    "ord_prc",
+                    "ord_uv",
+                    "ord_pric",
+                    "unp",
+                    "cntr_prc",
+                    "cntr_uv",
+                    "cntr_pric",
+                    "unit_cntr_pric",
+                    "exec_pric",
+                    "prc",
+                )
+            elif source_api == "kt00007" and remaining_qty > 0:
+                # kt00007 can contain a partially filled order with both the
+                # submitted order price and an execution price.  While an open
+                # remainder exists, reconciliation must identify the broker
+                # order by its submitted order price.
+                unit_price_keys = (
+                    "ord_uv",
+                    "ord_prc",
+                    "ord_pric",
+                    "unp",
+                    "cntr_uv",
+                    "cntr_prc",
+                    "cntr_pric",
+                    "unit_cntr_pric",
+                    "exec_pric",
+                    "prc",
+                )
+            else:
+                unit_price_keys = (
+                    "unp",
+                    "cntr_prc",
+                    "cntr_uv",
+                    "cntr_pric",
+                    "unit_cntr_pric",
+                    "exec_pric",
+                    "ord_prc",
+                    "ord_uv",
+                    "ord_pric",
+                    "prc",
+                )
+            unit_price = _pick_first_positive_int(item, unit_price_keys)
             side = _normalize_side(
                 _pick_first(
                     item,
@@ -1077,9 +1122,7 @@ def _normalize_order_history_rows(*, results, source_api):
                     ).strip(),
                     "side": side,
                     "qty": qty,
-                    "remaining_qty": _to_int_safe(
-                        _pick_first(item, ("oso_qty", "osop_qty", "remaining_qty"))
-                    ),
+                    "remaining_qty": remaining_qty,
                     "unit_price": unit_price,
                     "ord_no": ord_no,
                     "orig_ord_no": orig_ord_no,
