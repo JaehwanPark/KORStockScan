@@ -124,7 +124,7 @@ def _safe_int(value, default=0):
         return default
 
 
-def _bounded_observation_live_overnight_reason(mem_stock):
+def _limit_down_live_overnight_forbidden(mem_stock):
     source_tokens = {
         token.strip().upper()
         for token in str(
@@ -136,20 +136,7 @@ def _bounded_observation_live_overnight_reason(mem_stock):
         .split(",")
         if token.strip()
     }
-    if "LIMIT_DOWN_LIVE_UNLOCK" in source_tokens:
-        return "limit_down_live_overnight_forbidden"
-    if "UPPER_LIMIT_LIVE_RECLAIM" in source_tokens:
-        return "upper_limit_live_overnight_forbidden"
-    return ""
-
-
-def _limit_down_live_overnight_forbidden(mem_stock):
-    """Compatibility predicate retained for existing focused tests/callers."""
-
-    return (
-        _bounded_observation_live_overnight_reason(mem_stock)
-        == "limit_down_live_overnight_forbidden"
-    )
+    return "LIMIT_DOWN_LIVE_UNLOCK" in source_tokens
 
 
 def _entry_time_context_from_mem_stock(mem_stock):
@@ -979,14 +966,12 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
             holding_recent_candles,
             holding_candle_meta,
         ) = _build_overnight_holding_context(code, mem_stock, ws_data, ctx)
-        bounded_live_overnight_reason = _bounded_observation_live_overnight_reason(
-            mem_stock
-        )
-        if bounded_live_overnight_reason:
+        limit_down_forced_sell = _limit_down_live_overnight_forbidden(mem_stock)
+        if limit_down_forced_sell:
             decision = {
                 "action": "SELL_TODAY",
                 "confidence": 100,
-                "reason": bounded_live_overnight_reason,
+                "reason": "limit_down_live_overnight_forbidden",
                 "risk_note": "bounded_live_auto_contract",
             }
         elif holding_context is None:
@@ -1037,7 +1022,7 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
                 holding_decision_context_model_payload(holding_context)
             )
         _submit_overnight_dual_persona_shadow(name, code, shadow_ctx, decision)
-        if not bounded_live_overnight_reason:
+        if not limit_down_forced_sell:
             decision = _apply_overnight_flow_override(
                 record, mem_stock, ws_data, ctx, decision, ai_engine
             )
