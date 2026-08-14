@@ -1315,6 +1315,27 @@ def build_ai_market_snapshot(
     best_ask = _safe_float(
         ws.get("best_ask") or ws.get("ask_price") or ask_row.get("price")
     )
+    effective_quote_source = str(
+        ws.get("market_data_effective_price_source") or ""
+    ).strip()
+    effective_quote_state = str(ws.get("market_data_freshness_state") or "").strip()
+    effective_quote_epoch = _epoch(ws.get("market_data_effective_quote_observed_epoch"))
+    rest_quote_reanchor = bool(
+        effective_quote_source == "ka10004_rest_orderbook"
+        and effective_quote_state == "rest_enriched"
+        and effective_quote_epoch is not None
+        and 0.0 <= now_epoch - effective_quote_epoch <= (_FRESH_MS / 1000.0)
+        and current_price is not None
+        and current_price > 0
+        and best_bid is not None
+        and best_ask is not None
+        and best_bid > 0
+        and best_ask >= best_bid
+    )
+    quote_value_epoch = effective_quote_epoch if rest_quote_reanchor else quote_epoch
+    price_value_epoch = effective_quote_epoch if rest_quote_reanchor else tape_epoch
+    quote_value_source = "ka10004_rest_orderbook" if rest_quote_reanchor else "ws_0D"
+    price_value_source = "ka10004_rest_orderbook" if rest_quote_reanchor else "ws_0B"
     candle_quality = (
         candle_ctx.get("source_quality")
         if isinstance(candle_ctx.get("source_quality"), dict)
@@ -1449,8 +1470,8 @@ def build_ai_market_snapshot(
     sources = {
         "current_price": _source_row(
             value=current_price if current_price and current_price > 0 else None,
-            source="ws_0B",
-            observed_epoch=tape_epoch,
+            source=price_value_source,
+            observed_epoch=price_value_epoch,
             now_epoch=now_epoch,
             market_suffix=tape_row.get("market_suffix", ""),
             market_route=tape_row.get("market_route", ""),
@@ -1462,8 +1483,8 @@ def build_ai_market_snapshot(
                 if best_bid and best_ask and best_bid > 0 and best_ask >= best_bid
                 else None
             ),
-            source="ws_0D",
-            observed_epoch=quote_epoch,
+            source=quote_value_source,
+            observed_epoch=quote_value_epoch,
             now_epoch=now_epoch,
             market_suffix=quote_row.get("market_suffix", ""),
             market_route=quote_row.get("market_route", ""),
@@ -1683,7 +1704,9 @@ def build_ai_market_snapshot(
     ):
         blockers.append("broker_route_venue_mismatch_or_missing")
     observed_epochs = [
-        value for value in (quote_epoch, tape_epoch) if isinstance(value, (int, float))
+        value
+        for value in (quote_value_epoch, tape_epoch)
+        if isinstance(value, (int, float))
     ]
     max_skew_ms = (
         round((max(observed_epochs) - min(observed_epochs)) * 1000.0, 3)
@@ -1822,6 +1845,18 @@ def build_ai_market_snapshot(
         "realtime_type_provenance": provenance,
         "sources": sources,
         "max_source_skew_ms": max_skew_ms,
+        "executable_quote_reanchor": {
+            "applied": rest_quote_reanchor,
+            "source": effective_quote_source or "ws",
+            "freshness_state": effective_quote_state or "not_provided",
+            "observed_epoch": effective_quote_epoch,
+            "request_code": str(
+                ws.get("market_data_effective_quote_request_code") or ""
+            ).strip()
+            or None,
+            "authority": "quote_and_current_price_only",
+            "tape_or_event_venue_authority": False,
+        },
         "quality": status,
         "ai_input_preflight_v1": preflight,
         "runtime_preflight_mode": preflight_mode,
@@ -1871,6 +1906,11 @@ def ai_market_snapshot_log_fields(
         snapshot = source
     snapshot = snapshot if isinstance(snapshot, dict) else {}
     preflight = ai_input_preflight(snapshot)
+    quote_reanchor = (
+        snapshot.get("executable_quote_reanchor")
+        if isinstance(snapshot.get("executable_quote_reanchor"), dict)
+        else {}
+    )
     contract_fields = {
         f"{observation_contract_prefix}{key}": value
         for key, value in OBSERVATION_CONTRACT.items()
@@ -1931,6 +1971,21 @@ def ai_market_snapshot_log_fields(
             "venue_attribution_reason"
         ),
         "ai_market_snapshot_session_bucket": snapshot.get("session_bucket"),
+        "ai_market_snapshot_executable_quote_reanchor_applied": bool(
+            quote_reanchor.get("applied", False)
+        ),
+        "ai_market_snapshot_executable_quote_reanchor_source": quote_reanchor.get(
+            "source"
+        ),
+        "ai_market_snapshot_executable_quote_reanchor_request_code": (
+            quote_reanchor.get("request_code")
+        ),
+        "ai_market_snapshot_executable_quote_reanchor_authority": (
+            quote_reanchor.get("authority")
+        ),
+        "ai_market_snapshot_executable_quote_reanchor_tape_or_event_venue_authority": bool(
+            quote_reanchor.get("tape_or_event_venue_authority", False)
+        ),
         "ai_input_preflight_schema": preflight.get("schema", PREFLIGHT_SCHEMA),
         "ai_input_preflight_allowed": bool(preflight.get("allowed", False)),
         "ai_input_preflight_source_allowed": bool(

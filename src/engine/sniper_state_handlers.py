@@ -60009,6 +60009,13 @@ def _handle_watching_strategy_branch(
                             realtime_ctx["entry_candle_context"] = (
                                 gatekeeper_candle_context
                             )
+                            realtime_ctx[
+                                "late_confirmation_recheck_requires_fresh_bbo_tape"
+                            ] = bool(
+                                stock.get(
+                                    "late_confirmation_recheck_requires_fresh_bbo_tape"
+                                )
+                            )
                             gatekeeper_started_at = time.perf_counter()
                             gatekeeper = ai_engine.evaluate_realtime_gatekeeper(
                                 stock_name=stock["name"],
@@ -66143,6 +66150,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         if len(submitted_broker_routes) == 1
         else "missing_or_conflicting_submitted_leg_routes"
     )
+    if bundle_broker_route in {"KRX", "NXT", "SOR"}:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "entry_execution_broker_route": bundle_broker_route,
+                "entry_execution_broker_route_resolution": bundle_route_resolution,
+                "entry_execution_route_recorded_at": now_ts,
+            },
+        )
+    else:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "entry_execution_broker_route": "UNKNOWN",
+                "entry_execution_broker_route_resolution": bundle_route_resolution,
+                "entry_execution_route_recorded_at": now_ts,
+            },
+        )
     submitted_execution_cohorts = sorted(
         {
             str(order.get("entry_execution_cohort") or "").strip().upper()
@@ -73633,6 +73658,22 @@ def _persist_post_submit_db_state(
         "buy_price": db_buy_price,
         "buy_qty": db_buy_qty,
     }
+    entry_execution_broker_route = (
+        str(stock.get("entry_execution_broker_route") or "").strip().upper()
+    )
+    if entry_execution_broker_route in {"KRX", "NXT", "SOR", "UNKNOWN"}:
+        buy_order_update.update(
+            {
+                "entry_execution_broker_route": entry_execution_broker_route,
+                "entry_execution_broker_route_resolution": str(
+                    stock.get("entry_execution_broker_route_resolution")
+                    or "successful_entry_submit"
+                ).strip(),
+                "entry_execution_route_recorded_at": _safe_float(
+                    stock.get("entry_execution_route_recorded_at"), time.time()
+                ),
+            }
+        )
     if opening_rotation_active:
         buy_order_update.update(
             {

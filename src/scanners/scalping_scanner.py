@@ -3128,6 +3128,71 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
             **observed_context,
         }
 
+    late_recheck_enabled = bool(
+        getattr(TRADING_RULES, "SCALP_SCANNER_LATE_RECHECK_ENABLED", True)
+    )
+    late_recheck_max_age_sec = max(
+        max_probe_sec,
+        int(
+            getattr(
+                TRADING_RULES,
+                "SCALP_SCANNER_LATE_RECHECK_MAX_AGE_SEC",
+                max_probe_sec * 3,
+            )
+            or max_probe_sec * 3
+        ),
+    )
+    late_recheck_min_price_delta = max(
+        min_price_delta,
+        float(
+            getattr(
+                TRADING_RULES,
+                "SCALP_SCANNER_LATE_RECHECK_MIN_PRICE_DELTA_PCT",
+                min_price_delta * 2.0,
+            )
+            or min_price_delta * 2.0
+        ),
+    )
+    late_recheck_min_flu_delta = max(
+        min_flu_delta,
+        float(
+            getattr(
+                TRADING_RULES,
+                "SCALP_SCANNER_LATE_RECHECK_MIN_FLU_DELTA_PCT",
+                min_flu_delta * 2.0,
+            )
+            or min_flu_delta * 2.0
+        ),
+    )
+    late_recheck_confirmed = bool(
+        late_recheck_enabled
+        and max_probe_sec < probe_age <= late_recheck_max_age_sec
+        and str(previous.get("last_guard_block_reason") or "")
+        == "late_confirmation_probe_expired"
+        and not price_declined
+        and not flu_metric_changed
+        and price_delta >= late_recheck_min_price_delta
+        and comparable_flu_delta >= late_recheck_min_flu_delta
+    )
+    if late_recheck_confirmed:
+        return {
+            "blocked": False,
+            "reason": "late_confirmation_bounded_recheck",
+            "candidate_role": candidate_role,
+            "source_signature": ",".join(source_signature),
+            "late_confirmation_recheck_once": True,
+            "late_confirmation_recheck_requires_fresh_bbo_tape": True,
+            "late_confirmation_recheck_max_age_sec": late_recheck_max_age_sec,
+            "late_confirmation_recheck_min_price_delta_pct": (
+                late_recheck_min_price_delta
+            ),
+            "late_confirmation_recheck_min_flu_delta_pct": (late_recheck_min_flu_delta),
+            "late_confirmation_recheck_rollback_env": (
+                "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_ENABLED=false"
+            ),
+            **observed_context,
+        }
+
     if source_set != {"VALUE_TOP"}:
         reason = _late_confirmation_probe_block_reason(
             probe_age=probe_age,
@@ -3541,6 +3606,25 @@ def _scanner_event_fields(target, source_guard=None):
             "scanner_promotion_emitted_epoch"
         )
         or "",
+        "late_confirmation_recheck_once": bool(
+            source_guard.get("late_confirmation_recheck_once")
+        ),
+        "late_confirmation_recheck_requires_fresh_bbo_tape": bool(
+            source_guard.get("late_confirmation_recheck_requires_fresh_bbo_tape")
+        ),
+        "late_confirmation_recheck_max_age_sec": source_guard.get(
+            "late_confirmation_recheck_max_age_sec"
+        ),
+        "late_confirmation_recheck_min_price_delta_pct": source_guard.get(
+            "late_confirmation_recheck_min_price_delta_pct"
+        ),
+        "late_confirmation_recheck_min_flu_delta_pct": source_guard.get(
+            "late_confirmation_recheck_min_flu_delta_pct"
+        ),
+        "late_confirmation_recheck_rollback_env": source_guard.get(
+            "late_confirmation_recheck_rollback_env"
+        )
+        or "",
         "scanner_priority_tier": source_guard.get("scanner_priority_tier")
         or priority_profile.get("scanner_priority_tier"),
         "scanner_priority_score": _safe_float(
@@ -3691,6 +3775,25 @@ def _scanner_runtime_target_payload(
         "scanner_promotion_reason": fields.get("scanner_promotion_reason") or "",
         "scanner_promotion_emitted_epoch": fields.get("scanner_promotion_emitted_epoch")
         or "",
+        "late_confirmation_recheck_once": bool(
+            fields.get("late_confirmation_recheck_once")
+        ),
+        "late_confirmation_recheck_requires_fresh_bbo_tape": bool(
+            fields.get("late_confirmation_recheck_requires_fresh_bbo_tape")
+        ),
+        "late_confirmation_recheck_max_age_sec": fields.get(
+            "late_confirmation_recheck_max_age_sec"
+        ),
+        "late_confirmation_recheck_min_price_delta_pct": fields.get(
+            "late_confirmation_recheck_min_price_delta_pct"
+        ),
+        "late_confirmation_recheck_min_flu_delta_pct": fields.get(
+            "late_confirmation_recheck_min_flu_delta_pct"
+        ),
+        "late_confirmation_recheck_rollback_env": fields.get(
+            "late_confirmation_recheck_rollback_env"
+        )
+        or "",
         "source_signature": fields.get("source_signature") or "",
         "current_price_observed": fields.get("current_price_observed"),
         "price_delta_since_first_seen_pct": fields.get(
@@ -3828,6 +3931,25 @@ def _persist_scanner_promotion_provenance(record, payload):
     )
     record.scanner_cntr_str_available = optional_bool("cntr_str_available")
     record.scanner_cntr_str = optional_float("cntr_str")
+    record.scanner_late_confirmation_recheck_once = optional_bool(
+        "late_confirmation_recheck_once"
+    )
+    record.scanner_late_confirmation_recheck_requires_fresh_bbo_tape = optional_bool(
+        "late_confirmation_recheck_requires_fresh_bbo_tape"
+    )
+    late_recheck_max_age_sec = optional_float("late_confirmation_recheck_max_age_sec")
+    record.scanner_late_confirmation_recheck_max_age_sec = (
+        int(late_recheck_max_age_sec) if late_recheck_max_age_sec is not None else None
+    )
+    record.scanner_late_confirmation_recheck_min_price_delta_pct = optional_float(
+        "late_confirmation_recheck_min_price_delta_pct"
+    )
+    record.scanner_late_confirmation_recheck_min_flu_delta_pct = optional_float(
+        "late_confirmation_recheck_min_flu_delta_pct"
+    )
+    record.scanner_late_confirmation_recheck_rollback_env = str(
+        payload.get("late_confirmation_recheck_rollback_env") or ""
+    ).strip()
 
 
 def promote_candidates(

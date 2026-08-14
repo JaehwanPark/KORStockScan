@@ -137,6 +137,19 @@ def test_get_active_targets_filters_only_swing_watching_by_default(monkeypatch):
                 "comparable_flu_delta_since_first_seen": float("nan"),
                 "cntr_str_available": None,
                 "cntr_str": float("nan"),
+                "late_confirmation_recheck_once": True,
+                "late_confirmation_recheck_requires_fresh_bbo_tape": True,
+                "late_confirmation_recheck_max_age_sec": 900,
+                "late_confirmation_recheck_min_price_delta_pct": 0.30,
+                "late_confirmation_recheck_min_flu_delta_pct": 0.60,
+                "late_confirmation_recheck_rollback_env": (
+                    "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_ENABLED=false"
+                ),
+                "entry_execution_broker_route": "SOR",
+                "entry_execution_broker_route_resolution": (
+                    "consistent_submitted_legs"
+                ),
+                "entry_execution_route_recorded_at": 1_786_676_000.25,
             },
         ]
     )
@@ -153,3 +166,16 @@ def test_get_active_targets_filters_only_swing_watching_by_default(monkeypatch):
     assert scanner_target["comparable_flu_delta_since_first_seen"] is None
     assert scanner_target["cntr_str_available"] is None
     assert scanner_target["cntr_str"] is None
+    assert scanner_target["late_confirmation_recheck_once"] is True
+    assert scanner_target["late_confirmation_recheck_requires_fresh_bbo_tape"] is True
+    assert scanner_target["late_confirmation_recheck_max_age_sec"] == 900
+    assert scanner_target["late_confirmation_recheck_min_price_delta_pct"] == 0.30
+    assert scanner_target["late_confirmation_recheck_min_flu_delta_pct"] == 0.60
+    assert scanner_target["late_confirmation_recheck_rollback_env"] == (
+        "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_ENABLED=false"
+    )
+    assert scanner_target["entry_execution_broker_route"] == "SOR"
+    assert scanner_target["entry_execution_broker_route_resolution"] == (
+        "consistent_submitted_legs"
+    )
+    assert scanner_target["entry_execution_route_recorded_at"] == (1_786_676_000.25)

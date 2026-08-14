@@ -977,6 +977,70 @@ def test_krx_rejects_integrated_source_without_event_venue_proof():
     assert snapshot["integrated_sor_route_proven"] is False
 
 
+def test_fresh_rest_bbo_reanchors_quote_only_without_waiving_tape_or_venue():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    ws = _ws(now, suffix="_AL", route="krx_nxt_integrated")
+    ws["last_realtime_type_ts"] = {"0B": now - 10.0, "0D": now - 10.0}
+    ws.update(
+        {
+            "curr": 10020,
+            "best_bid": 10010,
+            "best_ask": 10020,
+            "market_data_effective_price_source": "ka10004_rest_orderbook",
+            "market_data_freshness_state": "rest_enriched",
+            "market_data_effective_quote_observed_epoch": now - 0.1,
+            "market_data_effective_quote_request_code": "005930_AL",
+        }
+    )
+
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_screen",
+        ws_data=ws,
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        candle_context=_candle(
+            rest_route="_AL",
+            ws_route="krx_nxt_integrated",
+            request_code="005930_AL",
+        ),
+        now_ts=now,
+    )
+
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert snapshot["sources"]["current_price"]["source"] == ("ka10004_rest_orderbook")
+    assert snapshot["sources"]["current_price"]["quality"] == "fresh"
+    assert snapshot["sources"]["bbo"]["quality"] == "fresh"
+    assert snapshot["executable_quote_reanchor"] == {
+        "applied": True,
+        "source": "ka10004_rest_orderbook",
+        "freshness_state": "rest_enriched",
+        "observed_epoch": now - 0.1,
+        "request_code": "005930_AL",
+        "authority": "quote_and_current_price_only",
+        "tape_or_event_venue_authority": False,
+    }
+    assert "current_price_stale" not in preflight["source_blockers"]
+    assert "bbo_stale" not in preflight["source_blockers"]
+    assert "tape_stale" in preflight["source_blockers"]
+    assert "realtime_type_provenance_missing_or_stale" in preflight["source_blockers"]
+    assert preflight["source_allowed"] is False
+    assert snapshot["underlying_event_venue"] is None
+    assert snapshot["venue_attribution_allowed"] is False
+    log_fields = mod.ai_market_snapshot_log_fields(snapshot)
+    assert log_fields["ai_market_snapshot_executable_quote_reanchor_applied"] is True
+    assert (
+        log_fields["ai_market_snapshot_executable_quote_reanchor_authority"]
+        == "quote_and_current_price_only"
+    )
+    assert (
+        log_fields[
+            "ai_market_snapshot_executable_quote_reanchor_tape_or_event_venue_authority"
+        ]
+        is False
+    )
+
+
 def test_holding_sor_accepts_exact_integrated_execution_route_without_inventing_venue():
     now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     position = {

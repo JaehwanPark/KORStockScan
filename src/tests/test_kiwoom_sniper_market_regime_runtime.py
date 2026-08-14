@@ -721,6 +721,14 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
             "market_session_bucket": "krx_regular",
             "current_price_observed": 70000,
             "price_delta_since_first_seen_pct": "0.50",
+            "late_confirmation_recheck_once": True,
+            "late_confirmation_recheck_requires_fresh_bbo_tape": True,
+            "late_confirmation_recheck_max_age_sec": 900,
+            "late_confirmation_recheck_min_price_delta_pct": 0.30,
+            "late_confirmation_recheck_min_flu_delta_pct": 0.60,
+            "late_confirmation_recheck_rollback_env": (
+                "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_ENABLED=false"
+            ),
             "scanner_source_family": "scalping_scanner_rising_start_source_v1",
             "scanner_source_role": "primary_rising_start",
             "rank_change": -12,
@@ -745,6 +753,14 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert attached_target["scanner_watch_budget_owner"] == "rising_missed"
     assert attached_target["effective_venue"] == "KRX"
     assert attached_target["market_session_bucket"] == "krx_regular"
+    assert attached_target["late_confirmation_recheck_once"] is True
+    assert attached_target["late_confirmation_recheck_requires_fresh_bbo_tape"] is True
+    assert attached_target["late_confirmation_recheck_max_age_sec"] == 900
+    assert attached_target["late_confirmation_recheck_min_price_delta_pct"] == 0.30
+    assert attached_target["late_confirmation_recheck_min_flu_delta_pct"] == 0.60
+    assert attached_target["late_confirmation_recheck_rollback_env"] == (
+        "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_ENABLED=false"
+    )
     assert (
         attached_target["venue_resolution"]
         == "consistent_explicit:payload.effective_venue,payload.venue"
