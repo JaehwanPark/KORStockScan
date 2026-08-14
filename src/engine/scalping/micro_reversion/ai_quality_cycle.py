@@ -138,6 +138,9 @@ MICRO_REPORT_ROOT = (
     DATA_DIR / "report" / "ai_micro_reversion_materialized_replay_requests"
 )
 SOURCE_POLICY_ROOT = DATA_DIR / "policy" / "micro_reversion"
+ECONOMIC_POLICY_PATH = DATA_DIR / "config" / "micro_reversion_economic_policy.json"
+DEFAULT_DAILY_ATTEMPT_CAP = 96
+DEFAULT_PARENT_CAP = 8
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -2749,6 +2752,11 @@ def _default_paths(target_date: str) -> dict[str, Path]:
         / f"observation_source_quality_audit_{target_date}.json",
         "economic_source_manifest": SOURCE_POLICY_ROOT
         / "economic_reference_sources.json",
+        "economic_policy": ECONOMIC_POLICY_PATH,
+        "economic_owner_report": SOURCE_POLICY_ROOT
+        / "daily"
+        / target_date
+        / "owner_report.json",
         "economic_reference": ECONOMIC_REPORT_ROOT
         / f"micro_reversion_economic_reference_{target_date}.json",
         "cost_profile": ECONOMIC_REPORT_ROOT
@@ -2803,7 +2811,117 @@ def _economic_outputs(
             raise ValueError(f"economic_reference_{name}_internal_hash_mismatch")
         if payload.get("verified") is not True or _authority_findings(payload):
             raise ValueError(f"economic_reference_{name}_not_verified")
+    profiles = cost.get("profiles")
+    if not isinstance(profiles, list) or not profiles:
+        raise ValueError("economic_reference_cost_profiles_missing")
+    for profile in profiles:
+        if not isinstance(profile, Mapping):
+            raise ValueError("economic_reference_cost_profile_invalid")
+        if (
+            float(profile.get("buy_fee_bps")) != 1.5
+            or float(profile.get("sell_fee_bps")) != 1.5
+            or float(profile.get("statutory_sell_tax_bps")) != 20.0
+            or float(profile.get("uncertainty_buffer_bps")) != 0.0
+            or profile.get("listing_markets") not in (["KOSPI"], ["KOSDAQ"])
+            or profile.get("instrument_types") != ["EQUITY"]
+            or profile.get("instrument_tax_classes")
+            != ["ordinary_taxable_equity_20bps"]
+        ):
+            raise ValueError("economic_reference_cost_policy_mismatch")
+    records = master.get("records")
+    if not isinstance(records, list) or not records:
+        raise ValueError("economic_reference_symbol_records_missing")
+    for record in records:
+        if not isinstance(record, Mapping) or (
+            record.get("listing_market") not in {"KOSPI", "KOSDAQ"}
+            or record.get("instrument_type") != "EQUITY"
+            or record.get("instrument_tax_class") != "ordinary_taxable_equity_20bps"
+        ):
+            raise ValueError("economic_reference_symbol_scope_mismatch")
     return dict(cost), dict(master)
+
+
+def _validate_economic_owner_report(
+    report: Mapping[str, Any],
+    *,
+    target_date: str,
+    policy_path: Path,
+    manifest_path: Path,
+    pricing_path: Path,
+) -> None:
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+    from src.engine.scalping.micro_reversion.economic_reference_owner import (
+        OWNER_REPORT_SCHEMA,
+    )
+
+    if report.get("schema") != OWNER_REPORT_SCHEMA:
+        raise ValueError("economic_owner_report_schema_invalid")
+    if report.get("target_date") != target_date or report.get("status") != "pass":
+        raise ValueError("economic_owner_report_target_or_status_invalid")
+    try:
+        generated_at = datetime.fromisoformat(str(report.get("generated_at") or ""))
+    except ValueError as exc:
+        raise ValueError("economic_owner_report_generated_at_invalid") from exc
+    if generated_at.tzinfo is None or generated_at.astimezone(
+        KST
+    ).date().isoformat() != (target_date):
+        raise ValueError("economic_owner_report_generated_at_invalid")
+    declared_hash = str(report.get("artifact_content_sha256") or "")
+    body = {
+        key: item for key, item in report.items() if key != "artifact_content_sha256"
+    }
+    if not declared_hash or declared_hash != content_sha256(body):
+        raise ValueError("economic_owner_report_content_hash_mismatch")
+    if (
+        report.get("decision_authority") != "offline_economic_reference_source_only"
+        or _authority_findings(report)
+        or report.get("provider_call_performed") is not False
+    ):
+        raise ValueError("economic_owner_report_authority_invalid")
+    for field, path, hash_field, size_field in (
+        (
+            "policy_path",
+            policy_path,
+            "policy_sha256",
+            None,
+        ),
+        (
+            "economic_manifest_path",
+            manifest_path,
+            "economic_manifest_sha256",
+            "economic_manifest_size_bytes",
+        ),
+        (
+            "provider_pricing_path",
+            pricing_path,
+            "provider_pricing_sha256",
+            "provider_pricing_size_bytes",
+        ),
+    ):
+        if Path(str(report.get(field) or "")).resolve() != path.resolve():
+            raise ValueError(f"economic_owner_report_path_mismatch:{field}")
+        raw = path.read_bytes()
+        if report.get(hash_field) != _sha256(raw):
+            raise ValueError(f"economic_owner_report_hash_mismatch:{field}")
+        if size_field is not None and report.get(size_field) != len(raw):
+            raise ValueError(f"economic_owner_report_size_mismatch:{field}")
+    if (
+        not isinstance(report.get("eligible_common_stock_count"), int)
+        or report.get("eligible_common_stock_count", 0) <= 0
+        or report.get("eligible_common_stock_count")
+        != report.get("eligible_kospi_count", -1)
+        + report.get("eligible_kosdaq_count", -1)
+    ):
+        raise ValueError("economic_owner_report_symbol_census_invalid")
+    budget_basis = report.get("provider_budget_basis")
+    if not isinstance(budget_basis, Mapping) or (
+        budget_basis.get("evaluated_call_median") != 781
+        or budget_basis.get("daily_parent_cap") != DEFAULT_PARENT_CAP
+        or budget_basis.get("daily_attempt_cap") != DEFAULT_DAILY_ATTEMPT_CAP
+        or not isinstance(budget_basis.get("source_artifacts"), list)
+        or len(budget_basis["source_artifacts"]) != 5
+    ):
+        raise ValueError("economic_owner_report_budget_basis_invalid")
 
 
 def _collect_rolling_inputs(
@@ -2981,7 +3099,16 @@ def run_cycle(
     if isinstance(parent_cap, bool) or parent_cap <= 0:
         raise ValueError("parent_cap_must_be_positive")
 
-    selected_paths = {**_default_paths(target_date), **dict(paths or {})}
+    overrides = dict(paths or {})
+    selected_paths = {**_default_paths(target_date), **overrides}
+    if "economic_source_manifest" in overrides:
+        owner_root = selected_paths["economic_source_manifest"].parent
+        if "economic_owner_report" not in overrides:
+            selected_paths["economic_owner_report"] = (
+                owner_root / "daily" / target_date / "owner_report.json"
+            )
+        if "provider_pricing" not in overrides:
+            selected_paths["provider_pricing"] = owner_root / "provider_pricing.json"
     steps: list[dict[str, Any]] = []
     blockers: list[str] = []
     materialized: dict[str, Any] = {}
@@ -3006,6 +3133,49 @@ def run_cycle(
         audit_source = {}
         blockers.append(f"source_quality_audit_unavailable:{type(exc).__name__}")
 
+    owner_command = [
+        sys.executable,
+        "-m",
+        "src.engine.scalping.micro_reversion.economic_reference_owner",
+        "--target-date",
+        target_date,
+        "--policy",
+        str(selected_paths["economic_policy"]),
+        "--output-root",
+        str(selected_paths["economic_source_manifest"].parent),
+    ]
+    if not write:
+        blockers.append("write_required_for_composed_r0_r3_artifact_chain")
+    elif not blockers:
+        steps.append(
+            _command_step(
+                name="economic_reference_owner",
+                command=owner_command,
+                runner=command_runner,
+            )
+        )
+        if steps[-1]["returncode"] != 0:
+            blockers.append("economic_reference_owner_failed_or_not_effective")
+        else:
+            try:
+                owner_report = _load_json_auto(selected_paths["economic_owner_report"])
+                _validate_economic_owner_report(
+                    owner_report,
+                    target_date=target_date,
+                    policy_path=selected_paths["economic_policy"],
+                    manifest_path=selected_paths["economic_source_manifest"],
+                    pricing_path=selected_paths["provider_pricing"],
+                )
+            except (
+                OSError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as exc:
+                blockers.append(
+                    f"economic_reference_owner_report_invalid:{type(exc).__name__}"
+                )
+
     economic_command = [
         sys.executable,
         "-m",
@@ -3017,7 +3187,7 @@ def run_cycle(
         "--output",
         str(selected_paths["economic_reference"]),
     ]
-    if write:
+    if write and not blockers:
         steps.append(
             _command_step(
                 name="economic_reference",
@@ -3027,13 +3197,11 @@ def run_cycle(
         )
         if steps[-1]["returncode"] != 0:
             blockers.append("economic_reference_command_failed")
-    else:
-        blockers.append("write_required_for_composed_r0_r3_artifact_chain")
 
     economic: dict[str, Any] = {}
     cost_profile: dict[str, Any] = {}
     symbol_master: dict[str, Any] = {}
-    if selected_paths["economic_reference"].exists():
+    if not blockers and selected_paths["economic_reference"].exists():
         try:
             economic = _load_json_auto(selected_paths["economic_reference"])
             if (
@@ -3047,7 +3215,7 @@ def run_cycle(
                 _atomic_write_json(selected_paths["symbol_master"], symbol_master)
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             blockers.append(f"economic_reference_invalid:{type(exc).__name__}")
-    else:
+    elif not blockers:
         blockers.append("economic_reference_artifact_missing")
 
     paired_report: dict[str, Any] = {}
@@ -3335,6 +3503,8 @@ def run_cycle(
         "blockers": blockers,
         "source_quality_audit": audit_source,
         "economic_reference_path": str(selected_paths["economic_reference"]),
+        "economic_policy_path": str(selected_paths["economic_policy"]),
+        "economic_owner_report_path": str(selected_paths["economic_owner_report"]),
         "prepared_request_path": str(selected_paths["prepared"]),
         "bridge_report_path": str(selected_paths["bridge_report"]),
         "source_bundle_path": str(selected_paths["source_bundle"]),
@@ -3357,6 +3527,8 @@ def run_cycle(
             "maximum_logical_requests": parent_cap * len(EXPECTED_ARMS),
             "maximum_schema_attempts_per_request": quality.CANDIDATE_SCHEMA_MAX_ATTEMPTS,
             "reviewed_pricing_artifact_required": True,
+            "pricing_basis": "operator_accounting_zero_cost",
+            "capacity_basis": "2026-08-10_to_2026-08-14_evaluated_call_median_781",
         },
         "r3_runtime_apply_performed": False,
         "first_exact_candidate_approval_required": True,
@@ -3379,9 +3551,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", required=True)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--execute-provider-replay", action="store_true")
-    parser.add_argument("--daily-attempt-cap", type=int, default=12)
+    parser.add_argument(
+        "--daily-attempt-cap", type=int, default=DEFAULT_DAILY_ATTEMPT_CAP
+    )
     parser.add_argument("--daily-usd-cap", type=Decimal, default=Decimal("1.0"))
-    parser.add_argument("--parent-cap", type=int, default=1)
+    parser.add_argument("--parent-cap", type=int, default=DEFAULT_PARENT_CAP)
     args = parser.parse_args(argv)
 
     report = run_cycle(

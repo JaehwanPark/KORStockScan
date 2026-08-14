@@ -18,10 +18,12 @@ import json
 import math
 import os
 import tempfile
+import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from .contracts import CLEAN_BASELINE_DATE, normalize_symbol, normalize_venue
 from .tax import (
@@ -36,7 +38,7 @@ from .tax import (
 SOURCE_MANIFEST_SCHEMA = "micro_reversion_economic_reference_source_manifest_v2"
 RAW_BROKER_FEE_SCHEMA = "micro_reversion_raw_broker_fee_v2"
 RAW_STATUTORY_TAX_SCHEMA = "micro_reversion_raw_statutory_tax_v2"
-RAW_SYMBOL_MASTER_SCHEMA = "micro_reversion_raw_symbol_product_master_v2"
+RAW_SYMBOL_MASTER_SCHEMA = "micro_reversion_raw_symbol_product_master_v3"
 DAILY_RESOLUTION_SCHEMA = "micro_reversion_economic_reference_daily_resolution_v2"
 REVIEWED_COST_CATALOG_SCHEMA = "micro_reversion_reviewed_cost_catalog_v2"
 BRIDGE_COST_PROFILE_SCHEMA = "micro_reversion_reviewed_cost_profile_v1"
@@ -56,6 +58,19 @@ SUPPORTED_EXECUTION_VENUES = frozenset({"KRX", "NXT", "SOR"})
 SUPPORTED_LISTING_MARKETS = frozenset({"KOSPI", "KOSDAQ"})
 SUPPORTED_ECONOMIC_INSTRUMENT = InstrumentType.EQUITY.value
 MAX_BPS = 1_000.0
+OFFICIAL_MASTER_SOURCE_URIS = frozenset(
+    {
+        "https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip",
+        "https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip",
+    }
+)
+OFFICIAL_MASTER_REPOSITORY = "https://github.com/koreainvestment/open-trading-api"
+OFFICIAL_MASTER_PARSER_COMMIT = "b093e42ba32d1df5f5ddad7a71cb715cbc800832"
+_KST = ZoneInfo("Asia/Seoul")
+_OFFICIAL_MASTER_LAYOUT = {
+    "KOSPI": {"trailer_width": 227, "preferred_offset": 158},
+    "KOSDAQ": {"trailer_width": 221, "preferred_offset": 153},
+}
 
 AUTHORITY_CONTRACT: dict[str, Any] = {
     "decision_authority": "offline_economic_reference_source_only",
@@ -369,7 +384,9 @@ def _parse_descriptor(
     )
 
 
-def _load_source_snapshot(descriptor: SourceDescriptor) -> SourceSnapshot:
+def _load_source_snapshot(
+    descriptor: SourceDescriptor, *, expected_date: date
+) -> SourceSnapshot:
     blockers: list[str] = []
     observed_sha256: str | None = None
     observed_size: int | None = None
@@ -402,9 +419,12 @@ def _load_source_snapshot(descriptor: SourceDescriptor) -> SourceSnapshot:
             else:
                 expected_schema = RAW_SCHEMA_BY_KIND[descriptor.kind]
                 try:
+                    expected_fields = {"schema", "source_id", "records"}
+                    if descriptor.kind == "symbol_product_master":
+                        expected_fields.add("upstream_sources")
                     _exact_fields(
                         parsed,
-                        {"schema", "source_id", "records"},
+                        expected_fields,
                         error=f"source_payload_fields_invalid:{descriptor.source_id}",
                     )
                 except ValueError as exc:
@@ -420,6 +440,40 @@ def _load_source_snapshot(descriptor: SourceDescriptor) -> SourceSnapshot:
                     record_count = len(records)
                     if not records:
                         blockers.append(f"source_records_empty:{descriptor.source_id}")
+                if descriptor.kind == "symbol_product_master":
+                    upstream_blockers, official_common_stocks = (
+                        _official_symbol_upstream_contract(
+                            parsed.get("upstream_sources"),
+                            source_path=descriptor.resolved_path,
+                            expected_date=expected_date,
+                        )
+                    )
+                    blockers.extend(upstream_blockers)
+                    declared_common_stocks: set[tuple[str, str]] = set()
+                    if isinstance(records, list):
+                        for record in records:
+                            if not isinstance(record, Mapping):
+                                continue
+                            if (
+                                str(record.get("listing_market") or "").strip()
+                                not in SUPPORTED_LISTING_MARKETS
+                                or str(record.get("instrument_type") or "").strip()
+                                != SUPPORTED_ECONOMIC_INSTRUMENT
+                                or str(record.get("instrument_tax_class") or "").strip()
+                                != InstrumentTaxClass.ORDINARY_TAXABLE_EQUITY_20BPS.value
+                            ):
+                                continue
+                            symbol = normalize_symbol(record.get("symbol"))
+                            market = str(record.get("listing_market") or "").strip()
+                            if symbol:
+                                declared_common_stocks.add((symbol, market))
+                    if (
+                        not upstream_blockers
+                        and declared_common_stocks != official_common_stocks
+                    ):
+                        blockers.append(
+                            "official_symbol_normalized_records_derivation_mismatch"
+                        )
                 if not blockers:
                     payload = parsed
     return SourceSnapshot(
@@ -430,6 +484,194 @@ def _load_source_snapshot(descriptor: SourceDescriptor) -> SourceSnapshot:
         record_count=record_count,
         blockers=tuple(sorted(set(blockers))),
     )
+
+
+def _derived_official_common_stocks(
+    member_bytes: bytes, *, market: str
+) -> tuple[set[tuple[str, str]], int]:
+    layout = _OFFICIAL_MASTER_LAYOUT[market]
+    trailer_width = layout["trailer_width"]
+    preferred_offset = layout["preferred_offset"]
+    try:
+        lines = member_bytes.decode("cp949").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ValueError("member_encoding_invalid") from exc
+    if not lines:
+        raise ValueError("member_rows_empty")
+    records: set[tuple[str, str]] = set()
+    excluded_non_six_digit_symbol_count = 0
+    for line_number, line in enumerate(lines, start=1):
+        if len(line) <= trailer_width + 21:
+            raise ValueError(f"member_row_too_short:{line_number}")
+        prefix = line[:-trailer_width]
+        trailer = line[-trailer_width:]
+        symbol = prefix[:9].strip()
+        standard_code = prefix[9:21].strip()
+        korean_name = prefix[21:].strip()
+        security_group = trailer[:2].strip()
+        preferred_class = trailer[preferred_offset : preferred_offset + 1]
+        if security_group != "ST" or preferred_class != "0":
+            continue
+        if len(symbol) != 6 or not symbol.isdigit():
+            excluded_non_six_digit_symbol_count += 1
+            continue
+        if not standard_code or not korean_name:
+            raise ValueError(f"member_common_stock_identity_missing:{line_number}")
+        identity = (symbol, market)
+        if identity in records:
+            raise ValueError(f"member_common_stock_duplicate:{symbol}")
+        records.add(identity)
+    return records, excluded_non_six_digit_symbol_count
+
+
+def _official_symbol_upstream_contract(
+    value: Any, *, source_path: Path, expected_date: date
+) -> tuple[list[str], set[tuple[str, str]]]:
+    blockers: list[str] = []
+    official_common_stocks: set[tuple[str, str]] = set()
+    if not isinstance(value, list) or len(value) != 2:
+        return ["official_symbol_upstream_sources_invalid"], official_common_stocks
+    expected_markets = {"KOSPI", "KOSDAQ"}
+    seen_markets: set[str] = set()
+    expected_fields = {
+        "market",
+        "source_uri",
+        "archive_file_name",
+        "archive_path",
+        "archive_sha256",
+        "archive_size_bytes",
+        "member_name",
+        "member_sha256",
+        "member_size_bytes",
+        "source_repository",
+        "eligible_common_stock_count",
+        "excluded_non_six_digit_symbol_count",
+        "retrieved_at",
+        "parser_source_commit",
+    }
+    for index, raw in enumerate(value):
+        prefix = f"official_symbol_upstream:{index}"
+        if not isinstance(raw, Mapping) or set(raw) != expected_fields:
+            blockers.append(f"{prefix}:fields_invalid")
+            continue
+        market = str(raw.get("market") or "")
+        source_uri = str(raw.get("source_uri") or "")
+        archive_name = str(raw.get("archive_file_name") or "")
+        archive_sha = str(raw.get("archive_sha256") or "").lower()
+        member_name = str(raw.get("member_name") or "")
+        member_sha = str(raw.get("member_sha256") or "").lower()
+        parser_commit = str(raw.get("parser_source_commit") or "").lower()
+        if market not in expected_markets or market in seen_markets:
+            blockers.append(f"{prefix}:market_invalid")
+        seen_markets.add(market)
+        expected_uri = next(
+            (
+                uri
+                for uri in OFFICIAL_MASTER_SOURCE_URIS
+                if f"/{market.lower()}_code.mst.zip" in uri
+            ),
+            None,
+        )
+        if source_uri != expected_uri:
+            blockers.append(f"{prefix}:source_uri_invalid")
+        if raw.get("source_repository") != OFFICIAL_MASTER_REPOSITORY:
+            blockers.append(f"{prefix}:source_repository_invalid")
+        if archive_name != f"{market.lower()}_code.mst.zip":
+            blockers.append(f"{prefix}:archive_name_invalid")
+        if member_name != f"{market.lower()}_code.mst":
+            blockers.append(f"{prefix}:member_name_invalid")
+        if parser_commit != OFFICIAL_MASTER_PARSER_COMMIT:
+            blockers.append(f"{prefix}:parser_commit_invalid")
+        try:
+            retrieved = datetime.fromisoformat(str(raw.get("retrieved_at") or ""))
+        except ValueError:
+            blockers.append(f"{prefix}:retrieved_at_invalid")
+        else:
+            if retrieved.tzinfo is None:
+                blockers.append(f"{prefix}:retrieved_at_invalid")
+            elif retrieved.astimezone(_KST).date() != expected_date:
+                blockers.append(f"{prefix}:retrieved_at_date_mismatch")
+        archive_size = raw.get("archive_size_bytes")
+        member_size = raw.get("member_size_bytes")
+        eligible_count = raw.get("eligible_common_stock_count")
+        excluded_symbol_count = raw.get("excluded_non_six_digit_symbol_count")
+        for field, observed in (
+            ("archive_sha256", archive_sha),
+            ("member_sha256", member_sha),
+        ):
+            if len(observed) != 64 or any(
+                character not in "0123456789abcdef" for character in observed
+            ):
+                blockers.append(f"{prefix}:{field}_invalid")
+        for field, observed in (
+            ("eligible_common_stock_count", eligible_count),
+            ("excluded_non_six_digit_symbol_count", excluded_symbol_count),
+        ):
+            if (
+                isinstance(observed, bool)
+                or not isinstance(observed, int)
+                or observed < 0
+            ):
+                blockers.append(f"{prefix}:{field}_invalid")
+        for field, observed in (
+            ("archive_size_bytes", archive_size),
+            ("member_size_bytes", member_size),
+        ):
+            if (
+                isinstance(observed, bool)
+                or not isinstance(observed, int)
+                or observed <= 0
+            ):
+                blockers.append(f"{prefix}:{field}_invalid")
+        archive_path = Path(str(raw.get("archive_path") or ""))
+        if not archive_path.is_absolute():
+            archive_path = source_path.parent / archive_path
+        archive_path = archive_path.resolve(strict=False)
+        if archive_path.name != archive_name:
+            blockers.append(f"{prefix}:archive_path_invalid")
+            continue
+        try:
+            archive_bytes, archive_stat = _read_stable_bytes(archive_path)
+        except (OSError, ValueError):
+            blockers.append(f"{prefix}:archive_unreadable")
+            continue
+        if (
+            archive_stat.st_size != archive_size
+            or _raw_sha256(archive_bytes) != archive_sha
+        ):
+            blockers.append(f"{prefix}:archive_hash_or_size_mismatch")
+            continue
+        try:
+            with zipfile.ZipFile(archive_path) as bundle:
+                members = bundle.infolist()
+                if len(members) != 1 or members[0].filename != member_name:
+                    blockers.append(f"{prefix}:member_inventory_invalid")
+                    continue
+                member_bytes = bundle.read(members[0])
+        except (OSError, RuntimeError, zipfile.BadZipFile):
+            blockers.append(f"{prefix}:archive_zip_invalid")
+            continue
+        if len(member_bytes) != member_size or _raw_sha256(member_bytes) != member_sha:
+            blockers.append(f"{prefix}:member_hash_or_size_mismatch")
+            continue
+        try:
+            derived, derived_excluded_count = _derived_official_common_stocks(
+                member_bytes,
+                market=market,
+            )
+        except ValueError as exc:
+            blockers.append(f"{prefix}:{exc}")
+            continue
+        if eligible_count != len(derived):
+            blockers.append(f"{prefix}:eligible_common_stock_count_mismatch")
+        if excluded_symbol_count != derived_excluded_count:
+            blockers.append(f"{prefix}:excluded_symbol_count_mismatch")
+        if official_common_stocks.intersection(derived):
+            blockers.append(f"{prefix}:cross_market_symbol_duplicate")
+        official_common_stocks.update(derived)
+    if seen_markets != expected_markets:
+        blockers.append("official_symbol_upstream_market_coverage_invalid")
+    return blockers, official_common_stocks
 
 
 def _record_window(
@@ -1220,7 +1462,7 @@ def build_daily_resolution(
 
     snapshots: dict[str, SourceSnapshot] = {}
     for kind, descriptor in active_descriptors.items():
-        snapshot = _load_source_snapshot(descriptor)
+        snapshot = _load_source_snapshot(descriptor, expected_date=target)
         snapshots[kind] = snapshot
         blockers.extend(snapshot.blockers)
 

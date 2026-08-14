@@ -34,6 +34,7 @@ dist/
 # PostgreSQL을 쓰지만, 이전 로컬 DB 잔재나 백업본 방지
 *.db
 *.json
+!data/config/micro_reversion_economic_policy.json
 !data/config/low_price_two_leg_expanded_profile_evidence_2026-08-12.json
 !data/config/ofi_bucket_threshold_manifest.json
 !data/config/widget_research_watch_symbols.json

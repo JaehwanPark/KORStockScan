@@ -1,0 +1,127 @@
+{
+  "actual_order_submitted": false,
+  "allowed_runtime_apply": false,
+  "broker_fee": {
+    "buy_fee_bps": 1.5,
+    "sell_fee_bps": 1.5
+  },
+  "broker_order_forbidden": true,
+  "decision_authority": "offline_economic_reference_source_only",
+  "effective_from": "2026-08-18",
+  "effective_to": null,
+  "official_symbol_master": {
+    "allowed_listing_markets": [
+      "KOSDAQ",
+      "KOSPI"
+    ],
+    "parser_source_commit": "b093e42ba32d1df5f5ddad7a71cb715cbc800832",
+    "required_preferred_class_code": "0",
+    "required_security_group_code": "ST",
+    "source_repository": "https://github.com/koreainvestment/open-trading-api"
+  },
+  "policy_id": "main-ai-economic-policy-2026-08-18-v1",
+  "provider_budget_basis": {
+    "daily_attempt_cap": 96,
+    "daily_parent_cap": 8,
+    "evaluated_call_counts": [
+      676,
+      369,
+      781,
+      1113,
+      999
+    ],
+    "evaluated_call_median": 781,
+    "logical_requests_per_parent": 3,
+    "maximum_schema_attempts_per_request": 4,
+    "observation_window_end": "2026-08-14",
+    "observation_window_start": "2026-08-10",
+    "source_artifacts": [
+      {
+        "content_sha256": "40e9db47bab0129054184a1f3595f8e007a4024c707d61509e6530c5b5f721bf",
+        "content_size_bytes": 6042290,
+        "evaluated_call_count": 676,
+        "logical_path": "data/ai_decision_trace/ai_decision_trace_2026-08-10.jsonl",
+        "provider_called_count": 712,
+        "row_count": 857,
+        "target_date": "2026-08-10"
+      },
+      {
+        "content_sha256": "818e32f8006531080efb378f10259af81a42798563b9489c9ac5bf8df7916fbe",
+        "content_size_bytes": 3078450,
+        "evaluated_call_count": 369,
+        "logical_path": "data/ai_decision_trace/ai_decision_trace_2026-08-11.jsonl",
+        "provider_called_count": 370,
+        "row_count": 429,
+        "target_date": "2026-08-11"
+      },
+      {
+        "content_sha256": "1ec08ed849ed44e05d80882ae3b1496e089bda1cad182c21505ef1232361f41f",
+        "content_size_bytes": 6101606,
+        "evaluated_call_count": 781,
+        "logical_path": "data/ai_decision_trace/ai_decision_trace_2026-08-12.jsonl",
+        "provider_called_count": 788,
+        "row_count": 871,
+        "target_date": "2026-08-12"
+      },
+      {
+        "content_sha256": "afdbb5a2ce040dda568ae8f0092c19a43732011b3e5bf0ee17a01026d3ef1cd6",
+        "content_size_bytes": 12588442,
+        "evaluated_call_count": 1113,
+        "logical_path": "data/ai_decision_trace/ai_decision_trace_2026-08-13.jsonl",
+        "provider_called_count": 1120,
+        "row_count": 1848,
+        "target_date": "2026-08-13"
+      },
+      {
+        "content_sha256": "bb34d4982d873ccd6dd1b8e176714f2c2ef7e29248a89c2280b780df7209aac0",
+        "content_size_bytes": 10014231,
+        "evaluated_call_count": 999,
+        "logical_path": "data/ai_decision_trace/ai_decision_trace_2026-08-14.jsonl",
+        "provider_called_count": 1046,
+        "row_count": 1443,
+        "target_date": "2026-08-14"
+      }
+    ]
+  },
+  "provider_pricing": {
+    "prices": [
+      {
+        "input_usd_per_million_tokens": "0",
+        "model": "gpt-5-nano",
+        "output_usd_per_million_tokens": "0",
+        "provider": "openai"
+      },
+      {
+        "input_usd_per_million_tokens": "0",
+        "model": "gpt-5.4-nano",
+        "output_usd_per_million_tokens": "0",
+        "provider": "openai"
+      },
+      {
+        "input_usd_per_million_tokens": "0",
+        "model": "gpt-5.4-mini",
+        "output_usd_per_million_tokens": "0",
+        "provider": "openai"
+      },
+      {
+        "input_usd_per_million_tokens": "0",
+        "model": "qwen3_32b",
+        "output_usd_per_million_tokens": "0",
+        "provider": "bedrock"
+      },
+      {
+        "input_usd_per_million_tokens": "0",
+        "model": "nova_lite_v2",
+        "output_usd_per_million_tokens": "0",
+        "provider": "bedrock"
+      }
+    ],
+    "pricing_basis": "operator_accounting_zero_cost"
+  },
+  "reviewed_at": "2026-08-15T08:00:00+09:00",
+  "runtime_effect": false,
+  "schema": "micro_reversion_economic_reference_owner_policy_v1",
+  "statutory_tax": {
+    "sell_tax_bps": 20.0
+  }
+}

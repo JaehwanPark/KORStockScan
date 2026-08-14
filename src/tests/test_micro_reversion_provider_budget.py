@@ -12,6 +12,8 @@ import pytest
 from src.engine.scalping.micro_reversion.provider_budget import (
     PRICING_ARTIFACT_SCHEMA,
     PRICING_AUTHORITY,
+    OPERATOR_ZERO_COST_BASIS,
+    PUBLIC_RATE_BASIS,
     AttemptIdentity,
     BudgetExceededError,
     BudgetLedgerIntegrityError,
@@ -41,6 +43,7 @@ def _write_pricing_artifact(
     prices: list[dict] | None = None,
     raw_hash_override: str | None = None,
     raw_size_override: int | None = None,
+    pricing_basis: str = PUBLIC_RATE_BASIS,
 ) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     raw_path = tmp_path / "provider-pricing-source.txt"
@@ -53,6 +56,7 @@ def _write_pricing_artifact(
         "reviewed_at": "2026-08-13T18:00:00+09:00",
         "effective_from": effective_from,
         "effective_to": effective_to,
+        "pricing_basis": pricing_basis,
         "raw_pricing_source_path": raw_path.name,
         "raw_pricing_source_bytes_sha256": (
             raw_hash_override or hashlib.sha256(raw_bytes).hexdigest()
@@ -188,7 +192,7 @@ def test_pricing_artifact_missing_or_model_missing_fails_closed(
         pricing.price_for("openai", "unknown-model")
 
 
-def test_pricing_artifact_content_hash_and_positive_rates_fail_closed(
+def test_pricing_artifact_content_hash_and_rate_basis_fail_closed(
     tmp_path: Path,
 ) -> None:
     path = _write_pricing_artifact(tmp_path)
@@ -209,8 +213,53 @@ def test_pricing_artifact_content_hash_and_positive_rates_fail_closed(
             }
         ],
     )
-    with pytest.raises(PricingArtifactError, match="positive finite"):
+    with pytest.raises(PricingArtifactError, match="public_pricing_rate"):
         load_reviewed_pricing_artifact(zero_rate, as_of_date=EXECUTION_DATE)
+
+
+def test_operator_reviewed_zero_cost_pricing_is_exact_and_budgeted(
+    tmp_path: Path,
+) -> None:
+    zero_prices = [
+        {
+            "provider": "openai",
+            "model": "gpt-test",
+            "input_usd_per_million_tokens": "0",
+            "output_usd_per_million_tokens": "0",
+        }
+    ]
+    path = _write_pricing_artifact(
+        tmp_path,
+        prices=zero_prices,
+        pricing_basis=OPERATOR_ZERO_COST_BASIS,
+    )
+    pricing = load_reviewed_pricing_artifact(path, as_of_date=EXECUTION_DATE)
+    budget = ProviderBudgetLedger(
+        ledger_path=tmp_path / "zero-budget.jsonl",
+        pricing=pricing,
+        execution_date=EXECUTION_DATE,
+        daily_attempt_cap=1,
+        daily_usd_cap="1",
+    )
+
+    permit = budget.reserve_attempt(
+        _identity(),
+        token_ceiling=conservative_token_ceiling("request", max_output_tokens=10),
+        now=NOW,
+    )
+
+    assert pricing.pricing_basis == OPERATOR_ZERO_COST_BASIS
+    assert permit.reserved_cost_usd == Decimal("0")
+    assert budget.summary(now=NOW)["pricing_basis"] == OPERATOR_ZERO_COST_BASIS
+
+
+def test_operator_zero_cost_basis_rejects_any_nonzero_rate(tmp_path: Path) -> None:
+    path = _write_pricing_artifact(
+        tmp_path,
+        pricing_basis=OPERATOR_ZERO_COST_BASIS,
+    )
+    with pytest.raises(PricingArtifactError, match="zero_cost_rate_must_be_zero"):
+        load_reviewed_pricing_artifact(path, as_of_date=EXECUTION_DATE)
 
 
 def test_budget_revalidates_pricing_and_raw_source_before_reservation(

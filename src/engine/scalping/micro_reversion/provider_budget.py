@@ -23,8 +23,10 @@ from zoneinfo import ZoneInfo
 
 KST = ZoneInfo("Asia/Seoul")
 
-PRICING_ARTIFACT_SCHEMA = "ai_provider_reviewed_pricing_v1"
+PRICING_ARTIFACT_SCHEMA = "ai_provider_reviewed_pricing_v2"
 PRICING_AUTHORITY = "offline_provider_cost_reference_only"
+PUBLIC_RATE_BASIS = "provider_public_rate"
+OPERATOR_ZERO_COST_BASIS = "operator_accounting_zero_cost"
 LEDGER_RECORD_SCHEMA = "ai_provider_budget_ledger_record_v1"
 LEDGER_MANIFEST_SCHEMA = "ai_provider_budget_ledger_manifest_v1"
 BUDGET_SUMMARY_SCHEMA = "ai_provider_budget_summary_v1"
@@ -41,6 +43,7 @@ _PRICING_ARTIFACT_FIELDS = frozenset(
         "reviewed_at",
         "effective_from",
         "effective_to",
+        "pricing_basis",
         "raw_pricing_source_path",
         "raw_pricing_source_bytes_sha256",
         "raw_pricing_source_size_bytes",
@@ -209,8 +212,8 @@ class ModelPricing:
             "output_usd_per_million_tokens",
         ):
             value = getattr(self, field)
-            if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
-                raise ValueError(f"{field} must be a positive finite Decimal")
+            if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
+                raise ValueError(f"{field} must be a non-negative finite Decimal")
 
     def cost(self, *, input_tokens: int, output_tokens: int) -> Decimal:
         _validate_nonnegative_int(input_tokens, field="input_tokens")
@@ -253,6 +256,7 @@ class ReviewedPricingArtifact:
     effective_from: date
     effective_to: date
     reviewed_at: str
+    pricing_basis: str
     raw_source_path: Path
     raw_source_bytes_sha256: str
     raw_source_size_bytes: int
@@ -448,6 +452,9 @@ def load_reviewed_pricing_artifact(
     if reviewed_timestamp.astimezone(KST).date() > as_of_date:
         raise PricingArtifactError("reviewed_pricing_reviewed_at_in_future")
     reviewed_at = reviewed_timestamp.isoformat()
+    pricing_basis = str(payload.get("pricing_basis") or "").strip()
+    if pricing_basis not in {PUBLIC_RATE_BASIS, OPERATOR_ZERO_COST_BASIS}:
+        raise PricingArtifactError("reviewed_pricing_basis_invalid")
     try:
         effective_from = date.fromisoformat(str(payload.get("effective_from") or ""))
         effective_to = date.fromisoformat(str(payload.get("effective_to") or ""))
@@ -511,12 +518,12 @@ def load_reviewed_pricing_artifact(
         if key in seen:
             raise PricingArtifactError("reviewed_pricing_provider_model_duplicate")
         seen.add(key)
-        input_rate = _positive_decimal(
+        input_rate = _nonnegative_decimal(
             raw_price.get("input_usd_per_million_tokens"),
             field="input_usd_per_million_tokens",
             error_type=PricingArtifactError,
         )
-        output_rate = _positive_decimal(
+        output_rate = _nonnegative_decimal(
             raw_price.get("output_usd_per_million_tokens"),
             field="output_usd_per_million_tokens",
             error_type=PricingArtifactError,
@@ -529,6 +536,20 @@ def load_reviewed_pricing_artifact(
                 output_usd_per_million_tokens=output_rate,
             )
         )
+    all_rates = [
+        value
+        for price in prices
+        for value in (
+            price.input_usd_per_million_tokens,
+            price.output_usd_per_million_tokens,
+        )
+    ]
+    if pricing_basis == PUBLIC_RATE_BASIS and any(value <= 0 for value in all_rates):
+        raise PricingArtifactError("reviewed_public_pricing_rate_must_be_positive")
+    if pricing_basis == OPERATOR_ZERO_COST_BASIS and any(
+        value != 0 for value in all_rates
+    ):
+        raise PricingArtifactError("reviewed_operator_zero_cost_rate_must_be_zero")
     return ReviewedPricingArtifact(
         artifact_id=artifact_id,
         artifact_path=artifact_path,
@@ -537,6 +558,7 @@ def load_reviewed_pricing_artifact(
         effective_from=effective_from,
         effective_to=effective_to,
         reviewed_at=reviewed_at,
+        pricing_basis=pricing_basis,
         raw_source_path=source_path,
         raw_source_bytes_sha256=declared_source_hash,
         raw_source_size_bytes=declared_source_size,
@@ -619,6 +641,7 @@ class ProviderBudgetLedger:
             "daily_usd_cap": _decimal_text(normalized_usd_cap),
             "pricing_artifact_content_sha256": pricing.artifact_content_sha256,
             "pricing_artifact_file_sha256": pricing.artifact_file_sha256,
+            "pricing_basis": pricing.pricing_basis,
         }
         self._budget_contract_sha256 = _sha256_json(self._budget_contract)
 
@@ -846,6 +869,7 @@ class ProviderBudgetLedger:
                     self.pricing.artifact_content_sha256
                 ),
                 "pricing_artifact_file_sha256": self.pricing.artifact_file_sha256,
+                "pricing_basis": self.pricing.pricing_basis,
                 "raw_pricing_source_bytes_sha256": (
                     self.pricing.raw_source_bytes_sha256
                 ),
@@ -1599,6 +1623,23 @@ def _positive_decimal(
         raise error_type(f"{field} must be a positive finite number") from exc
     if not parsed.is_finite() or parsed <= 0:
         raise error_type(f"{field} must be a positive finite number")
+    return parsed
+
+
+def _nonnegative_decimal(
+    value: object,
+    *,
+    field: str,
+    error_type: type[Exception],
+) -> Decimal:
+    if isinstance(value, bool) or value is None:
+        raise error_type(f"{field} must be a non-negative finite number")
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise error_type(f"{field} must be a non-negative finite number") from exc
+    if not parsed.is_finite() or parsed < 0:
+        raise error_type(f"{field} must be a non-negative finite number")
     return parsed
 
 

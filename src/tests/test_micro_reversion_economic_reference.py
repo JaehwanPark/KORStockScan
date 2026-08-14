@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import zipfile
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -26,6 +28,7 @@ from src.engine.scalping.micro_reversion.economic_reference import (
     content_sha256,
     main,
 )
+from src.engine.scalping.micro_reversion.economic_reference_owner import MASTER_SPECS
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
 
 TARGET_DATE = "2026-08-14"
@@ -33,6 +36,8 @@ GENERATED_AT = datetime.fromisoformat("2026-08-14T18:30:00+09:00")
 ORDINARY_TAX_CLASS = "ordinary_taxable_equity_20bps"
 KONEX_TAX_CLASS = "konex_taxable_equity_10bps"
 UNSUPPORTED_TAX_CLASS = "unsupported_non_equity"
+KIS_SOURCE_REPOSITORY = "https://github.com/koreainvestment/open-trading-api"
+KIS_PARSER_COMMIT = "b093e42ba32d1df5f5ddad7a71cb715cbc800832"
 
 
 def _broker_record(
@@ -126,6 +131,59 @@ def _write_bundle(
     coverage_venues: list[str] | None = None,
     mutate_manifest: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[Path, dict[str, Path], dict[str, Any]]:
+    normalized_symbol_records = symbol_records or [_symbol_record()]
+    upstream_sources = []
+    for market in ("KOSPI", "KOSDAQ"):
+        spec = next(row for row in MASTER_SPECS if row.market == market)
+        member_name = f"{market.lower()}_code.mst"
+        archive_path = tmp_path / f"{member_name}.zip"
+        eligible = {
+            str(record["symbol"])
+            for record in normalized_symbol_records
+            if record.get("listing_market") == market
+            and record.get("instrument_type") == "EQUITY"
+            and record.get("instrument_tax_class") == ORDINARY_TAX_CLASS
+            and len(str(record.get("symbol") or "")) == 6
+            and str(record.get("symbol") or "").isdigit()
+        }
+        rows: list[str] = []
+        for symbol in sorted(eligible):
+            trailer = [" " * width for width in spec.widths]
+            trailer[0] = "ST"
+            trailer[spec.preferred_index] = "0"
+            rows.append(f"{symbol:<9}{('KR' + symbol):<12}ordinary" + "".join(trailer))
+        if not rows:
+            trailer = [" " * width for width in spec.widths]
+            trailer[0] = "EF"
+            trailer[spec.preferred_index] = "0"
+            rows.append(f"{'069500':<9}{'KR069500':<12}excluded" + "".join(trailer))
+        member_bytes = ("\n".join(rows) + "\n").encode("cp949")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+            bundle.writestr(member_name, member_bytes)
+        archive_bytes = buffer.getvalue()
+        archive_path.write_bytes(archive_bytes)
+        upstream_sources.append(
+            {
+                "market": market,
+                "source_uri": (
+                    "https://new.real.download.dws.co.kr/common/master/"
+                    f"{member_name}.zip"
+                ),
+                "archive_file_name": archive_path.name,
+                "archive_path": str(archive_path),
+                "archive_sha256": hashlib.sha256(archive_bytes).hexdigest(),
+                "archive_size_bytes": len(archive_bytes),
+                "member_name": member_name,
+                "member_sha256": hashlib.sha256(member_bytes).hexdigest(),
+                "member_size_bytes": len(member_bytes),
+                "source_repository": KIS_SOURCE_REPOSITORY,
+                "eligible_common_stock_count": len(eligible),
+                "excluded_non_six_digit_symbol_count": 0,
+                "retrieved_at": GENERATED_AT.isoformat(),
+                "parser_source_commit": KIS_PARSER_COMMIT,
+            }
+        )
     payloads = {
         "broker_fee": {
             "schema": RAW_BROKER_FEE_SCHEMA,
@@ -140,7 +198,8 @@ def _write_bundle(
         "symbol_product_master": {
             "schema": RAW_SYMBOL_MASTER_SCHEMA,
             "source_id": "official-symbol-master-2026",
-            "records": symbol_records or [_symbol_record()],
+            "upstream_sources": upstream_sources,
+            "records": normalized_symbol_records,
         },
     }
     paths: dict[str, Path] = {}
@@ -382,6 +441,44 @@ def test_raw_source_missing_tamper_and_size_mismatch_fail_closed(
     assert report["summary"]["eligible_pair_count"] == 0
     assert report["canonical_reviewed_cost_payload"]["verified"] is False
     assert report["canonical_symbol_master_payload"]["verified"] is False
+
+
+def test_official_symbol_upstream_archive_tamper_fails_closed(tmp_path: Path) -> None:
+    manifest_path, paths, _ = _write_bundle(tmp_path)
+    payload = json.loads(paths["symbol_product_master"].read_text(encoding="utf-8"))
+    archive_path = Path(payload["upstream_sources"][0]["archive_path"])
+    archive_path.write_bytes(archive_path.read_bytes() + b"tampered")
+
+    report = _resolve(manifest_path)
+
+    assert report["status"] == "blocked"
+    assert any(
+        "archive_hash_or_size_mismatch" in blocker for blocker in report["blockers"]
+    )
+    assert report["summary"]["eligible_pair_count"] == 0
+
+
+def test_official_symbol_normalized_records_must_derive_from_archives(
+    tmp_path: Path,
+) -> None:
+    manifest_path, paths, manifest = _write_bundle(tmp_path)
+    payload = json.loads(paths["symbol_product_master"].read_text(encoding="utf-8"))
+    payload["records"][0]["symbol"] = "000660"
+    raw = _write_raw(paths["symbol_product_master"], payload)
+    descriptor = next(
+        row for row in manifest["raw_sources"] if row["kind"] == "symbol_product_master"
+    )
+    descriptor["sha256"] = hashlib.sha256(raw).hexdigest()
+    descriptor["size_bytes"] = len(raw)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = _resolve(manifest_path)
+
+    assert report["status"] == "blocked"
+    assert (
+        "official_symbol_normalized_records_derivation_mismatch" in report["blockers"]
+    )
+    assert report["summary"]["eligible_pair_count"] == 0
 
 
 def test_input_verified_flag_is_rejected_instead_of_trusted(tmp_path: Path) -> None:
