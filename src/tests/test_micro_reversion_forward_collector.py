@@ -1198,7 +1198,9 @@ def test_ws_producer_hook_routes_0b_and_0d_without_cross_call(monkeypatch) -> No
     assert collector.depth_calls == 1
 
 
-def test_ws_source_only_collection_reaches_collector_not_trading_event(monkeypatch) -> None:
+def test_ws_source_only_collection_reaches_collector_not_trading_event(
+    monkeypatch,
+) -> None:
     class RecordingCollector:
         def __init__(self) -> None:
             self.trade_calls = 0
@@ -1209,9 +1211,7 @@ def test_ws_source_only_collection_reaches_collector_not_trading_event(monkeypat
     collector = RecordingCollector()
     manager = KiwoomWSManager("test-token")
     manager._micro_reversion_forward_collector = collector
-    manager._micro_reversion_observation_items_by_code = {
-        "000001": "000001_AL"
-    }
+    manager._micro_reversion_observation_items_by_code = {"000001": "000001_AL"}
     manager._micro_reversion_observation_only_codes.add("000001")
     monkeypatch.setattr(
         "src.engine.kiwoom_websocket.observe_raw_market_data",

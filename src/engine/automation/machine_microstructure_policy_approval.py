@@ -1298,16 +1298,16 @@ def _normalized_objective_followup(
             dict(source_candidate_handoff_binding)
             if row.get("state") == "CANDIDATE_QUEUE_HANDOFF"
             and source_candidate_handoff_binding is not None
-            else dict(existing_candidate_handoff_binding)
-            if existing_candidate_handoff_binding is not None
-            else None
+            else (
+                dict(existing_candidate_handoff_binding)
+                if existing_candidate_handoff_binding is not None
+                else None
+            )
         ),
         "handoff_evidence": (
             dict(existing_handoff_evidence)
             if existing_handoff_evidence is not None
-            else dict(handoff_evidence)
-            if handoff_evidence is not None
-            else None
+            else dict(handoff_evidence) if handoff_evidence is not None else None
         ),
         **authority,
         "authority": authority,
@@ -1977,9 +1977,11 @@ def _revalidate_entries_against_fresh_source(
         reason = (
             "fresh_source_candidate_rejected_revalidation_required"
             if candidate_id in rejected_candidate_ids
-            else "fresh_source_candidate_withdrawn_revalidation_required"
-            if candidate_id not in raw_candidate_ids
-            else "fresh_source_candidate_version_not_accepted_revalidation_required"
+            else (
+                "fresh_source_candidate_withdrawn_revalidation_required"
+                if candidate_id not in raw_candidate_ids
+                else "fresh_source_candidate_version_not_accepted_revalidation_required"
+            )
         )
         if entry.get("state") != STATE_REVALIDATION_REQUIRED:
             _invalidate_operator_decision(
@@ -2662,13 +2664,20 @@ def build_status_report(
     decision = (
         "operator_attention_required"
         if actionable
-        else "objective_followup_required"
-        if actionable_objective_followups
-        else "objective_followup_contract_rejected"
-        if objective_followup_rejections
-        else "source_gap_queue_preserved"
-        if source_status not in {"loaded", "not_applicable_preopen", "not_provided"}
-        else "no_operator_attention_required"
+        else (
+            "objective_followup_required"
+            if actionable_objective_followups
+            else (
+                "objective_followup_contract_rejected"
+                if objective_followup_rejections
+                else (
+                    "source_gap_queue_preserved"
+                    if source_status
+                    not in {"loaded", "not_applicable_preopen", "not_provided"}
+                    else "no_operator_attention_required"
+                )
+            )
+        )
     )
     return {
         "schema": REPORT_SCHEMA,
@@ -2679,9 +2688,11 @@ def build_status_report(
         "decision": decision,
         "metric_contract": METRIC_CONTRACT,
         "source_path": str(source_path) if source_path else None,
-        "source_artifact": dict(source_artifact)
-        if isinstance(source_artifact, Mapping)
-        else _empty_source_artifact_provenance(source_path),
+        "source_artifact": (
+            dict(source_artifact)
+            if isinstance(source_artifact, Mapping)
+            else _empty_source_artifact_provenance(source_path)
+        ),
         "source_status": source_status,
         "objective_followup_source_status": objective_followup_source_status,
         "queue_path": str(queue_path),
@@ -2991,9 +3002,7 @@ def _load_source_context_snapshot(
     )
 
 
-def _load_source_context(
-    *, target_date: date, source_report: Path | None
-) -> tuple[
+def _load_source_context(*, target_date: date, source_report: Path | None) -> tuple[
     Path,
     list[Mapping[str, Any]],
     list[Mapping[str, Any]],

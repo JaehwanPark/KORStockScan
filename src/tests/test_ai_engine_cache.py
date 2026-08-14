@@ -1074,9 +1074,7 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
     assert result["holding_score_model_action"] == result["action"]
     assert result["holding_score_effective_action"] == result["action"]
     assert result["holding_score_source_quality_override_applied"] is False
-    assert result["semantic_validator_version"] == (
-        "holding_score_live_normalizer_v1"
-    )
+    assert result["semantic_validator_version"] == ("holding_score_live_normalizer_v1")
     assert result["semantic_validator_applied"] is True
     assert result["semantic_validation_status"] == "pass"
     assert result["holding_score_source_quality_override_reason"] == "-"
@@ -1614,9 +1612,7 @@ def test_holding_score_v2_non_dict_response_keeps_transport_meta(monkeypatch):
     assert result["holding_score_contract_errors"] == [
         "holding_score_response_not_object"
     ]
-    assert result["forensic_semantic_errors"] == [
-        "holding_score_response_not_object"
-    ]
+    assert result["forensic_semantic_errors"] == ["holding_score_response_not_object"]
     assert result["ai_decision_outcome_eligible"] is False
 
 

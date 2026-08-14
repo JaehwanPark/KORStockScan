@@ -90,9 +90,7 @@ def _stored_prompt_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _request_envelope_hash(
-    *, payload_sha256: str, replay_context_sha256: str
-) -> str:
+def _request_envelope_hash(*, payload_sha256: str, replay_context_sha256: str) -> str:
     return _producer_hash(
         {
             "endpoint": "analyze_target",
@@ -503,8 +501,7 @@ def _premarket_route_inputs(
 def _attach(request: dict, evidence: dict) -> dict:
     metadata = (
         _verified_symbol_metadata()
-        if evidence.get("economics", {}).get("symbol_metadata_status")
-        == "verified"
+        if evidence.get("economics", {}).get("symbol_metadata_status") == "verified"
         else None
     )
     return attach_micro_context_to_replay_request(
@@ -549,18 +546,19 @@ def test_builds_past_only_context_and_liquidity_bounded_lifecycle() -> None:
     assert evidence["decision_watermark"]["past_only_join"] is True
     assert evidence["trace_market_data_route"] == "krx_only"
     assert evidence["integrated_sor_route_proven"] is False
-    assert evidence["liquidity_capacity"][
-        "counterfactual_liquidity_qty_ceiling"
-    ] == 5
+    assert evidence["liquidity_capacity"]["counterfactual_liquidity_qty_ceiling"] == 5
     assert evidence["liquidity_capacity"]["quantity_authority_status"] == (
         "depth_capacity_only_no_order_authority"
     )
-    assert "existing_position_formula_candidate_qty" not in evidence[
-        "liquidity_capacity"
-    ]
-    assert evidence["liquidity_capacity"]["snapshot_depth_execution_basis"][
-        "allocator_or_order_quantity_present"
-    ] is False
+    assert (
+        "existing_position_formula_candidate_qty" not in evidence["liquidity_capacity"]
+    )
+    assert (
+        evidence["liquidity_capacity"]["snapshot_depth_execution_basis"][
+            "allocator_or_order_quantity_present"
+        ]
+        is False
+    )
     assert evidence["economics"]["symbol_metadata_status"] == "verified"
     assert evidence["economics"]["spread_double_counted"] is False
     assert evidence["economics"]["minimum_gross_target_bps"] > 28.0
@@ -600,9 +598,9 @@ def test_one_share_probe_floor_requires_real_bid_and_ask_capacity() -> None:
         verified_symbol_metadata=_verified_symbol_metadata(),
     )
 
-    conservative = evidence["liquidity_capacity"][
-        "counterfactual_liquidity_qty_grid"
-    ][1]
+    conservative = evidence["liquidity_capacity"]["counterfactual_liquidity_qty_grid"][
+        1
+    ]
     assert conservative["counterfactual_liquidity_bounded_qty"] == 1
     assert conservative["strict_depth_participation_capacity_qty"] == 0
     assert conservative["one_share_probe_floor_applied"] is True
@@ -730,7 +728,9 @@ def test_verified_cost_artifact_rejects_non_native_or_nonfinite_numbers(
         )
 
 
-def test_verified_symbol_metadata_is_hash_bound_and_trace_guessing_is_forbidden() -> None:
+def test_verified_symbol_metadata_is_hash_bound_and_trace_guessing_is_forbidden() -> (
+    None
+):
     evidence = build_tactical_evidence(
         trace=_trace(),
         payload=_payload(),
@@ -774,9 +774,7 @@ def test_verified_symbol_metadata_is_hash_bound_and_trace_guessing_is_forbidden(
             "verified_symbol_metadata_record_sha256_mismatch",
         ),
         (
-            lambda value: value["record"].update(
-                {"effective_from": "2026-08-15"}
-            ),
+            lambda value: value["record"].update({"effective_from": "2026-08-15"}),
             "verified_symbol_metadata_outside_effective_window",
         ),
     ],
@@ -814,9 +812,10 @@ def test_invalid_latest_market_and_depth_do_not_fallback_to_older_valid_rows() -
         config=_verified_config(),
     )
     assert market_blocked["source_quality"]["status"] == "blocked"
-    assert "market_invalid_row_supersedes_latest_valid" in market_blocked[
-        "source_quality"
-    ]["blockers"]
+    assert (
+        "market_invalid_row_supersedes_latest_valid"
+        in market_blocked["source_quality"]["blockers"]
+    )
     blocked_outcome = build_future_outcome(
         evidence=market_blocked,
         market_rows=[],
@@ -824,9 +823,10 @@ def test_invalid_latest_market_and_depth_do_not_fallback_to_older_valid_rows() -
         config=_verified_config(),
     )
     assert blocked_outcome["outcome_eligibility"] == "source_unavailable"
-    assert "tactical_evidence_source_quality_not_pass" in blocked_outcome[
-        "outcome_eligibility_blockers"
-    ]
+    assert (
+        "tactical_evidence_source_quality_not_pass"
+        in blocked_outcome["outcome_eligibility_blockers"]
+    )
 
     invalid_depth = {
         **_depth(
@@ -845,12 +845,14 @@ def test_invalid_latest_market_and_depth_do_not_fallback_to_older_valid_rows() -
     )
     assert depth_blocked["source_quality"]["status"] == "pass"
     assert depth_blocked["source_quality"]["liquidity_capacity_status"] == "blocked"
-    assert "depth_invalid_row_supersedes_latest_valid" in depth_blocked[
-        "source_quality"
-    ]["liquidity_capacity_blockers"]
-    assert depth_blocked["liquidity_capacity"][
-        "counterfactual_liquidity_qty_ceiling"
-    ] is None
+    assert (
+        "depth_invalid_row_supersedes_latest_valid"
+        in depth_blocked["source_quality"]["liquidity_capacity_blockers"]
+    )
+    assert (
+        depth_blocked["liquidity_capacity"]["counterfactual_liquidity_qty_ceiling"]
+        is None
+    )
 
 
 def test_future_outcome_rejects_tampered_evidence_identity() -> None:
@@ -934,9 +936,7 @@ def test_reconfirmed_price_does_not_reuse_buy_support_from_invalidated_cycle() -
     assert evidence["state"] == "reversion_candidate"
     assert evidence["event"]["recovery_invalidation_count"] == 1
     assert evidence["event"]["latest_recovery_cycle_reconfirmed"] is True
-    assert evidence["tape"]["latest_recovery_cycle_support"][
-        "buy_qty"
-    ] == 0
+    assert evidence["tape"]["latest_recovery_cycle_support"]["buy_qty"] == 0
 
 
 def test_latest_recovery_cycle_keeps_buy_buildup_before_final_reclaim_cross() -> None:
@@ -1023,12 +1023,13 @@ def test_cross_epoch_depth_and_future_depth_are_not_joined() -> None:
     assert evidence["state"] == "reversion_confirmed"
     assert evidence["source_quality"]["status"] == "pass"
     assert evidence["source_quality"]["liquidity_capacity_status"] == "blocked"
-    assert "same_epoch_past_depth_missing" in evidence["source_quality"][
-        "liquidity_capacity_blockers"
-    ]
-    assert evidence["liquidity_capacity"][
-        "counterfactual_liquidity_qty_ceiling"
-    ] is None
+    assert (
+        "same_epoch_past_depth_missing"
+        in evidence["source_quality"]["liquidity_capacity_blockers"]
+    )
+    assert (
+        evidence["liquidity_capacity"]["counterfactual_liquidity_qty_ceiling"] is None
+    )
 
 
 def test_unknown_cost_keeps_net_target_null_without_blocking_price_context() -> None:
@@ -1179,15 +1180,14 @@ def test_entry_outcome_joins_deduplicated_allocator_and_caps_at_5pct_depth() -> 
     assert outcome["formula_version"] == "entry_type_5stage_cap25_v1"
     assert len(outcome["allocator_event_sha256"]) == 64
     assert len(outcome["allocator_source_event_sha256s"]) == 2
-    assert all(
-        len(value) == 64 for value in outcome["allocator_source_event_sha256s"]
-    )
+    assert all(len(value) == 64 for value in outcome["allocator_source_event_sha256s"])
     assert outcome["allocator_first_event_timestamp_ms"] >= _ms(
         "2026-08-14T09:00:11.000+09:00"
     )
-    assert outcome["allocator_last_event_timestamp_ms"] >= outcome[
-        "allocator_first_event_timestamp_ms"
-    ]
+    assert (
+        outcome["allocator_last_event_timestamp_ms"]
+        >= outcome["allocator_first_event_timestamp_ms"]
+    )
     assert outcome["allocator_matching_row_count"] == 2
     assert outcome["allocator_deduplicated_event_count"] == 1
     assert outcome["notional_net_profit_eligible"] is True
@@ -1267,9 +1267,7 @@ def test_allocator_join_ignores_other_trace_and_symbol() -> None:
     ("mutation", "reason"),
     [
         (
-            lambda row: row.update(
-                {"emitted_at": "2026-08-14T09:00:10.999+09:00"}
-            ),
+            lambda row: row.update({"emitted_at": "2026-08-14T09:00:10.999+09:00"}),
             "entry_pipeline_allocator_event_precedes_ai_decision",
         ),
         (
@@ -1277,9 +1275,7 @@ def test_allocator_join_ignores_other_trace_and_symbol() -> None:
             "entry_pipeline_allocator_venue_mismatch",
         ),
         (
-            lambda row: row["fields"].update(
-                {"market_session_bucket": "nxt_regular"}
-            ),
+            lambda row: row["fields"].update({"market_session_bucket": "nxt_regular"}),
             "entry_pipeline_allocator_session_mismatch",
         ),
         (
@@ -1288,9 +1284,7 @@ def test_allocator_join_ignores_other_trace_and_symbol() -> None:
         ),
     ],
 )
-def test_allocator_join_fails_closed_on_causal_scope_mismatch(
-    mutation, reason
-) -> None:
+def test_allocator_join_fails_closed_on_causal_scope_mismatch(mutation, reason) -> None:
     evidence = build_tactical_evidence(
         trace=_trace(),
         payload=_payload(),
@@ -1337,9 +1331,10 @@ def test_scale_in_outcome_delegates_quantity_owner() -> None:
     assert outcome["counterfactual_quantity_basis"] == (
         "scale_in_quantity_owner_delegated"
     )
-    assert "scale_in_quantity_owner_not_connected" in outcome[
-        "outcome_eligibility_blockers"
-    ]
+    assert (
+        "scale_in_quantity_owner_not_connected"
+        in outcome["outcome_eligibility_blockers"]
+    )
     assert outcome["notional_net_profit_eligible"] is False
 
 
@@ -1481,8 +1476,7 @@ def test_future_outcome_requires_same_conservative_fast_exit_capacity() -> None:
 
     assert outcome["future_depth_participation_rate"] == 0.05
     assert all(
-        row["quantity_sweep_observation_count"] == 0
-        for row in outcome["horizons"]
+        row["quantity_sweep_observation_count"] == 0 for row in outcome["horizons"]
     )
     assert outcome["first_hit"] == "none_or_unmatured"
 
@@ -1556,8 +1550,7 @@ def test_allocator_entry_future_depth_never_applies_one_share_floor() -> None:
 
     assert outcome["counterfactual_quantity"] == 1
     assert all(
-        row["quantity_sweep_observation_count"] == 0
-        for row in outcome["horizons"]
+        row["quantity_sweep_observation_count"] == 0 for row in outcome["horizons"]
     )
     assert outcome["economic_promotion_evidence_eligible"] is False
 
@@ -1637,12 +1630,14 @@ def test_holding_position_requires_fresh_reconciled_free_to_sell_quantity() -> N
         max_exit_sweep_slippage_bps=10.0,
         max_broker_position_age_sec=60.0,
     )
-    assert lifecycle["exit_projection"][
-        "counterfactual_immediately_executable_qty"
-    ] == 7
+    assert (
+        lifecycle["exit_projection"]["counterfactual_immediately_executable_qty"] == 7
+    )
 
 
-def test_opt_in_replay_enrichment_preserves_exact_payload_and_three_arm_parity() -> None:
+def test_opt_in_replay_enrichment_preserves_exact_payload_and_three_arm_parity() -> (
+    None
+):
     evidence = build_tactical_evidence(
         trace=_trace(),
         payload=_payload(),
@@ -1679,12 +1674,11 @@ def test_opt_in_replay_enrichment_preserves_exact_payload_and_three_arm_parity()
     assert request == original
     assert enriched["exact_payload"] == exact_payload
     assert enriched["candidate_input"][TACTICAL_EVIDENCE_SCHEMA] == evidence
-    assert manifest["replay_arms"][1]["analytical_context_pair_sha256"] == manifest[
-        "replay_arms"
-    ][2]["analytical_context_pair_sha256"]
-    assert "tactical_micro_reversion_evidence_sha256" not in manifest[
-        "replay_arms"
-    ][0]
+    assert (
+        manifest["replay_arms"][1]["analytical_context_pair_sha256"]
+        == manifest["replay_arms"][2]["analytical_context_pair_sha256"]
+    )
+    assert "tactical_micro_reversion_evidence_sha256" not in manifest["replay_arms"][0]
     assert manifest["provider_call_performed"] is False
 
 
@@ -1696,9 +1690,7 @@ def test_entry_price_control_semantics_are_prompt_version_specific() -> None:
             "endpoint": "entry_price",
             "action": "USE_DEFENSIVE",
             "prompt_version": "entry_price_v1",
-            "semantic_validator_version": (
-                "live_entry_price_v1_schema_semantic_v1"
-            ),
+            "semantic_validator_version": ("live_entry_price_v1_schema_semantic_v1"),
             "entry_price_v1_contract_status": "pass",
             "entry_price_v1_contract_errors": [],
             "entry_price_v1_forensic_errors": [],
@@ -1714,9 +1706,7 @@ def test_entry_price_control_semantics_are_prompt_version_specific() -> None:
     }
     assert not {
         finding
-        for finding in _control_decision_findings(
-            trace, control_contract=contract
-        )
+        for finding in _control_decision_findings(trace, control_contract=contract)
         if "entry_price" in finding
     }
 
@@ -1741,9 +1731,7 @@ def test_entry_price_control_semantics_are_prompt_version_specific() -> None:
     }
     assert not {
         finding
-        for finding in _control_decision_findings(
-            v2_5, control_contract=v2_5_contract
-        )
+        for finding in _control_decision_findings(v2_5, control_contract=v2_5_contract)
         if "entry_price" in finding
     }
 
@@ -1774,9 +1762,7 @@ def test_entry_price_v1_trace_producer_fields_reach_bridge_consumer(
             "openai_request_id": "request-1",
             "openai_response_schema_sha256": result["response_schema_sha256"],
             "openai_response_schema_application": "provider_enforced_openai",
-            "semantic_validator_version": (
-                "live_entry_price_v1_schema_semantic_v1"
-            ),
+            "semantic_validator_version": ("live_entry_price_v1_schema_semantic_v1"),
             "semantic_validator_applied": True,
             "semantic_validation_status": "pass",
             "entry_price_v1_contract_status": "pass",
@@ -1832,13 +1818,9 @@ def test_materializes_fair_three_arm_requests_without_provider_authority() -> No
             "effective_venue": "KRX",
             "session_bucket": "KRX_REGULAR",
             "exact_payload": deepcopy(exact_payload),
-            "source_exact_payload_sha256": evidence[
-                "source_exact_payload_sha256"
-            ],
+            "source_exact_payload_sha256": evidence["source_exact_payload_sha256"],
             "payload_sha256": evidence["source_provider_payload_sha256"],
-            "request_envelope_sha256": evidence[
-                "source_request_envelope_sha256"
-            ],
+            "request_envelope_sha256": evidence["source_request_envelope_sha256"],
             "candidate_input": candidate_input,
             "candidate_input_sha256": _producer_hash(candidate_input),
             "candidate": {
@@ -1885,12 +1867,8 @@ def test_materializes_fair_three_arm_requests_without_provider_authority() -> No
         "replay_control_exact_plus_micro",
         "replay_candidate_exact_plus_micro",
     ]
-    assert arms[0]["candidate_input_sha256"] != arms[1][
-        "candidate_input_sha256"
-    ]
-    assert arms[1]["candidate_input_sha256"] == arms[2][
-        "candidate_input_sha256"
-    ]
+    assert arms[0]["candidate_input_sha256"] != arms[1]["candidate_input_sha256"]
+    assert arms[1]["candidate_input_sha256"] == arms[2]["candidate_input_sha256"]
     assert len({row["paired_replay_id"] for row in arms}) == 3
     assert len({row["paired_replay_parent_id"] for row in arms}) == 1
     assert materialized["paired_replay_materialized"] is True
@@ -1901,9 +1879,12 @@ def test_materializes_fair_three_arm_requests_without_provider_authority() -> No
     ]
     assert enriched_economics["symbol_metadata_status"] == "verified"
     assert "record" not in enriched_economics
-    assert "effective_qty" not in arms[1]["candidate_input"][
-        TACTICAL_EVIDENCE_SCHEMA
-    ]["liquidity_capacity"]
+    assert (
+        "effective_qty"
+        not in arms[1]["candidate_input"][TACTICAL_EVIDENCE_SCHEMA][
+            "liquidity_capacity"
+        ]
+    )
     for row in arms:
         assert row["actual_order_submitted"] is False
         assert row["broker_order_forbidden"] is True
@@ -1984,9 +1965,7 @@ def test_premarket_scope_requires_explicit_route_mapping() -> None:
         krx_market,
         krx_depth,
         krx_reference,
-    ) = _premarket_route_inputs(
-        market_data_route="krx_only", integrated_proven=False
-    )
+    ) = _premarket_route_inputs(market_data_route="krx_only", integrated_proven=False)
     krx_evidence = build_tactical_evidence(
         trace=krx_trace,
         payload=krx_payload,
@@ -2039,9 +2018,10 @@ def test_premarket_scope_requires_explicit_route_mapping() -> None:
         config=_verified_config(),
     )
     assert blocked_evidence["state"] == "source_unavailable"
-    assert "integrated_route_proof_missing" in blocked_evidence[
-        "source_quality"
-    ]["blockers"]
+    assert (
+        "integrated_route_proof_missing"
+        in blocked_evidence["source_quality"]["blockers"]
+    )
     blocked_outcome = build_future_outcome(
         evidence=blocked_evidence,
         market_rows=[],
@@ -2103,12 +2083,10 @@ def test_report_uses_purpose_specific_primary_when_first_control_is_invalid() ->
         config=_verified_config(),
     )
 
-    assert report["summary"][
-        "control_decision_eligible_primary_episode_count"
-    ] == 1
-    assert report["summary"][
-        "paired_decision_quality_eligible_primary_episode_count"
-    ] == 1
+    assert report["summary"]["control_decision_eligible_primary_episode_count"] == 1
+    assert (
+        report["summary"]["paired_decision_quality_eligible_primary_episode_count"] == 1
+    )
     by_trace = {row["decision_trace_id"]: row for row in report["rows"]}
     assert by_trace["trace-1"]["primary_parent_wave_stage_row"] is True
     assert by_trace["trace-1"]["primary_control_parent_wave_stage_row"] is False
@@ -2201,7 +2179,9 @@ def test_disk_backed_source_store_matches_in_memory_report(tmp_path) -> None:
     }
 
 
-def test_envelope_join_supports_trace_without_request_id_in_report_and_prefilter() -> None:
+def test_envelope_join_supports_trace_without_request_id_in_report_and_prefilter() -> (
+    None
+):
     trace = _trace()
     trace.pop("request_id")
     payload = _payload()
@@ -2254,9 +2234,7 @@ def test_bridge_report_records_outcome_only_pipeline_source_census() -> None:
             "source_json_object_row_count": 3,
             "source_snapshot_stable": True,
         },
-        verified_symbol_metadata_by_trace={
-            "trace-1": _verified_symbol_metadata()
-        },
+        verified_symbol_metadata_by_trace={"trace-1": _verified_symbol_metadata()},
     )
 
     source = report["entry_pipeline_source"]
@@ -2269,16 +2247,10 @@ def test_bridge_report_records_outcome_only_pipeline_source_census() -> None:
     assert source["entry_pipeline_row_count"] == 3
     assert source["allocator_contract_row_count"] == 3
     assert source["trace_symbol_linked_row_count"] == 2
-    assert report["summary"][
-        "entry_pipeline_allocator_outcome_joined_count"
-    ] == 1
+    assert report["summary"]["entry_pipeline_allocator_outcome_joined_count"] == 1
     assert report["report_row_count"] == len(report["rows"])
     assert report["report_content_sha256"] == _producer_hash(
-        {
-            key: value
-            for key, value in report.items()
-            if key != "report_content_sha256"
-        }
+        {key: value for key, value in report.items() if key != "report_content_sha256"}
     )
 
     missing = build_bridge_report(
@@ -2295,9 +2267,7 @@ def test_bridge_report_records_outcome_only_pipeline_source_census() -> None:
             "source_path": "/missing/pipeline_events_2026-08-14.jsonl",
             "source_sha256": None,
         },
-        verified_symbol_metadata_by_trace={
-            "trace-1": _verified_symbol_metadata()
-        },
+        verified_symbol_metadata_by_trace={"trace-1": _verified_symbol_metadata()},
     )
     assert missing["status"] == "warning"
     assert missing["entry_pipeline_source"]["outcome_join_mode"] == (
@@ -2316,16 +2286,15 @@ def test_bridge_report_records_outcome_only_pipeline_source_census() -> None:
         event_references=[_reference()],
         config=_verified_config(),
         entry_pipeline_rows=[_entry_pipeline_allocator_row(quantity=50)],
-        verified_symbol_metadata_by_trace={
-            "trace-1": _verified_symbol_metadata()
-        },
+        verified_symbol_metadata_by_trace={"trace-1": _verified_symbol_metadata()},
     )
     assert unverified_programmatic["entry_pipeline_source"]["status"] == (
         "programmatic_rows_source_unspecified"
     )
-    assert unverified_programmatic["entry_pipeline_source"][
-        "outcome_join_mode"
-    ] == "standardized_one_share_observation_only"
+    assert (
+        unverified_programmatic["entry_pipeline_source"]["outcome_join_mode"]
+        == "standardized_one_share_observation_only"
+    )
     unverified_outcome = unverified_programmatic["rows"][0]["future_outcome"]
     assert unverified_outcome["allocator_event_sha256"] is None
     assert unverified_outcome["notional_net_profit_eligible"] is False
@@ -2362,13 +2331,9 @@ def test_cli_defaults_pipeline_path_and_missing_source_to_observation_only(
     data_dir = tmp_path / "data"
     trace_path = data_dir / "ai_decision_trace" / "ai_decision_trace_2026-08-14.jsonl"
     payload_path = (
-        data_dir
-        / "ai_decision_payloads"
-        / "ai_decision_payloads_2026-08-14.jsonl"
+        data_dir / "ai_decision_payloads" / "ai_decision_payloads_2026-08-14.jsonl"
     )
-    pipeline_path = (
-        data_dir / "pipeline_events" / "pipeline_events_2026-08-14.jsonl"
-    )
+    pipeline_path = data_dir / "pipeline_events" / "pipeline_events_2026-08-14.jsonl"
     for path in (trace_path, payload_path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("{}\n", encoding="utf-8")
@@ -2424,12 +2389,14 @@ def test_cli_defaults_pipeline_path_and_missing_source_to_observation_only(
     assert captured[0]["source"]["logical_source_path"] == str(pipeline_path)
     assert captured[0]["source"]["source_path"] == str(pipeline_path)
     assert captured[0]["source"]["source_compression"] == "plain"
-    assert captured[0]["source"]["source_sha256"] == hashlib.sha256(
-        pipeline_bytes
-    ).hexdigest()
-    assert captured[0]["source"]["source_content_sha256"] == hashlib.sha256(
-        pipeline_bytes
-    ).hexdigest()
+    assert (
+        captured[0]["source"]["source_sha256"]
+        == hashlib.sha256(pipeline_bytes).hexdigest()
+    )
+    assert (
+        captured[0]["source"]["source_content_sha256"]
+        == hashlib.sha256(pipeline_bytes).hexdigest()
+    )
     assert captured[0]["source"]["source_bytes"] == len(pipeline_bytes)
     assert captured[0]["source"]["source_content_bytes"] == len(pipeline_bytes)
     assert captured[0]["source"]["source_line_count"] == 1
@@ -2453,15 +2420,15 @@ def test_cli_defaults_pipeline_path_and_missing_source_to_observation_only(
     assert captured[1]["source"]["logical_source_path"] == str(pipeline_path)
     assert captured[1]["source"]["source_path"] == str(pipeline_gzip_path)
     assert captured[1]["source"]["source_compression"] == "gzip"
-    assert captured[1]["source"]["source_sha256"] == hashlib.sha256(
-        pipeline_gzip_path.read_bytes()
-    ).hexdigest()
-    assert captured[1]["source"]["source_content_sha256"] == hashlib.sha256(
-        pipeline_bytes
-    ).hexdigest()
-    assert captured[1]["source"]["source_bytes"] == (
-        pipeline_gzip_path.stat().st_size
+    assert (
+        captured[1]["source"]["source_sha256"]
+        == hashlib.sha256(pipeline_gzip_path.read_bytes()).hexdigest()
     )
+    assert (
+        captured[1]["source"]["source_content_sha256"]
+        == hashlib.sha256(pipeline_bytes).hexdigest()
+    )
+    assert captured[1]["source"]["source_bytes"] == (pipeline_gzip_path.stat().st_size)
     assert captured[1]["source"]["source_content_bytes"] == len(pipeline_bytes)
 
     assert (
@@ -2516,9 +2483,7 @@ def test_cli_defaults_pipeline_path_and_missing_source_to_observation_only(
     )
     assert captured[4]["config"].cost_profile_verified is True
     assert captured[4]["metadata"]["trace-1"]["lookup_status"] == "verified"
-    assert captured[4]["metadata"]["trace-1"]["record"][
-        "instrument_type"
-    ] == "EQUITY"
+    assert captured[4]["metadata"]["trace-1"]["record"]["instrument_type"] == "EQUITY"
 
 
 def test_replay_enrichment_rejects_outcome_leakage() -> None:

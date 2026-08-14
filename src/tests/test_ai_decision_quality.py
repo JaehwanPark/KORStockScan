@@ -1280,9 +1280,7 @@ def test_holding_flow_forensic_sidecar_is_not_a_natural_control_sample():
                     "provider_actual": trace["provider_actual"],
                     "model": trace["model"],
                     "request_temperature": trace["request_temperature"],
-                    "request_reasoning_effort": trace[
-                        "request_reasoning_effort"
-                    ],
+                    "request_reasoning_effort": trace["request_reasoning_effort"],
                 }
             ],
         },
@@ -5336,20 +5334,16 @@ def _micro_reversion_materialization_fixture():
             "sanitized_prompt": control_prompt,
         }
     ]
-    control_contract_artifact = (
-        quality.build_micro_reversion_control_contract_artifact(
-            target_date="2026-08-14",
-            prepared_requests=prepared,
-            traces=[trace],
-            payloads=[payload],
-            prompt_rows=prompt_rows,
-        )
+    control_contract_artifact = quality.build_micro_reversion_control_contract_artifact(
+        target_date="2026-08-14",
+        prepared_requests=prepared,
+        traces=[trace],
+        payloads=[payload],
+        prompt_rows=prompt_rows,
     )
     assert control_contract_artifact["control_contract_count"] == 1
 
-    def market(
-        timestamp, *, price, side, qty, sequence, bid=None, ask=None
-    ):
+    def market(timestamp, *, price, side, qty, sequence, bid=None, ask=None):
         return {
             "schema": "scalp_micro_reversion_market_stream_point_v3",
             "metric_contract_id": "scalp_micro_reversion_market_stream_contract_v3",
@@ -5454,22 +5448,16 @@ def _micro_reversion_materialization_fixture():
             "shock_horizon_ms": 1_000,
             "event_sequence_in_wave": 1,
             "event_detected_at_ms": int(
-                datetime.fromisoformat(
-                    "2026-08-14T09:00:06.000+09:00"
-                ).timestamp()
+                datetime.fromisoformat("2026-08-14T09:00:06.000+09:00").timestamp()
                 * 1_000
             ),
             "segment_event_detected_at_ms": int(
-                datetime.fromisoformat(
-                    "2026-08-14T09:00:06.000+09:00"
-                ).timestamp()
+                datetime.fromisoformat("2026-08-14T09:00:06.000+09:00").timestamp()
                 * 1_000
             ),
             "capture_started_at": "2026-08-14T09:00:05.000+09:00",
             "capture_ended_at": "2026-08-14T09:03:06.000+09:00",
-            "decision_authority": (
-                "forward_path_observation_only_no_policy_selection"
-            ),
+            "decision_authority": ("forward_path_observation_only_no_policy_selection"),
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "trading_runtime_effect": False,
@@ -5509,9 +5497,7 @@ def _micro_reversion_materialization_fixture():
         traces=[trace],
         payloads=[payload],
         prompt_rows=prompt_rows,
-        control_prompt_contracts=control_contract_artifact[
-            "control_prompt_contracts"
-        ],
+        control_prompt_contracts=control_contract_artifact["control_prompt_contracts"],
         market_rows=market_rows,
         depth_rows=depth_rows,
         event_references=event_references,
@@ -5583,9 +5569,7 @@ def test_materializes_micro_reversion_requests_from_actual_prepared_output():
 
 def test_micro_reversion_materialization_fails_closed_without_full_control_prompt():
     prepared, source_bundle = _micro_reversion_materialization_fixture()
-    source_bundle["rows"][0]["current_control_prompt_contract"].pop(
-        "system_prompt"
-    )
+    source_bundle["rows"][0]["current_control_prompt_contract"].pop("system_prompt")
     source_bundle["source_bundle_content_sha256"] = quality._sha256(
         {
             key: value
@@ -5723,10 +5707,7 @@ def test_micro_reversion_source_bundle_cli_reads_gzip_exact_journals(
 
     observation_root = tmp_path / "observations"
     partition = (
-        observation_root
-        / "trade_date=2026-08-14"
-        / "venue=KRX"
-        / "session=KRX_REGULAR"
+        observation_root / "trade_date=2026-08-14" / "venue=KRX" / "session=KRX_REGULAR"
     )
     partition.mkdir(parents=True)
     for pool_name, file_name in (
@@ -5874,9 +5855,7 @@ def _micro_reversion_action_neutral_bridge_fixture():
         event_references=event_references,
         config=config,
         verified_symbol_metadata_by_trace={
-            prepared[0]["decision_trace_id"]: source_row[
-                "verified_symbol_metadata"
-            ]
+            prepared[0]["decision_trace_id"]: source_row["verified_symbol_metadata"]
         },
     )
     assert bridge_report["rows"][0]["tactical_micro_reversion_evidence_v1"] == (
@@ -5905,17 +5884,13 @@ def test_micro_reversion_bridge_outcome_adapts_action_neutral_seconds_label():
     assert primary["first_hit"] == "net_target_first"
     assert primary["source_quality_adjusted_ev_pct"] > 0
     assert primary["action_neutral_path_sha256"]
-    assert label["quantity_authority"] == (
-        "standardized_one_share_observation_only"
-    )
+    assert label["quantity_authority"] == ("standardized_one_share_observation_only")
     assert label["notional_net_profit_eligible"] is False
     assert label["outcome_embedded_in_provider_input"] is False
 
 
 def test_micro_reversion_bridge_outcome_rejects_unsupported_stage_per_row():
-    _, materialized, bridge_report = (
-        _micro_reversion_action_neutral_bridge_fixture()
-    )
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
     for request in materialized["requests"]:
         request["stage"] = "entry_price"
         request["endpoint"] = "entry_price"
@@ -5940,9 +5915,7 @@ def test_micro_reversion_bridge_outcome_rejects_unsupported_stage_per_row():
 
 
 def test_micro_reversion_action_neutral_label_tamper_fails_declared_hash():
-    _, materialized, bridge_report = (
-        _micro_reversion_action_neutral_bridge_fixture()
-    )
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
     artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
         bridge_report=bridge_report,
         materialized_report=materialized,
@@ -5963,9 +5936,7 @@ def test_micro_reversion_action_neutral_label_tamper_fails_declared_hash():
 
 
 def test_micro_reversion_bridge_report_tamper_fails_declared_hash():
-    _, materialized, bridge_report = (
-        _micro_reversion_action_neutral_bridge_fixture()
-    )
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
     bridge_report["summary"]["trace_payload_join_count"] = 999
 
     with pytest.raises(ValueError, match="bridge_report_content_hash_mismatch"):
@@ -5976,9 +5947,7 @@ def test_micro_reversion_bridge_report_tamper_fails_declared_hash():
 
 
 def test_micro_reversion_action_neutral_label_flows_into_three_arm_evaluator():
-    _, materialized, bridge_report = (
-        _micro_reversion_action_neutral_bridge_fixture()
-    )
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
     artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
         bridge_report=bridge_report,
         materialized_report=materialized,
@@ -6011,9 +5980,7 @@ def test_micro_reversion_action_neutral_label_flows_into_three_arm_evaluator():
     evaluation = report["three_arm_evaluation"]
     assert evaluation["complete_parent_count"] == 1
     assert evaluation["rows"][0]["cost_adjusted_outcome_pct"] > 0
-    assert evaluation["comparisons"][1][
-        "paired_metric_eligible_parent_count"
-    ] == 1
+    assert evaluation["comparisons"][1]["paired_metric_eligible_parent_count"] == 1
     assert [
         (
             row["decision_stage"],
@@ -6029,15 +5996,11 @@ def test_micro_reversion_action_neutral_label_flows_into_three_arm_evaluator():
 def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
     tmp_path, monkeypatch, capsys
 ):
-    _, materialized, bridge_report = (
-        _micro_reversion_action_neutral_bridge_fixture()
-    )
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
     materialized_path = tmp_path / "materialized.json"
     bridge_path = tmp_path / "bridge.json"
     output_path = tmp_path / "execution.json"
-    materialized_path.write_text(
-        json.dumps(materialized), encoding="utf-8"
-    )
+    materialized_path.write_text(json.dumps(materialized), encoding="utf-8")
     bridge_path.write_text(json.dumps(bridge_report), encoding="utf-8")
     monkeypatch.setattr(quality, "_offline_openai_api_keys", lambda: ["test-key"])
     monkeypatch.setattr(
@@ -6058,9 +6021,7 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
                 "transport": "openai_responses_http_offline",
                 "source_transport_contract": candidate["transport"],
                 "response_id": f"response-{request['paired_replay_id']}",
-                "response_sha256": quality._sha256(
-                    request["paired_replay_id"]
-                ),
+                "response_sha256": quality._sha256(request["paired_replay_id"]),
                 "provider_none": False,
                 "provider_call_attempted": True,
                 "provider_call_succeeded": True,
@@ -6100,9 +6061,7 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
     assert written["actual_order_submitted"] is False
     checkpoint_path = output_path.with_name(f"{output_path.stem}.checkpoint.json")
     assert not checkpoint_path.exists()
-    assert not quality._micro_reversion_checkpoint_record_dir(
-        checkpoint_path
-    ).exists()
+    assert not quality._micro_reversion_checkpoint_record_dir(checkpoint_path).exists()
 
 
 def test_micro_reversion_execute_cli_rejects_explicit_parallel_workers(
@@ -6205,9 +6164,7 @@ def test_micro_reversion_execution_joins_one_outcome_after_three_arm_calls():
                 "provider": "openai",
                 "model": "gpt-test",
                 "transport": "openai_responses_http_offline",
-                "source_transport_contract": (
-                    request["candidate"]["transport"]
-                ),
+                "source_transport_contract": (request["candidate"]["transport"]),
                 "response_id": "test-response-id",
                 "response_sha256": quality._sha256(request["paired_replay_id"]),
                 "provider_none": False,
@@ -6232,9 +6189,7 @@ def test_micro_reversion_execution_joins_one_outcome_after_three_arm_calls():
     assert report["provider_call_succeeded"] is True
     assert len(report["outcome_joins"]) == 1
     assert report["outcomes_embedded_in_provider_input"] is False
-    assert all(
-        row["replay_result"]["status"] == "pass" for row in report["results"]
-    )
+    assert all(row["replay_result"]["status"] == "pass" for row in report["results"])
     assert report["three_arm_evaluation"]["complete_parent_count"] == 1
     assert report["three_arm_evaluation"]["notional_net_profit_eligible"] is False
 
@@ -6379,9 +6334,7 @@ def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
     assert len(resumed["results"]) == 3
 
 
-def test_micro_reversion_checkpoint_record_writes_scale_linearly(
-    tmp_path, monkeypatch
-):
+def test_micro_reversion_checkpoint_record_writes_scale_linearly(tmp_path, monkeypatch):
     original_atomic_write = quality._atomic_write_json
     serialized_bytes = []
 
@@ -6435,9 +6388,7 @@ def test_micro_reversion_checkpoint_record_tamper_fails_closed(tmp_path):
     )
     quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
     record_path = next(
-        quality._micro_reversion_checkpoint_record_dir(checkpoint_path).glob(
-            "*.json"
-        )
+        quality._micro_reversion_checkpoint_record_dir(checkpoint_path).glob("*.json")
     )
     stored = json.loads(record_path.read_text(encoding="utf-8"))
     stored["result"]["payload"] = "tampered"
@@ -6501,9 +6452,9 @@ def test_micro_reversion_source_bundle_excludes_bad_row_without_aborting():
                 "endpoint": "analyze_target",
                 "model": "gpt-test",
                 "schema_name": "decision_quality_v2_7_entry",
-                "prompt_sha256": seed_bundle["rows"][0][
-                    "source_trace"
-                ]["prompt_sha256"],
+                "prompt_sha256": seed_bundle["rows"][0]["source_trace"][
+                    "prompt_sha256"
+                ],
                 "sanitized_prompt": seed_bundle["rows"][0][
                     "current_control_prompt_contract"
                 ]["system_prompt"],
@@ -6514,9 +6465,9 @@ def test_micro_reversion_source_bundle_excludes_bad_row_without_aborting():
         control_prompt_contracts=[
             {
                 "decision_trace_id": prepared[0]["decision_trace_id"],
-                "prompt_sha256": seed_bundle["rows"][0][
-                    "source_trace"
-                ]["prompt_sha256"],
+                "prompt_sha256": seed_bundle["rows"][0]["source_trace"][
+                    "prompt_sha256"
+                ],
                 "prompt_contract": seed_bundle["rows"][0][
                     "current_control_prompt_contract"
                 ],
@@ -6614,9 +6565,9 @@ def test_micro_reversion_source_bundle_uses_bounded_sqlite_store():
                     "model": trace["model"],
                     "schema_name": payload["schema_name"],
                     "prompt_sha256": trace["prompt_sha256"],
-                    "sanitized_prompt": seed[
-                        "current_control_prompt_contract"
-                    ]["system_prompt"],
+                    "sanitized_prompt": seed["current_control_prompt_contract"][
+                        "system_prompt"
+                    ],
                     "replay_exact": True,
                     "redacted": False,
                 }
@@ -6625,9 +6576,7 @@ def test_micro_reversion_source_bundle_uses_bounded_sqlite_store():
                 {
                     "decision_trace_id": trace["decision_trace_id"],
                     "prompt_sha256": trace["prompt_sha256"],
-                    "prompt_contract": seed[
-                        "current_control_prompt_contract"
-                    ],
+                    "prompt_contract": seed["current_control_prompt_contract"],
                 }
             ],
             market_rows=(),
@@ -6641,12 +6590,17 @@ def test_micro_reversion_source_bundle_uses_bounded_sqlite_store():
         )
 
     assert rebuilt["source_materialization_mode"] == "sqlite_bounded_per_trace"
-    assert rebuilt["source_materialization_diagnostics"][
-        "invalid_timestamp_rows_used_for_evidence"
-    ] is False
-    assert rebuilt["source_materialization_diagnostics"][
-        "retained_row_counts"
-    ] == {"market": 4, "depth": 1, "reference": 1}
+    assert (
+        rebuilt["source_materialization_diagnostics"][
+            "invalid_timestamp_rows_used_for_evidence"
+        ]
+        is False
+    )
+    assert rebuilt["source_materialization_diagnostics"]["retained_row_counts"] == {
+        "market": 4,
+        "depth": 1,
+        "reference": 1,
+    }
     assert rebuilt["eligible_row_count"] == 1
     assert rebuilt["rows"][0]["evidence"] == seed["evidence"]
 
@@ -6709,9 +6663,7 @@ def test_actual_stage_coverage_prepare_output_adapts_into_three_arm_requests():
                     "provider_actual": trace["provider_actual"],
                     "model": trace["model"],
                     "request_temperature": trace["request_temperature"],
-                    "request_reasoning_effort": trace[
-                        "request_reasoning_effort"
-                    ],
+                    "request_reasoning_effort": trace["request_reasoning_effort"],
                 }
             ]
         },
@@ -6784,10 +6736,7 @@ def test_actual_stage_coverage_prepare_output_adapts_into_three_arm_requests():
         bridge_source_bundle=rebuilt_bundle,
     )
     assert materialized["request_count"] == 3
-    assert all(
-        row["candidate"]["schema_name"]
-        for row in materialized["requests"]
-    )
+    assert all(row["candidate"]["schema_name"] for row in materialized["requests"])
 
 
 def test_holding_paired_replay_uses_noncollapsed_prompt_and_pointer_ledger():

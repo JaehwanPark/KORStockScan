@@ -280,8 +280,7 @@ def prepare_stage_requests(
             "response_schema_mode": trace.get("openai_response_schema_mode"),
             "response_schema_application": (
                 "provider_enforced_openai"
-                if str(trace.get("provider_actual") or "").strip().lower()
-                == "openai"
+                if str(trace.get("provider_actual") or "").strip().lower() == "openai"
                 else "local_expected_only_not_sent_to_bedrock"
             ),
             "response_schema_registry_used": trace.get(

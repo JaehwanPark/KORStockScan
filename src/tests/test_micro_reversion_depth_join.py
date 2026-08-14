@@ -28,9 +28,7 @@ def _depth_row(
         series_sequence=sequence,
         venue=venue,
         session_bucket=f"{venue}_REGULAR",
-        item={"KRX": "000001", "NXT": "000001_NX", "SOR": "000001_AL"}[
-            venue
-        ],
+        item={"KRX": "000001", "NXT": "000001_NX", "SOR": "000001_AL"}[venue],
         orderbook_time_raw="090000000",
         best_bid=10_000,
         best_ask=10_010,
@@ -59,9 +57,7 @@ def _market_row(
         "schema": "scalp_micro_reversion_market_stream_point_v3",
         "metric_contract_id": "scalp_micro_reversion_market_stream_contract_v3",
         "realtime_type": "0B",
-        "item": {"KRX": "000001", "NXT": "000001_NX", "SOR": "000001_AL"}[
-            venue
-        ],
+        "item": {"KRX": "000001", "NXT": "000001_NX", "SOR": "000001_AL"}[venue],
         "symbol": "000001",
         "venue": venue,
         "session_bucket": f"{venue}_REGULAR",
@@ -120,12 +116,8 @@ def test_join_never_crosses_venue_and_marks_stale() -> None:
 
 
 def test_join_never_crosses_sequence_epoch() -> None:
-    depth = _depth_row(
-        received="2026-08-08T09:00:00.000+09:00", sequence_epoch=122
-    )
-    market = _market_row(
-        received="2026-08-08T09:00:00.100+09:00", sequence_epoch=123
-    )
+    depth = _depth_row(received="2026-08-08T09:00:00.000+09:00", sequence_epoch=122)
+    market = _market_row(received="2026-08-08T09:00:00.100+09:00", sequence_epoch=123)
 
     joined = join_latest_past_depth((market,), (depth,), max_age_ms=500)[0]
 

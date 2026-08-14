@@ -236,9 +236,9 @@ def test_holding_control_and_candidate_use_distinct_response_contracts():
     control_request["candidate"] = {
         **candidate,
         "schema_name": "holding_score_v2",
-        "response_schema": replay.build_openai_response_text_format(
-            "holding_score_v2"
-        )["schema"],
+        "response_schema": replay.build_openai_response_text_format("holding_score_v2")[
+            "schema"
+        ],
         "semantic_validator_version": "holding_score_live_normalizer_v1",
     }
     live_response = {
@@ -257,9 +257,7 @@ def test_holding_control_and_candidate_use_distinct_response_contracts():
     )
     out_of_range = {**live_response, "score": 999, "confidence": -1}
     assert set(
-        replay.quality.validate_replay_candidate_response(
-            control_request, out_of_range
-        )
+        replay.quality.validate_replay_candidate_response(control_request, out_of_range)
     ) >= {
         "holding_score_score_out_of_range",
         "holding_score_confidence_out_of_range",
@@ -270,9 +268,9 @@ def test_holding_flow_live_control_schema_is_not_used_for_generic_candidate():
     candidate_schema = replay.quality._prompt_v2_openai_schema("holding")
     assert "edge_state" in candidate_schema["required"]
     assert "flow_state" not in candidate_schema["properties"]
-    control_schema = replay.build_openai_response_text_format(
-        "holding_exit_flow_v1"
-    )["schema"]
+    control_schema = replay.build_openai_response_text_format("holding_exit_flow_v1")[
+        "schema"
+    ]
     control_request = {
         "stage": "holding",
         "candidate": {

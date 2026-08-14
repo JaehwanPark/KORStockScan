@@ -259,21 +259,17 @@ def validate_depth_row(payload: object) -> None:
         if tuple(row[0] for row in levels) != tuple(range(1, len(levels) + 1)):
             raise ValueError(f"depth {side} levels must be contiguous")
         if side == "ask" and any(
-            left[1] >= right[1]
-            for left, right in zip(levels, levels[1:], strict=False)
+            left[1] >= right[1] for left, right in zip(levels, levels[1:], strict=False)
         ):
             raise ValueError("depth ask prices must increase")
         if side == "bid" and any(
-            left[1] <= right[1]
-            for left, right in zip(levels, levels[1:], strict=False)
+            left[1] <= right[1] for left, right in zip(levels, levels[1:], strict=False)
         ):
             raise ValueError("depth bid prices must decrease")
         if levels[0][1] != float(payload[f"best_{side}"]):
             raise ValueError(f"depth best {side} conflicts with level one")
         if levels[0][2] != best_quantity:
-            raise ValueError(
-                f"depth best {side} quantity conflicts with level one"
-            )
+            raise ValueError(f"depth best {side} quantity conflicts with level one")
         if int(payload[f"{side}_depth"]) < sum(row[2] for row in levels):
             raise ValueError(f"depth {side} total does not cover retained levels")
     route_totals = payload.get("route_depth_totals")
@@ -339,7 +335,9 @@ def _validate_market_row(payload: object) -> None:
         or not isinstance(series_sequence, int)
         or series_sequence != source_sequence
     ):
-        raise ValueError("market source and series sequences must be positive and equal")
+        raise ValueError(
+            "market source and series sequences must be positive and equal"
+        )
     _series_key(payload)
     exchange_us = _timestamp_us(payload.get("exchange_timestamp"))
     receive_us = _timestamp_us(payload.get("local_receive_timestamp"))

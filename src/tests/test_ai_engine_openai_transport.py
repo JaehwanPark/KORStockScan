@@ -582,9 +582,7 @@ def test_unrelated_endpoint_keeps_json_object_when_global_registry_is_disabled(
     meta = engine._consume_last_transport_meta()
     assert meta["openai_response_schema_registry_used"] is False
     assert meta["openai_response_schema_mode"] == "json_object"
-    assert meta["openai_response_schema_application"] == (
-        "provider_json_object_openai"
-    )
+    assert meta["openai_response_schema_application"] == ("provider_json_object_openai")
     assert meta["openai_entry_risk_dynamic_fact_schema_applied"] is False
 
 
@@ -663,18 +661,19 @@ def test_v2_14_forces_dynamic_strict_schema_when_global_registry_is_disabled(
     meta = engine._consume_last_transport_meta()
     assert meta["openai_response_schema_registry_used"] is True
     assert meta["openai_response_schema_mode"] == "strict_dynamic_entry_risk"
-    assert meta["openai_response_schema_application"] == (
-        "provider_enforced_openai"
+    assert meta["openai_response_schema_application"] == ("provider_enforced_openai")
+    assert (
+        meta["openai_response_schema_sha256"]
+        == hashlib.sha256(
+            json.dumps(
+                response_format["schema"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
     )
-    assert meta["openai_response_schema_sha256"] == hashlib.sha256(
-        json.dumps(
-            response_format["schema"],
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
     assert meta["openai_entry_risk_dynamic_fact_schema_applied"] is True
     assert meta["expected_semantic_validator_version"] == (
         openai_module.ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
@@ -1888,12 +1887,8 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
     assert result["bedrock_fallback_family"] == "lite_v2"
     assert result["provider"] == "bedrock"
     assert result["holding_flow_contract_status"] == "semantic_rejected"
-    assert "holding_flow_score_type_invalid" in result[
-        "holding_flow_contract_errors"
-    ]
-    assert result["forensic_semantic_errors"] == result[
-        "holding_flow_contract_errors"
-    ]
+    assert "holding_flow_score_type_invalid" in result["holding_flow_contract_errors"]
+    assert result["forensic_semantic_errors"] == result["holding_flow_contract_errors"]
     assert result["semantic_validator_applied"] is True
     assert result["semantic_validation_status"] == "rejected"
     assert result["ai_result_source"] == "live"
@@ -1905,9 +1900,12 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
     assert captured["kwargs"]["metadata_extra"]["sim_record_id"] == "SIM-HOLD-1"
     assert captured["kwargs"]["metadata_extra"]["entry_adm_candidate_id"] == "ADM-1"
     assert captured["kwargs"].get("replay_context") is None
-    assert captured["kwargs"]["metadata_extra"][
-        "holding_exact_replay_context_capture_status"
-    ] == "forensic_sidecar_disabled_to_preserve_live_latency"
+    assert (
+        captured["kwargs"]["metadata_extra"][
+            "holding_exact_replay_context_capture_status"
+        ]
+        == "forensic_sidecar_disabled_to_preserve_live_latency"
+    )
     assert not captured["user_input"].lstrip().startswith("{")
     assert "To reverse the previous flow-review action" in captured["prompt"]
     assert "If a system guard applies" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
@@ -1972,9 +1970,12 @@ def test_holding_flow_legacy_call_does_not_build_forensic_context(
     assert result["action"] == "HOLD"
     assert builder_called["value"] is False
     assert captured["kwargs"].get("replay_context") is None
-    assert captured["kwargs"]["metadata_extra"][
-        "holding_exact_replay_context_capture_status"
-    ] == "forensic_sidecar_disabled_to_preserve_live_latency"
+    assert (
+        captured["kwargs"]["metadata_extra"][
+            "holding_exact_replay_context_capture_status"
+        ]
+        == "forensic_sidecar_disabled_to_preserve_live_latency"
+    )
     assert not captured["user_input"].lstrip().startswith("{")
 
 
@@ -2061,12 +2062,13 @@ def test_entry_price_v1_malformed_response_is_quality_rejected_without_live_rewr
     assert result["semantic_validator_applied"] is True
     assert result["semantic_validation_status"] == "rejected"
     assert result["entry_price_v1_contract_status"] == "semantic_rejected"
-    assert "entry_price_v1_confidence_type_invalid" in result[
-        "entry_price_v1_contract_errors"
-    ]
-    assert result["forensic_semantic_errors"] == result[
-        "entry_price_v1_contract_errors"
-    ]
+    assert (
+        "entry_price_v1_confidence_type_invalid"
+        in result["entry_price_v1_contract_errors"]
+    )
+    assert (
+        result["forensic_semantic_errors"] == result["entry_price_v1_contract_errors"]
+    )
     assert result["ai_decision_outcome_eligible"] is False
 
 
@@ -2078,12 +2080,18 @@ def test_entry_price_v1_semantic_wait_range_matches_live_prompt_contract():
         "reason": "reference price is acceptable",
     }
 
-    assert openai_module._entry_price_v1_response_contract_errors(
-        {**base, "max_wait_sec": 5}
-    ) == []
-    assert openai_module._entry_price_v1_response_contract_errors(
-        {**base, "max_wait_sec": 1200}
-    ) == []
+    assert (
+        openai_module._entry_price_v1_response_contract_errors(
+            {**base, "max_wait_sec": 5}
+        )
+        == []
+    )
+    assert (
+        openai_module._entry_price_v1_response_contract_errors(
+            {**base, "max_wait_sec": 1200}
+        )
+        == []
+    )
     assert "entry_price_v1_max_wait_sec_out_of_range" in (
         openai_module._entry_price_v1_response_contract_errors(
             {**base, "max_wait_sec": 4}

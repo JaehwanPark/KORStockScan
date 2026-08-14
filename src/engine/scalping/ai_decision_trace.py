@@ -1056,9 +1056,7 @@ def capture_ai_request(
                 "replay_context_redacted": bool(replay_context_redacted),
                 "replay_context_exact": not replay_context_redacted,
                 "sanitized_replay_context": sanitized_replay_context,
-                "sanitized_replay_context_sha256": (
-                    sanitized_replay_context_sha256
-                ),
+                "sanitized_replay_context_sha256": (sanitized_replay_context_sha256),
             }
             if replay_context_present
             else {}
@@ -1068,9 +1066,7 @@ def capture_ai_request(
                 "replay_context_sha256": replay_context_sha256,
                 "replay_context_redacted": bool(replay_context_redacted),
                 "replay_context_exact": not replay_context_redacted,
-                "sanitized_replay_context_sha256": (
-                    sanitized_replay_context_sha256
-                ),
+                "sanitized_replay_context_sha256": (sanitized_replay_context_sha256),
             }
             if replay_context_present
             else {}
@@ -1082,9 +1078,7 @@ def capture_ai_request(
                 "ai_replay_context_bytes": len(replay_context_bytes),
                 "ai_replay_context_redacted": bool(replay_context_redacted),
                 "ai_replay_context_exact": not replay_context_redacted,
-                "ai_replay_context_semantic_sha256": (
-                    sanitized_replay_context_sha256
-                ),
+                "ai_replay_context_semantic_sha256": (sanitized_replay_context_sha256),
             }
             if replay_context_present
             else {}
@@ -2196,9 +2190,7 @@ def record_ai_decision_trace(
             "score": trace_row["score"],
             "confidence": trace_row["confidence"],
             "reason_codes": trace_row["reason_codes"],
-            "holding_score_model_action": trace_row[
-                "holding_score_model_action"
-            ],
+            "holding_score_model_action": trace_row["holding_score_model_action"],
             "holding_score_model_score": trace_row["holding_score_model_score"],
             "holding_score_model_confidence": trace_row[
                 "holding_score_model_confidence"

@@ -10,7 +10,6 @@ import pytest
 from src.engine.automation import machine_microstructure_policy_approval as mod
 from src.engine.monitoring import machine_microstructure_attribution as attribution_mod
 
-
 KST = ZoneInfo("Asia/Seoul")
 
 
@@ -299,9 +298,9 @@ def test_candidate_cannot_self_declare_trusted_runtime_registration() -> None:
 def test_candidate_cannot_self_declare_post_apply_receipt_owner() -> None:
     now = datetime(2026, 8, 14, 20, 30, tzinfo=KST)
     candidate = _candidate()
-    candidate["runtime_design"]["post_apply_attribution"]["owner"] = (
-        "candidate_controlled_attribution_owner"
-    )
+    candidate["runtime_design"]["post_apply_attribution"][
+        "owner"
+    ] = "candidate_controlled_attribution_owner"
 
     queue, rejected = mod.sync_queue(
         _empty(now),
@@ -1068,9 +1067,8 @@ def test_objective_followup_accepts_closed_states_only_with_queue_evidence(
     assert handed_off["objective_followups"][0]["state"] == ("CANDIDATE_QUEUE_HANDOFF")
     persisted_handoff = handed_off["objective_followups"][0]["handoff_evidence"]
     assert persisted_handoff["accepted_candidate_queue_key"] == accepted_keys[0]
-    assert (
-        persisted_handoff["accepted_candidate_sha256"]
-        == (handed_off["candidates"][0]["candidate_sha256"])
+    assert persisted_handoff["accepted_candidate_sha256"] == (
+        handed_off["candidates"][0]["candidate_sha256"]
     )
     assert persisted_handoff["verification"] == (
         "same_run_objective_bound_candidate_intake_accepted"
@@ -1187,9 +1185,8 @@ def test_non_handoff_gap_cannot_be_closed_by_bound_candidate() -> None:
     )
 
     assert candidate_rejections == []
-    assert (
-        "objective_followup_non_handoff_gap_transfer_forbidden"
-        in (rejections[0]["errors"])
+    assert "objective_followup_non_handoff_gap_transfer_forbidden" in (
+        rejections[0]["errors"]
     )
     assert preserved["objective_followups"] == []
 
@@ -1907,9 +1904,8 @@ def test_objective_source_date_and_state_updates_are_monotonic_trading_day_only(
         value.startswith("objective_followup_state_transition_forbidden:")
         for value in transition_rejections[0]["errors"]
     )
-    assert (
-        "objective_followup_source_date_not_krx_trading_day"
-        in (weekend_rejections[0]["errors"])
+    assert "objective_followup_source_date_not_krx_trading_day" in (
+        weekend_rejections[0]["errors"]
     )
     for rejected_queue in (stale, regressed, weekend):
         assert rejected_queue["objective_followups"][0]["source_date"] == ("2026-08-18")

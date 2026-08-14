@@ -645,9 +645,11 @@ def _widget_inventory(
                         and entry_price > 0
                         and target_bps is not None
                         and target_bps > 0
-                        else exit_price
-                        if exit_reason == "fixed_average_take_profit"
-                        else None
+                        else (
+                            exit_price
+                            if exit_reason == "fixed_average_take_profit"
+                            else None
+                        )
                     )
                     lifecycle_id = (
                         f"widget:{symbol}:{session}:{index}:{entry_at.isoformat()}"
@@ -913,9 +915,9 @@ def _widget_inventory(
             scope_id = f"expansion:{symbol}:SOR_REGULAR"
             if scope_id not in row["owner_scope_ids"]:
                 row["owner_scope_ids"].append(scope_id)
-            row["owner_scope_kinds"][scope_id] = (
-                "prospective_widget_collector_expansion"
-            )
+            row["owner_scope_kinds"][
+                scope_id
+            ] = "prospective_widget_collector_expansion"
             row["owner_scope_expected_venues"][scope_id] = ["SOR"]
 
     for row in symbols.values():
@@ -1847,11 +1849,11 @@ def _depth_item_matches_scope(payload: dict[str, Any]) -> bool:
     expected_item = (
         symbol
         if venue == "KRX"
-        else f"{symbol}_NX"
-        if venue == "NXT"
-        else f"{symbol}_AL"
-        if venue == "SOR"
-        else ""
+        else (
+            f"{symbol}_NX"
+            if venue == "NXT"
+            else f"{symbol}_AL" if venue == "SOR" else ""
+        )
     )
     return bool(symbol and expected_item and payload.get("item") == expected_item)
 
@@ -2160,15 +2162,23 @@ def _micro_context(
         canary_status = (
             "loaded_pass"
             if canary_valid
-            else "target_date_evidence_unavailable"
-            if canary_payload is None or not canary_target_date_matches
-            else "target_date_evidence_incomplete"
-            if not canary_target_day_complete
-            else "missing_or_invalid"
-            if not canary_contract_valid
-            else "target_date_evidence_stale"
-            if not canary_freshness_valid
-            else "missing_or_invalid"
+            else (
+                "target_date_evidence_unavailable"
+                if canary_payload is None or not canary_target_date_matches
+                else (
+                    "target_date_evidence_incomplete"
+                    if not canary_target_day_complete
+                    else (
+                        "missing_or_invalid"
+                        if not canary_contract_valid
+                        else (
+                            "target_date_evidence_stale"
+                            if not canary_freshness_valid
+                            else "missing_or_invalid"
+                        )
+                    )
+                )
+            )
         )
         canary_source = {
             "path": str(canary_snapshot_path),
@@ -3145,21 +3155,33 @@ def build_report(
     source_contract_gap = (
         "micro_source_exclusion_manifest_missing_or_invalid"
         if micro_source["source_exclusion_manifest_status"] != "loaded"
-        else "micro_canary_source_quality_missing_or_invalid"
-        if (micro_source.get("canary_source_quality") or {}).get("status")
-        == "missing_or_invalid"
-        else "micro_canary_target_date_evidence_unavailable"
-        if (micro_source.get("canary_source_quality") or {}).get("status")
-        == "target_date_evidence_unavailable"
-        else "micro_canary_target_date_evidence_incomplete"
-        if (micro_source.get("canary_source_quality") or {}).get("status")
-        == "target_date_evidence_incomplete"
-        else "micro_canary_target_date_evidence_stale"
-        if (micro_source.get("canary_source_quality") or {}).get("status")
-        == "target_date_evidence_stale"
-        else "micro_stream_source_contract_invalid"
-        if micro_source.get("source_contract_ready") is not True
-        else None
+        else (
+            "micro_canary_source_quality_missing_or_invalid"
+            if (micro_source.get("canary_source_quality") or {}).get("status")
+            == "missing_or_invalid"
+            else (
+                "micro_canary_target_date_evidence_unavailable"
+                if (micro_source.get("canary_source_quality") or {}).get("status")
+                == "target_date_evidence_unavailable"
+                else (
+                    "micro_canary_target_date_evidence_incomplete"
+                    if (micro_source.get("canary_source_quality") or {}).get("status")
+                    == "target_date_evidence_incomplete"
+                    else (
+                        "micro_canary_target_date_evidence_stale"
+                        if (micro_source.get("canary_source_quality") or {}).get(
+                            "status"
+                        )
+                        == "target_date_evidence_stale"
+                        else (
+                            "micro_stream_source_contract_invalid"
+                            if micro_source.get("source_contract_ready") is not True
+                            else None
+                        )
+                    )
+                )
+            )
+        )
     )
     results = [
         _anchor_result(
@@ -3193,11 +3215,16 @@ def build_report(
         resolved_scope_kind = scope_kind or (
             "active_widget_owner"
             if owner == "widget" and "active_widget_owner" in normalized_scope_kinds
-            else "active_episode_owner"
-            if owner == "episode" and "active_episode_owner" in normalized_scope_kinds
-            else normalized_scope_kinds[0]
-            if normalized_scope_kinds
-            else "unknown_owner_scope"
+            else (
+                "active_episode_owner"
+                if owner == "episode"
+                and "active_episode_owner" in normalized_scope_kinds
+                else (
+                    normalized_scope_kinds[0]
+                    if normalized_scope_kinds
+                    else "unknown_owner_scope"
+                )
+            )
         )
         gaps.append(
             {

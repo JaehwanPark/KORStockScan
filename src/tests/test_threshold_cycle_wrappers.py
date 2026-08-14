@@ -1746,8 +1746,7 @@ def test_run_bot_auto_renews_allowlisted_override_without_renewing_removed_famil
         [
             "bash",
             "-c",
-            function_block
-            + """
+            function_block + """
 export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-07-30
@@ -1838,8 +1837,7 @@ def test_run_bot_does_not_auto_renew_without_explicit_operator_authority():
         [
             "bash",
             "-c",
-            function_block
-            + """
+            function_block + """
 export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED=false
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-07-30
@@ -1866,8 +1864,7 @@ def test_run_bot_expiry_uses_tp1_source_gap_relief_own_active_date():
         [
             "bash",
             "-c",
-            function_block
-            + """
+            function_block + """
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-08-03
 export KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED=true
@@ -1901,8 +1898,7 @@ def test_run_bot_preserves_existing_daily_entry_split_contract_and_disables_expi
         [
             "bash",
             "-c",
-            function_block
-            + f"""
+            function_block + f"""
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED=true
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE=DAILY
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE={policy_path}
@@ -1939,8 +1935,7 @@ def test_run_bot_disables_daily_entry_split_when_baseline_policy_is_missing(tmp_
         [
             "bash",
             "-c",
-            function_block
-            + f"""
+            function_block + f"""
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED=true
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE=DAILY
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE={missing_policy_path}

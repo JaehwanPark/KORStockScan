@@ -95,9 +95,7 @@ def _depth_row(
         "item": (
             f"{symbol}_AL"
             if venue == "SOR"
-            else f"{symbol}_NX"
-            if venue == "NXT"
-            else symbol
+            else f"{symbol}_NX" if venue == "NXT" else symbol
         ),
         "orderbook_time_raw": "100000",
         "bid_depth": 1000,

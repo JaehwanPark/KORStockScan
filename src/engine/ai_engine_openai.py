@@ -140,15 +140,9 @@ from src.engine.ai_prompt_contracts import (
 def _expected_semantic_contract_version(schema_name):
     schema = str(schema_name or "").strip()
     known = {
-        ENTRY_RISK_ADJUDICATION_SCHEMA: (
-            ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
-        ),
-        "decision_quality_v2_7_entry": (
-            BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
-        ),
-        "entry_price_explicit_fill_value_v1": (
-            ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION
-        ),
+        ENTRY_RISK_ADJUDICATION_SCHEMA: (ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION),
+        "decision_quality_v2_7_entry": (BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION),
+        "entry_price_explicit_fill_value_v1": (ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION),
         "entry_price_v1": "live_entry_price_v1_schema_semantic_v1",
         "holding_score_v2": "holding_score_live_normalizer_v1",
         "holding_exit_flow_v1": "holding_flow_live_schema_semantic_v1",
@@ -7704,9 +7698,7 @@ class GPTSniperEngine:
                     result_source="live",
                     input_contract_fields=input_contract_fields,
                 )
-            legacy_semantic_errors = _entry_price_v1_response_contract_errors(
-                result
-            )
+            legacy_semantic_errors = _entry_price_v1_response_contract_errors(result)
             normalized = normalize_scalping_entry_price_result(
                 result, fallback_price=fallback_price
             )
@@ -9828,9 +9820,7 @@ class GPTSniperEngine:
             )
             normalized.update(
                 {
-                    "semantic_validator_version": (
-                        "holding_score_live_normalizer_v1"
-                    ),
+                    "semantic_validator_version": ("holding_score_live_normalizer_v1"),
                     "expected_semantic_validator_version": (
                         "holding_score_live_normalizer_v1"
                     ),
@@ -9839,13 +9829,9 @@ class GPTSniperEngine:
                         "rejected" if holding_score_semantic_errors else "pass"
                     ),
                     "holding_score_contract_status": (
-                        "semantic_rejected"
-                        if holding_score_semantic_errors
-                        else "pass"
+                        "semantic_rejected" if holding_score_semantic_errors else "pass"
                     ),
-                    "holding_score_contract_errors": (
-                        holding_score_semantic_errors
-                    ),
+                    "holding_score_contract_errors": (holding_score_semantic_errors),
                     "forensic_semantic_errors": holding_score_semantic_errors,
                 }
             )
@@ -9956,9 +9942,7 @@ class GPTSniperEngine:
                     ),
                     "holding_score_model_action": model_holding_score["action"],
                     "holding_score_model_score": model_holding_score["score"],
-                    "holding_score_model_confidence": model_holding_score[
-                        "confidence"
-                    ],
+                    "holding_score_model_confidence": model_holding_score["confidence"],
                     "holding_score_model_reason": model_holding_score["reason"],
                     "holding_score_model_data_quality": (
                         model_holding_score_data_quality
@@ -10526,18 +10510,20 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
             replay_capture_status = "provider_input_is_structured_exact"
             replay_capture_error_type = None
             if holding_flow_v2_enabled:
-                structured_holding_flow_input = self._build_scalping_holding_flow_v2_context(
-                    stock_name,
-                    stock_code,
-                    ws_data or {},
-                    recent_ticks or [],
-                    recent_candles or [],
-                    position_ctx or {},
-                    flow_history=flow_history,
-                    decision_kind=decision_kind,
-                    matrix_runtime=matrix_runtime,
-                    lifecycle_ai_runtime=lifecycle_ai_runtime,
-                    holding_context=holding_context,
+                structured_holding_flow_input = (
+                    self._build_scalping_holding_flow_v2_context(
+                        stock_name,
+                        stock_code,
+                        ws_data or {},
+                        recent_ticks or [],
+                        recent_candles or [],
+                        position_ctx or {},
+                        flow_history=flow_history,
+                        decision_kind=decision_kind,
+                        matrix_runtime=matrix_runtime,
+                        lifecycle_ai_runtime=lifecycle_ai_runtime,
+                        holding_context=holding_context,
+                    )
                 )
             else:
                 # Do not build or synchronously persist an observation-only
@@ -10595,9 +10581,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     else "holding_flow_text_v1"
                 ),
                 default_mode=(
-                    "structured_json"
-                    if holding_flow_v2_enabled
-                    else "plain_text"
+                    "structured_json" if holding_flow_v2_enabled else "plain_text"
                 ),
             )
             input_contract_fields.update(trace_context_fields)
@@ -10647,13 +10631,9 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                         "rejected" if holding_flow_semantic_errors else "pass"
                     ),
                     "holding_flow_contract_status": (
-                        "semantic_rejected"
-                        if holding_flow_semantic_errors
-                        else "pass"
+                        "semantic_rejected" if holding_flow_semantic_errors else "pass"
                     ),
-                    "holding_flow_contract_errors": (
-                        holding_flow_semantic_errors
-                    ),
+                    "holding_flow_contract_errors": (holding_flow_semantic_errors),
                     "forensic_semantic_errors": holding_flow_semantic_errors,
                 }
             )
