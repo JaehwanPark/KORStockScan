@@ -10560,6 +10560,27 @@ def _complete_scalp_simulated_sell(
     if isinstance(HIGHEST_PRICES, dict):
         with ENTRY_LOCK:
             HIGHEST_PRICES.pop(_price_tracking_key(stock, code), None)
+    smoothing_registration: dict[str, Any] = {
+        "registered": False,
+        "status": "not_applicable",
+        "active_arm_count": 0,
+        "expires_at_epoch": None,
+        "journal_arm_ids": [],
+    }
+    try:
+        callback_result = register_non_revive_smoothing_post_sell_paths(
+            stock,
+            code,
+            now_ts=now_ts,
+        )
+        if isinstance(callback_result, dict):
+            smoothing_registration.update(callback_result)
+    except Exception as exc:
+        smoothing_registration["status"] = "registration_callback_error"
+        log_error(
+            "[SMOOTHING_POST_SELL] sim non-revive registration failed "
+            f"code={code}: {exc}"
+        )
     source_fields = {}
     resolved_exit_rule = exit_rule or stock.get("last_exit_rule") or "-"
     sim_exit_ai_score = _safe_float(
@@ -10607,6 +10628,23 @@ def _complete_scalp_simulated_sell(
             would_submit_stage="sell_order_sent",
             runtime_effect="simulated_completed_only",
             decision_authority="sim_observation_only",
+            smoothing_non_revive_post_sell_registered=bool(
+                smoothing_registration.get("registered")
+            ),
+            smoothing_non_revive_post_sell_registration_status=str(
+                smoothing_registration.get("status") or "unknown"
+            ),
+            smoothing_non_revive_post_sell_active_arm_count=_safe_int(
+                smoothing_registration.get("active_arm_count"), 0
+            ),
+            smoothing_non_revive_post_sell_expires_at_epoch=(
+                smoothing_registration.get("expires_at_epoch")
+            ),
+            smoothing_non_revive_post_sell_journal_arm_ids="|".join(
+                str(arm_id)
+                for arm_id in smoothing_registration.get("journal_arm_ids") or []
+                if str(arm_id).strip()
+            ),
             **_scalp_sim_submit_guard_context_fields(stock),
             panic_epoch_id=stock.get("panic_epoch_id"),
             last_panic_action_level=stock.get("last_panic_action_level"),
@@ -48073,6 +48111,7 @@ def register_non_revive_smoothing_post_sell_paths(
             "status": "no_active_arms",
             "active_arm_count": 0,
             "expires_at_epoch": None,
+            "journal_arm_ids": [],
         }
     position_keys = {
         str(arm.get("position_key") or "").strip() for arm in active_arms.values()
@@ -48091,6 +48130,7 @@ def register_non_revive_smoothing_post_sell_paths(
             "status": "invalid_arm_contract",
             "active_arm_count": len(active_arms),
             "expires_at_epoch": None,
+            "journal_arm_ids": sorted(active_arms),
         }
     max_observation_sec = float(
         max(SMOOTHING_SOURCE_ONLY_HORIZONS_SEC) + SMOOTHING_SOURCE_ONLY_MAX_LAG_SEC
@@ -48108,6 +48148,7 @@ def register_non_revive_smoothing_post_sell_paths(
             "status": "late_registration",
             "active_arm_count": len(active_arms),
             "expires_at_epoch": round(expires_at, 3),
+            "journal_arm_ids": sorted(active_arms),
         }
     registration_id = "|".join(sorted(active_arms))
     with ENTRY_LOCK:
@@ -48133,6 +48174,7 @@ def register_non_revive_smoothing_post_sell_paths(
                 "status": "capacity_rejected",
                 "active_arm_count": len(active_arms),
                 "expires_at_epoch": round(expires_at, 3),
+                "journal_arm_ids": sorted(active_arms),
             }
         _SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY[registration_id] = {
             "registration_id": registration_id,
@@ -48167,12 +48209,14 @@ def register_non_revive_smoothing_post_sell_paths(
             "status": "ws_retention_rejected",
             "active_arm_count": len(active_arms),
             "expires_at_epoch": round(expires_at, 3),
+            "journal_arm_ids": sorted(active_arms),
         }
     return {
         "registered": True,
         "status": "registered",
         "active_arm_count": len(active_arms),
         "expires_at_epoch": round(expires_at, 3),
+        "journal_arm_ids": sorted(active_arms),
     }
 
 

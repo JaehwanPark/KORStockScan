@@ -72,6 +72,7 @@ def _reset_state(monkeypatch, tmp_path):
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED.clear()
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_HYPOTHESIS_CREATED.clear()
     state_handlers._SCALP_SIM_AI_CALL_TIMES.clear()
+    state_handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY.clear()
     captured_pipeline_events = []
     monkeypatch.setattr(
         state_handlers,
@@ -3525,6 +3526,116 @@ def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):
     assert sim_post_sell_candidates[0]["exit_rule"] == "scalp_hard_stop_pct"
     assert sim_post_sell_candidates[0]["current_ai_score"] == 76
     assert sim_post_sell_candidates[0]["ai_model"] == "bedrock-nova-lite-v2"
+
+
+def test_scalp_simulator_sell_registers_exact_smoothing_post_sell_observer(
+    monkeypatch,
+):
+    started_at = 1_000.0
+    state, _event = state_handlers.arm_source_only_path(
+        None,
+        family="soft_stop_whipsaw_confirmation",
+        position_key="holding:123456:900",
+        trace_id="trace-sim-terminal",
+        snapshot_id="snapshot-sim-terminal",
+        alternative_action="HOLD",
+        control_action="EXIT",
+        now_ts=started_at,
+        effective_price=9_900,
+        effective_profit_rate=-1.2,
+        reference_buy_price=10_000,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        runtime_family_enabled=False,
+        alternative_executed=False,
+        source_reason="soft_stop_candidate_runtime_disabled",
+    )
+    arm_id = next(iter(state["arms"]))
+    retained = []
+    holding_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "retain_ws_subscription_until",
+        lambda code, until_ts: retained.append((code, until_ts)) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: holding_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        type(
+            "Manager",
+            (),
+            {"get_latest_data": lambda _self, _code: {"curr": 10_050}},
+        )(),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        lambda *_args, **_kwargs: (
+            {"quote_consistency_state": "single_source"},
+            10_050,
+            10_060,
+            10_040,
+        ),
+    )
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "simulation_book": "scalp_ai_buy_all",
+        "scalp_live_simulator": True,
+        "sim_record_id": "SIM-SMOOTHING-1",
+        "actual_order_submitted": False,
+        state_handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: state,
+    }
+
+    assert state_handlers._complete_scalp_simulated_sell(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9_900},
+        curr_price=9_900,
+        now_ts=started_at + 3.0,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-1.2,
+    )
+
+    sell_event = next(
+        fields
+        for stage, fields in holding_logs
+        if stage == "scalp_sim_sell_order_assumed_filled"
+    )
+    assert sell_event["actual_order_submitted"] is False
+    assert sell_event["broker_order_forbidden"] is True
+    assert sell_event["smoothing_non_revive_post_sell_registered"] is True
+    assert (
+        sell_event["smoothing_non_revive_post_sell_registration_status"] == "registered"
+    )
+    assert sell_event["smoothing_non_revive_post_sell_journal_arm_ids"] == arm_id
+    assert retained == [("123456", started_at + 92.0)]
+    assert state_handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY
+    for horizon in state_handlers.SMOOTHING_SOURCE_ONLY_HORIZONS_SEC:
+        state_handlers.observe_non_revive_smoothing_post_sell_paths(
+            now_ts=started_at + horizon
+        )
+    horizon_events = [
+        fields
+        for stage, fields in holding_logs
+        if stage == "smoothing_source_only_path_horizon"
+    ]
+    assert [fields["horizon_sec"] for fields in horizon_events] == [10, 20, 40, 60, 90]
+    assert all(
+        fields["observation_phase"] == "post_sell_non_revive"
+        for fields in horizon_events
+    )
+    assert state_handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY == {}
 
 
 def test_scalp_simulator_scale_in_does_not_call_real_buy(monkeypatch):

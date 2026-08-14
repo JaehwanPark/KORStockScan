@@ -4414,6 +4414,11 @@ def test_smoothing_price_and_receipt_lineage_survive_event_compaction():
         "median_price": 9912,
         "trailing_continuation_recheck_id": "scr-runtime-1",
         "trailing_continuation_position_key": "runtime:000001:position-1",
+        "smoothing_non_revive_post_sell_registered": True,
+        "smoothing_non_revive_post_sell_registration_status": "registered",
+        "smoothing_non_revive_post_sell_active_arm_count": 1,
+        "smoothing_non_revive_post_sell_expires_at_epoch": 1092.0,
+        "smoothing_non_revive_post_sell_journal_arm_ids": "sj-1",
     }
 
     event = report_mod._compact_threshold_cycle_event(
@@ -4830,6 +4835,62 @@ def test_smoothing_source_only_reports_non_revive_exact_coverage_gap():
     assert phase["horizon_count"] == 5
     assert phase["ev_eligible_horizon_count"] == 0
     assert phase["registration_status_counts"] == {"registration_callback_error": 1}
+
+
+def test_smoothing_source_only_reports_sim_terminal_registration_gap_by_arm_id():
+    lineage = {
+        "journal_arm_id": "sj-soft-sim-terminal-gap",
+        "journal_family": "soft_stop_whipsaw_confirmation",
+        "journal_position_key": "holding:253590:1786667300",
+        "journal_trace_id": "trace-sim-terminal",
+        "journal_snapshot_id": "snapshot-sim-terminal",
+        "journal_alternative_action": "HOLD",
+        "journal_control_action": "EXIT",
+        "journal_started_at_epoch": 1786668435.0,
+        "exact_lineage_status": "source_exact",
+    }
+    events = [
+        {
+            "stage": "smoothing_source_only_path_armed",
+            "record_id": None,
+            "emitted_at": "2026-08-14T09:47:15+09:00",
+            "fields": {
+                **lineage,
+                "anchor_effective_profit_rate": -1.5,
+                "reference_buy_price": 10_100,
+                "anchor_effective_price_source": "ws",
+                "anchor_effective_price_quality": "single_source",
+            },
+        },
+        {
+            "stage": "scalp_sim_sell_order_assumed_filled",
+            "record_id": None,
+            "emitted_at": "2026-08-14T09:47:18+09:00",
+            "fields": {
+                "profit_rate": -1.5,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "sim_observation_only",
+                "smoothing_non_revive_post_sell_journal_arm_ids": (
+                    "sj-soft-sim-terminal-gap"
+                ),
+                "smoothing_non_revive_post_sell_registration_status": (
+                    "ws_retention_rejected"
+                ),
+            },
+        },
+    ]
+
+    journal = report_mod._build_smoothing_source_only_path_journal(
+        events, family="soft_stop_whipsaw_confirmation"
+    )
+
+    assert journal["exclusion_reason_counts"] == {
+        "non_revive_post_sell_observer_missing": 5
+    }
+    phase = journal["observation_phase_summary"]["post_sell_non_revive"]
+    assert phase["arm_count"] == 1
+    assert phase["registration_status_counts"] == {"ws_retention_rejected": 1}
 
 
 def test_smoothing_source_only_ofi_excludes_journal_native_lineage_from_ev():

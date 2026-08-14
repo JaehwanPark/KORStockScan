@@ -221,6 +221,11 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "sim_record_id",
     "simulation_book",
     "smoothing_action",
+    "smoothing_non_revive_post_sell_active_arm_count",
+    "smoothing_non_revive_post_sell_expires_at_epoch",
+    "smoothing_non_revive_post_sell_journal_arm_ids",
+    "smoothing_non_revive_post_sell_registered",
+    "smoothing_non_revive_post_sell_registration_status",
     "second_extension_forbidden",
     "spread_bps",
     "spread_ratio",
@@ -9203,6 +9208,25 @@ def _build_smoothing_source_only_path_journal(
             if arm_id:
                 target[arm_id].append(event)
     completed_by_record = _completed_valid_profit_index(events)
+    sim_terminal_by_arm: dict[str, list[dict]] = defaultdict(list)
+    for event in _events_for_stage(events, "scalp_sim_sell_order_assumed_filled"):
+        terminal_fields = _event_fields(event)
+        if (
+            _truthy(terminal_fields.get("actual_order_submitted"))
+            or not _truthy(terminal_fields.get("broker_order_forbidden"))
+            or str(terminal_fields.get("decision_authority") or "").strip()
+            != "sim_observation_only"
+        ):
+            continue
+        arm_ids = str(
+            terminal_fields.get("smoothing_non_revive_post_sell_journal_arm_ids") or ""
+        ).split("|")
+        for terminal_arm_id in arm_ids:
+            normalized_arm_id = terminal_arm_id.strip()
+            if normalized_arm_id:
+                sim_terminal_by_arm[normalized_arm_id].append(event)
+    for terminal_rows in sim_terminal_by_arm.values():
+        terminal_rows.sort(key=lambda row: str(row.get("emitted_at") or ""))
     rows: list[dict[str, Any]] = []
     exclusion_reasons: Counter = Counter()
     guarded_terminal_reasons: Counter = Counter()
@@ -9244,6 +9268,15 @@ def _build_smoothing_source_only_path_journal(
             record_id=record_id,
             after_at=arm_at,
         )
+        if completed is None and arm_at:
+            completed = next(
+                (
+                    candidate
+                    for candidate in sim_terminal_by_arm.get(arm_id, [])
+                    if str(candidate.get("emitted_at") or "") >= arm_at
+                ),
+                None,
+            )
         completed_dt = _parse_datetime(
             completed.get("emitted_at") if completed is not None else None
         )

@@ -16,6 +16,20 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## Smoothing exact-path 보완
+
+- [x] `[SmoothingSimTerminalExactObserver0814] sim 즉시종료 source-only exact-path observer bridge 구현·리뷰` (`Due: 2026-08-14`, `Slot: INTRADAY`, `TimeWindow: 11:30~12:30`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [test_scalp_live_simulator.py](/home/ubuntu/KORStockScan/src/tests/test_scalp_live_simulator.py), [test_daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/tests/test_daily_threshold_cycle_report.py)
+  - 판정 기준: `scalp_sim_sell_order_assumed_filled` 직전의 active smoothing arm을 92초 bounded detached registry에 등록하고, 동일 arm ID로 exact 10/20/40/60/90초 horizon과 등록 실패를 postclose에서 구분한다.
+  - 금지: sim terminal observer는 `actual_order_submitted=false`, `broker_order_forbidden=true`, `runtime_effect=false`를 유지하고 매도·취소·threshold·provider·bot 권한을 가지지 않는다.
+  - 결과: 기존 non-revive observer/WS retention을 sim terminal에 연결하고 arm ID·등록 상태를 compact threshold source contract에 추가했다.
+
+- [ ] `[SmoothingExactPathPostcloseVerify0814] immutable snapshot 기반 smoothing exact-path postclose 정합성 확인` (`Due: 2026-08-14`, `Slot: POSTCLOSE`, `TimeWindow: 20:55~21:10`, `Track: RuntimeStability`)
+  - Source: [pipeline_events_2026-08-14.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-08-14.jsonl), [threshold_cycle_2026-08-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle/threshold_cycle_2026-08-14.json), [threshold_cycle_cumulative_2026-08-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_2026-08-14.json), [threshold_cycle_postclose_verification_2026-08-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-08-14.json)
+  - 판정 기준: postclose immutable snapshot→partition→daily/cumulative→verifier의 smoothing armed/horizon/closed 수량과 `post_sell_non_revive` 등록 상태가 일치하고, exact-path 누락이 정상 표본으로 잘못 포함되지 않아야 한다.
+  - 금지: 분 단위 10분 post-sell MFE/MAE를 exact 10/20/40/60/90초 경로로 대체하거나, 일일 표본만으로 runtime apply를 열지 않는다.
+  - 다음 액션: `pass_exact_counts_match`, `warning_natural_no_arm`, `hold_sample`, `fail_registration_or_ingestion_gap` 중 하나로 닫고 실패 시 producer/consumer acceptance test를 남긴다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-08-13` postclose -> `2026-08-14`)
 
