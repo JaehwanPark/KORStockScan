@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -14,10 +14,13 @@ from src.trading.order.samsung_entry_policy import (
     APPLIED_SCHEMA,
     BASELINE_POLICIES,
     CANDIDATE_SCHEMA,
+    KST,
+    OPERATOR_OVERRIDE_RUNTIME_SOURCE,
     atomic_write_json,
     baseline_applied_payload,
     candidate_policies_with_current_baselines,
     load_applied_machine_policy,
+    operator_target_override,
     policy_hash,
     policy_mutations_between,
     validate_applied,
@@ -197,6 +200,42 @@ def test_missing_candidate_writes_valid_exact_date_baseline(tmp_path: Path):
     assert reason == "ready"
     assert policy == BASELINE_POLICIES["midday"]
     assert applied_hash == payload["policy_hash"]
+
+
+def test_loader_applies_target3_only_after_operator_override_instant(tmp_path: Path):
+    target = date(2026, 8, 14)
+    payload = baseline_applied_payload(target_date=target, reason="test")
+    applied_dir = tmp_path / "applied"
+    atomic_write_json(
+        applied_dir / f"samsung_machine_entry_policy_{target}.json", payload
+    )
+
+    before, before_hash, before_reason = load_applied_machine_policy(
+        "morning",
+        target_date=target,
+        applied_dir=applied_dir,
+        as_of=datetime(2026, 8, 14, 9, 21, 6, tzinfo=KST),
+    )
+    after, after_hash, after_reason = load_applied_machine_policy(
+        "midday",
+        target_date=target,
+        applied_dir=applied_dir,
+        as_of=datetime(2026, 8, 14, 9, 21, 7, tzinfo=KST),
+    )
+
+    assert before["target_ticks"] == 2
+    assert before_hash == payload["policy_hash"]
+    assert before_reason == "ready"
+    assert after["target_ticks"] == 3
+    assert after_hash != payload["policy_hash"]
+    assert after_reason == "ready_operator_override"
+    assert OPERATOR_OVERRIDE_RUNTIME_SOURCE.endswith("operator_override")
+    override = operator_target_override(
+        target_date=target,
+        as_of=datetime(2026, 8, 14, 9, 21, 7, tzinfo=KST),
+    )
+    assert override is not None
+    assert "morning_reentry" in override["runtime_scopes"]
 
 
 def test_latest_valid_prior_candidate_is_applied_without_relaxing_guards(

@@ -19,7 +19,10 @@ from src.trading.samsung_afternoon_one_share.machine import (
     SamsungAfternoonOneShareMachine,
 )
 from src.trading.samsung_afternoon_one_share.policy import DEFAULT_POLICY
-from src.trading.order.samsung_entry_policy import load_applied_machine_policy
+from src.trading.order.samsung_entry_policy import (
+    OPERATOR_OVERRIDE_RUNTIME_SOURCE,
+    load_applied_machine_policy,
+)
 from src.trading.samsung_afternoon_one_share.preflight import (
     DEFAULT_AUTHORITY_PATH,
     validate_authority,
@@ -93,7 +96,12 @@ def main(argv: list[str] | None = None) -> int:
             DEFAULT_POLICY,
             rolling_high_drawdown_pct=float(applied["rolling_high_drawdown_pct"]),
             rolling_low_proximity_pct=float(applied["rolling_low_proximity_pct"]),
-            runtime_policy_source="preopen_applied_policy",
+            target_ticks=int(applied["target_ticks"]),
+            runtime_policy_source=(
+                OPERATOR_OVERRIDE_RUNTIME_SOURCE
+                if applied_reason == "ready_operator_override"
+                else "preopen_applied_policy"
+            ),
             runtime_policy_hash=applied_hash,
         )
     state_path = args.state_path or (

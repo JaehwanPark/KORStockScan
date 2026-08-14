@@ -19,8 +19,10 @@ from src.engine.monitoring.samsung_machine_entry_tuning import (
 )
 from src.trading.order.samsung_entry_policy import (
     BASELINE_POLICIES,
+    OPERATOR_OVERRIDE_RUNTIME_SOURCE,
     atomic_write_json,
     baseline_applied_payload,
+    load_applied_machine_policy,
     policy_hash,
     policy_mutations_between,
 )
@@ -228,8 +230,19 @@ def test_exact_date_applied_policy_provenance_and_broker_sell_price(tmp_path: Pa
     atomic_write_json(
         applied_dir / "samsung_machine_entry_policy_2026-08-14.json", applied
     )
+    _, effective_hash, effective_reason = load_applied_machine_policy(
+        "midday", target_date=date(2026, 8, 14), applied_dir=applied_dir
+    )
+    assert effective_reason == "ready_operator_override"
     payload = _state("midday", "2026-08-14")
-    payload["signal_features"]["runtime_policy_hash"] = applied["policy_hash"]
+    payload["signal_features"].update(
+        {
+            "signal_bar": "2026-08-14T13:15:00+09:00",
+            "target_ticks": 3,
+            "runtime_policy_source": OPERATOR_OVERRIDE_RUNTIME_SOURCE,
+            "runtime_policy_hash": effective_hash,
+        }
+    )
     payload["legs"][0].update(
         {"quantity": 10, "buy_filled_qty": 10, "target_filled_qty": 10}
     )
@@ -262,7 +275,7 @@ def test_exact_date_applied_policy_provenance_and_broker_sell_price(tmp_path: Pa
         "signal_feature_exact_date_applied_policy_mismatch"
         in mismatched["source_quality_reasons"]
     )
-    payload["signal_features"]["runtime_policy_hash"] = applied["policy_hash"]
+    payload["signal_features"]["runtime_policy_hash"] = effective_hash
     payload["legs"][0]["quantity"] = 1
     state_path.write_text(json.dumps(payload), encoding="utf-8")
     quantity_mismatch = extract_machine_row(
@@ -276,6 +289,53 @@ def test_exact_date_applied_policy_provenance_and_broker_sell_price(tmp_path: Pa
         "exact_date_applied_quantity_mismatch"
         in quantity_mismatch["source_quality_reasons"]
     )
+    payload["legs"][0]["quantity"] = 10
+    payload["signal_features"]["signal_bar"] = "2026-08-13T13:15:00+09:00"
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    wrong_signal_date = extract_machine_row(
+        machine="midday",
+        state_path=state_path,
+        target_date="2026-08-14",
+        cost_pct=0.20,
+        applied_dir=applied_dir,
+    )
+    assert (
+        "signal_feature_policy_timestamp_invalid"
+        in wrong_signal_date["source_quality_reasons"]
+    )
+
+
+def test_pre_override_morning_signal_keeps_exact_date_base_policy(tmp_path: Path):
+    applied_dir = tmp_path / "applied"
+    applied = baseline_applied_payload(
+        target_date=date(2026, 8, 14), reason="test_baseline"
+    )
+    atomic_write_json(
+        applied_dir / "samsung_machine_entry_policy_2026-08-14.json", applied
+    )
+    payload = _state("morning", "2026-08-14")
+    payload["signal_features"].update(
+        {
+            "signal_bar": "2026-08-14T09:00:00+09:00",
+            "target_ticks": 2,
+            "runtime_policy_source": "preopen_applied_policy",
+            "runtime_policy_hash": applied["policy_hash"],
+        }
+    )
+    payload["legs"][0]["quantity"] = 10
+    payload["legs"][1]["quantity"] = 10
+    state_path = tmp_path / "morning_state.json"
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    row = extract_machine_row(
+        machine="morning",
+        state_path=state_path,
+        target_date="2026-08-14",
+        cost_pct=0.20,
+        applied_dir=applied_dir,
+    )
+
+    assert row["source_quality"] == "pass"
 
 
 def test_extracts_morning_reentry_as_fixed_observation_cohort(tmp_path: Path):
@@ -370,6 +430,58 @@ def test_extracts_morning_reentry_as_fixed_observation_cohort(tmp_path: Path):
     assert row["summary"]["completed_signal_episode"] is True
     assert row["summary"]["completed_legs"] == 1
     assert "SECRET" not in json.dumps(row)
+
+    applied_dir = tmp_path / "applied"
+    applied = baseline_applied_payload(
+        target_date=date(2026, 8, 14), reason="test_baseline"
+    )
+    atomic_write_json(
+        applied_dir / "samsung_machine_entry_policy_2026-08-14.json", applied
+    )
+    state["trade_date"] = "2026-08-14"
+    state["signal_features"]["signal_bar"] = "2026-08-14T09:17:00+09:00"
+    state["signal_features"]["prerequisite"][
+        "first_episode_completed_at"
+    ] = "2026-08-14T09:00:00+09:00"
+    for leg in state["legs"]:
+        leg["quantity"] = 10
+    state["legs"][0]["target_filled_qty"] = 10
+    state["legs"][0]["target_fill_price"] = 100400
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    pre_override = extract_machine_row(
+        machine="morning_reentry",
+        state_path=state_path,
+        target_date="2026-08-14",
+        cost_pct=0.20,
+        applied_dir=applied_dir,
+    )
+    assert pre_override["source_quality"] == "pass"
+
+    _, effective_hash, effective_reason = load_applied_machine_policy(
+        "morning", target_date=date(2026, 8, 14), applied_dir=applied_dir
+    )
+    assert effective_reason == "ready_operator_override"
+    state["signal_features"].update(
+        {
+            "signal_bar": "2026-08-14T09:22:00+09:00",
+            "target_ticks": 3,
+            "runtime_policy_source": OPERATOR_OVERRIDE_RUNTIME_SOURCE,
+            "runtime_policy_hash": effective_hash,
+        }
+    )
+    state["legs"][0]["target_price"] = 100500
+    state["legs"][0]["target_fill_price"] = 100500
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    post_override = extract_machine_row(
+        machine="morning_reentry",
+        state_path=state_path,
+        target_date="2026-08-14",
+        cost_pct=0.20,
+        applied_dir=applied_dir,
+    )
+    assert post_override["source_quality"] == "pass"
 
 
 def test_morning_reentry_unmet_prerequisite_is_valid_no_op_observation(

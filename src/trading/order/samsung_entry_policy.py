@@ -34,6 +34,27 @@ MAX_CANDIDATE_AGE_DAYS = 7
 CLEAN_BASELINE_DATE = "2026-06-05"
 LEGACY_TWO_SHARE_CANDIDATE_LAST_SOURCE_DATE = date(2026, 8, 13)
 LEGACY_TWO_SHARE_APPLIED_LAST_TARGET_DATE = date(2026, 8, 13)
+SAMSUNG_TARGET_TICKS_OPERATOR_OVERRIDE = {
+    "override_id": "samsung_episode_target_ticks_3_20260814",
+    "machines": ["morning", "midday", "afternoon"],
+    "runtime_scopes": ["morning", "morning_reentry", "midday", "afternoon"],
+    "axis": "target_ticks",
+    "before": 2,
+    "after": 3,
+    "approved_at_kst": "2026-08-14T09:21:07+09:00",
+    "effective_at_kst": "2026-08-14T09:21:07+09:00",
+    "decision_authority": "explicit_user_directed_intraday_operator_override",
+    "reason": "operator_accepts_91p43pct_target_reach_for_more_cost_slippage_margin",
+    "existing_order_effect": "none_do_not_cancel_or_replace_owned_target_orders",
+    "rollback": {
+        "trigger": "explicit_user_revert_after_broker_priced_postclose_review",
+        "action": "restore_target_ticks_2_for_new_samsung_episode_targets",
+        "existing_order_effect": "none_do_not_cancel_or_replace_owned_target_orders",
+    },
+}
+OPERATOR_OVERRIDE_RUNTIME_SOURCE = (
+    "exact_date_applied_policy_plus_samsung_target_ticks_3_operator_override"
+)
 
 BASELINE_POLICIES: dict[str, dict[str, Any]] = {
     "morning": {
@@ -59,6 +80,67 @@ BASELINE_POLICIES: dict[str, dict[str, Any]] = {
         "target_ticks": 2,
     },
 }
+
+
+def operator_target_override(
+    *, target_date: date, as_of: datetime | None = None
+) -> dict[str, Any] | None:
+    """Return the explicit target override only after its effective instant."""
+
+    effective_at = datetime.fromisoformat(
+        str(SAMSUNG_TARGET_TICKS_OPERATOR_OVERRIDE["effective_at_kst"])
+    ).astimezone(KST)
+    if target_date < effective_at.date():
+        return None
+    if target_date == effective_at.date():
+        observed_at = as_of or datetime.now(tz=KST)
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=KST)
+        else:
+            observed_at = observed_at.astimezone(KST)
+        if observed_at < effective_at:
+            return None
+    return dict(SAMSUNG_TARGET_TICKS_OPERATOR_OVERRIDE)
+
+
+def effective_target_ticks(
+    machine: str, *, target_date: date, as_of: datetime | None = None
+) -> int:
+    if machine not in BASELINE_POLICIES:
+        raise ValueError("unknown_samsung_machine")
+    transition = operator_target_override(target_date=target_date, as_of=as_of)
+    return int(
+        transition["after"]
+        if transition is not None
+        else BASELINE_POLICIES[machine]["target_ticks"]
+    )
+
+
+def effective_runtime_policy_source(
+    *, target_date: date, as_of: datetime | None = None
+) -> str:
+    return (
+        OPERATOR_OVERRIDE_RUNTIME_SOURCE
+        if operator_target_override(target_date=target_date, as_of=as_of) is not None
+        else "preopen_applied_policy"
+    )
+
+
+def _effective_applied_policies(
+    payload: dict[str, Any], *, target_date: date, as_of: datetime | None
+) -> dict[str, dict[str, Any]]:
+    policies = {
+        machine: dict(payload["machines"][machine]["policy"])
+        for machine in BASELINE_POLICIES
+    }
+    transition = operator_target_override(target_date=target_date, as_of=as_of)
+    if transition is None:
+        return policies
+    for machine in transition["machines"]:
+        if policies[machine].get(transition["axis"]) != transition["before"]:
+            raise ValueError("operator_target_override_before_value_mismatch")
+        policies[machine][transition["axis"]] = transition["after"]
+    return policies
 
 
 def _canonical_hash(payload: Any) -> str:
@@ -292,6 +374,7 @@ def load_applied_machine_policy(
     *,
     target_date: date,
     applied_dir: Path = APPLIED_DIR,
+    as_of: datetime | None = None,
 ) -> tuple[dict[str, Any] | None, str, str]:
     path = applied_path(target_date, applied_dir=applied_dir)
     try:
@@ -301,10 +384,20 @@ def load_applied_machine_policy(
     valid, reason = validate_applied(payload, target_date=target_date)
     if not valid:
         return None, "", reason
-    item = payload["machines"].get(machine)
-    if not isinstance(item, dict):
+    if machine not in BASELINE_POLICIES:
         return None, "", "applied_machine_policy_missing"
-    return dict(item["policy"]), str(payload["policy_hash"]), "ready"
+    try:
+        policies = _effective_applied_policies(
+            payload, target_date=target_date, as_of=as_of
+        )
+    except ValueError as exc:
+        return None, "", str(exc)
+    override = operator_target_override(target_date=target_date, as_of=as_of)
+    return (
+        policies[machine],
+        policy_hash(policies),
+        "ready_operator_override" if override is not None else "ready",
+    )
 
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:

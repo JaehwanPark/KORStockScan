@@ -100,6 +100,13 @@
 
 ## 세션 추가 후속
 
+- [x] `[SamsungEpisodeTargetTicks3OperatorOverride0814] 삼성전자 독립 episode 신규 목표 +3호가 사용자 오버라이드 반영` (`Due: 2026-08-14`, `Slot: INTRADAY`, `TimeWindow: 09:21~13:12`, `Track: RuntimeStability`)
+  - Source: [samsung_entry_policy.py](/home/ubuntu/KORStockScan/src/trading/order/samsung_entry_policy.py), [samsung-machine docs](/home/ubuntu/KORStockScan/docs/samsung-morning-one-share-machine.md), [traceability](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정: clean baseline `+3호가` 도달률 91.43%를 삼성전자에서 감당 가능한 위험으로 본 사용자 명시 지시에 따라 `morning`, `morning_reentry`, `midday`, `afternoon`의 2026-08-14 09:21:07 KST 이후 신규 목표만 `+2→+3`으로 변경한다.
+  - 귀속: 정확일자 base artifact는 변조하지 않고 effective overlay hash·runtime source는 신호시각별 state에, override id·효력시각·target은 same-day authority에 고정한다. 09:21:07 이전 오전 신호와 이미 접수된 목표주문·기존 `HELD`는 취소·교체하지 않고 +2 provenance를 유지한다.
+  - 경계: 수량·50:50 leg·진입·validity·무손절·미청산 보유·provider/bot/cap/broker guard는 변경하지 않았고 widget·메인 봇·삼성중공업은 대상이 아니다.
+  - Rollback: 장후 broker-priced attribution 검토 후 사용자가 명시적으로 지시하면 이후 신규 목표만 +2로 복원하며 이미 접수된 목표주문은 유지한다.
+
 - [ ] `[RiskyMicroEpisodeExecutableOutcomeJoin0814] risky rising-missed micro episode 실행가능 결과 결합 및 rolling EV 자격 확인` (`Due: 2026-08-14`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~20:20`, `Track: ScalpingLogic`)
   - Source: [risky_micro_episode policy](/home/ubuntu/KORStockScan/src/engine/scalping/risky_micro_episode/policy.py), [rising_missed_intraday_feedback.py](/home/ubuntu/KORStockScan/src/engine/monitoring/rising_missed_intraday_feedback.py), [pipeline_events_2026-08-14.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-08-14.jsonl)
   - 판정 기준: source candidate를 동일 후보의 실행가능 BBO 기준 passive fill 가능성·3/10/20/30초 target/adverse first-hit·timeout·비용 차감 결과와 결합하고, clean baseline 이후 rolling 30 resolved episode·10 symbols·3 trade dates를 충족한 경우에만 `source_quality_adjusted_ev_pct` 후보를 만든다.

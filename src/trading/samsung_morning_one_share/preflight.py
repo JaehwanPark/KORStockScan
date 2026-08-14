@@ -14,6 +14,10 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
+from src.trading.order.samsung_entry_policy import (
+    effective_target_ticks,
+    operator_target_override,
+)
 from src.trading.samsung_morning_one_share.machine import KST
 from src.trading.samsung_morning_one_share.reentry import (
     DEFAULT_REENTRY_STATE_PATH,
@@ -77,6 +81,13 @@ def build_authority_artifact(
     if not decision.ready:
         raise ValueError("preflight_not_ready")
     observed_at = observed_at.astimezone(KST)
+    target_date = date.fromisoformat(decision.target_date)
+    target_ticks = effective_target_ticks(
+        "morning", target_date=target_date, as_of=observed_at
+    )
+    target_override = operator_target_override(
+        target_date=target_date, as_of=observed_at
+    )
     return {
         "schema": AUTHORITY_SCHEMA,
         "status": "ready",
@@ -92,7 +103,8 @@ def build_authority_artifact(
             "allocation": "ten_shares_base_limit_and_ten_shares_base_plus_1tick",
             "nxt_entry": "two_independent_10share_legs_from_08:00_open_until_08:10",
             "sor_regular_fallback": "each_unfilled_leg_from_09:00_open_until_09:30",
-            "target": "fill_plus_2_ticks",
+            "target": f"fill_plus_{target_ticks}_ticks",
+            "operator_target_override": target_override,
             "unfilled_target": "hold_position_without_forced_exit",
             "entry_tuning": "preopen_exact_date_bounded_policy_artifact",
             "entry_tuning_bounds": "morning_baseline_only_until_observed_alternative",
@@ -190,13 +202,16 @@ def validate_authority(
         return False, "authority_timeout_policy_forbidden"
     if policy.get("unfilled_target") != "hold_position_without_forced_exit":
         return False, "authority_hold_policy_mismatch"
+    target_ticks = effective_target_ticks("morning", target_date=now.date(), as_of=now)
+    target_override = operator_target_override(target_date=now.date(), as_of=now)
     expected = {
         "symbol": "005930",
         "quantity": EPISODE_TOTAL_QUANTITY,
         "allocation": "ten_shares_base_limit_and_ten_shares_base_plus_1tick",
         "nxt_entry": "two_independent_10share_legs_from_08:00_open_until_08:10",
         "sor_regular_fallback": "each_unfilled_leg_from_09:00_open_until_09:30",
-        "target": "fill_plus_2_ticks",
+        "target": f"fill_plus_{target_ticks}_ticks",
+        "operator_target_override": target_override,
         "widget_relationship": "parallel_independent_strategy",
         "entry_tuning": "preopen_exact_date_bounded_policy_artifact",
         "entry_tuning_bounds": "morning_baseline_only_until_observed_alternative",
