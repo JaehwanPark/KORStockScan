@@ -12,9 +12,11 @@ import json
 import os
 import queue
 import shutil
+import stat
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from enum import StrEnum
@@ -49,8 +51,7 @@ MARKET_PATH_METRIC_CONTRACT = {
     "sample_floor": "collector_health_5d_200_events_not_economic_promotion",
     "primary_decision_metric": "pre_active_post_path_coverage_pct",
     "source_quality_gate": (
-        "monotonic_source_sequence_and_timezone_aware_exchange_and_receive_"
-        "timestamps"
+        "monotonic_source_sequence_and_timezone_aware_exchange_and_receive_timestamps"
     ),
     "forbidden_uses": (
         "broker_order_submission",
@@ -603,6 +604,51 @@ class PathStoragePolicy:
         ).with_name("market_depth_stream.jsonl")
 
 
+def partition_maintenance_lock_path(partition_path: Path) -> Path:
+    """Return the external lock shared by writers and closed-date maintenance."""
+
+    path = Path(partition_path).absolute()
+    trade_dir = next(
+        (
+            candidate
+            for candidate in (path, *path.parents)
+            if candidate.name.startswith("trade_date=")
+        ),
+        None,
+    )
+    if trade_dir is None:
+        return path.parent / ".partition_maintenance_locks" / f"{path.name}.lock"
+    date.fromisoformat(trade_dir.name.removeprefix("trade_date="))
+    return (
+        trade_dir.parent / ".partition_maintenance_locks" / (f"{trade_dir.name}.lock")
+    )
+
+
+@contextmanager
+def partition_maintenance_lock(
+    partition_path: Path,
+    *,
+    blocking: bool = True,
+    exclusive: bool = False,
+) -> Iterable[None]:
+    """Hold the date-partition lock before opening any journal shard."""
+
+    lock_path = partition_maintenance_lock_path(partition_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o640)
+    operation = (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | (
+        0 if blocking else fcntl.LOCK_NB
+    )
+    try:
+        fcntl.flock(descriptor, operation)
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
 class NonBlockingPathJournalWriter:
     """Bounded queue and dedicated durable writer.
 
@@ -664,9 +710,15 @@ class NonBlockingPathJournalWriter:
                 return
             if self._thread is not None:
                 self._writer_restarts += 1
-            shard_paths = partition_path_files(self._path)
+            with partition_maintenance_lock(self._path):
+                shard_paths = readable_partition_path_files(self._path)
             if shard_paths:
-                self._active_shard_index = _shard_index(self._path, shard_paths[-1])
+                last_logical = (
+                    shard_paths[-1].with_suffix("")
+                    if shard_paths[-1].suffix == ".gz"
+                    else shard_paths[-1]
+                )
+                self._active_shard_index = _shard_index(self._path, last_logical)
                 self._shard_count = len(shard_paths)
                 self._partition_bytes = sum(path.stat().st_size for path in shard_paths)
             else:
@@ -786,31 +838,40 @@ class NonBlockingPathJournalWriter:
                         with self._lock:
                             self._storage_self_disabled = True
                         raise OSError("path partition total byte limit reached")
-                    active_path = self._storage_policy.shard_path(
-                        self._path, self._active_shard_index
-                    )
-                    existing_bytes = (
-                        active_path.stat().st_size if active_path.exists() else 0
-                    )
-                    if (
-                        existing_bytes + projected_bytes
-                        > self._storage_policy.max_partition_bytes
-                    ):
-                        next_index = self._active_shard_index + 1
-                        if next_index >= self._storage_policy.max_partition_shards:
-                            with self._lock:
-                                self._storage_self_disabled = True
-                            raise OSError("path partition shard limit reached")
+                    with partition_maintenance_lock(self._path):
                         active_path = self._storage_policy.shard_path(
-                            self._path, next_index
+                            self._path, self._active_shard_index
                         )
-                        if active_path.exists():
-                            raise OSError("next path shard already exists")
-                        with self._lock:
-                            self._active_shard_index = next_index
-                            self._rotations += 1
-                        manifest_needs_refresh = True
-                    write_metrics = append_market_path_points(active_path, batch)
+                        # Maintenance may have compressed the last closed
+                        # shard while this long-lived writer was idle. Never
+                        # recreate that logical index beside its gzip. Advance
+                        # to a new shard and refresh a mixed gzip/plain manifest
+                        # while still holding the shared partition lock.
+                        if (
+                            not active_path.exists()
+                            and active_path.with_suffix(
+                                f"{active_path.suffix}.gz"
+                            ).exists()
+                        ):
+                            active_path = self._advance_shard_locked()
+                            manifest_needs_refresh = True
+                        existing_bytes = (
+                            active_path.stat().st_size if active_path.exists() else 0
+                        )
+                        if (
+                            existing_bytes + projected_bytes
+                            > self._storage_policy.max_partition_bytes
+                        ):
+                            active_path = self._advance_shard_locked()
+                            manifest_needs_refresh = True
+                        write_metrics = _append_market_path_points_locked(
+                            active_path,
+                            batch,
+                        )
+                        if manifest_needs_refresh:
+                            manifest_needs_refresh = not self._refresh_manifest(
+                                partition_lock_held=True
+                            )
                     if write_metrics is None:
                         write_metrics = PathAppendMetrics(0, 0.0, 0.0)
                 except Exception as exc:
@@ -863,8 +924,6 @@ class NonBlockingPathJournalWriter:
                                 self._projection_breaches += 1
                                 self._storage_self_disabled = True
                                 self._capture_degraded = True
-                    if manifest_needs_refresh:
-                        manifest_needs_refresh = not self._refresh_manifest()
                 finally:
                     latency_ms = (time.monotonic() - started) * 1_000.0
                     with self._lock:
@@ -873,12 +932,28 @@ class NonBlockingPathJournalWriter:
         if self._shard_count > 0:
             self._refresh_manifest()
 
-    def _refresh_manifest(self) -> bool:
+    def _advance_shard_locked(self) -> Path:
+        next_index = self._active_shard_index + 1
+        if next_index >= self._storage_policy.max_partition_shards:
+            with self._lock:
+                self._storage_self_disabled = True
+            raise OSError("path partition shard limit reached")
+        next_path = self._storage_policy.shard_path(self._path, next_index)
+        next_gzip = next_path.with_suffix(f"{next_path.suffix}.gz")
+        if next_path.exists() or next_gzip.exists():
+            raise OSError("next path shard already exists")
+        with self._lock:
+            self._active_shard_index = next_index
+            self._rotations += 1
+        return next_path
+
+    def _refresh_manifest(self, *, partition_lock_held: bool = False) -> bool:
         try:
             write_market_path_manifest(
                 self._path,
                 storage_policy=self._storage_policy,
                 active_shard_index=self._active_shard_index,
+                _partition_lock_held=partition_lock_held,
             )
         except Exception as exc:
             with self._lock:
@@ -908,6 +983,15 @@ def append_market_path_points(
     materialized = tuple(points)
     if not materialized:
         return PathAppendMetrics(0, 0.0, 0.0)
+    with partition_maintenance_lock(path):
+        return _append_market_path_points_locked(Path(path), materialized)
+
+
+def _append_market_path_points_locked(
+    path: Path,
+    points: Iterable[PathJournalPoint],
+) -> PathAppendMetrics:
+    materialized = tuple(points)
     _validate_batch_order(materialized)
     encoded = b"".join(
         (json.dumps(point.as_dict(), ensure_ascii=False, sort_keys=True) + "\n").encode(
@@ -916,8 +1000,10 @@ def append_market_path_points(
         for point in materialized
     )
     target = Path(path)
+    _assert_no_symlink_ancestors(target)
     target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(target, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o640)
+    _assert_no_symlink_ancestors(target)
+    descriptor = _open_append_regular_nofollow(target, allow_create=True)
     write_started = time.monotonic()
     fsync_latency_ms = 0.0
     try:
@@ -930,6 +1016,7 @@ def append_market_path_points(
             remaining = remaining[written:]
         fsync_started = time.monotonic()
         os.fsync(descriptor)
+        _assert_open_descriptor_matches_path(descriptor, target)
         fsync_latency_ms = (time.monotonic() - fsync_started) * 1_000.0
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -941,15 +1028,62 @@ def append_market_path_points(
     )
 
 
+def _open_append_regular_nofollow(path: Path, *, allow_create: bool) -> int:
+    _assert_no_symlink_ancestors(path)
+    if path.is_symlink():
+        raise OSError(f"journal target symlink is forbidden: {path}")
+    if path.exists() and not path.is_file():
+        raise OSError(f"journal target must be a regular file: {path}")
+    flags = (
+        os.O_APPEND
+        | os.O_WRONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    if allow_create:
+        flags |= os.O_CREAT
+    descriptor = os.open(path, flags, 0o640)
+    opened = os.fstat(descriptor)
+    if not stat.S_ISREG(opened.st_mode):
+        os.close(descriptor)
+        raise OSError(f"journal target must be a regular file: {path}")
+    return descriptor
+
+
+def _assert_open_descriptor_matches_path(descriptor: int, path: Path) -> None:
+    _assert_no_symlink_ancestors(path)
+    opened = os.fstat(descriptor)
+    current = path.lstat()
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or opened.st_dev != current.st_dev
+        or opened.st_ino != current.st_ino
+    ):
+        raise OSError(f"journal target changed during append: {path}")
+
+
+def _assert_no_symlink_ancestors(path: Path) -> None:
+    absolute = Path(path).absolute()
+    for ancestor in reversed(absolute.parents):
+        if ancestor.is_symlink():
+            raise OSError(f"path ancestor symlink is forbidden: {ancestor}")
+        if ancestor.exists() and not ancestor.is_dir():
+            raise OSError(f"path ancestor must be a directory: {ancestor}")
+
+
 def partition_path_files(partition_path: Path) -> tuple[Path, ...]:
     """Return the legacy base file followed by validated rotated shards."""
 
     base = Path(partition_path)
+    _assert_no_symlink_ancestors(base)
     indexed: list[tuple[int, Path]] = []
-    if base.exists():
+    if base.exists() or base.is_symlink():
+        _assert_regular_partition_file(base)
         indexed.append((0, base))
     pattern = f"{base.stem}.part-*{base.suffix}"
     for candidate in base.parent.glob(pattern):
+        _assert_regular_partition_file(candidate)
         index = _shard_index(base, candidate)
         if index > 0:
             indexed.append((index, candidate))
@@ -964,16 +1098,18 @@ def readable_partition_path_files(partition_path: Path) -> tuple[Path, ...]:
     """Discover one contiguous partition from plain or post-session gzip shards."""
 
     base = Path(partition_path)
+    _assert_no_symlink_ancestors(base)
     indexed: dict[int, Path] = {}
     candidates: list[Path] = []
-    if base.exists():
+    if base.exists() or base.is_symlink():
         candidates.append(base)
     compressed_base = base.with_suffix(f"{base.suffix}.gz")
-    if compressed_base.exists():
+    if compressed_base.exists() or compressed_base.is_symlink():
         candidates.append(compressed_base)
     candidates.extend(base.parent.glob(f"{base.stem}.part-*{base.suffix}"))
     candidates.extend(base.parent.glob(f"{base.stem}.part-*{base.suffix}.gz"))
     for candidate in candidates:
+        _assert_regular_partition_file(candidate)
         logical = candidate.with_suffix("") if candidate.suffix == ".gz" else candidate
         index = _shard_index(base, logical)
         if index in indexed:
@@ -986,19 +1122,39 @@ def readable_partition_path_files(partition_path: Path) -> tuple[Path, ...]:
     return tuple(path for _index, path in ordered)
 
 
+def _assert_regular_partition_file(path: Path) -> None:
+    if path.is_symlink():
+        raise OSError(f"path partition shard symlink is forbidden: {path}")
+    if not path.is_file():
+        raise OSError(f"path partition shard must be a regular file: {path}")
+
+
 def write_market_path_manifest(
     partition_path: Path,
     *,
     storage_policy: PathStoragePolicy,
     active_shard_index: int,
+    _partition_lock_held: bool = False,
 ) -> Path:
     """Atomically publish a discoverable manifest for all JSONL shards."""
 
+    if not _partition_lock_held:
+        with partition_maintenance_lock(partition_path):
+            return write_market_path_manifest(
+                partition_path,
+                storage_policy=storage_policy,
+                active_shard_index=active_shard_index,
+                _partition_lock_held=True,
+            )
+
     base = Path(partition_path)
-    shards = partition_path_files(base)
+    shards = readable_partition_path_files(base)
     if not shards:
         raise ValueError("cannot write a manifest without path shards")
-    if _shard_index(base, shards[-1]) != active_shard_index:
+    last_logical = (
+        shards[-1].with_suffix("") if shards[-1].suffix == ".gz" else shards[-1]
+    )
+    if _shard_index(base, last_logical) != active_shard_index:
         raise ValueError("active shard does not match discovered shard sequence")
     payload = {
         "schema": MARKET_PATH_MANIFEST_SCHEMA,
@@ -1012,9 +1168,13 @@ def write_market_path_manifest(
         "projection_horizon_sec": storage_policy.projection_horizon_sec,
         "shards": [
             {
-                "index": _shard_index(base, shard),
+                "index": _shard_index(
+                    base,
+                    shard.with_suffix("") if shard.suffix == ".gz" else shard,
+                ),
                 "file": shard.name,
                 "bytes": shard.stat().st_size,
+                "compressed": shard.suffix == ".gz",
             }
             for shard in shards
         ],

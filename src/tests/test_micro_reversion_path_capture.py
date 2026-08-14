@@ -1,8 +1,13 @@
+import errno
 import gzip
 from dataclasses import replace
 import json
 from pathlib import Path
+import threading
 
+import pytest
+
+from src.engine.scalping.micro_reversion import path_capture as path_capture_module
 from src.engine.scalping.micro_reversion.contracts import (
     CoverageTier,
     ShockEvent,
@@ -14,10 +19,14 @@ from src.engine.scalping.micro_reversion.observation_adapter import (
 from src.engine.scalping.micro_reversion.path_capture import (
     ParentWavePathCoalescer,
     PathEnvelopeOrderStatus,
+    PathEventReference,
     PathPhase,
     PreEventRingBuffer,
     append_path_event_references,
     load_path_event_references,
+)
+from src.engine.scalping.micro_reversion.path_journal import (
+    partition_maintenance_lock,
 )
 
 BASE_MS = 1_775_779_200_000
@@ -70,6 +79,16 @@ def _event(event_id: str, sequence: int, horizon: int) -> MultiHorizonShockEvent
         rearm_reason="initial_shock" if sequence == 1 else "same_parent_wave",
         event=shock,
     )
+
+
+def _reference(event_id: str, sequence: int = 1) -> PathEventReference:
+    coalescer = ParentWavePathCoalescer(PreEventRingBuffer(max_age_ms=30_000))
+    registration = coalescer.register_event(
+        _event(event_id, sequence, 1_000),
+        sequence_epoch=1,
+        event_exchange_timestamp="2026-04-10T09:00:25+09:00",
+    )
+    return registration.event_reference
 
 
 def test_ring_tracks_gaps_duplicates_and_out_of_order() -> None:
@@ -296,3 +315,209 @@ def test_reference_loader_supports_post_session_gzip(tmp_path: Path) -> None:
         handle.write('{"schema":"reference-test"}\n')
 
     assert load_path_event_references(target) == ({"schema": "reference-test"},)
+
+
+def test_reference_append_holds_shared_partition_lock_through_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = (
+        tmp_path
+        / "trade_date=2026-04-10"
+        / "venue=KRX"
+        / "session=KRX_REGULAR"
+        / "market_stream_event_references.jsonl"
+    )
+    reached_fsync = threading.Event()
+    release_fsync = threading.Event()
+    errors: list[BaseException] = []
+    real_fsync = path_capture_module.os.fsync
+
+    def blocking_fsync(descriptor: int) -> None:
+        reached_fsync.set()
+        if not release_fsync.wait(timeout=5):
+            raise TimeoutError("reference append test did not release fsync")
+        real_fsync(descriptor)
+
+    def append_reference() -> None:
+        try:
+            append_path_event_references(target, (_reference("evt-lock"),))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    monkeypatch.setattr(path_capture_module.os, "fsync", blocking_fsync)
+    writer = threading.Thread(target=append_reference)
+    writer.start()
+    assert reached_fsync.wait(timeout=5)
+    try:
+        with pytest.raises(BlockingIOError):
+            with partition_maintenance_lock(
+                target,
+                blocking=False,
+                exclusive=True,
+            ):
+                pass
+    finally:
+        release_fsync.set()
+        writer.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert errors == []
+    assert load_path_event_references(target)[0]["shock_event_id"] == "evt-lock"
+
+
+def test_reference_append_after_compression_fails_closed_without_mutation(
+    tmp_path: Path,
+) -> None:
+    target = (
+        tmp_path
+        / "trade_date=2026-04-10"
+        / "venue=KRX"
+        / "session=KRX_REGULAR"
+        / "market_stream_event_references.jsonl"
+    )
+    append_path_event_references(target, (_reference("evt-before"),))
+    compressed = target.with_suffix(".jsonl.gz")
+    with target.open("rb") as source, gzip.open(compressed, "wb") as output:
+        output.write(source.read())
+    target.unlink()
+
+    original = compressed.read_bytes()
+    with pytest.raises(OSError, match="partition is closed"):
+        append_path_event_references(target, (_reference("evt-after", 2),))
+
+    assert not target.exists()
+    assert compressed.read_bytes() == original
+    assert not target.with_name(
+        "market_stream_event_references.part-000001.jsonl"
+    ).exists()
+    assert [row["shock_event_id"] for row in load_path_event_references(target)] == [
+        "evt-before"
+    ]
+
+
+def test_reference_append_rejects_invalid_existing_gzip_without_mutation(
+    tmp_path: Path,
+) -> None:
+    target = (
+        tmp_path
+        / "trade_date=2026-04-10"
+        / "venue=KRX"
+        / "session=KRX_REGULAR"
+        / "market_stream_event_references.jsonl"
+    )
+    target.parent.mkdir(parents=True)
+    compressed = target.with_suffix(".jsonl.gz")
+    compressed.write_bytes(b"not-a-gzip")
+    original = compressed.read_bytes()
+
+    with pytest.raises(OSError, match="partition is closed"):
+        append_path_event_references(target, (_reference("evt-invalid"),))
+
+    assert compressed.read_bytes() == original
+    assert not target.with_name(
+        "market_stream_event_references.part-000001.jsonl"
+    ).exists()
+
+
+def test_reference_plain_append_rolls_back_partial_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = (
+        tmp_path
+        / "trade_date=2026-04-10"
+        / "venue=KRX"
+        / "session=KRX_REGULAR"
+        / "market_stream_event_references.jsonl"
+    )
+    target.parent.mkdir(parents=True)
+    append_path_event_references(target, (_reference("evt-before"),))
+    original = target.read_bytes()
+    real_write = path_capture_module.os.write
+    write_count = 0
+
+    def partial_then_enospc(descriptor: int, payload: memoryview) -> int:
+        nonlocal write_count
+        write_count += 1
+        if write_count == 1:
+            return real_write(descriptor, payload[: max(1, len(payload) // 2)])
+        raise OSError(errno.ENOSPC, "injected_reference_enospc")
+
+    monkeypatch.setattr(path_capture_module.os, "write", partial_then_enospc)
+    with pytest.raises(OSError, match="injected_reference_enospc"):
+        append_path_event_references(target, (_reference("evt-failed", 2),))
+
+    assert target.read_bytes() == original
+    assert [row["shock_event_id"] for row in load_path_event_references(target)] == [
+        "evt-before"
+    ]
+
+    monkeypatch.setattr(path_capture_module.os, "write", real_write)
+    append_path_event_references(target, (_reference("evt-after", 3),))
+    assert [row["shock_event_id"] for row in load_path_event_references(target)] == [
+        "evt-before",
+        "evt-after",
+    ]
+
+
+@pytest.mark.parametrize("compressed_target", [False, True])
+def test_reference_append_rejects_external_symlink_target(
+    tmp_path: Path,
+    compressed_target: bool,
+) -> None:
+    target = (
+        tmp_path
+        / "trade_date=2026-04-10"
+        / "venue=KRX"
+        / "session=KRX_REGULAR"
+        / "market_stream_event_references.jsonl"
+    )
+    target.parent.mkdir(parents=True)
+    selected = target.with_suffix(".jsonl.gz") if compressed_target else target
+    external = tmp_path.parent / (
+        f"{tmp_path.name}-external.jsonl.gz"
+        if compressed_target
+        else f"{tmp_path.name}-external.jsonl"
+    )
+    external.write_bytes(
+        gzip.compress(b'{"external":true}\n', mtime=0)
+        if compressed_target
+        else b'{"external":true}\n'
+    )
+    original = external.read_bytes()
+    selected.symlink_to(external)
+
+    with pytest.raises(OSError, match="symlink"):
+        append_path_event_references(target, (_reference("evt-symlink"),))
+
+    assert selected.is_symlink()
+    assert external.read_bytes() == original
+    peer = target if compressed_target else target.with_suffix(".jsonl.gz")
+    assert not peer.exists()
+    with pytest.raises(OSError, match="symlink"):
+        load_path_event_references(target)
+
+
+def test_reference_append_and_load_reject_symlinked_session_ancestor(
+    tmp_path: Path,
+) -> None:
+    venue_dir = tmp_path / "trade_date=2026-04-10" / "venue=KRX"
+    external = tmp_path.parent / f"{tmp_path.name}-external-session"
+    venue_dir.mkdir(parents=True)
+    external.mkdir()
+    session = venue_dir / "session=KRX_REGULAR"
+    session.symlink_to(external, target_is_directory=True)
+    target = session / "market_stream_event_references.jsonl"
+
+    with pytest.raises(OSError, match="ancestor symlink"):
+        append_path_event_references(target, (_reference("evt-ancestor"),))
+    assert not (external / target.name).exists()
+
+    external_source = external / target.name
+    external_source.write_text('{"external":true}\n', encoding="utf-8")
+    original = external_source.read_bytes()
+    with pytest.raises(OSError, match="ancestor symlink"):
+        load_path_event_references(target)
+
+    assert external_source.read_bytes() == original

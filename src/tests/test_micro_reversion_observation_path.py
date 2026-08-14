@@ -1,6 +1,8 @@
+import gzip
 import json
 import threading
 import time
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -17,8 +19,13 @@ from src.engine.scalping.micro_reversion.path_journal import (
     NonBlockingPathJournalWriter,
     PathStoragePolicy,
     append_market_path_points,
+    partition_maintenance_lock,
     partition_path_files,
     readable_partition_path_files,
+    write_market_path_manifest,
+)
+from src.engine.scalping.micro_reversion.storage_maintenance import (
+    maintain_forward_storage,
 )
 from src.engine.scalping.micro_reversion.tax import (
     InstrumentType,
@@ -129,6 +136,58 @@ def test_market_path_batch_requires_monotonic_sequence(tmp_path: Path) -> None:
         append_market_path_points(output, [_point(2), _point(1)])
 
 
+def test_market_path_append_rejects_external_symlink_target(tmp_path: Path) -> None:
+    output = (
+        tmp_path
+        / "trade_date=2026-08-08"
+        / "venue=KRX"
+        / "session=KRX_REGULAR"
+        / "market_path.jsonl"
+    )
+    output.parent.mkdir(parents=True)
+    external = tmp_path.parent / f"{tmp_path.name}-external.jsonl"
+    external.write_text('{"external":true}\n', encoding="utf-8")
+    original = external.read_bytes()
+    output.symlink_to(external)
+
+    with pytest.raises(OSError, match="symlink"):
+        append_market_path_points(output, [_point(1)])
+
+    assert output.is_symlink()
+    assert external.read_bytes() == original
+
+
+def test_market_path_writer_and_manifest_reject_symlinked_session_ancestor(
+    tmp_path: Path,
+) -> None:
+    venue_dir = tmp_path / "trade_date=2026-08-08" / "venue=KRX"
+    external = tmp_path.parent / f"{tmp_path.name}-external-session"
+    venue_dir.mkdir(parents=True)
+    external.mkdir()
+    session = venue_dir / "session=KRX_REGULAR"
+    session.symlink_to(external, target_is_directory=True)
+    output = session / "market_path.jsonl"
+
+    with pytest.raises(OSError, match="ancestor symlink"):
+        append_market_path_points(output, [_point(1)])
+    assert not (external / output.name).exists()
+
+    external_source = external / output.name
+    external_source.write_text('{"external":true}\n', encoding="utf-8")
+    original = external_source.read_bytes()
+    policy = PathStoragePolicy()
+    external_manifest = external / policy.manifest_path(output).name
+    with pytest.raises(OSError, match="ancestor symlink"):
+        write_market_path_manifest(
+            output,
+            storage_policy=policy,
+            active_shard_index=0,
+        )
+
+    assert external_source.read_bytes() == original
+    assert not external_manifest.exists()
+
+
 def test_nonblocking_writer_records_queue_drop(tmp_path: Path, monkeypatch) -> None:
     entered = threading.Event()
     release = threading.Event()
@@ -138,7 +197,7 @@ def test_nonblocking_writer_records_queue_drop(tmp_path: Path, monkeypatch) -> N
         release.wait(timeout=2)
 
     monkeypatch.setattr(
-        "src.engine.scalping.micro_reversion.path_journal.append_market_path_points",
+        "src.engine.scalping.micro_reversion.path_journal._append_market_path_points_locked",
         blocked_append,
     )
     writer = NonBlockingPathJournalWriter(
@@ -173,7 +232,7 @@ def test_close_does_not_depend_on_queue_shutdown_marker(
         release.wait(timeout=2)
 
     monkeypatch.setattr(
-        "src.engine.scalping.micro_reversion.path_journal.append_market_path_points",
+        "src.engine.scalping.micro_reversion.path_journal._append_market_path_points_locked",
         blocked_append,
     )
     writer = NonBlockingPathJournalWriter(
@@ -243,7 +302,7 @@ def test_storage_policy_partitions_by_date_venue_and_session(tmp_path: Path) -> 
     )
 
     assert path.relative_to(tmp_path).as_posix() == (
-        "trade_date=2026-08-08/venue=KRX/" "session=KRX_REGULAR/market_path.jsonl"
+        "trade_date=2026-08-08/venue=KRX/session=KRX_REGULAR/market_path.jsonl"
     )
 
 
@@ -486,3 +545,87 @@ def test_writer_rejects_cross_batch_sequence_regression(tmp_path: Path) -> None:
     assert metrics.persisted_envelope_count == 1
     assert metrics.journal_writer_error_count == 1
     assert metrics.journal_dropped_envelopes == 1
+
+
+def test_partition_lock_allows_parallel_writers_and_excludes_maintenance(
+    tmp_path: Path,
+) -> None:
+    base = (
+        tmp_path
+        / "trade_date=2026-08-08"
+        / "venue=KRX"
+        / "session=KRX_REGULAR"
+        / "market_path.jsonl"
+    )
+    acquired = threading.Event()
+
+    def acquire_writer_lock() -> None:
+        with partition_maintenance_lock(base):
+            acquired.set()
+
+    with partition_maintenance_lock(base):
+        thread = threading.Thread(target=acquire_writer_lock)
+        thread.start()
+        assert acquired.wait(timeout=1)
+        thread.join(timeout=1)
+        with pytest.raises(BlockingIOError):
+            with partition_maintenance_lock(
+                base,
+                blocking=False,
+                exclusive=True,
+            ):
+                raise AssertionError("exclusive maintenance lock unexpectedly acquired")
+
+
+def test_writer_late_append_advances_after_closed_shard_compression(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "forward"
+    base = (
+        root
+        / "trade_date=2026-08-08"
+        / "venue=KRX"
+        / "session=KRX_REGULAR"
+        / "market_path.jsonl"
+    )
+    first = NonBlockingPathJournalWriter(
+        base,
+        max_batch_size=1,
+        flush_interval_sec=0.01,
+    )
+    first.start()
+    assert first.submit(_point(1)) is True
+    first.close()
+
+    maintenance = maintain_forward_storage(
+        root,
+        as_of_date=date(2026, 8, 10),
+        storage_policy=PathStoragePolicy(compression_after_days=1),
+        apply=True,
+    )
+    assert maintenance["status"] == "pass"
+    assert not base.exists()
+    compressed = base.with_suffix(".jsonl.gz")
+    assert compressed.exists()
+
+    late = NonBlockingPathJournalWriter(
+        base,
+        max_batch_size=1,
+        flush_interval_sec=0.01,
+    )
+    late.start()
+    assert late.submit(_point(2)) is True
+    late.close()
+
+    next_shard = base.with_name("market_path.part-000001.jsonl")
+    assert next_shard.exists()
+    with gzip.open(compressed, "rt", encoding="utf-8") as handle:
+        assert json.loads(handle.readline())["series_sequence"] == 1
+    assert json.loads(next_shard.read_text(encoding="utf-8"))["series_sequence"] == 2
+    manifest = json.loads(
+        base.with_name("market_path.manifest.json").read_text(encoding="utf-8")
+    )
+    assert [row["file"] for row in manifest["shards"]] == [
+        "market_path.jsonl.gz",
+        "market_path.part-000001.jsonl",
+    ]

@@ -9,8 +9,10 @@ from __future__ import annotations
 import hashlib
 import fcntl
 import gzip
+import io
 import json
 import os
+import stat
 import threading
 from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
@@ -21,7 +23,16 @@ from typing import Any, Iterable
 
 from .multi_horizon import MultiHorizonShockEvent
 from .observation_adapter import RawMarketObservation
-from .path_journal import AggressorSide, MarketPathPoint, MarketStreamPoint
+from .path_journal import (
+    AggressorSide,
+    MarketPathPoint,
+    MarketStreamPoint,
+    _assert_no_symlink_ancestors,
+    _assert_open_descriptor_matches_path,
+    _open_append_regular_nofollow,
+    partition_maintenance_lock,
+    readable_partition_path_files,
+)
 
 PATH_REFERENCE_SCHEMA = "scalp_micro_reversion_path_event_reference_v2"
 PATH_CAPTURE_AUTHORITY = "forward_path_observation_only_no_policy_selection"
@@ -723,44 +734,101 @@ def append_path_event_references(
     if not materialized:
         return
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
     encoded = b"".join(
         (json.dumps(reference.as_dict(), sort_keys=True) + "\n").encode("utf-8")
         for reference in materialized
     )
-    descriptor = os.open(target, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o640)
-    try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        remaining = memoryview(encoded)
-        while remaining:
-            written = os.write(descriptor, remaining)
-            if written <= 0:
-                raise OSError("path reference append made no progress")
-            remaining = remaining[written:]
-        os.fsync(descriptor)
-    finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
+    with partition_maintenance_lock(target):
+        _assert_no_symlink_ancestors(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _assert_no_symlink_ancestors(target)
+        shards = readable_partition_path_files(target)
+        # Reference reconciliation has one canonical filename and no manifest
+        # handoff for late logical shards. Once maintenance publishes any gzip
+        # (or a legacy shard is present), fail closed instead of mutating the
+        # gzip in place or accepting a row that production cannot discover.
+        if any(shard.suffix == ".gz" for shard in shards) or len(shards) > 1:
+            raise OSError("compressed or sharded reference partition is closed")
+        append_target = target
+        descriptor = _open_append_regular_nofollow(
+            append_target,
+            allow_create=True,
+        )
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            original_size = os.fstat(descriptor).st_size
+            try:
+                remaining = memoryview(encoded)
+                while remaining:
+                    written = os.write(descriptor, remaining)
+                    if written <= 0:
+                        raise OSError("path reference append made no progress")
+                    remaining = remaining[written:]
+                os.fsync(descriptor)
+                _assert_open_descriptor_matches_path(descriptor, append_target)
+            except BaseException:
+                # JSONL append is restored to the exact previous byte boundary
+                # before releasing the per-file lock.  This keeps both the
+                # old gzip history and an existing/new plain tail readable
+                # after ENOSPC or an interrupted short write.
+                os.ftruncate(descriptor, original_size)
+                os.fsync(descriptor)
+                raise
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
 
 def load_path_event_references(path: Path) -> tuple[dict[str, Any], ...]:
     """Load current plain or post-session compressed event-window references."""
 
     plain = Path(path)
-    compressed = plain.with_suffix(f"{plain.suffix}.gz")
-    if plain.exists() and compressed.exists():
-        raise ValueError("plain and compressed reference files overlap")
-    selected = plain if plain.exists() else compressed
-    if not selected.exists():
-        return ()
-    opener = gzip.open if selected.suffix == ".gz" else open
+    with partition_maintenance_lock(plain):
+        _assert_no_symlink_ancestors(plain)
+        return _load_reference_shards(readable_partition_path_files(plain))
+
+
+def _load_reference_shards(shards: tuple[Path, ...]) -> tuple[dict[str, Any], ...]:
     rows: list[dict[str, Any]] = []
-    with opener(selected, "rt", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            if not isinstance(row, dict):
-                raise ValueError("path event reference row must be an object")
-            rows.append(row)
+    for selected in shards:
+        rows.extend(_load_reference_shard(selected))
     return tuple(rows)
+
+
+def _load_reference_shard(selected: Path) -> list[dict[str, Any]]:
+    descriptor = os.open(
+        selected,
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0),
+    )
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH)
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise OSError("path reference source must be a regular file")
+        rows: list[dict[str, Any]] = []
+        raw = os.fdopen(descriptor, "rb", closefd=False)
+        binary = (
+            gzip.GzipFile(fileobj=raw, mode="rb") if selected.suffix == ".gz" else raw
+        )
+        with io.TextIOWrapper(binary, encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    raise ValueError("path event reference row must be an object")
+                rows.append(row)
+        current = selected.lstat()
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or opened.st_dev != current.st_dev
+            or opened.st_ino != current.st_ino
+        ):
+            raise OSError("path reference source changed during read")
+        return rows
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
