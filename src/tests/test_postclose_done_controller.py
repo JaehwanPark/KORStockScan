@@ -1979,18 +1979,6 @@ def test_limit_down_no_observation_is_done_acceptable_warning():
     }.issubset(mod.DONE_ACCEPTABLE_WARNING_ISSUES)
 
 
-def test_upper_limit_source_block_is_done_acceptable_warning():
-    assert {
-        "upper_limit_watch_candidate_source_missing",
-        "upper_limit_watch_candidate_source_quality_blocked",
-        "upper_limit_watch_cumulative_source_invalid",
-        "upper_limit_watch_event_source_invalid",
-        "upper_limit_watch_ordered_path_not_observed",
-        "upper_limit_watch_auto_live_policy_ready",
-        "upper_limit_watch_source_blocked",
-    }.issubset(mod.DONE_ACCEPTABLE_WARNING_ISSUES)
-
-
 def test_postclose_done_controller_blocks_done_when_codex_runner_incomplete_is_required(
     monkeypatch, tmp_path
 ):

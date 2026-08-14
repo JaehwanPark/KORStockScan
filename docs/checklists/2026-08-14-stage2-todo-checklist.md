@@ -120,6 +120,13 @@
   - 금지: candidate count, mark-price MFE, daily-only win rate만으로 broker 주문, 취소, 자동매도, 수량/cap, hard safety, provider/bot 또는 PREOPEN live 승격을 열지 않는다. 기존 `position_sizing_dynamic_formula -> probe-first` 수량 owner와 episode/widget order ledger를 변경하거나 공유하지 않는다.
   - 다음 액션: `outcome_join_ready_positive_ev`, `outcome_join_ready_non_positive_ev`, `fill_feasibility_unresolved`, `source_quality_blocked`, `sample_floor_pending` 중 하나로 닫는다.
 
+- [x] `[UpperLimitRotationRetirement0814] 전일 상한가 순환관찰·bounded-live 자동전환 전체 폐기` (`Due: 2026-08-14`, `Slot: INTRADAY`, `TimeWindow: 11:40~13:30`, `Track: ScalpingLogic`)
+  - Source: [Plan Rebase](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [traceability](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [postclose wrapper](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [scalping scanner](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py)
+  - 판정: 사용자 명시 지시에 따라 `upper_limit_watch` 후보·WS 관찰·rising 슬롯 회수·scanner 승격·bounded-live 정책·장후 report/verifier/controller 소비자를 제거하고 기존 산출물을 archive/audit evidence로만 고정한다.
+  - 적용 경계: 현재 PID `193679`는 11:34:59 KST에 변경 전 코드로 시작했으며 이 작업에서는 bot을 재기동하지 않았다. source tree와 다음 기동 경로에서는 폐기됐지만, 현재 프로세스의 메모리 내 observer 해제는 별도 승인된 우아한 재기동 시점에 완료한다.
+  - 경계: 일반 상한가 근접 추격매수 차단, 보유종목 상한가 도달 청산, limit-down 관찰, opening/rising 예산과 provider·bot·수량·broker/hard-safety는 변경하지 않는다.
+  - 재개 조건: 기존 플래그나 과거 artifact로 재활성화하지 않으며, 향후 재검토는 신규 workorder·namespace·증거계약·runtime guard를 요구한다.
+
 
 
 
