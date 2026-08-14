@@ -190,6 +190,7 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "raw_flow_action",
     "reference_time",
     "reference_price",
+    "reference_buy_price",
     "reason",
     "recheck_contract_version",
     "recheck_deadline_lag_sec",

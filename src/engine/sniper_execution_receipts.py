@@ -5,6 +5,7 @@ import threading
 import time
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.database.models import RecommendationHistory
 from src.engine.scalping.opening_rotation import (
@@ -24,6 +25,10 @@ from src.engine.scalping.entry_candidate_lifecycle_state import (
     observe_candidate_transition_safe,
 )
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
+from src.engine.scalping.main_lifecycle_journal import (
+    pipeline_lifecycle_fields_safe,
+    pipeline_lifecycle_stage_mapped,
+)
 from src.engine.scalping.rising_missed_one_share_entry import (
     scout_ai_execution_attribution_fields,
 )
@@ -68,6 +73,34 @@ _broker_snapshot_refresh_callback = None
 # 테스트/단독 사용 시에는 _STATE_LOCK이 없을 수 있으므로 RECEIPT_LOCK을 fallback으로 둡니다.
 RECEIPT_LOCK = threading.RLock()
 _STATE_LOCK = None
+_KST = ZoneInfo("Asia/Seoul")
+
+_MAIN_LIFECYCLE_GENERATED_PIPELINE_FIELDS = frozenset(
+    {
+        "attempt_id",
+        "main_lifecycle_identity_schema",
+        "main_lifecycle_id",
+        "main_lifecycle_attempt_id",
+        "main_lifecycle_record_id",
+        "main_lifecycle_stock_code",
+        "main_lifecycle_trade_date",
+        "main_lifecycle_observed_at",
+        "main_lifecycle_venue",
+        "main_lifecycle_session_bucket",
+        "main_lifecycle_source_pipeline",
+        "main_lifecycle_source_stage",
+        "main_lifecycle_stage",
+        "main_lifecycle_decision_authority",
+        "main_lifecycle_runtime_effect",
+        "main_lifecycle_order_authority",
+        "main_lifecycle_provider_authority",
+        "main_lifecycle_market_observation_expected",
+        "main_lifecycle_bbo_observed",
+        "main_lifecycle_depth_observed",
+        "main_lifecycle_heartbeat",
+        "main_lifecycle_decision_trace_id",
+    }
+)
 
 
 def _active_state_lock():
@@ -234,6 +267,18 @@ _SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS = (
     "rising_missed_scout_parent_ai_probe_intent_after_cost_reward_risk",
 )
 _ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS = (ENTRY_CANDIDATE_LIFECYCLE_CONTEXT_KEY,)
+_MAIN_LIFECYCLE_SNAPSHOT_KEYS = (
+    "id",
+    "scanner_generation_id",
+    "effective_venue",
+    "rising_missed_effective_venue",
+    "entry_setup_live_policy_effective_venue",
+    "market_session_bucket",
+    "rising_missed_market_session_bucket",
+    "entry_setup_live_policy_session_bucket",
+    "last_watching_ai_decision_trace_id",
+    "last_watching_ai_attempt_decision_trace_id",
+)
 _GENERAL_ENTRY_MARGIN_POSITION_KEYS = (
     "general_entry_margin_authority_reason",
     "general_entry_margin_cash_guard_bypassed",
@@ -255,6 +300,7 @@ _GENERAL_ENTRY_MARGIN_POSITION_KEYS = (
 )
 _BUY_RECEIPT_SNAPSHOT_KEYS = (
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
+    *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
     "buy_execution_notified",
     "buy_price",
     "buy_qty",
@@ -296,6 +342,7 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
 )
 _SELL_RECEIPT_SNAPSHOT_KEYS = (
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
+    *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
     "actual_order_submitted",
     "broker_order_forbidden",
@@ -371,6 +418,7 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
 )
 _ADD_RECEIPT_SNAPSHOT_KEYS = (
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
+    *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
     "actual_order_submitted",
     "add_count",
     "avg_down_count",
@@ -756,10 +804,45 @@ def bind_execution_dependencies(
 
 
 def _log_holding_pipeline(
-    name, code, target_id, stage, *, candidate_stock=None, **fields
+    name,
+    code,
+    target_id,
+    stage,
+    *,
+    candidate_stock=None,
+    observed_at=None,
+    observe_candidate_lifecycle=True,
+    **fields,
 ):
+    lifecycle_stage_mapped = pipeline_lifecycle_stage_mapped(
+        pipeline="HOLDING_PIPELINE",
+        source_stage=stage,
+    )
+    for field_name in _MAIN_LIFECYCLE_GENERATED_PIPELINE_FIELDS:
+        if field_name != "attempt_id" or lifecycle_stage_mapped:
+            fields.pop(field_name, None)
     if isinstance(candidate_stock, dict):
-        observe_candidate_transition_safe(candidate_stock, code, stage, fields)
+        trusted_observed_at = observed_at
+        if isinstance(trusted_observed_at, datetime):
+            if trusted_observed_at.tzinfo is None:
+                trusted_observed_at = trusted_observed_at.replace(tzinfo=_KST)
+            else:
+                trusted_observed_at = trusted_observed_at.astimezone(_KST)
+        identity_stock = dict(candidate_stock)
+        identity_stock.setdefault("id", target_id)
+        identity_stock.setdefault("code", code)
+        fields.update(
+            pipeline_lifecycle_fields_safe(
+                identity_stock,
+                code,
+                pipeline="HOLDING_PIPELINE",
+                source_stage=stage,
+                source_fields=fields,
+                observed_at=trusted_observed_at,
+            )
+        )
+        if observe_candidate_lifecycle:
+            observe_candidate_transition_safe(candidate_stock, code, stage, fields)
     emit_pipeline_event(
         "HOLDING_PIPELINE",
         name,
@@ -781,6 +864,56 @@ def _trailing_continuation_receipt_fields(stock: dict[str, Any]) -> dict[str, An
             or "-"
         ),
     }
+
+
+def _main_lifecycle_exit_economics_fields(
+    stock: dict[str, Any],
+    *,
+    buy_price: float,
+    sell_price: float,
+    sell_qty: int,
+    realized_net_pnl_krw: float,
+    decision_price: float | None = None,
+    decision_basis_source: str | None = None,
+) -> dict[str, Any]:
+    """Return receipt-derived economics without inventing a slippage basis."""
+
+    if buy_price <= 0 or sell_price <= 0 or sell_qty <= 0:
+        return {}
+    gross_pnl_krw = (sell_price - buy_price) * sell_qty
+    fields = {
+        "main_lifecycle_realized_net_pnl_krw": round(
+            realized_net_pnl_krw, 4
+        ),
+    }
+    implied_fees_taxes_krw = gross_pnl_krw - realized_net_pnl_krw
+    if implied_fees_taxes_krw >= -0.01:
+        fields["main_lifecycle_fees_taxes_krw"] = round(
+            max(0.0, implied_fees_taxes_krw), 4
+        )
+    resolved_decision_price = _safe_float(decision_price, 0.0)
+    resolved_basis_source = str(decision_basis_source or "").strip()
+    if decision_price is None:
+        for field_name in (
+            "fast_exit_decision_executable_sell_price",
+            "exit_decision_executable_sell_price",
+        ):
+            candidate = _safe_float(stock.get(field_name), 0.0)
+            if candidate > 0:
+                resolved_decision_price = candidate
+                resolved_basis_source = field_name
+                break
+    if resolved_decision_price > 0:
+        fields["main_lifecycle_slippage_krw"] = round(
+            max(0.0, (resolved_decision_price - sell_price) * sell_qty), 4
+        )
+        fields["main_lifecycle_slippage_basis_price"] = round(
+            resolved_decision_price, 4
+        )
+        fields["main_lifecycle_slippage_basis_source"] = (
+            resolved_basis_source or "explicit_exit_decision_price"
+        )
+    return fields
 
 
 def _run_probe_fill_continuation(target_stock: dict[str, Any], code: str) -> None:
@@ -1591,6 +1724,23 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
             f"invalid fill requested={requested_qty} filled={filled_before} exec_qty={exec_qty}"
         )
         return
+    partial_decision_price = _safe_float(target_stock.get("sell_target_price"), 0.0)
+    partial_realized_net_pnl_krw = calculate_net_realized_pnl(
+        safe_buy_price,
+        exec_price,
+        effective_exec_qty,
+    )
+    partial_lifecycle_economics = _main_lifecycle_exit_economics_fields(
+        target_stock,
+        buy_price=safe_buy_price,
+        sell_price=float(exec_price),
+        sell_qty=effective_exec_qty,
+        realized_net_pnl_krw=partial_realized_net_pnl_krw,
+        decision_price=partial_decision_price,
+        decision_basis_source=(
+            "nxt_rising_missed_tp1_partial_sell_target_price"
+        ),
+    )
 
     filled_qty = filled_before + effective_exec_qty
     fill_amount = max(
@@ -1630,12 +1780,20 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
             code,
             target_id,
             "nxt_rising_missed_tp1_partial_fill_progress",
+            candidate_stock=target_stock,
+            observed_at=now,
+            observe_candidate_lifecycle=False,
             ord_no=order_no or "-",
             fill_qty=effective_exec_qty,
             filled_qty=filled_qty,
             requested_qty=requested_qty,
             runner_qty=runner_qty,
             fill_price=exec_price,
+            main_lifecycle_exit_qty=effective_exec_qty,
+            main_lifecycle_exit_price=exec_price,
+            **partial_lifecycle_economics,
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
             runtime_effect=True,
         )
         return
@@ -1671,9 +1829,15 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
         code,
         target_id,
         "nxt_rising_missed_tp1_partial_sell_completed",
+        candidate_stock=target_stock,
+        observed_at=now,
+        observe_candidate_lifecycle=False,
         ord_no=order_no or "-",
         sell_price=avg_sell_price,
         sold_qty=filled_qty,
+        main_lifecycle_exit_qty=effective_exec_qty,
+        main_lifecycle_exit_price=exec_price,
+        **partial_lifecycle_economics,
         runner_qty=runner_qty,
         realized_profit_pct=f"{realized_profit_pct:+.2f}",
         realized_pnl_krw=realized_pnl_krw,
@@ -1769,12 +1933,16 @@ def _handle_scalp_revive_sell_execution(
                 exec_price,
                 completed_sell_qty,
             )
+            reconciled_full_exit = (
+                position_buy_qty > 0 and completed_sell_qty == position_buy_qty
+            )
             _log_holding_pipeline(
                 target_stock.get("name"),
                 code,
                 target_id,
                 "sell_completed",
                 candidate_stock=target_stock,
+                observed_at=now,
                 order_no=str(order_no or "").strip() or "-",
                 metric_role="execution_quality_real_only",
                 decision_authority="broker_sell_fill_observation_only",
@@ -1793,6 +1961,10 @@ def _handle_scalp_revive_sell_execution(
                 ),
                 sell_price=int(exec_price or 0),
                 sell_qty=completed_sell_qty,
+                main_lifecycle_exit_qty=completed_sell_qty,
+                main_lifecycle_exit_price=int(exec_price or 0),
+                main_lifecycle_broker_reconciled=reconciled_full_exit,
+                main_lifecycle_reconciled_final_exit=reconciled_full_exit,
                 buy_price=f"{safe_buy_price:.2f}",
                 buy_qty=position_buy_qty,
                 realized_pnl_krw=realized_pnl_krw,
@@ -1804,6 +1976,13 @@ def _handle_scalp_revive_sell_execution(
                 revive=True,
                 new_watch_id=int(new_watch_id or 0),
                 **_trailing_continuation_receipt_fields(target_stock),
+                **_main_lifecycle_exit_economics_fields(
+                    target_stock,
+                    buy_price=safe_buy_price,
+                    sell_price=float(exec_price or 0),
+                    sell_qty=completed_sell_qty,
+                    realized_net_pnl_krw=realized_pnl_krw,
+                ),
                 **scout_ai_execution_attribution_fields(
                     target_stock,
                     stage="sell_completed",
@@ -3132,8 +3311,15 @@ def _update_db_for_sell(
                 target_id,
                 "sell_completed",
                 candidate_stock=receipt_snapshot,
+                observed_at=now,
                 order_no=receipt_snapshot.get("sell_execution_order_no") or "-",
-                sell_price=int(exec_price or 0),
+                sell_price=position_weighted_sell_price,
+                last_sell_fill_price=int(exec_price or 0),
+                sell_qty=completed_buy_qty,
+                main_lifecycle_exit_qty=completed_runner_qty,
+                main_lifecycle_exit_price=int(exec_price or 0),
+                main_lifecycle_broker_reconciled=completed_runner_qty > 0,
+                main_lifecycle_reconciled_final_exit=completed_runner_qty > 0,
                 position_weighted_sell_price=position_weighted_sell_price,
                 profit_rate=f"{profit_rate:+.2f}",
                 exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
@@ -3179,6 +3365,13 @@ def _update_db_for_sell(
                 ),
                 effective_venue=receipt_snapshot.get("last_sell_execution_cohort", "-"),
                 actual_order_submitted=True,
+                **_main_lifecycle_exit_economics_fields(
+                    receipt_snapshot,
+                    buy_price=safe_buy_price,
+                    sell_price=float(exec_price or 0),
+                    sell_qty=completed_runner_qty,
+                    realized_net_pnl_krw=runner_realized_pnl_krw,
+                ),
                 **scout_ai_execution_attribution_fields(
                     receipt_snapshot,
                     stage="sell_completed",
@@ -3526,6 +3719,7 @@ def _handle_add_buy_execution(
         target_id,
         "scale_in_executed",
         candidate_stock=target_stock,
+        observed_at=now,
         metric_role="execution_quality_real_only",
         decision_authority="broker_receipt_observation_only",
         runtime_effect=False,
@@ -4098,6 +4292,7 @@ def _handle_entry_buy_execution(
         target_id,
         "position_rebased_after_fill",
         candidate_stock=target_stock,
+        observed_at=now,
         order_no=order_no or "-",
         fill_price=int(exec_price or 0),
         fill_qty=int(effective_exec_qty or 0),
@@ -4148,6 +4343,7 @@ def _handle_entry_buy_execution(
         target_id,
         "holding_started",
         candidate_stock=target_stock,
+        observed_at=now,
         metric_role="execution_quality_real_only",
         decision_authority="broker_receipt_observation_only",
         runtime_effect=False,

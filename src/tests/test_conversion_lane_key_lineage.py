@@ -890,6 +890,66 @@ def test_active_seed_candidate_natural_no_match_does_not_require_seed_lineage(
     assert summary["active_seed_candidate_missing_parent_seed_stage_counts"] == {}
 
 
+def test_key_lineage_ignores_carried_seed_ids_on_explicit_no_match(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    prefix = {
+        "entry_score_parent": "score_watch_recovery",
+        "entry_source_parent": "entry_source_wait6579",
+    }
+    _write(
+        tmp_path
+        / "report"
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target}.json",
+        {},
+    )
+    _write(
+        tmp_path
+        / "threshold_cycle"
+        / "scalp_sim_policies"
+        / f"scalp_sim_policy_catalog_{target}.json",
+        {"active_sim_priority_seeds": []},
+    )
+    _write(
+        tmp_path
+        / "threshold_cycle"
+        / "swing_sim_policies"
+        / f"swing_sim_policy_catalog_{target}.json",
+        {},
+    )
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        json.dumps(
+            {
+                "stage": "scalp_sim_holding_started",
+                "fields": {
+                    "active_seed_candidate_observable_prefix": json.dumps(
+                        prefix, sort_keys=True
+                    ),
+                    "scalp_sim_active_priority_seed_matched": False,
+                    "active_seed_match_source": "no_match",
+                    "active_seed_id": "rising_missed_prior_stale",
+                    "active_seed_matched_ids": ["rising_missed_prior_stale"],
+                    "scalp_sim_auto_policy_active_seed_count": 1,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+    summary = report["summary"]
+
+    assert summary["key_mismatch_count"] == 0
+    assert summary["active_seed_candidate_unmatched_event_count"] == 1
+    assert "rising_missed_prior_stale" not in json.dumps(report, sort_keys=True)
+
+
 def test_key_lineage_infers_followup_parent_seed_from_unique_observable_prefix(
     monkeypatch, tmp_path
 ):

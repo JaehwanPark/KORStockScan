@@ -1,6 +1,6 @@
 # 2026-08-14 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-08-14T16:45:02+09:00
+- generated_at: 2026-08-14T21:52:40+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -56,7 +56,7 @@
 
 ## Rows
 
-- record_id= code=108490 name=로보티즈 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.33 final=None ai=44.0 tick=1.5 micro_vwap=-41.92
+- record_id= code=108490 name=로보티즈 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.33 final=None ai=45.0 tick=1.5 micro_vwap=-0.18
 - record_id=31397 code=093370 name=후성 label=pyramid_overheat_or_reversal_risk blocker=profit_not_enough profit=0.26 final=-0.15 ai=54.0 tick=2.0 micro_vwap=-41.83
 - record_id=32002 code=125490 name=한라캐스트 label=pyramid_overheat_or_reversal_risk blocker=rising_missed_scout_pyramid_bridge_blocked:profit_not_enough profit=0.31 final=0.23 ai=59.0 tick=2.0 micro_vwap=68.15
 - record_id=32227 code=125490 name=한라캐스트 label=pyramid_would_have_helped blocker=pyramid_hard_blocked:micro_vwap_severe_overheated,fresh_micro_confirmation_missing profit=1.7 final=1.86 ai=72.0 tick=1.0 micro_vwap=81.97

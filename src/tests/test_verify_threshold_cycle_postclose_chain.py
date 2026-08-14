@@ -3634,6 +3634,49 @@ def test_active_sim_priority_handoff_fails_unknown_runtime_key(monkeypatch):
     assert status["unknown_consumed_ids"] == ["active_seed_unknown"]
 
 
+def test_active_sim_priority_handoff_ignores_stale_id_on_explicit_no_match(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "active_seed_id": "rising_missed_prior_stale",
+                "active_seed_matched_ids": ["rising_missed_prior_stale"],
+                "scalp_sim_active_priority_seed_matched": False,
+                "active_seed_match_source": "no_match",
+                "active_seed_candidate_observable_prefix": json.dumps(
+                    {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_wait6579",
+                    },
+                    sort_keys=True,
+                ),
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-01",
+        discovery={},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [],
+        },
+        swing_catalog={},
+        preopen_apply={},
+        swing_sim_report={},
+    )
+
+    assert status["status"] == "not_applicable"
+    assert status["observed_seed_ids"] == []
+    assert status["unknown_consumed_ids"] == []
+    assert status["active_priority_match_absence_diagnosis"]["candidate_prefix_count"] == 1
+
+
 def test_active_sim_priority_handoff_reports_inactive_consumed_ids(monkeypatch):
     monkeypatch.setattr(
         mod,

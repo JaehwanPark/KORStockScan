@@ -3431,6 +3431,90 @@ def test_pattern_lab_ai_review_resolves_ldm_policy_floor_alias_with_collection_p
     assert details["allowed_runtime_apply"] is False
 
 
+def test_pattern_lab_ai_review_resolves_partial_ldm_policy_maturity_as_collection():
+    payload = {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "sample_floor": 20,
+        "joined_sample_floor": 10,
+        "window_policy": "same_day_source_bundle_plus_rolling_threshold_cycle_consumer",
+        "summary": {
+            "total_rows": 2964,
+            "joined_rows": 1141,
+            "stage_counts": {"entry": 632, "scale_in": 1115},
+            "complete_flow_count": 6,
+            "join_contract_blocked": False,
+        },
+        "policy_entries": [
+            {
+                "policy_key": "entry:weighted_adm_v1",
+                "stage": "entry",
+                "sample": 632,
+                "joined_sample": 7,
+                "source_quality_gate": "hold_sample",
+                "promote_ready": False,
+            },
+            {
+                "policy_key": "scale_in:weighted_adm_v1",
+                "stage": "scale_in",
+                "sample": 1115,
+                "joined_sample": 1101,
+                "source_quality_gate": "pass",
+                "promote_ready": False,
+            },
+        ],
+        "warnings": [],
+    }
+    context = {
+        "sources": {"lifecycle_decision_matrix": {"summary": mod._summary_for(payload)}}
+    }
+    item = {
+        "review_id": "lifecycle_decision_matrix_policy_maturity",
+        "final_state": "source_quality_gap",
+        "final_decision": "block_runtime_use",
+    }
+
+    status, contract_id, details = mod._source_maturity_resolution(item, context)
+
+    assert status == "resolved_as_observed_sample_maturity_hold"
+    assert contract_id == "lifecycle_decision_matrix_stage_sample_maturity"
+    assert details["policy_entry_count"] == 2
+    assert details["policy_pass_count"] == 1
+    assert details["collection_priority"][0]["stage"] == "scale_in"
+    assert details["collection_priority"][1]["joined_sample_deficit"] == 3
+    assert details["root_cause_closure_status"] == "evidence_collection_open"
+    assert details["runtime_effect"] is False
+
+
+def test_pattern_lab_ai_review_resolves_stale_workorder_root_cause_after_rejudge():
+    context = {
+        "sources": {
+            "code_improvement_workorder": {
+                "exists": True,
+                "path": "/tmp/code_improvement_workorder.json",
+                "summary": {
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "summary": {
+                        "implementation_required_count": 0,
+                        "needs_followup_workorder_count": 0,
+                        "selected_unimplemented_runtime_effect_false_count": 0,
+                    },
+                },
+            }
+        }
+    }
+    item = {
+        "review_id": "code_improvement_workorder_root_cause_open",
+        "final_state": "automation_handoff_gap",
+        "final_decision": "block_runtime_use",
+    }
+
+    assert mod._is_resolved_pattern_lab_code_improvement_pending_source_only_gap(
+        item, context
+    )
+
+
 def test_pattern_lab_ai_review_marks_recursive_workorder_review_id_as_implemented_source_only():
     status, provenance = mod._implementation_marker_for_conclusion(
         {
