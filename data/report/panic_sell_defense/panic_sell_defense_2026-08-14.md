@@ -9,27 +9,27 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-08-14T12:28:02`
-- latest_event_at: `2026-08-14T12:28:05`
+- as_of: `2026-08-14T14:32:01`
+- latest_event_at: `2026-08-14T14:32:09`
 - reasons: `panic thresholds not breached`
 
 ## 입력 자원 계약
 
 - memory_bounded_streaming: `true`
-- scanned_row_count: `106713`
-- retained_exit_event_count: `4421`
+- scanned_row_count: `157466`
+- retained_exit_event_count: `5050`
 - full_event_list_materialized: `false`
 - out_of_order_event_count: `0`
-- unique_market_observation_count: `12549`
-- duplicate_snapshot_skipped_count: `10599`
+- unique_market_observation_count: `16447`
+- duplicate_snapshot_skipped_count: `14136`
 
 ## 패닉 지표
 
 - panic_decision_basis: `real_exit_with_broker_provenance_only`
 - real_exit_provenance_required: `true`
 - real_exit_count: `0`
-- non_real_exit_count: `465`
-- unproven_exit_count: `465`
+- non_real_exit_count: `468`
+- unproven_exit_count: `468`
 - sim_probe_exit_excluded_from_panic: `true`
 - stop_loss_exit_count: `0`
 - current_30m_stop_loss_exit_count: `0`
@@ -47,7 +47,7 @@
 
 ## 회복 지표
 
-- active_positions: `4`
+- active_positions: `3`
 - active_profit_sample: `0`
 - active_avg_unrealized_profit_rate_pct: `-`
 - active_win_rate_pct: `-`
@@ -57,21 +57,21 @@
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `807`
+- evaluated_symbol_count: `898`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `390`
-- degraded_orderbook_count: `390`
-- stale_or_unhealthy_orderbook_count: `10`
+- missing_orderbook_count: `457`
+- degraded_orderbook_count: `457`
+- stale_or_unhealthy_orderbook_count: `11`
 - panic_report_entry_count: `0`
 - panic_active_confirmation_count: `0`
 - recovery_release_transition_count: `0`
 - max_observed_panic_score: `0.4462`
 - panic_near_threshold_observation_count: `0`
-- max_panic_score: `0.3037`
+- max_panic_score: `0.3085`
 - max_recovery_score: `0.6793`
 - micro_cusum_triggered_symbol_count: `0`
 - micro_consensus_pass_symbol_count: `0`
@@ -80,11 +80,11 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_ON`
-- market_panic_breadth_as_of: `2026-08-14T12:28:02`
+- market_panic_breadth_as_of: `2026-08-14T14:32:01`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
-- evaluated_symbol_count: `807`
+- evaluated_symbol_count: `898`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
 - confirmed_risk_off_advisory: `false`

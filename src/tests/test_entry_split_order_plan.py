@@ -1540,6 +1540,17 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
     assert orders[0]["entry_split_order_execution_mode"] == "probe_first_market"
     continuation = orders[0]["entry_split_order_probe_continuation"]
     assert sum(continuation["residual_quantities"]) == 9
+    runtime_state = split_plan.probe_runtime_state_snapshot(
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9)))
+    )
+    reserved_bundle = runtime_state["bundles"][
+        orders[0]["entry_split_order_probe_bundle_id"]
+    ]
+    assert reserved_bundle["phase"] == "planned"
+    assert reserved_bundle["requested_qty"] == 10
+    assert reserved_bundle["continuation"] == continuation
+    assert reserved_bundle["probe_submit_best_ask"] == 10050
+    assert reserved_bundle["timeout_sec"] == 3
 
     residuals, residual_fields = split_plan.build_probe_residual_orders(
         continuation,
@@ -1638,6 +1649,14 @@ def test_probe_first_capacity_counts_all_nonterminal_bundle_phases(
     bundle_id, reason = split_plan._reserve_probe_runtime_bundle(
         stock={"code": "654321", "strategy": "SCALPING"},
         total_qty=2,
+        submit_contract={
+            "continuation": {
+                "requested_qty": 2,
+                "residual_qty": 1,
+                "residual_quantities": [1],
+            },
+            "probe_submit_best_ask": 10_000,
+        },
         now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
     )
 
@@ -1652,11 +1671,55 @@ def test_probe_first_capacity_counts_all_nonterminal_bundle_phases(
     released_bundle_id, released_reason = split_plan._reserve_probe_runtime_bundle(
         stock={"code": "654322", "strategy": "SCALPING"},
         total_qty=2,
+        submit_contract={
+            "continuation": {
+                "requested_qty": 2,
+                "residual_qty": 1,
+                "residual_quantities": [1],
+            },
+            "probe_submit_best_ask": 10_000,
+        },
         now=datetime(2026, 7, 20, 10, 2, tzinfo=timezone(timedelta(hours=9))),
     )
 
     assert released_bundle_id
     assert released_reason == "reserved"
+
+
+def test_probe_runtime_reservation_rejects_incomplete_submit_contract(
+    monkeypatch, tmp_path
+):
+    target_date = "2026-07-20"
+    state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", state_path)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", target_date)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
+
+    bundle_id, reason = split_plan._reserve_probe_runtime_bundle(
+        stock={"code": "654323", "strategy": "SCALPING"},
+        total_qty=2,
+        submit_contract={"continuation": {"requested_qty": 2}},
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert bundle_id == ""
+    assert reason == "probe_submit_contract_invalid"
+    assert state_path.exists() is False
+
+    empty_bundle_id, empty_reason = split_plan._reserve_probe_runtime_bundle(
+        stock={"code": "654324", "strategy": "SCALPING"},
+        total_qty=2,
+        submit_contract={
+            "continuation": {},
+            "probe_submit_best_ask": 10_000,
+        },
+        now=datetime(2026, 7, 20, 10, 1, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert empty_bundle_id == ""
+    assert empty_reason == "probe_submit_contract_invalid"
+    assert state_path.exists() is False
 
 
 def test_allocator_probe_first_applies_to_real_rising_missed_initial_entry(
