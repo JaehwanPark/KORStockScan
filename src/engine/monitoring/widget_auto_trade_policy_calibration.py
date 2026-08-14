@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import statistics
 from dataclasses import dataclass
@@ -27,6 +28,10 @@ from src.engine.monitoring.hanwha_ocean_widget_contract import (
     DEFAULT_OBSERVATION_DIR as HANWHA_OBSERVATION_DIR,
     HANWHA_OCEAN_CODE,
     HANWHA_OCEAN_NAME,
+)
+from src.engine.monitoring.machine_microstructure_attribution import (
+    OUTPUT_DIR as MACHINE_MICROSTRUCTURE_REPORT_DIR,
+    load_prior_owner_diagnostic,
 )
 from src.engine.monitoring.samsung_widget_contract import (
     DEFAULT_OBSERVATION_DIR as SAMSUNG_OBSERVATION_DIR,
@@ -83,6 +88,37 @@ METRIC_CONTRACT = {
         "qualified_KRX_observation_dates_from_2026-08-12"
     ),
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "lifecycle_speed_diagnostics": {
+        "metric_role": "diagnostic_execution_velocity_and_capital_occupancy",
+        "decision_authority": "postclose_diagnostic_only",
+        "window_policy": "per_resolved_or_right_censored_widget_trade_lifecycle",
+        "sample_floor": "one_single_fill_leg_with_aware_entry_and_exit_timestamps",
+        "primary_decision_metric": "cost_aware_realized_return_per_capital_hour",
+        "primary_decision_metric_unit": (
+            "realized_profit_krw_per_capital_occupied_krw_hour"
+        ),
+        "source_quality_gate": (
+            "ordered_aware_timestamps_and_single_leg_exact_occupancy_only"
+        ),
+        "forbidden_uses": [
+            "multi_leg_first_entry_duration_as_exact_capital_occupancy",
+            "speed_or_gross_return_as_policy_selection_authority",
+            "target_cooldown_cap_quantity_or_force_exit_mutation",
+        ],
+        "gross_no_slippage_role": "diagnostic_only_not_live_promotion_authority",
+        "fields": [
+            "gross_no_slippage_avg_return_pct",
+            "median_resolved_holding_duration_sec",
+            "p90_resolved_holding_duration_sec",
+            "target_exit_within_180s_ratio",
+            "observed_occupancy_seconds_sum",
+            "right_censored_occupancy_seconds_sum",
+            "observed_capital_occupied_krw_seconds",
+            "cost_aware_realized_return_per_capital_hour",
+        ],
+        "selection_effect": False,
+        "missing_timestamp_policy": "unknown_not_zero_or_instant_exit",
+    },
     "source_quality_gate": (
         "completed_prior_dates;fresh_actionable_source_rows;valid_completed_bar_ohlc;"
         "venue_and_session_provenance;chronological_holdout_not_used_for_selection;"
@@ -98,6 +134,7 @@ METRIC_CONTRACT = {
         "automatic_process_restart",
         "same_bar_target_after_scale_in_fill",
         "unresolved_samsung_mark_as_realized_profit",
+        "gross_no_slippage_or_speed_diagnostic_as_standalone_policy_authority",
     ],
 }
 
@@ -526,6 +563,68 @@ def _simulate_day(
 def _summary(trades: Sequence[dict[str, Any]]) -> dict[str, Any]:
     resolved = [row for row in trades if row.get("net_return_pct") is not None]
     values = [float(row["net_return_pct"]) for row in resolved]
+    gross_values = [
+        float(row["gross_return_pct"])
+        for row in resolved
+        if row.get("gross_return_pct") is not None
+    ]
+    lifecycle_durations: list[tuple[dict[str, Any], float]] = []
+    for row in trades:
+        try:
+            entry_at = datetime.fromisoformat(str(row.get("entry_at") or ""))
+            exit_at = datetime.fromisoformat(str(row.get("exit_at") or ""))
+        except ValueError:
+            continue
+        if entry_at.tzinfo is None or exit_at.tzinfo is None or exit_at < entry_at:
+            continue
+        lifecycle_durations.append((row, (exit_at - entry_at).total_seconds()))
+    resolved_holding_durations = [
+        duration
+        for row, duration in lifecycle_durations
+        if row.get("net_return_pct") is not None
+    ]
+    target_holding_durations = [
+        duration
+        for row, duration in lifecycle_durations
+        if row.get("exit_reason") == "fixed_average_take_profit"
+    ]
+    right_censored_holding_durations = [
+        duration
+        for row, duration in lifecycle_durations
+        if row.get("exit_reason") == "right_censored"
+    ]
+    observed_capital_occupied_krw_seconds = 0.0
+    observed_cost_aware_realized_profit_krw = 0.0
+    capital_timing_trade_count = 0
+    capital_occupancy_unavailable_multi_leg_trade_count = 0
+    for row, duration in lifecycle_durations:
+        average_price = _positive_price(
+            row.get("average_price") or row.get("entry_price")
+        )
+        try:
+            filled_leg_count = int(row.get("filled_leg_count") or 0)
+        except (TypeError, ValueError):
+            filled_leg_count = 0
+        if average_price is None or filled_leg_count <= 0:
+            continue
+        if filled_leg_count != 1:
+            capital_occupancy_unavailable_multi_leg_trade_count += 1
+            continue
+        notional = average_price * filled_leg_count * WIDGET_AUTO_TRADE_LEG_QUANTITY
+        observed_capital_occupied_krw_seconds += notional * duration
+        capital_timing_trade_count += 1
+        if row.get("net_return_pct") is not None:
+            observed_cost_aware_realized_profit_krw += (
+                notional * float(row["net_return_pct"]) / 100.0
+            )
+    ordered_resolved_durations = sorted(resolved_holding_durations)
+    p90_resolved_duration = (
+        ordered_resolved_durations[
+            max(0, math.ceil(len(ordered_resolved_durations) * 0.9) - 1)
+        ]
+        if ordered_resolved_durations
+        else None
+    )
     dates = sorted({str(row["trade_date"]) for row in trades})
     target_count = sum(
         row.get("exit_reason") == "fixed_average_take_profit" for row in trades
@@ -550,6 +649,66 @@ def _summary(trades: Sequence[dict[str, Any]]) -> dict[str, Any]:
         ),
         "source_quality_adjusted_ev_pct": (
             round(sum(values) / len(resolved), 6) if resolved else None
+        ),
+        "gross_no_slippage_avg_return_pct": (
+            round(statistics.fmean(gross_values), 6) if gross_values else None
+        ),
+        "lifecycle_timing_trade_count": len(lifecycle_durations),
+        "lifecycle_timing_missing_trade_count": len(trades) - len(lifecycle_durations),
+        "median_resolved_holding_duration_sec": (
+            round(statistics.median(resolved_holding_durations), 3)
+            if resolved_holding_durations
+            else None
+        ),
+        "p90_resolved_holding_duration_sec": (
+            round(p90_resolved_duration, 3)
+            if p90_resolved_duration is not None
+            else None
+        ),
+        "target_exit_within_180s_count": sum(
+            duration <= 180.0 for duration in target_holding_durations
+        ),
+        "target_exit_within_180s_ratio": (
+            round(
+                sum(duration <= 180.0 for duration in target_holding_durations)
+                / len(target_holding_durations),
+                6,
+            )
+            if target_holding_durations
+            else None
+        ),
+        "observed_occupancy_seconds_sum": (
+            round(sum(duration for _, duration in lifecycle_durations), 3)
+            if lifecycle_durations
+            else None
+        ),
+        "right_censored_occupancy_seconds_sum": (
+            round(sum(right_censored_holding_durations), 3)
+            if right_censored_holding_durations
+            else None
+        ),
+        "capital_timing_trade_count": capital_timing_trade_count,
+        "capital_occupancy_unavailable_multi_leg_trade_count": (
+            capital_occupancy_unavailable_multi_leg_trade_count
+        ),
+        "observed_capital_occupied_krw_seconds": (
+            round(observed_capital_occupied_krw_seconds, 3)
+            if capital_timing_trade_count
+            else None
+        ),
+        "capital_timing_cohort_cost_aware_realized_net_profit_krw": (
+            round(observed_cost_aware_realized_profit_krw, 3)
+            if capital_timing_trade_count
+            else None
+        ),
+        "cost_aware_realized_return_per_capital_hour": (
+            round(
+                observed_cost_aware_realized_profit_krw
+                / (observed_capital_occupied_krw_seconds / 3600.0),
+                9,
+            )
+            if observed_capital_occupied_krw_seconds > 0
+            else None
         ),
         "simple_sum_net_return_pct": round(sum(values), 6) if values else None,
         "diagnostic_win_rate_pct": (
@@ -990,7 +1149,9 @@ def _calibrate_session(
     provisional_decision = (
         "widget_auto_trade_policy_candidate_ready"
         if selected["ready"] and holdout_ready
-        else selected["reason"] if not selected["ready"] else holdout_reason
+        else selected["reason"]
+        if not selected["ready"]
+        else holdout_reason
     )
     carry_forward_policy = _carry_forward_parameters(previous_runtime_policy)
     carry_forward_calibration_summary = None
@@ -1203,11 +1364,23 @@ def build_report(
     *,
     target_date: date,
     previous_session_policies: dict[str, dict[str, dict[str, Any]]] | None = None,
+    machine_microstructure_report_dir: Path = MACHINE_MICROSTRUCTURE_REPORT_DIR,
 ) -> dict[str, Any]:
     if target_date < CLEAN_BASELINE_DATE:
         raise ValueError("target date precedes clean baseline")
     effective_date = _next_krx_trading_date(target_date)
     previous_session_policies = previous_session_policies or {}
+    micro_feedback = load_prior_owner_diagnostic(
+        target_date=target_date,
+        owner="widget",
+        report_dir=machine_microstructure_report_dir,
+    )
+    feedback_payload = micro_feedback.get("owner_payload") or {}
+    feedback_symbols = (
+        feedback_payload.get("symbols") if isinstance(feedback_payload, dict) else {}
+    )
+    if not isinstance(feedback_symbols, dict):
+        feedback_symbols = {}
     symbol_reports: dict[str, Any] = {}
     source_paths: list[str] = []
     for spec in SPECS:
@@ -1242,6 +1415,19 @@ def build_report(
                 spec.symbol, target_date=target_date
             ),
             "sessions": sessions,
+            "microstructure_prior_trading_day_diagnostic": {
+                "status": (
+                    "loaded"
+                    if spec.symbol in feedback_symbols
+                    else "owner_symbol_not_present"
+                    if micro_feedback["status"] == "loaded"
+                    else micro_feedback["status"]
+                ),
+                "source_date": micro_feedback["source_date"],
+                "selection_effect": False,
+                "base_policy_unchanged": True,
+                "payload": feedback_symbols.get(spec.symbol),
+            },
         }
     statistically_ready_count = sum(
         session_report["decision"] == "widget_auto_trade_policy_candidate_ready"
@@ -1279,6 +1465,11 @@ def build_report(
         "carried_forward_session_policy_count": carried_forward_count,
         "ready_session_policy_count": ready_count,
         "symbols": symbol_reports,
+        "machine_microstructure_prior_trading_day_diagnostic_source": {
+            key: value
+            for key, value in micro_feedback.items()
+            if key != "owner_payload"
+        },
         "metric_contract": METRIC_CONTRACT,
         "runtime_effect": False,
         "actual_order_submitted": False,
@@ -1306,9 +1497,9 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
             elif calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 block_reason = str(calibration["decision"])
             if block_reason is not None:
-                blocked_sessions.setdefault(spec.symbol, {})[
-                    session_name
-                ] = block_reason
+                blocked_sessions.setdefault(spec.symbol, {})[session_name] = (
+                    block_reason
+                )
                 continue
             if calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 continue

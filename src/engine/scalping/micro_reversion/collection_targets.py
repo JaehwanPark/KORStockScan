@@ -8,8 +8,8 @@ data boundary.
 
 from __future__ import annotations
 
-import hashlib
 import json
+import math
 import os
 import tempfile
 from datetime import date, datetime, timedelta
@@ -18,7 +18,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.utils.constants import DATA_DIR
-from src.utils.market_day import is_krx_trading_day
+from src.utils.market_day import count_krx_trading_days, is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 COLLECTION_TARGET_SCHEMA = "scalp_micro_reversion_collection_targets_v1"
@@ -42,9 +42,7 @@ POLICY_SAMPLE_ACCUMULATION = "micro_policy_sample_accumulation"
 COLLECTION_TARGET_METRIC_CONTRACT = {
     "metric_role": "producer_consumer_coverage_repair_and_policy_sample_budget",
     "decision_authority": "next_session_market_data_observation_only",
-    "window_policy": (
-        "exact_next_krx_trading_date_bounded_dynamic_universe_rotation"
-    ),
+    "window_policy": ("exact_next_krx_trading_date_bounded_dynamic_universe_rotation"),
     "sample_floor": "not_an_economic_or_policy_promotion_metric",
     "primary_decision_metric": (
         "repairable_gap_and_policy_sample_coverage_within_daily_symbol_budget"
@@ -73,11 +71,7 @@ def _next_krx_trading_date(source_date: date) -> date:
 
 
 def _bounded_max_symbols(value: Any = None) -> int:
-    raw = (
-        os.getenv(COLLECTION_TARGET_MAX_SYMBOLS_ENV, "")
-        if value is None
-        else value
-    )
+    raw = os.getenv(COLLECTION_TARGET_MAX_SYMBOLS_ENV, "") if value is None else value
     try:
         parsed = int(str(raw).strip()) if str(raw).strip() else 0
     except (TypeError, ValueError):
@@ -107,8 +101,32 @@ def _registration_item(symbol: str, venue: str) -> str:
     return symbol
 
 
-def _rotation_rank(*parts: str) -> str:
-    return hashlib.sha256("|".join(parts).encode("ascii")).hexdigest()
+def _rotation_index(effective_date: date) -> int:
+    return count_krx_trading_days(date(2026, 1, 1), effective_date)
+
+
+def _priority_round_robin(
+    rows: list[dict[str, Any]], *, rotation_index: int, step: int
+) -> list[dict[str, Any]]:
+    ordered: list[dict[str, Any]] = []
+    remaining_slots = max(0, step)
+    priorities = sorted({int(row["_gap_priority"]) for row in rows}, reverse=True)
+    for priority in priorities:
+        cohort = sorted(
+            (row for row in rows if int(row["_gap_priority"]) == priority),
+            key=lambda row: str(row["symbol"]),
+        )
+        if cohort:
+            cohort_slots = min(len(cohort), remaining_slots)
+            rotation_step = max(1, cohort_slots)
+            offset = (rotation_index * rotation_step) % len(cohort)
+            selection_cycle_period = len(cohort) // math.gcd(len(cohort), rotation_step)
+            for row in cohort:
+                row["_selection_cycle_period"] = selection_cycle_period
+            cohort = cohort[offset:] + cohort[:offset]
+            remaining_slots -= cohort_slots
+        ordered.extend(cohort)
+    return ordered
 
 
 def _is_active_gap(gap: dict[str, Any]) -> bool:
@@ -125,6 +143,8 @@ def build_collection_targets(
     """Build one exact-date source-only subscription target per selected symbol."""
 
     source_date = date.fromisoformat(str(attribution_report["target_date"]))
+    if not is_krx_trading_day(source_date):
+        raise ValueError("collection_target_source_date_not_krx_trading_day")
     effective_date = _next_krx_trading_date(source_date)
     budget = _bounded_max_symbols(max_symbols)
     merged: dict[str, dict[str, Any]] = {}
@@ -166,30 +186,41 @@ def build_collection_targets(
         merge_scope(gap, collection_reason=str(gap["gap_class"]))
 
     consumers = attribution_report.get("consumers") or {}
-    widget_symbols = ((consumers.get("widget_postclose_tuning") or {}).get("symbols"))
+    widget_symbols = (consumers.get("widget_postclose_tuning") or {}).get("symbols")
     if isinstance(widget_symbols, dict):
         for scope_id, payload in widget_symbols.items():
             if not isinstance(payload, dict):
                 continue
             scope_kinds = [str(value) for value in payload.get("scopes") or ()]
-            merge_scope(
-                {
-                    "owner": "widget",
-                    "scope_id": str(scope_id),
-                    "scope_kind": (
-                        "active_widget_owner"
-                        if "active_widget_owner" in scope_kinds
-                        else scope_kinds[0]
-                        if scope_kinds
-                        else "prospective_widget_research"
-                    ),
-                    "symbol": payload.get("symbol") or scope_id,
-                    "expected_venues": payload.get("expected_venues") or ("SOR",),
-                },
-                collection_reason=POLICY_SAMPLE_ACCUMULATION,
-            )
-    episode_profiles = (
-        (consumers.get("episode_machine_postclose_tuning") or {}).get("profiles")
+            owner_scope_ids = [
+                str(value) for value in payload.get("owner_scope_ids") or ()
+            ]
+            owner_scope_kinds = payload.get("owner_scope_kinds") or {}
+            owner_scope_venues = payload.get("owner_scope_expected_venues") or {}
+            if not owner_scope_ids:
+                owner_scope_ids = [str(scope_id)]
+            for owner_scope_id in owner_scope_ids:
+                merge_scope(
+                    {
+                        "owner": "widget",
+                        "scope_id": owner_scope_id,
+                        "scope_kind": owner_scope_kinds.get(owner_scope_id)
+                        or (
+                            "active_widget_owner"
+                            if "active_widget_owner" in scope_kinds
+                            else scope_kinds[0]
+                            if scope_kinds
+                            else "prospective_widget_research"
+                        ),
+                        "symbol": payload.get("symbol") or scope_id,
+                        "expected_venues": owner_scope_venues.get(owner_scope_id)
+                        or payload.get("expected_venues")
+                        or ("SOR",),
+                    },
+                    collection_reason=POLICY_SAMPLE_ACCUMULATION,
+                )
+    episode_profiles = (consumers.get("episode_machine_postclose_tuning") or {}).get(
+        "profiles"
     )
     if isinstance(episode_profiles, dict):
         for scope_id, payload in episode_profiles.items():
@@ -209,19 +240,15 @@ def build_collection_targets(
 
     candidates: list[dict[str, Any]] = []
     effective_key = effective_date.isoformat()
+    rotation_index = _rotation_index(effective_date)
     for symbol, row in merged.items():
         venues = sorted(row["expected_venues"] or {"SOR"})
-        venue = min(
-            venues,
-            key=lambda value: _rotation_rank(effective_key, symbol, value),
-        )
         gap_classes = sorted(row["gap_classes"])
         collection_reasons = sorted(row["collection_reasons"])
         gap_priority = max(
             (
                 3
-                if gap
-                in {"micro_date_partition_missing", "micro_symbol_not_observed"}
+                if gap in {"micro_date_partition_missing", "micro_symbol_not_observed"}
                 else 2
                 if gap in REPAIRABLE_GAPS
                 else 1
@@ -231,8 +258,6 @@ def build_collection_targets(
         candidates.append(
             {
                 "symbol": symbol,
-                "registration_item": _registration_item(symbol, venue),
-                "expected_venue": venue,
                 "owners": sorted(row["owners"]),
                 "scope_ids": sorted(row["scope_ids"]),
                 "scope_kinds": sorted(row["scope_kinds"]),
@@ -252,25 +277,32 @@ def build_collection_targets(
                 "trading_decision_effect": False,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
+                "_expected_venues": venues,
                 "_gap_priority": gap_priority,
-                "_rotation_rank": _rotation_rank(effective_key, symbol),
             }
         )
 
-    candidates.sort(
-        key=lambda row: (-int(row["_gap_priority"]), row["_rotation_rank"])
+    active_rows = [row for row in candidates if row["active_owner"]]
+    prospective_rows = [row for row in candidates if not row["active_owner"]]
+    if active_rows:
+        prospective_reserve = min(len(prospective_rows), 1) if budget >= 2 else 0
+        active_budget = min(len(active_rows), budget - prospective_reserve)
+        prospective_budget = min(len(prospective_rows), budget - active_budget)
+    else:
+        active_budget = 0
+        prospective_budget = min(len(prospective_rows), budget)
+    active_candidates = _priority_round_robin(
+        active_rows,
+        rotation_index=rotation_index,
+        step=active_budget,
     )
-    active_candidates = [row for row in candidates if row["active_owner"]]
-    prospective_candidates = [row for row in candidates if not row["active_owner"]]
-    prospective_budget = (
-        min(len(prospective_candidates), 1)
-        if active_candidates and budget >= 2
-        else min(len(prospective_candidates), budget)
+    prospective_candidates = _priority_round_robin(
+        prospective_rows,
+        rotation_index=rotation_index,
+        step=prospective_budget,
     )
-    active_budget = budget - prospective_budget
     selected = (
-        active_candidates[:active_budget]
-        + prospective_candidates[:prospective_budget]
+        active_candidates[:active_budget] + prospective_candidates[:prospective_budget]
     )
     remaining = budget - len(selected)
     if remaining > 0:
@@ -278,16 +310,24 @@ def build_collection_targets(
         remaining = budget - len(selected)
     if remaining > 0:
         selected.extend(
-            prospective_candidates[
-                prospective_budget : prospective_budget + remaining
-            ]
+            prospective_candidates[prospective_budget : prospective_budget + remaining]
         )
     selected_keys = {row["symbol"] for row in selected}
     overflow = [row for row in candidates if row["symbol"] not in selected_keys]
     for rows in (selected, overflow):
         for row in rows:
+            venues = list(row.pop("_expected_venues"))
+            selection_cycle_period = max(1, int(row.pop("_selection_cycle_period", 1)))
+            # Advance the venue after the symbol-selection cohort completes a
+            # cycle.  Using rotation_index directly for both dimensions phase-
+            # locks multi-symbol cohorts (each symbol can otherwise receive the
+            # same venue forever).  A stable symbol phase also distributes the
+            # selected routes without sacrificing deterministic replay.
+            venue_phase = rotation_index // selection_cycle_period + int(row["symbol"])
+            venue = venues[venue_phase % len(venues)]
+            row["expected_venue"] = venue
+            row["registration_item"] = _registration_item(row["symbol"], venue)
             row.pop("_gap_priority", None)
-            row.pop("_rotation_rank", None)
 
     generated = generated_at or datetime.now(KST)
     return {
@@ -318,7 +358,13 @@ def build_collection_targets(
             "selected_symbol_count": len(selected),
             "overflow_symbol_count": len(overflow),
             "rotation_key": effective_key,
-            "overflow_rotates_on_next_effective_date": True,
+            "rotation_index": rotation_index,
+            "rotation_policy": "priority_cohort_deterministic_round_robin",
+            "venue_rotation_policy": (
+                "independent_symbol_phase_after_selection_cohort_cycle"
+            ),
+            "overflow_rotates_on_next_effective_date": False,
+            "bounded_rotation_condition": "stable_priority_cohort_and_daily_budget",
         },
         "selected_targets": selected,
         "overflow_targets": overflow,
@@ -378,7 +424,8 @@ def load_exact_date_collection_targets(
         source_date = date.fromisoformat(str(payload.get("source_date")))
         parsed_effective_date = date.fromisoformat(effective_date)
         source_date_valid = (
-            source_date < parsed_effective_date
+            is_krx_trading_day(source_date)
+            and source_date < parsed_effective_date
             and _next_krx_trading_date(source_date) == parsed_effective_date
         )
     except (AttributeError, TypeError, ValueError):

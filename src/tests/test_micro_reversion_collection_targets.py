@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from src.engine.scalping.micro_reversion.collection_targets import (
     build_collection_targets,
     load_exact_date_collection_targets,
@@ -128,6 +130,33 @@ def test_dynamic_machine_universe_continues_bounded_policy_sample_collection():
         "005930",
         "000660",
     }
+
+
+def test_widget_policy_sample_uses_exact_scope_venues_not_aggregate_fallback():
+    report = _report([])
+    report["consumers"] = {
+        "widget_postclose_tuning": {
+            "symbols": {
+                "111111": {
+                    "symbol": "111111",
+                    "scopes": ["prospective_widget_research"],
+                    "expected_venues": ["KRX", "SOR"],
+                    "owner_scope_ids": ["research:111111:KRX_REGULAR"],
+                    "owner_scope_kinds": {
+                        "research:111111:KRX_REGULAR": ("prospective_widget_research")
+                    },
+                    "owner_scope_expected_venues": {
+                        "research:111111:KRX_REGULAR": ["KRX"]
+                    },
+                }
+            }
+        }
+    }
+
+    payload = build_collection_targets(report, max_symbols=1)
+
+    assert payload["selected_targets"][0]["expected_venue"] == "KRX"
+    assert payload["selected_targets"][0]["registration_item"] == "111111"
     assert all(
         "micro_policy_sample_accumulation" in row["collection_reasons"]
         for row in payload["selected_targets"]
@@ -236,3 +265,149 @@ def test_malformed_symbol_is_not_silently_truncated_into_a_target():
 
     assert payload["selected_targets"] == []
     assert payload["status"] == "no_repairable_gap"
+
+
+def test_non_trading_source_date_cannot_overwrite_next_session_targets():
+    report = _report([])
+    report["target_date"] = "2026-08-15"
+
+    with pytest.raises(
+        ValueError, match="collection_target_source_date_not_krx_trading_day"
+    ):
+        build_collection_targets(report)
+
+
+def test_loader_rejects_non_trading_source_date_even_for_next_trading_day(
+    tmp_path,
+):
+    payload = build_collection_targets(
+        _report(
+            [
+                {
+                    "owner": "widget",
+                    "scope_id": "555555",
+                    "scope_kind": "active_widget_owner",
+                    "symbol": "555555",
+                    "expected_venues": ["KRX"],
+                    "gap_class": "micro_symbol_not_observed",
+                }
+            ]
+        )
+    )
+    payload["source_date"] = "2026-08-15"
+    payload["effective_date"] = "2026-08-18"
+    write_collection_targets(payload, root=tmp_path)
+
+    rejected = load_exact_date_collection_targets("2026-08-18", root=tmp_path)
+
+    assert rejected["status"] == "invalid_authority_or_date_contract"
+    assert rejected["registration_items"] == []
+
+
+def test_stable_priority_cohort_round_robin_has_bounded_symbol_coverage():
+    gaps = [
+        {
+            "owner": "episode",
+            "scope_id": f"active_{symbol}",
+            "scope_kind": "active_episode_owner",
+            "symbol": symbol,
+            "expected_venues": ["SOR"],
+            "gap_class": "micro_symbol_not_observed",
+        }
+        for symbol in ("111111", "222222", "333333", "444444", "555555", "666666")
+    ]
+    observed = set()
+    for source_date in ("2026-08-10", "2026-08-11", "2026-08-12"):
+        report = _report(gaps)
+        report["target_date"] = source_date
+        payload = build_collection_targets(report, max_symbols=2)
+        observed.update(row["symbol"] for row in payload["selected_targets"])
+        assert payload["budget"]["rotation_policy"] == (
+            "priority_cohort_deterministic_round_robin"
+        )
+
+    assert observed == {"111111", "222222", "333333", "444444", "555555", "666666"}
+
+
+def test_multi_venue_symbol_rotates_routes_across_trading_days():
+    gap = {
+        "owner": "widget",
+        "scope_id": "multi_venue",
+        "scope_kind": "active_widget_owner",
+        "symbol": "111111",
+        "expected_venues": ["KRX", "NXT", "SOR"],
+        "gap_class": "micro_symbol_not_observed",
+    }
+    venues = set()
+    for source_date in ("2026-08-10", "2026-08-11", "2026-08-12"):
+        report = _report([gap])
+        report["target_date"] = source_date
+        payload = build_collection_targets(report, max_symbols=1)
+        venues.add(payload["selected_targets"][0]["expected_venue"])
+
+    assert venues == {"KRX", "NXT", "SOR"}
+
+
+def test_symbol_and_venue_round_robins_do_not_phase_lock():
+    symbols = ("111111", "222222", "333333")
+    gaps = [
+        {
+            "owner": "episode",
+            "scope_id": f"active_{symbol}",
+            "scope_kind": "active_episode_owner",
+            "symbol": symbol,
+            "expected_venues": ["KRX", "NXT", "SOR"],
+            "gap_class": "micro_symbol_not_observed",
+        }
+        for symbol in symbols
+    ]
+    observed_venues = {symbol: set() for symbol in symbols}
+    for source_date in (
+        "2026-08-10",
+        "2026-08-11",
+        "2026-08-12",
+        "2026-08-13",
+        "2026-08-14",
+        "2026-08-18",
+        "2026-08-19",
+        "2026-08-20",
+        "2026-08-21",
+    ):
+        report = _report(gaps)
+        report["target_date"] = source_date
+        payload = build_collection_targets(report, max_symbols=1)
+        selected = payload["selected_targets"][0]
+        observed_venues[selected["symbol"]].add(selected["expected_venue"])
+        assert payload["budget"]["venue_rotation_policy"] == (
+            "independent_symbol_phase_after_selection_cohort_cycle"
+        )
+
+    assert all(venues == {"KRX", "NXT", "SOR"} for venues in observed_venues.values())
+
+
+def test_single_symbol_budget_keeps_active_owner_ahead_of_prospective_owner():
+    payload = build_collection_targets(
+        _report(
+            [
+                {
+                    "owner": "episode",
+                    "scope_id": "active",
+                    "scope_kind": "active_episode_owner",
+                    "symbol": "111111",
+                    "expected_venues": ["SOR"],
+                    "gap_class": "micro_symbol_not_observed",
+                },
+                {
+                    "owner": "widget",
+                    "scope_id": "prospective",
+                    "scope_kind": "prospective_widget_research",
+                    "symbol": "222222",
+                    "expected_venues": ["SOR"],
+                    "gap_class": "micro_symbol_not_observed",
+                },
+            ]
+        ),
+        max_symbols=1,
+    )
+
+    assert [row["symbol"] for row in payload["selected_targets"]] == ["111111"]

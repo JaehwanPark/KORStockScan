@@ -30,6 +30,7 @@ from src.trading.low_price_two_leg.gateway import (
 from src.trading.low_price_two_leg.machine import LowPriceTwoLegMachine
 from src.trading.low_price_two_leg.policy_runtime import (
     BASELINE_POLICIES,
+    CANDIDATE_SCHEMA,
     KAKAO_MORNING_TARGET_TRANSITION,
     POLICY_BOUNDS,
     apply_operator_policy_transitions,
@@ -695,9 +696,9 @@ def test_research_evidence_gate_validates_each_selected_profile(tmp_path):
         validate_research_evidence(profile, path, expected_sha256=digest)[0]
         for profile in legacy_profiles
     )
-    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"][
-        "scan_start"
-    ] = "13:19"
+    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"]["scan_start"] = (
+        "13:19"
+    )
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert not validate_research_evidence(
         PROFILES["samsung_heavy_midday"], path, expected_sha256=digest
@@ -929,15 +930,39 @@ def test_kakao_morning_target_transition_starts_next_date_only(tmp_path):
 def test_legacy_two_share_candidate_normalizes_to_current_twenty_share_runtime(
     tmp_path,
 ):
-    source = Path(
-        "data/threshold_cycle/low_price_two_leg/candidates/"
-        "low_price_two_leg_policy_candidate_2026-08-12.json"
-    )
-    legacy = json.loads(source.read_text(encoding="utf-8"))
+    legacy_policies = {
+        profile_id: {**policy, "quantity": 2}
+        for profile_id, policy in BASELINE_POLICIES.items()
+    }
+    legacy = {
+        "schema": CANDIDATE_SCHEMA,
+        "source_date": "2026-08-12",
+        "source_report": "low_price_two_leg_tuning",
+        "source_report_schema": REPORT_SCHEMA,
+        "clean_tuning_baseline_date": "2026-06-05",
+        "policy_hash": policy_hash(legacy_policies),
+        "policy_mutations": [],
+        "same_stage_owner_guard": {"mutation_present": False},
+        "profiles": {
+            profile_id: {
+                "selection_status": "carry_forward_profile_policy",
+                "selected_axis": None,
+                "policy": policy,
+                "allowed_runtime_apply": True,
+            }
+            for profile_id, policy in legacy_policies.items()
+        },
+        "decision_authority": "postclose_bounded_candidate_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+    }
     assert all(item["policy"]["quantity"] == 2 for item in legacy["profiles"].values())
     candidate_dir = tmp_path / "candidates"
     candidate_dir.mkdir()
-    (candidate_dir / source.name).write_text(json.dumps(legacy), encoding="utf-8")
+    (candidate_dir / "low_price_two_leg_policy_candidate_2026-08-12.json").write_text(
+        json.dumps(legacy), encoding="utf-8"
+    )
 
     applied, status = build_applied_policy(
         target_date=date(2026, 8, 14), candidate_dir=candidate_dir
@@ -1343,8 +1368,9 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     )
     assert migrated_status == "candidate_applied"
     assert set(migrated["profiles"]) == set(PROFILES)
-    assert migrated["profiles"]["mirae_asset_morning"]["policy"] == (
-        BASELINE_POLICIES["mirae_asset_morning"]
+    assert (
+        migrated["profiles"]["mirae_asset_morning"]["policy"]
+        == (BASELINE_POLICIES["mirae_asset_morning"])
     )
 
     pre_expanded_v2 = json.loads(json.dumps(candidate))
@@ -1378,8 +1404,9 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     )
     assert expanded_status == "candidate_applied"
     assert set(expanded_applied["profiles"]) == set(PROFILES)
-    assert expanded_applied["profiles"]["kakao_morning"]["policy"] == (
-        BASELINE_POLICIES["kakao_morning"]
+    assert (
+        expanded_applied["profiles"]["kakao_morning"]["policy"]
+        == (BASELINE_POLICIES["kakao_morning"])
     )
 
     source_gap_report = json.loads(json.dumps(report))
@@ -1533,6 +1560,43 @@ def test_prior_episode_completion_is_reconciled_to_original_profile_date(tmp_pat
     assert summary["completed_legs"] == 2
     assert summary["held_or_unresolved_legs"] == 0
     assert report["daily"]["profiles"][profile_id]["attempted"] is False
+
+
+def test_actual_leg_lifecycle_timing_and_gross_diagnostics_are_preserved(tmp_path):
+    profile_id = "samsung_heavy_midday"
+    state_dir = tmp_path / "states"
+    source_quality_dir = tmp_path / "source_quality"
+    _write_carried_state(state_dir, profile_id, "2026-08-11", held=False)
+    state_path = state_dir / f"{profile_id}_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    durations = (30, 300)
+    for leg, duration in zip(state["legs"], durations, strict=True):
+        leg["buy_filled_at"] = "2026-08-11T13:00:00+09:00"
+        leg["target_filled_at"] = (
+            datetime(2026, 8, 11, 13, 0, tzinfo=KST) + timedelta(seconds=duration)
+        ).isoformat()
+        leg["target_fill_price"] = leg["target_price"]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _write_source_quality_audit(source_quality_dir, "2026-08-11")
+
+    report = build_report(
+        target_date="2026-08-11",
+        state_dir=state_dir,
+        output_dir=tmp_path / "reports",
+        source_quality_dir=source_quality_dir,
+        machine_microstructure_report_dir=tmp_path / "micro",
+    )
+
+    legs = report["daily"]["profiles"][profile_id]["legs"]
+    assert [leg["holding_duration_sec"] for leg in legs] == [30.0, 300.0]
+    assert all(leg["gross_no_slippage_return_pct"] is not None for leg in legs)
+    summary = report["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
+    assert summary["completed_legs_with_lifecycle_timing"] == 2
+    assert summary["median_reconciliation_confirmed_holding_duration_sec"] == 165.0
+    assert summary["p90_reconciliation_confirmed_holding_duration_sec"] == 300.0
+    assert summary["target_reconciliation_completion_within_180s_ratio"] == 0.5
+    assert summary["broker_completed_capital_occupied_krw_seconds"] > 0
+    assert summary["broker_completed_net_return_per_capital_hour"] > 0
 
 
 def test_clean_window_loads_legacy_report_and_does_not_impute_missing_dates(tmp_path):
@@ -1708,6 +1772,132 @@ def test_nontrading_target_is_excluded_and_cannot_open_candidate(tmp_path):
         not in report["clean_baseline_window"]["available_actual_observation_dates"]
     )
     assert candidate["policy_mutations"] == []
+
+
+def test_prior_microstructure_diagnostic_is_consumed_without_candidate_effect(
+    tmp_path,
+):
+    micro_dir = tmp_path / "machine_micro"
+    micro_dir.mkdir()
+    profile_id = "samsung_heavy_midday"
+    (micro_dir / "machine_microstructure_attribution_2026-08-13.json").write_text(
+        json.dumps(
+            {
+                "schema": "machine_microstructure_attribution_v1",
+                "target_date": "2026-08-13",
+                "status": "warning",
+                "authority": {
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                "consumers": {
+                    "episode_machine_postclose_tuning": {
+                        "profiles": {
+                            profile_id: {
+                                "micro_context_status": "matched",
+                                "anchor_results": [
+                                    {"anchor_role": "episode_signal_bar"}
+                                ],
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = {
+        "target_date": "2026-08-14",
+        "state_dir": tmp_path / "states",
+        "output_dir": tmp_path / "reports",
+        "source_quality_dir": tmp_path / "source_quality",
+    }
+    loaded = build_report(
+        **common,
+        machine_microstructure_report_dir=micro_dir,
+    )
+    missing = build_report(
+        **common,
+        machine_microstructure_report_dir=tmp_path / "missing_micro",
+    )
+
+    diagnostic = loaded["daily"]["profiles"][profile_id][
+        "microstructure_prior_trading_day_diagnostic"
+    ]
+    assert diagnostic["status"] == "loaded"
+    assert diagnostic["source_date"] == "2026-08-13"
+    assert diagnostic["selection_effect"] is False
+    assert diagnostic["payload"]["micro_context_status"] == "matched"
+    assert (
+        missing["daily"]["profiles"][profile_id][
+            "microstructure_prior_trading_day_diagnostic"
+        ]["status"]
+        == "missing"
+    )
+
+    loaded_candidate = build_candidate(
+        loaded,
+        candidate_dir=tmp_path / "loaded_candidates",
+        samsung_candidate_dir=tmp_path / "samsung_candidates",
+    )
+    missing_candidate = build_candidate(
+        missing,
+        candidate_dir=tmp_path / "missing_candidates",
+        samsung_candidate_dir=tmp_path / "samsung_candidates",
+    )
+    assert loaded_candidate["policy_hash"] == missing_candidate["policy_hash"]
+    assert loaded_candidate["policy_mutations"] == missing_candidate["policy_mutations"]
+
+
+def test_multi_day_prior_episode_reconciliation_loads_exact_source_date_diagnostic(
+    tmp_path,
+):
+    profile_id = "samsung_heavy_midday"
+    state_dir = tmp_path / "states"
+    source_quality_dir = tmp_path / "source_quality"
+    micro_dir = tmp_path / "machine_micro"
+    micro_dir.mkdir()
+    _write_carried_state(state_dir, profile_id, "2026-08-12", held=False)
+    _write_source_quality_audit(source_quality_dir, "2026-08-12")
+    _write_source_quality_audit(source_quality_dir, "2026-08-14")
+    (micro_dir / "machine_microstructure_attribution_2026-08-12.json").write_text(
+        json.dumps(
+            {
+                "schema": "machine_microstructure_attribution_v1",
+                "target_date": "2026-08-12",
+                "authority": {
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                "consumers": {
+                    "episode_machine_postclose_tuning": {
+                        "profiles": {profile_id: {"micro_context_status": "matched"}}
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_report(
+        target_date="2026-08-14",
+        state_dir=state_dir,
+        output_dir=tmp_path / "reports",
+        source_quality_dir=source_quality_dir,
+        machine_microstructure_report_dir=micro_dir,
+    )
+
+    diagnostic = report["prior_state_reconciliations"][profile_id]["row"][
+        "microstructure_prior_trading_day_diagnostic"
+    ]
+    assert diagnostic["status"] == "loaded"
+    assert diagnostic["source_date"] == "2026-08-12"
+    assert diagnostic["owner_source_date"] == "2026-08-12"
+    assert diagnostic["payload"]["micro_context_status"] == "matched"
 
 
 def test_prior_held_episode_blocks_only_its_own_profile_tuning(tmp_path):

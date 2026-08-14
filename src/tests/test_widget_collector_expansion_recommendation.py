@@ -120,7 +120,7 @@ def test_recommendation_ranks_positive_liquid_non_active_symbol(tmp_path):
     assert report["allowed_runtime_apply"] is False
 
 
-def test_recommendation_excludes_manual_operator_symbol(tmp_path):
+def test_recommendation_does_not_filter_manual_operator_symbol(tmp_path):
     replay_dir = tmp_path / "replay"
     payload_dir = tmp_path / "payload"
     replay_dir.mkdir()
@@ -153,8 +153,11 @@ def test_recommendation_excludes_manual_operator_symbol(tmp_path):
         manual_excluded_codes=frozenset({"111111"}),
     )
 
-    assert report["status"] == "no_qualified_candidate"
-    assert report["exclusion_counts"]["manual_control_excluded"] == 1
+    assert report["status"] == "recommendations_ready"
+    assert [row["stock_code"] for row in report["recommendations"]] == ["111111"]
+    assert "manual_control_excluded" not in report["exclusion_counts"]
+    assert report["manual_control_exclusion_applied"] is False
+    assert report["source"]["manual_control_exclusion_applied"] is False
 
 
 def test_admin_notifier_sends_once_and_never_creates_service(tmp_path):

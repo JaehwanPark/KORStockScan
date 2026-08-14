@@ -26,9 +26,6 @@ from src.engine.monitoring.samsung_widget_contract import (
     NXT_AFTERMARKET_END,
     previous_krx_trading_date,
 )
-from src.engine.risk.manual_control_exclusion import (
-    configured_manual_control_exclusion_codes,
-)
 from src.engine.scalping.ai_decision_trace import replay_source_input
 from src.engine.monitoring.widget_symbol_signal_policy_research import (
     SYMBOLS as RESEARCH_WIDGET_SYMBOLS,
@@ -71,6 +68,7 @@ METRIC_CONTRACT = {
     "forbidden_uses": [
         "automatic_collector_creation",
         "automatic_service_start_or_restart",
+        "manual_control_exclusion_as_collection_or_evaluation_filter",
         "real_order_submission",
         "account_or_quantity_decision",
         "trading_runtime_threshold",
@@ -375,24 +373,23 @@ def build_recommendation_report(
     manual_excluded_codes: frozenset[str] | None = None,
     current_replay_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Build research recommendations without applying final-order exclusions.
+
+    ``manual_excluded_codes`` remains an ignored compatibility keyword for older
+    callers.  Manual-control exclusion is enforced only at the final trading
+    action boundary and must not censor collection, replay, or evaluation.
+    """
+
     replay, replay_paths = _load_replay_history(
         replay_dir,
         through_date=target_date,
         current_replay_report=current_replay_report,
-    )
-    excluded_codes = (
-        configured_manual_control_exclusion_codes()
-        if manual_excluded_codes is None
-        else manual_excluded_codes
     )
     exclusion_counts: dict[str, int] = defaultdict(int)
     outcome_candidates: dict[str, dict[str, Any]] = {}
     for code, item in replay.items():
         if code in IMPLEMENTED_WIDGET_CODES:
             exclusion_counts["already_active_widget"] += 1
-            continue
-        if code in excluded_codes:
-            exclusion_counts["manual_control_excluded"] += 1
             continue
         samples = int(item["sample_count"])
         target_first = int(item["target_first_count"])
@@ -555,7 +552,7 @@ def build_recommendation_report(
             ),
             "feature_paths": feature_paths,
             "active_widget_codes": sorted(IMPLEMENTED_WIDGET_CODES),
-            "manual_excluded_codes": sorted(excluded_codes),
+            "manual_control_exclusion_applied": False,
         },
         "metric_contract": METRIC_CONTRACT,
         "implementation_review_contract": {
@@ -578,6 +575,7 @@ def build_recommendation_report(
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+        "manual_control_exclusion_applied": False,
     }
 
 
@@ -864,8 +862,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not is_krx_trading_day(target_date):
         raise ValueError(
-            "widget_expansion_recommendation_requires_krx_trading_date:"
-            f"{target_date}"
+            f"widget_expansion_recommendation_requires_krx_trading_date:{target_date}"
         )
     payload_path = args.payload_dir / f"ai_decision_payloads_{target_date}.jsonl"
     label_path = args.label_dir / f"ai_decision_outcome_labels_{target_date}.json"
@@ -911,8 +908,7 @@ def main(argv: list[str] | None = None) -> int:
             "sent_state_persist_failed",
         }:
             raise RuntimeError(
-                "widget_expansion_telegram_not_delivered:"
-                f"{report['telegram_status']}"
+                f"widget_expansion_telegram_not_delivered:{report['telegram_status']}"
             )
     if not args.write:
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))

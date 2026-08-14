@@ -11,12 +11,17 @@ import argparse
 import json
 import math
 import os
+import statistics
 import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from src.trading.low_price_two_leg.machine import DEFAULT_STATE_DIR
+from src.engine.monitoring.machine_microstructure_attribution import (
+    OUTPUT_DIR as MACHINE_MICROSTRUCTURE_REPORT_DIR,
+    load_prior_owner_diagnostic,
+)
 from src.trading.low_price_two_leg.policy_runtime import (
     APPLIED_DIR,
     BASELINE_POLICIES,
@@ -98,6 +103,39 @@ METRIC_CONTRACT = {
     },
     "primary_decision_metric": "notional_weighted_ev_pct",
     "profit_cost_model": "broker_target_fill_price_minus_fixed_round_trip_cost_pct",
+    "lifecycle_speed_diagnostics": {
+        "metric_role": "diagnostic_execution_velocity_and_capital_occupancy",
+        "decision_authority": "postclose_diagnostic_only",
+        "window_policy": "per_completed_broker_leg_buy_fill_to_target_fill",
+        "sample_floor": "one_completed_leg_with_ordered_aware_fill_timestamps",
+        "primary_decision_metric": "broker_completed_net_return_per_capital_hour",
+        "primary_decision_metric_unit": (
+            "realized_profit_krw_per_capital_occupied_krw_hour"
+        ),
+        "source_quality_gate": (
+            "broker_receipt_terminal_leg_and_ordered_aware_fill_timestamps"
+        ),
+        "forbidden_uses": [
+            "missing_timestamp_as_zero_latency",
+            "gross_or_speed_metric_as_policy_selection_authority",
+            "target_validity_quantity_stop_or_forced_exit_mutation",
+        ],
+        "gross_no_slippage_role": "diagnostic_only_not_live_promotion_authority",
+        "fields": [
+            "buy_filled_at",
+            "target_filled_at",
+            "holding_duration_sec",
+            "gross_no_slippage_return_pct",
+            "median_reconciliation_confirmed_holding_duration_sec",
+            "target_reconciliation_completion_within_180s_ratio",
+            "broker_completed_capital_occupied_krw_seconds",
+            "broker_completed_net_return_per_capital_hour",
+        ],
+        "missing_timestamp_policy": "unknown_not_zero_or_instant_fill",
+        "timestamp_provenance": (
+            "broker_execution_reconciliation_observed_at_not_exchange_fill_time"
+        ),
+    },
     "source_quality_gate": [
         "target_date_profile_state_match",
         "actual_broker_receipt_terminal_leg_contract",
@@ -118,6 +156,7 @@ METRIC_CONTRACT = {
         "more_than_one_profile_or_axis_mutation_per_day",
         "threshold_relaxation",
         "quantity_target_entry_validity_stop_or_forced_exit_change",
+        "gross_no_slippage_or_speed_diagnostic_as_standalone_policy_authority",
         "provider_bot_cap_or_broker_guard_change",
     ],
 }
@@ -156,6 +195,17 @@ def _as_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _aware_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip().replace("Z", "+00:00")
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
 
 
 def _source_quality_preflight(target_date: str, source_quality_dir: Path) -> dict:
@@ -271,6 +321,8 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     buy_filled_qty = _as_int(
         raw.get("buy_filled_qty", position_qty + target_filled_qty)
     )
+    buy_filled_at = _aware_timestamp(raw.get("buy_filled_at"))
+    target_filled_at = _aware_timestamp(raw.get("target_filled_at"))
     completed = (
         status == "COMPLETE"
         and target_filled_qty > 0
@@ -306,10 +358,23 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     profit_price_source = (
         "broker_target_fill_price"
         if completed and target_fill_price > 0
-        else "configured_target_price_proxy" if completed else "not_completed"
+        else "configured_target_price_proxy"
+        if completed
+        else "not_completed"
     )
     net_profit_pct = (
         (profit_exit_price / fill_price - 1.0) * 100.0 - cost_pct if completed else None
+    )
+    gross_no_slippage_return_pct = (
+        (profit_exit_price / fill_price - 1.0) * 100.0 if completed else None
+    )
+    holding_duration_sec = (
+        (target_filled_at - buy_filled_at).total_seconds()
+        if completed
+        and buy_filled_at is not None
+        and target_filled_at is not None
+        and target_filled_at >= buy_filled_at
+        else None
     )
     return {
         "leg_id": str(raw.get("leg_id") or ""),
@@ -322,6 +387,16 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "buy_filled_qty": buy_filled_qty,
         "target_filled_qty": target_filled_qty,
         "target_fill_price": target_fill_price,
+        "buy_filled_at": buy_filled_at.isoformat() if buy_filled_at else None,
+        "target_filled_at": (
+            target_filled_at.isoformat() if target_filled_at else None
+        ),
+        "holding_duration_sec": (
+            round(holding_duration_sec, 3) if holding_duration_sec is not None else None
+        ),
+        "lifecycle_timestamp_provenance": (
+            "broker_execution_reconciliation_observed_at_not_exchange_fill_time"
+        ),
         "profit_exit_price": profit_exit_price if completed else 0,
         "profit_price_source": profit_price_source,
         "completed": completed,
@@ -330,6 +405,11 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "contract_valid": contract_valid,
         "net_profit_pct": (
             round(net_profit_pct, 6) if net_profit_pct is not None else None
+        ),
+        "gross_no_slippage_return_pct": (
+            round(gross_no_slippage_return_pct, 6)
+            if gross_no_slippage_return_pct is not None
+            else None
         ),
     }
 
@@ -488,6 +568,32 @@ def _aggregate(rows: list[dict]) -> dict:
         for leg in completed
         if leg.get("profit_price_source") == "configured_target_price_proxy"
     ]
+    timed_completed = [
+        leg
+        for leg in completed
+        if _as_float(leg.get("holding_duration_sec")) is not None
+        and float(leg["holding_duration_sec"]) >= 0.0
+    ]
+    holding_durations = [float(leg["holding_duration_sec"]) for leg in timed_completed]
+    sorted_holding_durations = sorted(holding_durations)
+    p90_holding_duration = (
+        sorted_holding_durations[
+            max(0, math.ceil(len(sorted_holding_durations) * 0.9) - 1)
+        ]
+        if sorted_holding_durations
+        else None
+    )
+    gross_no_slippage_returns = [
+        float(leg["gross_no_slippage_return_pct"])
+        for leg in completed
+        if _as_float(leg.get("gross_no_slippage_return_pct")) is not None
+    ]
+    timed_broker_completed = [
+        leg
+        for leg in broker_priced_completed
+        if _as_float(leg.get("holding_duration_sec")) is not None
+        and float(leg["holding_duration_sec"]) >= 0.0
+    ]
     attempted_notional = sum(
         _as_int(leg.get("entry_price")) * _as_int(leg.get("quantity")) for leg in legs
     )
@@ -497,6 +603,19 @@ def _aggregate(rows: list[dict]) -> dict:
         * float(leg["net_profit_pct"])
         / 100.0
         for leg in broker_priced_completed
+    )
+    broker_completed_capital_occupied_krw_seconds = sum(
+        _as_int(leg.get("fill_price"))
+        * _as_int(leg.get("buy_filled_qty"))
+        * float(leg["holding_duration_sec"])
+        for leg in timed_broker_completed
+    )
+    timed_broker_realized_profit = sum(
+        _as_int(leg.get("fill_price"))
+        * _as_int(leg.get("buy_filled_qty"))
+        * float(leg["net_profit_pct"])
+        / 100.0
+        for leg in timed_broker_completed
     )
     target_proxy_profit = sum(
         _as_int(leg.get("fill_price"))
@@ -532,6 +651,52 @@ def _aggregate(rows: list[dict]) -> dict:
             leg.get("held") or not leg.get("terminal") for leg in all_legs
         ),
         "notional_weighted_ev_pct": round(ev, 6) if ev is not None else None,
+        "gross_no_slippage_avg_return_pct": (
+            round(statistics.fmean(gross_no_slippage_returns), 6)
+            if gross_no_slippage_returns
+            else None
+        ),
+        "completed_legs_with_lifecycle_timing": len(timed_completed),
+        "lifecycle_timing_missing_completed_legs": len(completed)
+        - len(timed_completed),
+        "median_reconciliation_confirmed_holding_duration_sec": (
+            round(statistics.median(holding_durations), 3)
+            if holding_durations
+            else None
+        ),
+        "p90_reconciliation_confirmed_holding_duration_sec": (
+            round(p90_holding_duration, 3) if p90_holding_duration is not None else None
+        ),
+        "target_reconciliation_completion_within_180s_count": sum(
+            duration <= 180.0 for duration in holding_durations
+        ),
+        "target_reconciliation_completion_within_180s_ratio": (
+            round(
+                sum(duration <= 180.0 for duration in holding_durations)
+                / len(holding_durations),
+                6,
+            )
+            if holding_durations
+            else None
+        ),
+        "completed_holding_seconds_sum": (
+            round(sum(holding_durations), 3) if holding_durations else None
+        ),
+        "broker_realized_net_profit_krw": round(broker_realized_profit, 3),
+        "broker_completed_capital_occupied_krw_seconds": (
+            round(broker_completed_capital_occupied_krw_seconds, 3)
+            if timed_broker_completed
+            else None
+        ),
+        "broker_completed_net_return_per_capital_hour": (
+            round(
+                timed_broker_realized_profit
+                / (broker_completed_capital_occupied_krw_seconds / 3600.0),
+                9,
+            )
+            if broker_completed_capital_occupied_krw_seconds > 0
+            else None
+        ),
         "target_price_proxy_notional_weighted_ev_pct": (
             round(target_proxy_profit / attempted_notional * 100.0, 6)
             if attempted_notional
@@ -669,12 +834,75 @@ def build_report(
     source_quality_dir: Path = SOURCE_QUALITY_DIR,
     applied_dir: Path = APPLIED_DIR,
     cost_pct: float = 0.20,
+    machine_microstructure_report_dir: Path = MACHINE_MICROSTRUCTURE_REPORT_DIR,
 ) -> dict:
     parsed_date = date.fromisoformat(target_date)
     expected_clean_dates = _clean_trading_dates_through(parsed_date)
     target_date_is_trading = is_krx_trading_day(parsed_date)
     if not math.isfinite(cost_pct) or not 0 <= cost_pct < 100:
         raise ValueError("cost_pct_must_be_finite_percentage")
+    micro_feedback = load_prior_owner_diagnostic(
+        target_date=parsed_date,
+        owner="episode",
+        report_dir=machine_microstructure_report_dir,
+    )
+    micro_feedback_cache: dict[str, dict[str, Any]] = {
+        str(micro_feedback["source_date"]): micro_feedback
+    }
+
+    def feedback_for_source_date(owner_source_date: str) -> dict[str, Any]:
+        cached = micro_feedback_cache.get(owner_source_date)
+        if cached is not None:
+            return cached
+        try:
+            requested_source_date = date.fromisoformat(owner_source_date)
+        except ValueError:
+            return {
+                "status": "owner_source_date_invalid",
+                "source_date": owner_source_date,
+                "owner_payload": None,
+            }
+        loaded = load_prior_owner_diagnostic(
+            target_date=parsed_date,
+            owner="episode",
+            report_dir=machine_microstructure_report_dir,
+            source_date=requested_source_date,
+        )
+        micro_feedback_cache[owner_source_date] = loaded
+        return loaded
+
+    def micro_diagnostic(profile_id: str, *, owner_source_date: str) -> dict[str, Any]:
+        feedback = feedback_for_source_date(owner_source_date)
+        feedback_payload = feedback.get("owner_payload") or {}
+        feedback_profiles = (
+            feedback_payload.get("profiles")
+            if isinstance(feedback_payload, dict)
+            else {}
+        )
+        if not isinstance(feedback_profiles, dict):
+            feedback_profiles = {}
+        source_date_matches = feedback.get("source_date") == owner_source_date
+        return {
+            "status": (
+                "loaded"
+                if source_date_matches and profile_id in feedback_profiles
+                else "owner_profile_not_present"
+                if source_date_matches and feedback["status"] == "loaded"
+                else "owner_source_date_mismatch"
+                if feedback["status"] == "loaded"
+                else feedback["status"]
+            ),
+            "source_date": feedback.get("source_date"),
+            "owner_source_date": owner_source_date,
+            "source_path": feedback.get("source_path"),
+            "source_sha256": feedback.get("source_sha256"),
+            "selection_effect": False,
+            "base_policy_unchanged": True,
+            "payload": (
+                feedback_profiles.get(profile_id) if source_date_matches else None
+            ),
+        }
+
     daily: dict[str, dict] = {}
     prior_state_reconciliations: dict[str, dict] = {}
     for profile_id in PROFILES:
@@ -710,6 +938,12 @@ def build_report(
                     resolved_row["source_quality_reasons"].append(
                         "original_date_source_quality_audit_blocked"
                     )
+            resolved_row["microstructure_prior_trading_day_diagnostic"] = (
+                micro_diagnostic(
+                    profile_id,
+                    owner_source_date=state_date.isoformat(),
+                )
+            )
             prior_state_reconciliations[profile_id] = {
                 "source_date": state_date.isoformat(),
                 "state_status": resolved_row["state_status"],
@@ -741,6 +975,11 @@ def build_report(
                     "observation_source_quality_audit_blocked"
                 )
             row["source_quality"] = "gap"
+    for profile_id, row in daily.items():
+        row["microstructure_prior_trading_day_diagnostic"] = micro_diagnostic(
+            profile_id,
+            owner_source_date=str(micro_feedback["source_date"]),
+        )
     history = _load_history(output_dir, parsed_date, cost_pct)
     for profile_id, reconciliation in prior_state_reconciliations.items():
         source_date = reconciliation["source_date"]
@@ -783,6 +1022,11 @@ def build_report(
         "metric_contract": METRIC_CONTRACT,
         "source_quality_preflight": source_preflight,
         "daily": {"profiles": daily},
+        "machine_microstructure_prior_trading_day_diagnostic_source": {
+            key: value
+            for key, value in micro_feedback.items()
+            if key != "owner_payload"
+        },
         "prior_state_reconciliations": prior_state_reconciliations,
         "clean_baseline_window": {
             "start_date": CLEAN_BASELINE_DATE.isoformat(),

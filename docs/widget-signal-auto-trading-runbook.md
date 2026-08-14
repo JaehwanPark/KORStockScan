@@ -53,19 +53,31 @@
   누적 후보 결함이 확인되면 사용하지 않고 해당 세션을 차단한다.
 - 장후 `machine_microstructure_attribution`은 당일 위젯 calibration, prospective
   signal research, 21:15 collector-expansion recommendation 종목 inventory를
-  micro-reversion 0B/0D 경로에 결합한다. 20:10 1차 산출 뒤 expansion service가
-  같은 날짜 report를 원자 갱신하므로 늦게 추가된 후보도 누락하지 않는다. micro
-  symbol 또는 entry-anchor window가 없으면 명시적 coverage gap으로 남긴다. 결손을
-  0수익으로 간주하지 않고 기존 위젯 EV와 exact-date policy 생성도 차단하지 않는다.
+  exact-date micro-reversion 0B/0D/event-reference 경로에 결합한다. owner
+  schema/date, aware timestamp, symbol·venue·session·sequence epoch를 검증하고
+  `signal -> buy-fill-confirmed -> target-fill-confirmed/exit` lifecycle을
+  actual/counterfactual, realized/right-censored, context-matched/policy-eligible
+  unique decision lifecycle로 분리한다. 구조 계약이 유효한 HELD-only lifecycle은
+  custody/결손 진단에는 남기지만 정책 readiness 표본으로 세지 않고, 다른
+  source-quality 계약 불합격은 context에서도 fail closed한다. 20:10 1차
+  산출 뒤 expansion service가 같은 날짜 report를 원자 갱신하므로 늦게 추가된
+  후보도 누락하지 않는다. micro symbol 또는 lifecycle anchor window가 없으면
+  명시적 coverage gap으로 남긴다. 결손을 0수익으로 간주하지 않고 기존 위젯 EV와
+  exact-date policy 생성도 차단하지 않는다.
   repairable gap은 다음 거래일 bounded source-only 0B/0D 수집 대상으로 되먹임하며,
   일회 수집 뒤 표본이 끊기지 않도록 현재 동적 위젯 universe도 일 4종목 공통
-  한도 안에서 `micro_policy_sample_accumulation`으로 회전 관찰한다. 수동관리
-  제외목록은 이 수집·평가 단계에 적용하지 않는다. 이 연결은
-  diagnostic-only이며 주문이나 위젯 policy 선택 권한이 없다. micro 조건이 위젯
-  policy를 실제로 바꾸려면 동일 symbol/session 5거래일·matched anchor 20건,
-  BBO 95%·depth 90%, 비용 반영 paired rolling 5/10/20일 EV 양수와 downside
-  비악화가 필요하다. 최초 bounded runtime family 연결은 별도 사용자 승인을 거쳐
-  exact-date PREOPEN으로만 열린다.
+  한도 안에서 stable priority cohort, symbol round-robin, 독립 per-symbol venue
+  phase로 회전 관찰한다. 이는 공정한 bounded rotation이지 overflow 종목의 바로
+  다음 거래일 선정을 보장하지 않는다. 수동관리 제외목록은 이 수집·평가·정책
+  연구 단계에 적용하지 않고 최종 실주문 owner 충돌 방지에만 사용한다. 다음 거래일
+  calibration은 정확한 prior owner source date의 owner-shaped diagnostic만 읽고
+  `selection_effect=false`를 유지한다. 이 연결은 diagnostic-only이며 주문이나
+  위젯 policy 선택 권한이 없다. micro 조건이 위젯 policy를 실제로 바꾸려면 동일
+  symbol/session 5거래일·policy-eligible unique decision lifecycle 20건, BBO
+  95%·depth 90%, 비용 반영 paired rolling 5/10/20일 EV와 20일 net profit·비용
+  반영 자본시간당 수익 양수, downside·HELD/right-censored 비악화가 필요하다.
+  최초 bounded runtime family 연결은 별도 사용자 승인을 거쳐 exact-date
+  PREOPEN으로만 열린다.
 - 모든 위젯 execution policy는 장후에 일일 완료 에피소드 상한 1~5회를 같은
   종목·세션·setup·목표·cooldown 조건으로 비교한다. 1~3회는 기존 비용차감
   누적 EV/chronological holdout 순위로 선택하며, 4회 또는 5회로 자동 확대하려면
@@ -84,10 +96,16 @@
 - 같은 스냅샷에 진입과 최종 청산이 함께 있으면 청산이 우선한다.
 - KRX 매수와 NXT 매수는 최유리지정가(`trde_tp=6`)를 사용한다. 최종 매도는
   KRX 시장가(`trde_tp=3`), NXT 최유리지정가(`trde_tp=6`)를 사용한다.
-- 매수 주문번호의 체결을 `kt00007`에서 확인하면 체결 평균가 대비 최소
-  `+1.00%`가 되는 첫 유효 호가에 체결수량만큼 보통 지정가
-  (`kt10001`, `trde_tp=0`) 익절 주문을 제출한다. 부분체결은 새로 확인된
-  미보호 수량만 추가 주문하며, 수수료·세금은 목표가 계산에 가산하지 않는다.
+- 매수 주문번호의 체결을 `kt00007`에서 확인하면 해당 entry episode에 고정된
+  active execution policy의 `take_profit_bps_from_equal_share_average`를 체결
+  평균가에 적용한 첫 유효 호가로 체결수량만큼 보통 지정가(`kt10001`,
+  `trde_tp=0`) 익절 주문을 제출한다. 현재 두산·한화 exact-date 장후 policy
+  calibration grid는 30~150bp이고 2026-08-14 Samsung exact-date 정책은 80bp다.
+  내장 Samsung baseline은 50bp이며 policy loader의 방어 범위는 20~300bp다.
+  policy lookup이 `None`인 compatibility 경로는 100bp
+  fallback을 사용한다. 따라서 고정
+  `+1.00%`가 runtime 계약은 아니다. 부분체결은 새로 확인된 미보호 수량만 추가
+  주문하며, 수수료·세금은 목표가 계산에 가산하지 않는다.
 - 최종 `EXIT_READY`가 익절 주문보다 먼저 발생하면 `kt10003`으로 익절 잔량을
   취소한다. 원 주문번호 조회에서 취소·부분체결 수량이 확정되기 전에는 최종
   청산 주문을 제출하지 않으며, 확정 뒤 당일 위젯 원장의 남은 수량만 판다.
@@ -99,6 +117,21 @@
   증권사 응답이 결정한다. 신용주문 `kt10006`으로 바꾸지 않는다.
 - 전역 BUY 일시정지, 신호 freshness/venue 계약, 단일 실행기 lock, 수량 상한,
   미체결 중복 방지는 우회하지 않는다.
+
+## 회전 수익 목적과 현재 구현 경계
+
+체결 확인 직후 정책 지정가 익절을 제출하고 익절 완료 뒤 새 source episode를
+받는 흐름은 빠른 청산·재진입의 실행 기반이다. 장후 report도 lifecycle duration,
+180초 이내 목표완료, 자본점유, 비용 반영 자본시간당 수익을 노출한다. 다만
+micro-reversion 연결은 이 값을 관찰·귀속할 뿐 현재 entry/exit policy를 선택하지
+않는다. 위젯은 open episode가 청산될 때까지 신규 entry가 막히고 exact-date
+cooldown·daily completion cap을 지킨다. 별도 lower-price episode machine은 일 1회
+attempt를 소비하고 미청산을 `HELD`로 종결하며 timeout/forced-exit/re-entry 축이 없다.
+따라서 “최대한 빠르고 자주 거래해 소량 순이익을 누적” 목적에 대한 현재 판정은
+관찰 기반과 체결 후 즉시 TP는 구현됐지만 turnover 정책은 미구현인 `partial`이다.
+향후 speed/turnover 변경은 동일 lifecycle의 비용 반영 paired EV·net profit·p10·
+HELD/right-censored·capital occupancy를 함께 검증한 뒤 같은 stage 단일 bounded
+family, rollback, post-apply attribution, 최초 사용자 명시 승인을 요구한다.
 
 ## 당일 원장과 날짜 초기화
 

@@ -19,14 +19,18 @@ import re
 import tempfile
 from collections import Counter
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 from urllib import parse, request
 from zoneinfo import ZoneInfo
 
+from src.engine.monitoring.machine_microstructure_attribution import (
+    resolve_completed_machine_target_date,
+)
 from src.engine.scalping.micro_reversion.contracts import CLEAN_BASELINE_DATE
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
+from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 QUEUE_SCHEMA = "machine_microstructure_policy_approval_queue_v1"
@@ -57,6 +61,8 @@ STATE_DESIGN_REQUIRED = "DESIGN_REQUIRED"
 STATE_REVIEW_READY = "REVIEW_READY"
 STATE_USER_APPROVED = "USER_APPROVED"
 STATE_PREOPEN_SCHEDULED = "PREOPEN_SCHEDULED"
+STATE_PREOPEN_MISSED_REVIEW_REQUIRED = "PREOPEN_MISSED_REVIEW_REQUIRED"
+STATE_REVALIDATION_REQUIRED = "REVALIDATION_REQUIRED"
 STATE_APPLIED = "APPLIED"
 STATE_POST_APPLY_ATTRIBUTED = "POST_APPLY_ATTRIBUTED"
 STATE_AUTO_CHAIN_ELIGIBLE = "AUTO_CHAIN_ELIGIBLE"
@@ -69,6 +75,8 @@ REMINDER_STATES = {
     STATE_REVIEW_READY,
     STATE_USER_APPROVED,
     STATE_PREOPEN_SCHEDULED,
+    STATE_PREOPEN_MISSED_REVIEW_REQUIRED,
+    STATE_REVALIDATION_REQUIRED,
     STATE_APPLIED,
     STATE_HOLD,
 }
@@ -82,6 +90,8 @@ EXPIRABLE_STATES = {
     STATE_REVIEW_READY,
     STATE_USER_APPROVED,
     STATE_PREOPEN_SCHEDULED,
+    STATE_PREOPEN_MISSED_REVIEW_REQUIRED,
+    STATE_REVALIDATION_REQUIRED,
     STATE_AUTO_CHAIN_ELIGIBLE,
     STATE_HOLD,
 }
@@ -89,6 +99,31 @@ VALID_DECISIONS = {"approve", "hold", "reject"}
 VALID_PHASES = {"postclose", "preopen"}
 VALID_STAGES = {"entry", "submit", "holding", "scale_in", "exit"}
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+# This ledger has no trusted per-candidate venue scope.  Use the earliest
+# supported market open (NXT 08:00 KST) as the common fail-closed cutoff.
+PREOPEN_HANDOFF_CUTOFF_KST = time(hour=8)
+
+DECISION_ALLOWED_STATES = {
+    "approve": {
+        STATE_REVIEW_READY,
+        STATE_HOLD,
+        STATE_PREOPEN_MISSED_REVIEW_REQUIRED,
+    },
+    "hold": {
+        STATE_DESIGN_REQUIRED,
+        STATE_REVIEW_READY,
+        STATE_USER_APPROVED,
+        STATE_PREOPEN_MISSED_REVIEW_REQUIRED,
+    },
+    "reject": {
+        STATE_DESIGN_REQUIRED,
+        STATE_REVIEW_READY,
+        STATE_USER_APPROVED,
+        STATE_HOLD,
+        STATE_PREOPEN_MISSED_REVIEW_REQUIRED,
+        STATE_REVALIDATION_REQUIRED,
+    },
+}
 
 # Candidate producers cannot grant runtime authority to their own output.
 # Families enter this source-owned registry only together with a real PREOPEN
@@ -128,6 +163,98 @@ def _now_kst(now: datetime | None = None) -> datetime:
     if value.tzinfo is None:
         value = value.replace(tzinfo=KST)
     return value.astimezone(KST)
+
+
+def _aware_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(KST)
+
+
+def _artifact_is_newer_than_invalidation(
+    artifact: Mapping[str, Any], entry: Mapping[str, Any]
+) -> bool:
+    decided_at = _aware_datetime(artifact.get("decided_at_kst"))
+    if decided_at is None:
+        return False
+    invalidated_at = _aware_datetime(entry.get("operator_decision_invalidated_at_kst"))
+    if invalidated_at is None:
+        return True
+    return decided_at > invalidated_at
+
+
+def _invalidate_operator_decision(
+    entry: dict[str, Any], *, invalidated_at: datetime, reason: str
+) -> None:
+    previous = str(entry.get("operator_decision_artifact") or "").strip()
+    if previous:
+        previous_payload = _load_json(Path(previous))
+        if previous_payload is None:
+            # Do not clear the only canonical approval pointer when neither an
+            # immutable archive nor an inline artifact snapshot can be made.
+            raise ValueError(
+                "operator_decision_artifact_unreadable_during_invalidation"
+            )
+        if (
+            previous_payload.get("schema") != APPROVAL_SCHEMA
+            or previous_payload.get("queue_key") != entry.get("queue_key")
+            or previous_payload.get("candidate_id") != entry.get("candidate_id")
+            or previous_payload.get("candidate_sha256") != entry.get("candidate_sha256")
+            or previous_payload.get("operator_authorization_id")
+            != entry.get("operator_authorization_id")
+            or previous_payload.get("decided_at_kst")
+            != entry.get("operator_decision_at_kst")
+        ):
+            raise ValueError(
+                "operator_decision_artifact_contract_invalid_during_invalidation"
+            )
+        archived = _archive_operator_decision_artifact(
+            Path(previous),
+            payload=previous_payload,
+            invalidated_at=invalidated_at,
+            reason=reason,
+        )
+        history = list(entry.get("invalidated_operator_decision_artifacts") or ())
+        if archived is not None and str(archived) not in history:
+            history.append(str(archived))
+        entry["invalidated_operator_decision_artifacts"] = history
+        history_rows = list(entry.get("invalidated_operator_decision_history") or ())
+        history_rows.append(
+            {
+                "canonical_artifact_path": previous,
+                "archived_artifact_path": str(archived) if archived else None,
+                "invalidated_at_kst": invalidated_at.isoformat(timespec="microseconds"),
+                "reason": reason,
+                "archive_status": (
+                    "immutable_file_and_inline_snapshot"
+                    if archived
+                    else "inline_snapshot_only"
+                ),
+                "operator_decision_artifact_sha256": hashlib.sha256(
+                    _canonical_json(previous_payload)
+                ).hexdigest(),
+                "operator_decision_artifact_snapshot": previous_payload,
+            }
+        )
+        entry["invalidated_operator_decision_history"] = history_rows
+    for field in (
+        "operator_decision_artifact",
+        "operator_decision_at_kst",
+        "operator_authorization_id",
+        "operator_registry_entry_sha256",
+    ):
+        entry.pop(field, None)
+    entry["operator_decision_invalidated_at_kst"] = invalidated_at.isoformat(
+        timespec="microseconds"
+    )
+    entry["operator_decision_invalidation_reason"] = reason
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -180,6 +307,44 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _archive_operator_decision_artifact(
+    path: Path,
+    *,
+    payload: Mapping[str, Any],
+    invalidated_at: datetime,
+    reason: str,
+) -> Path | None:
+    invalidated_at_text = invalidated_at.isoformat(timespec="microseconds")
+    artifact_digest = hashlib.sha256(_canonical_json(payload)).hexdigest()
+    archive_identity = hashlib.sha256(
+        _canonical_json(
+            {
+                "artifact_sha256": artifact_digest,
+                "invalidated_at_kst": invalidated_at_text,
+                "reason": reason,
+            }
+        )
+    ).hexdigest()
+    archive_path = (
+        path.parent
+        / "invalidated"
+        / (f"{path.stem}__invalidated_{archive_identity[:16]}.json")
+    )
+    archive_payload = {
+        "schema": "machine_microstructure_policy_invalidated_decision_archive_v1",
+        "canonical_artifact_path": str(path),
+        "operator_decision_artifact_sha256": artifact_digest,
+        "invalidated_at_kst": invalidated_at_text,
+        "invalidation_reason": reason,
+        "operator_decision_artifact": payload,
+    }
+    try:
+        _atomic_write_json(archive_path, archive_payload)
+    except OSError:
+        return None
+    return archive_path
 
 
 def _finite_float(value: Any) -> float | None:
@@ -338,8 +503,11 @@ def runtime_design_errors(
         errors.append("bounded_contract_sha256_invalid")
     if not _nonempty_mapping(design.get("rollback")):
         errors.append("rollback_missing")
-    if not _nonempty_mapping(design.get("post_apply_attribution")):
+    post_apply_attribution = design.get("post_apply_attribution")
+    if not _nonempty_mapping(post_apply_attribution):
         errors.append("post_apply_attribution_missing")
+    elif not str(post_apply_attribution.get("owner") or "").strip():
+        errors.append("post_apply_attribution_owner_missing")
     forbidden = design.get("forbidden_uses")
     if not isinstance(forbidden, list) or not forbidden:
         errors.append("runtime_design_forbidden_uses_missing")
@@ -354,6 +522,8 @@ def runtime_design_errors(
         != design.get("bounded_contract_sha256")
         or registry_entry.get("preopen_consumer") != design.get("preopen_consumer")
         or not str(registry_entry.get("apply_receipt_owner") or "").strip()
+        or registry_entry.get("post_apply_attribution_owner")
+        != (post_apply_attribution or {}).get("owner")
     ):
         errors.append("runtime_family_trusted_registry_mismatch")
     return errors
@@ -429,6 +599,7 @@ def _apply_operator_decisions(
     entries: list[dict[str, Any]],
     artifacts: Sequence[Mapping[str, Any]],
     *,
+    as_of: datetime,
     runtime_registry: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> None:
     by_key = {str(entry.get("queue_key") or ""): entry for entry in entries}
@@ -444,12 +615,19 @@ def _apply_operator_decisions(
         entry = by_key.get(key)
         if entry is None:
             continue
+        if not _artifact_is_newer_than_invalidation(artifact, entry):
+            continue
         if str(artifact.get("candidate_sha256") or "") != str(
             entry.get("candidate_sha256") or ""
         ):
             continue
         decision = str(artifact.get("decision") or "")
         if decision not in VALID_DECISIONS:
+            continue
+        decided_at = _aware_datetime(artifact.get("decided_at_kst"))
+        if decided_at is None or decided_at > as_of:
+            continue
+        if entry.get("state") not in DECISION_ALLOWED_STATES[decision]:
             continue
         candidate = entry.get("candidate") or {}
         family = _candidate_runtime_family(candidate)
@@ -470,33 +648,30 @@ def _apply_operator_decisions(
             or artifact.get("broker_order_forbidden") is not True
         ):
             continue
+        if decision == "approve" and runtime_design_errors(
+            candidate, runtime_registry=runtime_registry
+        ):
+            _invalidate_operator_decision(
+                entry,
+                invalidated_at=as_of,
+                reason="approval_ignored_runtime_design_not_ready",
+            )
+            entry["state"] = STATE_DESIGN_REQUIRED
+            entry["state_reason"] = "approval_ignored_runtime_design_not_ready"
+            continue
         entry["operator_decision_artifact"] = str(artifact.get("_artifact_path") or "")
         entry["operator_decision_at_kst"] = artifact.get("decided_at_kst")
         entry["operator_authorization_id"] = artifact.get("operator_authorization_id")
         entry["operator_registry_entry_sha256"] = registry_digest
-        if decision == "approve" and entry.get("state") in {
-            STATE_REVIEW_READY,
-            STATE_HOLD,
-        }:
-            if runtime_design_errors(candidate, runtime_registry=runtime_registry):
-                entry["state"] = STATE_DESIGN_REQUIRED
-                entry["state_reason"] = "approval_ignored_runtime_design_not_ready"
-            else:
-                entry["state"] = STATE_USER_APPROVED
-                entry["state_reason"] = "explicit_operator_approval_recorded"
-        elif decision == "hold" and entry.get("state") in {
-            STATE_DESIGN_REQUIRED,
-            STATE_REVIEW_READY,
-            STATE_USER_APPROVED,
-        }:
+        entry.pop("operator_decision_invalidated_at_kst", None)
+        entry.pop("operator_decision_invalidation_reason", None)
+        if decision == "approve":
+            entry["state"] = STATE_USER_APPROVED
+            entry["state_reason"] = "explicit_operator_approval_recorded"
+        elif decision == "hold":
             entry["state"] = STATE_HOLD
             entry["state_reason"] = "explicit_operator_hold_recorded"
-        elif decision == "reject" and entry.get("state") in {
-            STATE_DESIGN_REQUIRED,
-            STATE_REVIEW_READY,
-            STATE_USER_APPROVED,
-            STATE_HOLD,
-        }:
+        else:
             entry["state"] = STATE_REJECTED
             entry["state_reason"] = "explicit_operator_rejection_recorded"
 
@@ -530,10 +705,49 @@ def _handoff_matches_entry(
     )
 
 
+def _applied_receipt_time_is_valid(
+    receipt: Mapping[str, Any],
+    entry: Mapping[str, Any],
+    *,
+    as_of: datetime,
+) -> bool:
+    applied_at = _aware_datetime(receipt.get("applied_at_kst"))
+    handoff = _load_json(Path(str(entry.get("preopen_handoff") or "")))
+    handoff_created_at = _aware_datetime((handoff or {}).get("created_at_kst"))
+    try:
+        target_date = date.fromisoformat(str(entry.get("preopen_target_date") or ""))
+    except ValueError:
+        return False
+    return bool(
+        applied_at is not None
+        and handoff_created_at is not None
+        and applied_at.date() == target_date
+        and applied_at.time() < PREOPEN_HANDOFF_CUTOFF_KST
+        and handoff_created_at <= applied_at <= as_of
+    )
+
+
+def _attribution_receipt_time_is_valid(
+    receipt: Mapping[str, Any],
+    entry: Mapping[str, Any],
+    *,
+    as_of: datetime,
+) -> bool:
+    attributed_at = _aware_datetime(receipt.get("attributed_at_kst"))
+    source_receipt = _load_json(Path(str(entry.get("family_apply_receipt") or "")))
+    applied_at = _aware_datetime((source_receipt or {}).get("applied_at_kst"))
+    return bool(
+        attributed_at is not None
+        and applied_at is not None
+        and applied_at <= attributed_at <= as_of
+    )
+
+
 def _apply_family_receipts(
     entries: list[dict[str, Any]],
     receipt_dir: Path,
     *,
+    as_of: datetime,
     runtime_registry: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     enrollments: dict[str, dict[str, Any]] = {}
@@ -556,11 +770,10 @@ def _apply_family_receipts(
             continue
         candidate = entry.get("candidate") or {}
         design = candidate.get("runtime_design") or {}
-        registry_digest = _registry_entry_sha256(
-            _trusted_registry_entry(
-                str(design.get("runtime_family") or ""), runtime_registry
-            )
+        registry_entry = _trusted_registry_entry(
+            str(design.get("runtime_family") or ""), runtime_registry
         )
+        registry_digest = _registry_entry_sha256(registry_entry)
         if (
             str(receipt.get("candidate_sha256") or "")
             != str(entry.get("candidate_sha256") or "")
@@ -608,6 +821,13 @@ def _apply_family_receipts(
                 receipt.get("runtime_effect") is not True
                 or receipt.get("runtime_apply_performed") is not True
                 or receipt.get("actual_order_submitted") is not False
+                or receipt.get("receipt_owner")
+                != (registry_entry or {}).get("apply_receipt_owner")
+                or not _applied_receipt_time_is_valid(
+                    receipt,
+                    entry,
+                    as_of=as_of,
+                )
             ):
                 continue
             entry["family_apply_receipt"] = str(path)
@@ -618,8 +838,15 @@ def _apply_family_receipts(
                 or receipt.get("runtime_apply_performed") is not False
                 or receipt.get("actual_order_submitted") is not False
                 or receipt.get("post_apply_attribution_complete") is not True
+                or receipt.get("receipt_owner")
+                != (registry_entry or {}).get("post_apply_attribution_owner")
                 or str(receipt.get("source_apply_receipt") or "")
                 != str(entry.get("family_apply_receipt") or "")
+                or not _attribution_receipt_time_is_valid(
+                    receipt,
+                    entry,
+                    as_of=as_of,
+                )
             ):
                 continue
             entry["post_apply_attribution_receipt"] = str(path)
@@ -645,6 +872,7 @@ def _validated_existing_enrollments(
     entries: Sequence[Mapping[str, Any]],
     *,
     receipt_dir: Path,
+    as_of: datetime,
     runtime_registry: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     by_key = {str(entry.get("queue_key") or ""): entry for entry in entries}
@@ -664,9 +892,8 @@ def _validated_existing_enrollments(
             continue
         candidate = entry.get("candidate") or {}
         design = candidate.get("runtime_design") or {}
-        registry_digest = _registry_entry_sha256(
-            _trusted_registry_entry(str(family), runtime_registry)
-        )
+        registry_entry = _trusted_registry_entry(str(family), runtime_registry)
+        registry_digest = _registry_entry_sha256(registry_entry)
         if (
             str(design.get("runtime_family") or "") != str(family)
             or runtime_design_errors(candidate, runtime_registry=runtime_registry)
@@ -700,12 +927,109 @@ def _validated_existing_enrollments(
             or receipt.get("runtime_effect") is not True
             or receipt.get("runtime_apply_performed") is not True
             or receipt.get("actual_order_submitted") is not False
+            or receipt.get("receipt_owner")
+            != (registry_entry or {}).get("apply_receipt_owner")
             or receipt.get("same_stage_owner_conflict_free") is not True
             or receipt.get("hard_safety_and_broker_guards_preserved") is not True
+            or not _applied_receipt_time_is_valid(
+                receipt,
+                entry,
+                as_of=as_of,
+            )
         ):
             continue
         validated[str(family)] = dict(raw)
     return validated
+
+
+_FRESH_SOURCE_REVALIDATION_STATES = {
+    STATE_DESIGN_REQUIRED,
+    STATE_REVIEW_READY,
+    STATE_USER_APPROVED,
+    STATE_PREOPEN_MISSED_REVIEW_REQUIRED,
+    STATE_REVALIDATION_REQUIRED,
+    STATE_AUTO_CHAIN_ELIGIBLE,
+    STATE_HOLD,
+}
+
+
+def _mark_missed_preopen_handoffs(
+    entries: Sequence[dict[str, Any]],
+    *,
+    as_of_date: date,
+    now: datetime,
+) -> None:
+    for entry in entries:
+        if entry.get("state") != STATE_PREOPEN_SCHEDULED:
+            continue
+        try:
+            target_date = date.fromisoformat(
+                str(entry.get("preopen_target_date") or "")
+            )
+        except ValueError:
+            target_date = date.min
+        if target_date >= as_of_date:
+            continue
+        history = list(entry.get("missed_preopen_handoffs") or ())
+        history.append(
+            {
+                "target_date": entry.get("preopen_target_date"),
+                "handoff": entry.get("preopen_handoff"),
+                "authorization_mode": entry.get("authorization_mode"),
+                "marked_missed_at_kst": now.isoformat(timespec="seconds"),
+            }
+        )
+        entry["missed_preopen_handoffs"] = history
+        _invalidate_operator_decision(
+            entry,
+            invalidated_at=now,
+            reason="exact_date_preopen_handoff_missed",
+        )
+        for field in (
+            "preopen_handoff",
+            "preopen_target_date",
+            "authorization_mode",
+        ):
+            entry.pop(field, None)
+        entry["state"] = STATE_PREOPEN_MISSED_REVIEW_REQUIRED
+        entry["state_reason"] = (
+            "exact_date_preopen_handoff_missed_explicit_redecision_required"
+        )
+
+
+def _revalidate_entries_against_fresh_source(
+    entries: Sequence[dict[str, Any]],
+    *,
+    source_status: str,
+    accepted_queue_keys: set[str],
+    raw_candidate_ids: set[str],
+    rejected_candidate_ids: set[str],
+    now: datetime,
+) -> None:
+    if source_status != "loaded":
+        return
+    for entry in entries:
+        if entry.get("state") not in _FRESH_SOURCE_REVALIDATION_STATES:
+            continue
+        queue_key = str(entry.get("queue_key") or "")
+        if queue_key in accepted_queue_keys:
+            continue
+        candidate_id = str(entry.get("candidate_id") or "")
+        reason = (
+            "fresh_source_candidate_rejected_revalidation_required"
+            if candidate_id in rejected_candidate_ids
+            else "fresh_source_candidate_withdrawn_revalidation_required"
+            if candidate_id not in raw_candidate_ids
+            else "fresh_source_candidate_version_not_accepted_revalidation_required"
+        )
+        if entry.get("state") != STATE_REVALIDATION_REQUIRED:
+            _invalidate_operator_decision(
+                entry,
+                invalidated_at=now,
+                reason=reason,
+            )
+        entry["state"] = STATE_REVALIDATION_REQUIRED
+        entry["state_reason"] = reason
 
 
 def sync_queue(
@@ -724,14 +1048,40 @@ def sync_queue(
     entries = [
         dict(row) for row in queue.get("candidates", []) if isinstance(row, dict)
     ]
+    # Reconcile a family-owned apply receipt before a fresh daily candidate can
+    # supersede the scheduled version that was actually applied that morning.
+    # Otherwise the normal source-date/hash refresh can make the receipt
+    # unreachable and silently lose both APPLIED state and family enrollment.
+    family_enrollments = _validated_existing_enrollments(
+        queue.get("family_enrollments") or {},
+        entries,
+        receipt_dir=apply_receipt_dir,
+        as_of=generated,
+        runtime_registry=runtime_registry,
+    )
+    new_enrollments = _apply_family_receipts(
+        entries,
+        apply_receipt_dir,
+        as_of=generated,
+        runtime_registry=runtime_registry,
+    )
+    family_enrollments.update(new_enrollments)
     by_key = {str(entry.get("queue_key") or ""): entry for entry in entries}
     intake_rejections: list[dict[str, Any]] = []
+    accepted_queue_keys: set[str] = set()
+    raw_candidate_ids: set[str] = set()
+    rejected_candidate_ids: set[str] = set()
     for raw_candidate in source_candidates:
         candidate = dict(raw_candidate)
+        raw_candidate_id = str(candidate.get("candidate_id") or "").strip()
+        if raw_candidate_id:
+            raw_candidate_ids.add(raw_candidate_id)
         errors = evidence_readiness_errors(candidate)
         if str(candidate.get("source_date") or "") != as_of_date.isoformat():
             errors.append("candidate_source_date_not_as_of_date")
         if errors:
+            if raw_candidate_id:
+                rejected_candidate_ids.add(raw_candidate_id)
             intake_rejections.append(
                 {
                     "candidate_id": candidate.get("candidate_id"),
@@ -742,6 +1092,8 @@ def sync_queue(
         digest = candidate_sha256(candidate)
         declared_digest = str(candidate.get("candidate_sha256") or "")
         if declared_digest and declared_digest != digest:
+            if raw_candidate_id:
+                rejected_candidate_ids.add(raw_candidate_id)
             intake_rejections.append(
                 {
                     "candidate_id": candidate.get("candidate_id"),
@@ -751,6 +1103,7 @@ def sync_queue(
             continue
         candidate_id = str(candidate["candidate_id"])
         key = _queue_key(candidate_id, digest)
+        accepted_queue_keys.add(key)
         for previous in entries:
             if (
                 previous.get("candidate_id") == candidate_id
@@ -775,7 +1128,21 @@ def sync_queue(
             entry["candidate"] = candidate
             entry["runtime_design_errors"] = design_errors
             entry["runtime_registry_entry_sha256"] = registry_digest
-            if entry.get("state") == STATE_DESIGN_REQUIRED and not design_errors:
+            if entry.get("state") == STATE_REVALIDATION_REQUIRED:
+                _invalidate_operator_decision(
+                    entry,
+                    invalidated_at=generated,
+                    reason=("fresh_source_candidate_revalidated_new_decision_required"),
+                )
+                entry["state"] = (
+                    STATE_DESIGN_REQUIRED if design_errors else STATE_REVIEW_READY
+                )
+                entry["state_reason"] = (
+                    "fresh_source_candidate_revalidated_runtime_design_required"
+                    if design_errors
+                    else "fresh_source_candidate_revalidated_review_ready"
+                )
+            elif entry.get("state") == STATE_DESIGN_REQUIRED and not design_errors:
                 entry["state"] = STATE_REVIEW_READY
                 entry["state_reason"] = "runtime_design_registered_review_ready"
             elif design_errors and entry.get("state") in {
@@ -810,30 +1177,31 @@ def sync_queue(
         entries.append(entry)
         by_key[key] = entry
 
+    _mark_missed_preopen_handoffs(
+        entries,
+        as_of_date=as_of_date,
+        now=generated,
+    )
     for entry in entries:
         if entry.get("state") in EXPIRABLE_STATES and _entry_expired(
             entry, as_of_date=as_of_date
         ):
             entry["state"] = STATE_EXPIRED
             entry["state_reason"] = "evidence_validity_expired_revalidation_required"
-
     _apply_operator_decisions(
         entries,
         approval_artifacts,
+        as_of=generated,
         runtime_registry=runtime_registry,
     )
-    family_enrollments = _validated_existing_enrollments(
-        queue.get("family_enrollments") or {},
+    _revalidate_entries_against_fresh_source(
         entries,
-        receipt_dir=apply_receipt_dir,
-        runtime_registry=runtime_registry,
+        source_status=source_status,
+        accepted_queue_keys=accepted_queue_keys,
+        raw_candidate_ids=raw_candidate_ids,
+        rejected_candidate_ids=rejected_candidate_ids,
+        now=generated,
     )
-    new_enrollments = _apply_family_receipts(
-        entries,
-        apply_receipt_dir,
-        runtime_registry=runtime_registry,
-    )
-    family_enrollments.update(new_enrollments)
     for entry in entries:
         candidate = entry.get("candidate") or {}
         family = _candidate_runtime_family(candidate)
@@ -900,6 +1268,7 @@ def record_operator_decision(
     operator_authorization_id: str,
     operator_instruction: str,
     approval_dir: Path = APPROVAL_DIR,
+    apply_receipt_dir: Path = APPLY_RECEIPT_DIR,
     now: datetime | None = None,
     runtime_registry: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], Path]:
@@ -907,6 +1276,16 @@ def record_operator_decision(
         raise ValueError("operator_decision_invalid")
     if not operator_authorization_id.strip() or not operator_instruction.strip():
         raise ValueError("explicit_operator_authority_missing")
+    requested_at = _now_kst(now)
+    queue, _ = sync_queue(
+        queue,
+        source_candidates=(),
+        source_path=None,
+        as_of_date=requested_at.date(),
+        now=requested_at,
+        apply_receipt_dir=apply_receipt_dir,
+        runtime_registry=runtime_registry,
+    )
     matches = [
         row
         for row in queue.get("candidates", [])
@@ -918,30 +1297,30 @@ def record_operator_decision(
         raise ValueError("candidate_id_and_hash_not_uniquely_found")
     entry = matches[0]
     state = str(entry.get("state") or "")
-    if _entry_expired(entry, as_of_date=_now_kst(now).date()):
+    if _entry_expired(entry, as_of_date=requested_at.date()):
         raise ValueError("candidate_evidence_expired")
+    if state not in DECISION_ALLOWED_STATES[decision]:
+        reason = {
+            "approve": "candidate_not_approval_ready",
+            "hold": "candidate_not_holdable",
+            "reject": "candidate_not_rejectable",
+        }[decision]
+        raise ValueError(f"{reason}:{state}")
     if decision == "approve":
-        if state not in {STATE_REVIEW_READY, STATE_HOLD}:
-            raise ValueError(f"candidate_not_approval_ready:{state}")
         design_errors = runtime_design_errors(
             entry.get("candidate") or {}, runtime_registry=runtime_registry
         )
         if design_errors:
             raise ValueError("runtime_design_not_ready:" + ",".join(design_errors))
-    elif decision == "hold" and state not in {
-        STATE_DESIGN_REQUIRED,
-        STATE_REVIEW_READY,
-        STATE_USER_APPROVED,
-    }:
-        raise ValueError(f"candidate_not_holdable:{state}")
-    elif decision == "reject" and state not in {
-        STATE_DESIGN_REQUIRED,
-        STATE_REVIEW_READY,
-        STATE_USER_APPROVED,
-        STATE_HOLD,
-    }:
-        raise ValueError(f"candidate_not_rejectable:{state}")
-    decided_at = _now_kst(now).isoformat(timespec="seconds")
+    decision_time = requested_at
+    invalidated_at = _aware_datetime(entry.get("operator_decision_invalidated_at_kst"))
+    if invalidated_at is not None and decision_time <= invalidated_at:
+        # The persisted timestamps used to have second precision.  Preserve a
+        # strict causal ordering even when an operator re-decides in the same
+        # wall-clock second as the invalidation instead of silently ignoring
+        # the newly written artifact.
+        decision_time = invalidated_at + timedelta(microseconds=1)
+    decided_at = decision_time.isoformat(timespec="microseconds")
     runtime_family = _candidate_runtime_family(entry.get("candidate") or {})
     registry_digest = _registry_entry_sha256(
         _trusted_registry_entry(runtime_family, runtime_registry)
@@ -965,17 +1344,37 @@ def record_operator_decision(
         "forbidden_uses": METRIC_CONTRACT["forbidden_uses"],
     }
     path = approval_artifact_path(entry, approval_dir)
-    _atomic_write_json(path, artifact)
     updated, _ = sync_queue(
         queue,
         source_candidates=(),
         source_path=None,
-        as_of_date=_now_kst(now).date(),
-        now=now,
+        as_of_date=decision_time.date(),
+        now=decision_time,
         approval_artifacts=[{**artifact, "_artifact_path": str(path)}],
-        apply_receipt_dir=Path("/__machine_micro_no_receipts__"),
+        apply_receipt_dir=apply_receipt_dir,
         runtime_registry=runtime_registry,
     )
+    expected_state = {
+        "approve": STATE_USER_APPROVED,
+        "hold": STATE_HOLD,
+        "reject": STATE_REJECTED,
+    }[decision]
+    updated_matches = [
+        row
+        for row in updated.get("candidates", [])
+        if isinstance(row, Mapping)
+        and row.get("candidate_id") == candidate_id
+        and row.get("candidate_sha256") == expected_candidate_sha256
+    ]
+    if (
+        len(updated_matches) != 1
+        or updated_matches[0].get("state") != expected_state
+        or updated_matches[0].get("operator_authorization_id")
+        != operator_authorization_id.strip()
+        or updated_matches[0].get("operator_decision_at_kst") != decided_at
+    ):
+        raise ValueError("operator_decision_not_applied_after_receipt_reconciliation")
+    _atomic_write_json(path, artifact)
     return updated, path
 
 
@@ -991,6 +1390,15 @@ def schedule_preopen_handoffs(
     entries = [
         dict(row) for row in queue.get("candidates", []) if isinstance(row, dict)
     ]
+    if generated.date() != target_date:
+        raise ValueError("preopen_handoff_target_date_not_generated_kst_date")
+    if not is_krx_trading_day(target_date):
+        raise ValueError("preopen_handoff_target_date_not_krx_trading_day")
+    # The scheduled automation runs at 07:35 KST.  Preserve that valid path,
+    # but never mint an apply-authorizing handoff after any supported venue
+    # could already be trading; venue/cohort is not a trusted registry field.
+    if generated.time() >= PREOPEN_HANDOFF_CUTOFF_KST:
+        raise ValueError("preopen_handoff_generated_at_or_after_market_open_cutoff")
     written: list[Path] = []
     for entry in entries:
         if entry.get("state") not in {
@@ -1413,6 +1821,7 @@ def _record_decision(args: argparse.Namespace) -> dict[str, Any]:
             operator_authorization_id=args.operator_authorization_id,
             operator_instruction=args.operator_instruction,
             approval_dir=args.approval_dir,
+            apply_receipt_dir=args.apply_receipt_dir,
         )
         _atomic_write_json(args.queue_path, queue)
     return {
@@ -1429,7 +1838,7 @@ def _record_decision(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase", choices=sorted(VALID_PHASES))
-    parser.add_argument("--target-date", default=_now_kst().date().isoformat())
+    parser.add_argument("--target-date")
     parser.add_argument("--source-report", type=Path)
     parser.add_argument("--queue-path", type=Path, default=DEFAULT_QUEUE_PATH)
     parser.add_argument("--report-dir", type=Path, default=REPORT_DIR)
@@ -1444,6 +1853,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--operator-authorization-id", default="")
     parser.add_argument("--operator-instruction", default="")
     args = parser.parse_args(argv)
+    if not args.target_date:
+        args.target_date = (
+            resolve_completed_machine_target_date().isoformat()
+            if args.phase == "postclose"
+            else _now_kst().date().isoformat()
+        )
     try:
         date.fromisoformat(args.target_date)
         if args.record_decision:

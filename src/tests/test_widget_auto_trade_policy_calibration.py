@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 
 from src.engine.monitoring.samsung_widget_contract import KST
@@ -154,14 +155,21 @@ def test_summary_excludes_right_censored_rows_from_ev_denominator() -> None:
             {
                 "trade_date": "2026-08-11",
                 "net_return_pct": 0.6,
+                "gross_return_pct": 0.8,
                 "exit_reason": "fixed_average_take_profit",
                 "filled_leg_count": 1,
+                "average_price": 10000,
+                "entry_at": "2026-08-11T10:00:00+09:00",
+                "exit_at": "2026-08-11T10:02:00+09:00",
             },
             {
                 "trade_date": "2026-08-11",
                 "net_return_pct": None,
                 "exit_reason": "right_censored",
                 "filled_leg_count": 1,
+                "average_price": 10000,
+                "entry_at": "2026-08-11T10:00:00+09:00",
+                "exit_at": "2026-08-11T10:10:00+09:00",
             },
         ]
     )
@@ -169,6 +177,33 @@ def test_summary_excludes_right_censored_rows_from_ev_denominator() -> None:
     assert summary["source_quality_adjusted_ev_pct"] == 0.6
     assert summary["right_censored_count"] == 1
     assert summary["target_completion_ratio"] == 0.5
+    assert summary["gross_no_slippage_avg_return_pct"] == 0.8
+    assert summary["median_resolved_holding_duration_sec"] == 120.0
+    assert summary["target_exit_within_180s_ratio"] == 1.0
+    assert summary["observed_capital_occupied_krw_seconds"] == 72_000_000.0
+    assert summary["cost_aware_realized_return_per_capital_hour"] == 0.03
+
+
+def test_summary_does_not_fake_exact_capital_occupancy_for_multi_leg_trade() -> None:
+    summary = _summary(
+        [
+            {
+                "trade_date": "2026-08-11",
+                "net_return_pct": 0.6,
+                "gross_return_pct": 0.8,
+                "exit_reason": "fixed_average_take_profit",
+                "filled_leg_count": 2,
+                "average_price": 10000,
+                "entry_at": "2026-08-11T10:00:00+09:00",
+                "exit_at": "2026-08-11T10:02:00+09:00",
+            }
+        ]
+    )
+
+    assert summary["capital_timing_trade_count"] == 0
+    assert summary["capital_occupancy_unavailable_multi_leg_trade_count"] == 1
+    assert summary["observed_capital_occupied_krw_seconds"] is None
+    assert summary["cost_aware_realized_return_per_capital_hour"] is None
 
 
 def test_holdout_gates_calibration_selected_high_cap_without_downgrading(
@@ -708,4 +743,87 @@ def test_low_symbol_research_gate_records_fully_missing_trading_dates() -> None:
     assert (
         "no_valid_krx_regular_rows"
         in accumulation["excluded_observation_dates"]["2026-08-12"]
+    )
+
+
+def test_widget_report_consumes_prior_micro_diagnostic_without_policy_effect(
+    tmp_path, monkeypatch
+) -> None:
+    session = SessionSpec("KRX_REGULAR", "KRX", ("14:30:00",), False, (), False)
+    spec = SymbolSpec(
+        symbol="999999",
+        name="synthetic",
+        observation_dir=tmp_path / "observations",
+        prefix="synthetic",
+        sessions=(session,),
+        add_trigger_arms=((),),
+        target_bps_values=(50,),
+        max_entries_values=(1,),
+        minimum_signal_dates=2,
+        minimum_trades=2,
+        analysis_start_date=date(2026, 6, 5),
+        minimum_qualified_observation_dates=0,
+    )
+    monkeypatch.setattr(calibration, "SPECS", (spec,))
+    monkeypatch.setattr(
+        calibration,
+        "_load_rows",
+        lambda _spec, *, target_date: ([], [], {"loaded": 0}),
+    )
+    micro_dir = tmp_path / "machine_micro"
+    micro_dir.mkdir()
+    (micro_dir / "machine_microstructure_attribution_2026-08-13.json").write_text(
+        json.dumps(
+            {
+                "schema": "machine_microstructure_attribution_v1",
+                "target_date": "2026-08-13",
+                "status": "warning",
+                "authority": {
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                "consumers": {
+                    "widget_postclose_tuning": {
+                        "symbols": {
+                            "999999": {
+                                "micro_context_status": "matched",
+                                "anchor_results": [
+                                    {"anchor_role": "counterfactual_calibration_entry"}
+                                ],
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = calibration.build_report(
+        target_date=date(2026, 8, 14),
+        machine_microstructure_report_dir=micro_dir,
+    )
+    missing = calibration.build_report(
+        target_date=date(2026, 8, 14),
+        machine_microstructure_report_dir=tmp_path / "missing_micro",
+    )
+
+    diagnostic = loaded["symbols"]["999999"][
+        "microstructure_prior_trading_day_diagnostic"
+    ]
+    assert diagnostic["status"] == "loaded"
+    assert diagnostic["source_date"] == "2026-08-13"
+    assert diagnostic["selection_effect"] is False
+    assert diagnostic["payload"]["micro_context_status"] == "matched"
+    assert (
+        missing["symbols"]["999999"]["microstructure_prior_trading_day_diagnostic"][
+            "status"
+        ]
+        == "missing"
+    )
+    assert (
+        loaded["symbols"]["999999"]["sessions"]
+        == missing["symbols"]["999999"]["sessions"]
     )
