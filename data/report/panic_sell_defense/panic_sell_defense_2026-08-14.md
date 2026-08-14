@@ -9,19 +9,19 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-08-14T11:32:01`
-- latest_event_at: `2026-08-14T11:32:06`
+- as_of: `2026-08-14T11:34:02`
+- latest_event_at: `2026-08-14T11:34:06`
 - reasons: `panic thresholds not breached`
 
 ## 입력 자원 계약
 
 - memory_bounded_streaming: `true`
-- scanned_row_count: `84793`
+- scanned_row_count: `85832`
 - retained_exit_event_count: `4268`
 - full_event_list_materialized: `false`
 - out_of_order_event_count: `0`
-- unique_market_observation_count: `10410`
-- duplicate_snapshot_skipped_count: `8643`
+- unique_market_observation_count: `10533`
+- duplicate_snapshot_skipped_count: `8728`
 
 ## 패닉 지표
 
@@ -57,14 +57,14 @@
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `706`
+- evaluated_symbol_count: `708`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `358`
-- degraded_orderbook_count: `358`
+- missing_orderbook_count: `359`
+- degraded_orderbook_count: `359`
 - stale_or_unhealthy_orderbook_count: `6`
 - panic_report_entry_count: `0`
 - panic_active_confirmation_count: `0`
@@ -80,11 +80,11 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_ON`
-- market_panic_breadth_as_of: `2026-08-14T11:32:01`
+- market_panic_breadth_as_of: `2026-08-14T11:34:02`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
-- evaluated_symbol_count: `706`
+- evaluated_symbol_count: `708`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
 - confirmed_risk_off_advisory: `false`
