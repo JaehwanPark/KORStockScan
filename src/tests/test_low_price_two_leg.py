@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -376,6 +377,125 @@ def test_machine_state_and_order_ledger_are_bound_to_one_profile(tmp_path):
     assert state["signal_features"]["source"] == (
         "kiwoom_ka10080_010140_AL_completed_1m"
     )
+
+
+@pytest.mark.parametrize(
+    ("prior_status", "prior_reason"),
+    [
+        ("COMPLETE", ""),
+        ("BLOCKED", "state_leg_target_policy_mismatch"),
+    ],
+)
+def test_prior_terminal_ledger_rolls_before_current_policy_validation(
+    tmp_path, prior_status, prior_reason
+):
+    prior_profile = PROFILES["kakao_morning"]
+    current_profile = replace(
+        prior_profile,
+        policy=replace(
+            prior_profile.policy,
+            target_ticks=prior_profile.policy.target_ticks + 1,
+        ),
+    )
+    signal_close = 39_250
+    legs = []
+    owned_order_nos = []
+    for index, plan in enumerate(prior_profile.policy.entry_legs(signal_close), 1):
+        entry_price = int(plan["entry_price"])
+        buy_order_no = f"B{index}"
+        target_order_no = f"T{index}"
+        owned_order_nos.extend([buy_order_no, target_order_no])
+        legs.append(
+            {
+                "leg_id": plan["leg_id"],
+                "price_role": plan["price_role"],
+                "quantity": 1,
+                "entry_price": entry_price,
+                "status": "COMPLETE",
+                "buy_order_no": buy_order_no,
+                "fill_price": entry_price,
+                "buy_filled_qty": 1,
+                "position_qty": 0,
+                "target_price": prior_profile.policy.target_price(entry_price),
+                "target_order_no": target_order_no,
+                "target_quantity": 1,
+                "target_filled_qty": 1,
+                "target_fill_price": prior_profile.policy.target_price(entry_price),
+            }
+        )
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema": "low_price_two_leg_kakao_morning_state_v1",
+                "trade_date": "2026-08-13",
+                "status": prior_status,
+                "attempt_consumed": True,
+                "signal_close": signal_close,
+                "signal_features": {},
+                "legs": legs,
+                "position_qty": 0,
+                "blocked_reason": prior_reason,
+                "owned_order_nos": owned_order_nos,
+                "audit": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    machine = LowPriceTwoLegMachine(
+        profile=current_profile,
+        gateway=FakeGateway(current_profile.profile_id),
+        state_path=state_path,
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+
+    state = machine.run_once(_at(14, 9, 19))
+
+    assert state["trade_date"] == "2026-08-14"
+    assert state["status"] == "READY"
+    assert state["blocked_reason"] != "state_leg_target_policy_mismatch"
+    assert any(
+        event.get("action") == "daily_state_initialized_from_prior_terminal_policy"
+        and event.get("prior_trade_date") == "2026-08-13"
+        and event.get("prior_blocked_reason") == prior_reason
+        for event in state["audit"]
+    )
+
+
+def test_prior_policy_mismatch_with_open_exposure_never_rolls(tmp_path):
+    profile = PROFILES["kakao_morning"]
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema": "low_price_two_leg_kakao_morning_state_v1",
+                "trade_date": "2026-08-13",
+                "status": "BLOCKED",
+                "attempt_consumed": True,
+                "signal_features": {},
+                "legs": [],
+                "position_qty": 1,
+                "blocked_reason": "state_leg_target_policy_mismatch",
+                "owned_order_nos": [],
+                "audit": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=FakeGateway(profile.profile_id),
+        state_path=state_path,
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+
+    state = machine.run_once(_at(14, 9, 19))
+
+    assert state["trade_date"] == "2026-08-13"
+    assert state["status"] == "BLOCKED"
+    assert state["position_qty"] == 1
 
 
 def test_mirae_machine_uses_user_approved_minus_one_minus_two_split(tmp_path):

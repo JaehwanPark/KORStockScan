@@ -203,6 +203,130 @@ def test_reentry_arms_only_after_both_first_episode_legs_complete(tmp_path):
     assert state["prerequisite"]["required_completed_leg_count"] == 2
 
 
+def test_reentry_uses_durable_leg_completion_when_bounded_audit_was_evicted(
+    tmp_path,
+):
+    first_state = tmp_path / "first.json"
+    _write_first_episode(first_state)
+    payload = json.loads(first_state.read_text(encoding="utf-8"))
+    payload["legs"][0]["target_filled_at"] = _at(9, 2).isoformat()
+    payload["legs"][1]["target_filled_at"] = _at(9, 10).isoformat()
+    payload["audit"] = [
+        {
+            "at_kst": _at(9, 11).isoformat(),
+            "action": "target_open_wait",
+            "leg_id": "base",
+        }
+        for _ in range(100)
+    ]
+    first_state.write_text(json.dumps(payload), encoding="utf-8")
+    gateway = ReentryGateway(_signal_bars())
+    machine = SamsungMorningSORReentryMachine(
+        gateway=gateway,
+        state_path=tmp_path / "reentry.json",
+        first_episode_state_path=first_state,
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+
+    state = machine.run_once(_at(9, 18))
+
+    assert state["status"] == "READY"
+    assert state["blocked_reason"] == ""
+    assert state["prerequisite"]["first_episode_completed_at"] == (
+        "2026-08-13T09:10:00+09:00"
+    )
+    assert gateway.buy_calls == []
+
+
+def test_unarmed_same_day_provenance_block_retries_from_durable_leg_fields(
+    tmp_path,
+):
+    first_state = tmp_path / "first.json"
+    _write_first_episode(first_state)
+    first_payload = json.loads(first_state.read_text(encoding="utf-8"))
+    for leg in first_payload["legs"]:
+        leg["target_filled_at"] = _at(9, 0).isoformat()
+    first_payload["audit"] = []
+    first_state.write_text(json.dumps(first_payload), encoding="utf-8")
+    reentry_state = tmp_path / "reentry.json"
+    reentry_state.write_text(
+        json.dumps(
+            {
+                "schema": "samsung_morning_sor_reentry_two_leg_state_v1",
+                "trade_date": "2026-08-13",
+                "status": "BLOCKED",
+                "attempt_consumed": False,
+                "position_qty": 0,
+                "legs": [],
+                "owned_order_nos": [],
+                "blocked_reason": "first_episode_completion_provenance_missing",
+                "audit": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    gateway = ReentryGateway(_signal_bars())
+    machine = SamsungMorningSORReentryMachine(
+        gateway=gateway,
+        state_path=reentry_state,
+        first_episode_state_path=first_state,
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+
+    state = machine.run_once(_at(9, 18))
+
+    assert state["status"] == "BUY_OPEN"
+    assert state["blocked_reason"] == ""
+    assert any(
+        event.get("action") == "same_day_completion_provenance_block_recovered"
+        for event in state["audit"]
+    )
+    assert gateway.buy_calls == [100_200, 100_100]
+
+
+def test_same_day_provenance_block_with_owned_order_never_retries(tmp_path):
+    first_state = tmp_path / "first.json"
+    _write_first_episode(first_state)
+    first_payload = json.loads(first_state.read_text(encoding="utf-8"))
+    for leg in first_payload["legs"]:
+        leg["target_filled_at"] = _at(9, 0).isoformat()
+    first_payload["audit"] = []
+    first_state.write_text(json.dumps(first_payload), encoding="utf-8")
+    reentry_state = tmp_path / "reentry.json"
+    reentry_state.write_text(
+        json.dumps(
+            {
+                "schema": "samsung_morning_sor_reentry_two_leg_state_v1",
+                "trade_date": "2026-08-13",
+                "status": "BLOCKED",
+                "attempt_consumed": False,
+                "position_qty": 0,
+                "legs": [],
+                "owned_order_nos": ["B1"],
+                "blocked_reason": "first_episode_completion_provenance_missing",
+                "audit": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    gateway = ReentryGateway(_signal_bars())
+    machine = SamsungMorningSORReentryMachine(
+        gateway=gateway,
+        state_path=reentry_state,
+        first_episode_state_path=first_state,
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+
+    state = machine.run_once(_at(9, 18))
+
+    assert state["status"] == "BLOCKED"
+    assert state["owned_order_nos"] == ["B1"]
+    assert gateway.buy_calls == []
+
+
 def test_reentry_waits_until_krx_regular_without_calling_market_source(tmp_path):
     first_state = tmp_path / "first.json"
     _write_first_episode(first_state)

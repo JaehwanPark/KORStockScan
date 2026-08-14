@@ -29,7 +29,12 @@ from src.utils.constants import DATA_DIR
 DEFAULT_REENTRY_STATE_PATH = (
     DATA_DIR / "runtime" / "samsung_morning_sor_reentry_state.json"
 )
-SAFE_PRECONDITION_BLOCK_REASONS = frozenset({"first_episode_both_legs_not_complete"})
+SAFE_PRECONDITION_BLOCK_REASONS = frozenset(
+    {
+        "first_episode_both_legs_not_complete",
+        "first_episode_completion_provenance_missing",
+    }
+)
 
 
 def _first_episode_payload_complete(payload: object, target_date: date) -> bool:
@@ -117,8 +122,7 @@ def prior_reentry_allows_new_first_episode(
     )
     safe_precondition_block = (
         status == "BLOCKED"
-        and str(payload.get("blocked_reason") or "")
-        in SAFE_PRECONDITION_BLOCK_REASONS
+        and str(payload.get("blocked_reason") or "") in SAFE_PRECONDITION_BLOCK_REASONS
         and payload.get("attempt_consumed") is False
         and legs == []
         and owned_order_nos == []
@@ -206,7 +210,22 @@ class SamsungMorningSORReentryMachine(SamsungRegularTwoLegMachine):
             return None, "first_episode_state_invalid"
         if not _first_episode_payload_complete(payload, now.date()):
             return None, "first_episode_both_legs_not_complete"
+        expected_ids = {"base_plus_1tick", "base"}
         completion_by_leg: dict[str, datetime] = {}
+        for leg in payload.get("legs") or []:
+            if not isinstance(leg, dict):
+                continue
+            leg_id = str(leg.get("leg_id") or "")
+            if leg_id not in expected_ids:
+                continue
+            try:
+                completed_at = datetime.fromisoformat(
+                    str(leg.get("target_filled_at") or "")
+                )
+            except ValueError:
+                continue
+            if completed_at.tzinfo is not None:
+                completion_by_leg[leg_id] = completed_at.astimezone(KST)
         for event in payload.get("audit") or []:
             if (
                 not isinstance(event, dict)
@@ -214,18 +233,19 @@ class SamsungMorningSORReentryMachine(SamsungRegularTwoLegMachine):
             ):
                 continue
             leg_id = str(event.get("leg_id") or "")
+            if leg_id not in expected_ids or leg_id in completion_by_leg:
+                continue
             try:
                 completed_at = datetime.fromisoformat(str(event.get("at_kst") or ""))
             except ValueError:
                 continue
             if completed_at.tzinfo is not None:
                 completion_by_leg[leg_id] = completed_at.astimezone(KST)
-        expected_ids = {"base_plus_1tick", "base"}
         if set(completion_by_leg) != expected_ids:
             return None, "first_episode_completion_provenance_missing"
-        completed_at = max(completion_by_leg.values())
-        if completed_at.date() != now.date():
+        if any(value.date() != now.date() for value in completion_by_leg.values()):
             return None, "first_episode_completion_date_mismatch"
+        completed_at = max(completion_by_leg.values())
         return completed_at, "ready"
 
     def _source(self, now: datetime):
@@ -305,9 +325,41 @@ class SamsungMorningSORReentryMachine(SamsungRegularTwoLegMachine):
             prior_blocked_reason=prior_reason,
         )
 
+    def _retry_safe_same_day_completion_provenance_block(self, now: datetime) -> None:
+        """Retry only an unarmed same-day block repaired by durable provenance."""
+
+        if (
+            not self._state
+            or self._state.get("schema") != self.schema
+            or self._state.get("trade_date") != now.date().isoformat()
+            or self._state.get("status") != "BLOCKED"
+            or self._state.get("blocked_reason")
+            != "first_episode_completion_provenance_missing"
+            or self._state.get("attempt_consumed") is not False
+            or self._state.get("legs") != []
+            or self._state.get("owned_order_nos") != []
+        ):
+            return
+        try:
+            position_qty = int(self._state.get("position_qty", 0) or 0)
+        except (TypeError, ValueError):
+            return
+        if position_qty != 0:
+            return
+        completed_at, reason = self._first_episode_completion(now)
+        if completed_at is None or reason != "ready":
+            return
+        self._state = _fresh_state(now, self.schema)
+        self._record(
+            now,
+            "same_day_completion_provenance_block_recovered",
+            first_episode_completed_at=completed_at.isoformat(),
+        )
+
     def run_once(self, now: datetime | None = None) -> dict:
         now = (now or datetime.now(tz=KST)).astimezone(KST)
         self._roll_safe_precondition_block(now)
+        self._retry_safe_same_day_completion_provenance_block(now)
         return super().run_once(now)
 
     def _consider_entry(self, now: datetime) -> dict:

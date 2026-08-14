@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -14,6 +15,9 @@ from src.trading.order.regular_two_leg_machine import SamsungRegularTwoLegMachin
 from src.utils.constants import DATA_DIR
 
 DEFAULT_STATE_DIR = DATA_DIR / "runtime" / "low_price_two_leg"
+_SAFE_PRIOR_TERMINAL_POLICY_BLOCK_REASONS = frozenset(
+    {"state_leg_target_policy_mismatch"}
+)
 
 
 def default_state_path(profile: MachineProfile) -> Path:
@@ -85,3 +89,49 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
                 self._block(now, "state_leg_target_policy_mismatch")
                 return False
         return True
+
+    def _roll_prior_terminal_state_before_current_policy_validation(
+        self, now: datetime
+    ) -> None:
+        """Roll a structurally complete prior-day ledger before policy checks.
+
+        Prices in a completed prior-day ledger belong to that day's applied
+        policy.  Validating them against today's policy before
+        date rollover can turn a clean terminal ledger into a permanent block
+        when postclose calibration changes the target rule.  Recovery is
+        deliberately limited to zero-exposure, fully terminal ledgers.
+        """
+
+        if not self._state or self._state.get("trade_date") == now.date().isoformat():
+            return
+        try:
+            position_qty = int(self._state.get("position_qty", 0) or 0)
+        except (TypeError, ValueError):
+            return
+        status = str(self._state.get("status") or "")
+        prior_reason = str(self._state.get("blocked_reason") or "")
+        if position_qty != 0 or status not in {"COMPLETE", "BLOCKED"}:
+            return
+        if status == "BLOCKED" and (
+            prior_reason not in _SAFE_PRIOR_TERMINAL_POLICY_BLOCK_REASONS
+            or self._derive_status() != "COMPLETE"
+        ):
+            return
+
+        prior_date = str(self._state.get("trade_date") or "")
+        self._state.update({"status": "COMPLETE", "blocked_reason": ""})
+        if not super()._validate_state_contract(now):
+            return
+        if not self._roll_date(now):
+            return
+        self._record(
+            now,
+            "daily_state_initialized_from_prior_terminal_policy",
+            prior_trade_date=prior_date,
+            prior_blocked_reason=prior_reason,
+        )
+
+    def run_once(self, now: datetime | None = None) -> dict:
+        now = (now or datetime.now(tz=KST)).astimezone(KST)
+        self._roll_prior_terminal_state_before_current_policy_validation(now)
+        return super().run_once(now)
