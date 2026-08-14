@@ -187,6 +187,12 @@ def _clean_baseline_metadata(target_date: str, lookback_days: int) -> dict[str, 
         if requested_start < baseline:
             effective_start = baseline
             excluded_before = baseline.isoformat()
+    else:
+        # A pre-baseline target remains available only as same-day archive/audit
+        # evidence.  Never widen its discovery query farther into forbidden
+        # history just because the target itself cannot support tuning.
+        effective_start = target
+        excluded_before = target.isoformat()
     return {
         "policy": policy,
         "requested_start_date": requested_start.isoformat(),

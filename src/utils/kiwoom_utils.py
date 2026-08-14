@@ -2509,11 +2509,13 @@ def get_previous_limit_down_stocks_ka10017(token):
         {
             "request_payload": payload,
             "received_count": len(rows),
+            "source_label": "previous_limit_down",
             "official_upstream_commit": ("69642586f7d84ba9fd8a6faf1f1537c7fda6568b"),
             "official_upstream_paths": [
                 "kiwoom_docs/종목정보.md",
                 "examples/국내주식/종목정보/get_domestic_upper_lower_limit_stocks.py",
             ],
+            "official_reference_verified_at": "2026-08-14T12:09:39+09:00",
         }
     )
     return rows, source_meta

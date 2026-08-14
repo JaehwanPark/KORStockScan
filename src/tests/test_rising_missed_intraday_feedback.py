@@ -120,6 +120,9 @@ def test_risky_micro_episode_source_candidates_are_consumed_by_feedback_report(
     assert candidate["outcome_join_required"] is True
     assert candidate["quantity_is_tuning_axis"] is False
     assert candidate["independent_episode_or_widget_owner"] is False
+    assert candidate["outcome_evaluation_role"] == "diagnostic_recheck_cohort"
+    assert report["summary"]["risky_micro_episode_resolved_eligible_episode_count"] == 0
+    assert len(report["risky_micro_episode_recheck_diagnostic_rows"]) == 1
     assert (
         report["summary"]["risky_micro_episode_executable_outcome_join_ready"] is False
     )
@@ -200,6 +203,20 @@ def test_risky_micro_episode_joins_passive_fill_and_executable_short_path(tmp_pa
     assert outcome["outcome_join_status"] == "resolved_target_first"
     assert outcome["net_return_bps"] > 0
     assert [item["horizon_sec"] for item in outcome["horizons"]] == [3, 10, 20, 30]
+    assert [item["entry_profile"] for item in outcome["entry_profile_outcomes"]] == [
+        "bid_plus_one_ttl_3s",
+        "bid_plus_one_ttl_5s",
+        "bid_plus_one_ttl_10s",
+        "limited_ask_ttl_3s_spread_le_15bps",
+    ]
+    assert outcome["entry_profile_outcomes"][-1]["entry_profile_eligible"] is False
+    assert all(
+        item["runtime_effect"] is False
+        and item["allowed_runtime_apply"] is False
+        and item["actual_order_submitted"] is False
+        and item["broker_order_forbidden"] is True
+        for item in outcome["entry_profile_outcomes"]
+    )
     assert report["summary"]["risky_micro_episode_resolved_eligible_episode_count"] == 1
     assert (
         report["summary"]["risky_micro_episode_executable_outcome_join_ready"] is True
@@ -291,6 +308,85 @@ def test_risky_micro_episode_normalizes_mixed_naive_and_aware_timestamps(tmp_pat
     assert outcome["outcome_join_status"] == "resolved_target_first"
     assert outcome["decision_authority"] == "source_only_no_runtime_apply"
     assert summary["risky_micro_episode_resolved_eligible_episode_count"] == 1
+
+
+def test_risky_micro_episode_compares_limited_ask_only_below_15bps(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    candidate = _event(
+        "micro-narrow",
+        "000010",
+        "narrow",
+        "risky_micro_episode_source_candidate_observed",
+        {
+            "risky_micro_episode_status": "source_only_candidate",
+            "risky_micro_episode_reason": "fresh_passive_cost_aware_episode_candidate",
+            "risky_micro_episode_source_stage": "latency_block",
+            "risky_micro_episode_best_bid": 10_000,
+            "risky_micro_episode_best_ask": 10_010,
+            "risky_micro_episode_quote_age_ms": 10,
+            "risky_micro_episode_spread_bps": 10,
+            "risky_micro_episode_hypothetical_entry_price": 10_000,
+            "risky_micro_episode_hypothetical_target_price": 10_040,
+            "risky_micro_episode_hypothetical_adverse_price": 9_970,
+            "risky_micro_episode_gross_target_bps": 33,
+            "risky_micro_episode_adverse_limit_bps": 33,
+            "risky_micro_episode_conservative_total_cost_bps": 23,
+            "risky_micro_episode_passive_ttl_sec": 3,
+            "risky_micro_episode_max_hold_sec": 20,
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:00:00+09:00",
+    )
+    terminal = _event(
+        "micro-narrow",
+        "000010",
+        "narrow",
+        "market_data_observed",
+        {
+            "market_data_effective_best_bid": 10_050,
+            "market_data_effective_best_ask": 10_060,
+            "market_data_effective_quote_age_ms": 10,
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:00:20+09:00",
+    )
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in (candidate, terminal)),
+        encoding="utf-8",
+    )
+
+    _, outcomes = mod._build_risky_micro_episode_source_candidates(pipeline_path)
+
+    profiles = {
+        item["entry_profile"]: item for item in outcomes[0]["entry_profile_outcomes"]
+    }
+    ask_profile = profiles["limited_ask_ttl_3s_spread_le_15bps"]
+    assert ask_profile["entry_profile_eligible"] is True
+    assert ask_profile["fill_feasible"] is True
+    assert ask_profile["entry_profile_promotion_ev_included"] is False
+    assert (
+        profiles["bid_plus_one_ttl_3s"]["entry_profile_promotion_ev_included"] is True
+    )
+
+
+def test_risky_micro_rolling_keeps_recheck_out_of_promotion_ev():
+    row = {
+        "ts": "2026-08-14T09:00:00+09:00",
+        "stock_code": "000010",
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+        "status": "recheck_required",
+        "policy_version": mod.RISKY_MICRO_POLICY_VERSION,
+        "entry_profile": mod.RISKY_MICRO_PRIMARY_ENTRY_PROFILE,
+        "outcome_join_status": "resolved_target_first",
+        "fill_feasible": True,
+        "net_return_bps": 100,
+        "entry_profile_promotion_ev_included": True,
+    }
+
+    assert mod._risky_micro_daily_rolling_eligible_rows("2026-08-14", [row]) == []
 
 
 def test_risky_micro_episode_never_joins_cross_venue_bbo(tmp_path):
@@ -501,6 +597,11 @@ def test_risky_micro_rolling_requires_30_resolved_10_symbols_3_dates(
                 "market_session_bucket": "KRX_REGULAR",
                 "source_category": "tp1",
                 "source_stage": "tp1:rising_missed_tp1_candidate_blocked",
+                "candidate_status": "source_only_candidate",
+                "policy_version": mod.RISKY_MICRO_POLICY_VERSION,
+                "entry_profile": mod.RISKY_MICRO_PRIMARY_ENTRY_PROFILE,
+                "entry_profile_ttl_sec": 3,
+                "entry_profile_promotion_ev_included": True,
                 "outcome_join_status": "resolved_target_first",
                 "fill_feasible": True,
                 "net_return_bps": 10,
@@ -537,6 +638,10 @@ def test_risky_micro_rolling_requires_30_resolved_10_symbols_3_dates(
     assert summary["risky_micro_episode_rolling_unique_symbol_count"] == 10
     assert summary["risky_micro_episode_rolling_trade_date_count"] == 3
     assert summary["risky_micro_episode_promotion_review_sample_floor_met"] is True
+    assert summary["risky_micro_episode_resolved_opportunity_sample_floor_met"] is True
+    assert summary["risky_micro_episode_filled_terminal_sample_floor_met"] is True
+    assert summary["risky_micro_episode_filled_terminal_episode_count"] == 30
+    assert summary["risky_micro_episode_real_order_promotion_allowed"] is False
     assert summary["risky_micro_episode_rolling_decision"] == (
         "outcome_join_ready_positive_ev"
     )
@@ -585,6 +690,47 @@ def test_risky_micro_rolling_excludes_truncated_legacy_daily_outcomes(
         {"target_date": "2026-08-13", "reason": "truncated_daily_outcomes"}
     ]
     assert summary["risky_micro_episode_source_quality_adjusted_ev_pct"] is None
+
+
+def test_risky_micro_rolling_separates_resolved_and_filled_terminal_floors(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    rows = [
+        {
+            "trade_date": trade_date,
+            "ts": f"{trade_date}T09:00:{index:02d}+09:00",
+            "stock_code": f"{index:06d}",
+            "effective_venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+            "candidate_status": "source_only_candidate",
+            "policy_version": mod.RISKY_MICRO_POLICY_VERSION,
+            "entry_profile": mod.RISKY_MICRO_PRIMARY_ENTRY_PROFILE,
+            "entry_profile_promotion_ev_included": True,
+            "outcome_join_status": "resolved_not_filled",
+            "fill_feasible": False,
+            "net_return_bps": 0,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        for trade_date in ("2026-08-12", "2026-08-13", "2026-08-14")
+        for index in range(10)
+    ]
+
+    summary, _ = mod._clean_baseline_rolling_risky_micro_outcomes(
+        "2026-08-14",
+        rows,
+    )
+
+    assert summary["risky_micro_episode_resolved_opportunity_sample_floor_met"] is True
+    assert summary["risky_micro_episode_filled_terminal_episode_count"] == 0
+    assert summary["risky_micro_episode_filled_terminal_sample_floor_met"] is False
+    assert summary["risky_micro_episode_promotion_review_sample_floor_met"] is False
+    assert summary["risky_micro_episode_real_order_promotion_state"] == (
+        "blocked_sample_floor"
+    )
 
 
 def test_tp1_label_projection_preserves_plain_counterfactual_provenance():

@@ -4118,15 +4118,8 @@ def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
     )
     assert fields["zero_context_defaulted_zero_field_count"] >= 2
     assert "threshold_mutation" in fields["zero_context_forbidden_uses"]
-    opening_event = next(
-        event
-        for event in emitted
-        if event["stage"] == "opening_rotation_1pct_upstream_blocked"
-    )
-    assert opening_event["fields"]["freshness_envelope_attempted"] is False
-    assert (
-        opening_event["fields"]["opening_rotation_upstream_scope_state"]
-        == "source_scope_day_change_missing"
+    assert all(
+        event["stage"] != "opening_rotation_1pct_upstream_blocked" for event in emitted
     )
 
 

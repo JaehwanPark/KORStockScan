@@ -7,7 +7,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from src.engine.scalping.risky_micro_episode import evaluate_risky_micro_episode
+from src.engine.scalping.risky_micro_episode import (
+    POLICY_VERSION as RISKY_MICRO_POLICY_VERSION,
+    PRIMARY_ENTRY_PROFILE as RISKY_MICRO_PRIMARY_ENTRY_PROFILE,
+    evaluate_risky_micro_episode,
+)
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -46,6 +50,9 @@ RISKY_MICRO_ROLLING_REPORT_DAYS = 20
 RISKY_MICRO_ROLLING_MIN_RESOLVED_EPISODES = 30
 RISKY_MICRO_ROLLING_MIN_UNIQUE_SYMBOLS = 10
 RISKY_MICRO_ROLLING_MIN_TRADE_DATES = 3
+RISKY_MICRO_ROLLING_MIN_FILLED_TERMINAL_EPISODES = 10
+RISKY_MICRO_ENTRY_PROFILE_TTLS_SEC = (3, 5, 10)
+RISKY_MICRO_LIMITED_ASK_MAX_SPREAD_BPS = 15.0
 RISKY_MICRO_EXPECTED_SOURCE_CATEGORIES = (
     "scanner_candidate",
     "tp1",
@@ -4508,6 +4515,7 @@ def _risky_micro_quote_age_ms(fields: dict[str, Any]) -> float | None:
         "ws_age_ms",
         "pre_submit_effective_quote_age_ms",
         "observed_mark_gap_fresh_quote_age_ms",
+        "risky_micro_episode_quote_age_ms",
     )
 
 
@@ -4803,23 +4811,48 @@ def _risky_micro_horizon_measurement(
     }
 
 
-def _join_risky_micro_executable_outcome(
+def _join_risky_micro_entry_profile_outcome(
     candidate: dict[str, Any],
     observations: list[dict[str, Any]],
+    *,
+    entry_profile: str,
+    entry_price_override: float | None,
+    ttl_sec: int,
+    profile_eligible: bool,
+    profile_eligibility_reason: str,
+    promotion_ev_included: bool,
 ) -> dict[str, Any]:
     candidate_ts = _risky_micro_ts(candidate.get("ts"))
-    entry_price = _safe_float(candidate.get("hypothetical_entry_price"))
-    target_price = _safe_float(candidate.get("hypothetical_target_price"))
-    adverse_price = _safe_float(candidate.get("hypothetical_adverse_price"))
+    entry_price = entry_price_override
     gross_target_bps = _safe_float(candidate.get("gross_target_bps")) or 0.0
     adverse_limit_bps = (
         _safe_float(candidate.get("adverse_limit_bps")) or gross_target_bps
     )
     total_cost_bps = _safe_float(candidate.get("conservative_total_cost_bps")) or 0.0
-    ttl_sec = max(1, _safe_int(candidate.get("passive_ttl_sec")))
+    ttl_sec = max(1, ttl_sec)
     max_hold_sec = max(1, _safe_int(candidate.get("max_hold_sec")))
+    is_bid_plus_one_profile = entry_profile.startswith("bid_plus_one_ttl_")
+    target_price = (
+        _safe_float(candidate.get("hypothetical_target_price"))
+        if is_bid_plus_one_profile
+        else None
+    )
+    adverse_price = (
+        _safe_float(candidate.get("hypothetical_adverse_price"))
+        if is_bid_plus_one_profile
+        else None
+    )
+    if target_price is None and entry_price is not None and gross_target_bps > 0:
+        target_price = entry_price * (1.0 + gross_target_bps / 10_000.0)
     if adverse_price is None and entry_price is not None and adverse_limit_bps > 0:
         adverse_price = entry_price * (1.0 - adverse_limit_bps / 10_000.0)
+    candidate_status = str(candidate.get("status") or "unknown")
+    if candidate_status == "source_only_candidate":
+        evaluation_role = "promotion_ev_source_candidate"
+    elif candidate_status == "recheck_required":
+        evaluation_role = "diagnostic_recheck_cohort"
+    else:
+        evaluation_role = "excluded_or_source_quality_control"
     base = {
         "metric_role": "source_only_counterfactual_outcome",
         "decision_authority": "source_only_no_runtime_apply",
@@ -4831,20 +4864,36 @@ def _join_risky_micro_executable_outcome(
         "fill_price": None,
         "exit_price": None,
         "net_return_bps": None,
-        "outcome_join_consumer": "fresh_executable_bbo_passive_fill_v1",
-        "outcome_evaluation_role": (
-            "eligible_source_candidate"
-            if candidate.get("status") in {"source_only_candidate", "recheck_required"}
-            else "excluded_or_source_quality_control"
+        "outcome_join_consumer": "fresh_executable_bbo_entry_profile_v2",
+        "candidate_status": candidate_status,
+        "policy_version": str(candidate.get("policy_version") or "unknown"),
+        "entry_profile": entry_profile,
+        "entry_profile_ttl_sec": ttl_sec,
+        "entry_profile_eligible": profile_eligible,
+        "entry_profile_eligibility_reason": profile_eligibility_reason,
+        "entry_profile_promotion_ev_included": bool(promotion_ev_included),
+        "entry_profile_entry_price": entry_price,
+        "entry_profile_target_price": target_price,
+        "entry_profile_adverse_price": adverse_price,
+        "outcome_evaluation_role": evaluation_role,
+        "fill_price_basis": (
+            "passive_limit_conservative_ask_touch"
+            if is_bid_plus_one_profile
+            else "bounded_candidate_executable_ask_touch"
         ),
-        "fill_price_basis": "passive_limit_conservative_ask_touch",
         "exit_price_basis": "fresh_executable_bid",
         "adverse_price_basis": (
             "event_hypothetical_adverse_price"
-            if _safe_float(candidate.get("hypothetical_adverse_price")) is not None
-            else "symmetric_gross_target_bps_fallback"
+            if is_bid_plus_one_profile
+            and _safe_float(candidate.get("hypothetical_adverse_price")) is not None
+            else "entry_profile_adverse_limit_bps"
         ),
     }
+    if not profile_eligible:
+        return {
+            **base,
+            "outcome_join_status": "diagnostic_profile_not_applicable",
+        }
     if candidate.get("status") == "source_quality_blocked":
         return {**base, "outcome_join_status": "source_quality_blocked"}
     if (
@@ -4976,6 +5025,74 @@ def _join_risky_micro_executable_outcome(
     }
 
 
+def _join_risky_micro_executable_outcome(
+    candidate: dict[str, Any],
+    observations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare bounded source-only entry profiles for one candidate.
+
+    Only the canonical bid+1/3-second profile can enter promotion EV.  Longer
+    TTLs and the narrow-spread ask profile are paired diagnostics, so a single
+    episode cannot gain promotion weight by being represented four times.
+    """
+
+    passive_entry = _safe_float(candidate.get("hypothetical_entry_price"))
+    best_ask = _safe_float(candidate.get("best_ask"))
+    spread_bps = _safe_float(candidate.get("spread_bps"))
+    profiles: list[dict[str, Any]] = []
+    for ttl_sec in RISKY_MICRO_ENTRY_PROFILE_TTLS_SEC:
+        profile_name = f"bid_plus_one_ttl_{ttl_sec}s"
+        profiles.append(
+            _join_risky_micro_entry_profile_outcome(
+                candidate,
+                observations,
+                entry_profile=profile_name,
+                entry_price_override=passive_entry,
+                ttl_sec=ttl_sec,
+                profile_eligible=True,
+                profile_eligibility_reason="passive_bid_plus_one_profile",
+                promotion_ev_included=(
+                    profile_name == RISKY_MICRO_PRIMARY_ENTRY_PROFILE
+                    and candidate.get("status") == "source_only_candidate"
+                ),
+            )
+        )
+    ask_eligible = bool(
+        best_ask is not None
+        and best_ask > 0
+        and spread_bps is not None
+        and spread_bps <= RISKY_MICRO_LIMITED_ASK_MAX_SPREAD_BPS
+    )
+    profiles.append(
+        _join_risky_micro_entry_profile_outcome(
+            candidate,
+            observations,
+            entry_profile="limited_ask_ttl_3s_spread_le_15bps",
+            entry_price_override=best_ask,
+            ttl_sec=3,
+            profile_eligible=ask_eligible,
+            profile_eligibility_reason=(
+                "candidate_spread_le_15bps"
+                if ask_eligible
+                else "candidate_spread_missing_or_above_15bps"
+            ),
+            promotion_ev_included=False,
+        )
+    )
+    primary = next(
+        item
+        for item in profiles
+        if item.get("entry_profile") == RISKY_MICRO_PRIMARY_ENTRY_PROFILE
+    )
+    return {
+        **primary,
+        "entry_profile_outcomes": profiles,
+        "entry_profile_comparison_authority": (
+            "source_only_paired_counterfactual_no_runtime_apply"
+        ),
+    }
+
+
 def _build_risky_micro_episode_source_candidates(
     pipeline_path: Path,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -4985,6 +5102,7 @@ def _build_risky_micro_episode_source_candidates(
     reason_counts: Counter[str] = Counter()
     source_stage_counts: Counter[str] = Counter()
     source_category_counts: Counter[str] = Counter()
+    instrumentation_gap_counts: Counter[str] = Counter()
     unique_symbols: set[str] = set()
     seen: set[tuple[str, str, str, str, str]] = set()
     rows: list[dict[str, Any]] = []
@@ -5027,6 +5145,23 @@ def _build_risky_micro_episode_source_candidates(
         reason_counts[reason] += 1
         source_stage_counts[source_stage] += 1
         source_category_counts[_risky_micro_source_category(source_stage)] += 1
+        instrumentation_gap = fields.get("risky_micro_episode_instrumentation_gap")
+        if not instrumentation_gap:
+            if reason == "executable_bbo_missing_or_invalid":
+                instrumentation_gap = "executable_bbo_missing"
+            elif reason == "executable_quote_stale_or_age_missing":
+                instrumentation_gap = (
+                    "quote_age_missing"
+                    if _risky_micro_quote_age_ms(fields) is None
+                    else "stale_quote"
+                )
+            elif reason == "tick_context_missing":
+                instrumentation_gap = "tick_context_missing"
+            else:
+                instrumentation_gap = "none"
+        instrumentation_gap = str(instrumentation_gap)
+        candidate_quote_age_ms = _risky_micro_quote_age_ms(fields)
+        instrumentation_gap_counts[instrumentation_gap] += 1
         rows.append(
             {
                 "ts": _event_ts(row),
@@ -5037,6 +5172,58 @@ def _build_risky_micro_episode_source_candidates(
                 "market_session_bucket": session,
                 "status": status,
                 "reason": reason,
+                "policy_version": str(
+                    fields.get("risky_micro_episode_policy_version") or "unknown"
+                ),
+                "entry_profile": str(
+                    fields.get("risky_micro_episode_entry_profile")
+                    or "legacy_unspecified"
+                ),
+                "instrumentation_gap": instrumentation_gap,
+                "bbo_state": fields.get(
+                    "risky_micro_episode_bbo_state",
+                    (
+                        "valid"
+                        if _safe_int(fields.get("risky_micro_episode_best_bid")) > 0
+                        and _safe_int(fields.get("risky_micro_episode_best_ask"))
+                        >= _safe_int(fields.get("risky_micro_episode_best_bid"))
+                        else "missing_or_invalid"
+                    ),
+                ),
+                "quote_age_ms": (
+                    candidate_quote_age_ms
+                    if candidate_quote_age_ms is not None
+                    else "-"
+                ),
+                "quote_freshness_state": fields.get(
+                    "risky_micro_episode_quote_freshness_state",
+                    (
+                        "missing"
+                        if candidate_quote_age_ms is None
+                        else (
+                            "fresh"
+                            if 0
+                            <= float(candidate_quote_age_ms)
+                            <= RISKY_MICRO_MAX_QUOTE_AGE_MS
+                            else "stale"
+                        )
+                    ),
+                ),
+                "tick_context_state": fields.get(
+                    "risky_micro_episode_tick_context_state",
+                    (
+                        "present"
+                        if _safe_float(
+                            fields.get("risky_micro_episode_tick_acceleration_ratio")
+                        )
+                        is not None
+                        and _safe_float(
+                            fields.get("risky_micro_episode_tick_window_span_sec")
+                        )
+                        is not None
+                        else "missing"
+                    ),
+                ),
                 "source_stage": source_stage,
                 "source_category": fields.get(
                     "risky_micro_episode_source_category",
@@ -5151,6 +5338,8 @@ def _build_risky_micro_episode_source_candidates(
     outcome_counts: Counter[str] = Counter()
     resolved_eligible_net_bps: list[float] = []
     resolved_eligible_count = 0
+    recheck_diagnostic_net_bps: list[float] = []
+    recheck_diagnostic_resolved_count = 0
     for candidate in rows:
         observations = sorted(
             observations_by_code.get(str(candidate.get("stock_code") or ""), []),
@@ -5165,11 +5354,18 @@ def _build_risky_micro_episode_source_candidates(
         outcome_counts[outcome_status] += 1
         if outcome.get(
             "outcome_evaluation_role"
-        ) == "eligible_source_candidate" and outcome_status.startswith("resolved_"):
+        ) == "promotion_ev_source_candidate" and outcome_status.startswith("resolved_"):
             resolved_eligible_count += 1
             net_bps = _safe_float(outcome.get("net_return_bps"))
             if net_bps is not None:
                 resolved_eligible_net_bps.append(net_bps)
+        elif outcome.get(
+            "outcome_evaluation_role"
+        ) == "diagnostic_recheck_cohort" and outcome_status.startswith("resolved_"):
+            recheck_diagnostic_resolved_count += 1
+            net_bps = _safe_float(outcome.get("net_return_bps"))
+            if net_bps is not None:
+                recheck_diagnostic_net_bps.append(net_bps)
 
     observed_categories = {
         category for category in source_category_counts if category != "other"
@@ -5228,6 +5424,22 @@ def _build_risky_micro_episode_source_candidates(
             {"origin": key, "count": value}
             for key, value in projection_origin_counts.most_common()
         ],
+        "risky_micro_episode_instrumentation_gap_counts": [
+            {"gap": key, "count": value}
+            for key, value in instrumentation_gap_counts.most_common()
+        ],
+        "risky_micro_episode_tick_context_missing_count": (
+            instrumentation_gap_counts.get("tick_context_missing", 0)
+        ),
+        "risky_micro_episode_stale_quote_count": (
+            instrumentation_gap_counts.get("stale_quote", 0)
+        ),
+        "risky_micro_episode_quote_age_missing_count": (
+            instrumentation_gap_counts.get("quote_age_missing", 0)
+        ),
+        "risky_micro_episode_executable_bbo_missing_count": (
+            instrumentation_gap_counts.get("executable_bbo_missing", 0)
+        ),
         "risky_micro_episode_source_only_candidate_count": status_counts.get(
             "source_only_candidate", 0
         ),
@@ -5245,12 +5457,25 @@ def _build_risky_micro_episode_source_candidates(
         ],
         "risky_micro_episode_resolved_eligible_episode_count": resolved_eligible_count,
         "risky_micro_episode_daily_source_quality_adjusted_ev_pct": daily_source_quality_adjusted_ev_pct,
+        "risky_micro_episode_recheck_diagnostic_resolved_count": (
+            recheck_diagnostic_resolved_count
+        ),
+        "risky_micro_episode_recheck_diagnostic_ev_pct": (
+            round(
+                sum(recheck_diagnostic_net_bps)
+                / recheck_diagnostic_resolved_count
+                / 100.0,
+                6,
+            )
+            if recheck_diagnostic_resolved_count
+            else None
+        ),
         "risky_micro_episode_source_quality_adjusted_ev_pct": None,
         "risky_micro_episode_ev_decision_authority": "daily_source_only_diagnostic_not_promotion_authority",
         "risky_micro_episode_executable_outcome_join_ready": resolved_eligible_count
         > 0,
         "risky_micro_episode_promotion_review_sample_floor_met": False,
-        "risky_micro_episode_promotion_review_sample_floor_reason": "rolling_30_resolved_10_symbols_3_dates_not_owned_by_intraday_daily_report",
+        "risky_micro_episode_promotion_review_sample_floor_reason": "rolling_30_resolved_10_symbols_3_dates_and_10_filled_terminal_3_dates_not_owned_by_intraday_daily_report",
     }, rows
 
 
@@ -5258,53 +5483,82 @@ def _risky_micro_daily_rolling_eligible_rows(
     trade_date: str,
     rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Keep at most one resolved eligible episode per symbol and trade date."""
+    """Keep paired profile outcomes for source-only candidates only.
+
+    Recheck rows stay in the daily diagnostic table and never enter the rolling
+    promotion-EV population.  The daily cap is applied per symbol/profile so
+    paired TTL/ask diagnostics remain comparable without duplicating promotion
+    weight.
+    """
 
     eligible: list[dict[str, Any]] = []
-    seen_symbols: set[str] = set()
+    seen_symbol_profiles: set[tuple[str, str]] = set()
     for row in sorted(rows, key=lambda item: str(item.get("ts") or "")):
         code = str(row.get("stock_code") or "").strip()
-        outcome_status = str(row.get("outcome_join_status") or "")
-        net_return_bps = _safe_float(row.get("net_return_bps"))
+        candidate_status = str(row.get("candidate_status") or row.get("status") or "")
         venue = str(row.get("effective_venue") or "").strip().upper()
         session = str(row.get("market_session_bucket") or "").strip().upper()
         if (
             not code
-            or code in seen_symbols
-            or (
-                row.get("outcome_evaluation_role") != "eligible_source_candidate"
-                and not _boolish(row.get("rolling_eligible_daily_cap_applied"))
-            )
-            or not outcome_status.startswith("resolved_")
-            or net_return_bps is None
+            or candidate_status != "source_only_candidate"
             or venue not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
             or session in {"", "UNKNOWN"}
         ):
             continue
-        seen_symbols.add(code)
-        eligible.append(
-            {
-                "trade_date": trade_date,
-                "ts": row.get("ts"),
-                "stock_code": code,
-                "stock_name": row.get("stock_name"),
-                "effective_venue": venue,
-                "market_session_bucket": session,
-                "source_category": row.get("source_category")
-                or _risky_micro_source_category(str(row.get("source_stage") or "")),
-                "source_stage": row.get("source_stage"),
-                "outcome_join_status": outcome_status,
-                "fill_feasible": row.get("fill_feasible"),
-                "net_return_bps": round(net_return_bps, 6),
-                "metric_role": "source_only_counterfactual_outcome",
-                "decision_authority": "source_only_no_runtime_apply",
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "rolling_eligible_daily_cap_applied": True,
-            }
-        )
+        profile_outcomes = row.get("entry_profile_outcomes")
+        if not isinstance(profile_outcomes, list):
+            profile_outcomes = [row]
+        for profile in profile_outcomes:
+            if not isinstance(profile, dict):
+                continue
+            outcome_status = str(profile.get("outcome_join_status") or "")
+            net_return_bps = _safe_float(profile.get("net_return_bps"))
+            entry_profile = str(
+                profile.get("entry_profile") or row.get("entry_profile") or "unknown"
+            )
+            symbol_profile = (code, entry_profile)
+            if (
+                symbol_profile in seen_symbol_profiles
+                or not _boolish(profile.get("entry_profile_eligible", True))
+                or not outcome_status.startswith("resolved_")
+                or net_return_bps is None
+            ):
+                continue
+            seen_symbol_profiles.add(symbol_profile)
+            eligible.append(
+                {
+                    "trade_date": trade_date,
+                    "ts": row.get("ts"),
+                    "stock_code": code,
+                    "stock_name": row.get("stock_name"),
+                    "effective_venue": venue,
+                    "market_session_bucket": session,
+                    "source_category": row.get("source_category")
+                    or _risky_micro_source_category(str(row.get("source_stage") or "")),
+                    "source_stage": row.get("source_stage"),
+                    "candidate_status": candidate_status,
+                    "policy_version": str(
+                        profile.get("policy_version")
+                        or row.get("policy_version")
+                        or "unknown"
+                    ),
+                    "entry_profile": entry_profile,
+                    "entry_profile_ttl_sec": profile.get("entry_profile_ttl_sec"),
+                    "entry_profile_promotion_ev_included": _boolish(
+                        profile.get("entry_profile_promotion_ev_included")
+                    ),
+                    "outcome_join_status": outcome_status,
+                    "fill_feasible": profile.get("fill_feasible"),
+                    "net_return_bps": round(net_return_bps, 6),
+                    "metric_role": "source_only_counterfactual_outcome",
+                    "decision_authority": "source_only_no_runtime_apply",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "rolling_eligible_daily_cap_applied": True,
+                }
+            )
     return eligible
 
 
@@ -5385,27 +5639,63 @@ def _clean_baseline_rolling_risky_micro_outcomes(
             str(item.get("trade_date") or ""),
             str(item.get("ts") or ""),
             str(item.get("stock_code") or ""),
+            str(item.get("entry_profile") or ""),
         ),
     )
-    resolved_count = len(source_rows)
+    promotion_rows = [
+        row
+        for row in source_rows
+        if str(row.get("candidate_status") or "") == "source_only_candidate"
+        and str(row.get("policy_version") or "") == RISKY_MICRO_POLICY_VERSION
+        and str(row.get("entry_profile") or "") == RISKY_MICRO_PRIMARY_ENTRY_PROFILE
+        and _boolish(row.get("entry_profile_promotion_ev_included"))
+    ]
+    resolved_count = len(promotion_rows)
     unique_symbols = {
-        str(row.get("stock_code") or "") for row in source_rows if row.get("stock_code")
+        str(row.get("stock_code") or "")
+        for row in promotion_rows
+        if row.get("stock_code")
     }
     trade_dates = {
-        str(row.get("trade_date") or "") for row in source_rows if row.get("trade_date")
+        str(row.get("trade_date") or "")
+        for row in promotion_rows
+        if row.get("trade_date")
     }
     net_values = [
         value
-        for value in (_safe_float(row.get("net_return_bps")) for row in source_rows)
+        for value in (_safe_float(row.get("net_return_bps")) for row in promotion_rows)
         if value is not None
     ]
     diagnostic_ev_pct = (
         round(sum(net_values) / len(net_values) / 100.0, 6) if net_values else None
     )
-    sample_floor_met = bool(
+    resolved_opportunity_sample_floor_met = bool(
         resolved_count >= RISKY_MICRO_ROLLING_MIN_RESOLVED_EPISODES
         and len(unique_symbols) >= RISKY_MICRO_ROLLING_MIN_UNIQUE_SYMBOLS
         and len(trade_dates) >= RISKY_MICRO_ROLLING_MIN_TRADE_DATES
+    )
+    filled_terminal_rows = [
+        row
+        for row in promotion_rows
+        if _boolish(row.get("fill_feasible"))
+        and str(row.get("outcome_join_status") or "")
+        in {
+            "resolved_target_first",
+            "resolved_adverse_first",
+            "resolved_timeout",
+        }
+    ]
+    filled_terminal_trade_dates = {
+        str(row.get("trade_date") or "")
+        for row in filled_terminal_rows
+        if row.get("trade_date")
+    }
+    filled_terminal_sample_floor_met = bool(
+        len(filled_terminal_rows) >= RISKY_MICRO_ROLLING_MIN_FILLED_TERMINAL_EPISODES
+        and len(filled_terminal_trade_dates) >= RISKY_MICRO_ROLLING_MIN_TRADE_DATES
+    )
+    sample_floor_met = bool(
+        resolved_opportunity_sample_floor_met and filled_terminal_sample_floor_met
     )
     if not sample_floor_met:
         decision = "sample_floor_pending"
@@ -5414,8 +5704,69 @@ def _clean_baseline_rolling_risky_micro_outcomes(
     else:
         decision = "outcome_join_ready_non_positive_ev"
     outcome_counts = Counter(
-        str(row.get("outcome_join_status") or "unknown") for row in source_rows
+        str(row.get("outcome_join_status") or "unknown") for row in promotion_rows
     )
+    entry_profile_summaries: list[dict[str, Any]] = []
+    for entry_profile in sorted(
+        {
+            str(row.get("entry_profile") or "unknown")
+            for row in source_rows
+            if row.get("entry_profile")
+        }
+    ):
+        profile_rows = [
+            row
+            for row in source_rows
+            if row.get("candidate_status") == "source_only_candidate"
+            and row.get("policy_version") == RISKY_MICRO_POLICY_VERSION
+            and row.get("entry_profile") == entry_profile
+        ]
+        profile_values = [
+            value
+            for value in (
+                _safe_float(row.get("net_return_bps")) for row in profile_rows
+            )
+            if value is not None
+        ]
+        entry_profile_summaries.append(
+            {
+                "entry_profile": entry_profile,
+                "resolved_opportunity_count": len(profile_rows),
+                "filled_terminal_episode_count": sum(
+                    1
+                    for row in profile_rows
+                    if _boolish(row.get("fill_feasible"))
+                    and str(row.get("outcome_join_status") or "")
+                    in {
+                        "resolved_target_first",
+                        "resolved_adverse_first",
+                        "resolved_timeout",
+                    }
+                ),
+                "diagnostic_ev_pct": (
+                    round(sum(profile_values) / len(profile_values) / 100.0, 6)
+                    if profile_values
+                    else None
+                ),
+                "promotion_ev_included": (
+                    entry_profile == RISKY_MICRO_PRIMARY_ENTRY_PROFILE
+                ),
+                "decision_authority": "source_only_profile_comparison_no_runtime_apply",
+            }
+        )
+    promotion_blockers: list[str] = []
+    if len(trade_dates) < RISKY_MICRO_ROLLING_MIN_TRADE_DATES:
+        promotion_blockers.append("minimum_3_trade_dates_not_met")
+    if not resolved_opportunity_sample_floor_met:
+        promotion_blockers.append("resolved_opportunity_sample_floor_not_met")
+    if not filled_terminal_sample_floor_met:
+        promotion_blockers.append("filled_terminal_episode_sample_floor_not_met")
+    if diagnostic_ev_pct is not None and diagnostic_ev_pct <= 0.0:
+        promotion_blockers.append("non_positive_source_quality_adjusted_ev")
+    if sample_floor_met:
+        promotion_blockers.append(
+            "explicit_preopen_policy_and_operator_approval_required"
+        )
     return {
         "risky_micro_episode_rolling_decision": decision,
         "risky_micro_episode_rolling_resolved_episode_count": resolved_count,
@@ -5427,10 +5778,45 @@ def _clean_baseline_rolling_risky_micro_outcomes(
             diagnostic_ev_pct if sample_floor_met else None
         ),
         "risky_micro_episode_promotion_review_sample_floor_met": sample_floor_met,
-        "risky_micro_episode_promotion_review_sample_floor_reason": (
-            "rolling_30_resolved_10_symbols_3_dates_met"
+        "risky_micro_episode_resolved_opportunity_sample_floor_met": (
+            resolved_opportunity_sample_floor_met
+        ),
+        "risky_micro_episode_resolved_opportunity_sample_floor": {
+            "minimum_resolved_opportunities": RISKY_MICRO_ROLLING_MIN_RESOLVED_EPISODES,
+            "minimum_unique_symbols": RISKY_MICRO_ROLLING_MIN_UNIQUE_SYMBOLS,
+            "minimum_trade_dates": RISKY_MICRO_ROLLING_MIN_TRADE_DATES,
+        },
+        "risky_micro_episode_filled_terminal_episode_count": len(filled_terminal_rows),
+        "risky_micro_episode_filled_terminal_trade_date_count": len(
+            filled_terminal_trade_dates
+        ),
+        "risky_micro_episode_filled_terminal_sample_floor_met": (
+            filled_terminal_sample_floor_met
+        ),
+        "risky_micro_episode_filled_terminal_sample_floor": {
+            "minimum_filled_terminal_episodes": (
+                RISKY_MICRO_ROLLING_MIN_FILLED_TERMINAL_EPISODES
+            ),
+            "minimum_trade_dates": RISKY_MICRO_ROLLING_MIN_TRADE_DATES,
+            "terminal_outcomes": [
+                "resolved_target_first",
+                "resolved_adverse_first",
+                "resolved_timeout",
+            ],
+            "fill_basis": "counterfactual_fresh_executable_ask_touch",
+        },
+        "risky_micro_episode_entry_profile_summaries": entry_profile_summaries,
+        "risky_micro_episode_real_order_promotion_allowed": False,
+        "risky_micro_episode_real_order_promotion_blockers": promotion_blockers,
+        "risky_micro_episode_real_order_promotion_state": (
+            "blocked_pending_preopen_policy_and_explicit_approval"
             if sample_floor_met
-            else "rolling_30_resolved_10_symbols_3_dates_pending"
+            else "blocked_sample_floor"
+        ),
+        "risky_micro_episode_promotion_review_sample_floor_reason": (
+            "rolling_30_resolved_10_symbols_3_dates_and_10_filled_terminal_3_dates_met"
+            if sample_floor_met
+            else "rolling_resolved_opportunity_or_filled_terminal_floor_pending"
         ),
         "risky_micro_episode_rolling_outcome_status_counts": [
             {"status": key, "count": value}
@@ -5442,6 +5828,9 @@ def _clean_baseline_rolling_risky_micro_outcomes(
             "inspected_source_dates": sorted(inspected_dates),
             "excluded_reports": excluded_reports,
             "per_symbol_daily_episode_cap": 1,
+            "candidate_status_filter": "source_only_candidate",
+            "policy_version_filter": RISKY_MICRO_POLICY_VERSION,
+            "promotion_entry_profile": RISKY_MICRO_PRIMARY_ENTRY_PROFILE,
         },
         "risky_micro_episode_ev_decision_authority": (
             "rolling_source_only_review_candidate_no_runtime_apply"
@@ -5924,9 +6313,13 @@ def build_report(
             "risky_micro_episode_executable_outcome": {
                 "metric_role": "source_only_counterfactual_outcome",
                 "decision_authority": "source_only_no_runtime_apply",
-                "window_policy": "fresh_executable_bbo_3_10_20_30_second_path",
+                "window_policy": (
+                    "same_episode_bid_plus_one_ttl_3_5_10_and_ask_ttl3_spread_le_15bps_"
+                    "with_fresh_executable_bbo_3_10_20_30_second_path"
+                ),
                 "sample_floor": (
-                    "rolling_30_resolved_episodes_10_symbols_3_dates_for_promotion_review"
+                    "rolling_30_resolved_opportunities_10_symbols_3_dates_and_"
+                    "10_filled_terminal_episodes_3_dates_for_promotion_review"
                 ),
                 "primary_decision_metric": "source_quality_adjusted_ev_pct",
                 "source_quality_gate": (
@@ -5935,8 +6328,25 @@ def build_report(
                 "forbidden_uses": [
                     *FORBIDDEN_USES,
                     "daily_only_ev_runtime_promotion",
+                    "recheck_required_in_promotion_ev",
+                    "multi_profile_duplicate_weight_in_promotion_ev",
                     "cross_venue_outcome_join",
                     "mark_price_fill_or_exit_substitution",
+                ],
+            },
+            "risky_micro_episode_instrumentation_gap": {
+                "metric_role": "instrumentation_gap",
+                "decision_authority": "source_quality_repair_priority_only",
+                "window_policy": "same_candidate_projection_input_contract",
+                "sample_floor": "one_missing_required_input",
+                "primary_decision_metric": "gap_count_by_canonical_reason",
+                "source_quality_gate": (
+                    "explicit_bbo_quote_age_and_tick_context_presence_state"
+                ),
+                "forbidden_uses": [
+                    *FORBIDDEN_USES,
+                    "missing_context_imputation_for_promotion_ev",
+                    "source_quality_gap_as_real_order_authority",
                 ],
             },
         },
@@ -6080,6 +6490,11 @@ def build_report(
         ],
         "rising_missed_adverse_micro_recovery_rows": adverse_micro_recovery_rows[-200:],
         "risky_micro_episode_source_candidate_rows": risky_micro_episode_rows[-200:],
+        "risky_micro_episode_recheck_diagnostic_rows": [
+            row
+            for row in risky_micro_episode_rows[-200:]
+            if row.get("status") == "recheck_required"
+        ],
         "risky_micro_episode_rolling_eligible_rows": (
             risky_micro_episode_daily_rolling_rows
         ),
@@ -6294,8 +6709,14 @@ def write_outputs(
         f"{summary.get('risky_micro_episode_natural_sample_absent_categories')}",
         f"- risky_micro_episode_outcome_join_status_counts: "
         f"{summary.get('risky_micro_episode_outcome_join_status_counts')}",
+        f"- risky_micro_episode_instrumentation_gap_counts: "
+        f"{summary.get('risky_micro_episode_instrumentation_gap_counts')}",
         f"- risky_micro_episode_resolved_eligible_episode_count: "
         f"{summary.get('risky_micro_episode_resolved_eligible_episode_count')}",
+        f"- risky_micro_episode_recheck_diagnostic_resolved_count: "
+        f"{summary.get('risky_micro_episode_recheck_diagnostic_resolved_count')}",
+        f"- risky_micro_episode_recheck_diagnostic_ev_pct: "
+        f"{summary.get('risky_micro_episode_recheck_diagnostic_ev_pct')}",
         f"- risky_micro_episode_daily_source_quality_adjusted_ev_pct: "
         f"{summary.get('risky_micro_episode_daily_source_quality_adjusted_ev_pct')}",
         f"- risky_micro_episode_ev_decision_authority: "
@@ -6314,6 +6735,18 @@ def write_outputs(
         f"{summary.get('risky_micro_episode_source_quality_adjusted_ev_pct')}",
         f"- risky_micro_episode_promotion_review_sample_floor_met: "
         f"{summary.get('risky_micro_episode_promotion_review_sample_floor_met')}",
+        f"- risky_micro_episode_resolved_opportunity_sample_floor_met: "
+        f"{summary.get('risky_micro_episode_resolved_opportunity_sample_floor_met')}",
+        f"- risky_micro_episode_filled_terminal_episode_count: "
+        f"{summary.get('risky_micro_episode_filled_terminal_episode_count')}",
+        f"- risky_micro_episode_filled_terminal_sample_floor_met: "
+        f"{summary.get('risky_micro_episode_filled_terminal_sample_floor_met')}",
+        f"- risky_micro_episode_entry_profile_summaries: "
+        f"{summary.get('risky_micro_episode_entry_profile_summaries')}",
+        f"- risky_micro_episode_real_order_promotion_allowed: "
+        f"{summary.get('risky_micro_episode_real_order_promotion_allowed')}",
+        f"- risky_micro_episode_real_order_promotion_blockers: "
+        f"{summary.get('risky_micro_episode_real_order_promotion_blockers')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
         f"- consumer_readiness: {summary.get('consumer_readiness')}",
         "",
@@ -6380,7 +6813,9 @@ def write_outputs(
         for item in report.get("risky_micro_episode_source_candidate_rows") or []:
             lines.append(
                 "- ts={ts} code={stock_code} name={stock_name} status={status} "
-                "reason={reason} source_stage={source_stage} block={source_block_reason} "
+                "reason={reason} policy={policy_version} profile={entry_profile} "
+                "instrumentation_gap={instrumentation_gap} "
+                "source_stage={source_stage} block={source_block_reason} "
                 "origin={source_projection_origin} source_event={source_event_stage} "
                 "venue={effective_venue} session={market_session_bucket} "
                 "bbo={best_bid}/{best_ask} spread_bps={spread_bps} "

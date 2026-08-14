@@ -57,6 +57,8 @@ def test_observation_resamples_completed_bars_and_excludes_forming_bar():
         "expected_bar_count": 15,
         "source_quality": "pass",
         "missing_minutes": [],
+        "observed_no_trade_minutes": [],
+        "minute_gap_interpretation": "strict_expected_minute",
     }
     assert report["session_bar_vwap"]["completed_volume"] == 150
     assert report["opening_range_5m"]["high"] == 106

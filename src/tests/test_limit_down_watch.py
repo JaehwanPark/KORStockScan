@@ -167,7 +167,9 @@ def test_ka10017_previous_limit_down_request_and_parser(monkeypatch):
     assert rows[0]["Code"] == "000001"
     assert rows[0]["CurrentPrice"] == 4000
     assert rows[0]["ConsecutiveCountRaw"] == "2"
+    assert meta["source_label"] == "previous_limit_down"
     assert meta["official_upstream_commit"].startswith("69642586")
+    assert meta["official_reference_verified_at"].startswith("2026-08-14T")
 
 
 def test_ka10099_near_candidate_eligibility_is_fail_closed(monkeypatch):

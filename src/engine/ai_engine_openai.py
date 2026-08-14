@@ -7370,6 +7370,15 @@ class GPTSniperEngine:
                     self._copy_ai_transport_trace_metadata(defensive, result)
                     defensive.update(
                         {
+                            # The provider returned a physical response before
+                            # the semantic validator rejected it.  Preserve
+                            # that distinction in the final trace: this is not
+                            # a preflight/provider-not-called fallback.
+                            "provider_called": True,
+                            "ai_decision_outcome_eligible": False,
+                            "forensic_semantic_errors": semantic_errors,
+                            "decision_quality_contract_status": ("semantic_rejected"),
+                            "decision_quality_contract_errors": semantic_errors,
                             "entry_price_v2_5_contract_status": "rejected",
                             "entry_price_v2_5_contract_errors": semantic_errors,
                             **action_canonicalization,

@@ -34,6 +34,7 @@ def test_theborn_like_wide_spread_case_is_recheck_not_live_candidate():
         result["risky_micro_episode_metric_role"] == "source_candidate_classification"
     )
     assert result["risky_micro_episode_outcome_join_required"] is True
+    assert result["risky_micro_episode_entry_profile"] == "bid_plus_one_ttl_3s"
 
 
 def test_wemade_like_tick_deceleration_is_excluded():
@@ -80,6 +81,25 @@ def test_adverse_micro_and_stale_bbo_fail_closed():
 
     assert adverse["risky_micro_episode_status"] == "excluded_excessive_risk"
     assert stale["risky_micro_episode_status"] == "source_quality_blocked"
+    assert stale["risky_micro_episode_instrumentation_gap"] == "quote_age_missing"
+
+
+def test_missing_bbo_and_tick_context_have_canonical_instrumentation_gaps():
+    missing_bbo = _evaluate(best_bid=0, best_ask=0)
+    missing_tick = _evaluate(
+        tick_acceleration_ratio=None,
+        tick_window_span_sec=None,
+    )
+
+    assert (
+        missing_bbo["risky_micro_episode_instrumentation_gap"]
+        == "executable_bbo_missing"
+    )
+    assert (
+        missing_tick["risky_micro_episode_instrumentation_gap"]
+        == "tick_context_missing"
+    )
+    assert missing_tick["risky_micro_episode_tick_context_state"] == "missing"
 
 
 def test_long_tick_window_is_not_a_micro_episode():

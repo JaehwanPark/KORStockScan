@@ -10345,9 +10345,7 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
             dt, now_ts=now_ts
         )
         if owner_was_explicit.lower() == OPENING_ROTATION:
-            dt["scanner_watch_budget_owner_source"] = (
-                "retired_opening_owner_normalized"
-            )
+            dt["scanner_watch_budget_owner_source"] = "retired_opening_owner_normalized"
         else:
             dt["scanner_watch_budget_owner_source"] = (
                 "database_payload"
@@ -10431,9 +10429,7 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
             dt["scanner_watch_budget_owner"] = _scalping_watch_budget_owner(
                 dt, now_ts=now_ts
             )
-            dt["scanner_watch_budget_owner_source"] = (
-                "retired_opening_owner_normalized"
-            )
+            dt["scanner_watch_budget_owner_source"] = "retired_opening_owner_normalized"
         if replacements and not _scalping_attach_replacements_allowed(replacements):
             allowed = False
         if not allowed:
