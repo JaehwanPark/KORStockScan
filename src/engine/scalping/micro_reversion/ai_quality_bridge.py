@@ -15,7 +15,7 @@ import json
 import math
 import os
 import tempfile
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
@@ -3570,6 +3570,82 @@ def build_bridge_report(
                 _session(row.get("session_bucket")),
             )
         ].append(row)
+    def safe_receive_us(row: Mapping[str, Any]) -> int | None:
+        try:
+            return _timestamp_us(row.get("local_receive_timestamp"))
+        except (TypeError, ValueError):
+            return None
+
+    invalid_market_by_scope: dict[
+        tuple[str, str, str], tuple[Mapping[str, Any], ...]
+    ] = {}
+    market_times_by_scope: dict[tuple[str, str, str], tuple[int, ...]] = {}
+    for key, scoped_rows in market_by_scope.items():
+        invalid_market_by_scope[key] = tuple(
+            row for row in scoped_rows if safe_receive_us(row) is None
+        )
+        scoped_rows[:] = [row for row in scoped_rows if safe_receive_us(row) is not None]
+        scoped_rows.sort(
+            key=lambda row: (
+                int(safe_receive_us(row) or 0),
+                _nonnegative_int(row.get("source_sequence")) or 0,
+            )
+        )
+        market_times_by_scope[key] = tuple(
+            int(safe_receive_us(row) or 0)
+            for row in scoped_rows
+        )
+    invalid_depth_by_scope: dict[
+        tuple[str, str, str], tuple[Mapping[str, Any], ...]
+    ] = {}
+    depth_times_by_scope: dict[tuple[str, str, str], tuple[int, ...]] = {}
+    for key, scoped_rows in depth_by_scope.items():
+        invalid_depth_by_scope[key] = tuple(
+            row for row in scoped_rows if safe_receive_us(row) is None
+        )
+        scoped_rows[:] = [row for row in scoped_rows if safe_receive_us(row) is not None]
+        scoped_rows.sort(
+            key=lambda row: (
+                int(safe_receive_us(row) or 0),
+                _nonnegative_int(row.get("source_sequence")) or 0,
+            )
+        )
+        depth_times_by_scope[key] = tuple(
+            int(safe_receive_us(row) or 0)
+            for row in scoped_rows
+        )
+    invalid_references_by_scope: dict[
+        tuple[str, str, str], tuple[Mapping[str, Any], ...]
+    ] = {}
+    reference_times_by_scope: dict[tuple[str, str, str], tuple[int, ...]] = {}
+    for key, scoped_rows in references_by_scope.items():
+        invalid_references_by_scope[key] = tuple(
+            row
+            for row in scoped_rows
+            if _nonnegative_int(row.get("event_detected_at_ms")) is None
+        )
+        scoped_rows[:] = [
+            row
+            for row in scoped_rows
+            if _nonnegative_int(row.get("event_detected_at_ms")) is not None
+        ]
+        scoped_rows.sort(key=lambda row: int(row.get("event_detected_at_ms") or 0))
+        reference_times_by_scope[key] = tuple(
+            int(row.get("event_detected_at_ms") or 0) * 1_000
+            for row in scoped_rows
+        )
+
+    def bounded_rows(
+        scoped_rows: Sequence[Mapping[str, Any]],
+        times: Sequence[int],
+        *,
+        start_us: int,
+        end_us: int,
+    ) -> Sequence[Mapping[str, Any]]:
+        left = bisect_left(times, start_us)
+        right = bisect_right(times, end_us)
+        return scoped_rows[left:right]
+
     rows = []
     exclusions = Counter()
     for trace in trace_rows:
@@ -3585,12 +3661,57 @@ def build_bridge_report(
             resolved_scope.venue,
             resolved_scope.session_bucket,
         )
+        watermark, _ = exact_snapshot_watermark(trace, payload)
+        watermark_us = int((watermark or {}).get("captured_at_us") or 0)
+        context_start_us = max(
+            0,
+            watermark_us
+            - (
+                selected_config.active_wave_max_age_sec
+                + selected_config.context_lookback_sec
+            )
+            * 1_000_000,
+        )
+        outcome_end_us = watermark_us + (
+            selected_config.outcome_horizons_sec[-1] * 1_000
+            + selected_config.max_outcome_endpoint_lag_ms
+        ) * 1_000
+        scoped_market = market_by_scope.get(scope_key, ())
+        scoped_depth = depth_by_scope.get(scope_key, ())
+        scoped_references = references_by_scope.get(scope_key, ())
+        trace_market_rows = [
+            *bounded_rows(
+                scoped_market,
+                market_times_by_scope.get(scope_key, ()),
+                start_us=context_start_us,
+                end_us=outcome_end_us,
+            ),
+            *invalid_market_by_scope.get(scope_key, ()),
+        ]
+        trace_depth_rows = [
+            *bounded_rows(
+                scoped_depth,
+                depth_times_by_scope.get(scope_key, ()),
+                start_us=context_start_us,
+                end_us=outcome_end_us,
+            ),
+            *invalid_depth_by_scope.get(scope_key, ()),
+        ]
+        trace_references = [
+            *bounded_rows(
+                scoped_references,
+                reference_times_by_scope.get(scope_key, ()),
+                start_us=context_start_us,
+                end_us=watermark_us,
+            ),
+            *invalid_references_by_scope.get(scope_key, ()),
+        ]
         evidence = build_tactical_evidence(
             trace=trace,
             payload=payload,
-            market_rows=market_by_scope.get(scope_key, ()),
-            depth_rows=depth_by_scope.get(scope_key, ()),
-            event_references=references_by_scope.get(scope_key, ()),
+            market_rows=trace_market_rows,
+            depth_rows=trace_depth_rows,
+            event_references=trace_references,
             config=selected_config,
             excluded_scopes=excluded_scopes,
         )
@@ -3605,8 +3726,8 @@ def build_bridge_report(
         )
         outcome = build_future_outcome(
             evidence=evidence,
-            market_rows=market_by_scope.get(scope_key, ()),
-            depth_rows=depth_by_scope.get(scope_key, ()),
+            market_rows=trace_market_rows,
+            depth_rows=trace_depth_rows,
             config=selected_config,
         )
         row = {
@@ -3617,6 +3738,11 @@ def build_bridge_report(
             "payload_join_mode": payload_join_mode,
             "_parent_wave_stage_key": wave_key if wave_id else None,
             "primary_parent_wave_stage_row": False,
+            "primary_replay_parent_wave_stage_row": False,
+            "primary_control_parent_wave_stage_row": False,
+            "primary_paired_parent_wave_stage_row": False,
+            "primary_economic_parent_wave_stage_row": False,
+            "primary_mature_outcome_parent_wave_stage_row": False,
             "same_parent_wave_repeat": False,
             TACTICAL_EVIDENCE_SCHEMA: evidence,
             "future_outcome": outcome,
@@ -3651,7 +3777,7 @@ def build_bridge_report(
         if isinstance(wave_key, tuple):
             grouped_wave_rows[wave_key].append(index)
     for indexes in grouped_wave_rows.values():
-        eligible_indexes = [
+        observation_indexes = [
             index
             for index in indexes
             if (
@@ -3661,7 +3787,7 @@ def build_bridge_report(
             and rows[index][TACTICAL_EVIDENCE_SCHEMA].get("state")
             not in {"not_applicable", "source_unavailable"}
         ]
-        ranked_indexes = eligible_indexes or indexes
+        ranked_indexes = observation_indexes or indexes
         primary_index = min(
             ranked_indexes,
             key=lambda index: int(
@@ -3674,6 +3800,43 @@ def build_bridge_report(
         for index in indexes:
             rows[index]["primary_parent_wave_stage_row"] = index == primary_index
             rows[index]["same_parent_wave_repeat"] = index != primary_index
+        metric_predicates = {
+            "primary_replay_parent_wave_stage_row": lambda row: row[
+                "three_arm_manifest"
+            ].get("replay_context_eligible")
+            is True,
+            "primary_control_parent_wave_stage_row": lambda row: row[
+                "three_arm_manifest"
+            ].get("control_decision_eligible")
+            is True,
+            "primary_paired_parent_wave_stage_row": lambda row: row[
+                "three_arm_manifest"
+            ].get("paired_decision_quality_eligible")
+            is True,
+            "primary_economic_parent_wave_stage_row": lambda row: row[
+                "three_arm_manifest"
+            ].get("net_economic_evaluation_eligible")
+            is True,
+            "primary_mature_outcome_parent_wave_stage_row": lambda row: any(
+                horizon.get("mature") is True
+                for horizon in (row.get("future_outcome") or {}).get("horizons")
+                or []
+            ),
+        }
+        for flag, predicate in metric_predicates.items():
+            eligible = [index for index in indexes if predicate(rows[index])]
+            if not eligible:
+                continue
+            selected = min(
+                eligible,
+                key=lambda index: int(
+                    rows[index][TACTICAL_EVIDENCE_SCHEMA].get(
+                        "snapshot_captured_at_ms"
+                    )
+                    or 0
+                ),
+            )
+            rows[selected][flag] = True
     for row in rows:
         row.pop("_parent_wave_stage_key", None)
     state_counts = Counter(
@@ -3691,22 +3854,22 @@ def build_bridge_report(
     )
     replay_context_eligible = sum(
         row["three_arm_manifest"].get("replay_context_eligible") is True
-        and row.get("primary_parent_wave_stage_row") is True
+        and row.get("primary_replay_parent_wave_stage_row") is True
         for row in rows
     )
     economic_eligible = sum(
         row["three_arm_manifest"].get("net_economic_evaluation_eligible") is True
-        and row.get("primary_parent_wave_stage_row") is True
+        and row.get("primary_economic_parent_wave_stage_row") is True
         for row in rows
     )
     control_eligible = sum(
         row["three_arm_manifest"].get("control_decision_eligible") is True
-        and row.get("primary_parent_wave_stage_row") is True
+        and row.get("primary_control_parent_wave_stage_row") is True
         for row in rows
     )
     paired_eligible = sum(
         row["three_arm_manifest"].get("paired_decision_quality_eligible") is True
-        and row.get("primary_parent_wave_stage_row") is True
+        and row.get("primary_paired_parent_wave_stage_row") is True
         for row in rows
     )
     mature_outcome_eligible = sum(
@@ -3714,7 +3877,7 @@ def build_bridge_report(
             horizon.get("mature") is True
             for horizon in (row.get("future_outcome") or {}).get("horizons") or []
         )
-        and row.get("primary_parent_wave_stage_row") is True
+        and row.get("primary_mature_outcome_parent_wave_stage_row") is True
         for row in rows
     )
     generated = generated_at or datetime.now().astimezone()
@@ -3780,6 +3943,21 @@ def build_bridge_report(
             "state_counts": dict(state_counts),
             "stage_counts": dict(stage_counts),
             "exclusion_counts": dict(exclusions),
+            "noncausal_source_diagnostics": {
+                "invalid_market_timestamp_row_count": sum(
+                    len(scoped_rows)
+                    for scoped_rows in invalid_market_by_scope.values()
+                ),
+                "invalid_depth_timestamp_row_count": sum(
+                    len(scoped_rows)
+                    for scoped_rows in invalid_depth_by_scope.values()
+                ),
+                "invalid_event_reference_timestamp_row_count": sum(
+                    len(scoped_rows)
+                    for scoped_rows in invalid_references_by_scope.values()
+                ),
+                "included_in_prompt_context": False,
+            },
         },
         "rows": rows,
         "source_exact_payload_mutated": False,

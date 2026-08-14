@@ -617,6 +617,31 @@ def test_report_deduplicates_same_parent_wave_per_stage() -> None:
     assert report["future_outcomes_separate_from_prompt_context"] is True
 
 
+def test_report_time_index_keeps_invalid_rows_for_source_quality_attribution() -> None:
+    invalid_market = {
+        **_past_market_rows()[0],
+        "local_receive_timestamp": "invalid-timestamp",
+    }
+    report = build_bridge_report(
+        target_date="2026-08-14",
+        traces=[_trace()],
+        payloads=[_payload()],
+        market_rows=[*_past_market_rows(), invalid_market],
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+    )
+
+    evidence = report["rows"][0][TACTICAL_EVIDENCE_SCHEMA]
+    assert evidence["source_quality"]["rejected_market_reason_counts"] == {}
+    assert report["summary"]["noncausal_source_diagnostics"] == {
+        "invalid_market_timestamp_row_count": 1,
+        "invalid_depth_timestamp_row_count": 0,
+        "invalid_event_reference_timestamp_row_count": 0,
+        "included_in_prompt_context": False,
+    }
+
+
 def test_envelope_join_supports_trace_without_request_id_in_report_and_prefilter() -> None:
     trace = _trace()
     trace.pop("request_id")
