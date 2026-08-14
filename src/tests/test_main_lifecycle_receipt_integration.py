@@ -78,6 +78,15 @@ def test_broker_receipt_pipeline_preserves_exact_lifecycle_identity(
         fill_qty=3,
         fill_price=70_000,
         requested_qty=3,
+        receipt_economics_complete=True,
+        receipt_quantity_contract_complete=True,
+        receipt_unit_fill_consistent=True,
+        broker_execution_provenance_complete=True,
+        broker_execution_time_source="official_fid_908",
+        broker_execution_time_raw="100102",
+        broker_actual_execution_venue="KRX",
+        broker_sor_flag="N",
+        execution_no="BUY-701-E1",
     )
 
     fields = captured["fields"]
@@ -317,6 +326,15 @@ def test_receipt_transitions_close_one_exact_reconciled_lifecycle(
         fill_qty=1,
         fill_price=10_000,
         requested_qty=1,
+        receipt_economics_complete=True,
+        receipt_quantity_contract_complete=True,
+        receipt_unit_fill_consistent=True,
+        broker_execution_provenance_complete=True,
+        broker_execution_time_source="official_fid_908",
+        broker_execution_time_raw="090003",
+        broker_actual_execution_venue="KRX",
+        broker_sor_flag="N",
+        execution_no="BUY-801-E1",
     )
     execution_receipts._log_holding_pipeline(
         stock["name"],
@@ -351,6 +369,15 @@ def test_receipt_transitions_close_one_exact_reconciled_lifecycle(
         main_lifecycle_slippage_basis_price=10_011,
         main_lifecycle_slippage_basis_source="test_exit_decision_price",
         main_lifecycle_realized_net_pnl_krw=6,
+        sell_execution_receipt_economics_complete=True,
+        sell_execution_receipt_quantity_contract_complete=True,
+        sell_execution_receipt_unit_fill_consistent=True,
+        broker_execution_provenance_complete=True,
+        broker_execution_time_source="official_fid_908",
+        broker_execution_time_raw="090010",
+        broker_actual_execution_venue="KRX",
+        broker_sor_flag="N",
+        execution_no="SELL-801-E1",
     )
 
     source = tmp_path / "pipeline.jsonl"
@@ -384,6 +411,9 @@ def test_receipt_transitions_close_one_exact_reconciled_lifecycle(
 def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(
+        execution_receipts, "SELL_RECEIPT_RECOVERY_DIR", tmp_path / "receipts"
+    )
     events: list[dict[str, Any]] = []
     kst = timezone(timedelta(hours=9))
     started_at = datetime(2026, 8, 14, 9, 0, tzinfo=kst)
@@ -403,7 +433,12 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
         "nxt_rising_missed_tp1_partial_fill_amount": 0,
         "nxt_rising_missed_tp1_partial_original_qty": 10,
         "sell_target_price": 10_025,
-        "exit_decision_executable_sell_price": 10_015,
+            "exit_decision_executable_sell_price": 10_015,
+            "broker_execution_provenance_complete": True,
+            "broker_execution_time_source": "official_fid_908",
+            "broker_execution_time_raw": "090006",
+            "broker_actual_execution_venue": "KRX",
+            "broker_sor_flag": "N",
     }
     record = SimpleNamespace(
         buy_price=10_000.0,
@@ -529,6 +564,15 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
         fill_qty=10,
         fill_price=10_000,
         requested_qty=10,
+        receipt_economics_complete=True,
+        receipt_quantity_contract_complete=True,
+        receipt_unit_fill_consistent=True,
+        broker_execution_provenance_complete=True,
+        broker_execution_time_source="official_fid_908",
+        broker_execution_time_raw="090003",
+        broker_actual_execution_venue="KRX",
+        broker_sor_flag="N",
+        execution_no="BUY-901-E1",
     )
     execution_receipts._log_holding_pipeline(
         stock["name"],
@@ -555,8 +599,14 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
         exec_qty=2,
         now=(started_at + timedelta(seconds=6)).replace(tzinfo=None),
         safe_buy_price=10_000,
+        order_qty=4,
+        remaining_qty=2,
+        cumulative_exec_amount=20_040,
+        execution_no="PARTIAL-E1",
+        unit_exec_price=10_020,
+        unit_exec_qty=2,
     )
-    assert record.buy_qty == 8
+    assert record.buy_qty == 10
     assert stock["buy_qty"] == 8
     execution_receipts._handle_nxt_rising_missed_tp1_partial_sell_execution(
         target_id=stock["id"],
@@ -564,17 +614,46 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
         code=stock["code"],
         order_no="PARTIAL-901",
         exec_price=10_020,
-        exec_qty=2,
+        exec_qty=4,
         now=(started_at + timedelta(seconds=7)).replace(tzinfo=None),
         safe_buy_price=10_000,
+        order_qty=4,
+        remaining_qty=0,
+        cumulative_exec_amount=40_080,
+        execution_no="PARTIAL-E2",
+        unit_exec_price=10_020,
+        unit_exec_qty=2,
     )
-    assert record.buy_qty == 6
+    assert record.buy_qty == 10
     assert stock["buy_qty"] == 6
 
     receipt_snapshot = execution_receipts._receipt_snapshot(
         stock, execution_receipts._SELL_RECEIPT_SNAPSHOT_KEYS
     )
     receipt_snapshot["sell_execution_order_no"] = "RUNNER-901"
+    aggregate_net_pnl = execution_receipts.calculate_net_realized_pnl(
+        10_000, 10_014, 10
+    )
+    receipt_snapshot.update(
+        {
+            "sell_execution_expected_qty": 10,
+            "sell_execution_cumulative_qty": 10,
+            "sell_execution_cumulative_amount": 100_140,
+            "sell_execution_cumulative_net_pnl_krw": aggregate_net_pnl,
+            "sell_execution_final_leg_qty": 6,
+            "sell_execution_final_leg_price": 10_010,
+            "sell_execution_final_leg_net_pnl_krw": (
+                aggregate_net_pnl
+                - execution_receipts.calculate_net_realized_pnl(
+                    10_000, 10_020, 4
+                )
+            ),
+            "sell_execution_receipt_economics_complete": True,
+            "sell_execution_receipt_quantity_contract_complete": True,
+            "sell_execution_receipt_unit_fill_consistent": True,
+            "sell_execution_execution_no": "RUNNER-901-E1",
+        }
+        )
     execution_receipts._update_db_for_sell(
         stock["id"],
         10_010,

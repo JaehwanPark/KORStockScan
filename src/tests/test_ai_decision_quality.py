@@ -6013,13 +6013,14 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
     raw_pricing_bytes = b"reviewed test pricing source\n"
     raw_pricing_path.write_bytes(raw_pricing_bytes)
     pricing_path = tmp_path / "provider-pricing.json"
+    pricing_execution_date = datetime.now(KST).date().isoformat()
     pricing_payload = {
         "schema": PRICING_ARTIFACT_SCHEMA,
         "artifact_id": "provider-pricing-test-v1",
         "review_status": "reviewed",
         "reviewed_at": "2026-08-14T18:00:00+09:00",
         "effective_from": "2026-08-14",
-        "effective_to": "2026-08-14",
+        "effective_to": pricing_execution_date,
         "raw_pricing_source_path": raw_pricing_path.name,
         "raw_pricing_source_bytes_sha256": hashlib.sha256(
             raw_pricing_bytes
@@ -6182,13 +6183,14 @@ def test_micro_reversion_cli_ignores_unselected_openai_credentials_for_bedrock_b
     raw_pricing_bytes = b"reviewed mixed provider test pricing source\n"
     raw_pricing_path.write_bytes(raw_pricing_bytes)
     pricing_path = tmp_path / "provider-pricing.json"
+    pricing_execution_date = datetime.now(KST).date().isoformat()
     pricing_payload = {
         "schema": PRICING_ARTIFACT_SCHEMA,
         "artifact_id": "provider-pricing-mixed-test-v1",
         "review_status": "reviewed",
         "reviewed_at": "2026-08-14T18:00:00+09:00",
         "effective_from": "2026-08-14",
-        "effective_to": "2026-08-14",
+        "effective_to": pricing_execution_date,
         "raw_pricing_source_path": raw_pricing_path.name,
         "raw_pricing_source_bytes_sha256": hashlib.sha256(
             raw_pricing_bytes

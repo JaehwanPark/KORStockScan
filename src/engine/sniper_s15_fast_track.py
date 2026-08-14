@@ -827,7 +827,11 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             time.sleep(0.1)
 
             with state["lock"]:
-                if state["cum_sell_qty"] >= state["cum_buy_qty"] > 0:
+                if (
+                    state["cum_sell_qty"] == state["cum_buy_qty"] > 0
+                    and state.get("sell_receipt_position_complete") is True
+                    and state.get("sell_receipt_economics_complete") is True
+                ):
                     state["status"] = "DONE"
                     cleanup_allowed = True
                     break

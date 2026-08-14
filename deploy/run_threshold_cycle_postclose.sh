@@ -524,7 +524,7 @@ run_postclose_cmd() {
   local observed_state=""
   local observed_process=""
   local pending_signal=""
-  local supervisor_shell="${BASH:-bash}"
+  local supervisor_python="${VENV_PY:-/usr/bin/python3}"
   if command -v nice >/dev/null 2>&1; then
     cmd=(nice -n "$POSTCLOSE_NICE_LEVEL" "${cmd[@]}")
   fi
@@ -538,7 +538,7 @@ run_postclose_cmd() {
   fi
   if ! command -v setsid >/dev/null 2>&1 \
     || ! command -v ps >/dev/null 2>&1 \
-    || [ ! -x "$supervisor_shell" ]; then
+    || [ ! -x "$supervisor_python" ]; then
     echo "[threshold-cycle] process-group isolation unavailable command=${cmd[0]}" >&2
     return 127
   fi
@@ -549,13 +549,19 @@ run_postclose_cmd() {
   # stops before spawning the real command; the parent validates PID == PGID
   # and only then resumes it.  Signals received in this launch window are
   # recorded by handle_wrapper_signal and delivered to the verified group.
-  setsid -- "$supervisor_shell" -c '
-    kill -STOP "$$"
-    "$@" <&0 &
-    supervised_pid=$!
-    wait "$supervised_pid"
-    exit "$?"
-  ' postclose-command-supervisor "${cmd[@]}" <&0 &
+  setsid -- "$supervisor_python" -c '
+import os
+import signal
+import subprocess
+import sys
+
+for signal_number in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(signal_number, signal.SIG_DFL)
+os.kill(os.getpid(), signal.SIGSTOP)
+completed = subprocess.run(sys.argv[1:], check=False)
+returncode = completed.returncode
+raise SystemExit(returncode if returncode >= 0 else 128 - returncode)
+  ' "${cmd[@]}" <&0 &
   command_pid=$!
   ACTIVE_POSTCLOSE_PID="$command_pid"
   for _pgid_attempt in {1..100}; do
@@ -596,6 +602,13 @@ run_postclose_cmd() {
   pending_signal="$POSTCLOSE_PENDING_SIGNAL"
   POSTCLOSE_PENDING_SIGNAL=""
   if [ -n "$pending_signal" ]; then
+    # The verified supervisor is still stopped and has not spawned the real
+    # command.  Kill it unconditionally so even a disposition inherited as
+    # ignored by an unusual launcher cannot begin provider or postclose work.
+    kill -KILL -- "-$command_pid" 2>/dev/null || true
+    wait "$command_pid" 2>/dev/null || true
+    ACTIVE_POSTCLOSE_PID=""
+    ACTIVE_POSTCLOSE_PGID=""
     handle_wrapper_signal "$pending_signal"
   fi
   kill -CONT -- "-$command_pid"

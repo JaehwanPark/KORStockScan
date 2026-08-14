@@ -2,6 +2,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -138,6 +139,7 @@ def test_postclose_wrapper_terminates_foreground_process_group_on_signal(
         + "\nPOSTCLOSE_NICE_LEVEL=0\n"
         + "POSTCLOSE_IONICE_CLASS=-1\n"
         + 'POSTCLOSE_IONICE_LEVEL=0\nPOSTCLOSE_CPU_AFFINITY=""\n'
+        + f'VENV_PY="{sys.executable}"\n'
         + f'mark_postclose_failed() {{ printf "%s:%s" "$1" "$2" > "{failure_marker_path}"; }}\n'
         + f'restart_postclose_bot_if_requested() {{ : > "{restart_marker_path}"; }}\n'
         + "POSTCLOSE_OPERATING=true\n"
@@ -199,6 +201,7 @@ def test_postclose_group_runner_accepts_fast_success_and_fails_closed_without_se
         "POSTCLOSE_IONICE_CLASS=-1\n"
         "POSTCLOSE_IONICE_LEVEL=0\n"
         'POSTCLOSE_CPU_AFFINITY=""\n'
+        f'VENV_PY="{sys.executable}"\n'
         "POSTCLOSE_GROUP_STARTING=false\n"
         'POSTCLOSE_PENDING_SIGNAL=""\n'
         'ACTIVE_POSTCLOSE_PID=""\n'
@@ -243,8 +246,12 @@ def test_postclose_group_runner_accepts_fast_success_and_fails_closed_without_se
     assert "process-group isolation unavailable" in no_setsid_result.stderr
 
 
+@pytest.mark.parametrize(
+    ("signal_number", "expected_return_code"),
+    [(signal.SIGHUP, 129), (signal.SIGINT, 130), (signal.SIGTERM, 143)],
+)
 def test_postclose_signal_during_group_startup_is_delivered_after_verification(
-    tmp_path,
+    tmp_path, signal_number, expected_return_code
 ):
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
         encoding="utf-8"
@@ -278,6 +285,7 @@ def test_postclose_signal_during_group_startup_is_delivered_after_verification(
         preamble
         + "\nPOSTCLOSE_NICE_LEVEL=0\nPOSTCLOSE_IONICE_CLASS=-1\n"
         + 'POSTCLOSE_IONICE_LEVEL=0\nPOSTCLOSE_CPU_AFFINITY=""\n'
+        + f'VENV_PY="{sys.executable}"\n'
         + run_function
         + f'\nrun_postclose_cmd bash "{child_script}"\n',
         encoding="utf-8",
@@ -301,8 +309,8 @@ def test_postclose_signal_during_group_startup_is_delivered_after_verification(
                 break
             time.sleep(0.01)
         assert ps_started.exists()
-        process.terminate()
-        assert process.wait(timeout=5) == 143
+        process.send_signal(signal_number)
+        assert process.wait(timeout=5) == expected_return_code
         assert not child_started.exists()
     finally:
         if process.poll() is None:

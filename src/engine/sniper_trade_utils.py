@@ -6,6 +6,47 @@ from src.engine import kiwoom_orders
 from src.utils import kiwoom_utils
 
 
+class BrokerRemainingQty(int):
+    """Integer-compatible broker quantity with tri-state confirmation provenance."""
+
+    def __new__(
+        cls,
+        value,
+        *,
+        confirmation_state: str,
+        source: str,
+        successful_exchanges=(),
+    ):
+        instance = int.__new__(cls, max(0, int(value or 0)))
+        instance.confirmation_state = str(confirmation_state)
+        instance.source = str(source)
+        instance.successful_exchanges = tuple(
+            sorted(
+                {
+                    str(exchange or "").strip().upper()
+                    for exchange in (successful_exchanges or ())
+                    if str(exchange or "").strip()
+                }
+            )
+        )
+        return instance
+
+
+def _remaining_qty_result(
+    value: int,
+    *,
+    confirmation_state: str,
+    source: str,
+    successful_exchanges=(),
+) -> BrokerRemainingQty:
+    return BrokerRemainingQty(
+        value,
+        confirmation_state=confirmation_state,
+        source=source,
+        successful_exchanges=successful_exchanges,
+    )
+
+
 def send_market_exit_now(code, qty, token):
     """정규장 중 즉시 시장가 청산용 공통 래퍼"""
     return kiwoom_orders.send_sell_order_market(
@@ -131,19 +172,33 @@ def send_cancel_order_with_exchange_retry(
 
 def confirm_cancel_or_reload_remaining(code, orig_ord_no, token, expected_qty):
     """
-    [공통 유틸] 주문 취소 후 실제 계좌 잔고를 재조회하여 팔아야 할 정확한 잔량(rem_qty) 반환
+    Return a broker-confirmed remaining position after an acknowledged cancel.
+
+    ``expected_qty`` is intentionally not a fallback.  Reusing the pre-cancel
+    quantity after an unknown cancel/inventory result can duplicate a partially
+    filled SELL, so every ambiguous path fails closed with zero.
     """
     if orig_ord_no:
-        send_cancel_order_with_exchange_retry(
+        cancel_result = send_cancel_order_with_exchange_retry(
             code=code,
             orig_ord_no=orig_ord_no,
             token=token,
             qty=0,
         )
+        if not _cancel_response_success(cancel_result):
+            return _remaining_qty_result(
+                0,
+                confirmation_state="unknown",
+                source="cancel_unconfirmed",
+            )
         time.sleep(0.5)
 
     try:
-        real_inventory, _ = kiwoom_orders.get_my_inventory(token)
+        real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(token)
+        successful = {
+            str(exchange or "").strip().upper()
+            for exchange in (successful_exchanges or ())
+        }
         real_stock = next(
             (
                 item
@@ -153,16 +208,40 @@ def confirm_cancel_or_reload_remaining(code, orig_ord_no, token, expected_qty):
             None,
         )
         if real_stock:
-            real_qty = int(float(real_stock.get("qty", 0) or 0))
-            if real_qty > 0:
-                return real_qty
+            quantity = max(0, int(float(real_stock.get("qty", 0) or 0)))
+            if quantity > 0:
+                return _remaining_qty_result(
+                    quantity,
+                    confirmation_state="confirmed_positive",
+                    source="kt00018_position_found",
+                    successful_exchanges=successful,
+                )
+            if {"KRX", "NXT"}.issubset(successful):
+                return _remaining_qty_result(
+                    0,
+                    confirmation_state="verified_zero",
+                    source="kt00018_all_venues_zero_row",
+                    successful_exchanges=successful,
+                )
     except Exception:
-        pass
-
-    try:
-        return max(0, int(expected_qty or 0))
-    except Exception:
-        return 0
+        return _remaining_qty_result(
+            0,
+            confirmation_state="unknown",
+            source="inventory_lookup_failed",
+        )
+    if {"KRX", "NXT"}.issubset(successful):
+        return _remaining_qty_result(
+            0,
+            confirmation_state="verified_zero",
+            source="kt00018_all_venues_position_absent",
+            successful_exchanges=successful,
+        )
+    return _remaining_qty_result(
+        0,
+        confirmation_state="unknown",
+        source="kt00018_partial_venue_confirmation",
+        successful_exchanges=successful,
+    )
 
 
 def extract_ord_no(res):

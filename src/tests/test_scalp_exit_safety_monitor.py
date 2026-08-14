@@ -1414,7 +1414,71 @@ def _ambiguous_cancel_response():
     }
 
 
-def test_sell_cancel_error_keeps_confirmed_broker_position_holding(monkeypatch):
+def test_sell_cancel_success_with_hidden_fill_stays_sell_ordered(monkeypatch):
+    monkeypatch.setattr(
+        handlers.sniper_trade_utils,
+        "send_cancel_order_with_exchange_retry",
+        lambda **kwargs: {"return_code": "0", "return_msg": "정상"},
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "get_my_inventory",
+        lambda token: ([{"code": "123456", "qty": 8}], {"KRX", "NXT"}),
+    )
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "log_error", lambda *args, **kwargs: None)
+    db = _CancelDB()
+    stock = {
+        "id": 1,
+        "name": "지연체결종목",
+        "status": "SELL_ORDERED",
+        "buy_qty": 10,
+        "sell_odno": "O1",
+        "sell_order_time": 100.0,
+        "exit_requested": True,
+    }
+
+    assert handlers.process_sell_cancellation(stock, "123456", "O1", db) is False
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["buy_qty"] == 10
+    assert stock["sell_odno"] == "O1"
+    assert stock["sell_cancel_reconciliation_required"] is True
+    assert db.updates == []
+
+
+def test_sell_cancel_success_without_fill_reconciles_before_holding(monkeypatch):
+    monkeypatch.setattr(
+        handlers.sniper_trade_utils,
+        "send_cancel_order_with_exchange_retry",
+        lambda **kwargs: {"return_code": "0", "return_msg": "정상"},
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "get_my_inventory",
+        lambda token: ([{"code": "123456", "qty": 10}], {"KRX", "NXT"}),
+    )
+    monkeypatch.setattr(handlers, "log_info", lambda *args, **kwargs: None)
+    db = _CancelDB()
+    stock = {
+        "id": 1,
+        "name": "미체결종목",
+        "status": "SELL_ORDERED",
+        "buy_qty": 10,
+        "sell_odno": "O1",
+        "sell_order_time": 100.0,
+        "exit_requested": True,
+    }
+
+    assert handlers.process_sell_cancellation(stock, "123456", "O1", db) is True
+    assert stock["status"] == "HOLDING"
+    assert stock["buy_qty"] == 10
+    assert "sell_odno" not in stock
+    assert db.updates == [{"status": "HOLDING"}]
+
+
+def test_sell_cancel_error_with_unreceipted_inventory_change_stays_sell_ordered(
+    monkeypatch,
+):
     monkeypatch.setattr(
         handlers.sniper_trade_utils,
         "send_cancel_order_with_exchange_retry",
@@ -1442,16 +1506,19 @@ def test_sell_cancel_error_keeps_confirmed_broker_position_holding(monkeypatch):
 
     handlers.process_sell_cancellation(stock, "123456", "O1", db)
 
-    assert stock["status"] == "HOLDING"
-    assert stock["buy_qty"] == 3
-    assert stock["sell_order_failure_count"] == 1
-    assert "sell_odno" not in stock
-    assert "exit_token" not in stock
-    assert stock["exit_requested"] is False
-    assert db.updates == [{"status": "HOLDING"}]
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["buy_qty"] == 7
+    assert stock["sell_odno"] == "O1"
+    assert stock["exit_token"] == "exit-positive"
+    assert stock["exit_requested"] is True
+    assert stock["sell_cancel_reconciliation_required"] is True
+    assert stock["sell_cancel_reconciliation_source"] == (
+        "positive_inventory_receipt_gap"
+    )
+    assert db.updates == [{"status": "SELL_ORDERED"}]
 
 
-def test_sell_cancel_error_completes_only_after_all_venue_zero_confirmation(
+def test_sell_cancel_error_zero_inventory_waits_for_exact_final_receipt(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -1479,10 +1546,14 @@ def test_sell_cancel_error_completes_only_after_all_venue_zero_confirmation(
 
     handlers.process_sell_cancellation(stock, "123456", "O1", db)
 
-    assert stock["status"] == "COMPLETED"
-    assert "sell_odno" not in stock
-    assert "123456" not in handlers.HIGHEST_PRICES
-    assert db.updates == [{"status": "COMPLETED"}]
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["sell_odno"] == "O1"
+    assert "123456" in handlers.HIGHEST_PRICES
+    assert stock["sell_cancel_reconciliation_required"] is True
+    assert stock["sell_cancel_reconciliation_source"] == (
+        "zero_inventory_exact_receipt_required"
+    )
+    assert db.updates == [{"status": "SELL_ORDERED"}]
 
 
 def test_sell_cancel_error_with_partial_inventory_evidence_stays_sell_ordered(
