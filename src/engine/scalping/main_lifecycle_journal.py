@@ -33,6 +33,51 @@ KST = ZoneInfo("Asia/Seoul")
 MAX_TRANSITION_BYTES = 16 * 1024
 MAX_DATA_STRING_LENGTH = 2_048
 PIPELINE_IDENTITY_SCHEMA = "main_scalping_lifecycle_pipeline_identity_v1"
+BROKER_EXECUTION_PROVENANCE_SCHEMA = (
+    "kiwoom_ws_order_execution_provenance_v1"
+)
+BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA = (
+    "kiwoom_websocket_order_execution_00_values_v1"
+)
+KIWOOM_OFFICIAL_REFERENCE_SHA = (
+    "69642586f7d84ba9fd8a6faf1f1537c7fda6568b"
+)
+BROKER_EXECUTION_SOURCE_TYPE = "00"
+
+# Official WebSocket type ``00`` is the reviewed per-event order/execution
+# source.  Promotion proof requires the explicit raw-envelope marker and the
+# exact native FIDs below; lifecycle-derived or generic aliases are never
+# allowed to manufacture native broker provenance.  ``ka10075`` remains an
+# unfilled-order reconciliation source only: its ``tm`` is order time and an
+# order disappears after full fill, so it cannot independently prove this
+# terminal execution ledger.
+BROKER_EXECUTION_NATIVE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "raw_envelope_schema": (
+        "main_lifecycle_broker_raw_envelope_schema",
+        "broker_raw_envelope_schema",
+    ),
+    "source_type": (
+        "main_lifecycle_broker_raw_source_type",
+        "broker_raw_source_type",
+    ),
+    "order_no": ("9203",),
+    "stock_code": ("9001",),
+    "order_status": ("913",),
+    "order_qty": ("900",),
+    "remaining_qty": ("902",),
+    "cumulative_fill_amount_krw": ("903",),
+    "order_side_text": ("905",),
+    "order_side_code": ("907",),
+    "execution_time": ("908",),
+    "execution_no": ("909",),
+    "execution_price": ("910",),
+    "cumulative_fill_qty": ("911",),
+    "unit_execution_price": ("914",),
+    "unit_fill_qty": ("915",),
+    "execution_venue_code": ("2134",),
+    "execution_venue_text": ("2135",),
+    "sor_yn": ("2136",),
+}
 
 # Only these existing live pipeline stages may become lifecycle transitions.
 # The map is intentionally exact: the postclose producer must never infer a
@@ -104,7 +149,32 @@ _ALLOWED_DATA_FIELDS = frozenset(
         "paired_replay_arm",
         "actual_broker_order_submitted",
         "broker_order_no",
+        "broker_order_no_list",
         "broker_reconciled",
+        "broker_execution_provenance_schema",
+        "broker_execution_official_reference_sha",
+        "broker_execution_provenance_state",
+        "broker_execution_provenance_error",
+        "broker_execution_raw_envelope_schema",
+        "broker_execution_source_type",
+        "broker_execution_order_no",
+        "broker_execution_no",
+        "broker_execution_stock_code",
+        "broker_execution_order_status",
+        "broker_execution_side",
+        "broker_execution_order_qty",
+        "broker_execution_cumulative_fill_qty",
+        "broker_execution_cumulative_fill_amount_krw",
+        "broker_execution_remaining_qty",
+        "broker_execution_price",
+        "broker_execution_reported_price",
+        "broker_execution_unit_fill_qty",
+        "broker_execution_time_hhmmss",
+        "broker_execution_venue",
+        "broker_execution_sor_yn",
+        "broker_execution_fill_state",
+        "broker_execution_identity",
+        "broker_execution_content_sha256",
         "fill_state",
         "fill_qty",
         "fill_price",
@@ -171,6 +241,545 @@ def _canonical_sha256(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value)).hexdigest()
 
 
+def _raw_text(value: Any) -> str | None:
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if text.lower() in {"", "-", "none", "null", "not_available"}:
+        return None
+    if len(text) > 128 or any(char in text for char in "\r\n\x00"):
+        raise ValueError("broker_execution_raw_text_invalid")
+    return text
+
+
+def _raw_wire_text(value: Any) -> str:
+    """Return one exact Kiwoom wire token without lossy normalization."""
+
+    if not isinstance(value, str) or value != value.strip():
+        raise ValueError("broker_execution_raw_wire_text_invalid")
+    text = _raw_text(value)
+    if text is None:
+        raise ValueError("broker_execution_raw_wire_text_missing")
+    return text
+
+
+def _required_raw_text(value: Any) -> str:
+    return _raw_wire_text(value)
+
+
+def _raw_value_supplied(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return True
+    text = str(value).strip()
+    return text.lower() not in {"", "-", "none", "null", "not_available"}
+
+
+def _raw_integer(value: Any, *, positive: bool) -> int:
+    if not isinstance(value, str) or value != value.strip():
+        raise ValueError("broker_execution_integer_invalid")
+    if not re.fullmatch(r"[0-9]+", value):
+        raise ValueError("broker_execution_integer_invalid")
+    number = int(value)
+    if number < 0 or (positive and number == 0) or number > 10**15:
+        raise ValueError("broker_execution_integer_out_of_range")
+    return number
+
+
+def _expected_integer(value: Any, *, positive: bool) -> int:
+    if isinstance(value, bool):
+        raise ValueError("broker_execution_expected_integer_invalid")
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError("broker_execution_expected_integer_invalid")
+        value = int(value)
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+        number = int(value)
+    else:
+        raise ValueError("broker_execution_expected_integer_invalid")
+    if number < 0 or (positive and number == 0) or number > 10**15:
+        raise ValueError("broker_execution_expected_integer_out_of_range")
+    return number
+
+
+def _raw_order_no(value: Any) -> str:
+    try:
+        text = _raw_wire_text(value)
+    except ValueError as exc:
+        raise ValueError("broker_execution_order_no_invalid") from exc
+    if not re.fullmatch(r"[0-9]{7}", text) or int(text) == 0:
+        raise ValueError("broker_execution_order_no_invalid")
+    return text
+
+
+def _raw_execution_no(value: Any) -> str:
+    try:
+        text = _raw_wire_text(value)
+    except ValueError as exc:
+        raise ValueError("broker_execution_execution_no_invalid") from exc
+    if not re.fullmatch(r"[0-9]{7}", text) or int(text) == 0:
+        raise ValueError("broker_execution_execution_no_invalid")
+    return text
+
+
+def _raw_stock_code(value: Any) -> str:
+    try:
+        text = _raw_wire_text(value)
+    except ValueError as exc:
+        raise ValueError("broker_execution_stock_code_invalid") from exc
+    if not re.fullmatch(r"[0-9]{6}", text):
+        raise ValueError("broker_execution_stock_code_invalid")
+    return text
+
+
+def _raw_order_status(value: Any) -> str:
+    text = _raw_wire_text(value)
+    if text != "체결":
+        raise ValueError("broker_execution_order_status_not_execution")
+    return text
+
+
+def _raw_side_text(value: Any) -> str:
+    text = _raw_wire_text(value)
+    side = {"+매수": "BUY", "-매도": "SELL"}.get(text)
+    if side is None:
+        raise ValueError("broker_execution_side_text_invalid")
+    return side
+
+
+def _raw_side_code(value: Any) -> str:
+    text = _raw_wire_text(value)
+    side = {"1": "SELL", "2": "BUY"}.get(text)
+    if side is None:
+        raise ValueError("broker_execution_side_code_invalid")
+    return side
+
+
+def _raw_execution_time(value: Any) -> str:
+    text = _raw_wire_text(value)
+    if not re.fullmatch(r"[0-9]{6}", text):
+        raise ValueError("broker_execution_time_invalid")
+    hours, minutes, seconds = (
+        int(text[:2]),
+        int(text[2:4]),
+        int(text[4:]),
+    )
+    if hours > 23 or minutes > 59 or seconds > 59:
+        raise ValueError("broker_execution_time_invalid")
+    return text
+
+
+def _raw_venue_code(value: Any) -> str:
+    text = _raw_wire_text(value)
+    venue = {
+        "1": "KRX",
+        "2": "NXT",
+        "0": "SOR",
+    }.get(text)
+    if venue is None:
+        raise ValueError("broker_execution_venue_code_invalid")
+    return venue
+
+
+def _raw_venue_text(value: Any) -> str:
+    text = _raw_wire_text(value)
+    venue = {"KRX": "KRX", "NXT": "NXT", "통합": "SOR"}.get(text)
+    if venue is None:
+        raise ValueError("broker_execution_venue_text_invalid")
+    return venue
+
+
+def _raw_sor_yn(value: Any) -> str:
+    text = _raw_wire_text(value)
+    if text not in {"Y", "N"}:
+        raise ValueError("broker_execution_sor_yn_invalid")
+    return text
+
+
+def _resolve_raw_alias(
+    source_fields: Mapping[str, Any],
+    canonical_name: str,
+    normalizer: Any,
+) -> tuple[Any | None, bool]:
+    values: list[Any] = []
+    present = False
+    for key in BROKER_EXECUTION_NATIVE_FIELD_ALIASES[canonical_name]:
+        if key not in source_fields:
+            continue
+        raw_value = source_fields.get(key)
+        if not _raw_value_supplied(raw_value):
+            continue
+        present = True
+        values.append(normalizer(raw_value))
+    if not values:
+        return None, present
+    first = values[0]
+    if any(value != first for value in values[1:]):
+        raise ValueError(f"broker_execution_native_alias_conflict:{canonical_name}")
+    return first, True
+
+
+def _execution_venue_matches(*, lifecycle_venue: Any, raw_venue: str) -> bool:
+    lifecycle = str(lifecycle_venue or "").strip().upper()
+    if raw_venue == "SOR":
+        # Official SOR/integrated responses do not identify the underlying
+        # execution exchange, so they are evidence but not promotion proof.
+        return False
+    if lifecycle == "PREMARKET_KRX_LIKE":
+        return raw_venue == "KRX"
+    return lifecycle == raw_venue
+
+
+def build_broker_execution_provenance(
+    source_fields: Mapping[str, Any] | None,
+    *,
+    expected_qty: Any,
+    expected_price: Any,
+    expected_stock_code: Any,
+    expected_side: Any,
+    lifecycle_venue: Any,
+    expected_fill_state: Any | None = None,
+) -> dict[str, Any]:
+    """Canonicalize one complete official Kiwoom WebSocket execution proof.
+
+    Missing or malformed raw fields are preserved as a bounded source-quality
+    state.  They never fall back to lifecycle-derived quantities and never
+    grant R2/R3 evidence.
+    """
+
+    fields = source_fields if isinstance(source_fields, Mapping) else {}
+    result: dict[str, Any] = {
+        "broker_execution_provenance_schema": (
+            BROKER_EXECUTION_PROVENANCE_SCHEMA
+        ),
+        "broker_execution_official_reference_sha": (
+            KIWOOM_OFFICIAL_REFERENCE_SHA
+        ),
+    }
+    raw_key_present = any(
+        key in fields and _raw_value_supplied(fields.get(key))
+        for aliases in BROKER_EXECUTION_NATIVE_FIELD_ALIASES.values()
+        for key in aliases
+    )
+    if not raw_key_present:
+        result.update(
+            {
+                "broker_execution_provenance_state": "missing",
+                "broker_execution_provenance_error": (
+                    "official_broker_execution_raw_fields_missing"
+                ),
+            }
+        )
+        return result
+
+    try:
+        raw_envelope_schema, _ = _resolve_raw_alias(
+            fields,
+            "raw_envelope_schema",
+            _required_raw_text,
+        )
+        source_type, _ = _resolve_raw_alias(
+            fields,
+            "source_type",
+            _required_raw_text,
+        )
+        order_no, _ = _resolve_raw_alias(fields, "order_no", _raw_order_no)
+        stock_code, _ = _resolve_raw_alias(
+            fields, "stock_code", _raw_stock_code
+        )
+        order_status, _ = _resolve_raw_alias(
+            fields, "order_status", _raw_order_status
+        )
+        side_text, _ = _resolve_raw_alias(
+            fields, "order_side_text", _raw_side_text
+        )
+        side_code, _ = _resolve_raw_alias(
+            fields, "order_side_code", _raw_side_code
+        )
+        execution_no, _ = _resolve_raw_alias(
+            fields, "execution_no", _raw_execution_no
+        )
+        order_qty, _ = _resolve_raw_alias(
+            fields,
+            "order_qty",
+            lambda value: _raw_integer(value, positive=True),
+        )
+        cumulative_fill_qty, _ = _resolve_raw_alias(
+            fields,
+            "cumulative_fill_qty",
+            lambda value: _raw_integer(value, positive=True),
+        )
+        cumulative_fill_amount, _ = _resolve_raw_alias(
+            fields,
+            "cumulative_fill_amount_krw",
+            lambda value: _raw_integer(value, positive=True),
+        )
+        remaining_qty, _ = _resolve_raw_alias(
+            fields,
+            "remaining_qty",
+            lambda value: _raw_integer(value, positive=False),
+        )
+        execution_price, _ = _resolve_raw_alias(
+            fields,
+            "execution_price",
+            lambda value: _raw_integer(value, positive=True),
+        )
+        unit_execution_price, _ = _resolve_raw_alias(
+            fields,
+            "unit_execution_price",
+            lambda value: _raw_integer(value, positive=True),
+        )
+        unit_fill_qty, _ = _resolve_raw_alias(
+            fields,
+            "unit_fill_qty",
+            lambda value: _raw_integer(value, positive=True),
+        )
+        execution_time, _ = _resolve_raw_alias(
+            fields, "execution_time", _raw_execution_time
+        )
+        execution_venue_code, _ = _resolve_raw_alias(
+            fields, "execution_venue_code", _raw_venue_code
+        )
+        execution_venue_text, _ = _resolve_raw_alias(
+            fields, "execution_venue_text", _raw_venue_text
+        )
+        sor_yn, _ = _resolve_raw_alias(
+            fields, "sor_yn", _raw_sor_yn
+        )
+    except (TypeError, ValueError) as exc:
+        result.update(
+            {
+                "broker_execution_provenance_state": "invalid",
+                "broker_execution_provenance_error": str(exc)[:256],
+            }
+        )
+        return result
+
+    required = {
+        "raw_envelope_schema": raw_envelope_schema,
+        "source_type": source_type,
+        "order_no": order_no,
+        "execution_no": execution_no,
+        "stock_code": stock_code,
+        "order_status": order_status,
+        "order_side_text": side_text,
+        "order_side_code": side_code,
+        "order_qty": order_qty,
+        "cumulative_fill_qty": cumulative_fill_qty,
+        "cumulative_fill_amount_krw": cumulative_fill_amount,
+        "remaining_qty": remaining_qty,
+        "execution_price": execution_price,
+        "unit_execution_price": unit_execution_price,
+        "unit_fill_qty": unit_fill_qty,
+        "execution_time": execution_time,
+        "execution_venue_code": execution_venue_code,
+        "execution_venue_text": execution_venue_text,
+        "sor_yn": sor_yn,
+    }
+    missing = sorted(key for key, value in required.items() if value is None)
+    if missing:
+        result.update(
+            {
+                "broker_execution_provenance_state": "incomplete",
+                "broker_execution_provenance_error": (
+                    "official_broker_execution_fields_incomplete:"
+                    + ",".join(missing)
+                )[:256],
+            }
+        )
+        return result
+
+    assert isinstance(raw_envelope_schema, str)
+    assert isinstance(source_type, str)
+    assert isinstance(order_no, str)
+    assert isinstance(execution_no, str)
+    assert isinstance(stock_code, str)
+    assert isinstance(order_status, str)
+    assert isinstance(side_text, str)
+    assert isinstance(side_code, str)
+    assert isinstance(order_qty, int)
+    assert isinstance(cumulative_fill_qty, int)
+    assert isinstance(cumulative_fill_amount, int)
+    assert isinstance(remaining_qty, int)
+    assert isinstance(execution_price, int)
+    assert isinstance(unit_execution_price, int)
+    assert isinstance(unit_fill_qty, int)
+    assert isinstance(execution_time, str)
+    assert isinstance(execution_venue_code, str)
+    assert isinstance(execution_venue_text, str)
+    assert isinstance(sor_yn, str)
+
+    try:
+        expected_quantity = _expected_integer(expected_qty, positive=True)
+        expected_execution_price = _expected_integer(expected_price, positive=True)
+        normalized_stock_code = _raw_stock_code(expected_stock_code)
+        normalized_side = str(expected_side or "").strip().upper()
+        if raw_envelope_schema != BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA:
+            raise ValueError("broker_execution_raw_envelope_schema_invalid")
+        if source_type != BROKER_EXECUTION_SOURCE_TYPE:
+            raise ValueError("broker_execution_source_type_not_full_proof")
+        if normalized_side not in {"BUY", "SELL"}:
+            raise ValueError("broker_execution_expected_side_invalid")
+        if stock_code != normalized_stock_code:
+            raise ValueError("broker_execution_stock_code_mismatch")
+        if side_text != side_code or side_code != normalized_side:
+            raise ValueError("broker_execution_side_mismatch")
+        if execution_venue_code != execution_venue_text:
+            raise ValueError("broker_execution_venue_native_fields_conflict")
+        if cumulative_fill_qty + remaining_qty != order_qty:
+            raise ValueError("broker_execution_quantity_reconciliation_failed")
+        if unit_fill_qty > cumulative_fill_qty:
+            raise ValueError("broker_execution_unit_qty_exceeds_cumulative")
+        if execution_price != unit_execution_price:
+            raise ValueError("broker_execution_native_price_fields_conflict")
+        if cumulative_fill_amount < unit_fill_qty * unit_execution_price:
+            raise ValueError("broker_execution_cumulative_amount_too_small")
+        if expected_quantity != unit_fill_qty:
+            raise ValueError("broker_execution_unit_qty_mismatch")
+        if expected_execution_price != unit_execution_price:
+            raise ValueError("broker_execution_price_mismatch")
+        if not _execution_venue_matches(
+            lifecycle_venue=lifecycle_venue,
+            raw_venue=execution_venue_code,
+        ):
+            raise ValueError("broker_execution_venue_ambiguous_or_mismatch")
+        derived_fill_state = "full" if remaining_qty == 0 else "partial"
+        normalized_expected_state = str(expected_fill_state or "").strip().lower()
+        if (
+            normalized_expected_state
+            and normalized_expected_state not in {"partial", "full"}
+        ):
+            raise ValueError("broker_execution_expected_fill_state_invalid")
+        if normalized_expected_state and normalized_expected_state != derived_fill_state:
+            raise ValueError("broker_execution_fill_state_mismatch")
+    except (TypeError, ValueError) as exc:
+        result.update(
+            {
+                "broker_execution_provenance_state": "invalid",
+                "broker_execution_provenance_error": str(exc)[:256],
+            }
+        )
+        return result
+
+    canonical_raw = {
+        "raw_envelope_schema": raw_envelope_schema,
+        "source_type": source_type,
+        "order_no": order_no,
+        "execution_no": execution_no,
+        "stock_code": stock_code,
+        "order_status": order_status,
+        "side": side_code,
+        "order_qty": order_qty,
+        "cumulative_fill_qty": cumulative_fill_qty,
+        "cumulative_fill_amount_krw": cumulative_fill_amount,
+        "remaining_qty": remaining_qty,
+        "reported_execution_price": execution_price,
+        "unit_execution_price": unit_execution_price,
+        "unit_fill_qty": unit_fill_qty,
+        "execution_time_hhmmss": execution_time,
+        "execution_venue": execution_venue_code,
+        "sor_yn": sor_yn,
+        "fill_state": derived_fill_state,
+    }
+    identity_payload = {
+        "source_type": source_type,
+        "order_no": order_no,
+        "execution_no": execution_no,
+    }
+    result.update(
+        {
+            "broker_execution_provenance_state": "complete",
+            "broker_execution_raw_envelope_schema": raw_envelope_schema,
+            "broker_execution_source_type": source_type,
+            "broker_execution_order_no": order_no,
+            "broker_execution_no": execution_no,
+            "broker_execution_stock_code": stock_code,
+            "broker_execution_order_status": order_status,
+            "broker_execution_side": side_code,
+            "broker_execution_order_qty": order_qty,
+            "broker_execution_cumulative_fill_qty": cumulative_fill_qty,
+            "broker_execution_cumulative_fill_amount_krw": (
+                cumulative_fill_amount
+            ),
+            "broker_execution_remaining_qty": remaining_qty,
+            "broker_execution_price": unit_execution_price,
+            "broker_execution_reported_price": execution_price,
+            "broker_execution_unit_fill_qty": unit_fill_qty,
+            "broker_execution_time_hhmmss": execution_time,
+            "broker_execution_venue": execution_venue_code,
+            "broker_execution_sor_yn": sor_yn,
+            "broker_execution_fill_state": derived_fill_state,
+            "broker_execution_identity": (
+                "bex-" + _canonical_sha256(identity_payload)[:32]
+            ),
+            "broker_execution_content_sha256": _canonical_sha256(canonical_raw),
+        }
+    )
+    return result
+
+
+def validate_broker_execution_provenance(
+    data: Mapping[str, Any],
+    *,
+    expected_qty: Any,
+    expected_price: Any,
+    expected_stock_code: Any,
+    expected_side: Any,
+    lifecycle_venue: Any,
+    expected_fill_state: Any | None = None,
+) -> str | None:
+    """Return a stable validation error for a canonical complete proof."""
+
+    if data.get("broker_execution_provenance_state") != "complete":
+        return "broker_execution_provenance_not_complete"
+    side = str(data.get("broker_execution_side") or "").strip().upper()
+    venue = str(data.get("broker_execution_venue") or "").strip().upper()
+    native_projection = {
+        "broker_raw_envelope_schema": data.get(
+            "broker_execution_raw_envelope_schema"
+        ),
+        "broker_raw_source_type": data.get("broker_execution_source_type"),
+        "9203": data.get("broker_execution_order_no"),
+        "9001": data.get("broker_execution_stock_code"),
+        "913": data.get("broker_execution_order_status"),
+        "900": str(data.get("broker_execution_order_qty", "")),
+        "902": str(data.get("broker_execution_remaining_qty", "")),
+        "903": str(data.get("broker_execution_cumulative_fill_amount_krw", "")),
+        "905": {"BUY": "+매수", "SELL": "-매도"}.get(side),
+        "907": {"BUY": "2", "SELL": "1"}.get(side),
+        "908": data.get("broker_execution_time_hhmmss"),
+        "909": data.get("broker_execution_no"),
+        "910": str(data.get("broker_execution_reported_price", "")),
+        "911": str(data.get("broker_execution_cumulative_fill_qty", "")),
+        "914": str(data.get("broker_execution_price", "")),
+        "915": str(data.get("broker_execution_unit_fill_qty", "")),
+        "2134": {"KRX": "1", "NXT": "2", "SOR": "0"}.get(venue),
+        "2135": {"KRX": "KRX", "NXT": "NXT", "SOR": "통합"}.get(venue),
+        "2136": data.get("broker_execution_sor_yn"),
+    }
+    rebuilt = build_broker_execution_provenance(
+        native_projection,
+        expected_qty=expected_qty,
+        expected_price=expected_price,
+        expected_stock_code=expected_stock_code,
+        expected_side=expected_side,
+        lifecycle_venue=lifecycle_venue,
+        expected_fill_state=expected_fill_state,
+    )
+    if rebuilt.get("broker_execution_provenance_state") != "complete":
+        return str(
+            rebuilt.get("broker_execution_provenance_error")
+            or "broker_execution_provenance_rebuild_failed"
+        )
+    for key, value in rebuilt.items():
+        if data.get(key) != value:
+            return f"broker_execution_canonical_field_mismatch:{key}"
+    return None
+
+
 def _normalize_record_id(value: Any) -> str:
     if isinstance(value, bool):
         raise ValueError("record_id_invalid")
@@ -185,6 +794,22 @@ def _normalize_stock_code(value: Any) -> str:
     if not re.fullmatch(r"[0-9]{6}", text):
         raise ValueError("stock_code_invalid")
     return text
+
+
+def _normalize_submitted_order_numbers(data: Mapping[str, Any]) -> list[str]:
+    primary = str(data.get("broker_order_no") or "").strip()
+    list_text = str(data.get("broker_order_no_list") or "").strip()
+    raw_values = list_text.split(",") if list_text else ([primary] if primary else [])
+    order_numbers: list[str] = []
+    for raw_value in raw_values:
+        order_no = _raw_order_no(raw_value)
+        if order_no not in order_numbers:
+            order_numbers.append(order_no)
+    if not order_numbers:
+        raise ValueError("submitted_broker_order_no_required")
+    if primary and primary not in order_numbers:
+        raise ValueError("submitted_primary_order_not_in_order_list")
+    return order_numbers
 
 
 def _normalize_attempt_id(value: Any) -> str:
@@ -576,6 +1201,7 @@ def build_transition(
     if timestamp.astimezone(KST).date().isoformat() != target_date:
         raise ValueError("observed_at_trade_date_mismatch")
     event_data = _sanitize_data(data)
+    normalized_venue = str(venue or "UNKNOWN").strip().upper() or "UNKNOWN"
 
     if normalized_stage == "submit":
         if _positive_number(event_data.get("requested_qty")) is None:
@@ -583,9 +1209,9 @@ def build_transition(
         if event_data.get("terminal_no_fill") is not True:
             if event_data.get("actual_broker_order_submitted") is not True:
                 raise ValueError("submit_actual_broker_order_required")
-            broker_order_no = str(event_data.get("broker_order_no") or "").strip()
-            if broker_order_no.lower() in {"", "-", "none", "null"}:
-                raise ValueError("submit_broker_order_no_required")
+            order_numbers = _normalize_submitted_order_numbers(event_data)
+            event_data["broker_order_no"] = order_numbers[0]
+            event_data["broker_order_no_list"] = ",".join(order_numbers)
     if normalized_stage == "fill":
         if event_data.get("fill_state") not in VALID_FILL_STATES:
             raise ValueError("fill_state_invalid")
@@ -613,6 +1239,16 @@ def build_transition(
             "fill_qty" in event_data or "fill_price" in event_data
         ):
             raise ValueError("scale_in_non_add_fill_forbidden")
+        if (
+            decision == "ADD"
+            and "fill_qty" not in event_data
+            and event_data.get("actual_broker_order_submitted") is True
+        ):
+            if _positive_number(event_data.get("requested_qty")) is None:
+                raise ValueError("scale_in_submit_requested_qty_invalid")
+            order_numbers = _normalize_submitted_order_numbers(event_data)
+            event_data["broker_order_no"] = order_numbers[0]
+            event_data["broker_order_no_list"] = ",".join(order_numbers)
     if event_data.get("terminal_no_fill") is True:
         if normalized_stage not in NO_FILL_TERMINAL_STAGES:
             raise ValueError("terminal_no_fill_stage_invalid")
@@ -634,6 +1270,89 @@ def build_transition(
             raise ValueError("exit_qty_invalid")
         if _positive_number(event_data.get("exit_price")) is None:
             raise ValueError("exit_price_invalid")
+    if (
+        normalized_stage == "exit"
+        and "exit_qty" not in event_data
+        and event_data.get("actual_broker_order_submitted") is True
+    ):
+        if _positive_number(event_data.get("requested_qty")) is None:
+            raise ValueError("exit_submit_requested_qty_invalid")
+        order_numbers = _normalize_submitted_order_numbers(event_data)
+        event_data["broker_order_no"] = order_numbers[0]
+        event_data["broker_order_no_list"] = ",".join(order_numbers)
+
+    execution_qty: Any | None = None
+    execution_price: Any | None = None
+    execution_fill_state: Any | None = None
+    if normalized_stage == "fill":
+        execution_qty = event_data.get("fill_qty")
+        execution_price = event_data.get("fill_price")
+        execution_fill_state = event_data.get("fill_state")
+    elif (
+        normalized_stage == "scale_in"
+        and event_data.get("scale_in_decision") == "ADD"
+        and "fill_qty" in event_data
+    ):
+        execution_qty = event_data.get("fill_qty")
+        execution_price = event_data.get("fill_price")
+    elif normalized_stage == "exit" and "exit_qty" in event_data:
+        execution_qty = event_data.get("exit_qty")
+        execution_price = event_data.get("exit_price")
+
+    if execution_qty is not None:
+        state = str(
+            event_data.get("broker_execution_provenance_state") or ""
+        ).strip().lower()
+        if not state:
+            event_data.update(
+                {
+                    "broker_execution_provenance_schema": (
+                        BROKER_EXECUTION_PROVENANCE_SCHEMA
+                    ),
+                    "broker_execution_official_reference_sha": (
+                        KIWOOM_OFFICIAL_REFERENCE_SHA
+                    ),
+                    "broker_execution_provenance_state": "missing",
+                    "broker_execution_provenance_error": (
+                        "official_broker_execution_raw_fields_missing"
+                    ),
+                }
+            )
+            state = "missing"
+        if event_data.get("broker_execution_provenance_schema") != (
+            BROKER_EXECUTION_PROVENANCE_SCHEMA
+        ):
+            raise ValueError("broker_execution_provenance_schema_invalid")
+        if event_data.get("broker_execution_official_reference_sha") != (
+            KIWOOM_OFFICIAL_REFERENCE_SHA
+        ):
+            raise ValueError("broker_execution_official_reference_sha_invalid")
+        if state not in {"complete", "missing", "incomplete", "invalid"}:
+            raise ValueError("broker_execution_provenance_state_invalid")
+        if state == "complete":
+            if str(
+                event_data.get("broker_execution_provenance_error") or ""
+            ).strip():
+                raise ValueError("broker_execution_complete_with_error")
+            provenance_error = validate_broker_execution_provenance(
+                event_data,
+                expected_qty=execution_qty,
+                expected_price=execution_price,
+                expected_stock_code=lineage["stock_code"],
+                expected_side="SELL" if normalized_stage == "exit" else "BUY",
+                lifecycle_venue=normalized_venue,
+                expected_fill_state=execution_fill_state,
+            )
+            if provenance_error is not None:
+                raise ValueError(
+                    f"broker_execution_provenance_invalid:{provenance_error}"
+                )
+        else:
+            provenance_error = str(
+                event_data.get("broker_execution_provenance_error") or ""
+            ).strip()
+            if not provenance_error:
+                raise ValueError("broker_execution_provenance_error_required")
 
     row: dict[str, Any] = {
         "schema": JOURNAL_SCHEMA,
@@ -642,7 +1361,7 @@ def build_transition(
         "main_lifecycle_id": main_lifecycle_id,
         **lineage,
         "stage": normalized_stage,
-        "venue": str(venue or "UNKNOWN").strip().upper() or "UNKNOWN",
+        "venue": normalized_venue,
         "session_bucket": str(session_bucket or "unknown").strip().lower() or "unknown",
         "data": event_data,
         **AUTHORITY_CONTRACT,
@@ -776,7 +1495,12 @@ def start_scanner_attempt_safe(
 
 __all__ = [
     "AUTHORITY_CONTRACT",
+    "BROKER_EXECUTION_NATIVE_FIELD_ALIASES",
+    "BROKER_EXECUTION_PROVENANCE_SCHEMA",
+    "BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA",
+    "BROKER_EXECUTION_SOURCE_TYPE",
     "JOURNAL_SCHEMA",
+    "KIWOOM_OFFICIAL_REFERENCE_SHA",
     "MAX_TRANSITION_BYTES",
     "PIPELINE_IDENTITY_SCHEMA",
     "PIPELINE_STAGE_MAP",
@@ -784,6 +1508,7 @@ __all__ = [
     "VALID_SCALE_IN_DECISIONS",
     "VALID_STAGES",
     "append_transition_safe",
+    "build_broker_execution_provenance",
     "build_transition",
     "journal_path",
     "lineage_payload",
@@ -791,5 +1516,6 @@ __all__ = [
     "pipeline_lifecycle_fields_safe",
     "start_scanner_attempt_safe",
     "transition_content_sha256",
+    "validate_broker_execution_provenance",
     "validate_main_lifecycle_id",
 ]

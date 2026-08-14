@@ -12,7 +12,10 @@ import pytest
 from src.engine.scalping import main_lifecycle_journal as journal
 from src.engine.scalping import main_lifecycle_paired as paired
 from src.engine.scalping.main_lifecycle_journal import (
+    BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA,
+    KIWOOM_OFFICIAL_REFERENCE_SHA,
     append_transition_safe,
+    build_broker_execution_provenance,
     build_transition,
     journal_path,
     mint_main_lifecycle_id,
@@ -77,6 +80,89 @@ def _event(
     )
 
 
+def _broker_raw_fields(
+    *,
+    order_no: str,
+    execution_no: str,
+    order_qty: int,
+    cumulative_qty: int,
+    cumulative_amount: int,
+    remaining_qty: int,
+    execution_price: int,
+    unit_qty: int,
+    second: int,
+    venue: str = "KRX",
+    side: str = "BUY",
+    stock_code: str = "005930",
+) -> dict[str, Any]:
+    venue_code = {"KRX": "1", "NXT": "2"}[venue]
+    side_text = {"BUY": "+매수", "SELL": "-매도"}[side]
+    side_code = {"BUY": "2", "SELL": "1"}[side]
+    return {
+        "broker_raw_envelope_schema": BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA,
+        "broker_raw_source_type": "00",
+        "9203": order_no,
+        "9001": stock_code,
+        "913": "체결",
+        "900": str(order_qty),
+        "902": str(remaining_qty),
+        "903": str(cumulative_amount),
+        "905": side_text,
+        "907": side_code,
+        "908": (BASE + timedelta(seconds=second)).strftime("%H%M%S"),
+        "909": execution_no,
+        "910": str(execution_price),
+        "911": str(cumulative_qty),
+        "914": str(execution_price),
+        "915": str(unit_qty),
+        "2134": venue_code,
+        "2135": venue,
+        "2136": "N",
+    }
+
+
+def _broker_execution_proof(
+    *,
+    order_no: str,
+    execution_no: str,
+    order_qty: int,
+    cumulative_qty: int,
+    cumulative_amount: int,
+    remaining_qty: int,
+    execution_price: int,
+    unit_qty: int,
+    second: int,
+    fill_state: str | None = None,
+    venue: str = "KRX",
+    side: str = "BUY",
+    stock_code: str = "005930",
+) -> dict[str, Any]:
+    proof = build_broker_execution_provenance(
+        _broker_raw_fields(
+            order_no=order_no,
+            execution_no=execution_no,
+            order_qty=order_qty,
+            cumulative_qty=cumulative_qty,
+            cumulative_amount=cumulative_amount,
+            remaining_qty=remaining_qty,
+            execution_price=execution_price,
+            unit_qty=unit_qty,
+            second=second,
+            venue=venue,
+            side=side,
+            stock_code=stock_code,
+        ),
+        expected_qty=unit_qty,
+        expected_price=execution_price,
+        expected_stock_code=stock_code,
+        expected_side=side,
+        lifecycle_venue=venue,
+        expected_fill_state=fill_state,
+    )
+    assert proof["broker_execution_provenance_state"] == "complete"
+    return proof
+
+
 def _complete_lifecycle(
     attempt_id: str,
     *,
@@ -86,8 +172,26 @@ def _complete_lifecycle(
     exit_second: int = 63,
     low_depth_stage: str | None = None,
     label_horizon_sec: int | None = None,
+    entry_execution_order_no: str | None = None,
+    exit_execution_order_no: str | None = None,
+    entry_submitted_qty_override: int | None = None,
+    broker_namespace: int | None = None,
+    entry_execution_raw_second: int | None = None,
+    exit_execution_raw_second: int | None = None,
+    include_broker_execution_provenance: bool = True,
 ) -> list[dict[str, Any]]:
     identity = _identity(attempt_id, record_id=f"record-{attempt_id}")
+    namespace = (
+        broker_namespace
+        if broker_namespace is not None
+        else int(hashlib.sha256(attempt_id.encode()).hexdigest()[:12], 16)
+        % 1_000_000
+    )
+    assert 0 <= namespace < 1_000_000
+    entry_order_no = f"1{namespace:06d}"
+    exit_order_no = f"3{namespace:06d}"
+    order_qty = int(sum(quantity for _, quantity in fill_states))
+    entry_order_qty = order_qty + int(fill_states[-1][0] == "partial")
     rows = [
         _event(
             identity,
@@ -111,20 +215,52 @@ def _complete_lifecycle(
             "submit",
             2,
             data={
-                "requested_qty": sum(quantity for _, quantity in fill_states),
+                "requested_qty": (
+                    entry_submitted_qty_override
+                    if entry_submitted_qty_override is not None
+                    else entry_order_qty
+                ),
                 "actual_broker_order_submitted": True,
-                "broker_order_no": f"broker-{attempt_id}",
+                "broker_order_no": entry_order_no,
+                "broker_order_no_list": entry_order_no,
             },
             depth_observed=low_depth_stage != "submit",
         ),
     ]
     fill_second = 3
+    cumulative_fill_qty = 0
+    cumulative_fill_amount = 0
+    execution_offset = 0
     for fill_state, quantity in fill_states:
+        unit_qty = int(quantity)
+        cumulative_fill_qty += unit_qty
+        cumulative_fill_amount += unit_qty * 10_000
         fill_data: dict[str, Any] = {
             "fill_state": fill_state,
             "fill_qty": quantity,
             "fill_price": 10_000,
         }
+        if include_broker_execution_provenance:
+            fill_data.update(
+                _broker_execution_proof(
+                    order_no=entry_execution_order_no or entry_order_no,
+                    execution_no=(
+                        f"2{(namespace + execution_offset) % 1_000_000:06d}"
+                    ),
+                    order_qty=entry_order_qty,
+                    cumulative_qty=cumulative_fill_qty,
+                    cumulative_amount=cumulative_fill_amount,
+                    remaining_qty=entry_order_qty - cumulative_fill_qty,
+                    execution_price=10_000,
+                    unit_qty=unit_qty,
+                    second=(
+                        entry_execution_raw_second
+                        if entry_execution_raw_second is not None
+                        else fill_second
+                    ),
+                    fill_state=fill_state,
+                )
+            )
         if label_horizon_sec is not None:
             fill_data["label_horizon_sec"] = label_horizon_sec
         rows.append(
@@ -137,6 +273,7 @@ def _complete_lifecycle(
             )
         )
         fill_second += 1
+        execution_offset += 1
     rows.append(
         _event(
             identity,
@@ -160,18 +297,53 @@ def _complete_lifecycle(
         _event(
             identity,
             "exit",
-            exit_second,
+            exit_second - 1,
             data={
-                "exit_qty": sum(quantity for _, quantity in fill_states),
-                "exit_price": 10_010,
-                "broker_reconciled": True,
-                "reconciled_final_exit": True,
-                "fees_taxes_krw": 20,
-                "slippage_krw": 5,
-                "slippage_basis_price": 10_011,
-                "slippage_basis_source": "test_exit_decision_price",
-                "realized_net_pnl_krw": 25,
+                "actual_broker_order_submitted": True,
+                "broker_order_no": exit_order_no,
+                "broker_order_no_list": exit_order_no,
+                "requested_qty": sum(quantity for _, quantity in fill_states),
             },
+            depth_observed=low_depth_stage != "exit",
+        )
+    )
+    exit_data: dict[str, Any] = {
+        "exit_qty": sum(quantity for _, quantity in fill_states),
+        "exit_price": 10_010,
+        "broker_reconciled": True,
+        "reconciled_final_exit": True,
+        "fees_taxes_krw": 20,
+        "slippage_krw": 5,
+        "slippage_basis_price": 10_011,
+        "slippage_basis_source": "test_exit_decision_price",
+        "realized_net_pnl_krw": 25,
+    }
+    if include_broker_execution_provenance:
+        exit_data.update(
+            _broker_execution_proof(
+                order_no=exit_execution_order_no or exit_order_no,
+                execution_no=f"4{namespace:06d}",
+                order_qty=order_qty,
+                cumulative_qty=order_qty,
+                cumulative_amount=order_qty * 10_010,
+                remaining_qty=0,
+                execution_price=10_010,
+                unit_qty=order_qty,
+                second=(
+                    exit_execution_raw_second
+                    if exit_execution_raw_second is not None
+                    else exit_second
+                ),
+                fill_state="full",
+                side="SELL",
+            )
+        )
+    rows.append(
+        _event(
+            identity,
+            "exit",
+            exit_second,
+            data=exit_data,
             depth_observed=low_depth_stage != "exit",
         )
     )
@@ -304,12 +476,25 @@ def test_journal_submit_requires_explicit_real_broker_evidence() -> None:
         _event(identity, "submit", 2, data={"requested_qty": 5})
 
 
-def test_duplicate_transition_is_gap_and_never_double_counted(
+def test_exact_transition_replay_is_idempotent_and_never_double_counted(
     tmp_path: Path,
 ) -> None:
     rows = _complete_lifecycle("duplicate")
     fill = next(row for row in rows if row["stage"] == "fill")
     rows.insert(rows.index(fill) + 1, dict(fill))
+    late_replay = build_transition(
+        main_lifecycle_id=fill["main_lifecycle_id"],
+        record_id=fill["record_id"],
+        stock_code=fill["stock_code"],
+        attempt_id=fill["attempt_id"],
+        trade_date=fill["trade_date"],
+        stage=fill["stage"],
+        observed_at=BASE + timedelta(seconds=64),
+        venue=fill["venue"],
+        session_bucket=fill["session_bucket"],
+        data=fill["data"],
+    )
+    rows.append(late_replay)
     source = tmp_path / "journal.jsonl"
     _write_jsonl(source, rows)
 
@@ -317,9 +502,55 @@ def test_duplicate_transition_is_gap_and_never_double_counted(
     row = report["rows"][0]
 
     assert row["entry_fill_qty"] == pytest.approx(5)
-    assert row["invalid_transition_count"] == 1
-    assert "duplicate_transition_event" in row["invalid_transition_reasons"]
+    assert row["invalid_transition_count"] == 0
+    assert row["transition_replay_duplicate_count"] == 1
+    assert row["broker_execution_replay_duplicate_count"] == 1
+    assert report["promotion_ready"] is True
+
+
+def test_broker_order_and_execution_identity_are_unique_across_lifecycles(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "cross_lifecycle_broker_identity.jsonl"
+    _write_jsonl(
+        source,
+        [
+            *_complete_lifecycle("broker-owner-a", broker_namespace=901),
+            *_complete_lifecycle("broker-owner-b", broker_namespace=901),
+        ],
+    )
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+
+    assert report["broker_order_no_cross_lifecycle_conflict_count"] == 2
+    assert (
+        report[
+            "broker_execution_cross_lifecycle_identity_conflict_count"
+        ]
+        == 2
+    )
+    assert report["promotion_evidence_eligible_count"] == 0
     assert report["promotion_ready"] is False
+    assert "broker_order_no_cross_lifecycle_conflict" in report[
+        "global_source_quality_gate_blockers"
+    ]
+    assert "broker_execution_identity_cross_lifecycle_conflict" in report[
+        "global_source_quality_gate_blockers"
+    ]
+    for row in report["rows"]:
+        assert row["broker_order_no_cross_lifecycle_conflict_count"] == 2
+        assert (
+            row[
+                "broker_execution_cross_lifecycle_identity_conflict_count"
+            ]
+            == 2
+        )
+        assert "broker_order_no_cross_lifecycle_conflict" in row[
+            "promotion_blockers"
+        ]
+        assert "broker_execution_identity_cross_lifecycle_conflict" in row[
+            "promotion_blockers"
+        ]
 
 
 def test_transition_identity_content_conflict_is_source_gap(tmp_path: Path) -> None:
@@ -340,6 +571,238 @@ def test_transition_identity_content_conflict_is_source_gap(tmp_path: Path) -> N
     )
 
 
+def test_execution_order_must_match_the_explicit_submitted_order(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "submission_execution_mismatch.jsonl"
+    _write_jsonl(
+        source,
+        _complete_lifecycle(
+            "submission-mismatch",
+            entry_execution_order_no="1000099",
+        ),
+    )
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    row = report["rows"][0]
+
+    assert row["broker_execution_submission_link_conflict_count"] == 1
+    assert row["entry_fill_qty"] == 0.0
+    assert "broker_execution_submission_link_conflict" in row[
+        "promotion_blockers"
+    ]
+    assert report["promotion_ready"] is False
+    assert report["promotion_ready_lifecycle_ids"] == []
+
+
+def test_sell_execution_must_match_the_explicit_submitted_order(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sell_submission_execution_mismatch.jsonl"
+    _write_jsonl(
+        source,
+        _complete_lifecycle(
+            "sell-submission-mismatch",
+            exit_execution_order_no="3000099",
+        ),
+    )
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    row = report["rows"][0]
+
+    assert row["broker_execution_submission_link_conflict_count"] == 1
+    assert row["exit_qty"] == 0.0
+    assert "broker_execution_submission_link_conflict" in row[
+        "promotion_blockers"
+    ]
+    assert report["promotion_ready"] is False
+
+
+def test_execution_order_quantity_must_match_submitted_quantity(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "submission_execution_quantity_mismatch.jsonl"
+    _write_jsonl(
+        source,
+        _complete_lifecycle(
+            "submission-quantity-mismatch",
+            entry_submitted_qty_override=6,
+        ),
+    )
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    row = report["rows"][0]
+
+    assert row["broker_submitted_order_qty_mismatch_phases"] == ["entry"]
+    assert "broker_execution_submitted_qty_mismatch:entry" in row[
+        "promotion_blockers"
+    ]
+    assert report["promotion_ready"] is False
+
+
+def test_execution_time_must_not_predate_submit_beyond_bounded_clock_skew(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "submission_execution_time_mismatch.jsonl"
+    _write_jsonl(
+        source,
+        _complete_lifecycle(
+            "submission-time-mismatch",
+            entry_execution_raw_second=-10,
+        ),
+    )
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    row = report["rows"][0]
+
+    assert row["broker_execution_submission_link_conflict_count"] == 1
+    assert row["entry_fill_qty"] == 0.0
+    assert "broker_execution_submission_link_conflict" in row[
+        "promotion_blockers"
+    ]
+    assert report["promotion_ready"] is False
+
+
+def test_each_submitted_order_keeps_its_exact_quantity_link(tmp_path: Path) -> None:
+    rows = _complete_lifecycle("per-order-quantity")
+    submit_index = next(
+        index for index, row in enumerate(rows) if row["stage"] == "submit"
+    )
+    identity = {
+        key: rows[0][key]
+        for key in ("main_lifecycle_id", "record_id", "stock_code", "attempt_id")
+    }
+    first_order = "1000101"
+    second_order = "1000102"
+    rows[submit_index : submit_index + 2] = [
+        _event(
+            identity,
+            "submit",
+            2,
+            data={
+                "requested_qty": 2,
+                "actual_broker_order_submitted": True,
+                "broker_order_no": first_order,
+                "broker_order_no_list": first_order,
+            },
+        ),
+        _event(
+            identity,
+            "submit",
+            3,
+            data={
+                "requested_qty": 3,
+                "actual_broker_order_submitted": True,
+                "broker_order_no": second_order,
+                "broker_order_no_list": second_order,
+            },
+        ),
+        _event(
+            identity,
+            "fill",
+            4,
+            data={
+                "fill_state": "full",
+                "fill_qty": 3,
+                "fill_price": 10_000,
+                **_broker_execution_proof(
+                    order_no=first_order,
+                    execution_no="2000101",
+                    order_qty=3,
+                    cumulative_qty=3,
+                    cumulative_amount=30_000,
+                    remaining_qty=0,
+                    execution_price=10_000,
+                    unit_qty=3,
+                    second=4,
+                    fill_state="full",
+                ),
+            },
+        ),
+        _event(
+            identity,
+            "fill",
+            5,
+            data={
+                "fill_state": "full",
+                "fill_qty": 2,
+                "fill_price": 10_000,
+                **_broker_execution_proof(
+                    order_no=second_order,
+                    execution_no="2000102",
+                    order_qty=2,
+                    cumulative_qty=2,
+                    cumulative_amount=20_000,
+                    remaining_qty=0,
+                    execution_price=10_000,
+                    unit_qty=2,
+                    second=5,
+                    fill_state="full",
+                ),
+            },
+        ),
+    ]
+    source = tmp_path / "per_order_quantity_mismatch.jsonl"
+    _write_jsonl(source, rows)
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    row = report["rows"][0]
+
+    assert row["broker_execution_submission_link_conflict_count"] == 2
+    assert row["entry_fill_qty"] == 0.0
+    assert report["promotion_ready"] is False
+
+
+def test_scale_in_execution_without_exact_submit_link_fails_closed(
+    tmp_path: Path,
+) -> None:
+    rows = _complete_lifecycle("scale-submit-link")
+    exit_index = next(
+        index
+        for index, row in enumerate(rows)
+        if row["stage"] == "exit"
+        and row["data"].get("actual_broker_order_submitted") is True
+    )
+    identity = {
+        key: rows[0][key]
+        for key in ("main_lifecycle_id", "record_id", "stock_code", "attempt_id")
+    }
+    rows.insert(
+        exit_index,
+        _event(
+            identity,
+            "scale_in",
+            6,
+            data={
+                "scale_in_decision": "ADD",
+                "fill_qty": 1,
+                "fill_price": 9_990,
+                **_broker_execution_proof(
+                    order_no="2000001",
+                    execution_no="2000002",
+                    order_qty=1,
+                    cumulative_qty=1,
+                    cumulative_amount=9_990,
+                    remaining_qty=0,
+                    execution_price=9_990,
+                    unit_qty=1,
+                    second=6,
+                    fill_state="full",
+                ),
+            },
+        ),
+    )
+    source = tmp_path / "scale_submission_missing.jsonl"
+    _write_jsonl(source, rows)
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    row = report["rows"][0]
+
+    assert row["broker_execution_submission_link_conflict_count"] == 1
+    assert row["scale_in_fill_qty"] == 0.0
+    assert report["promotion_ready"] is False
+
+
 def test_entry_phase_cannot_regress_after_holding(tmp_path: Path) -> None:
     attempt_id = "phase-regression"
     identity = _identity(attempt_id, record_id=f"record-{attempt_id}")
@@ -355,7 +818,7 @@ def test_entry_phase_cannot_regress_after_holding(tmp_path: Path) -> None:
             data={
                 "requested_qty": 5,
                 "actual_broker_order_submitted": True,
-                "broker_order_no": "late-submit",
+                    "broker_order_no": "1000099",
             },
         ),
         _event(identity, "scanner", 4.5),
@@ -441,12 +904,92 @@ def test_no_add_is_distinct_from_missing_scale_in(tmp_path: Path) -> None:
     assert rows["explicit-no-add"]["scale_in_decisions"] == ["NO_ADD"]
     assert rows["explicit-no-add"]["scale_in_contract_state"] == "explicit"
     assert rows["explicit-no-add"]["row_source_quality_gate_pass"] is True
-    assert rows["explicit-no-add"]["promotion_evidence_eligible"] is False
+    assert rows["explicit-no-add"]["promotion_evidence_eligible"] is True
     assert rows["missing"]["scale_in_decisions"] == []
     assert rows["missing"]["scale_in_contract_state"] == "missing"
     assert "scale_in_decision_missing" in rows["missing"]["promotion_blockers"]
     assert rows["missing"]["promotion_evidence_eligible"] is False
-    assert report["promotion_ready"] is False
+    assert report["promotion_ready"] is True
+    assert report["promotion_ready_lifecycle_ids"] == [
+        rows["explicit-no-add"]["main_lifecycle_id"]
+    ]
+
+
+def test_isolatable_broker_provenance_gap_excludes_only_exact_lifecycle(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "isolated_broker_provenance_gap.jsonl"
+    _write_jsonl(
+        source,
+        [
+            *_complete_lifecycle("clean-lifecycle"),
+            *_complete_lifecycle(
+                "broker-gap-lifecycle",
+                include_broker_execution_provenance=False,
+            ),
+        ],
+    )
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    rows = _by_attempt(report)
+    clean = rows["clean-lifecycle"]
+    broker_gap = rows["broker-gap-lifecycle"]
+    manifest = report["lifecycle_window_exclusion_manifest"]
+
+    assert report["global_source_quality_gate_pass"] is True
+    assert report["global_source_quality_gate_blockers"] == []
+    assert report["candidate_row_gate_failure_count"] == 1
+    assert report["promotion_evidence_eligible_count"] == 1
+    assert report["promotion_ready"] is True
+    assert report["promotion_ready_lifecycle_ids"] == [
+        clean["main_lifecycle_id"]
+    ]
+    assert clean["promotion_evidence_eligible"] is True
+    assert clean["promotion_disposition"] == "eligible_source_only"
+    assert broker_gap["promotion_evidence_eligible"] is False
+    assert broker_gap["promotion_disposition"] == (
+        "excluded_exact_lifecycle_window"
+    )
+    assert "broker_execution_raw_provenance_gap" in broker_gap[
+        "promotion_blockers"
+    ]
+    assert "daily_source_quality_gate_failed" not in clean[
+        "promotion_blockers"
+    ]
+    assert manifest["schema"] == (
+        "main_scalping_lifecycle_window_exclusion_manifest_v1"
+    )
+    assert manifest["metric_role"] == "source_quality_gate"
+    assert manifest["decision_authority"] == (
+        "exact_lifecycle_window_exclusion_only"
+    )
+    assert manifest["excluded_lifecycle_count"] == 1
+    assert manifest["eligible_lifecycle_count"] == 1
+    assert manifest["taxonomy_counts"] == {
+        "broker_execution_provenance_or_custody_gap": 1
+    }
+    assert manifest["entries"] == [
+        {
+            "main_lifecycle_id": broker_gap["main_lifecycle_id"],
+            "exclusion_scope": "exact_main_lifecycle_window",
+            "taxonomies": [
+                "broker_execution_provenance_or_custody_gap"
+            ],
+            "reason_codes_sha256": paired._sha256(
+                broker_gap["promotion_blockers"]
+            ),
+        }
+    ]
+    assert report["runtime_effect"] is False
+    assert report["runtime_authority"] is False
+    assert report["order_authority"] is False
+    assert report["provider_authority"] is False
+    assert report["allowed_runtime_apply"] is False
+    assert manifest["runtime_effect"] is False
+    assert manifest["runtime_authority"] is False
+    assert manifest["order_authority"] is False
+    assert manifest["provider_authority"] is False
+    assert manifest["allowed_runtime_apply"] is False
 
 
 def test_partial_and_full_fill_cohorts_are_not_merged(tmp_path: Path) -> None:
@@ -893,6 +1436,13 @@ def test_cross_lifecycle_reference_hash_conflict_blocks_daily_promotion(
         "daily_source_quality_gate_failed" in row["promotion_blockers"]
         for row in report["rows"]
     )
+    assert report["lifecycle_window_exclusion_manifest"][
+        "excluded_lifecycle_count"
+    ] == 0
+    assert all(
+        row["promotion_disposition"] == "global_source_contract_blocked"
+        for row in report["rows"]
+    )
 
 
 def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
@@ -927,10 +1477,11 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
             pipeline="ENTRY_PIPELINE",
             source_stage="order_bundle_submitted",
             second=2,
-            fields={
-                "actual_order_submitted": True,
-                "broker_order_no": "broker-701",
-                "requested_qty": 5,
+                fields={
+                    "actual_order_submitted": True,
+                    "broker_order_no": "0000701",
+                    "broker_order_no_list": "0000701",
+                    "requested_qty": 5,
                 "bbo_observed": True,
                 "depth_observed": True,
             },
@@ -945,6 +1496,17 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
                 "fill_qty": 5,
                 "fill_price": 10_000,
                 "requested_qty": 5,
+                **_broker_raw_fields(
+                    order_no="0000701",
+                    execution_no="0001701",
+                    order_qty=5,
+                    cumulative_qty=5,
+                    cumulative_amount=50_000,
+                    remaining_qty=0,
+                    execution_price=10_000,
+                    unit_qty=5,
+                    second=3,
+                ),
                 "bbo_observed": True,
                 "depth_observed": True,
             },
@@ -967,14 +1529,39 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
                 "depth_observed": True,
             },
         ),
-        _pipeline_event(
-            stock=stock,
-            pipeline="HOLDING_PIPELINE",
-            source_stage="sell_completed",
+            _pipeline_event(
+                stock=stock,
+                pipeline="HOLDING_PIPELINE",
+                source_stage="sell_order_sent",
+                second=62,
+                fields={
+                    "actual_order_submitted": True,
+                    "ord_no": "0002701",
+                    "qty": 5,
+                    "bbo_observed": True,
+                    "depth_observed": True,
+                },
+            ),
+            _pipeline_event(
+                stock=stock,
+                pipeline="HOLDING_PIPELINE",
+                source_stage="sell_completed",
             second=63,
             fields={
                 "sell_qty": 5,
                 "sell_price": 10_010,
+                **_broker_raw_fields(
+                    order_no="0002701",
+                    execution_no="0003701",
+                    order_qty=5,
+                    cumulative_qty=5,
+                    cumulative_amount=50_050,
+                    remaining_qty=0,
+                    execution_price=10_010,
+                        unit_qty=5,
+                        second=63,
+                        side="SELL",
+                    ),
                 "bbo_observed": True,
                 "depth_observed": True,
             },
@@ -1008,16 +1595,469 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
     )
 
     assert report["source_kind"] == "pipeline_events_explicit_id_only"
-    assert report["pipeline_lifecycle_mapped_row_count"] == 7
-    assert report["pipeline_lifecycle_accepted_row_count"] == 7
+    assert report["pipeline_lifecycle_mapped_row_count"] == 8
+    assert report["pipeline_lifecycle_accepted_row_count"] == 8
     assert report["pipeline_lifecycle_instrumentation_gap_count"] == 0
     assert report["promotion_ready"] is True
     assert report["rows"][0]["attempt_id"] == stock["scanner_generation_id"]
     assert report["rows"][0]["actual_holding_duration_sec"] == pytest.approx(60)
     assert report["rows"][0]["scale_in_decisions"] == ["NO_ADD"]
-    assert report["rows"][0]["market_observation_expected_count"] == 4
+    assert report["rows"][0]["market_observation_expected_count"] == 5
     assert report["rows"][0]["bbo_coverage_pct"] == pytest.approx(100)
     assert report["rows"][0]["depth_coverage_pct"] == pytest.approx(100)
+
+
+def test_official_broker_execution_native_contract_is_strict_and_source_only() -> None:
+    complete = _broker_execution_proof(
+        order_no="0000901",
+        execution_no="0001901",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+        fill_state="full",
+    )
+
+    assert complete["broker_execution_official_reference_sha"] == (
+        KIWOOM_OFFICIAL_REFERENCE_SHA
+    )
+    assert complete["broker_execution_provenance_state"] == "complete"
+    assert complete["broker_execution_fill_state"] == "full"
+
+    incomplete_native = _broker_raw_fields(
+        order_no="0000901",
+        execution_no="0001901",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+    )
+    incomplete_native.pop("909")
+    incomplete = build_broker_execution_provenance(
+        incomplete_native,
+        expected_qty=5,
+        expected_price=10_000,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+    assert incomplete["broker_execution_provenance_state"] == "incomplete"
+    assert "execution_no" in incomplete["broker_execution_provenance_error"]
+
+    venue_conflict_native = _broker_raw_fields(
+        order_no="0000901",
+        execution_no="0001901",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+    )
+    venue_conflict_native["2135"] = "NXT"
+    conflict = build_broker_execution_provenance(
+        venue_conflict_native,
+        expected_qty=5,
+        expected_price=10_000,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+    assert conflict["broker_execution_provenance_state"] == "invalid"
+    assert conflict["broker_execution_provenance_error"] == (
+        "broker_execution_venue_native_fields_conflict"
+    )
+
+    sor_native = _broker_raw_fields(
+        order_no="0000901",
+        execution_no="0001901",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+    )
+    sor_native["2134"] = "0"
+    sor_native["2135"] = "통합"
+    sor = build_broker_execution_provenance(
+        sor_native,
+        expected_qty=5,
+        expected_price=10_000,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+    assert sor["broker_execution_provenance_state"] == "invalid"
+    assert sor["broker_execution_provenance_error"] == (
+        "broker_execution_venue_ambiguous_or_mismatch"
+    )
+
+    malformed_native = _broker_raw_fields(
+        order_no="0000901",
+        execution_no="0001901",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+    )
+    malformed_native["911"] = True
+    malformed = build_broker_execution_provenance(
+        malformed_native,
+        expected_qty=5,
+        expected_price=10_000,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+    assert malformed["broker_execution_provenance_state"] == "invalid"
+    assert malformed["broker_execution_provenance_error"] == (
+        "broker_execution_integer_invalid"
+    )
+
+    generic_only = build_broker_execution_provenance(
+        {
+            "source_api_id": "00",
+            "order_no": "0000901",
+            "execution_no": "0001901",
+            "order_qty": 5,
+            "remaining_qty": 0,
+            "execution_price": 10_000,
+            "unit_fill_qty": 5,
+            "execution_time": "090003",
+            "execution_venue": "KRX",
+        },
+        expected_qty=5,
+        expected_price=10_000,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+    assert generic_only["broker_execution_provenance_state"] == "missing"
+
+    unit_price_conflict_native = _broker_raw_fields(
+        order_no="0000901",
+        execution_no="0001901",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+    )
+    unit_price_conflict_native["914"] = "10001"
+    unit_price_conflict = build_broker_execution_provenance(
+        unit_price_conflict_native,
+        expected_qty=5,
+        expected_price=10_000,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+    assert unit_price_conflict["broker_execution_provenance_state"] == "invalid"
+    assert unit_price_conflict["broker_execution_provenance_error"] == (
+        "broker_execution_native_price_fields_conflict"
+    )
+
+    zero_identifier_native = _broker_raw_fields(
+        order_no="0000000",
+        execution_no="0001901",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+    )
+    zero_identifier = build_broker_execution_provenance(
+        zero_identifier_native,
+        expected_qty=5,
+        expected_price=10_000,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+    assert zero_identifier["broker_execution_provenance_state"] == "invalid"
+    assert zero_identifier["broker_execution_provenance_error"] == (
+        "broker_execution_order_no_invalid"
+    )
+
+
+@pytest.mark.parametrize(
+    ("native_overrides", "expected_error"),
+    [
+        ({"9001": "000660"}, "broker_execution_stock_code_mismatch"),
+        (
+            {"905": "-매도", "907": "1"},
+            "broker_execution_side_mismatch",
+        ),
+        (
+            {"913": "접수"},
+            "broker_execution_order_status_not_execution",
+        ),
+        ({"909": "0000000"}, "broker_execution_execution_no_invalid"),
+        ({"908": "250000"}, "broker_execution_time_invalid"),
+        ({"908": "09:00:03"}, "broker_execution_time_invalid"),
+        ({"905": "++매 수"}, "broker_execution_side_text_invalid"),
+        ({"2134": "K R X"}, "broker_execution_venue_code_invalid"),
+        ({"2135": "한국거래소"}, "broker_execution_venue_text_invalid"),
+    ],
+)
+def test_official_execution_rejects_wrong_stock_side_status_or_execution_id(
+    native_overrides: dict[str, Any], expected_error: str
+) -> None:
+    native = _broker_raw_fields(
+        order_no="0000901",
+        execution_no="0001901",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+    )
+    native.update(native_overrides)
+
+    proof = build_broker_execution_provenance(
+        native,
+        expected_qty=5,
+        expected_price=10_000,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+
+    assert proof["broker_execution_provenance_state"] == "invalid"
+    assert proof["broker_execution_provenance_error"] == expected_error
+
+
+def test_pipeline_partial_full_replay_is_deduped_by_exact_execution_identity(
+    tmp_path: Path,
+) -> None:
+    stock = {
+        "id": 711,
+        "name": "TEST",
+        "code": "005930",
+        "scanner_generation_id": "005930:SCANPROM-711:r1",
+        "effective_venue": "KRX",
+        "market_session_bucket": "regular",
+    }
+    raw_execution = _broker_raw_fields(
+        order_no="0000711",
+        execution_no="0001711",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+    )
+    events = [
+        _pipeline_event(
+            stock=stock,
+            pipeline="ENTRY_PIPELINE",
+            source_stage="scalping_scanner_fast_precheck",
+            second=0,
+        ),
+        _pipeline_event(
+            stock=stock,
+            pipeline="ENTRY_PIPELINE",
+            source_stage="ai_confirmed",
+            second=1,
+            fields={"action": "BUY"},
+        ),
+        _pipeline_event(
+            stock=stock,
+            pipeline="ENTRY_PIPELINE",
+            source_stage="order_bundle_submitted",
+            second=2,
+            fields={
+                "actual_order_submitted": True,
+                "broker_order_no": "0000711",
+                "requested_qty": 5,
+            },
+        ),
+        _pipeline_event(
+            stock=stock,
+            pipeline="HOLDING_PIPELINE",
+            source_stage="position_rebased_after_fill",
+            second=3,
+            fields={
+                "fill_quality": "PARTIAL_FILL",
+                "fill_qty": 5,
+                "fill_price": 10_000,
+                **raw_execution,
+            },
+        ),
+        _pipeline_event(
+            stock=stock,
+            pipeline="HOLDING_PIPELINE",
+            source_stage="position_rebased_after_fill",
+            second=4,
+            fields={
+                "fill_quality": "FULL_FILL",
+                "fill_qty": 5,
+                "fill_price": 10_000,
+                **raw_execution,
+            },
+        ),
+    ]
+    source = tmp_path / "pipeline_execution_replay.jsonl"
+    _write_jsonl(source, events)
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    row = report["rows"][0]
+
+    assert row["entry_fill_qty"] == 5.0
+    assert row["partial_fill_event_count"] == 0
+    assert row["full_fill_event_count"] == 1
+    assert row["broker_execution_unique_count"] == 1
+    assert row["broker_execution_replay_duplicate_count"] == 1
+    assert row["broker_execution_conflict_count"] == 0
+    assert row["invalid_transition_count"] == 0
+    assert report["runtime_effect"] is False
+    assert report["order_authority"] is False
+
+
+def test_conflicting_execution_identity_is_blocked_without_double_count(
+    tmp_path: Path,
+) -> None:
+    stock = {
+        "id": 712,
+        "name": "TEST",
+        "code": "005930",
+        "scanner_generation_id": "005930:SCANPROM-712:r1",
+        "effective_venue": "KRX",
+        "market_session_bucket": "regular",
+    }
+    first_raw = _broker_raw_fields(
+        order_no="0000712",
+        execution_no="0001712",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+    )
+    conflicting_raw = _broker_raw_fields(
+        order_no="0000712",
+        execution_no="0001712",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_005,
+        remaining_qty=0,
+        execution_price=10_001,
+        unit_qty=5,
+        second=4,
+    )
+    stagnant_cumulative_raw = _broker_raw_fields(
+        order_no="0000712",
+        execution_no="0002712",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=5,
+    )
+    events = [
+        _pipeline_event(
+            stock=stock,
+            pipeline="ENTRY_PIPELINE",
+            source_stage="scalping_scanner_fast_precheck",
+            second=0,
+        ),
+        _pipeline_event(
+            stock=stock,
+            pipeline="ENTRY_PIPELINE",
+            source_stage="ai_confirmed",
+            second=1,
+            fields={"action": "BUY"},
+        ),
+        _pipeline_event(
+            stock=stock,
+            pipeline="ENTRY_PIPELINE",
+            source_stage="order_bundle_submitted",
+            second=2,
+            fields={
+                "actual_order_submitted": True,
+                "broker_order_no": "0000712",
+                "requested_qty": 5,
+            },
+        ),
+        _pipeline_event(
+            stock=stock,
+            pipeline="HOLDING_PIPELINE",
+            source_stage="position_rebased_after_fill",
+            second=3,
+            fields={
+                "fill_quality": "FULL_FILL",
+                "fill_qty": 5,
+                "fill_price": 10_000,
+                **first_raw,
+            },
+        ),
+        _pipeline_event(
+            stock=stock,
+            pipeline="HOLDING_PIPELINE",
+            source_stage="position_rebased_after_fill",
+            second=4,
+            fields={
+                "fill_quality": "FULL_FILL",
+                "fill_qty": 5,
+                "fill_price": 10_001,
+                **conflicting_raw,
+            },
+        ),
+        _pipeline_event(
+            stock=stock,
+            pipeline="HOLDING_PIPELINE",
+            source_stage="position_rebased_after_fill",
+            second=5,
+            fields={
+                "fill_quality": "FULL_FILL",
+                "fill_qty": 5,
+                "fill_price": 10_000,
+                **stagnant_cumulative_raw,
+            },
+        ),
+    ]
+    source = tmp_path / "pipeline_execution_conflict.jsonl"
+    _write_jsonl(source, events)
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    row = report["rows"][0]
+
+    assert row["entry_fill_qty"] == 5.0
+    assert row["broker_execution_unique_count"] == 1
+    assert row["broker_execution_conflict_count"] == 1
+    assert row["broker_execution_order_progress_conflict_count"] == 1
+    assert "broker_execution_identity_content_conflict" in row[
+        "invalid_transition_reasons"
+    ]
+    assert "broker_execution_order_progress_conflict" in row[
+        "invalid_transition_reasons"
+    ]
+    assert report["promotion_ready"] is False
+    assert report["promotion_ready_lifecycle_ids"] == []
 
 
 def test_mapped_pipeline_row_without_id_is_gap_and_never_joined(

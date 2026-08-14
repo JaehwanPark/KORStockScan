@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.engine.scalping import ai_decision_quality as quality
+from src.engine.scalping.micro_reversion import provider_budget
 from src.engine.scalping.micro_reversion.provider_budget import (
     PRICING_ARTIFACT_SCHEMA,
     PRICING_AUTHORITY,
@@ -17,6 +18,29 @@ from src.engine.scalping.micro_reversion.provider_budget import (
 )
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+def _freeze_quality_clock(monkeypatch, *, target_date: str) -> None:
+    fixed_now = datetime.fromisoformat(f"{target_date}T20:00:00+09:00")
+
+    class _FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            fixed = cls(
+                fixed_now.year,
+                fixed_now.month,
+                fixed_now.day,
+                fixed_now.hour,
+                fixed_now.minute,
+                fixed_now.second,
+                tzinfo=fixed_now.tzinfo,
+            )
+            if tz is None:
+                return fixed.replace(tzinfo=None)
+            return fixed.astimezone(tz)
+
+    monkeypatch.setattr(quality, "datetime", _FixedDateTime)
+    monkeypatch.setattr(provider_budget, "datetime", _FixedDateTime)
 
 
 def test_legacy_holding_prompt_endpoint_is_consumed_as_holding_score():
@@ -595,9 +619,9 @@ def test_cached_semantic_repair_requires_current_version_and_exact_repair_list()
 
     assert quality._semantic_repair_provenance_matches(result, request) is True
     stale = json.loads(json.dumps(result))
-    stale["candidate_attempts"][0]["provider_provenance"][
-        "semantic_repair_version"
-    ] = "bounded_opportunity_fail_safe_repair_v1"
+    stale["candidate_attempts"][0]["provider_provenance"]["semantic_repair_version"] = (
+        "bounded_opportunity_fail_safe_repair_v1"
+    )
     assert quality._semantic_repair_provenance_matches(stale, request) is False
     stale_list = json.loads(json.dumps(result))
     stale_list["candidate_attempts"][0]["provider_provenance"]["repairs"] = []
@@ -5088,8 +5112,9 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     )
     assert results[0]["same_payload_confirmed"] is True
     assert results[0]["status"] == "pass"
-    assert results[0]["candidate_contract_sha256"] == (
-        requests[0]["candidate"]["contract_sha256"]
+    assert (
+        results[0]["candidate_contract_sha256"]
+        == (requests[0]["candidate"]["contract_sha256"])
     )
     report = quality.build_paired_replay_report(
         target_date="2026-07-27",
@@ -6005,6 +6030,7 @@ def test_micro_reversion_action_neutral_label_flows_into_three_arm_evaluator():
 def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
     tmp_path, monkeypatch, capsys
 ):
+    _freeze_quality_clock(monkeypatch, target_date="2026-08-14")
     _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
     materialized_path = tmp_path / "materialized.json"
     bridge_path = tmp_path / "bridge.json"
@@ -6126,6 +6152,7 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
 def test_micro_reversion_cli_ignores_unselected_openai_credentials_for_bedrock_batch(
     tmp_path, monkeypatch, capsys
 ):
+    _freeze_quality_clock(monkeypatch, target_date="2026-08-14")
     from src.engine.scalping import ai_stage_coverage_replay
 
     prepared, source_bundle = _micro_reversion_materialization_fixture()
@@ -6149,9 +6176,7 @@ def test_micro_reversion_cli_ignores_unselected_openai_credentials_for_bedrock_b
         candidate["response_schema_application"] = (
             "local_expected_only_not_sent_to_bedrock"
         )
-        candidate["contract_sha256"] = quality._candidate_contract_sha256(
-            candidate
-        )
+        candidate["contract_sha256"] = quality._candidate_contract_sha256(candidate)
     materialized["requests"].extend(future_openai_requests)
     materialized["request_ids"] = [
         request["paired_replay_id"] for request in materialized["requests"]
@@ -6175,7 +6200,9 @@ def test_micro_reversion_cli_ignores_unselected_openai_credentials_for_bedrock_b
     output_path = tmp_path / "execution.json"
     materialized_path.write_text(json.dumps(materialized), encoding="utf-8")
     outcome_path.write_text(
-        json.dumps({"schema": "test_outcomes_v1", "labels": [first_label, future_label]}),
+        json.dumps(
+            {"schema": "test_outcomes_v1", "labels": [first_label, future_label]}
+        ),
         encoding="utf-8",
     )
     raw_pricing_path = tmp_path / "provider-pricing-source.txt"
@@ -6487,10 +6514,13 @@ def test_micro_reversion_execution_budget_never_slices_one_parent_arms():
     assert report["status"] == (
         "offline_three_arm_execution_complete_with_failures_or_exclusions"
     )
-    assert quality._micro_reversion_execution_exit_code(
-        report=report,
-        execute_candidate=True,
-    ) == 2
+    assert (
+        quality._micro_reversion_execution_exit_code(
+            report=report,
+            execute_candidate=True,
+        )
+        == 2
+    )
 
 
 def test_micro_reversion_execution_commits_one_bounded_parent_per_batch():
@@ -6561,10 +6591,13 @@ def test_micro_reversion_execution_commits_one_bounded_parent_per_batch():
     assert first_batch["result_count"] == 3
     assert first_batch["deferred_request_count"] == 3
     assert first_batch["three_arm_evaluation"]["complete_parent_count"] == 1
-    assert quality._micro_reversion_execution_exit_code(
-        report=first_batch,
-        execute_candidate=True,
-    ) == 0
+    assert (
+        quality._micro_reversion_execution_exit_code(
+            report=first_batch,
+            execute_candidate=True,
+        )
+        == 0
+    )
 
     calls.clear()
     second_batch = quality.run_micro_reversion_materialized_requests(
@@ -6605,9 +6638,7 @@ def test_micro_reversion_batch_allows_unselected_intentional_exclusion():
     for request in materialized["requests"]:
         candidate = request["candidate"]
         candidate["provider"] = "unsupported_offline_provider"
-        candidate["contract_sha256"] = quality._candidate_contract_sha256(
-            candidate
-        )
+        candidate["contract_sha256"] = quality._candidate_contract_sha256(candidate)
     materialized["requests"].extend(supported_requests)
     materialized["request_ids"] = [
         request["paired_replay_id"] for request in materialized["requests"]
@@ -6626,6 +6657,7 @@ def test_micro_reversion_batch_allows_unselected_intentional_exclusion():
         "label_id": supported_label_id,
         "decision_trace_id": "trace-supported-second",
     }
+    supported_label["horizon_metrics"]["10m"]["source_quality_adjusted_ev_pct"] = 0.5
     calls: list[str] = []
 
     def runner(request):
@@ -6661,10 +6693,13 @@ def test_micro_reversion_batch_allows_unselected_intentional_exclusion():
     assert batch["execution_exclusion_count"] == 3
     assert batch["blocking_execution_exclusion_count"] == 0
     assert batch["three_arm_evaluation"]["complete_parent_count"] == 1
-    assert quality._micro_reversion_execution_exit_code(
-        report=batch,
-        execute_candidate=True,
-    ) == 0
+    assert (
+        quality._micro_reversion_execution_exit_code(
+            report=batch,
+            execute_candidate=True,
+        )
+        == 0
+    )
 
     def consumer_budget_receipt(report):
         report_without_hash = deepcopy(
@@ -6675,6 +6710,7 @@ def test_micro_reversion_batch_allows_unselected_intentional_exclusion():
             }
         )
         for result in report_without_hash["results"]:
+            old_result_id = result["result_id"]
             for attempt in result["replay_result"]["candidate_attempts"]:
                 provenance = attempt["provider_provenance"]
                 reservation_id = f"reservation-{result['paired_replay_id']}"
@@ -6686,21 +6722,42 @@ def test_micro_reversion_batch_allows_unselected_intentional_exclusion():
                         ),
                         "provider_budget_settled": True,
                         "provider_budget_unknown_usage_reservation_retained": False,
+                        "provider_budget_reserved_cost_usd": "0.1",
+                        "provider_budget_actual_cost_usd": "0.1",
                         "provider_budget_circuit_breaker_open": False,
                     }
                 )
+            result["result_id"] = (
+                "micro-result-"
+                + quality._sha256(quality._micro_reversion_result_content(result))[:24]
+            )
+            report_without_hash["result_ids"] = [
+                result["result_id"] if value == old_result_id else value
+                for value in report_without_hash["result_ids"]
+            ]
+            report_without_hash["new_result_ids"] = [
+                result["result_id"] if value == old_result_id else value
+                for value in report_without_hash["new_result_ids"]
+            ]
         budget_body = {
+            "schema": cycle.BUDGET_SUMMARY_SCHEMA,
             "circuit_breaker_open": False,
             "committed_cost_usd": "0.5",
             "daily_usd_cap": "1.0",
             "reservation_count": len(report_without_hash["results"]),
             "daily_attempt_cap": 12,
+            "pricing_artifact_content_sha256": "e" * 64,
+            **cycle.PROVIDER_BUDGET_AUTHORITY_CONTRACT,
         }
         report_without_hash["provider_budget"] = {
             **budget_body,
             "summary_content_sha256": quality._sha256(budget_body),
         }
         report_without_hash["provider_budget_contract_findings"] = []
+        report_without_hash["target_date"] = "2026-08-14"
+        report_without_hash["outcome_label_artifact_sha256"] = quality._sha256(
+            {"kind": "test_outcome_artifact", "target_date": "2026-08-14"}
+        )
         return {
             **report_without_hash,
             "report_content_sha256": cycle._sha256(report_without_hash),
@@ -6708,9 +6765,16 @@ def test_micro_reversion_batch_allows_unselected_intentional_exclusion():
 
     cycle_report = consumer_budget_receipt(batch)
     # This narrow fixture intentionally has no reviewed economic reference, so
-    # the accepted execution contributes no R2 row yet; contract validation
-    # must still accept the supported bounded batch without raising.
-    assert cycle._validated_execution_rows(cycle_report) == []
+    # fail closed instead of silently turning a present evaluation into an empty
+    # subset that could be mistaken for a complete historical consumer pass.
+    with pytest.raises(
+        ValueError,
+        match=(
+            "execution_report_exact_census_invalid:"
+            "evaluation_economic_reference_hash_invalid"
+        ),
+    ):
+        cycle._validated_execution_rows(cycle_report)
 
     def forbidden_rerun(_request):
         raise AssertionError("a completed bounded batch must be idempotently reusable")
@@ -6728,12 +6792,22 @@ def test_micro_reversion_batch_allows_unselected_intentional_exclusion():
     assert rerun["new_result_count"] == 0
     assert rerun["result_count"] == 3
     assert rerun["deferred_request_count"] == 3
-    assert quality._micro_reversion_execution_exit_code(
-        report=rerun,
-        execute_candidate=True,
-    ) == 0
+    assert (
+        quality._micro_reversion_execution_exit_code(
+            report=rerun,
+            execute_candidate=True,
+        )
+        == 0
+    )
     rerun_for_consumer = consumer_budget_receipt(rerun)
-    assert cycle._validated_execution_rows(rerun_for_consumer) == []
+    with pytest.raises(
+        ValueError,
+        match=(
+            "execution_report_exact_census_invalid:"
+            "evaluation_economic_reference_hash_invalid"
+        ),
+    ):
+        cycle._validated_execution_rows(rerun_for_consumer)
 
 
 def test_micro_reversion_execution_does_not_infer_provider_success_from_hash():
@@ -6795,9 +6869,9 @@ def test_micro_reversion_execution_budget_findings_block_breaker_and_over_cap():
                             }
                         }
                     ]
-                }
+                },
             }
-        ]
+        ],
     }
     summary_body = {
         "circuit_breaker_open": True,
@@ -6935,8 +7009,9 @@ def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
             if key != "report_content_sha256"
         }
     )
-    assert rematerialized["report_content_sha256"] != (
-        materialized["report_content_sha256"]
+    assert (
+        rematerialized["report_content_sha256"]
+        != (materialized["report_content_sha256"])
     )
     assert quality._micro_reversion_materialized_request_census_sha256(
         rematerialized
@@ -7084,8 +7159,9 @@ def test_micro_reversion_checkpoint_recovers_record_written_before_manifest(
     assert reconstructed["results"][0]["result_id"] == "orphan-result"
     manifest = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert manifest["checkpoint_record_count"] == 1
-    assert manifest["checkpoint_head_sha256"] == (
-        record["checkpoint_record_content_sha256"]
+    assert (
+        manifest["checkpoint_head_sha256"]
+        == (record["checkpoint_record_content_sha256"])
     )
 
 

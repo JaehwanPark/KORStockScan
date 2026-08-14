@@ -15,24 +15,33 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from src.engine.scalping.main_lifecycle_journal import (
     AUTHORITY_CONTRACT,
+    BROKER_EXECUTION_PROVENANCE_SCHEMA,
+    BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA,
     JOURNAL_SCHEMA,
+    KIWOOM_OFFICIAL_REFERENCE_SHA,
     PIPELINE_IDENTITY_SCHEMA,
     PIPELINE_STAGE_MAP,
     SHA256_RE,
     VALID_STAGES,
+    build_broker_execution_provenance,
     build_transition,
 )
 from src.utils.constants import DATA_DIR
 
 REPORT_SCHEMA = "main_scalping_lifecycle_paired_daily_v1"
+LIFECYCLE_WINDOW_EXCLUSION_MANIFEST_SCHEMA = (
+    "main_scalping_lifecycle_window_exclusion_manifest_v1"
+)
 REPORT_DIR = DATA_DIR / "report" / "main_scalping_lifecycle_paired"
 PIPELINE_EVENT_DIR = DATA_DIR / "pipeline_events"
 
@@ -42,6 +51,8 @@ _EVENT_ID_LIMIT_PER_LIFECYCLE = 4_096
 MAX_LIFECYCLE_ACCUMULATORS = 50_000
 MAX_TRANSITION_EVENT_IDENTITIES = 500_000
 _QUANTITY_EPSILON = 1e-8
+_BROKER_SUBMIT_CLOCK_SKEW_SEC = 2
+KST = ZoneInfo("Asia/Seoul")
 _REQUIRED_COMPLETE_STAGES = frozenset(
     {
         "scanner",
@@ -332,6 +343,30 @@ def _pipeline_text(value: Any) -> str:
     return "" if normalized.lower() in {"", "-", "none", "null"} else normalized
 
 
+def _pipeline_broker_order_numbers(
+    fields: Mapping[str, Any],
+) -> tuple[list[str] | None, str | None]:
+    list_text = _pipeline_text(fields.get("broker_order_no_list"))
+    primary = _pipeline_text(
+        fields.get("broker_order_no")
+        or fields.get("order_no")
+        or fields.get("ord_no")
+    )
+    raw_values = list_text.split(",") if list_text else ([primary] if primary else [])
+    order_numbers: list[str] = []
+    for raw_value in raw_values:
+        order_no = str(raw_value or "").strip()
+        if not re.fullmatch(r"[0-9]{7}", order_no) or int(order_no) == 0:
+            return None, "pipeline_broker_order_no_invalid"
+        if order_no not in order_numbers:
+            order_numbers.append(order_no)
+    if not order_numbers:
+        return None, "pipeline_broker_order_no_missing"
+    if primary and primary not in order_numbers:
+        return None, "pipeline_broker_order_primary_not_in_list"
+    return order_numbers, None
+
+
 def _pipeline_scale_in_decision(
     source_stage: str, fields: Mapping[str, Any]
 ) -> str | None:
@@ -359,7 +394,12 @@ def _pipeline_scale_in_decision(
 
 
 def _pipeline_transition_data(
-    *, lifecycle_stage: str, source_stage: str, fields: Mapping[str, Any]
+    *,
+    lifecycle_stage: str,
+    source_stage: str,
+    fields: Mapping[str, Any],
+    lifecycle_stock_code: str,
+    lifecycle_venue: str,
 ) -> tuple[dict[str, Any] | None, str | None]:
     data: dict[str, Any] = {}
     decision_trace_id = _pipeline_text(
@@ -391,15 +431,17 @@ def _pipeline_transition_data(
         if _pipeline_bool(fields.get("actual_order_submitted")) is not True:
             return None, "pipeline_submit_not_explicitly_broker_submitted"
         data["actual_broker_order_submitted"] = True
-        broker_order_no = _pipeline_text(
-            fields.get("broker_order_no")
-            or fields.get("order_no")
-            or fields.get("ord_no")
+        broker_order_numbers, order_error = _pipeline_broker_order_numbers(fields)
+        if broker_order_numbers is None:
+            return None, order_error or "pipeline_submit_broker_order_no_missing"
+        data["broker_order_no"] = broker_order_numbers[0]
+        data["broker_order_no_list"] = ",".join(broker_order_numbers)
+        requested_qty = _finite_number(
+            fields.get("submitted_qty")
+            if "submitted_qty" in fields
+            else fields.get("requested_qty"),
+            positive=True,
         )
-        if not broker_order_no:
-            return None, "pipeline_submit_broker_order_no_missing"
-        data["broker_order_no"] = broker_order_no
-        requested_qty = _finite_number(fields.get("requested_qty"), positive=True)
         if requested_qty is None:
             return None, "pipeline_submit_requested_qty_invalid"
         data["requested_qty"] = requested_qty
@@ -437,12 +479,55 @@ def _pipeline_transition_data(
         if decision is None:
             return None, "pipeline_scale_in_decision_unmapped"
         data["scale_in_decision"] = decision
+        if source_stage == "scale_in_order_submitted":
+            broker_order_numbers, order_error = _pipeline_broker_order_numbers(fields)
+            if broker_order_numbers is None:
+                return None, order_error or "pipeline_scale_in_order_no_missing"
+            requested_qty = _finite_number(
+                fields.get("submitted_qty")
+                if "submitted_qty" in fields
+                else fields.get("qty"),
+                positive=True,
+            )
+            if requested_qty is None:
+                return None, "pipeline_scale_in_submitted_qty_invalid"
+            data.update(
+                {
+                    "actual_broker_order_submitted": True,
+                    "broker_order_no": broker_order_numbers[0],
+                    "broker_order_no_list": ",".join(broker_order_numbers),
+                    "requested_qty": requested_qty,
+                }
+            )
         if source_stage == "scale_in_executed":
             fill_qty = _finite_number(fields.get("fill_qty"), positive=True)
             fill_price = _finite_number(fields.get("fill_price"), positive=True)
             if fill_qty is None or fill_price is None:
                 return None, "pipeline_scale_in_fill_price_or_qty_invalid"
             data.update({"fill_qty": fill_qty, "fill_price": fill_price})
+
+    if lifecycle_stage == "exit" and source_stage == "sell_order_sent":
+        if _pipeline_bool(fields.get("actual_order_submitted")) is not True:
+            return None, "pipeline_sell_not_explicitly_broker_submitted"
+        broker_order_numbers, order_error = _pipeline_broker_order_numbers(fields)
+        if broker_order_numbers is None:
+            return None, order_error or "pipeline_sell_order_no_missing"
+        requested_qty = _finite_number(
+            fields.get("qty")
+            if "qty" in fields
+            else fields.get("requested_qty"),
+            positive=True,
+        )
+        if requested_qty is None:
+            return None, "pipeline_sell_submitted_qty_invalid"
+        data.update(
+            {
+                "actual_broker_order_submitted": True,
+                "broker_order_no": broker_order_numbers[0],
+                "broker_order_no_list": ",".join(broker_order_numbers),
+                "requested_qty": requested_qty,
+            }
+        )
 
     execution_exit_stages = {
         "nxt_rising_missed_tp1_partial_fill_progress",
@@ -511,6 +596,42 @@ def _pipeline_transition_data(
         value = _finite_number(fields.get(source_key), nonnegative=nonnegative)
         if value is not None:
             data[destination_key] = value
+
+    execution_qty: Any | None = None
+    execution_price: Any | None = None
+    if lifecycle_stage == "fill":
+        execution_qty = data.get("fill_qty")
+        execution_price = data.get("fill_price")
+    elif (
+        lifecycle_stage == "scale_in"
+        and source_stage == "scale_in_executed"
+        and data.get("scale_in_decision") == "ADD"
+    ):
+        execution_qty = data.get("fill_qty")
+        execution_price = data.get("fill_price")
+    elif lifecycle_stage == "exit" and source_stage in execution_exit_stages:
+        execution_qty = data.get("exit_qty")
+        execution_price = data.get("exit_price")
+    if execution_qty is not None and execution_price is not None:
+        broker_provenance = build_broker_execution_provenance(
+            fields,
+            expected_qty=execution_qty,
+            expected_price=execution_price,
+            expected_stock_code=lifecycle_stock_code,
+            expected_side="SELL" if lifecycle_stage == "exit" else "BUY",
+            lifecycle_venue=lifecycle_venue,
+            # The official quantity/remainder pair owns partial/full.  A
+            # producer label is never allowed to duplicate one execution by
+            # relabeling the same raw identity on replay.
+            expected_fill_state=None,
+        )
+        data.update(broker_provenance)
+        if (
+            lifecycle_stage == "fill"
+            and broker_provenance.get("broker_execution_provenance_state")
+            == "complete"
+        ):
+            data["fill_state"] = broker_provenance["broker_execution_fill_state"]
     return data, None
 
 
@@ -577,6 +698,10 @@ def _validated_pipeline_transition(
         lifecycle_stage=lifecycle_stage,
         source_stage=source_stage,
         fields=fields,
+        lifecycle_stock_code=stock_code,
+        lifecycle_venue=(
+            _pipeline_text(fields.get("main_lifecycle_venue")) or "UNKNOWN"
+        ),
     )
     if data is None:
         return None, data_error or "pipeline_lifecycle_data_invalid", True
@@ -702,6 +827,48 @@ class _LifecycleAccumulator:
     economics_fields_seen: set[str] = field(default_factory=set)
     observed_actual_broker_order_submitted: bool = False
     event_content_by_id: dict[str, str] = field(default_factory=dict)
+    transition_replay_duplicate_count: int = 0
+    broker_execution_content_by_identity: dict[str, str] = field(
+        default_factory=dict
+    )
+    broker_execution_unique_count: int = 0
+    broker_execution_replay_duplicate_count: int = 0
+    broker_execution_conflict_count: int = 0
+    broker_execution_order_progress_conflict_count: int = 0
+    broker_execution_submission_link_conflict_count: int = 0
+    broker_execution_provenance_state_counts: dict[str, int] = field(
+        default_factory=dict
+    )
+    broker_order_progress_by_no: dict[str, tuple[int, int, int, int, int]] = field(
+        default_factory=dict
+    )
+    submitted_order_phase_by_no: dict[str, str] = field(default_factory=dict)
+    submitted_order_observed_seconds_by_no: dict[str, int] = field(
+        default_factory=dict
+    )
+    submitted_requested_qty_by_order_no: dict[str, int] = field(
+        default_factory=dict
+    )
+    submitted_order_group_keys: set[tuple[str, tuple[str, ...], int]] = field(
+        default_factory=set
+    )
+    submitted_requested_qty_by_phase: dict[str, int] = field(
+        default_factory=dict
+    )
+    executed_order_qty_by_phase: dict[str, dict[str, int]] = field(
+        default_factory=dict
+    )
+    broker_submission_replay_duplicate_count: int = 0
+    broker_execution_provenance_gap_count: int = 0
+    broker_execution_provenance_gap_reasons: list[str] = field(
+        default_factory=list
+    )
+    broker_execution_entry_covered_qty: float = 0.0
+    broker_execution_exit_covered_qty: float = 0.0
+    broker_execution_partial_count: int = 0
+    broker_execution_full_count: int = 0
+    broker_order_no_cross_lifecycle_conflict_count: int = 0
+    broker_execution_cross_lifecycle_identity_conflict_count: int = 0
 
     @classmethod
     def from_transition(cls, row: Mapping[str, Any]) -> _LifecycleAccumulator:
@@ -779,18 +946,314 @@ class _LifecycleAccumulator:
             return "exit_before_fill"
         return None
 
-    def _duplicate_event_error(self, row: Mapping[str, Any]) -> str | None:
+    def _duplicate_event_state(self, row: Mapping[str, Any]) -> str:
         event_id = str(row.get("event_id") or "").strip()
         content_hash = str(row.get("transition_content_sha256") or "").strip()
         previous = self.event_content_by_id.get(event_id)
         if previous is not None:
             if previous == content_hash:
-                return "duplicate_transition_event"
-            return "duplicate_event_id_content_conflict"
+                return "replay"
+            return "conflict"
         if len(self.event_content_by_id) >= _EVENT_ID_LIMIT_PER_LIFECYCLE:
-            return "transition_event_identity_limit_exceeded"
+            return "limit"
+        return "new"
+
+    def _retain_event_identity(self, row: Mapping[str, Any]) -> None:
+        event_id = str(row.get("event_id") or "").strip()
+        content_hash = str(row.get("transition_content_sha256") or "").strip()
         self.event_content_by_id[event_id] = content_hash
+
+    @staticmethod
+    def _submission_phase(stage: str, data: Mapping[str, Any]) -> str | None:
+        if stage == "submit" and data.get("terminal_no_fill") is not True:
+            return "entry"
+        if (
+            stage == "scale_in"
+            and data.get("scale_in_decision") == "ADD"
+            and "fill_qty" not in data
+            and data.get("actual_broker_order_submitted") is True
+        ):
+            return "scale_in"
+        if (
+            stage == "exit"
+            and "exit_qty" not in data
+            and data.get("actual_broker_order_submitted") is True
+        ):
+            return "exit"
         return None
+
+    @staticmethod
+    def _execution_phase(stage: str) -> str:
+        if stage == "fill":
+            return "entry"
+        if stage == "scale_in":
+            return "scale_in"
+        return "exit"
+
+    def _observe_order_submission(
+        self,
+        stage: str,
+        data: Mapping[str, Any],
+        *,
+        observed_at: datetime,
+    ) -> str:
+        phase = self._submission_phase(stage, data)
+        if phase is None:
+            return "not_applicable"
+        raw_order_numbers = str(data.get("broker_order_no_list") or "").split(",")
+        order_numbers = tuple(
+            order_no.strip() for order_no in raw_order_numbers if order_no.strip()
+        )
+        requested_qty = _finite_number(data.get("requested_qty"), positive=True)
+        if (
+            not order_numbers
+            or len(order_numbers) != 1
+            or requested_qty is None
+            or not requested_qty.is_integer()
+        ):
+            return "conflict"
+        requested_int = int(requested_qty)
+        group_key = (phase, order_numbers, requested_int)
+        if group_key in self.submitted_order_group_keys:
+            self.broker_submission_replay_duplicate_count += 1
+            return "replay"
+        for order_no in order_numbers:
+            previous_phase = self.submitted_order_phase_by_no.get(order_no)
+            if previous_phase is not None:
+                return "conflict"
+        self.submitted_order_group_keys.add(group_key)
+        self.submitted_requested_qty_by_phase[phase] = (
+            self.submitted_requested_qty_by_phase.get(phase, 0) + requested_int
+        )
+        observed_kst = observed_at.astimezone(KST)
+        observed_seconds = (
+            observed_kst.hour * 3600
+            + observed_kst.minute * 60
+            + observed_kst.second
+        )
+        for order_no in order_numbers:
+            self.submitted_order_phase_by_no[order_no] = phase
+            self.submitted_order_observed_seconds_by_no[order_no] = observed_seconds
+            self.submitted_requested_qty_by_order_no[order_no] = requested_int
+        return "new"
+
+    @staticmethod
+    def _execution_bearing_data(stage: str, data: Mapping[str, Any]) -> bool:
+        if stage == "fill":
+            return True
+        if stage == "scale_in":
+            return data.get("scale_in_decision") == "ADD" and "fill_qty" in data
+        return stage == "exit" and "exit_qty" in data
+
+    @staticmethod
+    def _broker_execution_semantic_sha256(
+        stage: str, data: Mapping[str, Any]
+    ) -> str:
+        keys = (
+            "broker_execution_content_sha256",
+            "fill_state",
+            "fill_qty",
+            "fill_price",
+            "exit_qty",
+            "exit_price",
+            "broker_reconciled",
+            "reconciled_final_exit",
+            "fees_taxes_krw",
+            "slippage_krw",
+            "slippage_basis_price",
+            "slippage_basis_source",
+            "realized_net_pnl_krw",
+        )
+        return _sha256(
+            {
+                "stage": stage,
+                "data": {key: data.get(key) for key in keys if key in data},
+            }
+        )
+
+    def _existing_broker_execution_state(
+        self, stage: str, data: Mapping[str, Any]
+    ) -> str:
+        if (
+            not self._execution_bearing_data(stage, data)
+            or data.get("broker_execution_provenance_state") != "complete"
+        ):
+            return "new"
+        identity = str(data.get("broker_execution_identity") or "").strip()
+        previous = self.broker_execution_content_by_identity.get(identity)
+        if previous is None:
+            return "new"
+        semantic_hash = self._broker_execution_semantic_sha256(stage, data)
+        return "replay" if previous == semantic_hash else "conflict"
+
+    def _observe_broker_execution(
+        self,
+        stage: str,
+        data: Mapping[str, Any],
+        *,
+        observed_at: datetime,
+    ) -> str:
+        """Return a bounded execution observation state."""
+
+        if not self._execution_bearing_data(stage, data):
+            return "not_applicable"
+        state = str(
+            data.get("broker_execution_provenance_state") or "missing"
+        ).strip().lower()
+        if state not in {"complete", "missing", "incomplete", "invalid"}:
+            state = "invalid"
+        if state != "complete":
+            self.broker_execution_provenance_state_counts[state] = (
+                self.broker_execution_provenance_state_counts.get(state, 0) + 1
+            )
+            self.broker_execution_provenance_gap_count += 1
+            reason = str(
+                data.get("broker_execution_provenance_error")
+                or "broker_execution_provenance_not_complete"
+            )[:256]
+            if (
+                reason not in self.broker_execution_provenance_gap_reasons
+                and len(self.broker_execution_provenance_gap_reasons) < 20
+            ):
+                self.broker_execution_provenance_gap_reasons.append(reason)
+            return "gap"
+
+        identity = str(data.get("broker_execution_identity") or "").strip()
+        content_hash = str(
+            data.get("broker_execution_content_sha256") or ""
+        ).strip()
+        if not identity or not SHA256_RE.fullmatch(content_hash):
+            self.broker_execution_provenance_state_counts["invalid"] = (
+                self.broker_execution_provenance_state_counts.get("invalid", 0) + 1
+            )
+            self.broker_execution_provenance_gap_count += 1
+            reason = "broker_execution_identity_or_hash_invalid"
+            if reason not in self.broker_execution_provenance_gap_reasons:
+                self.broker_execution_provenance_gap_reasons.append(reason)
+            return "gap"
+        semantic_hash = self._broker_execution_semantic_sha256(stage, data)
+        previous = self.broker_execution_content_by_identity.get(identity)
+        if previous is not None:
+            if previous == semantic_hash:
+                self.broker_execution_replay_duplicate_count += 1
+                return "replay"
+            self.broker_execution_conflict_count += 1
+            return "conflict"
+
+        order_no = str(data.get("broker_execution_order_no") or "")
+        execution_phase = self._execution_phase(stage)
+        if self.submitted_order_phase_by_no.get(order_no) != execution_phase:
+            self.broker_execution_submission_link_conflict_count += 1
+            return "submission_conflict"
+        submitted_seconds = self.submitted_order_observed_seconds_by_no.get(
+            order_no
+        )
+        submitted_order_qty = self.submitted_requested_qty_by_order_no.get(order_no)
+        if submitted_seconds is None or submitted_order_qty is None:
+            self.broker_execution_submission_link_conflict_count += 1
+            return "submission_conflict"
+        expected_side = "SELL" if execution_phase == "exit" else "BUY"
+        if (
+            str(data.get("broker_execution_stock_code") or "") != self.stock_code
+            or str(data.get("broker_execution_side") or "") != expected_side
+        ):
+            self.broker_execution_submission_link_conflict_count += 1
+            return "submission_conflict"
+        try:
+            order_qty = int(data["broker_execution_order_qty"])
+            cumulative_qty = int(data["broker_execution_cumulative_fill_qty"])
+            cumulative_amount = int(
+                data["broker_execution_cumulative_fill_amount_krw"]
+            )
+            remaining_qty = int(data["broker_execution_remaining_qty"])
+            execution_price = int(data["broker_execution_price"])
+            unit_qty = int(data["broker_execution_unit_fill_qty"])
+            execution_time_text = str(data["broker_execution_time_hhmmss"])
+            execution_time_seconds = (
+                int(execution_time_text[:2]) * 3600
+                + int(execution_time_text[2:4]) * 60
+                + int(execution_time_text[4:])
+            )
+        except (KeyError, TypeError, ValueError):
+            self.broker_execution_provenance_state_counts["invalid"] = (
+                self.broker_execution_provenance_state_counts.get("invalid", 0) + 1
+            )
+            self.broker_execution_provenance_gap_count += 1
+            reason = "broker_execution_canonical_numeric_fields_invalid"
+            if reason not in self.broker_execution_provenance_gap_reasons:
+                self.broker_execution_provenance_gap_reasons.append(reason)
+            return "gap"
+        if order_qty != submitted_order_qty:
+            self.broker_execution_submission_link_conflict_count += 1
+            return "submission_conflict"
+        previous_progress = self.broker_order_progress_by_no.get(order_no)
+        observed_kst = observed_at.astimezone(KST)
+        observed_time_seconds = (
+            observed_kst.hour * 3600
+            + observed_kst.minute * 60
+            + observed_kst.second
+        )
+        if (
+            execution_time_seconds + _BROKER_SUBMIT_CLOCK_SKEW_SEC
+            < submitted_seconds
+        ):
+            self.broker_execution_submission_link_conflict_count += 1
+            return "submission_conflict"
+        if previous_progress is None:
+            progress_valid = (
+                cumulative_qty == unit_qty
+                and cumulative_amount == unit_qty * execution_price
+                and execution_time_seconds <= observed_time_seconds
+            )
+        else:
+            (
+                previous_order_qty,
+                previous_cumulative_qty,
+                previous_cumulative_amount,
+                previous_remaining_qty,
+                previous_execution_time_seconds,
+            ) = previous_progress
+            progress_valid = all(
+                (
+                    order_qty == previous_order_qty,
+                    cumulative_qty - previous_cumulative_qty == unit_qty,
+                    cumulative_amount - previous_cumulative_amount
+                    == unit_qty * execution_price,
+                    remaining_qty < previous_remaining_qty,
+                    execution_time_seconds >= previous_execution_time_seconds,
+                    execution_time_seconds <= observed_time_seconds,
+                )
+            )
+        if not progress_valid:
+            self.broker_execution_order_progress_conflict_count += 1
+            return "order_progress_conflict"
+
+        self.broker_execution_content_by_identity[identity] = semantic_hash
+        self.broker_order_progress_by_no[order_no] = (
+            order_qty,
+            cumulative_qty,
+            cumulative_amount,
+            remaining_qty,
+            execution_time_seconds,
+        )
+        phase_orders = self.executed_order_qty_by_phase.setdefault(
+            execution_phase, {}
+        )
+        previous_phase_order_qty = phase_orders.get(order_no)
+        if previous_phase_order_qty is not None and previous_phase_order_qty != order_qty:
+            self.broker_execution_submission_link_conflict_count += 1
+            return "submission_conflict"
+        phase_orders[order_no] = order_qty
+        self.broker_execution_unique_count += 1
+        self.broker_execution_provenance_state_counts["complete"] = (
+            self.broker_execution_provenance_state_counts.get("complete", 0) + 1
+        )
+        fill_state = str(data.get("broker_execution_fill_state") or "")
+        if fill_state == "partial":
+            self.broker_execution_partial_count += 1
+        elif fill_state == "full":
+            self.broker_execution_full_count += 1
+        return "new"
 
     def _integrate_capital(self, timestamp: datetime) -> bool:
         if self.last_observed_at is None:
@@ -943,9 +1406,28 @@ class _LifecycleAccumulator:
         if not self._matches_lineage(row):
             self._invalid("cross_attempt_join_blocked")
             return
-        duplicate_error = self._duplicate_event_error(row)
-        if duplicate_error is not None:
-            self._invalid(duplicate_error)
+        duplicate_state = self._duplicate_event_state(row)
+        if duplicate_state == "replay":
+            self.transition_replay_duplicate_count += 1
+            return
+        if duplicate_state == "conflict":
+            self._invalid("duplicate_event_id_content_conflict")
+            return
+        if duplicate_state == "limit":
+            self._invalid("transition_event_identity_limit_exceeded")
+            return
+        stage = str(row["stage"])
+        data = row["data"]
+        assert isinstance(data, dict)
+        existing_broker_execution = self._existing_broker_execution_state(
+            stage, data
+        )
+        if existing_broker_execution == "replay":
+            self.broker_execution_replay_duplicate_count += 1
+            return
+        if existing_broker_execution == "conflict":
+            self.broker_execution_conflict_count += 1
+            self._invalid("broker_execution_identity_content_conflict")
             return
         stage_error = self._stage_contract_error(row)
         if stage_error is not None:
@@ -956,16 +1438,44 @@ class _LifecycleAccumulator:
         except (TypeError, ValueError):
             self._invalid("transition_timestamp_invalid")
             return
+        if self.last_observed_at is not None and timestamp < self.last_observed_at:
+            self._invalid("lifecycle_timestamp_regression")
+            return
+        submission_state = self._observe_order_submission(
+            stage,
+            data,
+            observed_at=timestamp,
+        )
+        if submission_state == "replay":
+            return
+        if submission_state == "conflict":
+            self.broker_execution_submission_link_conflict_count += 1
+            self._invalid("broker_submission_identity_or_quantity_conflict")
+            return
+        broker_execution_state = self._observe_broker_execution(
+            stage,
+            data,
+            observed_at=timestamp,
+        )
+        if broker_execution_state == "replay":
+            return
+        if broker_execution_state == "conflict":
+            self._invalid("broker_execution_identity_content_conflict")
+            return
+        if broker_execution_state == "order_progress_conflict":
+            self._invalid("broker_execution_order_progress_conflict")
+            return
+        if broker_execution_state == "submission_conflict":
+            self._invalid("broker_execution_submission_link_conflict")
+            return
         if not self._integrate_capital(timestamp):
             return
+        self._retain_event_identity(row)
 
         self.transition_count += 1
         self.first_observed_at = self.first_observed_at or timestamp
         self.last_observed_at = timestamp
-        stage = str(row["stage"])
         self.stage_counts[stage] = self.stage_counts.get(stage, 0) + 1
-        data = row["data"]
-        assert isinstance(data, dict)
 
         if data.get("market_observation_expected") is not False:
             self.market_observation_expected_count += 1
@@ -1019,6 +1529,8 @@ class _LifecycleAccumulator:
             if quantity is not None and price is not None:
                 self.first_fill_at = self.first_fill_at or timestamp
                 self._add_fill(quantity=quantity, price=price, scale_in=False)
+                if broker_execution_state == "new":
+                    self.broker_execution_entry_covered_qty += quantity
 
         if stage == "scale_in":
             decision = str(data.get("scale_in_decision") or "")
@@ -1032,6 +1544,8 @@ class _LifecycleAccumulator:
                         self._invalid("scale_in_add_before_entry_fill")
                     else:
                         self._add_fill(quantity=quantity, price=price, scale_in=True)
+                        if broker_execution_state == "new":
+                            self.broker_execution_entry_covered_qty += quantity
 
         if stage == "exit":
             quantity = _finite_number(data.get("exit_qty"), positive=True)
@@ -1046,6 +1560,8 @@ class _LifecycleAccumulator:
                 open_qty_before = self.open_qty
                 self._apply_exit(quantity, price)
                 if self.open_qty < open_qty_before:
+                    if broker_execution_state == "new":
+                        self.broker_execution_exit_covered_qty += quantity
                     basis_price = _finite_number(
                         data.get("slippage_basis_price"), positive=True
                     )
@@ -1221,6 +1737,63 @@ class _LifecycleAccumulator:
             < self.exit_qty
         ):
             blockers.append("slippage_basis_source_exit_qty_coverage_incomplete")
+        total_entry_execution_qty = self.entry_fill_qty + self.scale_in_fill_qty
+        unreconciled_broker_order_count = sum(
+            1
+            for _, _, _, remaining_qty, _ in self.broker_order_progress_by_no.values()
+            if remaining_qty > 0
+        )
+        submitted_order_coverage_gap_phases: list[str] = []
+        submitted_order_qty_mismatch_phases: list[str] = []
+        for phase, submitted_qty in sorted(
+            self.submitted_requested_qty_by_phase.items()
+        ):
+            submitted_order_nos = {
+                order_no
+                for order_no, submitted_phase in self.submitted_order_phase_by_no.items()
+                if submitted_phase == phase
+            }
+            executed_order_qty = self.executed_order_qty_by_phase.get(phase, {})
+            if submitted_order_nos != set(executed_order_qty):
+                submitted_order_coverage_gap_phases.append(phase)
+            if sum(executed_order_qty.values()) != submitted_qty:
+                submitted_order_qty_mismatch_phases.append(phase)
+        if self.broker_execution_provenance_gap_count:
+            blockers.append("broker_execution_raw_provenance_gap")
+        if self.broker_execution_conflict_count:
+            blockers.append("broker_execution_identity_content_conflict")
+        if self.broker_execution_order_progress_conflict_count:
+            blockers.append("broker_execution_order_progress_conflict")
+        if self.broker_execution_submission_link_conflict_count:
+            blockers.append("broker_execution_submission_link_conflict")
+        if self.broker_order_no_cross_lifecycle_conflict_count:
+            blockers.append("broker_order_no_cross_lifecycle_conflict")
+        if self.broker_execution_cross_lifecycle_identity_conflict_count:
+            blockers.append("broker_execution_identity_cross_lifecycle_conflict")
+        if submitted_order_coverage_gap_phases:
+            blockers.append(
+                "broker_execution_submitted_order_coverage_incomplete:"
+                + ",".join(submitted_order_coverage_gap_phases)
+            )
+        if submitted_order_qty_mismatch_phases:
+            blockers.append(
+                "broker_execution_submitted_qty_mismatch:"
+                + ",".join(submitted_order_qty_mismatch_phases)
+            )
+        if unreconciled_broker_order_count:
+            blockers.append("broker_execution_order_remaining_unreconciled")
+        if (
+            total_entry_execution_qty > _QUANTITY_EPSILON
+            and self.broker_execution_entry_covered_qty + _QUANTITY_EPSILON
+            < total_entry_execution_qty
+        ):
+            blockers.append("broker_execution_entry_qty_coverage_incomplete")
+        if (
+            self.exit_qty > _QUANTITY_EPSILON
+            and self.broker_execution_exit_covered_qty + _QUANTITY_EPSILON
+            < self.exit_qty
+        ):
+            blockers.append("broker_execution_exit_qty_coverage_incomplete")
         if self.invalid_transition_count:
             blockers.append("invalid_transition_present")
 
@@ -1277,6 +1850,83 @@ class _LifecycleAccumulator:
             "partial_fill_event_count": self.partial_fill_event_count,
             "full_fill_event_count": self.full_fill_event_count,
             "fill_completion_class": self._fill_completion_class(),
+            "broker_execution_official_reference_sha": (
+                KIWOOM_OFFICIAL_REFERENCE_SHA
+            ),
+            "broker_execution_provenance_schema": (
+                BROKER_EXECUTION_PROVENANCE_SCHEMA
+            ),
+            "broker_execution_raw_envelope_schema": (
+                BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA
+            ),
+            "broker_execution_unique_count": self.broker_execution_unique_count,
+            "broker_execution_replay_duplicate_count": (
+                self.broker_execution_replay_duplicate_count
+            ),
+            "broker_execution_conflict_count": (
+                self.broker_execution_conflict_count
+            ),
+            "broker_execution_order_progress_conflict_count": (
+                self.broker_execution_order_progress_conflict_count
+            ),
+            "broker_execution_submission_link_conflict_count": (
+                self.broker_execution_submission_link_conflict_count
+            ),
+            "broker_order_no_cross_lifecycle_conflict_count": (
+                self.broker_order_no_cross_lifecycle_conflict_count
+            ),
+            "broker_execution_cross_lifecycle_identity_conflict_count": (
+                self.broker_execution_cross_lifecycle_identity_conflict_count
+            ),
+            "broker_submission_replay_duplicate_count": (
+                self.broker_submission_replay_duplicate_count
+            ),
+            "broker_submitted_order_count": len(
+                self.submitted_order_phase_by_no
+            ),
+            "broker_submitted_requested_qty_by_phase": dict(
+                sorted(self.submitted_requested_qty_by_phase.items())
+            ),
+            "broker_submitted_requested_qty_by_order_no": dict(
+                sorted(self.submitted_requested_qty_by_order_no.items())
+            ),
+            "broker_executed_order_qty_by_phase": {
+                phase: dict(sorted(order_qty.items()))
+                for phase, order_qty in sorted(
+                    self.executed_order_qty_by_phase.items()
+                )
+            },
+            "broker_submitted_order_coverage_gap_phases": (
+                submitted_order_coverage_gap_phases
+            ),
+            "broker_submitted_order_qty_mismatch_phases": (
+                submitted_order_qty_mismatch_phases
+            ),
+            "broker_execution_provenance_state_counts": dict(
+                sorted(self.broker_execution_provenance_state_counts.items())
+            ),
+            "broker_execution_provenance_gap_count": (
+                self.broker_execution_provenance_gap_count
+            ),
+            "broker_execution_provenance_gap_reasons": (
+                self.broker_execution_provenance_gap_reasons
+            ),
+            "broker_execution_entry_covered_qty": (
+                self.broker_execution_entry_covered_qty
+            ),
+            "broker_execution_exit_covered_qty": (
+                self.broker_execution_exit_covered_qty
+            ),
+            "broker_execution_partial_count": (
+                self.broker_execution_partial_count
+            ),
+            "broker_execution_full_count": self.broker_execution_full_count,
+            "broker_execution_unreconciled_order_count": (
+                unreconciled_broker_order_count
+            ),
+            "transition_replay_duplicate_count": (
+                self.transition_replay_duplicate_count
+            ),
             "scale_in_decisions": self.scale_in_decisions,
             "scale_in_contract_state": (
                 "explicit" if self.scale_in_decisions else "missing"
@@ -1325,6 +1975,40 @@ def _bounded_gap(
             "line_number": line_number,
         }
     )
+
+
+def _lifecycle_window_exclusion_taxonomies(
+    reason_codes: Sequence[str],
+) -> list[str]:
+    """Classify row-local blockers without granting promotion authority."""
+
+    taxonomies: set[str] = set()
+    for reason in reason_codes:
+        if reason in {
+            "broker_order_no_cross_lifecycle_conflict",
+            "broker_execution_identity_cross_lifecycle_conflict",
+        }:
+            taxonomies.add("cross_lifecycle_identity_conflict")
+        elif reason.startswith("broker_execution_") or reason == (
+            "actual_broker_order_submission_required"
+        ):
+            taxonomies.add("broker_execution_provenance_or_custody_gap")
+        elif reason.startswith(("bbo_", "depth_", "session_exposure_")):
+            taxonomies.add("market_observation_coverage_gap")
+        elif reason.startswith(("reviewed_cost_", "verified_symbol_")):
+            taxonomies.add("economic_reference_gap")
+        elif reason.startswith(
+            (
+                "realized_economics_",
+                "fees_taxes_",
+                "slippage_",
+                "realized_net_pnl_",
+            )
+        ):
+            taxonomies.add("realized_economics_gap")
+        else:
+            taxonomies.add("lifecycle_completeness_or_consistency_gap")
+    return sorted(taxonomies)
 
 
 def _reference_hash_contract(
@@ -1406,6 +2090,40 @@ def _scan_fallback_source(
         missing_id_count + parse_gap_count + read_gap_count + missing_source_count,
         gaps,
     )
+
+
+def _apply_cross_lifecycle_broker_ownership_gate(
+    accumulators: Mapping[str, _LifecycleAccumulator],
+) -> tuple[int, int]:
+    """Fail closed when one broker identity is claimed by two lifecycles."""
+
+    order_owners: dict[str, list[_LifecycleAccumulator]] = {}
+    execution_owners: dict[str, list[_LifecycleAccumulator]] = {}
+    for accumulator in accumulators.values():
+        for order_no in accumulator.submitted_order_phase_by_no:
+            order_owners.setdefault(order_no, []).append(accumulator)
+        for identity in accumulator.broker_execution_content_by_identity:
+            execution_owners.setdefault(identity, []).append(accumulator)
+
+    conflicting_orders = {
+        order_no: owners
+        for order_no, owners in order_owners.items()
+        if len({owner.main_lifecycle_id for owner in owners}) > 1
+    }
+    conflicting_executions = {
+        identity: owners
+        for identity, owners in execution_owners.items()
+        if len({owner.main_lifecycle_id for owner in owners}) > 1
+    }
+    for owners in conflicting_orders.values():
+        for owner in owners:
+            owner.broker_order_no_cross_lifecycle_conflict_count += 1
+            owner._invalid("broker_order_no_cross_lifecycle_conflict")
+    for owners in conflicting_executions.values():
+        for owner in owners:
+            owner.broker_execution_cross_lifecycle_identity_conflict_count += 1
+            owner._invalid("broker_execution_identity_cross_lifecycle_conflict")
+    return len(conflicting_orders), len(conflicting_executions)
 
 
 def build_daily_report(
@@ -1555,6 +2273,25 @@ def build_daily_report(
             0, len(accumulator.event_content_by_id) - retained_before
         )
 
+    (
+        broker_order_no_cross_lifecycle_conflict_count,
+        broker_execution_cross_lifecycle_identity_conflict_count,
+    ) = _apply_cross_lifecycle_broker_ownership_gate(accumulators)
+    if broker_order_no_cross_lifecycle_conflict_count:
+        _bounded_gap(
+            gap_examples,
+            reason="broker_order_no_cross_lifecycle_conflict",
+            source=census.source_path,
+            line_number=0,
+        )
+    if broker_execution_cross_lifecycle_identity_conflict_count:
+        _bounded_gap(
+            gap_examples,
+            reason="broker_execution_identity_cross_lifecycle_conflict",
+            source=census.source_path,
+            line_number=0,
+        )
+
     fallback_census, fallback_gap_count, fallback_gaps = _scan_fallback_source(
         raw_fallback_path
     )
@@ -1583,6 +2320,78 @@ def build_daily_report(
     rows = [
         accumulators[lifecycle_id].finalize() for lifecycle_id in sorted(accumulators)
     ]
+    lifecycle_window_exclusion_entries: list[dict[str, Any]] = []
+    lifecycle_window_exclusion_reason_counts: dict[str, int] = {}
+    lifecycle_window_exclusion_taxonomy_counts: dict[str, int] = {}
+    locally_excluded_lifecycle_ids: set[str] = set()
+    for row in rows:
+        reason_codes = [
+            str(reason)
+            for reason in row.get("promotion_blockers", [])
+            if str(reason).strip()
+        ]
+        if not reason_codes:
+            row["lifecycle_window_source_quality_disposition"] = (
+                "eligible_before_global_source_contract_gate"
+            )
+            row["lifecycle_window_exclusion_taxonomies"] = []
+            continue
+        taxonomies = _lifecycle_window_exclusion_taxonomies(reason_codes)
+        row["lifecycle_window_source_quality_disposition"] = (
+            "excluded_exact_lifecycle_window"
+        )
+        row["lifecycle_window_exclusion_taxonomies"] = taxonomies
+        locally_excluded_lifecycle_ids.add(str(row["main_lifecycle_id"]))
+        for reason in reason_codes:
+            lifecycle_window_exclusion_reason_counts[reason] = (
+                lifecycle_window_exclusion_reason_counts.get(reason, 0) + 1
+            )
+        for taxonomy in taxonomies:
+            lifecycle_window_exclusion_taxonomy_counts[taxonomy] = (
+                lifecycle_window_exclusion_taxonomy_counts.get(taxonomy, 0) + 1
+            )
+        lifecycle_window_exclusion_entries.append(
+            {
+                "main_lifecycle_id": row["main_lifecycle_id"],
+                "exclusion_scope": "exact_main_lifecycle_window",
+                "taxonomies": taxonomies,
+                "reason_codes_sha256": _sha256(reason_codes),
+            }
+        )
+    lifecycle_window_exclusion_manifest = {
+        "schema": LIFECYCLE_WINDOW_EXCLUSION_MANIFEST_SCHEMA,
+        "metric_role": "source_quality_gate",
+        "decision_authority": "exact_lifecycle_window_exclusion_only",
+        "window_policy": "exact_trade_date_and_main_lifecycle_id",
+        "sample_floor": "not_applicable_source_quality_manifest",
+        "primary_decision_metric": "excluded_lifecycle_count",
+        "source_quality_gate": "row_local_promotion_blocker_taxonomy",
+        "evaluation_phase": "before_global_source_contract_gate",
+        "exclusion_scope": "exact_main_lifecycle_window",
+        "excluded_lifecycle_count": len(lifecycle_window_exclusion_entries),
+        "eligible_lifecycle_count": (
+            len(rows) - len(lifecycle_window_exclusion_entries)
+        ),
+        "taxonomy_counts": dict(
+            sorted(lifecycle_window_exclusion_taxonomy_counts.items())
+        ),
+        "reason_code_counts": dict(
+            sorted(lifecycle_window_exclusion_reason_counts.items())
+        ),
+        "entries": lifecycle_window_exclusion_entries,
+        "runtime_effect": False,
+        "runtime_authority": False,
+        "order_authority": False,
+        "provider_authority": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": [
+            "direct_runtime_or_order_apply",
+            "provider_model_bot_threshold_price_quantity_or_cap_change",
+            "exclude_other_clean_lifecycle_windows",
+        ],
+    }
     reference_binding_mode = (
         "postclose_explicit"
         if reviewed_cost_hash is not None or symbol_master_hash is not None
@@ -1628,6 +2437,26 @@ def build_daily_report(
     lifecycle_invalid_transition_count = sum(
         int(row["invalid_transition_count"]) for row in rows
     )
+    broker_execution_provenance_gap_count = sum(
+        int(row["broker_execution_provenance_gap_count"]) for row in rows
+    )
+    broker_execution_conflict_count = sum(
+        int(row["broker_execution_conflict_count"]) for row in rows
+    )
+    broker_execution_order_progress_conflict_count = sum(
+        int(row["broker_execution_order_progress_conflict_count"])
+        for row in rows
+    )
+    broker_execution_submission_link_conflict_count = sum(
+        int(row["broker_execution_submission_link_conflict_count"])
+        for row in rows
+    )
+    broker_execution_replay_duplicate_count = sum(
+        int(row["broker_execution_replay_duplicate_count"]) for row in rows
+    )
+    broker_execution_unique_count = sum(
+        int(row["broker_execution_unique_count"]) for row in rows
+    )
     candidate_row_gate_failure_count = sum(
         1
         for row in rows
@@ -1654,10 +2483,17 @@ def build_daily_report(
         )
     if pipeline_lifecycle_instrumentation_gap_count:
         global_gate_blockers.append("pipeline_lifecycle_instrumentation_gap")
-    if lifecycle_invalid_transition_count:
-        global_gate_blockers.append("lifecycle_transition_consistency_gap")
-    if candidate_row_gate_failure_count:
-        global_gate_blockers.append("completed_candidate_row_gate_failure")
+    # Row-local lifecycle, broker-provenance, execution-progress, and candidate
+    # gate failures are already bound to an exact main_lifecycle_id in the
+    # exclusion manifest above.  They must not quarantine unrelated clean
+    # lifecycle windows.  Unbound source failures and cross-lifecycle identity
+    # conflicts remain global below.
+    if broker_order_no_cross_lifecycle_conflict_count:
+        global_gate_blockers.append("broker_order_no_cross_lifecycle_conflict")
+    if broker_execution_cross_lifecycle_identity_conflict_count:
+        global_gate_blockers.append(
+            "broker_execution_identity_cross_lifecycle_conflict"
+        )
     if fallback_gap_count:
         global_gate_blockers.append("raw_fallback_instrumentation_gap")
     if raw_fallback_path is not None and not bool(
@@ -1675,6 +2511,14 @@ def build_daily_report(
                     *row["promotion_blockers"],
                     "daily_source_quality_gate_failed",
                 ]
+
+    for row in rows:
+        if row["promotion_evidence_eligible"] is True:
+            row["promotion_disposition"] = "eligible_source_only"
+        elif str(row["main_lifecycle_id"]) in locally_excluded_lifecycle_ids:
+            row["promotion_disposition"] = "excluded_exact_lifecycle_window"
+        else:
+            row["promotion_disposition"] = "global_source_contract_blocked"
 
     eligible_count = sum(
         1 for row in rows if row["promotion_evidence_eligible"] is True
@@ -1704,6 +2548,15 @@ def build_daily_report(
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "source_transition_schema": JOURNAL_SCHEMA,
         "source_pipeline_identity_schema": PIPELINE_IDENTITY_SCHEMA,
+        "broker_execution_provenance_schema": (
+            BROKER_EXECUTION_PROVENANCE_SCHEMA
+        ),
+        "broker_execution_raw_envelope_schema": (
+            BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA
+        ),
+        "broker_execution_official_reference_sha": (
+            KIWOOM_OFFICIAL_REFERENCE_SHA
+        ),
         "source_kind": source_kind,
         "source_path": census.source_path,
         "source_raw_sha256": census.source_raw_sha256,
@@ -1724,6 +2577,12 @@ def build_daily_report(
             + int(census.source_read_error is not None)
             + fallback_gap_count
             + candidate_row_gate_failure_count
+            + broker_execution_provenance_gap_count
+            + broker_execution_conflict_count
+            + broker_execution_order_progress_conflict_count
+            + broker_execution_submission_link_conflict_count
+            + broker_order_no_cross_lifecycle_conflict_count
+            + broker_execution_cross_lifecycle_identity_conflict_count
             + lifecycle_accumulator_overflow_row_count
             + transition_event_identity_overflow_row_count
             + int(not census.source_exists)
@@ -1756,7 +2615,30 @@ def build_daily_report(
             transition_event_identity_overflow_row_count
         ),
         "lifecycle_invalid_transition_count": lifecycle_invalid_transition_count,
+        "broker_execution_provenance_gap_count": (
+            broker_execution_provenance_gap_count
+        ),
+        "broker_execution_conflict_count": broker_execution_conflict_count,
+        "broker_execution_order_progress_conflict_count": (
+            broker_execution_order_progress_conflict_count
+        ),
+        "broker_execution_submission_link_conflict_count": (
+            broker_execution_submission_link_conflict_count
+        ),
+        "broker_order_no_cross_lifecycle_conflict_count": (
+            broker_order_no_cross_lifecycle_conflict_count
+        ),
+        "broker_execution_cross_lifecycle_identity_conflict_count": (
+            broker_execution_cross_lifecycle_identity_conflict_count
+        ),
+        "broker_execution_replay_duplicate_count": (
+            broker_execution_replay_duplicate_count
+        ),
+        "broker_execution_unique_count": broker_execution_unique_count,
         "candidate_row_gate_failure_count": candidate_row_gate_failure_count,
+        "lifecycle_window_exclusion_manifest": (
+            lifecycle_window_exclusion_manifest
+        ),
         "lifecycle_count": len(rows),
         "terminal_state_counts": dict(sorted(terminal_state_counts.items())),
         "fill_completion_class_counts": dict(sorted(fill_completion_counts.items())),

@@ -96,6 +96,10 @@ def test_broker_receipt_pipeline_preserves_exact_lifecycle_identity(
     assert transition["attempt_id"] == stock["scanner_generation_id"]
     assert transition["stage"] == "fill"
     assert transition["data"]["fill_state"] == "full"
+    assert transition["data"]["broker_execution_provenance_state"] == "missing"
+    assert transition["data"]["broker_execution_official_reference_sha"] == (
+        "69642586f7d84ba9fd8a6faf1f1537c7fda6568b"
+    )
     assert transition["data"]["decision_trace_id"] == "trace-701"
     assert transition["observed_at"] == broker_observed_at.replace(
         tzinfo=timezone(timedelta(hours=9))
@@ -213,7 +217,7 @@ def test_exit_economics_uses_exact_decision_price_or_omits_slippage() -> None:
     assert "main_lifecycle_slippage_krw" not in no_basis
 
 
-def test_receipt_transitions_close_one_exact_reconciled_lifecycle(
+def test_current_receipt_rows_preserve_lifecycle_but_fail_close_raw_fill_gap(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     events: list[dict[str, Any]] = []
@@ -302,7 +306,7 @@ def test_receipt_transitions_close_one_exact_reconciled_lifecycle(
         "order_bundle_submitted",
         started_at + timedelta(seconds=2),
         actual_order_submitted=True,
-        broker_order_no="BUY-801",
+        broker_order_no="0000801",
         requested_qty=1,
         **common_market,
     )
@@ -369,7 +373,7 @@ def test_receipt_transitions_close_one_exact_reconciled_lifecycle(
     )
 
     assert report["source_invalid_transition_count"] == 0
-    assert report["promotion_ready"] is True
+    assert report["promotion_ready"] is False
     assert len(report["rows"]) == 1
     row = report["rows"][0]
     assert row["terminal_state"] == "FINAL_EXIT_RECONCILED"
@@ -378,7 +382,33 @@ def test_receipt_transitions_close_one_exact_reconciled_lifecycle(
     assert row["fees_taxes_krw"] == 3.0
     assert row["slippage_krw"] == 1.0
     assert row["realized_net_pnl_krw"] == 6.0
-    assert row["promotion_evidence_eligible"] is True
+    assert row["broker_execution_provenance_state_counts"] == {"missing": 2}
+    assert row["broker_execution_provenance_gap_count"] == 2
+    assert row["broker_execution_provenance_gap_reasons"] == [
+        "official_broker_execution_raw_fields_missing"
+    ]
+    assert row["broker_execution_entry_covered_qty"] == 0.0
+    assert row["broker_execution_exit_covered_qty"] == 0.0
+    assert "broker_execution_raw_provenance_gap" in row["promotion_blockers"]
+    assert "broker_execution_entry_qty_coverage_incomplete" in row[
+        "promotion_blockers"
+    ]
+    assert "broker_execution_exit_qty_coverage_incomplete" in row[
+        "promotion_blockers"
+    ]
+    assert row["promotion_evidence_eligible"] is False
+    assert report["promotion_evidence_eligible_count"] == 0
+    assert report["runtime_authority"] is False
+    assert report["order_authority"] is False
+    assert report["provider_authority"] is False
+    assert report["allowed_runtime_apply"] is False
+    assert report["runtime_effect"] is False
+    assert report["actual_order_submitted"] is False
+    assert report["broker_order_forbidden"] is True
+    assert row["runtime_authority"] is False
+    assert row["order_authority"] is False
+    assert row["provider_authority"] is False
+    assert row["allowed_runtime_apply"] is False
 
 
 def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
@@ -514,7 +544,7 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
         "order_bundle_submitted",
         started_at + timedelta(seconds=2),
         actual_order_submitted=True,
-        broker_order_no="BUY-901",
+        broker_order_no="0000901",
         requested_qty=10,
         **common_market,
     )
@@ -600,7 +630,7 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
     )
 
     assert report["source_invalid_transition_count"] == 0
-    assert report["promotion_ready"] is True
+    assert report["promotion_ready"] is False
     row = report["rows"][0]
     assert row["terminal_state"] == "FINAL_EXIT_RECONCILED"
     assert row["actual_holding_duration_sec"] == 7.0
@@ -623,4 +653,9 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
         "realized_net_pnl_krw": 10.0,
         "slippage_krw": 10.0,
     }
-    assert row["promotion_evidence_eligible"] is True
+    assert row["broker_execution_provenance_state_counts"] == {"missing": 4}
+    assert row["broker_execution_provenance_gap_count"] == 4
+    assert row["broker_execution_entry_covered_qty"] == 0.0
+    assert row["broker_execution_exit_covered_qty"] == 0.0
+    assert row["promotion_evidence_eligible"] is False
+    assert report["promotion_evidence_eligible_count"] == 0

@@ -19,6 +19,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -32,7 +33,18 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from src.engine.scalping import ai_decision_quality as quality
+from src.engine.scalping.main_lifecycle_journal import (
+    BROKER_EXECUTION_PROVENANCE_SCHEMA,
+    BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA,
+    JOURNAL_SCHEMA,
+    KIWOOM_OFFICIAL_REFERENCE_SHA,
+    PIPELINE_IDENTITY_SCHEMA,
+)
 from src.engine.scalping.micro_reversion.contracts import CLEAN_BASELINE_DATE
+from src.engine.scalping.micro_reversion.provider_budget import (
+    AUTHORITY_CONTRACT as PROVIDER_BUDGET_AUTHORITY_CONTRACT,
+)
+from src.engine.scalping.micro_reversion.provider_budget import BUDGET_SUMMARY_SCHEMA
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path
 
@@ -43,6 +55,58 @@ PREPARED_SCHEMA = "main_ai_quality_micro_prepared_requests_v1"
 ROLLING_SCHEMA = "main_ai_quality_rolling_paired_evaluation_v1"
 R3_SCHEMA = "main_ai_quality_source_only_candidate_manifest_v1"
 LIFECYCLE_REPORT_SCHEMA = "main_scalping_lifecycle_paired_daily_v1"
+LIFECYCLE_WINDOW_EXCLUSION_MANIFEST_SCHEMA = (
+    "main_scalping_lifecycle_window_exclusion_manifest_v1"
+)
+
+LIFECYCLE_REPORT_AUTHORITY_CONTRACT: dict[str, Any] = {
+    "metric_role": "main_scalping_lifecycle_paired_source_quality",
+    "decision_authority": "source_only_candidate_evidence",
+    "window_policy": "exact_trade_date_scanner_attempt_to_reconciled_final_exit",
+    "sample_floor": "one_complete_exact_lineage_lifecycle",
+    "primary_decision_metric": "complete_reconciled_lifecycle_coverage",
+    "source_quality_gate": (
+        "exact_lineage_complete_lifecycle_reconciled_cost_symbol_and_market_depth"
+    ),
+    "runtime_effect": False,
+    "runtime_authority": False,
+    "order_authority": False,
+    "provider_authority": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "forbidden_uses": [
+        "direct_runtime_or_order_apply",
+        "provider_model_bot_threshold_price_quantity_or_cap_change",
+        "hard_safety_or_broker_guard_bypass",
+        "cross_attempt_symbol_or_timestamp_join",
+        "label_horizon_as_actual_holding_duration",
+        "raw_fallback_without_explicit_main_lifecycle_id_for_promotion",
+    ],
+}
+
+LIFECYCLE_EXCLUSION_AUTHORITY_CONTRACT: dict[str, Any] = {
+    "metric_role": "source_quality_gate",
+    "decision_authority": "exact_lifecycle_window_exclusion_only",
+    "window_policy": "exact_trade_date_and_main_lifecycle_id",
+    "sample_floor": "not_applicable_source_quality_manifest",
+    "primary_decision_metric": "excluded_lifecycle_count",
+    "source_quality_gate": "row_local_promotion_blocker_taxonomy",
+    "evaluation_phase": "before_global_source_contract_gate",
+    "exclusion_scope": "exact_main_lifecycle_window",
+    "runtime_effect": False,
+    "runtime_authority": False,
+    "order_authority": False,
+    "provider_authority": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "forbidden_uses": [
+        "direct_runtime_or_order_apply",
+        "provider_model_bot_threshold_price_quantity_or_cap_change",
+        "exclude_other_clean_lifecycle_windows",
+    ],
+}
 
 OFFLINE_AUTHORITY: dict[str, Any] = {
     "decision_authority": "postclose_source_only_ai_quality_research",
@@ -64,6 +128,7 @@ MIN_UNIQUE_SYMBOLS = 10
 MIN_BBO_COVERAGE_PCT = 95.0
 MIN_DEPTH_COVERAGE_PCT = 90.0
 MIN_RELATIVE_UPLIFT_PCT = 1.0
+MAX_LIFECYCLE_FINDINGS = 200
 
 REPORT_ROOT = DATA_DIR / "report" / "main_ai_quality_r0_r3"
 ECONOMIC_REPORT_ROOT = DATA_DIR / "report" / "micro_reversion_economic_reference"
@@ -178,6 +243,9 @@ def _authority_findings(value: Mapping[str, Any]) -> list[str]:
         ("broker_order_forbidden", True),
     ):
         if value.get(field) is not expected:
+            findings.append(f"authority_contract_invalid:{field}")
+    for field in ("runtime_authority", "order_authority", "provider_authority"):
+        if field in value and value.get(field) is not False:
             findings.append(f"authority_contract_invalid:{field}")
     return findings
 
@@ -330,6 +398,684 @@ def _percentile(values: Sequence[float], percentile: float) -> float | None:
     return ordered[position]
 
 
+def _execution_census_error(reason: str) -> None:
+    raise ValueError(f"execution_report_exact_census_invalid:{reason}")
+
+
+def _execution_string_list(
+    value: Any,
+    *,
+    field: str,
+    allow_empty: bool = True,
+) -> list[str]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        _execution_census_error(f"{field}_invalid")
+    normalized = [str(item) for item in value]
+    if (not allow_empty and not normalized) or len(normalized) != len(set(normalized)):
+        _execution_census_error(f"{field}_duplicate_or_empty")
+    return normalized
+
+
+def _validate_execution_exact_census(
+    *,
+    report: Mapping[str, Any],
+    results: Sequence[Any],
+    evaluation: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    """Bind one historical result to its exact request/parent/evaluation census."""
+
+    request_count = _native_nonnegative_int(report.get("request_count"))
+    parent_count = _native_nonnegative_int(report.get("parent_count"))
+    result_count = len(results)
+    committed_parent_count = _native_nonnegative_int(
+        report.get("committed_parent_count")
+    )
+    if (
+        request_count is None
+        or request_count <= 0
+        or request_count % len(EXPECTED_ARMS) != 0
+        or parent_count != request_count // len(EXPECTED_ARMS)
+        or committed_parent_count is None
+        or committed_parent_count <= 0
+        or result_count != committed_parent_count * len(EXPECTED_ARMS)
+    ):
+        _execution_census_error("parent_request_result_count_mismatch")
+
+    request_refs_raw = report.get("request_refs")
+    if not isinstance(request_refs_raw, list) or len(request_refs_raw) != request_count:
+        _execution_census_error("request_refs_count_mismatch")
+    request_refs: list[Mapping[str, Any]] = []
+    request_by_id: dict[str, Mapping[str, Any]] = {}
+    request_ids_by_parent: dict[str, list[str]] = defaultdict(list)
+    request_arms_by_parent: dict[str, set[str]] = defaultdict(set)
+    request_trace_by_parent: dict[str, set[str]] = defaultdict(set)
+    for raw_ref in request_refs_raw:
+        if not isinstance(raw_ref, Mapping):
+            _execution_census_error("request_ref_not_object")
+        parent_id = str(raw_ref.get("paired_replay_parent_id") or "").strip()
+        request_id = str(raw_ref.get("paired_replay_id") or "").strip()
+        arm = str(raw_ref.get("micro_reversion_replay_arm") or "").strip()
+        trace_id = str(raw_ref.get("decision_trace_id") or "").strip()
+        if (
+            not parent_id
+            or not request_id
+            or request_id in request_by_id
+            or arm not in EXPECTED_ARMS
+            or not trace_id
+            or any(
+                not _valid_sha256(raw_ref.get(field))
+                for field in (
+                    "candidate_input_sha256",
+                    "prompt_sha256",
+                    "prompt_contract_sha256",
+                )
+            )
+        ):
+            _execution_census_error("request_ref_identity_or_hash_invalid")
+        request_refs.append(raw_ref)
+        request_by_id[request_id] = raw_ref
+        request_ids_by_parent[parent_id].append(request_id)
+        request_arms_by_parent[parent_id].add(arm)
+        request_trace_by_parent[parent_id].add(trace_id)
+    if len(request_ids_by_parent) != parent_count or any(
+        len(request_ids_by_parent[parent_id]) != len(EXPECTED_ARMS)
+        or request_arms_by_parent[parent_id] != set(EXPECTED_ARMS)
+        or len(request_trace_by_parent[parent_id]) != 1
+        for parent_id in request_ids_by_parent
+    ):
+        _execution_census_error("request_parent_arm_census_mismatch")
+
+    result_ids: list[str] = []
+    result_request_ids: list[str] = []
+    result_by_parent: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    result_arms_by_parent: dict[str, set[str]] = defaultdict(set)
+    provider_attempts: list[Mapping[str, Any]] = []
+    provider_actual_costs_by_result_id: dict[str, list[Decimal]] = {}
+    provider_response_hash_observed = False
+    for raw_result in results:
+        if not isinstance(raw_result, Mapping):
+            _execution_census_error("result_not_object")
+        result = raw_result
+        result_id = str(result.get("result_id") or "").strip()
+        request_id = str(result.get("paired_replay_id") or "").strip()
+        parent_id = str(result.get("paired_replay_parent_id") or "").strip()
+        arm = str(result.get("micro_reversion_replay_arm") or "").strip()
+        request_ref = request_by_id.get(request_id)
+        replay_result = result.get("replay_result")
+        candidate_response = (
+            replay_result.get("candidate_response")
+            if isinstance(replay_result, Mapping)
+            else None
+        )
+        candidate_attempts = (
+            replay_result.get("candidate_attempts")
+            if isinstance(replay_result, Mapping)
+            else None
+        )
+        if not isinstance(candidate_attempts, list) or any(
+            not isinstance(attempt, Mapping) for attempt in candidate_attempts
+        ):
+            _execution_census_error("result_provider_attempt_census_invalid")
+        result_provider_attempts = [
+            attempt
+            for attempt in candidate_attempts
+            if str(
+                (
+                    attempt.get("provider_provenance")
+                    if isinstance(attempt.get("provider_provenance"), Mapping)
+                    else {}
+                ).get("provider")
+                or ""
+            )
+            .strip()
+            .lower()
+            not in {"", "none", "deterministic_offline_adapter"}
+        ]
+        if not result_provider_attempts:
+            _execution_census_error("result_provider_attempt_missing")
+        for attempt in result_provider_attempts:
+            provenance = attempt.get("provider_provenance")
+            if not isinstance(provenance, Mapping):
+                _execution_census_error("result_provider_provenance_invalid")
+            response_hash = next(
+                (
+                    provenance.get(field)
+                    for field in (
+                        "response_sha256",
+                        "canonical_response_sha256",
+                        "bedrock_response_sha256",
+                    )
+                    if provenance.get(field) is not None
+                ),
+                None,
+            )
+            try:
+                reserved_cost = Decimal(
+                    str(provenance.get("provider_budget_reserved_cost_usd"))
+                )
+                actual_cost = Decimal(
+                    str(provenance.get("provider_budget_actual_cost_usd"))
+                )
+            except (InvalidOperation, TypeError, ValueError):
+                reserved_cost = Decimal("NaN")
+                actual_cost = Decimal("NaN")
+            if (
+                not str(provenance.get("provider") or "").strip()
+                or not str(provenance.get("model") or "").strip()
+                or provenance.get("provider_none") is not False
+                or provenance.get("provider_call_attempted") is not True
+                or provenance.get("provider_call_succeeded") is not True
+                or not str(provenance.get("transport") or "").strip()
+                or not str(provenance.get("source_transport_contract") or "").strip()
+                or not _valid_sha256(response_hash)
+                or (
+                    not str(provenance.get("response_id") or "").strip()
+                    and not str(
+                        provenance.get("response_id_unavailable_reason") or ""
+                    ).strip()
+                )
+                or not str(
+                    provenance.get("provider_budget_reservation_id") or ""
+                ).strip()
+                or not _valid_sha256(
+                    provenance.get("provider_budget_attempt_identity_sha256")
+                )
+                or provenance.get("provider_budget_settled") is not True
+                or provenance.get("provider_budget_unknown_usage_reservation_retained")
+                is not False
+                or provenance.get("provider_budget_circuit_breaker_open") is not False
+                or not reserved_cost.is_finite()
+                or reserved_cost < 0
+                or not actual_cost.is_finite()
+                or actual_cost < 0
+                or actual_cost > reserved_cost
+            ):
+                _execution_census_error("result_provider_provenance_invalid")
+            provider_response_hash_observed = True
+        provider_attempts.extend(result_provider_attempts)
+        expected_result_id = (
+            "micro-result-"
+            + _sha256(
+                {key: value for key, value in result.items() if key != "result_id"}
+            )[:24]
+        )
+        if (
+            not result_id
+            or result_id != expected_result_id
+            or result_id in result_ids
+            or not request_id
+            or request_id in result_request_ids
+            or request_ref is None
+            or parent_id != request_ref.get("paired_replay_parent_id")
+            or arm != request_ref.get("micro_reversion_replay_arm")
+            or result.get("decision_trace_id") != request_ref.get("decision_trace_id")
+            or result.get("candidate_input_sha256")
+            != request_ref.get("candidate_input_sha256")
+            or result.get("prompt_sha256") != request_ref.get("prompt_sha256")
+            or result.get("prompt_contract_sha256")
+            != request_ref.get("prompt_contract_sha256")
+            or not _valid_sha256(result.get("source_exact_payload_sha256"))
+            or not _valid_sha256(result.get("outcome_label_content_sha256"))
+            or not str(result.get("outcome_join_key") or "").strip()
+            or not isinstance(replay_result, Mapping)
+            or replay_result.get("status") != "pass"
+            or not isinstance(candidate_response, Mapping)
+            or result.get("candidate_response_content_sha256")
+            != _sha256(candidate_response)
+            or _authority_findings(result)
+        ):
+            _execution_census_error("result_identity_content_or_hash_invalid")
+        result_ids.append(result_id)
+        provider_actual_costs_by_result_id[result_id] = [
+            Decimal(
+                str(
+                    (
+                        attempt.get("provider_provenance")
+                        if isinstance(attempt.get("provider_provenance"), Mapping)
+                        else {}
+                    ).get("provider_budget_actual_cost_usd")
+                )
+            )
+            for attempt in result_provider_attempts
+        ]
+        result_request_ids.append(request_id)
+        result_by_parent[parent_id].append(result)
+        result_arms_by_parent[parent_id].add(arm)
+    if len(result_by_parent) != committed_parent_count or any(
+        len(parent_results) != len(EXPECTED_ARMS)
+        or result_arms_by_parent[parent_id] != set(EXPECTED_ARMS)
+        for parent_id, parent_results in result_by_parent.items()
+    ):
+        _execution_census_error("result_parent_arm_census_mismatch")
+    if report.get("result_ids") != result_ids:
+        _execution_census_error("result_ids_order_or_content_mismatch")
+    if (
+        report.get("provider_call_attempted") is not bool(provider_attempts)
+        or report.get("provider_call_performed") is not bool(provider_attempts)
+        or report.get("provider_call_succeeded") is not bool(provider_attempts)
+        or report.get("provider_response_hash_observed")
+        is not provider_response_hash_observed
+        or report.get("outcomes_embedded_in_provider_input") is not False
+    ):
+        _execution_census_error("provider_execution_receipt_census_mismatch")
+
+    deferred_ids = _execution_string_list(
+        report.get("deferred_request_ids"),
+        field="deferred_request_ids",
+    )
+    expected_deferred_ids = [
+        str(ref.get("paired_replay_id"))
+        for ref in request_refs
+        if str(ref.get("paired_replay_id")) not in set(result_request_ids)
+    ]
+    deferred_count = _native_nonnegative_int(report.get("deferred_request_count"))
+    if deferred_ids != expected_deferred_ids or deferred_count != len(deferred_ids):
+        _execution_census_error("deferred_request_census_mismatch")
+
+    new_result_ids = _execution_string_list(
+        report.get("new_result_ids"),
+        field="new_result_ids",
+    )
+    new_result_count = _native_nonnegative_int(report.get("new_result_count"))
+    if new_result_count != len(new_result_ids) or any(
+        result_id not in set(result_ids) for result_id in new_result_ids
+    ):
+        _execution_census_error("new_result_census_mismatch")
+    provider_budget = report.get("provider_budget")
+    if (
+        not isinstance(provider_budget, Mapping)
+        or provider_budget.get("schema") != BUDGET_SUMMARY_SCHEMA
+        or any(
+            provider_budget.get(field) != expected
+            for field, expected in PROVIDER_BUDGET_AUTHORITY_CONTRACT.items()
+        )
+        or not _valid_sha256(provider_budget.get("pricing_artifact_content_sha256"))
+    ):
+        _execution_census_error("provider_budget_reference_hash_invalid")
+    try:
+        committed_cost = Decimal(str(provider_budget.get("committed_cost_usd")))
+    except (InvalidOperation, TypeError, ValueError):
+        committed_cost = Decimal("NaN")
+    current_result_actual_cost = sum(
+        (
+            cost
+            for result_id in new_result_ids
+            for cost in provider_actual_costs_by_result_id[result_id]
+        ),
+        Decimal(0),
+    )
+    if not committed_cost.is_finite() or committed_cost < current_result_actual_cost:
+        _execution_census_error("provider_budget_current_result_cost_underreported")
+    new_results = [
+        result
+        for result in results
+        if str(result.get("result_id") or "") in set(new_result_ids)
+    ]
+    if new_result_ids != [str(result.get("result_id") or "") for result in new_results]:
+        _execution_census_error("new_result_order_mismatch")
+    expected_selected_request_ids = [
+        str(result.get("paired_replay_id") or "") for result in new_results
+    ]
+    selected_request_ids = _execution_string_list(
+        report.get("selected_request_ids"),
+        field="selected_request_ids",
+    )
+    expected_selected_parent_ids = list(
+        dict.fromkeys(
+            str(result.get("paired_replay_parent_id") or "") for result in new_results
+        )
+    )
+    selected_parent_ids = _execution_string_list(
+        report.get("selected_parent_ids"),
+        field="selected_parent_ids",
+    )
+    new_parent_ids = set(expected_selected_parent_ids)
+    checkpoint_resume_count = _native_nonnegative_int(
+        report.get("checkpoint_resume_result_count")
+    )
+    provisional_checkpoint_count = _native_nonnegative_int(
+        report.get("provisional_checkpoint_result_count")
+    )
+    reused_result_count = _native_nonnegative_int(report.get("reused_result_count"))
+    newly_committed_parent_count = _native_nonnegative_int(
+        report.get("newly_committed_parent_count")
+    )
+    max_new_requests = _native_nonnegative_int(report.get("max_new_requests"))
+    expected_reused_count = sum(
+        str(result.get("result_id") or "") not in set(new_result_ids)
+        and str(result.get("paired_replay_parent_id") or "") not in new_parent_ids
+        for result in results
+    )
+    expected_provisional_count = sum(
+        str(result.get("result_id") or "") not in set(new_result_ids)
+        and str(result.get("paired_replay_parent_id") or "") in new_parent_ids
+        for result in results
+    )
+    if (
+        selected_request_ids != expected_selected_request_ids
+        or selected_parent_ids != expected_selected_parent_ids
+        or checkpoint_resume_count != result_count - new_result_count
+        or provisional_checkpoint_count != expected_provisional_count
+        or reused_result_count != expected_reused_count
+        or newly_committed_parent_count != len(new_parent_ids)
+        or max_new_requests is None
+        or max_new_requests <= 0
+        or new_result_count > max_new_requests
+        or report.get("candidate_model_call_attempted") is not bool(new_results)
+    ):
+        _execution_census_error("checkpoint_selected_or_reused_census_mismatch")
+
+    exclusions = report.get("execution_exclusions")
+    if not isinstance(exclusions, list):
+        _execution_census_error("execution_exclusions_invalid")
+    seen_excluded_request_ids: set[str] = set()
+    deferred_id_set = set(deferred_ids)
+    for exclusion in exclusions:
+        if not isinstance(exclusion, Mapping):
+            _execution_census_error("execution_exclusion_not_object")
+        request_id = str(exclusion.get("paired_replay_id") or "")
+        request_ref = request_by_id.get(request_id)
+        if (
+            request_ref is None
+            or request_id not in deferred_id_set
+            or request_id in seen_excluded_request_ids
+            or exclusion.get("paired_replay_parent_id")
+            != request_ref.get("paired_replay_parent_id")
+            or exclusion.get("micro_reversion_replay_arm")
+            != request_ref.get("micro_reversion_replay_arm")
+            or not str(exclusion.get("reason") or "").strip()
+        ):
+            _execution_census_error("execution_exclusion_binding_invalid")
+        seen_excluded_request_ids.add(request_id)
+
+    outcome_joins = report.get("outcome_joins")
+    if not isinstance(outcome_joins, list):
+        _execution_census_error("outcome_join_census_invalid")
+    outcome_by_key: dict[str, Mapping[str, Any]] = {}
+    for outcome_join in outcome_joins:
+        if not isinstance(outcome_join, Mapping):
+            _execution_census_error("outcome_join_not_object")
+        join_key = str(outcome_join.get("outcome_join_key") or "").strip()
+        if (
+            not join_key
+            or join_key in outcome_by_key
+            or (not _valid_sha256(outcome_join.get("outcome_label_content_sha256")))
+            or not str(outcome_join.get("decision_trace_id") or "").strip()
+            or not str(outcome_join.get("effective_venue") or "").strip()
+            or not str(outcome_join.get("session_bucket") or "").strip()
+            or outcome_join.get("label_status") not in {"partial", "mature"}
+            or outcome_join.get("outcome_embedded_in_provider_input") is not False
+        ):
+            _execution_census_error("outcome_join_identity_invalid")
+        outcome_by_key[join_key] = outcome_join
+    result_outcome_keys = {
+        str(result.get("outcome_join_key") or "") for result in results
+    }
+    if set(outcome_by_key) != result_outcome_keys or any(
+        result.get("outcome_label_content_sha256")
+        != outcome_by_key[str(result.get("outcome_join_key"))].get(
+            "outcome_label_content_sha256"
+        )
+        or result.get("decision_trace_id")
+        != outcome_by_key[str(result.get("outcome_join_key"))].get("decision_trace_id")
+        for result in results
+    ):
+        _execution_census_error("outcome_join_result_binding_mismatch")
+
+    evaluation_rows = evaluation.get("rows")
+    evaluation_exclusions = evaluation.get("exclusions")
+    if (
+        evaluation.get("schema") != "ai_micro_reversion_three_arm_evaluation_v1"
+        or evaluation.get("status") != "evaluated"
+        or _authority_findings(evaluation)
+        or not isinstance(evaluation_rows, list)
+        or not isinstance(evaluation_exclusions, list)
+        or evaluation_exclusions
+        or evaluation.get("complete_parent_count") != len(evaluation_rows)
+        or evaluation.get("excluded_parent_count") != 0
+        or len(evaluation_rows) != committed_parent_count
+    ):
+        _execution_census_error("evaluation_top_level_census_mismatch")
+    evaluation_by_parent: dict[str, Mapping[str, Any]] = {}
+    for raw_row in evaluation_rows:
+        if not isinstance(raw_row, Mapping):
+            _execution_census_error("evaluation_row_not_object")
+        parent_id = str(raw_row.get("paired_replay_parent_id") or "").strip()
+        parent_results = result_by_parent.get(parent_id)
+        arms = raw_row.get("arms")
+        if (
+            not parent_id
+            or parent_id in evaluation_by_parent
+            or parent_results is None
+            or not isinstance(arms, Mapping)
+            or set(arms) != set(EXPECTED_ARMS)
+        ):
+            _execution_census_error("evaluation_parent_arm_census_mismatch")
+        expected_trace_ids = {
+            str(result.get("decision_trace_id") or "") for result in parent_results
+        }
+        expected_join_keys = {
+            str(result.get("outcome_join_key") or "") for result in parent_results
+        }
+        expected_label_hashes = {
+            str(result.get("outcome_label_content_sha256") or "")
+            for result in parent_results
+        }
+        if (
+            len(expected_trace_ids) != 1
+            or raw_row.get("decision_trace_id") not in expected_trace_ids
+            or len(expected_join_keys) != 1
+            or raw_row.get("outcome_join_key") not in expected_join_keys
+            or len(expected_label_hashes) != 1
+            or raw_row.get("outcome_label_content_sha256") not in expected_label_hashes
+            or quality._venue(raw_row.get("effective_venue"))
+            != quality._venue(
+                outcome_by_key[str(raw_row.get("outcome_join_key"))].get(
+                    "effective_venue"
+                )
+            )
+            or quality._session(raw_row.get("session_bucket"))
+            != quality._session(
+                outcome_by_key[str(raw_row.get("outcome_join_key"))].get(
+                    "session_bucket"
+                )
+            )
+        ):
+            _execution_census_error("evaluation_result_identity_binding_mismatch")
+
+        row_stage = str(raw_row.get("decision_stage") or "").strip().lower()
+        cost_adjusted_outcome = _finite_number(raw_row.get("cost_adjusted_outcome_pct"))
+        mae_pct = _finite_number(raw_row.get("mae_pct"))
+        first_hit = str(raw_row.get("first_hit") or "")
+        if (
+            row_stage not in SUPPORTED_ECONOMIC_STAGES
+            or cost_adjusted_outcome is None
+            or mae_pct is None
+            or not re.fullmatch(r"[0-9]{6}", str(raw_row.get("stock_code") or ""))
+        ):
+            _execution_census_error("evaluation_outcome_metric_invalid")
+        if not all(
+            _valid_sha256(raw_row.get(field))
+            for field in (
+                "cost_profile_artifact_sha256",
+                "cost_catalog_content_sha256",
+                "selected_cost_profile_content_sha256",
+                "symbol_master_artifact_sha256",
+                "symbol_metadata_record_sha256",
+            )
+        ):
+            _execution_census_error("evaluation_economic_reference_hash_invalid")
+        if not str(raw_row.get("selected_cost_profile_id") or "").strip():
+            _execution_census_error("evaluation_cost_profile_id_missing")
+        result_by_arm = {
+            str(result.get("micro_reversion_replay_arm") or ""): result
+            for result in parent_results
+        }
+        base_notional_values: list[float] = []
+        for arm in EXPECTED_ARMS:
+            result = result_by_arm[arm]
+            replay_result = result.get("replay_result")
+            assert isinstance(replay_result, Mapping)
+            response = replay_result.get("candidate_response")
+            assert isinstance(response, Mapping)
+            result_stage = (
+                str(replay_result.get("stage") or result.get("stage") or "")
+                .strip()
+                .lower()
+            )
+            response_action = str(response.get("action") or "UNKNOWN").upper()
+            exposure_role, exposure_fraction = quality._micro_reversion_action_exposure(
+                result_stage,
+                response_action,
+                dict(response),
+            )
+            arm_value = arms[arm]
+            if not isinstance(arm_value, Mapping):
+                _execution_census_error("evaluation_arm_value_not_object")
+            standardized_probe = exposure_role == "standardized_probe_observation_only"
+            economic_observation = bool(exposure_fraction) or standardized_probe
+            expected_signal_selected = exposure_role in {
+                "full_entry_exposure",
+                "standardized_probe_observation_only",
+                "existing_position_exposure",
+            }
+            expected_ev = (
+                cost_adjusted_outcome * exposure_fraction
+                if exposure_fraction is not None
+                else None
+            )
+            expected_probe_ev = cost_adjusted_outcome if standardized_probe else None
+
+            def same_optional_number(observed: Any, expected: float | None) -> bool:
+                observed_number = _finite_number(observed)
+                if expected is None:
+                    return observed is None
+                return observed_number is not None and math.isclose(
+                    observed_number,
+                    expected,
+                    rel_tol=0.0,
+                    abs_tol=1e-12,
+                )
+
+            if (
+                result_stage != row_stage
+                or str(result.get("stage") or "").strip().lower() != row_stage
+                or arm_value.get("action") != response_action
+                or arm_value.get("exposure_role") != exposure_role
+                or not same_optional_number(
+                    arm_value.get("exposure_fraction"), exposure_fraction
+                )
+                or arm_value.get("economic_signal_selected")
+                is not expected_signal_selected
+                or not same_optional_number(
+                    arm_value.get("source_quality_adjusted_ev_pct"), expected_ev
+                )
+                or not same_optional_number(
+                    arm_value.get("standardized_probe_observation_ev_pct"),
+                    expected_probe_ev,
+                )
+                or arm_value.get("adverse_exposure")
+                is not bool(economic_observation and mae_pct < 0)
+                or arm_value.get("severe_tail_exposure")
+                is not bool(economic_observation and mae_pct <= -3.0)
+                or arm_value.get("after_cost_target_first")
+                is not bool(
+                    economic_observation
+                    and cost_adjusted_outcome > 0
+                    and first_hit in {"target", "target_first", "net_target_first"}
+                )
+            ):
+                _execution_census_error("evaluation_result_semantic_binding_invalid")
+            notional_eligible = arm_value.get("notional_net_profit_eligible")
+            notional_value = _finite_number(
+                arm_value.get("notional_incremental_value_krw")
+            )
+            if notional_eligible is True:
+                if (
+                    exposure_fraction is None
+                    or exposure_fraction <= 0
+                    or notional_value is None
+                ):
+                    _execution_census_error("evaluation_notional_semantics_invalid")
+                base_notional_values.append(notional_value / exposure_fraction)
+            elif (
+                notional_eligible is not False
+                or arm_value.get("notional_incremental_value_krw") is not None
+            ):
+                _execution_census_error("evaluation_notional_semantics_invalid")
+        if base_notional_values and any(
+            not math.isclose(
+                value,
+                base_notional_values[0],
+                rel_tol=0.0,
+                abs_tol=1e-8,
+            )
+            for value in base_notional_values[1:]
+        ):
+            _execution_census_error("evaluation_notional_base_mismatch")
+        evaluation_by_parent[parent_id] = raw_row
+    if set(evaluation_by_parent) != set(result_by_parent):
+        _execution_census_error("evaluation_result_parent_set_mismatch")
+
+    sample_floor = evaluation.get("sample_floor")
+    arm_metrics = evaluation.get("arm_metrics")
+    partitions = evaluation.get("stage_venue_partitions")
+    if (
+        not isinstance(sample_floor, Mapping)
+        or sample_floor.get("observed_rows") != len(evaluation_rows)
+        or not isinstance(arm_metrics, Mapping)
+        or set(arm_metrics) != set(EXPECTED_ARMS)
+        or any(
+            not isinstance(arm_metrics[arm], Mapping)
+            or arm_metrics[arm].get("row_count") != len(evaluation_rows)
+            for arm in EXPECTED_ARMS
+        )
+        or not isinstance(partitions, list)
+        or not partitions
+    ):
+        _execution_census_error("evaluation_aggregate_census_mismatch")
+    partition_counts: dict[tuple[str, str, str], int] = {}
+    for partition in partitions:
+        if not isinstance(partition, Mapping):
+            _execution_census_error("evaluation_partition_not_object")
+        key = (
+            str(partition.get("decision_stage") or ""),
+            str(partition.get("effective_venue") or ""),
+            str(partition.get("session_bucket") or ""),
+        )
+        complete_count = _native_nonnegative_int(partition.get("complete_parent_count"))
+        partition_metrics = partition.get("arm_metrics")
+        if (
+            not all(key)
+            or key in partition_counts
+            or complete_count is None
+            or complete_count <= 0
+            or not isinstance(partition_metrics, Mapping)
+            or set(partition_metrics) != set(EXPECTED_ARMS)
+            or any(
+                not isinstance(partition_metrics[arm], Mapping)
+                or partition_metrics[arm].get("row_count") != complete_count
+                for arm in EXPECTED_ARMS
+            )
+        ):
+            _execution_census_error("evaluation_partition_census_invalid")
+        partition_counts[key] = complete_count
+    expected_partition_counts: dict[tuple[str, str, str], int] = defaultdict(int)
+    for row in evaluation_rows:
+        expected_partition_counts[
+            (
+                str(row.get("decision_stage") or ""),
+                str(row.get("effective_venue") or ""),
+                str(row.get("session_bucket") or ""),
+            )
+        ] += 1
+    if partition_counts != dict(expected_partition_counts):
+        _execution_census_error("evaluation_partition_parent_census_mismatch")
+    return [row for row in evaluation_rows if isinstance(row, Mapping)]
+
+
 def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]:
     if report.get("schema") != quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA:
         raise ValueError("execution_report_schema_invalid")
@@ -339,20 +1085,40 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
         raise ValueError("execution_report_content_hash_mismatch")
     if _authority_findings(report):
         raise ValueError("execution_report_authority_invalid")
+    try:
+        report_date = date.fromisoformat(str(report.get("target_date") or ""))
+    except ValueError as exc:
+        raise ValueError("execution_report_target_date_invalid") from exc
+    if report_date < CLEAN_BASELINE_DATE:
+        raise ValueError("execution_report_before_clean_baseline")
+    if any(
+        not _valid_sha256(report.get(field))
+        for field in (
+            "materialized_report_content_sha256",
+            "materialized_request_census_sha256",
+            "materialized_report_artifact_sha256",
+            "outcome_label_artifact_sha256",
+        )
+    ):
+        raise ValueError("execution_report_source_artifact_hash_missing")
     results = report.get("results")
     if not isinstance(results, list):
         raise ValueError("execution_report_results_invalid")
+    if any(not isinstance(result, Mapping) for result in results):
+        raise ValueError("execution_report_result_invalid")
     result_count = len(results)
     request_count = report.get("request_count")
     status = report.get("status")
-    deferred_request_count = int(report.get("deferred_request_count") or 0)
-    uncommitted_result_count = int(report.get("uncommitted_result_count") or 0)
+    deferred_request_count = _native_nonnegative_int(
+        report.get("deferred_request_count")
+    )
+    uncommitted_result_count = _native_nonnegative_int(
+        report.get("uncommitted_result_count")
+    )
     newly_committed_parent_count = report.get("newly_committed_parent_count")
     new_result_count = report.get("new_result_count")
     execution_exclusions = report.get("execution_exclusions")
-    blocking_execution_exclusions = report.get(
-        "blocking_execution_exclusions"
-    )
+    blocking_execution_exclusions = report.get("blocking_execution_exclusions")
     provider_budget = report.get("provider_budget")
     if (
         status not in quality.MICRO_REVERSION_EXECUTION_SUCCESS_STATUSES
@@ -366,7 +1132,7 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
         or request_count < result_count
         or result_count <= 0
         or result_count % len(EXPECTED_ARMS) != 0
-        or int(report.get("execution_failed_count") or 0) != 0
+        or _native_nonnegative_int(report.get("execution_failed_count")) != 0
         or not isinstance(execution_exclusions, list)
         or report.get("execution_exclusion_count") != len(execution_exclusions)
         or not isinstance(blocking_execution_exclusions, list)
@@ -374,7 +1140,8 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
         != len(blocking_execution_exclusions)
         or bool(blocking_execution_exclusions)
         or uncommitted_result_count != 0
-        or int(report.get("provider_provenance_pass_count") or 0) != result_count
+        or _native_nonnegative_int(report.get("provider_provenance_pass_count"))
+        != result_count
         or report.get("provider_budget_contract_findings") != []
     ):
         raise ValueError("execution_report_not_complete_provider_verified")
@@ -428,9 +1195,11 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
     }
     if declared_evaluation_hash != _sha256(evaluation_without_hash):
         raise ValueError("three_arm_evaluation_content_hash_mismatch")
-    rows = evaluation.get("rows")
-    if not isinstance(rows, list):
-        raise ValueError("three_arm_evaluation_rows_invalid")
+    rows = _validate_execution_exact_census(
+        report=report,
+        results=results,
+        evaluation=evaluation,
+    )
 
     result_contracts: dict[str, dict[str, str]] = defaultdict(dict)
     for result in results:
@@ -447,7 +1216,11 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
         contract_hash = str(result.get("prompt_contract_sha256") or "")
         if parent and arm and contract_hash:
             result_contracts[parent][arm] = contract_hash
-    completed_parent_ids = set(result_contracts)
+    completed_parent_ids = {
+        parent_id
+        for parent_id, contracts in result_contracts.items()
+        if set(contracts) == set(EXPECTED_ARMS)
+    }
     for exclusion in execution_exclusions:
         if (
             not isinstance(exclusion, Mapping)
@@ -460,22 +1233,22 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
     normalized: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, Mapping):
-            continue
+            _execution_census_error("evaluation_row_not_object_after_validation")
         parent = str(row.get("paired_replay_parent_id") or "")
         arms = row.get("arms")
         contracts = result_contracts.get(parent, {})
         if not parent or not isinstance(arms, Mapping):
-            continue
+            _execution_census_error("evaluation_row_shape_invalid")
         if set(arms) != set(EXPECTED_ARMS) or set(contracts) != set(EXPECTED_ARMS):
-            continue
+            _execution_census_error("evaluation_result_arm_binding_mismatch")
         micro_control = arms["replay_control_exact_plus_micro"]
         candidate = arms["replay_candidate_exact_plus_micro"]
         if not isinstance(micro_control, Mapping) or not isinstance(candidate, Mapping):
-            continue
+            _execution_census_error("evaluation_economic_arm_invalid")
         control_ev = _finite_number(micro_control.get("source_quality_adjusted_ev_pct"))
         candidate_ev = _finite_number(candidate.get("source_quality_adjusted_ev_pct"))
         if control_ev is None or candidate_ev is None:
-            continue
+            _execution_census_error("evaluation_economic_metric_invalid")
         reference_fields = {
             "cost_profile_artifact_sha256": row.get("cost_profile_artifact_sha256"),
             "cost_catalog_content_sha256": row.get("cost_catalog_content_sha256"),
@@ -486,10 +1259,10 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
             "symbol_metadata_record_sha256": row.get("symbol_metadata_record_sha256"),
         }
         if not all(_valid_sha256(value) for value in reference_fields.values()):
-            continue
+            _execution_census_error("evaluation_economic_reference_hash_invalid")
         selected_profile_id = str(row.get("selected_cost_profile_id") or "").strip()
         if not selected_profile_id:
-            continue
+            _execution_census_error("evaluation_cost_profile_id_missing")
         normalized.append(
             {
                 "target_date": str(report.get("target_date") or ""),
@@ -528,6 +1301,8 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
                 **reference_fields,
             }
         )
+    if len(normalized) != len(rows):
+        _execution_census_error("evaluation_normalized_row_count_mismatch")
     return normalized
 
 
@@ -551,14 +1326,10 @@ def _validate_current_execution_artifact(
     ):
         raise ValueError("current_execution_materialized_hash_mismatch")
     if report.get("materialized_request_census_sha256") != (
-        quality._micro_reversion_materialized_request_census_sha256(
-            materialized_report
-        )
+        quality._micro_reversion_materialized_request_census_sha256(materialized_report)
     ):
         raise ValueError("current_execution_materialized_census_hash_mismatch")
-    if report.get("outcome_label_artifact_sha256") != _sha256(
-        outcome_label_artifact
-    ):
+    if report.get("outcome_label_artifact_sha256") != _sha256(outcome_label_artifact):
         raise ValueError("current_execution_outcome_artifact_hash_mismatch")
     if report.get("max_new_requests") != expected_max_new_requests:
         raise ValueError("current_execution_request_bound_mismatch")
@@ -604,9 +1375,7 @@ def _validate_current_execution_artifact(
         {
             "paired_replay_parent_id": request.get("paired_replay_parent_id"),
             "paired_replay_id": request.get("paired_replay_id"),
-            "micro_reversion_replay_arm": request.get(
-                "micro_reversion_replay_arm"
-            ),
+            "micro_reversion_replay_arm": request.get("micro_reversion_replay_arm"),
             "stage": request.get("stage"),
             "provider": (request.get("candidate") or {}).get("provider"),
             "model": (request.get("candidate") or {}).get("model"),
@@ -617,9 +1386,7 @@ def _validate_current_execution_artifact(
     ]
     if report.get("execution_exclusions") != expected_execution_exclusions:
         raise ValueError("current_execution_exclusion_census_mismatch")
-    quality._validate_micro_reversion_outcome_label_artifact(
-        outcome_label_artifact
-    )
+    quality._validate_micro_reversion_outcome_label_artifact(outcome_label_artifact)
     labels_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for label in outcome_label_artifact.get("labels") or []:
         if isinstance(label, dict) and label.get("label_id"):
@@ -640,27 +1407,29 @@ def _validate_current_execution_artifact(
     bound_result_request_ids = [
         str(result.get("paired_replay_id") or "") for result in bound_results
     ]
-    if (
-        any(result_id not in request_by_id for result_id in bound_result_request_ids)
-        or len(bound_result_request_ids) != len(set(bound_result_request_ids))
-    ):
+    if any(
+        result_id not in request_by_id for result_id in bound_result_request_ids
+    ) or len(bound_result_request_ids) != len(set(bound_result_request_ids)):
         raise ValueError("current_execution_result_request_census_invalid")
     expected_deferred_request_ids = [
         request_id
         for request_id in request_ids
         if request_id not in set(bound_result_request_ids)
     ]
-    if (
-        report.get("deferred_request_ids") != expected_deferred_request_ids
-        or report.get("deferred_request_count")
-        != len(expected_deferred_request_ids)
+    if report.get(
+        "deferred_request_ids"
+    ) != expected_deferred_request_ids or report.get("deferred_request_count") != len(
+        expected_deferred_request_ids
     ):
         raise ValueError("current_execution_deferred_request_census_mismatch")
     selected_request_ids = report.get("selected_request_ids")
     selected_parent_ids = report.get("selected_parent_ids")
     if (
         not isinstance(selected_request_ids, list)
-        or any(request_id not in bound_result_request_ids for request_id in selected_request_ids)
+        or any(
+            request_id not in bound_result_request_ids
+            for request_id in selected_request_ids
+        )
         or len(selected_request_ids) != len(set(selected_request_ids))
         or not isinstance(selected_parent_ids, list)
         or selected_parent_ids
@@ -676,15 +1445,13 @@ def _validate_current_execution_artifact(
     expected_blocking_exclusions = [
         exclusion
         for exclusion in expected_execution_exclusions
-        if str(exclusion.get("paired_replay_parent_id") or "")
-        in blocking_parent_ids
+        if str(exclusion.get("paired_replay_parent_id") or "") in blocking_parent_ids
     ]
-    if (
-        report.get("blocking_execution_exclusions")
-        != expected_blocking_exclusions
-        or report.get("blocking_execution_exclusion_count")
-        != len(expected_blocking_exclusions)
-    ):
+    if report.get(
+        "blocking_execution_exclusions"
+    ) != expected_blocking_exclusions or report.get(
+        "blocking_execution_exclusion_count"
+    ) != len(expected_blocking_exclusions):
         raise ValueError("current_execution_blocking_exclusion_census_mismatch")
     report_status = report.get("status")
     if (
@@ -708,34 +1475,685 @@ def _validate_current_execution_artifact(
     return rows
 
 
+def _native_nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _positive_integer_mapping(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, Mapping) or not value:
+        return None
+    normalized: dict[str, int] = {}
+    for raw_key, raw_quantity in value.items():
+        key = str(raw_key or "").strip()
+        quantity = _native_nonnegative_int(raw_quantity)
+        if not key or quantity is None or quantity <= 0:
+            return None
+        normalized[key] = quantity
+    return normalized
+
+
+def _expected_main_lifecycle_id(
+    *, record_id: Any, stock_code: Any, attempt_id: Any
+) -> str | None:
+    if isinstance(record_id, bool) or isinstance(attempt_id, bool):
+        return None
+    record = str(record_id if record_id is not None else "").strip()
+    stock = str(stock_code or "").strip()
+    attempt = str(attempt_id or "").strip()
+    if (
+        not record
+        or len(record) > 128
+        or not re.fullmatch(r"[0-9]{6}", stock)
+        or not attempt
+        or len(attempt) > 160
+        or any(char in attempt for char in "\r\n\x00")
+    ):
+        return None
+    lineage = {
+        "record_id": record,
+        "stock_code": stock,
+        "attempt_id": attempt,
+    }
+    return f"mlc-{_sha256(lineage)[:32]}"
+
+
+def _lifecycle_report_hash_valid(report: Mapping[str, Any]) -> bool:
+    artifact_hash = str(report.get("artifact_content_sha256") or "")
+    if not artifact_hash or artifact_hash != _content_hash(
+        report, "artifact_content_sha256"
+    ):
+        return False
+    producer_content = {
+        key: value
+        for key, value in report.items()
+        if key
+        not in {
+            "content_sha256",
+            "report_content_sha256",
+            "artifact_content_sha256",
+        }
+    }
+    producer_hash = _sha256(producer_content)
+    return (
+        report.get("content_sha256") == producer_hash
+        and report.get("report_content_sha256") == producer_hash
+    )
+
+
+def _lifecycle_exclusion_taxonomies(reason_codes: Sequence[str]) -> list[str]:
+    """Mirror the current paired producer's exact-window taxonomy contract."""
+
+    taxonomies: set[str] = set()
+    for reason in reason_codes:
+        if reason in {
+            "broker_order_no_cross_lifecycle_conflict",
+            "broker_execution_identity_cross_lifecycle_conflict",
+        }:
+            taxonomies.add("cross_lifecycle_identity_conflict")
+        elif reason.startswith("broker_execution_") or reason == (
+            "actual_broker_order_submission_required"
+        ):
+            taxonomies.add("broker_execution_provenance_or_custody_gap")
+        elif reason.startswith(("bbo_", "depth_", "session_exposure_")):
+            taxonomies.add("market_observation_coverage_gap")
+        elif reason.startswith(("reviewed_cost_", "verified_symbol_")):
+            taxonomies.add("economic_reference_gap")
+        elif reason.startswith(
+            (
+                "realized_economics_",
+                "fees_taxes_",
+                "slippage_",
+                "realized_net_pnl_",
+            )
+        ):
+            taxonomies.add("realized_economics_gap")
+        else:
+            taxonomies.add("lifecycle_completeness_or_consistency_gap")
+    return sorted(taxonomies)
+
+
+def _lifecycle_exclusion_manifest_findings(
+    report: Mapping[str, Any], *, rows: Sequence[Mapping[str, Any]]
+) -> list[str]:
+    findings: list[str] = []
+    manifest = report.get("lifecycle_window_exclusion_manifest")
+    if not isinstance(manifest, Mapping):
+        return ["lifecycle_window_exclusion_manifest_missing"]
+    if manifest.get("schema") != LIFECYCLE_WINDOW_EXCLUSION_MANIFEST_SCHEMA:
+        findings.append("lifecycle_window_exclusion_manifest_schema_invalid")
+    for field, expected in LIFECYCLE_EXCLUSION_AUTHORITY_CONTRACT.items():
+        if manifest.get(field) != expected:
+            findings.append(f"lifecycle_window_exclusion_authority_invalid:{field}")
+
+    expected_entries: list[dict[str, Any]] = []
+    expected_reason_counts: dict[str, int] = defaultdict(int)
+    expected_taxonomy_counts: dict[str, int] = defaultdict(int)
+    eligible_count = 0
+    for row in rows:
+        lifecycle_id = str(row.get("main_lifecycle_id") or "")
+        raw_reasons = row.get("promotion_blockers")
+        if not isinstance(raw_reasons, list) or any(
+            not isinstance(reason, str) or not reason.strip() for reason in raw_reasons
+        ):
+            findings.append(
+                f"lifecycle_window_row_reason_codes_invalid:{lifecycle_id or 'missing'}"
+            )
+            continue
+        reason_codes = [str(reason) for reason in raw_reasons]
+        if not reason_codes:
+            eligible_count += 1
+            if row.get("lifecycle_window_source_quality_disposition") != (
+                "eligible_before_global_source_contract_gate"
+            ):
+                findings.append(
+                    "lifecycle_window_row_disposition_invalid:"
+                    f"{lifecycle_id or 'missing'}"
+                )
+            if row.get("lifecycle_window_exclusion_taxonomies") != []:
+                findings.append(
+                    "lifecycle_window_row_taxonomies_invalid:"
+                    f"{lifecycle_id or 'missing'}"
+                )
+            if row.get("promotion_disposition") != "eligible_source_only":
+                findings.append(
+                    "lifecycle_window_row_promotion_disposition_invalid:"
+                    f"{lifecycle_id or 'missing'}"
+                )
+            continue
+
+        taxonomies = _lifecycle_exclusion_taxonomies(reason_codes)
+        if row.get("lifecycle_window_source_quality_disposition") != (
+            "excluded_exact_lifecycle_window"
+        ):
+            findings.append(
+                f"lifecycle_window_row_disposition_invalid:{lifecycle_id or 'missing'}"
+            )
+        if row.get("lifecycle_window_exclusion_taxonomies") != taxonomies:
+            findings.append(
+                f"lifecycle_window_row_taxonomies_invalid:{lifecycle_id or 'missing'}"
+            )
+        if row.get("promotion_disposition") != "excluded_exact_lifecycle_window":
+            findings.append(
+                "lifecycle_window_row_promotion_disposition_invalid:"
+                f"{lifecycle_id or 'missing'}"
+            )
+        for reason in reason_codes:
+            expected_reason_counts[reason] += 1
+        for taxonomy in taxonomies:
+            expected_taxonomy_counts[taxonomy] += 1
+        expected_entries.append(
+            {
+                "main_lifecycle_id": lifecycle_id,
+                "exclusion_scope": "exact_main_lifecycle_window",
+                "taxonomies": taxonomies,
+                "reason_codes_sha256": _sha256(reason_codes),
+            }
+        )
+
+    if manifest.get("excluded_lifecycle_count") != len(expected_entries):
+        findings.append("lifecycle_window_excluded_census_mismatch")
+    if manifest.get("eligible_lifecycle_count") != eligible_count:
+        findings.append("lifecycle_window_eligible_census_mismatch")
+    if manifest.get("taxonomy_counts") != dict(
+        sorted(expected_taxonomy_counts.items())
+    ):
+        findings.append("lifecycle_window_taxonomy_census_mismatch")
+    if manifest.get("reason_code_counts") != dict(
+        sorted(expected_reason_counts.items())
+    ):
+        findings.append("lifecycle_window_reason_census_mismatch")
+    if manifest.get("entries") != expected_entries:
+        findings.append("lifecycle_window_entry_hash_or_binding_mismatch")
+    return findings
+
+
+def _lifecycle_report_contract_findings(
+    report: Mapping[str, Any], *, rows: Sequence[Any]
+) -> list[str]:
+    findings: list[str] = []
+    for field, expected in LIFECYCLE_REPORT_AUTHORITY_CONTRACT.items():
+        if report.get(field) != expected:
+            findings.append(f"top_level_authority_invalid:{field}")
+    for field, expected in (
+        ("source_transition_schema", JOURNAL_SCHEMA),
+        ("source_pipeline_identity_schema", PIPELINE_IDENTITY_SCHEMA),
+        (
+            "broker_execution_provenance_schema",
+            BROKER_EXECUTION_PROVENANCE_SCHEMA,
+        ),
+        (
+            "broker_execution_raw_envelope_schema",
+            BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA,
+        ),
+        (
+            "broker_execution_official_reference_sha",
+            KIWOOM_OFFICIAL_REFERENCE_SHA,
+        ),
+    ):
+        if report.get(field) != expected:
+            findings.append(f"top_level_broker_contract_invalid:{field}")
+    for hash_field, verified_field in (
+        ("reviewed_cost_profile_sha256", "reviewed_cost_profile_verified"),
+        ("symbol_master_artifact_sha256", "symbol_master_artifact_verified"),
+    ):
+        if not _valid_sha256(report.get(hash_field)):
+            findings.append(f"top_level_reference_hash_invalid:{hash_field}")
+        if report.get(verified_field) is not True:
+            findings.append(f"top_level_reference_not_verified:{verified_field}")
+    if report.get("source_kind") not in {
+        "pipeline_events_explicit_id_only",
+        "transition_journal",
+    }:
+        findings.append("top_level_source_kind_invalid")
+
+    source_census = report.get("source_raw_census")
+    if not isinstance(source_census, Mapping):
+        findings.append("source_raw_census_missing")
+    else:
+        if report.get("source_census_content_sha256") != _sha256(source_census):
+            findings.append("source_raw_census_hash_mismatch")
+        for field in ("source_raw_sha256", "source_decoded_sha256"):
+            if not _valid_sha256(source_census.get(field)):
+                findings.append(f"source_raw_census_hash_invalid:{field}")
+        if source_census.get("source_exists") is not True:
+            findings.append("source_raw_census_source_missing")
+        if source_census.get("source_read_error") is not None:
+            findings.append("source_raw_census_read_error")
+        for field in ("malformed_json_count", "non_object_count"):
+            if _native_nonnegative_int(source_census.get(field)) != 0:
+                findings.append(f"source_raw_census_not_clean:{field}")
+    if report.get("source_raw_sha256") != (
+        (source_census or {}).get("source_raw_sha256")
+        if isinstance(source_census, Mapping)
+        else None
+    ):
+        findings.append("source_raw_hash_binding_mismatch")
+    if report.get("source_content_sha256") != (
+        (source_census or {}).get("source_decoded_sha256")
+        if isinstance(source_census, Mapping)
+        else None
+    ):
+        findings.append("source_content_hash_binding_mismatch")
+
+    if report.get("global_source_quality_gate_pass") is not True:
+        findings.append("global_source_quality_gate_not_pass")
+    if report.get("global_source_quality_gate_blockers") != []:
+        findings.append("global_source_quality_gate_blockers_present")
+    if report.get("reference_contract_blockers") != []:
+        findings.append("reference_contract_blockers_present")
+    for field in (
+        "source_invalid_transition_count",
+        "mixed_source_row_count",
+        "lifecycle_accumulator_overflow_row_count",
+        "transition_event_identity_overflow_row_count",
+        "pipeline_lifecycle_instrumentation_gap_count",
+        "broker_order_no_cross_lifecycle_conflict_count",
+        "broker_execution_cross_lifecycle_identity_conflict_count",
+    ):
+        if _native_nonnegative_int(report.get(field)) != 0:
+            findings.append(f"top_level_zero_census_invalid:{field}")
+
+    row_dicts = [row for row in rows if isinstance(row, Mapping)]
+    if len(row_dicts) != len(rows) or report.get("lifecycle_count") != len(rows):
+        findings.append("lifecycle_row_census_mismatch")
+    eligible_ids = [
+        str(row.get("main_lifecycle_id") or "")
+        for row in row_dicts
+        if row.get("promotion_evidence_eligible") is True
+    ]
+    if (
+        any(not lifecycle_id for lifecycle_id in eligible_ids)
+        or len(eligible_ids) != len(set(eligible_ids))
+        or report.get("promotion_evidence_eligible_count") != len(eligible_ids)
+        or report.get("promotion_ready_lifecycle_ids") != eligible_ids
+        or report.get("promotion_ready") is not bool(eligible_ids)
+    ):
+        findings.append("promotion_row_census_mismatch")
+
+    findings.extend(_lifecycle_exclusion_manifest_findings(report, rows=row_dicts))
+
+    summed_fields = (
+        "broker_execution_provenance_gap_count",
+        "broker_execution_conflict_count",
+        "broker_execution_order_progress_conflict_count",
+        "broker_execution_submission_link_conflict_count",
+        "broker_order_no_cross_lifecycle_conflict_count",
+        "broker_execution_cross_lifecycle_identity_conflict_count",
+        "broker_execution_replay_duplicate_count",
+        "broker_execution_unique_count",
+    )
+    for field in summed_fields:
+        values = [_native_nonnegative_int(row.get(field)) for row in row_dicts]
+        if any(value is None for value in values) or report.get(field) != sum(
+            value or 0 for value in values
+        ):
+            findings.append(f"top_level_row_census_mismatch:{field}")
+    invalid_transition_values = [
+        _native_nonnegative_int(row.get("invalid_transition_count"))
+        for row in row_dicts
+    ]
+    if any(value is None for value in invalid_transition_values) or report.get(
+        "lifecycle_invalid_transition_count"
+    ) != sum(value or 0 for value in invalid_transition_values):
+        findings.append(
+            "top_level_row_census_mismatch:lifecycle_invalid_transition_count"
+        )
+
+    candidate_gate_failure_count = sum(
+        row.get("terminal_state") == "FINAL_EXIT_RECONCILED"
+        and row.get("promotion_evidence_eligible") is not True
+        for row in row_dicts
+    )
+    if report.get("candidate_row_gate_failure_count") != (candidate_gate_failure_count):
+        findings.append("candidate_row_gate_failure_census_mismatch")
+
+    fallback_gap_count = 0
+    fallback_census = report.get("raw_fallback_census")
+    if fallback_census is not None:
+        if not isinstance(fallback_census, Mapping):
+            findings.append("raw_fallback_census_invalid")
+        else:
+            fallback_counts = [
+                _native_nonnegative_int(fallback_census.get(field))
+                for field in (
+                    "missing_main_lifecycle_id_count",
+                    "malformed_json_count",
+                    "non_object_count",
+                )
+            ]
+            if any(value is None for value in fallback_counts):
+                findings.append("raw_fallback_census_invalid")
+            else:
+                fallback_gap_count = sum(value or 0 for value in fallback_counts)
+                fallback_gap_count += int(
+                    fallback_census.get("source_read_error") is not None
+                )
+                fallback_gap_count += int(
+                    fallback_census.get("source_exists") is not True
+                )
+            if fallback_gap_count:
+                findings.append("raw_fallback_global_gap_present")
+
+    instrumentation_fields = (
+        "source_invalid_transition_count",
+        "broker_execution_provenance_gap_count",
+        "broker_execution_conflict_count",
+        "broker_execution_order_progress_conflict_count",
+        "broker_execution_submission_link_conflict_count",
+        "broker_order_no_cross_lifecycle_conflict_count",
+        "broker_execution_cross_lifecycle_identity_conflict_count",
+        "lifecycle_accumulator_overflow_row_count",
+        "transition_event_identity_overflow_row_count",
+    )
+    instrumentation_values = [
+        _native_nonnegative_int(report.get(field)) for field in instrumentation_fields
+    ]
+    if any(value is None for value in instrumentation_values):
+        findings.append("instrumentation_gap_input_census_invalid")
+    elif isinstance(source_census, Mapping):
+        expected_instrumentation_gap_count = sum(
+            value or 0 for value in instrumentation_values
+        )
+        expected_instrumentation_gap_count += sum(
+            _native_nonnegative_int(source_census.get(field)) or 0
+            for field in ("malformed_json_count", "non_object_count")
+        )
+        expected_instrumentation_gap_count += int(
+            source_census.get("source_read_error") is not None
+        )
+        expected_instrumentation_gap_count += int(
+            source_census.get("source_exists") is not True
+        )
+        expected_instrumentation_gap_count += fallback_gap_count
+        expected_instrumentation_gap_count += candidate_gate_failure_count
+        expected_instrumentation_gap_count += int(not row_dicts)
+        if report.get("instrumentation_gap_count") != (
+            expected_instrumentation_gap_count
+        ):
+            findings.append("instrumentation_gap_census_mismatch")
+    return findings
+
+
+def _lifecycle_broker_row_findings(
+    row: Mapping[str, Any], *, report: Mapping[str, Any]
+) -> list[str]:
+    findings: list[str] = []
+    lifecycle_id = str(row.get("main_lifecycle_id") or "")
+    trace_ids = row.get("decision_trace_ids")
+    expected_lifecycle_id = _expected_main_lifecycle_id(
+        record_id=row.get("record_id"),
+        stock_code=row.get("stock_code"),
+        attempt_id=row.get("attempt_id"),
+    )
+    try:
+        trade_date = date.fromisoformat(str(row.get("trade_date") or ""))
+    except ValueError:
+        trade_date = None
+    if (
+        expected_lifecycle_id is None
+        or lifecycle_id != expected_lifecycle_id
+        or trade_date is None
+        or trade_date.isoformat() != str(report.get("target_date") or "")
+        or not re.fullmatch(r"[0-9]{6}", str(row.get("stock_code") or ""))
+        or not str(row.get("record_id") or "").strip()
+        or not str(row.get("attempt_id") or "").strip()
+        or not str(row.get("venue") or "").strip()
+        or not str(row.get("session_bucket") or "").strip()
+        or not isinstance(trace_ids, list)
+        or not trace_ids
+        or any(not str(trace_id or "").strip() for trace_id in trace_ids)
+        or len({str(trace_id) for trace_id in trace_ids}) != len(trace_ids)
+    ):
+        findings.append("row_exact_lifecycle_identity_invalid")
+    for field, expected in LIFECYCLE_REPORT_AUTHORITY_CONTRACT.items():
+        if row.get(field) != expected:
+            findings.append(f"row_authority_invalid:{field}")
+    for field, expected in (
+        (
+            "broker_execution_provenance_schema",
+            BROKER_EXECUTION_PROVENANCE_SCHEMA,
+        ),
+        (
+            "broker_execution_raw_envelope_schema",
+            BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA,
+        ),
+        (
+            "broker_execution_official_reference_sha",
+            KIWOOM_OFFICIAL_REFERENCE_SHA,
+        ),
+    ):
+        if row.get(field) != expected:
+            findings.append(f"row_broker_contract_invalid:{field}")
+    if (
+        row.get("promotion_evidence_eligible") is not True
+        or row.get("row_source_quality_gate_pass") is not True
+        or row.get("promotion_blockers") != []
+        or row.get("terminal_state") != "FINAL_EXIT_RECONCILED"
+    ):
+        findings.append("row_promotion_gate_not_current_complete")
+    if row.get("observed_actual_broker_order_submitted") is not True:
+        findings.append("row_actual_broker_submission_missing")
+    if row.get("broker_execution_provenance_gap_reasons") != []:
+        findings.append("row_broker_execution_gap_reasons_present")
+    for field in (
+        "invalid_transition_count",
+        "broker_execution_provenance_gap_count",
+        "broker_execution_conflict_count",
+        "broker_execution_order_progress_conflict_count",
+        "broker_execution_submission_link_conflict_count",
+        "broker_order_no_cross_lifecycle_conflict_count",
+        "broker_execution_cross_lifecycle_identity_conflict_count",
+        "broker_execution_unreconciled_order_count",
+    ):
+        if _native_nonnegative_int(row.get(field)) != 0:
+            findings.append(f"row_zero_census_invalid:{field}")
+
+    unique_count = _native_nonnegative_int(row.get("broker_execution_unique_count"))
+    partial_count = _native_nonnegative_int(row.get("broker_execution_partial_count"))
+    full_count = _native_nonnegative_int(row.get("broker_execution_full_count"))
+    state_counts = row.get("broker_execution_provenance_state_counts")
+    if (
+        unique_count is None
+        or unique_count <= 0
+        or partial_count is None
+        or full_count is None
+        or partial_count + full_count != unique_count
+        or not isinstance(state_counts, Mapping)
+        or state_counts != {"complete": unique_count}
+    ):
+        findings.append("row_broker_execution_provenance_census_invalid")
+
+    submitted_by_order = _positive_integer_mapping(
+        row.get("broker_submitted_requested_qty_by_order_no")
+    )
+    submitted_by_phase = _positive_integer_mapping(
+        row.get("broker_submitted_requested_qty_by_phase")
+    )
+    executed_raw = row.get("broker_executed_order_qty_by_phase")
+    executed_by_phase: dict[str, dict[str, int]] | None = None
+    if isinstance(executed_raw, Mapping) and executed_raw:
+        candidate: dict[str, dict[str, int]] = {}
+        for raw_phase, raw_orders in executed_raw.items():
+            phase = str(raw_phase or "").strip()
+            orders = _positive_integer_mapping(raw_orders)
+            if phase not in {"entry", "scale_in", "exit"} or orders is None:
+                candidate = {}
+                break
+            candidate[phase] = orders
+        executed_by_phase = candidate or None
+    if (
+        submitted_by_order is None
+        or submitted_by_phase is None
+        or executed_by_phase is None
+        or set(submitted_by_phase) != set(executed_by_phase)
+        or not {"entry", "exit"}.issubset(submitted_by_phase)
+        or row.get("broker_submitted_order_count") != len(submitted_by_order)
+        or row.get("broker_submitted_order_coverage_gap_phases") != []
+        or row.get("broker_submitted_order_qty_mismatch_phases") != []
+    ):
+        findings.append("row_broker_order_census_invalid")
+    else:
+        flattened: dict[str, int] = {}
+        order_conflict = False
+        for phase, orders in executed_by_phase.items():
+            if sum(orders.values()) != submitted_by_phase[phase]:
+                order_conflict = True
+            for order_no, quantity in orders.items():
+                if (
+                    not re.fullmatch(r"[0-9]{7}", order_no)
+                    or int(order_no) == 0
+                    or order_no in flattened
+                ):
+                    order_conflict = True
+                flattened[order_no] = quantity
+        if order_conflict or flattened != submitted_by_order:
+            findings.append("row_broker_order_quantity_binding_invalid")
+
+    entry_qty = _finite_number(row.get("entry_fill_qty"))
+    scale_in_qty = _finite_number(row.get("scale_in_fill_qty"))
+    exit_qty = _finite_number(row.get("exit_qty"))
+    entry_covered = _finite_number(row.get("broker_execution_entry_covered_qty"))
+    exit_covered = _finite_number(row.get("broker_execution_exit_covered_qty"))
+    if (
+        entry_qty is None
+        or entry_qty <= 0
+        or scale_in_qty is None
+        or scale_in_qty < 0
+        or exit_qty is None
+        or exit_qty <= 0
+        or entry_covered is None
+        or exit_covered is None
+        or not math.isclose(
+            entry_covered,
+            entry_qty + scale_in_qty,
+            rel_tol=0.0,
+            abs_tol=1e-8,
+        )
+        or not math.isclose(
+            exit_covered,
+            exit_qty,
+            rel_tol=0.0,
+            abs_tol=1e-8,
+        )
+        or not math.isclose(
+            entry_qty + scale_in_qty,
+            exit_qty,
+            rel_tol=0.0,
+            abs_tol=1e-8,
+        )
+        or _finite_number(row.get("open_qty_at_censor")) is None
+        or not math.isclose(
+            float(row.get("open_qty_at_censor")),
+            0.0,
+            rel_tol=0.0,
+            abs_tol=1e-8,
+        )
+    ):
+        findings.append("row_broker_execution_quantity_coverage_invalid")
+    elif executed_by_phase is not None:
+        expected_phase_quantities = {
+            "entry": entry_qty,
+            "exit": exit_qty,
+        }
+        if scale_in_qty > 0:
+            expected_phase_quantities["scale_in"] = scale_in_qty
+        if set(expected_phase_quantities) != set(executed_by_phase) or any(
+            not math.isclose(
+                float(sum(executed_by_phase[phase].values())),
+                expected_quantity,
+                rel_tol=0.0,
+                abs_tol=1e-8,
+            )
+            for phase, expected_quantity in expected_phase_quantities.items()
+        ):
+            findings.append("row_broker_execution_phase_quantity_invalid")
+
+    for row_field, report_field in (
+        ("reviewed_cost_profile_sha256", "reviewed_cost_profile_sha256"),
+        ("symbol_master_artifact_sha256", "symbol_master_artifact_sha256"),
+    ):
+        value = row.get(row_field)
+        if not _valid_sha256(value) or value != report.get(report_field):
+            findings.append(f"row_reference_hash_binding_invalid:{row_field}")
+    if (
+        row.get("reviewed_cost_profile_verified") is not True
+        or row.get("symbol_master_artifact_verified") is not True
+    ):
+        findings.append("row_reference_verification_missing")
+    return findings
+
+
 def _lifecycle_index(
     lifecycle_reports: Iterable[Mapping[str, Any]],
 ) -> tuple[dict[tuple[str, str], dict[str, Any]], list[str]]:
     index: dict[tuple[str, str], dict[str, Any]] = {}
     ambiguous_keys: set[tuple[str, str]] = set()
     findings: list[str] = []
+    finding_overflow_count = 0
+
+    def retain(*values: str) -> None:
+        nonlocal finding_overflow_count
+        for value in values:
+            if len(findings) < MAX_LIFECYCLE_FINDINGS - 1:
+                findings.append(value)
+            else:
+                finding_overflow_count += 1
+
     for report in lifecycle_reports:
         target_date = str(report.get("target_date") or "")
         rows = report.get("rows")
         if report.get("schema") != LIFECYCLE_REPORT_SCHEMA:
-            findings.append(
-                f"lifecycle_report_schema_invalid:{target_date or 'missing'}"
-            )
+            retain(f"lifecycle_report_schema_invalid:{target_date or 'missing'}")
             continue
         if not target_date or not isinstance(rows, list):
-            findings.append("lifecycle_report_shape_invalid")
+            retain("lifecycle_report_shape_invalid")
             continue
-        if _authority_findings(report):
-            findings.append(f"lifecycle_report_authority_invalid:{target_date}")
+        if not _lifecycle_report_hash_valid(report):
+            retain(f"lifecycle_report_hash_invalid:{target_date}")
             continue
-        declared_hash = report.get("artifact_content_sha256")
-        if not declared_hash or declared_hash != _content_hash(
-            report, "artifact_content_sha256"
-        ):
-            findings.append(f"lifecycle_report_hash_invalid:{target_date}")
+        report_findings = _lifecycle_report_contract_findings(report, rows=rows)
+        if report_findings:
+            retain(
+                *(
+                    f"lifecycle_report_contract_invalid:{target_date}:{reason}"
+                    for reason in report_findings
+                )
+            )
             continue
+        trace_owner: dict[str, str] = {}
+        report_ambiguous_traces: set[str] = set()
+        for raw_row in rows:
+            if not isinstance(raw_row, Mapping):
+                continue
+            lifecycle_id = str(raw_row.get("main_lifecycle_id") or "")
+            trace_ids = raw_row.get("decision_trace_ids")
+            if not isinstance(trace_ids, list):
+                continue
+            for raw_trace_id in trace_ids:
+                trace_id = str(raw_trace_id or "")
+                previous_owner = trace_owner.setdefault(trace_id, lifecycle_id)
+                if trace_id and previous_owner != lifecycle_id:
+                    report_ambiguous_traces.add(trace_id)
+        for trace_id in sorted(report_ambiguous_traces):
+            key = (target_date, trace_id)
+            index.pop(key, None)
+            if key not in ambiguous_keys:
+                retain(f"lifecycle_trace_identity_ambiguous:{target_date}:{trace_id}")
+            ambiguous_keys.add(key)
         for row in rows:
-            if not isinstance(row, Mapping):
+            assert isinstance(row, Mapping)
+            row_findings = _lifecycle_broker_row_findings(row, report=report)
+            lifecycle_id = str(row.get("main_lifecycle_id") or "missing")
+            if row_findings:
+                retain(
+                    *(
+                        "lifecycle_row_contract_invalid:"
+                        f"{target_date}:{lifecycle_id}:{reason}"
+                        for reason in row_findings
+                    )
+                )
                 continue
             trace_ids = row.get("decision_trace_ids")
             if not isinstance(trace_ids, list):
@@ -748,13 +2166,13 @@ def _lifecycle_index(
                 if key in ambiguous_keys:
                     continue
                 if key in index and index[key] != row:
-                    findings.append(
-                        f"lifecycle_trace_identity_ambiguous:{target_date}:{key[1]}"
-                    )
+                    retain(f"lifecycle_trace_identity_ambiguous:{target_date}:{key[1]}")
                     index.pop(key, None)
                     ambiguous_keys.add(key)
                     continue
                 index[key] = dict(row)
+    if finding_overflow_count:
+        findings.append(f"lifecycle_findings_truncated:{finding_overflow_count}")
     return index, findings
 
 
@@ -990,6 +2408,7 @@ def build_rolling_source_only_candidates(
     lifecycle_reports: Iterable[Mapping[str, Any]],
     source_quality_pass_by_date: Mapping[str, bool],
     economic_reference_pass_by_date: Mapping[str, bool],
+    input_diagnostics: Iterable[Mapping[str, Any]] = (),
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Build strict rolling R2 evidence and an R3 source-only manifest."""
 
@@ -997,10 +2416,27 @@ def build_rolling_source_only_candidates(
     joined_rows: list[dict[str, Any]] = []
     exclusions: list[dict[str, Any]] = []
     source_dates: set[str] = set()
+    global_candidate_blockers = [
+        (
+            "historical_execution_artifact_collection_invalid:"
+            f"{str(diagnostic.get('target_date') or 'missing')}:"
+            f"{str(diagnostic.get('reason') or 'unknown')}"
+        )
+        for diagnostic in input_diagnostics
+        if isinstance(diagnostic, Mapping)
+        and diagnostic.get("artifact") == "execution"
+        and diagnostic.get("status") == "invalid"
+    ]
     for report in execution_reports:
         try:
             rows = _validated_execution_rows(report)
         except (TypeError, ValueError) as exc:
+            blocker = (
+                "historical_execution_artifact_contract_invalid:"
+                f"{str(report.get('target_date') or 'missing')}:"
+                f"{str(exc)}"
+            )
+            global_candidate_blockers.append(blocker)
             exclusions.append(
                 {"reason": str(exc), "target_date": report.get("target_date")}
             )
@@ -1026,6 +2462,14 @@ def build_rolling_source_only_candidates(
             )
             findings = _lifecycle_gate_findings(lifecycle)
             if not findings and (
+                row.get("stock_code") != (lifecycle or {}).get("stock_code")
+                or str(row.get("effective_venue") or "").strip().upper()
+                != str((lifecycle or {}).get("venue") or "").strip().upper()
+                or quality._session(row.get("session_bucket"))
+                != quality._session((lifecycle or {}).get("session_bucket"))
+            ):
+                findings.append("daily_lifecycle_identity_binding_mismatch")
+            if not findings and (
                 row.get("cost_profile_artifact_sha256")
                 != (lifecycle or {}).get("reviewed_cost_profile_sha256")
                 or row.get("symbol_master_artifact_sha256")
@@ -1044,6 +2488,8 @@ def build_rolling_source_only_candidates(
                 )
                 continue
             joined_rows.append({**row, "lifecycle": dict(lifecycle or {})})
+
+    global_candidate_blockers = sorted(set(global_candidate_blockers))
 
     grouped: dict[tuple[str, str, str, str, str, str, str], list[dict[str, Any]]] = (
         defaultdict(list)
@@ -1071,7 +2517,11 @@ def build_rolling_source_only_candidates(
             window: _window_gate_findings(metrics)
             for window, metrics in windows.items()
         }
-        all_gates_pass = all(not values for values in gate_findings.values())
+        if global_candidate_blockers:
+            gate_findings["global_execution_artifact"] = list(global_candidate_blockers)
+        all_gates_pass = not global_candidate_blockers and all(
+            not values for values in gate_findings.values()
+        )
         reference_bindings = sorted(
             {
                 (
@@ -1161,13 +2611,18 @@ def build_rolling_source_only_candidates(
         "schema": ROLLING_SCHEMA,
         "target_date": target_date,
         "generated_at": datetime.now(KST).isoformat(),
-        "status": "rolling_evaluated" if joined_rows else "no_joined_lifecycle_rows",
+        "status": (
+            "historical_execution_contract_blocked"
+            if global_candidate_blockers
+            else ("rolling_evaluated" if joined_rows else "no_joined_lifecycle_rows")
+        ),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "source_execution_dates": sorted(source_dates),
         "joined_parent_count": len(joined_rows),
         "excluded_parent_count": len(exclusions),
         "partitions": partitions,
         "exclusions": exclusions,
+        "global_candidate_blockers": global_candidate_blockers,
         "lifecycle_report_findings": lifecycle_findings,
         "metric_role": "r2_rolling_main_lifecycle_ai_quality",
         "window_policy": "last_5_10_20_available_clean_trading_dates_same_partition",
@@ -1192,13 +2647,18 @@ def build_rolling_source_only_candidates(
         "target_date": target_date,
         "generated_at": datetime.now(KST).isoformat(),
         "status": (
-            "source_only_candidates_ready"
-            if source_candidates
-            else "no_source_only_candidate_passed_all_gates"
+            "source_only_candidate_blocked_invalid_historical_execution"
+            if global_candidate_blockers
+            else (
+                "source_only_candidates_ready"
+                if source_candidates
+                else "no_source_only_candidate_passed_all_gates"
+            )
         ),
         "source_rolling_artifact_sha256": rolling["artifact_content_sha256"],
         "candidate_count": len(source_candidates),
         "candidates": source_candidates,
+        "global_candidate_blockers": global_candidate_blockers,
         "first_runtime_candidate_auto_apply_performed": False,
         "runtime_apply_blocker": (
             "exact_candidate_bound_operator_approval_and_trusted_registered_"
@@ -1515,8 +2975,8 @@ def run_cycle(
         raise ValueError("target_date_before_clean_baseline")
     if isinstance(daily_attempt_cap, bool) or daily_attempt_cap <= 0:
         raise ValueError("daily_attempt_cap_must_be_positive")
-    canonical_daily_usd_cap, canonical_daily_usd_cap_text = (
-        _canonical_daily_usd_cap(daily_usd_cap)
+    canonical_daily_usd_cap, canonical_daily_usd_cap_text = _canonical_daily_usd_cap(
+        daily_usd_cap
     )
     if isinstance(parent_cap, bool) or parent_cap <= 0:
         raise ValueError("parent_cap_must_be_positive")
@@ -1751,9 +3211,7 @@ def run_cycle(
             blockers.append("bounded_provider_replay_failed_or_deferred")
         else:
             try:
-                current_execution_report = _load_json_auto(
-                    selected_paths["execution"]
-                )
+                current_execution_report = _load_json_auto(selected_paths["execution"])
                 current_pricing = _load_json_auto(selected_paths["provider_pricing"])
                 _validate_current_execution_artifact(
                     report=current_execution_report,
@@ -1814,9 +3272,7 @@ def run_cycle(
             runner=command_runner,
         )
     )
-    current_lifecycle_producer_complete = bool(
-        write and steps[-1]["returncode"] == 0
-    )
+    current_lifecycle_producer_complete = bool(write and steps[-1]["returncode"] == 0)
     if not current_lifecycle_producer_complete:
         blockers.append("main_lifecycle_paired_command_failed")
 
@@ -1837,9 +3293,7 @@ def run_cycle(
             lifecycle_reports=lifecycle_reports,
             current_execution_report=current_execution_report,
             current_provider_replay_complete=current_provider_replay_complete,
-            current_lifecycle_producer_complete=(
-                current_lifecycle_producer_complete
-            ),
+            current_lifecycle_producer_complete=(current_lifecycle_producer_complete),
         )
         rolling, r3_manifest = build_rolling_source_only_candidates(
             target_date=target_date,
@@ -1847,6 +3301,7 @@ def run_cycle(
             lifecycle_reports=lifecycle_reports,
             source_quality_pass_by_date=source_quality_pass,
             economic_reference_pass_by_date=economic_reference_pass,
+            input_diagnostics=rolling_diagnostics,
         )
         if write:
             _atomic_write_json(rolling_report_path(target_date), rolling)
