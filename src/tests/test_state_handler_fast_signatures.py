@@ -3813,6 +3813,39 @@ def test_log_entry_pipeline_carries_scanner_promotion_correlation(monkeypatch):
     assert fields["original_reason"] == "below_strength_base"
 
 
+def test_log_entry_pipeline_carries_explicit_condition_venue(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 77,
+        "name": "CONDITION",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "effective_venue": "KRX",
+        "venue": "KRX",
+        "venue_resolution": "condition_session_clock:krx_regular",
+        "market_session_bucket": "krx_regular",
+        "scanner_promotion_id": "CONDPROM-001450-1000000",
+        "scanner_promotion_emitted_epoch": "1000.000",
+        "scanner_promotion_reason": "condition_search_match:scalp_underpress_01",
+        "source_signature": "CONDITION_MATCHED,SCALP_UNDERPRESS_01",
+    }
+
+    _log_entry_pipeline(stock, "001450", "strength_momentum_observed")
+
+    fields = emitted[-1]["fields"]
+    assert fields["venue"] == "KRX"
+    assert fields["effective_venue"] == "KRX"
+    assert fields["venue_resolution"] == "condition_session_clock:krx_regular"
+    assert fields["market_session_bucket"] == "krx_regular"
+
+
 def test_log_entry_pipeline_hydrates_missing_scanner_promotion_id(monkeypatch):
     emitted = []
     monkeypatch.setattr(

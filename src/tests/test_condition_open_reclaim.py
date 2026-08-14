@@ -292,6 +292,137 @@ def test_open_reclaim_does_not_overwrite_completed_scalp_row(monkeypatch):
     assert db.records[1].position_tag == "OPEN_RECLAIM"
 
 
+def test_condition_runtime_handoff_keeps_session_cohorts_separate():
+    def at(hour, minute):
+        return datetime(2026, 8, 14, hour, minute).timestamp()
+
+    premarket = handlers._condition_runtime_handoff_fields(
+        "005930", "scalp_underpress_01", now_ts=at(8, 30)
+    )
+    krx = handlers._condition_runtime_handoff_fields(
+        "005930", "scalp_underpress_01", now_ts=at(10, 0)
+    )
+    nxt = handlers._condition_runtime_handoff_fields(
+        "005930", "scalp_underpress_01", now_ts=at(16, 30)
+    )
+    unsupported = handlers._condition_runtime_handoff_fields(
+        "005930", "scalp_underpress_01", now_ts=at(15, 45)
+    )
+
+    assert premarket["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert premarket["venue_resolution"] == (
+        "condition_session_clock:krx_like_premarket"
+    )
+    assert krx["effective_venue"] == "KRX"
+    assert krx["venue_resolution"] == "condition_session_clock:krx_regular"
+    assert nxt["effective_venue"] == "NXT"
+    assert nxt["venue_resolution"] == "condition_session_clock:nxt"
+    assert unsupported["effective_venue"] == "UNKNOWN"
+    assert unsupported["market_session_bucket"] == "outside_supported_session"
+
+
+def test_condition_reactivation_replaces_expired_scanner_generation(monkeypatch):
+    db = _DummyDB()
+    event_bus = _DummyEventBus()
+    active_targets = []
+    _bind_test_deps(active_targets, db, event_bus)
+    _FakeDateTime._fixed_now = datetime(2026, 8, 14, 10, 17, 0)
+    now_ts = _FakeDateTime._fixed_now.timestamp()
+
+    expired = handlers.RecommendationHistory(
+        rec_date=_FakeDateTime._fixed_now.date(),
+        stock_code="001450",
+        stock_name="OLD-HYUNDAI",
+        buy_price=44000,
+        buy_qty=0,
+        trade_type="SCALP",
+        strategy="SCALPING",
+        status="EXPIRED",
+        position_tag="SCANNER",
+        entry_armed_at_epoch=datetime(2026, 8, 14, 8, 8, 43).timestamp(),
+        effective_venue="PREMARKET_KRX_LIKE",
+        venue_resolution="scanner_session_clock:krx_like_premarket",
+        market_session_bucket="krx_like_premarket",
+        scanner_promotion_id="SCANPROM-001450-old",
+        scanner_promotion_reason="price_jump_start_acceleration",
+        scanner_promotion_emitted_epoch=datetime(
+            2026, 8, 14, 8, 8, 43
+        ).timestamp(),
+        scanner_source_signature="HIGH_PROXIMITY_CONFIRMATION,PRICE_JUMP_START",
+        scanner_watch_budget_owner="opening_rotation",
+        scanner_price_delta_since_first_seen_pct=1.2,
+        scanner_comparable_flu_delta_since_first_seen=0.8,
+        scanner_cntr_str_available=True,
+        scanner_cntr_str=145.0,
+    )
+    expired.id = 77
+    db.records.append(expired)
+
+    monkeypatch.setattr(handlers, "datetime", _FakeDateTime)
+    monkeypatch.setattr(handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        handlers,
+        "_get_latest_price",
+        lambda code: (_ for _ in ()).throw(
+            AssertionError("condition attach must not use an unaged price anchor")
+        ),
+    )
+    monkeypatch.setattr(handlers, "_get_latest_strength", lambda code: 100.0)
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_basic_info_ka10001",
+        lambda token, code: {"Name": "HYUNDAI"},
+    )
+    key = handlers._condition_key(
+        "001450",
+        _FakeDateTime._fixed_now.date(),
+        "SCALPING",
+        "SCALP_BASE",
+    )
+    handlers._CONDITION_STATE[key] = {
+        "first_seen": now_ts - 11,
+        "last_seen": now_ts - 1,
+        "confirmed": False,
+        "captured_price": 45000,
+        "last_strength": 99.0,
+        "hold_until": 0,
+        "last_unmatched": 0,
+        "unmatched_since": 0,
+    }
+
+    handlers.handle_condition_matched(
+        {"code": "001450", "condition_name": "scalp_underpress_01"}
+    )
+
+    assert len(active_targets) == 1
+    target = active_targets[0]
+    assert expired.status == "WATCHING"
+    assert expired.position_tag == "SCALP_BASE"
+    assert expired.buy_price == 0
+    assert expired.effective_venue == "KRX"
+    assert expired.market_session_bucket == "krx_regular"
+    assert expired.venue_resolution == "condition_session_clock:krx_regular"
+    assert expired.scanner_promotion_id == f"CONDPROM-001450-{int(now_ts * 1000)}"
+    assert expired.scanner_source_signature == (
+        "CONDITION_MATCHED,SCALP_UNDERPRESS_01"
+    )
+    assert expired.scanner_watch_budget_owner is None
+    assert expired.scanner_price_delta_since_first_seen_pct is None
+    assert expired.scanner_comparable_flu_delta_since_first_seen is None
+    assert expired.scanner_cntr_str_available is None
+    assert expired.scanner_cntr_str is None
+    assert target["id"] == 77
+    assert target["position_tag"] == "SCALP_BASE"
+    assert target["buy_price"] == 0
+    assert target["current_price_observed"] is None
+    assert target["condition_price_anchor_state"] == "pending_fresh_ws"
+    assert target["effective_venue"] == "KRX"
+    assert target["venue_resolution"] == "condition_session_clock:krx_regular"
+    assert target["market_session_bucket"] == "krx_regular"
+    assert target["scanner_promotion_id"] == expired.scanner_promotion_id
+    assert target["entry_armed_at_epoch"] == now_ts
+
+
 def test_s15_scan_base_arms_intraday_candidate_without_active_target(monkeypatch):
     db = _DummyDB()
     event_bus = _DummyEventBus()

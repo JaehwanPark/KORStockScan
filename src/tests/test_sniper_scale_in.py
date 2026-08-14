@@ -5383,6 +5383,172 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     assert snapshots
 
 
+def test_pre_submit_entry_ai_authority_retry_rebases_stale_quote_before_ai(
+    monkeypatch,
+):
+    now_ts = 1_783_471_000.0
+    captured = {}
+
+    class DummyAI:
+        def analyze_target(self, _name, ws_data, *_args, **_kwargs):
+            captured.update(ws_data)
+            return {
+                "action": "BUY",
+                "score": 72.0,
+                "reason": "fresh executable BBO",
+                "ai_result_source": "live",
+                "ai_parse_ok": True,
+                "decision_quality_contract_status": "pass",
+                "ai_decision_trace_id": "trace-fresh-retry",
+                "ai_decision_snapshot_id": "snapshot-fresh-retry",
+            }
+
+    fresh_ws = {
+        "curr": 10_480,
+        "best_bid": 10_450,
+        "best_ask": 10_520,
+        "last_ws_update_ts": now_ts - 0.05,
+    }
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda *_args, **_kwargs: (
+            dict(fresh_ws),
+            {
+                "pre_submit_ws_snapshot_refresh_applied": True,
+                "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+                "pre_submit_ws_snapshot_refresh_age_ms": 50.0,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "fetch_entry_candles_with_meta",
+        lambda *args, **kwargs: ([], {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "build_entry_candle_context",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *a, **k: None)
+    monkeypatch.setattr(
+        state_handlers, "_emit_scalp_entry_adm_snapshot", lambda *a, **k: None
+    )
+
+    retry = state_handlers._retry_entry_ai_submit_authority_before_block(
+        stock={"id": 1, "name": "fresh-retry", "strategy": "SCALPING"},
+        code="388050",
+        ws_data={
+            "curr": 10_480,
+            "best_bid": 10_450,
+            "best_ask": 10_520,
+            "last_ws_update_ts": now_ts - 4.0,
+        },
+        ai_engine=DummyAI(),
+        now_ts=now_ts,
+        current_ai_score=0.0,
+    )
+
+    assert captured["last_ws_update_ts"] == now_ts - 0.05
+    assert retry["pre_submit_entry_ai_authority_retry_success"] is True
+    assert (
+        retry["pre_submit_entry_ai_authority_retry_quote_refresh_applied"] is True
+    )
+    assert (
+        retry["pre_submit_entry_ai_authority_retry_quote_refresh_reason"]
+        == "latest_ws_snapshot_fresh"
+    )
+    assert (
+        retry["pre_submit_entry_ai_authority_retry_quote_refresh_source"]
+        == "ws_manager_latest_data"
+    )
+
+
+def test_pre_submit_entry_ai_authority_retry_keeps_caller_source_when_not_refreshed(
+    monkeypatch,
+):
+    now_ts = 1_783_471_000.0
+
+    class DummyAI:
+        def analyze_target(self, _name, ws_data, *_args, **_kwargs):
+            return {
+                "action": "BUY",
+                "score": 72.0,
+                "reason": f"caller quote {ws_data['best_ask']}",
+                "ai_result_source": "live",
+                "ai_parse_ok": True,
+                "decision_quality_contract_status": "pass",
+            }
+
+    caller_ws = {
+        "curr": 10_480,
+        "best_bid": 10_450,
+        "best_ask": 10_520,
+        "last_ws_update_ts": now_ts - 0.05,
+    }
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda *_args, **_kwargs: (
+            dict(caller_ws),
+            {
+                "pre_submit_ws_snapshot_refresh_applied": False,
+                "pre_submit_ws_snapshot_refresh_reason": "input_snapshot_fresh",
+                "pre_submit_ws_snapshot_refresh_age_ms": None,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "fetch_entry_candles_with_meta",
+        lambda *args, **kwargs: ([], {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "build_entry_candle_context",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *a, **k: None)
+    monkeypatch.setattr(
+        state_handlers, "_emit_scalp_entry_adm_snapshot", lambda *a, **k: None
+    )
+
+    retry = state_handlers._retry_entry_ai_submit_authority_before_block(
+        stock={"id": 1, "name": "caller-retry", "strategy": "SCALPING"},
+        code="388050",
+        ws_data=caller_ws,
+        ai_engine=DummyAI(),
+        now_ts=now_ts,
+        current_ai_score=0.0,
+    )
+
+    assert retry["pre_submit_entry_ai_authority_retry_success"] is True
+    assert (
+        retry["pre_submit_entry_ai_authority_retry_quote_refresh_applied"] is False
+    )
+    assert (
+        retry["pre_submit_entry_ai_authority_retry_quote_refresh_reason"]
+        == "input_snapshot_fresh"
+    )
+    assert (
+        retry["pre_submit_entry_ai_authority_retry_quote_refresh_source"]
+        == "caller_snapshot"
+    )
+
+
 def test_pre_submit_entry_ai_authority_retry_without_engine_keeps_block():
     stock = {
         "id": 1,

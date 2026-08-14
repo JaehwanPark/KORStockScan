@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from src.database.models import RecommendationHistory
-from src.engine.sniper_time import _in_time_window
+from src.engine.sniper_time import _in_time_window, scalping_session_venue_provenance
 from src.engine.sniper_s15_fast_track import (
     _now_ts,
     _arm_s15_candidate,
@@ -208,6 +208,77 @@ def _condition_key(code, target_date, strategy, position_tag):
         normalized_strategy,
         normalized_tag,
     )
+
+
+def _condition_runtime_handoff_fields(
+    code,
+    condition_name,
+    *,
+    now_ts,
+    observed_price=0,
+):
+    """Own a fresh condition-search target generation and its observation cohort.
+
+    The venue is the scanner/condition observation cohort, not a broker route.
+    Keeping that distinction explicit prevents a reused pre-open scanner row from
+    leaking stale venue and promotion provenance into a regular-session target.
+    """
+
+    venue_fields = dict(scalping_session_venue_provenance(float(now_ts)))
+    session_bucket = str(
+        venue_fields.get("market_session_bucket") or "outside_supported_session"
+    ).strip()
+    normalized_condition = str(condition_name or "UNKNOWN_CONDITION").strip()
+    source_token = normalized_condition.upper() or "UNKNOWN_CONDITION"
+    price = int(float(observed_price or 0))
+    return {
+        **venue_fields,
+        "venue_resolution": f"condition_session_clock:{session_bucket}",
+        "scanner_promotion_id": (
+            f"CONDPROM-{str(code or '').strip()[:6]}-{int(float(now_ts) * 1000)}"
+        ),
+        "scanner_promotion_reason": f"condition_search_match:{normalized_condition}",
+        "scanner_promotion_emitted_epoch": float(now_ts),
+        "source_signature": f"CONDITION_MATCHED,{source_token}",
+        "entry_armed_at_epoch": float(now_ts),
+        "current_price_observed": price if price > 0 else None,
+        "condition_price_anchor_state": (
+            "captured_from_explicit_fresh_source"
+            if price > 0
+            else "pending_fresh_ws"
+        ),
+        "condition_name": normalized_condition,
+        "condition_target_generation_owner": "condition_search_match",
+    }
+
+
+def _persist_condition_runtime_handoff(record, fields, *, observed_price=0):
+    """Replace reusable WATCHING/EXPIRED lineage with the current condition owner."""
+
+    record.status = "WATCHING"
+    record.entry_armed_at_epoch = float(fields["entry_armed_at_epoch"])
+    record.effective_venue = str(fields.get("effective_venue") or "UNKNOWN")
+    record.venue_resolution = str(fields.get("venue_resolution") or "")
+    record.market_session_bucket = str(fields.get("market_session_bucket") or "")
+    record.scanner_promotion_id = str(fields.get("scanner_promotion_id") or "")
+    record.scanner_promotion_reason = str(
+        fields.get("scanner_promotion_reason") or ""
+    )
+    record.scanner_promotion_emitted_epoch = float(
+        fields.get("scanner_promotion_emitted_epoch") or 0.0
+    )
+    record.scanner_source_signature = str(fields.get("source_signature") or "")
+    price = int(float(observed_price or 0))
+    record.scanner_current_price_observed = price if price > 0 else None
+    record.scanner_watch_budget_owner = None
+    record.scanner_price_delta_since_first_seen_pct = None
+    record.scanner_comparable_flu_delta_since_first_seen = None
+    record.scanner_cntr_str_available = None
+    record.scanner_cntr_str = None
+    # A reusable row may still carry the previous scanner's price anchor.  A
+    # zero value means the normal condition path will wait for its own live
+    # observation instead of calculating a gap from stale lineage.
+    record.buy_price = price if price > 0 else 0
 
 
 def _find_reusable_watch_record(session, *, rec_date, stock_code, strategy):
@@ -948,6 +1019,29 @@ def handle_condition_matched(payload):
                     record.position_tag = target_position_tag
 
             if not is_next_day_target:
+                condition_handoff = {}
+                if normalize_strategy(target_strategy) == "SCALPING":
+                    # CONDITION_MATCHED does not carry an executable quote and
+                    # _get_latest_price may fall back to an unaged candle.
+                    # Clear any reusable scanner anchor and let the next fresh
+                    # WS/BBO observation establish price ownership.
+                    observed_price = 0
+                    condition_handoff = _condition_runtime_handoff_fields(
+                        code,
+                        cnd_name,
+                        now_ts=now_ts,
+                        observed_price=observed_price,
+                    )
+                    # This condition match owns a new live target generation.
+                    # Do not retain an expired scanner owner's tag or anchor.
+                    record.strategy = "SCALPING"
+                    record.trade_type = "SCALP"
+                    record.position_tag = target_position_tag
+                    _persist_condition_runtime_handoff(
+                        record,
+                        condition_handoff,
+                        observed_price=observed_price,
+                    )
                 newly_added_to_active = False
                 if not _has_active_target(code, target_strategy):
                     marcap = (
@@ -962,13 +1056,15 @@ def handle_condition_matched(payload):
                         "name": name,
                         "strategy": active_strategy,
                         "status": "WATCHING",
-                        "added_time": time.time(),
+                        "added_time": now_ts,
+                        "buy_price": int(float(getattr(record, "buy_price", 0) or 0)),
                         "position_tag": normalize_position_tag(
                             active_strategy,
                             getattr(record, "position_tag", target_position_tag)
                             or target_position_tag,
                         ),
                         "marcap": marcap,
+                        **condition_handoff,
                     }
                     ACTIVE_TARGETS.append(new_target)
                     newly_added_to_active = True

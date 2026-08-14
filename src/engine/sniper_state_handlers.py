@@ -12569,7 +12569,10 @@ def _log_entry_pipeline(stock, code, stage, **fields):
     record_id = stock.get("id") if isinstance(stock, dict) else None
     scanner_venue_fields = (
         _scanner_runtime_event_venue_fields(stock)
-        if _is_scanner_watching_runtime_observation_target(stock)
+        if (
+            _is_scanner_watching_runtime_observation_target(stock)
+            or _has_explicit_runtime_venue_provenance(stock)
+        )
         else {}
     )
     scout_attribution_fields = scout_ai_execution_attribution_fields(
@@ -12627,6 +12630,18 @@ def _is_scanner_watching_runtime_observation_target(stock) -> bool:
         stock.get("scanner_promotion_id")
         or stock.get("scanner_promotion_reason")
         or stock.get("entry_armed_at_epoch")
+    )
+
+
+def _has_explicit_runtime_venue_provenance(stock) -> bool:
+    """Allow non-scanner owners to carry an already-resolved venue downstream."""
+
+    if not isinstance(stock, dict):
+        return False
+    supported = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+    return any(
+        str(stock.get(key) or "").strip().upper() in supported
+        for key in ("effective_venue", "venue")
     )
 
 
@@ -35648,6 +35663,44 @@ def _retry_entry_ai_submit_authority_before_block(
             candle_context = copy.deepcopy(dict(handoff.get("candle_context") or {}))
         else:
             retry_ws_data = _entry_context_ws_data(ws_data, stock)
+            # The submit revalidation owner may already have recovered a stale
+            # caller snapshot from the live WS manager.  Re-run that same
+            # fail-closed freshness owner before building the Entry AI retry
+            # payload so the provider preflight does not evaluate an older
+            # stock timestamp while submit safety is holding a fresh BBO.
+            retry_ws_data, retry_quote_refresh = (
+                _pre_submit_refresh_real_ws_snapshot(
+                    code,
+                    retry_ws_data,
+                    "SCALPING",
+                )
+            )
+            retry_quote_refresh_applied = bool(
+                retry_quote_refresh.get("pre_submit_ws_snapshot_refresh_applied")
+            )
+            fields.update(
+                {
+                    "pre_submit_entry_ai_authority_retry_quote_refresh_applied": (
+                        retry_quote_refresh_applied
+                    ),
+                    "pre_submit_entry_ai_authority_retry_quote_refresh_reason": str(
+                        retry_quote_refresh.get(
+                            "pre_submit_ws_snapshot_refresh_reason"
+                        )
+                        or "unknown"
+                    ),
+                    "pre_submit_entry_ai_authority_retry_quote_refresh_age_ms": (
+                        retry_quote_refresh.get(
+                            "pre_submit_ws_snapshot_refresh_age_ms"
+                        )
+                    ),
+                    "pre_submit_entry_ai_authority_retry_quote_refresh_source": (
+                        "ws_manager_latest_data"
+                        if retry_quote_refresh_applied
+                        else "caller_snapshot"
+                    ),
+                }
+            )
             recent_ticks = (
                 kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
                 or []
