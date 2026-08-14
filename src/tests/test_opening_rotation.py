@@ -38,6 +38,7 @@ _ORIGINAL_SCANNER_RUNTIME_EVENT_VENUE_FIELDS = (
 def _active_krx_opening_policy_for_runtime_unit_tests(monkeypatch):
     """Keep legacy unit fixtures explicit about the reviewed PREOPEN state."""
 
+    monkeypatch.setattr(handlers, "OPENING_ROTATION_RETIRED", False)
     monkeypatch.setattr(
         handlers,
         "load_active_opening_rotation_runtime_policy",
@@ -64,6 +65,47 @@ def _active_krx_opening_policy_for_runtime_unit_tests(monkeypatch):
         "_scanner_runtime_event_venue_fields",
         _runtime_venue_fields,
     )
+
+
+def test_opening_rotation_retirement_disables_runtime_entry_and_final_submit(
+    monkeypatch,
+):
+    monkeypatch.setattr(handlers, "OPENING_ROTATION_RETIRED", True)
+    assert handlers._opening_rotation_entry_config().enabled is False
+
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "_consume_entry_opportunity_recheck_ws_handoff",
+        lambda _stock, ws_data, _runtime: (ws_data, {}),
+    )
+    monkeypatch.setattr(handlers, "clear_signal_reference", lambda _stock: None)
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda _stock, _code, stage, **fields: emitted.append((stage, fields)),
+    )
+    stock = {"position_tag": POSITION_TAG, "opening_rotation_1pct_live": True}
+    runtime = {
+        "strategy": "SCALPING",
+        "ratio": 0.10,
+        "curr_price": 10_000,
+        "liquidity_value": 1_000_000_000,
+        "msg": "retired",
+        "now_ts": datetime(2026, 8, 14, 11, 0).timestamp(),
+        "cooldowns": {},
+        "alerted_stocks": set(),
+        "opening_rotation_1pct_live": True,
+        "pos_tag": POSITION_TAG,
+    }
+
+    assert not handlers._submit_watching_triggered_entry(
+        stock, "005930", {"curr": 10_000}, 1, runtime
+    )
+    assert stock["opening_rotation_retired_entry_blocked"] is True
+    assert "opening_rotation_1pct_live" not in stock
+    assert emitted[0][0] == "opening_rotation_retired_entry_blocked"
+    assert emitted[0][1]["broker_order_forbidden"] is True
 
 
 def _packet(price: int) -> dict:

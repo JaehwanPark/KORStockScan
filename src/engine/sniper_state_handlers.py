@@ -117,6 +117,7 @@ from src.engine.scalping.opening_rotation import (
     EntryConfig as OpeningRotationEntryConfig,
     ExitConfig as OpeningRotationExitConfig,
     POSITION_TAG as OPENING_ROTATION_POSITION_TAG,
+    RETIRED as OPENING_ROTATION_RETIRED,
     STATE_KEY as OPENING_ROTATION_STATE_KEY,
     evaluate_entry as evaluate_opening_rotation_entry,
     evaluate_exit as evaluate_opening_rotation_exit,
@@ -52522,6 +52523,8 @@ def _opening_rotation_float(name: str, default: float) -> float:
 
 
 def _opening_rotation_entry_config() -> OpeningRotationEntryConfig:
+    if OPENING_ROTATION_RETIRED:
+        return OpeningRotationEntryConfig(enabled=False)
     try:
         runtime_policy = load_active_opening_rotation_runtime_policy()
     except (OSError, ValueError, TypeError) as exc:
@@ -60642,6 +60645,44 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             runtime.get("pos_tag") or stock.get("position_tag")
         )
     )
+    if OPENING_ROTATION_RETIRED and opening_rotation_active:
+        clear_signal_reference(stock)
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "opening_rotation_retired_entry_blocked": True,
+                "opening_rotation_retirement_id": (
+                    "opening_rotation_full_retirement_20260814"
+                ),
+            },
+            pop_fields=[
+                "opening_rotation_1pct_live",
+                "opening_rotation_mechanical_signal_strength",
+                "target_buy_price",
+            ],
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "opening_rotation_retired_entry_blocked",
+            reason="opening_rotation_strategy_retired",
+            retirement_id="opening_rotation_full_retirement_20260814",
+            metric_role="safety_veto",
+            decision_authority="source_fixed_strategy_retirement",
+            window_policy="permanent_from_2026_08_14",
+            sample_floor="not_applicable_operator_retirement",
+            primary_decision_metric="opening_rotation_submit_attempt_count",
+            source_quality_gate="not_applicable_strategy_retired",
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            forbidden_uses=(
+                "opening_rotation_reactivation,broker_submit,threshold_or_policy_apply,"
+                "provider_or_bot_change,quantity_or_cap_change,guard_bypass"
+            ),
+        )
+        return False
     scout_upgrade_entry = bool(
         runtime.get("scout_upgrade_entry")
     ) and _is_rising_missed_one_share_scout_holding(

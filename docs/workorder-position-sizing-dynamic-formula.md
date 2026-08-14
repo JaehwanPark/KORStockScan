@@ -6,7 +6,7 @@ owner: `position_sizing_dynamic_formula`
 
 ## 1. 목적
 
-`position_sizing_dynamic_formula`는 모든 `SCALPING/SCALP` 신규매수, Opening Rotation, Rising Missed Scout, AVG_DOWN/PYRAMID, scalping sim/counterfactual 수량의 단일 owner다. 선택 공식 `entry_type_5stage_cap25_v1`은 `10%/15%/20%/25%/25%` 5단계를 사용하고 절대 비율 상한을 25%로 고정한다. NXT·시장 판별 실패·source 결측/무효·최초 진입정보 복원 실패는 tier 1(10%)로 fail closed한다.
+`position_sizing_dynamic_formula`는 모든 활성 `SCALPING/SCALP` 신규매수, Rising Missed Scout, AVG_DOWN/PYRAMID, scalping sim/counterfactual 수량의 단일 owner다. Opening Rotation은 `opening_rotation_full_retirement_20260814`로 폐기되어 수량·미수 예외 권한이 없다. 선택 공식 `entry_type_5stage_cap25_v1`은 `10%/15%/20%/25%/25%` 5단계를 사용하고 절대 비율 상한을 25%로 고정한다. NXT·시장 판별 실패·source 결측/무효·최초 진입정보 복원 실패는 tier 1(10%)로 fail closed한다.
 
 소스 구현은 완료됐지만 사용자의 재기동 금지에 따라 현재 프로세스에는 반영되지 않았다. 다음 명시적으로 승인된 프로세스 시작 전까지 상태는 `implemented_not_runtime_reflected`다. Report grid는 선택 공식과 `flat_10_fallback`만 비교하며 자동 runtime mutation 권한은 없다.
 

@@ -23,6 +23,8 @@ from src.engine.sniper_time import (
 POSITION_TAG = "OPENING_ROTATION_1PCT"
 WATCH_POSITION_TAG = "SCANNER"
 STATE_KEY = "opening_rotation_1pct_state"
+RETIRED = True
+RETIREMENT_ID = "opening_rotation_full_retirement_20260814"
 WINDOW_VERSION = "opening_rotation_common_0903_1140_v2"
 POLICY_SCHEMA_VERSION = "opening_rotation_runtime_policy_v2"
 ENTRY_TIME_BUCKET_MINUTES = 30

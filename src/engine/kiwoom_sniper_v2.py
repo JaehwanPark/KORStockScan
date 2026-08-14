@@ -5261,7 +5261,6 @@ def _scalping_watch_budget_owner(target, now_ts=None):
     explicit = target.get("scanner_watch_budget_owner")
     if str(explicit or "").strip().lower() in {
         GENERAL_SCALPING,
-        OPENING_ROTATION,
         LIMIT_DOWN_ROTATION,
         RISING_MISSED,
     }:
@@ -9416,6 +9415,8 @@ def _scanner_scheduler_reactivate_opening_rotation_source_gap_on_fresh_ws(
     on every tick.
     """
 
+    if sniper_state_handlers.OPENING_ROTATION_RETIRED:
+        return False
     if not isinstance(scheduler, ScannerRuntimeScheduler):
         return False
     if not _is_scanner_watching_target(target):
@@ -10384,11 +10385,16 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
         dt["scanner_watch_budget_owner"] = _scalping_watch_budget_owner(
             dt, now_ts=now_ts
         )
-        dt["scanner_watch_budget_owner_source"] = (
-            "database_payload"
-            if owner_was_explicit
-            else "legacy_db_restore_default_rising"
-        )
+        if owner_was_explicit.lower() == OPENING_ROTATION:
+            dt["scanner_watch_budget_owner_source"] = (
+                "retired_opening_owner_normalized"
+            )
+        else:
+            dt["scanner_watch_budget_owner_source"] = (
+                "database_payload"
+                if owner_was_explicit
+                else "legacy_db_restore_default_rising"
+            )
         identity_payload = {
             "record_id": dt.get("id"),
             "code": code,
@@ -10459,6 +10465,16 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
                 }
             }
         )
+        if (
+            str(dt.get("scanner_watch_budget_owner") or "").strip().lower()
+            == OPENING_ROTATION
+        ):
+            dt["scanner_watch_budget_owner"] = _scalping_watch_budget_owner(
+                dt, now_ts=now_ts
+            )
+            dt["scanner_watch_budget_owner_source"] = (
+                "retired_opening_owner_normalized"
+            )
         if replacements and not _scalping_attach_replacements_allowed(replacements):
             allowed = False
         if not allowed:

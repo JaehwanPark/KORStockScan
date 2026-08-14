@@ -78,7 +78,7 @@ RUN_PANIC_SELL_DEFENSE_REPORT="${THRESHOLD_CYCLE_RUN_PANIC_SELL_DEFENSE_REPORT:-
 RUN_MARKET_PANIC_BREADTH_REPORT="${THRESHOLD_CYCLE_RUN_MARKET_PANIC_BREADTH_REPORT:-true}"
 RUN_PIPELINE_EVENT_VERBOSITY_REPORT="${THRESHOLD_CYCLE_RUN_PIPELINE_EVENT_VERBOSITY_REPORT:-true}"
 RUN_OBSERVATION_SOURCE_QUALITY_AUDIT="${THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_AUDIT:-true}"
-RUN_OPENING_ROTATION_PROFILE_TUNING="${THRESHOLD_CYCLE_RUN_OPENING_ROTATION_PROFILE_TUNING:-true}"
+RUN_OPENING_ROTATION_PROFILE_TUNING="retired"
 RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION="${THRESHOLD_CYCLE_RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION:-true}"
 RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION="${THRESHOLD_CYCLE_RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION:-true}"
 RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT="${THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT:-false}"
@@ -1186,42 +1186,6 @@ if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_S
     "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
     "observation_source_quality_preflight"
-fi
-if [ "$RUN_OPENING_ROTATION_PROFILE_TUNING" = "true" ] || [ "$RUN_OPENING_ROTATION_PROFILE_TUNING" = "1" ]; then
-  opening_rotation_report_json="$PROJECT_DIR/data/report/opening_rotation_profile_tuning/opening_rotation_profile_tuning_${TARGET_DATE}.json"
-  opening_rotation_report_md="$PROJECT_DIR/data/report/opening_rotation_profile_tuning/opening_rotation_profile_tuning_${TARGET_DATE}.md"
-  opening_rotation_candidate_json="$PROJECT_DIR/data/runtime/opening_rotation/candidates/opening_rotation_runtime_policy_candidate_${TARGET_DATE}.json"
-  if reusable_completed_artifact \
-    "$opening_rotation_report_json" \
-    "$opening_rotation_report_md" \
-    "opening_rotation_profile_tuning" \
-    "$PROJECT_DIR/data/pipeline_events" \
-    "$PROJECT_DIR/src/engine/observation_source_quality_audit.py" \
-    "$PROJECT_DIR/src/engine/scalping/opening_rotation_tuning.py" && \
-    reusable_completed_artifact \
-      "$opening_rotation_candidate_json" \
-      - \
-      -; then
-    emit_postclose_marker "[REUSE] opening_rotation_profile_tuning target_date=$TARGET_DATE reason=completed_artifact_checkpoint"
-  else
-    wait_for_postclose_resources "opening_rotation_profile_tuning"
-    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.opening_rotation_tuning \
-      --mode postclose \
-      --target-date "$TARGET_DATE" \
-      --write \
-      --print-summary
-  fi
-  wait_for_report_artifact \
-    "$opening_rotation_report_json" \
-    "$opening_rotation_report_md" \
-    "opening_rotation_profile_tuning"
-  wait_for_json_artifact \
-    "$opening_rotation_candidate_json" \
-    "opening_rotation_runtime_policy_candidate"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.opening_rotation_tuning \
-    --mode verify \
-    --phase postclose \
-    --target-date "$TARGET_DATE"
 fi
 if [ "$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION" = "true" ] || [ "$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "scalping_pyramid_quality_calibration"

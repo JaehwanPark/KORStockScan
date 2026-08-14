@@ -9075,6 +9075,11 @@ def test_scanner_cold_warm_park_reactivates_on_first_post_attach_trade(
 def test_scanner_opening_rotation_tick_source_gap_rechecks_once_on_new_0b(
     monkeypatch,
 ):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "OPENING_ROTATION_RETIRED",
+        False,
+    )
     scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
     coordinator = ScannerAsyncEvalCoordinator(
         ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1)
@@ -9188,6 +9193,23 @@ def test_scanner_opening_rotation_tick_source_gap_rechecks_once_on_new_0b(
     assert "scanner_opening_rotation_source_gap_fresh_price" not in target
     assert "scanner_opening_rotation_source_gap_fresh_0b_epoch" not in target
     coordinator.shutdown()
+
+
+def test_scanner_opening_rotation_source_gap_recheck_is_retired(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "OPENING_ROTATION_RETIRED",
+        True,
+    )
+    assert (
+        kiwoom_sniper_v2._scanner_scheduler_reactivate_opening_rotation_source_gap_on_fresh_ws(
+            None,
+            {},
+            {},
+            now_epoch=1.0,
+        )
+        is False
+    )
 
 
 def test_scanner_warm_park_does_not_reactivate_non_cold_terminal_generation(
@@ -11142,15 +11164,9 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     emitted = []
     published = []
     targets = []
-    # DB recovery may restore an explicit Opening owner only while the
-    # PREOPEN-approved Opening watch window is active.  The strategy baseline
-    # is intentionally disabled when the target-date policy artifact is
-    # absent, so make the successful recovery contract explicit in this test.
-    monkeypatch.setattr(
-        kiwoom_sniper_v2,
-        "_scalping_watch_budget_opening_window_active",
-        lambda _now_ts: True,
-    )
+    # A legacy database row may still carry the retired Opening owner.  Restore
+    # the target for scanner observation, but normalize ownership into the
+    # rising pool so archived metadata cannot recreate protected capacity.
     monkeypatch.setattr(
         kiwoom_sniper_v2,
         "evaluate_manual_control_exclusion",
@@ -11230,9 +11246,10 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     assert emitted[-1]["fields"]["scanner_promotion_id"] == "SCANPROM-005930-1000000"
     assert emitted[-1]["fields"]["scanner_promotion_emitted_epoch"] == 1000.0
     assert emitted[-1]["fields"]["source_signature"] == "PRICE_JUMP_START"
-    assert targets[0]["scanner_watch_budget_owner"] == "opening_rotation"
+    assert targets[0]["scanner_watch_budget_owner"] == "rising_missed"
     assert (
-        emitted[-1]["fields"]["scanner_watch_budget_owner_source"] == "database_payload"
+        emitted[-1]["fields"]["scanner_watch_budget_owner_source"]
+        == "retired_opening_owner_normalized"
     )
 
 

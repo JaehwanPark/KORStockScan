@@ -73,7 +73,6 @@ def test_postclose_failed_run_reuses_only_valid_same_target_heavy_artifacts():
     assert "completed_artifact_checkpoint" in script
     assert 'expected_report_type != "-"' in script
     assert "source_quality_blocked" in script
-    assert "opening_rotation_profile_tuning" in script
     assert "scalping_avg_down_recovery_calibration" in script
     assert "one_share_threshold_opportunity" in script
     assert "one_share_ai_review_reusable" in script
@@ -1795,14 +1794,6 @@ def test_preopen_wrapper_smoke_allows_operator_lock_runtime_env_without_source_r
         "print(json.dumps({'target_date': date, 'status': 'inactive_fallback_v2_13'}))\n",
         encoding="utf-8",
     )
-    (scalping_dir / "opening_rotation_tuning.py").write_text(
-        "import json\n"
-        "import sys\n"
-        "date = sys.argv[sys.argv.index('--target-date') + 1]\n"
-        "mode = sys.argv[sys.argv.index('--mode') + 1]\n"
-        "print(json.dumps({'target_date': date, 'mode': mode, 'status': 'pass'}))\n",
-        encoding="utf-8",
-    )
     (engine_dir / "threshold_cycle_preopen_apply.py").write_text(
         "import json\n"
         "import sys\n"
@@ -1872,16 +1863,13 @@ def test_preopen_wrapper_smoke_allows_operator_lock_runtime_env_without_source_r
     assert manifest["status"] == "operator_runtime_env_lock_ready_missing_source_report"
 
 
-def test_opening_rotation_tuning_is_postclose_then_preopen_verified():
+def test_opening_rotation_tuning_and_preopen_apply_are_retired():
     postclose = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
         encoding="utf-8"
     )
     preopen = Path("deploy/run_threshold_cycle_preopen.sh").read_text(encoding="utf-8")
 
-    assert "THRESHOLD_CYCLE_RUN_OPENING_ROTATION_PROFILE_TUNING" in postclose
-    assert "-m src.engine.scalping.opening_rotation_tuning" in postclose
-    assert "--mode postclose" in postclose
-    assert "--phase postclose" in postclose
-    assert "--mode preopen" in preopen
-    assert "--phase preopen" in preopen
-    assert preopen.index("--mode preopen") < preopen.index("--phase preopen")
+    assert "THRESHOLD_CYCLE_RUN_OPENING_ROTATION_PROFILE_TUNING" not in postclose
+    assert "-m src.engine.scalping.opening_rotation_tuning" not in postclose
+    assert 'RUN_OPENING_ROTATION_PROFILE_TUNING="retired"' in postclose
+    assert "-m src.engine.scalping.opening_rotation_tuning" not in preopen

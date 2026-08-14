@@ -5927,10 +5927,17 @@ def test_market_gainer_reservation_replaces_only_six_non_holding_rising_slots(
         if record.status == "EXPIRED"
         and getattr(record, "scanner_watch_budget_owner", "") == "rising_missed"
     ]
+    expired_retired_opening = [
+        record
+        for record in db.records
+        if record.status == "EXPIRED"
+        and getattr(record, "scanner_watch_budget_owner", "") == "opening_rotation"
+    ]
     assert len(codes) == 6
     assert len(active) == 16
     assert len(active_market) == 6
-    assert len(expired_regular) == 6
+    assert len(expired_regular) + len(expired_retired_opening) == 6
+    assert len(expired_retired_opening) == 3
     assert [
         fields["scanner_market_gainer_active_count"] for fields in promoted_event_fields
     ] == [1, 2, 3, 4, 5, 6]
