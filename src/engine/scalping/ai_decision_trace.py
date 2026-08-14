@@ -1709,6 +1709,17 @@ def record_ai_decision_trace(
                 if isinstance(merged.get("forensic_semantic_errors"), list)
                 else []
             ),
+            "entry_price_v2_5_contract_status": _optional(
+                merged, "entry_price_v2_5_contract_status"
+            ),
+            "entry_price_v2_5_contract_errors": (
+                [
+                    str(error)
+                    for error in merged.get("entry_price_v2_5_contract_errors") or []
+                ]
+                if isinstance(merged.get("entry_price_v2_5_contract_errors"), list)
+                else []
+            ),
             "decision_quality_contract_status": _optional(
                 merged, "decision_quality_contract_status"
             ),

@@ -1421,6 +1421,54 @@ def test_rejected_physical_attempt_has_trace_without_outcome_label(
     assert not trace._outcome_path(trace._date_text()).exists()
 
 
+def test_entry_price_semantic_reject_preserves_physical_provider_and_errors(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    fields = trace.record_ai_decision_trace(
+        {
+            "ai_decision_trace_id": "entry-price-rejected-1",
+            "action": "USE_DEFENSIVE",
+            "provider_called": True,
+            "provider": "bedrock",
+            "provider_response_id": "bedrock-response-1",
+            "ai_decision_outcome_eligible": False,
+            "forensic_semantic_errors": ["selected_price_not_in_candidate_set"],
+            "decision_quality_contract_status": "semantic_rejected",
+            "decision_quality_contract_errors": ["selected_price_not_in_candidate_set"],
+            "entry_price_v2_5_contract_status": "rejected",
+            "entry_price_v2_5_contract_errors": ["selected_price_not_in_candidate_set"],
+            "ai_trace_stock_code": "005930",
+        },
+        prompt_type="entry_price",
+        prompt_version="decision_quality_entry_price_v2_5_live_krx_v1",
+        result_source="schema_semantic_rejected",
+    )
+
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["provider_called"] is True
+    assert row["provider_actual"] == "bedrock"
+    assert row["provider_response_id"] == "bedrock-response-1"
+    assert row["semantic_errors"] == ["selected_price_not_in_candidate_set"]
+    assert row["entry_price_v2_5_contract_status"] == "rejected"
+    assert row["entry_price_v2_5_contract_errors"] == [
+        "selected_price_not_in_candidate_set"
+    ]
+    assert row["decision_quality_contract_status"] == "semantic_rejected"
+    assert row["decision_quality_contract_errors"] == [
+        "selected_price_not_in_candidate_set"
+    ]
+    assert row["outcome_label_eligible"] is False
+    assert row["outcome_label_exclusion_reasons"] == [
+        "explicit_ai_decision_outcome_ineligible"
+    ]
+    assert fields["ai_decision_outcome_label_status"] == (
+        "not_applicable_rejected_attempt"
+    )
+    assert not trace._outcome_path(trace._date_text()).exists()
+
+
 def test_decision_quality_contract_rejection_is_preserved_in_trace(
     monkeypatch, tmp_path
 ):

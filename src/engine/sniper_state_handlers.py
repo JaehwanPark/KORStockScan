@@ -25987,9 +25987,14 @@ def _dispatch_scalp_preset_exit(
         else:
             sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
         if fast_exit and not _is_ok_response(sell_res):
-            broker_error = str(
-                sell_res.get("return_msg") if isinstance(sell_res, dict) else sell_res
-            ).strip() or "unknown"
+            broker_error = (
+                str(
+                    sell_res.get("return_msg")
+                    if isinstance(sell_res, dict)
+                    else sell_res
+                ).strip()
+                or "unknown"
+            )
             retry_backoff_fields = _mark_sell_order_failure_retry_backoff(
                 stock,
                 error=broker_error,
@@ -32734,14 +32739,10 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
     tp1_tick_context_fresh = bool(
         _truthy_field(tp1_context.get("rising_missed_tp1_submit_context_fresh"))
         and _truthy_field(
-            tp1_context.get(
-                "rising_missed_tp1_submit_context_tick_acceleration_fresh"
-            )
+            tp1_context.get("rising_missed_tp1_submit_context_tick_acceleration_fresh")
         )
         and str(
-            tp1_context.get(
-                "rising_missed_tp1_submit_context_tick_acceleration_source"
-            )
+            tp1_context.get("rising_missed_tp1_submit_context_tick_acceleration_source")
             or ""
         )
         == "trusted_ws_signed_0b_10tick_received_ts"
@@ -32764,9 +32765,7 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
     if tp1_tick_context_fresh:
         if tick_acceleration_ratio is None:
             tick_acceleration_ratio = _safe_float(
-                tp1_context.get(
-                    "rising_missed_tp1_submit_context_tick_acceleration"
-                ),
+                tp1_context.get("rising_missed_tp1_submit_context_tick_acceleration"),
                 None,
             )
         if tick_window_span_sec is None:
@@ -35707,12 +35706,10 @@ def _retry_entry_ai_submit_authority_before_block(
             # fail-closed freshness owner before building the Entry AI retry
             # payload so the provider preflight does not evaluate an older
             # stock timestamp while submit safety is holding a fresh BBO.
-            retry_ws_data, retry_quote_refresh = (
-                _pre_submit_refresh_real_ws_snapshot(
-                    code,
-                    retry_ws_data,
-                    "SCALPING",
-                )
+            retry_ws_data, retry_quote_refresh = _pre_submit_refresh_real_ws_snapshot(
+                code,
+                retry_ws_data,
+                "SCALPING",
             )
             retry_quote_refresh_applied = bool(
                 retry_quote_refresh.get("pre_submit_ws_snapshot_refresh_applied")
@@ -35723,15 +35720,11 @@ def _retry_entry_ai_submit_authority_before_block(
                         retry_quote_refresh_applied
                     ),
                     "pre_submit_entry_ai_authority_retry_quote_refresh_reason": str(
-                        retry_quote_refresh.get(
-                            "pre_submit_ws_snapshot_refresh_reason"
-                        )
+                        retry_quote_refresh.get("pre_submit_ws_snapshot_refresh_reason")
                         or "unknown"
                     ),
                     "pre_submit_entry_ai_authority_retry_quote_refresh_age_ms": (
-                        retry_quote_refresh.get(
-                            "pre_submit_ws_snapshot_refresh_age_ms"
-                        )
+                        retry_quote_refresh.get("pre_submit_ws_snapshot_refresh_age_ms")
                     ),
                     "pre_submit_entry_ai_authority_retry_quote_refresh_source": (
                         "ws_manager_latest_data"
@@ -60016,6 +60009,13 @@ def _handle_watching_strategy_branch(
                             realtime_ctx["entry_candle_context"] = (
                                 gatekeeper_candle_context
                             )
+                            realtime_ctx[
+                                "late_confirmation_recheck_requires_fresh_bbo_tape"
+                            ] = bool(
+                                stock.get(
+                                    "late_confirmation_recheck_requires_fresh_bbo_tape"
+                                )
+                            )
                             gatekeeper_started_at = time.perf_counter()
                             gatekeeper = ai_engine.evaluate_realtime_gatekeeper(
                                 stock_name=stock["name"],
@@ -66150,6 +66150,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         if len(submitted_broker_routes) == 1
         else "missing_or_conflicting_submitted_leg_routes"
     )
+    if bundle_broker_route in {"KRX", "NXT", "SOR"}:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "entry_execution_broker_route": bundle_broker_route,
+                "entry_execution_broker_route_resolution": bundle_route_resolution,
+                "entry_execution_route_recorded_at": now_ts,
+            },
+        )
+    else:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "entry_execution_broker_route": "UNKNOWN",
+                "entry_execution_broker_route_resolution": bundle_route_resolution,
+                "entry_execution_route_recorded_at": now_ts,
+            },
+        )
     submitted_execution_cohorts = sorted(
         {
             str(order.get("entry_execution_cohort") or "").strip().upper()
@@ -73640,6 +73658,22 @@ def _persist_post_submit_db_state(
         "buy_price": db_buy_price,
         "buy_qty": db_buy_qty,
     }
+    entry_execution_broker_route = (
+        str(stock.get("entry_execution_broker_route") or "").strip().upper()
+    )
+    if entry_execution_broker_route in {"KRX", "NXT", "SOR", "UNKNOWN"}:
+        buy_order_update.update(
+            {
+                "entry_execution_broker_route": entry_execution_broker_route,
+                "entry_execution_broker_route_resolution": str(
+                    stock.get("entry_execution_broker_route_resolution")
+                    or "successful_entry_submit"
+                ).strip(),
+                "entry_execution_route_recorded_at": _safe_float(
+                    stock.get("entry_execution_route_recorded_at"), time.time()
+                ),
+            }
+        )
     if opening_rotation_active:
         buy_order_update.update(
             {
@@ -86376,15 +86410,11 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
             else:
                 inventory_source = "kt00018_partial_venue_confirmation"
         except Exception as exc:
-            log_error(
-                f"⚠️ [{stock['name']}] 매도 취소 실패 후 잔고 재확인 실패: {exc}"
-            )
+            log_error(f"⚠️ [{stock['name']}] 매도 취소 실패 후 잔고 재확인 실패: {exc}")
 
         if broker_qty == 0:
             new_status = "COMPLETED"
-            log_info(
-                f"💡 [{stock['name']}] 전 거래소 잔고 0주 확인. COMPLETED로 전환."
-            )
+            log_info(f"💡 [{stock['name']}] 전 거래소 잔고 0주 확인. COMPLETED로 전환.")
             _mutate_stock_state(
                 stock,
                 set_fields={

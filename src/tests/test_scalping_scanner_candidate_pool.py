@@ -3304,6 +3304,14 @@ def test_scanner_promotion_provenance_persists_exact_runtime_handoff():
         "scanner_promotion_emitted_epoch": "123.500",
         "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
         "scanner_watch_budget_owner": "opening_rotation",
+        "late_confirmation_recheck_once": True,
+        "late_confirmation_recheck_requires_fresh_bbo_tape": True,
+        "late_confirmation_recheck_max_age_sec": 900,
+        "late_confirmation_recheck_min_price_delta_pct": 0.30,
+        "late_confirmation_recheck_min_flu_delta_pct": 0.60,
+        "late_confirmation_recheck_rollback_env": (
+            "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_ENABLED=false"
+        ),
         "current_price_observed": "71500",
         "price_delta_since_first_seen_pct": "1.25",
         "comparable_flu_delta_since_first_seen": "1.10",
@@ -3321,6 +3329,14 @@ def test_scanner_promotion_provenance_persists_exact_runtime_handoff():
     assert record.scanner_promotion_emitted_epoch == 123.5
     assert record.scanner_source_signature == "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
     assert record.scanner_watch_budget_owner == "opening_rotation"
+    assert record.scanner_late_confirmation_recheck_once is True
+    assert record.scanner_late_confirmation_recheck_requires_fresh_bbo_tape is True
+    assert record.scanner_late_confirmation_recheck_max_age_sec == 900
+    assert record.scanner_late_confirmation_recheck_min_price_delta_pct == 0.30
+    assert record.scanner_late_confirmation_recheck_min_flu_delta_pct == 0.60
+    assert record.scanner_late_confirmation_recheck_rollback_env == (
+        "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_ENABLED=false"
+    )
     assert record.scanner_current_price_observed == 71_500.0
     assert record.scanner_price_delta_since_first_seen_pct == 1.25
     assert record.scanner_comparable_flu_delta_since_first_seen == 1.10
@@ -5184,6 +5200,86 @@ def test_real_source_guard_reports_probe_expired_even_when_flu_accelerated(monke
     assert fields["flu_delta_since_first_seen"] == "3.36"
     assert fields["price_delta_since_first_seen_pct"] == "1.00"
     assert fields["probe_age_sec"] == "401.0"
+
+
+def test_real_source_guard_allows_one_bounded_late_confirmation_recheck(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=0.0,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+            SCALP_SCANNER_PROBE_MIN_SEC=30,
+            SCALP_SCANNER_PROBE_MAX_SEC=300,
+            SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT=0.15,
+            SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT=0.30,
+            SCALP_SCANNER_LATE_RECHECK_ENABLED=True,
+            SCALP_SCANNER_LATE_RECHECK_MAX_AGE_SEC=900,
+            SCALP_SCANNER_LATE_RECHECK_MIN_PRICE_DELTA_PCT=0.30,
+            SCALP_SCANNER_LATE_RECHECK_MIN_FLU_DELTA_PCT=0.60,
+        ),
+    )
+    target = {
+        "Code": "212560",
+        "Name": "네오오토",
+        "Price": 10540,
+        "FluRate": 6.2,
+        "CntrStr": 0.0,
+        "CntrStrAvailable": False,
+        "Source": "OPEN_TOP",
+        "SourceSet": {"OPEN_TOP"},
+        "PriorityScore": 0.0,
+        "SpikeRate": 0.0,
+        "RankNow": 1,
+        "RankPrev": 2,
+    }
+    _current_flu, metric, source = scalping_scanner._scanner_flu_metric(target)
+    recent = {
+        "212560": {
+            "scanner_probe_state": "first_seen_probe",
+            "first_seen_at": 1000.0,
+            "first_flu_rate": 5.0,
+            "first_flu_rate_metric": metric,
+            "first_flu_rate_source": source,
+            "first_price": 10000,
+            "last_source_signature": ("OPEN_TOP",),
+            "last_score": 100.0,
+            "last_guard_block_reason": "late_confirmation_probe_expired",
+        }
+    }
+
+    decision = scalping_scanner._scanner_real_source_guard_decision(
+        target, recent, 1660.0
+    )
+
+    assert decision["blocked"] is False
+    assert decision["reason"] == "late_confirmation_bounded_recheck"
+    assert decision["late_confirmation_recheck_once"] is True
+    assert decision["late_confirmation_recheck_requires_fresh_bbo_tape"] is True
+    assert decision["late_confirmation_recheck_rollback_env"] == (
+        "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_ENABLED=false"
+    )
+    payload = scalping_scanner._scanner_runtime_target_payload(
+        target,
+        {
+            **decision,
+            "scanner_promotion_id": "SCANPROM-212560-1660000",
+            "scanner_promotion_emitted_epoch": "1660.000",
+        },
+        record_id=212560,
+        now_ts=1660.0,
+    )
+    assert payload["scanner_promotion_reason"] == ("late_confirmation_bounded_recheck")
+    assert payload["late_confirmation_recheck_once"] is True
+    assert payload["late_confirmation_recheck_requires_fresh_bbo_tape"] is True
+    assert payload["late_confirmation_recheck_min_price_delta_pct"] == 0.30
+    assert payload["late_confirmation_recheck_min_flu_delta_pct"] == 0.60
 
 
 def test_real_source_guard_does_not_promote_on_mixed_flu_metric_delta(monkeypatch):

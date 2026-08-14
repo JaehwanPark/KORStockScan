@@ -224,6 +224,51 @@ class DBManager:
                 )
                 conn.execute(
                     text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_late_confirmation_recheck_once BOOLEAN;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_late_confirmation_recheck_requires_fresh_bbo_tape BOOLEAN;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_late_confirmation_recheck_max_age_sec INTEGER;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_late_confirmation_recheck_min_price_delta_pct DOUBLE PRECISION;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_late_confirmation_recheck_min_flu_delta_pct DOUBLE PRECISION;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_late_confirmation_recheck_rollback_env TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS entry_execution_broker_route TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS entry_execution_broker_route_resolution TEXT;"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS entry_execution_route_recorded_at DOUBLE PRECISION;"
+                    )
+                )
+                conn.execute(
+                    text(
                         "ALTER TABLE recommendation_history "
                         "ALTER COLUMN buy_price TYPE DOUBLE PRECISION USING buy_price::double precision;"
                     )
@@ -759,6 +804,15 @@ class DBManager:
                         scanner_comparable_flu_delta_since_first_seen as comparable_flu_delta_since_first_seen,
                         scanner_cntr_str_available as cntr_str_available,
                         scanner_cntr_str as cntr_str,
+                        scanner_late_confirmation_recheck_once as late_confirmation_recheck_once,
+                        scanner_late_confirmation_recheck_requires_fresh_bbo_tape as late_confirmation_recheck_requires_fresh_bbo_tape,
+                        scanner_late_confirmation_recheck_max_age_sec as late_confirmation_recheck_max_age_sec,
+                        scanner_late_confirmation_recheck_min_price_delta_pct as late_confirmation_recheck_min_price_delta_pct,
+                        scanner_late_confirmation_recheck_min_flu_delta_pct as late_confirmation_recheck_min_flu_delta_pct,
+                        scanner_late_confirmation_recheck_rollback_env as late_confirmation_recheck_rollback_env,
+                        entry_execution_broker_route,
+                        entry_execution_broker_route_resolution,
+                        entry_execution_route_recorded_at,
                         (
                             SELECT dsq.marcap
                             FROM daily_stock_quotes dsq
@@ -931,6 +985,17 @@ class DBManager:
                 t["trailing_stop_price"] = _safe_float(t.get("trailing_stop_price"))
                 t["entry_armed_at_epoch"] = _safe_float(t.get("entry_armed_at_epoch"))
                 for key in (
+                    "entry_execution_broker_route",
+                    "entry_execution_broker_route_resolution",
+                ):
+                    value = t.get(key)
+                    t[key] = (
+                        "" if value is None or pd.isna(value) else str(value).strip()
+                    )
+                t["entry_execution_route_recorded_at"] = _safe_optional_float(
+                    t.get("entry_execution_route_recorded_at")
+                )
+                for key in (
                     "current_price_observed",
                     "price_delta_since_first_seen_pct",
                     "comparable_flu_delta_since_first_seen",
@@ -939,6 +1004,30 @@ class DBManager:
                     t[key] = _safe_optional_float(t.get(key))
                 t["cntr_str_available"] = _safe_optional_bool(
                     t.get("cntr_str_available")
+                )
+                for key in (
+                    "late_confirmation_recheck_once",
+                    "late_confirmation_recheck_requires_fresh_bbo_tape",
+                ):
+                    t[key] = _safe_optional_bool(t.get(key))
+                late_recheck_max_age_sec = _safe_optional_float(
+                    t.get("late_confirmation_recheck_max_age_sec")
+                )
+                t["late_confirmation_recheck_max_age_sec"] = (
+                    int(late_recheck_max_age_sec)
+                    if late_recheck_max_age_sec is not None
+                    else None
+                )
+                for key in (
+                    "late_confirmation_recheck_min_price_delta_pct",
+                    "late_confirmation_recheck_min_flu_delta_pct",
+                ):
+                    t[key] = _safe_optional_float(t.get(key))
+                rollback_env = t.get("late_confirmation_recheck_rollback_env")
+                t["late_confirmation_recheck_rollback_env"] = (
+                    ""
+                    if rollback_env is None or pd.isna(rollback_env)
+                    else str(rollback_env).strip()
                 )
 
             return targets

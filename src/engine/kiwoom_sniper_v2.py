@@ -7734,6 +7734,12 @@ def _scanner_runtime_context_updates(payload):
         "negative_display_rebound",
         "scanner_watch_budget_owner",
         "scanner_watch_budget_owner_source",
+        "late_confirmation_recheck_once",
+        "late_confirmation_recheck_requires_fresh_bbo_tape",
+        "late_confirmation_recheck_max_age_sec",
+        "late_confirmation_recheck_min_price_delta_pct",
+        "late_confirmation_recheck_min_flu_delta_pct",
+        "late_confirmation_recheck_rollback_env",
         "limit_down_live_policy_key",
         "limit_down_live_policy_matched",
         "limit_down_live_policy_source_date",
@@ -10345,9 +10351,7 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
             dt, now_ts=now_ts
         )
         if owner_was_explicit.lower() == OPENING_ROTATION:
-            dt["scanner_watch_budget_owner_source"] = (
-                "retired_opening_owner_normalized"
-            )
+            dt["scanner_watch_budget_owner_source"] = "retired_opening_owner_normalized"
         else:
             dt["scanner_watch_budget_owner_source"] = (
                 "database_payload"
@@ -10431,9 +10435,7 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
             dt["scanner_watch_budget_owner"] = _scalping_watch_budget_owner(
                 dt, now_ts=now_ts
             )
-            dt["scanner_watch_budget_owner_source"] = (
-                "retired_opening_owner_normalized"
-            )
+            dt["scanner_watch_budget_owner_source"] = "retired_opening_owner_normalized"
         if replacements and not _scalping_attach_replacements_allowed(replacements):
             allowed = False
         if not allowed:

@@ -644,6 +644,16 @@ def build_market_data_enrichment(
             round(float(effective_age), 3) if effective_age is not None else "-"
         ),
         "market_data_effective_price_source": effective_source,
+        "market_data_effective_quote_observed_epoch": (
+            _safe_float(rest_orderbook.get("rest_received_ts"), None)
+            if effective_source == "ka10004_rest_orderbook"
+            else _safe_float(base.get("last_ws_update_ts"), None)
+        ),
+        "market_data_effective_quote_request_code": (
+            str(rest_orderbook.get("request_code") or "").strip()
+            if effective_source == "ka10004_rest_orderbook"
+            else ""
+        ),
         "market_data_effective_best_ask": effective_levels.get("best_ask", 0) or "-",
         "market_data_effective_best_bid": effective_levels.get("best_bid", 0) or "-",
         "market_data_effective_quote_level_basis": effective_level_basis,

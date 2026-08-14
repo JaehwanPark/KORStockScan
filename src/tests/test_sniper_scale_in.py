@@ -5458,9 +5458,7 @@ def test_pre_submit_entry_ai_authority_retry_rebases_stale_quote_before_ai(
 
     assert captured["last_ws_update_ts"] == now_ts - 0.05
     assert retry["pre_submit_entry_ai_authority_retry_success"] is True
-    assert (
-        retry["pre_submit_entry_ai_authority_retry_quote_refresh_applied"] is True
-    )
+    assert retry["pre_submit_entry_ai_authority_retry_quote_refresh_applied"] is True
     assert (
         retry["pre_submit_entry_ai_authority_retry_quote_refresh_reason"]
         == "latest_ws_snapshot_fresh"
@@ -5536,9 +5534,7 @@ def test_pre_submit_entry_ai_authority_retry_keeps_caller_source_when_not_refres
     )
 
     assert retry["pre_submit_entry_ai_authority_retry_success"] is True
-    assert (
-        retry["pre_submit_entry_ai_authority_retry_quote_refresh_applied"] is False
-    )
+    assert retry["pre_submit_entry_ai_authority_retry_quote_refresh_applied"] is False
     assert (
         retry["pre_submit_entry_ai_authority_retry_quote_refresh_reason"]
         == "input_snapshot_fresh"
@@ -28431,6 +28427,11 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
     assert by_stage["order_bundle_submitted"]["requested_qty"] == 1
     assert by_stage["order_bundle_submitted"]["submitted_qty"] == 1
     assert by_stage["order_bundle_submitted"]["submitted_leg_count"] == 1
+    assert stock["entry_execution_broker_route"] == "SOR"
+    assert stock["entry_execution_broker_route_resolution"] == (
+        "consistent_submitted_legs"
+    )
+    assert stock["entry_execution_route_recorded_at"] > 0
     assert sent_orders
 
 
@@ -34046,6 +34047,9 @@ def test_post_submit_db_persistence_does_not_downgrade_early_fill(monkeypatch):
         "buy_price": 19100,
         "buy_qty": 1,
         "entry_filled_qty": 1,
+        "entry_execution_broker_route": "SOR",
+        "entry_execution_broker_route_resolution": "broker_response",
+        "entry_execution_route_recorded_at": 1786676000.25,
     }
 
     updated_rows = state_handlers._persist_post_submit_db_state(
@@ -34068,8 +34072,30 @@ def test_post_submit_db_persistence_does_not_downgrade_early_fill(monkeypatch):
         "status": "HOLDING",
         "buy_price": 19100,
         "buy_qty": 1,
+        "entry_execution_broker_route": "SOR",
+        "entry_execution_broker_route_resolution": "broker_response",
+        "entry_execution_route_recorded_at": 1786676000.25,
     }
     assert captured["update_kwargs"] == {"synchronize_session": False}
+
+    conflict_stock = {
+        **stock,
+        "entry_execution_broker_route": "UNKNOWN",
+        "entry_execution_broker_route_resolution": (
+            "missing_or_conflicting_submitted_leg_routes"
+        ),
+    }
+    updated_rows = state_handlers._persist_post_submit_db_state(
+        conflict_stock,
+        code="100090",
+        curr_price=19110,
+        requested_qty=53,
+    )
+    assert updated_rows == 1
+    assert captured["values"]["entry_execution_broker_route"] == "UNKNOWN"
+    assert captured["values"]["entry_execution_broker_route_resolution"] == (
+        "missing_or_conflicting_submitted_leg_routes"
+    )
 
 
 @pytest.mark.parametrize("terminal_status", ["SELL_ORDERED", "COMPLETED", "EXPIRED"])

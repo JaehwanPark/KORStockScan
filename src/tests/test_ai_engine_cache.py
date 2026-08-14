@@ -281,6 +281,36 @@ def test_ai_input_preflight_blocks_provider_calls(monkeypatch):
     )
 
 
+def test_late_confirmation_recheck_requires_source_preflight_when_global_mode_off(
+    monkeypatch,
+):
+    engine = _build_engine()
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE", "off")
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("provider must not be called for stale late recheck")
+        ),
+    )
+
+    result = engine.evaluate_realtime_gatekeeper(
+        "테스트",
+        "005930",
+        {
+            "entry_candle_context": _blocked_ai_context(),
+            "late_confirmation_recheck_requires_fresh_bbo_tape": True,
+        },
+        analysis_mode="SCALP",
+    )
+
+    assert result["allow_entry"] is False
+    assert result["report"] == ("late_confirmation_recheck_source_preflight_blocked")
+    assert result["provider_called"] is False
+    assert result["late_confirmation_recheck_source_preflight_required"] is True
+    assert result["late_confirmation_recheck_source_preflight_blocked"] is True
+
+
 def test_analyze_target_maps_parent_handoff_metadata_into_trace_contract(monkeypatch):
     engine = _build_engine()
     monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")

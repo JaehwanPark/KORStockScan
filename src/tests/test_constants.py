@@ -735,6 +735,14 @@ def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_PROBE_MAX_SEC", "300")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT", "0.15")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT", "0.30")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_MAX_AGE_SEC", "900")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_MIN_PRICE_DELTA_PCT", "0.30"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_MIN_FLU_DELTA_PCT", "0.60"
+    )
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_TIERING_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY", "true"
@@ -888,6 +896,10 @@ def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch
     assert reloaded.TRADING_RULES.SCALP_SCANNER_PROBE_MAX_SEC == 300
     assert reloaded.TRADING_RULES.SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT == 0.15
     assert reloaded.TRADING_RULES.SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT == 0.30
+    assert reloaded.TRADING_RULES.SCALP_SCANNER_LATE_RECHECK_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALP_SCANNER_LATE_RECHECK_MAX_AGE_SEC == 900
+    assert reloaded.TRADING_RULES.SCALP_SCANNER_LATE_RECHECK_MIN_PRICE_DELTA_PCT == 0.30
+    assert reloaded.TRADING_RULES.SCALP_SCANNER_LATE_RECHECK_MIN_FLU_DELTA_PCT == 0.60
     assert reloaded.TRADING_RULES.SCALP_SCANNER_PRIORITY_TIERING_ENABLED is True
     assert (
         reloaded.TRADING_RULES.SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY is True

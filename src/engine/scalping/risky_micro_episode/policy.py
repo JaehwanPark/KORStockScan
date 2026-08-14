@@ -18,8 +18,9 @@ from src.trading.order.tick_utils import (
     move_price_up_by_bps,
 )
 
-SCHEMA = "risky_micro_episode_source_candidate_v1"
-POLICY_VERSION = "rising_missed_passive_micro_episode_source_only_v1"
+SCHEMA = "risky_micro_episode_source_candidate_v2"
+POLICY_VERSION = "rising_missed_passive_micro_episode_source_only_v2"
+PRIMARY_ENTRY_PROFILE = "bid_plus_one_ttl_3s"
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +108,7 @@ def _base_payload(
         "risky_micro_episode_outcome_join_status": (
             "pending_executable_fill_and_3_10_20_30_second_path_consumer"
         ),
+        "risky_micro_episode_entry_profile": PRIMARY_ENTRY_PROFILE,
         "risky_micro_episode_config": asdict(config),
     }
 
@@ -191,6 +193,17 @@ def evaluate_risky_micro_episode(
             status = "source_only_candidate"
             reason = "fresh_passive_cost_aware_episode_candidate"
 
+    if not bbo_valid:
+        instrumentation_gap = "executable_bbo_missing"
+    elif quote_age_ms is None:
+        instrumentation_gap = "quote_age_missing"
+    elif not quote_fresh:
+        instrumentation_gap = "stale_quote"
+    elif tick_acceleration_ratio is None or tick_window_span_sec is None:
+        instrumentation_gap = "tick_context_missing"
+    else:
+        instrumentation_gap = "none"
+
     return {
         **payload,
         "risky_micro_episode_status": status,
@@ -204,6 +217,16 @@ def evaluate_risky_micro_episode(
             round(float(quote_age_ms), 3) if quote_age_ms is not None else "-"
         ),
         "risky_micro_episode_quote_fresh": quote_fresh,
+        "risky_micro_episode_quote_freshness_state": (
+            "missing" if quote_age_ms is None else "fresh" if quote_fresh else "stale"
+        ),
+        "risky_micro_episode_bbo_state": "valid" if bbo_valid else "missing_or_invalid",
+        "risky_micro_episode_tick_context_state": (
+            "present"
+            if tick_acceleration_ratio is not None and tick_window_span_sec is not None
+            else "missing"
+        ),
+        "risky_micro_episode_instrumentation_gap": instrumentation_gap,
         "risky_micro_episode_spread_bps": (
             round(spread_bps, 3) if spread_bps is not None else "-"
         ),
@@ -224,6 +247,7 @@ def evaluate_risky_micro_episode(
         "risky_micro_episode_adverse_micro_detected": bool(adverse_micro_detected),
         "risky_micro_episode_large_sell_detected": bool(large_sell_detected),
         "risky_micro_episode_entry_style": "passive_limit_no_chase",
+        "risky_micro_episode_entry_profile": PRIMARY_ENTRY_PROFILE,
         "risky_micro_episode_hypothetical_entry_price": passive_entry_price,
         "risky_micro_episode_hypothetical_target_price": target_price,
         "risky_micro_episode_hypothetical_adverse_price": adverse_price,

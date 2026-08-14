@@ -623,6 +623,10 @@ class TradingConfig:
     SCALP_SCANNER_PROBE_MAX_SEC: int = 300
     SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT: float = 0.15
     SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT: float = 0.30
+    SCALP_SCANNER_LATE_RECHECK_ENABLED: bool = True
+    SCALP_SCANNER_LATE_RECHECK_MAX_AGE_SEC: int = 900
+    SCALP_SCANNER_LATE_RECHECK_MIN_PRICE_DELTA_PCT: float = 0.30
+    SCALP_SCANNER_LATE_RECHECK_MIN_FLU_DELTA_PCT: float = 0.60
     SCALP_SCANNER_PRIORITY_TIERING_ENABLED: bool = False
     SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY: bool = True
     SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY: bool = True
@@ -2434,6 +2438,18 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_scanner_probe_min_flu_delta_pct = _env_float(
         "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT"
     )
+    env_scalp_scanner_late_recheck_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_ENABLED"
+    )
+    env_scalp_scanner_late_recheck_max_age_sec = _env_int(
+        "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_MAX_AGE_SEC"
+    )
+    env_scalp_scanner_late_recheck_min_price_delta_pct = _env_float(
+        "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_MIN_PRICE_DELTA_PCT"
+    )
+    env_scalp_scanner_late_recheck_min_flu_delta_pct = _env_float(
+        "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_MIN_FLU_DELTA_PCT"
+    )
     env_scalp_scanner_priority_tiering_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_TIERING_ENABLED"
     )
@@ -3487,6 +3503,26 @@ def _build_trading_rules() -> TradingConfig:
                 env_scalp_scanner_probe_min_flu_delta_pct
                 if env_scalp_scanner_probe_min_flu_delta_pct is not None
                 else config.SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT
+            ),
+            SCALP_SCANNER_LATE_RECHECK_ENABLED=(
+                env_scalp_scanner_late_recheck_enabled
+                if env_scalp_scanner_late_recheck_enabled is not None
+                else config.SCALP_SCANNER_LATE_RECHECK_ENABLED
+            ),
+            SCALP_SCANNER_LATE_RECHECK_MAX_AGE_SEC=(
+                env_scalp_scanner_late_recheck_max_age_sec
+                if env_scalp_scanner_late_recheck_max_age_sec is not None
+                else config.SCALP_SCANNER_LATE_RECHECK_MAX_AGE_SEC
+            ),
+            SCALP_SCANNER_LATE_RECHECK_MIN_PRICE_DELTA_PCT=(
+                env_scalp_scanner_late_recheck_min_price_delta_pct
+                if env_scalp_scanner_late_recheck_min_price_delta_pct is not None
+                else config.SCALP_SCANNER_LATE_RECHECK_MIN_PRICE_DELTA_PCT
+            ),
+            SCALP_SCANNER_LATE_RECHECK_MIN_FLU_DELTA_PCT=(
+                env_scalp_scanner_late_recheck_min_flu_delta_pct
+                if env_scalp_scanner_late_recheck_min_flu_delta_pct is not None
+                else config.SCALP_SCANNER_LATE_RECHECK_MIN_FLU_DELTA_PCT
             ),
             SCALP_SCANNER_PRIORITY_TIERING_ENABLED=(
                 env_scalp_scanner_priority_tiering_enabled

@@ -2122,6 +2122,16 @@ def test_entry_price_v2_5_semantic_reject_closes_defensive_without_parse_failure
     assert result["ai_parse_fail"] is False
     assert result["entry_price_v2_5_contract_status"] == "rejected"
     assert result["entry_price_v2_5_contract_errors"]
+    assert result["provider_called"] is True
+    assert result["ai_decision_outcome_eligible"] is False
+    assert (
+        result["forensic_semantic_errors"] == result["entry_price_v2_5_contract_errors"]
+    )
+    assert result["decision_quality_contract_status"] == "semantic_rejected"
+    assert (
+        result["decision_quality_contract_errors"]
+        == result["entry_price_v2_5_contract_errors"]
+    )
     assert result["provider"] == "bedrock"
 
 
