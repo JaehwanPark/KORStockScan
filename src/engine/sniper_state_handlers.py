@@ -25528,6 +25528,7 @@ def _fast_exit_execution_route_fields(
     if execution_cohort == "UNKNOWN":
         execution_cohort = "OUTSIDE_SUPPORTED_SESSION"
         execution_cohort_resolution = "outside_supported_execution_session"
+    execution_session_blocked = execution_cohort == "OUTSIDE_SUPPORTED_SESSION"
     recorded_route_mismatch = bool(
         recorded_entry_cohort in {"NXT", "PREMARKET_KRX_LIKE"}
         and recorded_entry_route
@@ -25537,6 +25538,7 @@ def _fast_exit_execution_route_fields(
         resolution.get("blocked")
         or broker_route not in {"KRX", "NXT", "SOR"}
         or recorded_route_mismatch
+        or execution_session_blocked
     )
 
     snapshot = ws_data if isinstance(ws_data, dict) else {}
@@ -25594,6 +25596,8 @@ def _fast_exit_execution_route_fields(
         reason = "fast_exit_broker_route_invalid"
     elif recorded_route_mismatch:
         reason = "entry_execution_cohort_route_conflict"
+    elif execution_session_blocked:
+        reason = "fast_exit_outside_supported_execution_session"
     elif not source_quality_ready:
         reason = "nxt_executable_quote_route_unproven"
     elif rest_nxt_route_ready:
@@ -25614,6 +25618,7 @@ def _fast_exit_execution_route_fields(
         "fast_exit_recorded_entry_cohort": recorded_entry_cohort or "-",
         "fast_exit_confirmed_nxt_entry_position": confirmed_nxt_entry_position,
         "fast_exit_recorded_route_mismatch": recorded_route_mismatch,
+        "fast_exit_execution_session_blocked": execution_session_blocked,
         "fast_exit_broker_route_blocked": broker_route_blocked,
         "fast_exit_route_source_quality_blocked": source_quality_blocked,
         "fast_exit_route_guard_reason": reason,
@@ -25675,7 +25680,10 @@ def _dispatch_scalp_preset_exit(
     )
 
     def _defer_fast_exit_retry(
-        retry_reason: str, *, retry_delay_sec: float = 0.25
+        retry_reason: str,
+        *,
+        retry_delay_sec: float = 0.25,
+        retry_fields: dict | None = None,
     ) -> bool:
         if not fast_exit:
             return False
@@ -25712,6 +25720,7 @@ def _dispatch_scalp_preset_exit(
                 "unconfirmed_cancel_sell|duplicate_exit_token|quantity_guess|"
                 "broker_guard_bypass"
             ),
+            **(retry_fields or {}),
         )
         return True
 
@@ -25924,6 +25933,14 @@ def _dispatch_scalp_preset_exit(
         else:
             sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
         if fast_exit and not _is_ok_response(sell_res):
+            broker_error = str(
+                sell_res.get("return_msg") if isinstance(sell_res, dict) else sell_res
+            ).strip() or "unknown"
+            retry_backoff_fields = _mark_sell_order_failure_retry_backoff(
+                stock,
+                error=broker_error,
+                now_ts=now_ts,
+            )
             _mutate_stock_state(
                 stock,
                 set_fields={"exit_order_sent_at": exit_order_sent_at},
@@ -25939,7 +25956,17 @@ def _dispatch_scalp_preset_exit(
                         f"[SCALP_FAST_EXIT] {stock.get('name')}({code}) "
                         f"broker reject DB rollback failed: {exc}"
                     )
-            _defer_fast_exit_retry("broker_sell_submit_rejected")
+            _defer_fast_exit_retry(
+                "broker_sell_submit_rejected",
+                retry_delay_sec=max(
+                    1.0,
+                    _safe_float(retry_backoff_fields.get("retry_backoff_sec"), 30.0),
+                ),
+                retry_fields={
+                    **retry_backoff_fields,
+                    "broker_error": broker_error,
+                },
+            )
             return
         sell_broker_route = (
             str(
@@ -25986,6 +26013,7 @@ def _dispatch_scalp_preset_exit(
         )
         if ord_no:
             set_fields["sell_ord_no"] = ord_no
+            set_fields["sell_odno"] = ord_no
         sign = _resolve_sell_order_sign(sell_reason_type, profit_rate)
         pending_sell_msg = (
             f"{sign} **{stock['name']} 매도 전송 ({strategy})**\n"
@@ -71123,6 +71151,10 @@ def _resolve_holding_sell_dmst_stex_tp(
     current_t = now_t or datetime.now().time()
     is_nxt_enabled, source = _holding_sell_nxt_enabled_status(stock, code)
     krx_regular = _holding_sell_krx_regular_session(current_t)
+    nxt_execution_session = bool(
+        datetime_time(hour=8) <= current_t < datetime_time(hour=8, minute=50)
+        or datetime_time(hour=16) <= current_t < TIME_20_00
+    )
     if krx_regular:
         return {
             "blocked": False,
@@ -71130,6 +71162,14 @@ def _resolve_holding_sell_dmst_stex_tp(
             "nxt_enabled": is_nxt_enabled,
             "nxt_flag_source": source,
             "reason": "krx_regular_session_sor",
+        }
+    if not nxt_execution_session:
+        return {
+            "blocked": True,
+            "dmst_stex_tp": "NXT" if is_nxt_enabled is not False else "KRX",
+            "nxt_enabled": is_nxt_enabled,
+            "nxt_flag_source": source,
+            "reason": "outside_supported_sell_execution_session",
         }
     if is_nxt_enabled is False and not krx_regular:
         return {
@@ -86109,6 +86149,12 @@ def handle_sell_ordered_state(stock, code):
     ):
         return
 
+    sell_cancel_retry_at = _safe_float(
+        stock.get("sell_cancel_reconciliation_retry_at"), 0.0
+    )
+    if sell_cancel_retry_at > time.time():
+        return
+
     sell_order_time = stock.get("sell_order_time", 0)
 
     if sell_order_time == 0:
@@ -86124,30 +86170,50 @@ def handle_sell_ordered_state(stock, code):
             f"⚠️ [{stock['name']}] 매도 대기 {timeout_sec}초 초과. 호가 꼬임/VI 의심 ➡️ "
             "취소 후 HOLDING 롤백 절차 진입."
         )
-        orig_ord_no = stock.get("sell_odno")
+        orig_ord_no = stock.get("sell_odno") or stock.get("sell_ord_no")
 
         if not orig_ord_no:
             log_error(
-                f"🚨 [{stock['name']}] 취소할 원주문번호(odno)가 없습니다. 상태만 HOLDING으로 강제 롤백합니다."
+                f"🚨 [{stock['name']}] 취소할 원주문번호(odno)가 없습니다. "
+                "SELL_ORDERED claim을 유지하고 broker reconciliation을 재시도합니다."
             )
+            retry_sec = max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30))
             _mutate_stock_state(
                 stock,
-                set_fields={"status": "HOLDING"},
-                pop_fields=[
-                    "sell_order_time",
-                    "sell_odno",
-                    "pending_sell_msg",
-                    "sell_target_price",
-                ],
+                set_fields={
+                    "status": "SELL_ORDERED",
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": "missing_original_order_no",
+                    "sell_cancel_reconciliation_retry_at": time.time() + retry_sec,
+                },
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "sell_cancel_reconciliation_deferred",
+                inventory_source="missing_original_order_no",
+                retry_sec=retry_sec,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                metric_role="broker_reconciliation_guard",
+                decision_authority="sell_cancel_inventory_reconciliation",
+                window_policy="same_sell_order_until_order_number_or_broker_state_confirmed",
+                sample_floor="not_applicable_runtime_guard",
+                primary_decision_metric="broker_order_identity_confirmation_state",
+                source_quality_gate="original_order_number_or_broker_reconciliation",
+                forbidden_uses="missing_order_number_as_cancel_proof|duplicate_sell_submit",
             )
 
             try:
                 with DB.get_session() as session:
                     session.query(RecommendationHistory).filter_by(id=target_id).update(
-                        {"status": "HOLDING"}
+                        {"status": "SELL_ORDERED"}
                     )
             except Exception as e:
-                log_error(f"🚨 [DB 에러] {stock['name']} 매도 타임아웃 복구 실패: {e}")
+                log_error(
+                    f"🚨 [DB 에러] {stock['name']} 매도 주문번호 미확인 상태 유지 실패: {e}"
+                )
             return
 
         process_sell_cancellation(stock, code, orig_ord_no, DB)
@@ -86178,7 +86244,7 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
     if isinstance(res, dict):
         if str(res.get("return_code", res.get("rt_cd", ""))) == "0":
             is_success = True
-        err_msg = res.get("return_msg", "사유 알 수 없음")
+        err_msg = str(res.get("return_msg") or "사유 알 수 없음")
     elif res:
         is_success = True
 
@@ -86188,17 +86254,29 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
         )
         _mutate_stock_state(
             stock,
-            set_fields={"status": "HOLDING"},
+            set_fields={
+                "status": "HOLDING",
+                "exit_requested": False,
+                "fast_exit_retry_pending": False,
+                "fast_exit_retry_reason": "",
+                "fast_exit_retry_at": 0.0,
+            },
             pop_fields=[
                 "sell_odno",
+                "sell_ord_no",
                 "sell_order_time",
                 "pending_sell_msg",
                 "sell_target_price",
+                "exit_token",
+                "fast_exit_token",
+                "sell_cancel_reconciliation_required",
+                "sell_cancel_reconciliation_source",
+                "sell_cancel_reconciliation_retry_at",
             ],
         )
 
         try:
-            with DB.get_session() as session:
+            with db.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update(
                     {"status": "HOLDING"}
                 )
@@ -86212,21 +86290,165 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
     if any(
         keyword in err_msg for keyword in ["취소가능수량", "잔고", "주문없음", "체결"]
     ):
-        log_info(
-            f"💡 [{stock['name']}] 간발의 차이로 이미 매도 체결된 것으로 판단합니다. COMPLETED로 전환."
-        )
-        _mutate_stock_state(stock, set_fields={"status": "COMPLETED"})
-        with ENTRY_LOCK:
-            HIGHEST_PRICES.pop(code, None)
+        broker_qty = None
+        inventory_source = "inventory_lookup_failed"
+        try:
+            inventory, successful_exchanges = kiwoom_orders.get_my_inventory(
+                KIWOOM_TOKEN
+            )
+            successful = {
+                str(exchange or "").strip().upper()
+                for exchange in (successful_exchanges or set())
+            }
+            matching = next(
+                (
+                    item
+                    for item in (inventory or [])
+                    if str(item.get("code") or "").strip()[:6]
+                    == str(code or "").strip()[:6]
+                ),
+                None,
+            )
+            if matching is not None:
+                broker_qty = max(0, _safe_int(matching.get("qty"), 0))
+                inventory_source = "kt00018_position_found"
+            elif {"KRX", "NXT"}.issubset(successful):
+                broker_qty = 0
+                inventory_source = "kt00018_all_venues_position_absent"
+            else:
+                inventory_source = "kt00018_partial_venue_confirmation"
+        except Exception as exc:
+            log_error(
+                f"⚠️ [{stock['name']}] 매도 취소 실패 후 잔고 재확인 실패: {exc}"
+            )
+
+        if broker_qty == 0:
+            new_status = "COMPLETED"
+            log_info(
+                f"💡 [{stock['name']}] 전 거래소 잔고 0주 확인. COMPLETED로 전환."
+            )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": new_status,
+                    "exit_requested": False,
+                    "fast_exit_retry_pending": False,
+                    "fast_exit_retry_reason": "",
+                    "fast_exit_retry_at": 0.0,
+                    "sell_order_retry_backoff_until_ts": 0.0,
+                    "sell_order_retry_backoff_sec": 0,
+                    "sell_order_failure_count": 0,
+                    "last_sell_order_error": "",
+                    "last_sell_order_failed_at": 0.0,
+                },
+                pop_fields=[
+                    "sell_odno",
+                    "sell_ord_no",
+                    "sell_order_time",
+                    "pending_sell_msg",
+                    "sell_target_price",
+                    "exit_token",
+                    "fast_exit_token",
+                    "sell_cancel_reconciliation_required",
+                    "sell_cancel_reconciliation_source",
+                    "sell_cancel_reconciliation_retry_at",
+                ],
+            )
+            with ENTRY_LOCK:
+                HIGHEST_PRICES.pop(code, None)
+        elif broker_qty is not None and broker_qty > 0:
+            new_status = "HOLDING"
+            log_info(
+                f"♻️ [{stock['name']}] 브로커 잔고 {broker_qty}주 확인. "
+                "COMPLETED 오판 없이 HOLDING으로 복구."
+            )
+            retry_fields = _mark_sell_order_failure_retry_backoff(
+                stock,
+                error=err_msg,
+                now_ts=time.time(),
+            )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": new_status,
+                    "buy_qty": broker_qty,
+                    "exit_requested": False,
+                    "fast_exit_retry_pending": False,
+                    "fast_exit_retry_reason": "",
+                    "fast_exit_retry_at": 0.0,
+                },
+                pop_fields=[
+                    "sell_odno",
+                    "sell_ord_no",
+                    "sell_order_time",
+                    "pending_sell_msg",
+                    "sell_target_price",
+                    "exit_token",
+                    "fast_exit_token",
+                    "sell_cancel_reconciliation_required",
+                    "sell_cancel_reconciliation_source",
+                    "sell_cancel_reconciliation_retry_at",
+                ],
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "sell_cancel_reconciled_holding",
+                cancel_error=err_msg,
+                broker_qty=broker_qty,
+                inventory_source=inventory_source,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                metric_role="broker_reconciliation_guard",
+                decision_authority="sell_cancel_inventory_reconciliation",
+                window_policy="same_cancel_attempt_current_broker_inventory",
+                sample_floor="not_applicable_runtime_guard",
+                primary_decision_metric="broker_confirmed_remaining_qty",
+                source_quality_gate="kt00018_positive_position_or_all_venues_absent",
+                forbidden_uses="cancel_error_text_as_fill_proof|duplicate_sell_submit",
+                **retry_fields,
+            )
+        else:
+            new_status = "SELL_ORDERED"
+            retry_sec = max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30))
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": new_status,
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": inventory_source,
+                    "sell_cancel_reconciliation_retry_at": time.time() + retry_sec,
+                },
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "sell_cancel_reconciliation_deferred",
+                cancel_error=err_msg,
+                inventory_source=inventory_source,
+                retry_sec=retry_sec,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                metric_role="broker_reconciliation_guard",
+                decision_authority="sell_cancel_inventory_reconciliation",
+                window_policy="same_sell_order_until_broker_inventory_confirmed",
+                sample_floor="not_applicable_runtime_guard",
+                primary_decision_metric="broker_inventory_confirmation_state",
+                source_quality_gate="kt00018_positive_position_or_all_venues_absent",
+                forbidden_uses="cancel_error_text_as_fill_proof|duplicate_sell_submit",
+            )
 
         try:
-            with DB.get_session() as session:
+            with db.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update(
-                    {"status": "COMPLETED"}
+                    {"status": new_status}
                 )
         except Exception as exc:
             log_error(
-                f"🚨 [DB 에러] {stock['name']} 매도 취소 후 COMPLETED 복구 실패: {exc}"
+                f"🚨 [DB 에러] {stock['name']} 매도 취소 reconciliation "
+                f"상태({new_status}) 반영 실패: {exc}"
             )
     return False
 

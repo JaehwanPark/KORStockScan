@@ -1001,7 +1001,69 @@ def test_fast_exit_route_provenance_labels_outside_supported_session():
     assert fields["fast_exit_execution_cohort_resolution"] == (
         "outside_supported_execution_session"
     )
-    assert fields["fast_exit_route_resolution_reason"] == ("nxt_session_nxt_enabled")
+    assert fields["fast_exit_route_resolution_reason"] == (
+        "outside_supported_sell_execution_session"
+    )
+    assert fields["fast_exit_execution_session_blocked"] is True
+    assert fields["fast_exit_broker_route_blocked"] is True
+    assert fields["fast_exit_route_guard_reason"] == (
+        "outside_supported_sell_execution_session"
+    )
+
+
+def test_sell_route_guard_blocks_inter_session_gap_even_for_nxt_holding():
+    resolution = handlers._resolve_holding_sell_dmst_stex_tp(
+        {"is_nxt": True},
+        "123456",
+        now_t=datetime(2026, 8, 14, 8, 55).time(),
+    )
+
+    assert resolution == {
+        "blocked": True,
+        "dmst_stex_tp": "NXT",
+        "nxt_enabled": True,
+        "nxt_flag_source": "stock.is_nxt",
+        "reason": "outside_supported_sell_execution_session",
+    }
+
+
+def test_fast_exit_evaluator_never_reaches_quote_or_broker_in_inter_session_gap(
+    monkeypatch,
+):
+    now_ts = datetime(2026, 8, 14, 8, 55, tzinfo=handlers._KST).timestamp()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", "2026-08-14")
+    monkeypatch.setattr(handlers, "_has_active_sell_order_pending", lambda stock: False)
+    monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda *args: False)
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("blocked session must not reach quote or broker work")
+        ),
+    )
+    stock = {
+        "name": "장간격종목",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "is_nxt": True,
+        "entry_execution_broker_route": "NXT",
+        "entry_execution_cohort": "PREMARKET_KRX_LIKE",
+    }
+
+    triggered = handlers.evaluate_and_dispatch_fast_scalp_exit(
+        stock,
+        "123456",
+        _nxt_quote_snapshot("123456", now_ts),
+        now_ts=now_ts,
+    )
+
+    assert triggered is False
+    assert stock["status"] == "HOLDING"
+    assert stock.get("exit_token") is None
 
 
 def test_fast_exit_known_session_routes_do_not_wait_for_nxt_metadata(monkeypatch):
@@ -1162,6 +1224,76 @@ def test_fast_exit_dispatch_passes_explicit_nxt_route(monkeypatch):
         )
     ]
     assert stock["status"] == "SELL_ORDERED"
+    assert stock["sell_odno"] == "NXT-S1"
+    assert stock["sell_ord_no"] == "NXT-S1"
+
+
+def test_fast_exit_broker_reject_uses_shared_sell_backoff(monkeypatch):
+    now_ts = datetime(2026, 8, 14, 16, 20, tzinfo=handlers._KST).timestamp()
+    monkeypatch.setattr(handlers, "_remember_exit_context", lambda **kwargs: None)
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        handlers, "_sell_side_open_time_block_fields", lambda **kwargs: {}
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_confirm_cancel_or_reload_remaining",
+        lambda *args, **kwargs: 7,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_send_exit_best_ioc",
+        lambda *args, **kwargs: {
+            "return_code": "2000",
+            "return_msg": "[2000](505217:휴장시간으로 취소주문만 가능합니다.)",
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_rule_bool",
+        lambda name, default=False: (
+            True if name == "SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED" else default
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_rule_int",
+        lambda name, default=0: (
+            30 if name == "SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC" else default
+        ),
+    )
+    stock = {
+        "name": "NXT종목",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 7,
+        "fast_exit_broker_route": "NXT",
+        "exit_token": "token-reject",
+        "exit_decided_at": now_ts,
+    }
+
+    handlers._dispatch_scalp_preset_exit(
+        stock=stock,
+        code="123456",
+        now_ts=now_ts,
+        curr_p=9_800,
+        buy_p=10_000,
+        profit_rate=-2.0,
+        peak_profit=0.8,
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        reason="test",
+        exit_rule="scalp_hard_stop_pct",
+        fast_exit=True,
+    )
+
+    assert stock["status"] == "HOLDING"
+    assert stock["fast_exit_retry_pending"] is True
+    assert stock["fast_exit_retry_at"] == pytest.approx(now_ts + 30.0)
+    assert stock["sell_order_retry_backoff_until_ts"] == pytest.approx(now_ts + 30.0)
+    assert stock["sell_order_failure_count"] == 1
 
 
 def test_shared_exit_wrapper_preserves_explicit_route_and_guard_context(monkeypatch):
@@ -1206,3 +1338,191 @@ def test_handler_exit_wrapper_preserves_legacy_three_argument_dependency(monkeyp
     handlers._send_exit_best_ioc("123456", 3, "token")
 
     assert calls == [("123456", 3, "token")]
+
+
+class _CancelQuery:
+    def __init__(self, updates):
+        self.updates = updates
+
+    def filter_by(self, **kwargs):
+        return self
+
+    def update(self, values):
+        self.updates.append(dict(values))
+
+
+class _CancelSession:
+    def __init__(self, updates):
+        self.updates = updates
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def query(self, model):
+        return _CancelQuery(self.updates)
+
+
+class _CancelDB:
+    def __init__(self):
+        self.updates = []
+
+    def get_session(self):
+        return _CancelSession(self.updates)
+
+
+def test_sell_timeout_without_order_number_keeps_claim_until_reconciled(monkeypatch):
+    monkeypatch.setattr(handlers.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr(
+        handlers,
+        "_rule_int",
+        lambda name, default=0: {
+            "SELL_TIMEOUT_SEC": 40,
+            "SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC": 30,
+        }.get(name, default),
+    )
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "log_error", lambda *args, **kwargs: None)
+    db = _CancelDB()
+    monkeypatch.setattr(handlers, "DB", db)
+    stock = {
+        "id": 1,
+        "name": "주문번호미확인",
+        "status": "SELL_ORDERED",
+        "buy_qty": 3,
+        "sell_order_time": 900.0,
+        "exit_token": "exit-unknown-order",
+        "exit_requested": True,
+    }
+
+    handlers.handle_sell_ordered_state(stock, "123456")
+
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["exit_token"] == "exit-unknown-order"
+    assert stock["exit_requested"] is True
+    assert stock["sell_cancel_reconciliation_required"] is True
+    assert stock["sell_cancel_reconciliation_retry_at"] == 1_030.0
+    assert db.updates == [{"status": "SELL_ORDERED"}]
+
+
+def _ambiguous_cancel_response():
+    return {
+        "return_code": "2000",
+        "return_msg": "[2000](506550:취소가능수량이 없습니다.)",
+    }
+
+
+def test_sell_cancel_error_keeps_confirmed_broker_position_holding(monkeypatch):
+    monkeypatch.setattr(
+        handlers.sniper_trade_utils,
+        "send_cancel_order_with_exchange_retry",
+        lambda **kwargs: _ambiguous_cancel_response(),
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "get_my_inventory",
+        lambda token: ([{"code": "123456", "qty": 3}], {"KRX"}),
+    )
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "log_info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "log_error", lambda *args, **kwargs: None)
+    db = _CancelDB()
+    stock = {
+        "id": 1,
+        "name": "잔고종목",
+        "status": "SELL_ORDERED",
+        "buy_qty": 7,
+        "sell_odno": "O1",
+        "sell_order_time": 100.0,
+        "exit_token": "exit-positive",
+        "exit_requested": True,
+    }
+
+    handlers.process_sell_cancellation(stock, "123456", "O1", db)
+
+    assert stock["status"] == "HOLDING"
+    assert stock["buy_qty"] == 3
+    assert stock["sell_order_failure_count"] == 1
+    assert "sell_odno" not in stock
+    assert "exit_token" not in stock
+    assert stock["exit_requested"] is False
+    assert db.updates == [{"status": "HOLDING"}]
+
+
+def test_sell_cancel_error_completes_only_after_all_venue_zero_confirmation(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        handlers.sniper_trade_utils,
+        "send_cancel_order_with_exchange_retry",
+        lambda **kwargs: _ambiguous_cancel_response(),
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "get_my_inventory",
+        lambda token: ([], {"KRX", "NXT"}),
+    )
+    monkeypatch.setattr(handlers, "log_info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "log_error", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "HIGHEST_PRICES", {"123456": 10_100})
+    db = _CancelDB()
+    stock = {
+        "id": 1,
+        "name": "체결종목",
+        "status": "SELL_ORDERED",
+        "buy_qty": 7,
+        "sell_odno": "O1",
+        "sell_order_time": 100.0,
+    }
+
+    handlers.process_sell_cancellation(stock, "123456", "O1", db)
+
+    assert stock["status"] == "COMPLETED"
+    assert "sell_odno" not in stock
+    assert "123456" not in handlers.HIGHEST_PRICES
+    assert db.updates == [{"status": "COMPLETED"}]
+
+
+def test_sell_cancel_error_with_partial_inventory_evidence_stays_sell_ordered(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        handlers.sniper_trade_utils,
+        "send_cancel_order_with_exchange_retry",
+        lambda **kwargs: _ambiguous_cancel_response(),
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "get_my_inventory",
+        lambda token: ([], {"KRX"}),
+    )
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "log_info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "log_error", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr(
+        handlers,
+        "_rule_int",
+        lambda name, default=0: (
+            30 if name == "SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC" else default
+        ),
+    )
+    db = _CancelDB()
+    stock = {
+        "id": 1,
+        "name": "미확인종목",
+        "status": "SELL_ORDERED",
+        "buy_qty": 7,
+        "sell_odno": "O1",
+        "sell_order_time": 100.0,
+    }
+
+    handlers.process_sell_cancellation(stock, "123456", "O1", db)
+
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["sell_cancel_reconciliation_required"] is True
+    assert stock["sell_cancel_reconciliation_retry_at"] == 1_030.0
+    assert stock["sell_odno"] == "O1"
+    assert db.updates == [{"status": "SELL_ORDERED"}]
