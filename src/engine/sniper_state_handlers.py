@@ -32677,6 +32677,53 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
     qi = _safe_float(orderbook_fields.get("orderbook_micro_qi"), None)
     ofi_norm = _safe_float(orderbook_fields.get("orderbook_micro_ofi_norm"), None)
     tp1_context = _rising_missed_tp1_observation_context_log_fields(stock)
+    tp1_tick_context_fresh = bool(
+        _truthy_field(tp1_context.get("rising_missed_tp1_submit_context_fresh"))
+        and _truthy_field(
+            tp1_context.get(
+                "rising_missed_tp1_submit_context_tick_acceleration_fresh"
+            )
+        )
+        and str(
+            tp1_context.get(
+                "rising_missed_tp1_submit_context_tick_acceleration_source"
+            )
+            or ""
+        )
+        == "trusted_ws_signed_0b_10tick_received_ts"
+        and _safe_float(
+            tp1_context.get(
+                "rising_missed_tp1_submit_context_tick_acceleration_age_sec"
+            ),
+            999.0,
+        )
+        <= 3.0
+        and _safe_int(
+            tp1_context.get(
+                "rising_missed_tp1_submit_context_tick_window_sample_count"
+            ),
+            0,
+        )
+        >= 10
+    )
+    tick_context_source = "direct_entry_tick_context"
+    if tp1_tick_context_fresh:
+        if tick_acceleration_ratio is None:
+            tick_acceleration_ratio = _safe_float(
+                tp1_context.get(
+                    "rising_missed_tp1_submit_context_tick_acceleration"
+                ),
+                None,
+            )
+        if tick_window_span_sec is None:
+            tick_window_span_sec = _safe_float(
+                tp1_context.get(
+                    "rising_missed_tp1_submit_context_tick_window_span_sec"
+                ),
+                None,
+            )
+        if tick_acceleration_ratio is not None and tick_window_span_sec is not None:
+            tick_context_source = "trusted_tp1_ws_signed_0b_10tick_context"
     tp1_true_ofi = _safe_float(
         tp1_context.get("rising_missed_tp1_submit_context_true_ofi_ewma"), None
     )
@@ -32714,7 +32761,7 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
             )
         )
     )
-    return evaluate_risky_micro_episode(
+    result = evaluate_risky_micro_episode(
         rising_missed_lineage=bool(rising_missed_entry_lineage),
         source_stage=source_stage,
         source_block_reason=source_block_reason,
@@ -32727,6 +32774,11 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
         adverse_micro_detected=adverse_micro_detected,
         large_sell_detected=large_sell_detected,
     )
+    result["risky_micro_episode_tick_context_source"] = tick_context_source
+    result["risky_micro_episode_tick_context_fallback_applied"] = bool(
+        tick_context_source == "trusted_tp1_ws_signed_0b_10tick_context"
+    )
+    return result
 
 
 def _evaluate_rising_missed_tick_speed_entry_guard(
@@ -67620,6 +67672,13 @@ def _rising_missed_tp1_submit_context_fields(
         "rising_missed_tp1_submit_context_tick_acceleration_age_sec": (
             log_fields.get("rising_missed_tp1_tick_acceleration_age_sec") or "-"
         ),
+        "rising_missed_tp1_submit_context_tick_window_span_sec": (
+            log_fields.get("rising_missed_tp1_ws_momentum_window_span_sec") or "-"
+        ),
+        "rising_missed_tp1_submit_context_tick_window_sample_count": _safe_int(
+            log_fields.get("rising_missed_tp1_ws_momentum_sample_count"),
+            0,
+        ),
         "rising_missed_tp1_submit_context_low_rebound_pct": _safe_float(
             log_fields.get("rising_missed_tp1_low_rebound_pct"),
             0.0,
@@ -67725,6 +67784,8 @@ def _rising_missed_tp1_observation_context_log_fields(
         "rising_missed_tp1_submit_context_tick_acceleration_fresh",
         "rising_missed_tp1_submit_context_tick_acceleration_source",
         "rising_missed_tp1_submit_context_tick_acceleration_age_sec",
+        "rising_missed_tp1_submit_context_tick_window_span_sec",
+        "rising_missed_tp1_submit_context_tick_window_sample_count",
     ):
         fields[context_key] = context.get(context_key, "-")
     for source_key in (

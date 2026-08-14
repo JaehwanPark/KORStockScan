@@ -449,7 +449,8 @@ def test_pre_ai_budget_events_are_not_counted_as_lineage_join_failures(
     assert lineage["lineage_join_coverage_pct"] == 100.0
     assert lineage["raw_event_lineage_join_coverage_pct"] == 50.0
     assert lineage["lineage_join_coverage_denominator"] == (
-        "all_events_except_explicit_pre_ai_parent_not_expected"
+        "events_with_a_trusted_ai_result_expected; excludes_pre_ai_and_explicit_"
+        "attempt_result_unavailable"
     )
 
 
@@ -504,8 +505,11 @@ def test_budget_lineage_splits_attempt_without_result_from_missing_attempt() -> 
 
     lineage = sentinel._budget_ai_lineage_summary([event])
 
-    assert lineage["parent_trace_missing_when_expected_event_count"] == 1
+    assert lineage["status"] == "ai_attempt_result_unavailable_no_parent_expected"
+    assert lineage["lineage_join_eligible_event_count"] == 0
+    assert lineage["parent_trace_missing_when_expected_event_count"] == 0
     assert lineage["parent_attempt_without_trusted_result_event_count"] == 1
+    assert lineage["ai_attempt_result_unavailable_parent_not_expected_event_count"] == 1
     assert lineage["parent_trace_missing_without_attempt_event_count"] == 0
 
 

@@ -735,27 +735,38 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         if _field_first(event.fields, ("pre_submit_parent_ai_decision_trace_id",))
         in ai_trace_ids
     ]
-    join_eligible_events = [
-        event for event in lineage_events if id(event) not in pre_ai_expected_ids
-    ]
     lineage_present_ids = {id(event) for event in lineage_present}
     exact_lineage_ids = {id(event) for event in exact_lineage}
+    attempt_result_unavailable_events = [
+        event
+        for event in lineage_contract_events
+        if id(event) not in pre_ai_expected_ids and id(event) not in lineage_present_ids
+        if _field_first(event.fields, ("pre_submit_parent_ai_attempt_trace_id",))
+        not in {"", "-", "unknown", "not_available"}
+        and _field_first(event.fields, ("pre_submit_parent_ai_result_source",))
+        in {
+            "attempt_untrusted_or_not_available",
+            "input_preflight_blocked",
+            "provider_or_preflight_not_evaluated",
+        }
+    ]
+    attempt_result_unavailable_ids = {
+        id(event) for event in attempt_result_unavailable_events
+    }
+    join_eligible_events = [
+        event
+        for event in lineage_events
+        if id(event) not in pre_ai_expected_ids
+        and id(event) not in attempt_result_unavailable_ids
+    ]
     parent_trace_missing_events = [
         event for event in join_eligible_events if id(event) not in lineage_present_ids
     ]
-    parent_attempt_without_result_events = [
-        event
-        for event in parent_trace_missing_events
-        if _field_first(event.fields, ("pre_submit_parent_ai_attempt_trace_id",))
-        not in {"", "-", "unknown", "not_available"}
-    ]
-    parent_attempt_without_result_ids = {
-        id(event) for event in parent_attempt_without_result_events
-    }
     parent_trace_missing_without_attempt_events = [
         event
         for event in parent_trace_missing_events
-        if id(event) not in parent_attempt_without_result_ids
+        if _field_first(event.fields, ("pre_submit_parent_ai_attempt_trace_id",))
+        in {"", "-", "unknown", "not_available"}
     ]
     untrusted_or_stale_reason_counts: Counter[str] = Counter()
     for event in lineage_present:
@@ -811,8 +822,15 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         status = "exact_parent_ai_trace_unresolved"
     elif lineage_present:
         status = "parent_ai_trace_untrusted_or_not_exact"
-    elif pre_ai_expected and len(pre_ai_expected) == len(lineage_contract_events):
-        status = "pre_ai_budget_order_observed_no_parent_expected"
+    elif (pre_ai_expected or attempt_result_unavailable_events) and len(
+        pre_ai_expected
+    ) + len(attempt_result_unavailable_events) == len(lineage_contract_events):
+        if pre_ai_expected and attempt_result_unavailable_events:
+            status = "no_trusted_ai_result_parent_not_expected"
+        elif attempt_result_unavailable_events:
+            status = "ai_attempt_result_unavailable_no_parent_expected"
+        else:
+            status = "pre_ai_budget_order_observed_no_parent_expected"
     else:
         status = "instrumentation_gap_parent_ai_trace_missing"
     return {
@@ -842,7 +860,10 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
             parent_trace_missing_events
         ),
         "parent_attempt_without_trusted_result_event_count": len(
-            parent_attempt_without_result_events
+            attempt_result_unavailable_events
+        ),
+        "ai_attempt_result_unavailable_parent_not_expected_event_count": len(
+            attempt_result_unavailable_events
         ),
         "parent_trace_missing_without_attempt_event_count": len(
             parent_trace_missing_without_attempt_events
@@ -859,7 +880,8 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         "lineage_join_coverage_pct": coverage_pct,
         "raw_event_lineage_join_coverage_pct": raw_coverage_pct,
         "lineage_join_coverage_denominator": (
-            "all_events_except_explicit_pre_ai_parent_not_expected"
+            "events_with_a_trusted_ai_result_expected; excludes_pre_ai_and_explicit_"
+            "attempt_result_unavailable"
         ),
         "linked_budget_pass_trace_count": len(linked_pass),
         "linked_budget_block_trace_count": len(linked_block),

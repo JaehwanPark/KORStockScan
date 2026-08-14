@@ -37,6 +37,19 @@ LATENCY_ROLLING_MIN_READY_RATE_PCT = 30.0
 EXECUTABLE_BBO_COUNTERFACTUAL_STAGES = frozenset(
     {"latency_block", "rising_missed_tick_speed_entry_block"}
 )
+RISKY_MICRO_HORIZONS_SEC = (3, 10, 20, 30)
+RISKY_MICRO_MAX_ENDPOINT_LAG_SEC = 5.0
+RISKY_MICRO_MAX_INTERNAL_GAP_SEC = 10.0
+RISKY_MICRO_MAX_QUOTE_AGE_MS = 1_000.0
+RISKY_MICRO_EXPECTED_SOURCE_CATEGORIES = (
+    "scanner_candidate",
+    "tp1",
+    "entry_ai",
+    "latency",
+    "liquidity_micro",
+    "tick_speed",
+    "entry_price",
+)
 TP1_GROSS_TARGET_PCT = 1.30
 TP1_ADVERSE_STOP_PCT = -0.70
 TP1_COST_RESERVE_PCT = 0.30
@@ -4443,18 +4456,329 @@ def _build_adverse_micro_recovery_observation(
     }, rows
 
 
+def _risky_micro_source_category(source_stage: str) -> str:
+    stage = str(source_stage or "").lower()
+    if "scanner" in stage or ("candidate" in stage and "tp1" not in stage):
+        return "scanner_candidate"
+    if "tp1" in stage:
+        return "tp1"
+    if "entry_ai" in stage or "ai_authority" in stage:
+        return "entry_ai"
+    if "latency" in stage:
+        return "latency"
+    if "liquidity" in stage or "micro" in stage:
+        return "liquidity_micro"
+    if "tick_speed" in stage:
+        return "tick_speed"
+    if "entry_price" in stage or "price_canary" in stage:
+        return "entry_price"
+    return "other"
+
+
+def _risky_micro_ts(value: Any) -> datetime | None:
+    """Normalize source timestamps before executable-path comparisons."""
+
+    parsed = _parse_ts(value)
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=KST)
+    return parsed.astimezone(KST)
+
+
+def _risky_micro_venue_session(fields: dict[str, Any]) -> tuple[str, str]:
+    venue = (
+        str(
+            fields.get("rising_missed_effective_venue")
+            or fields.get("effective_venue")
+            or fields.get("venue")
+            or "unknown"
+        )
+        .strip()
+        .upper()
+    )
+    session = (
+        str(
+            fields.get("rising_missed_market_session_bucket")
+            or fields.get("market_session_bucket")
+            or "unknown"
+        )
+        .strip()
+        .upper()
+    )
+    return venue, session
+
+
+def _risky_micro_fresh_executable_bbo(
+    row: dict[str, Any],
+) -> tuple[float | None, float | None, str]:
+    fields = _fields(row)
+    bid, ask, source = _event_executable_bbo(row)
+    quote_age_ms = _safe_float(
+        fields.get("market_data_effective_quote_age_ms")
+        or fields.get("quote_age_ms")
+        or fields.get("ws_age_ms")
+        or fields.get("pre_submit_effective_quote_age_ms")
+    )
+    if bid is None or ask is None:
+        bid = _safe_float(fields.get("risky_micro_episode_best_bid"))
+        ask = _safe_float(fields.get("risky_micro_episode_best_ask"))
+        quote_age_ms = _safe_float(fields.get("risky_micro_episode_quote_age_ms"))
+        source = "risky_micro_candidate_bbo"
+    if (
+        bid is None
+        or ask is None
+        or bid <= 0
+        or ask < bid
+        or quote_age_ms is None
+        or quote_age_ms < 0
+        or quote_age_ms > RISKY_MICRO_MAX_QUOTE_AGE_MS
+    ):
+        return None, None, "missing_stale_or_invalid_executable_bbo"
+    return bid, ask, source
+
+
+def _risky_micro_horizon_measurement(
+    observations: list[dict[str, Any]],
+    *,
+    fill_ts: datetime,
+    fill_price: float,
+    horizon_sec: int,
+    total_cost_bps: float,
+) -> dict[str, Any]:
+    target_ts = fill_ts + timedelta(seconds=horizon_sec)
+    endpoint = next(
+        (item for item in observations if item["ts"] >= target_ts),
+        None,
+    )
+    if endpoint is None:
+        return {
+            "horizon_sec": horizon_sec,
+            "complete": False,
+            "reason": "endpoint_missing",
+        }
+    endpoint_lag_sec = (endpoint["ts"] - target_ts).total_seconds()
+    if endpoint_lag_sec > RISKY_MICRO_MAX_ENDPOINT_LAG_SEC:
+        return {
+            "horizon_sec": horizon_sec,
+            "complete": False,
+            "reason": "endpoint_lag_exceeded",
+            "endpoint_lag_sec": round(endpoint_lag_sec, 6),
+        }
+    path = [item for item in observations if fill_ts <= item["ts"] <= endpoint["ts"]]
+    path_times = [fill_ts, *(item["ts"] for item in path)]
+    max_gap_sec = max(
+        (
+            (right - left).total_seconds()
+            for left, right in zip(path_times, path_times[1:])
+        ),
+        default=0.0,
+    )
+    if max_gap_sec > RISKY_MICRO_MAX_INTERNAL_GAP_SEC:
+        return {
+            "horizon_sec": horizon_sec,
+            "complete": False,
+            "reason": "internal_gap_exceeded",
+            "max_internal_gap_sec": round(max_gap_sec, 6),
+        }
+    bids = [float(item["bid"]) for item in path]
+    terminal_bps = ((float(endpoint["bid"]) / fill_price) - 1.0) * 10_000.0
+    return {
+        "horizon_sec": horizon_sec,
+        "complete": True,
+        "endpoint_ts": endpoint["ts"].isoformat(),
+        "endpoint_lag_sec": round(endpoint_lag_sec, 6),
+        "max_internal_gap_sec": round(max_gap_sec, 6),
+        "observation_count": len(path),
+        "terminal_return_bps": round(terminal_bps, 6),
+        "cost_adjusted_terminal_return_bps": round(
+            terminal_bps - total_cost_bps,
+            6,
+        ),
+        "mfe_bps": round(((max(bids) / fill_price) - 1.0) * 10_000.0, 6),
+        "mae_bps": round(((min(bids) / fill_price) - 1.0) * 10_000.0, 6),
+        "price_basis": "fresh_executable_bid",
+    }
+
+
+def _join_risky_micro_executable_outcome(
+    candidate: dict[str, Any],
+    observations: list[dict[str, Any]],
+    *,
+    observation_watermark: datetime | None,
+) -> dict[str, Any]:
+    candidate_ts = _risky_micro_ts(candidate.get("ts"))
+    entry_price = _safe_float(candidate.get("hypothetical_entry_price"))
+    target_price = _safe_float(candidate.get("hypothetical_target_price"))
+    adverse_price = _safe_float(candidate.get("hypothetical_adverse_price"))
+    gross_target_bps = _safe_float(candidate.get("gross_target_bps")) or 0.0
+    adverse_limit_bps = (
+        _safe_float(candidate.get("adverse_limit_bps")) or gross_target_bps
+    )
+    total_cost_bps = _safe_float(candidate.get("conservative_total_cost_bps")) or 0.0
+    ttl_sec = max(1, _safe_int(candidate.get("passive_ttl_sec")))
+    max_hold_sec = max(1, _safe_int(candidate.get("max_hold_sec")))
+    if adverse_price is None and entry_price is not None and adverse_limit_bps > 0:
+        adverse_price = entry_price * (1.0 - adverse_limit_bps / 10_000.0)
+    base = {
+        "metric_role": "source_only_counterfactual_outcome",
+        "decision_authority": "source_only_no_runtime_apply",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "fill_feasible": None,
+        "fill_price": None,
+        "exit_price": None,
+        "net_return_bps": None,
+        "outcome_join_consumer": "fresh_executable_bbo_passive_fill_v1",
+        "outcome_evaluation_role": (
+            "eligible_source_candidate"
+            if candidate.get("status") in {"source_only_candidate", "recheck_required"}
+            else "excluded_or_source_quality_control"
+        ),
+        "fill_price_basis": "passive_limit_conservative_ask_touch",
+        "exit_price_basis": "fresh_executable_bid",
+        "adverse_price_basis": (
+            "event_hypothetical_adverse_price"
+            if _safe_float(candidate.get("hypothetical_adverse_price")) is not None
+            else "symmetric_gross_target_bps_fallback"
+        ),
+    }
+    if candidate.get("status") == "source_quality_blocked":
+        return {**base, "outcome_join_status": "source_quality_blocked"}
+    if candidate_ts is None or entry_price is None or entry_price <= 0:
+        return {**base, "outcome_join_status": "source_quality_blocked_input_missing"}
+    candidate_venue = str(candidate.get("effective_venue") or "UNKNOWN").upper()
+    candidate_session = str(candidate.get("market_session_bucket") or "UNKNOWN").upper()
+    if candidate_venue == "UNKNOWN" or candidate_session == "UNKNOWN":
+        return {
+            **base,
+            "outcome_join_status": "source_quality_blocked_venue_or_session_missing",
+        }
+    matching = [
+        item
+        for item in observations
+        if item["ts"] >= candidate_ts
+        and item["venue"] == candidate_venue
+        and item["session"] == candidate_session
+    ]
+    ttl_end = candidate_ts + timedelta(seconds=ttl_sec)
+    fill = next(
+        (
+            item
+            for item in matching
+            if item["ts"] <= ttl_end and float(item["ask"]) <= entry_price
+        ),
+        None,
+    )
+    if fill is None:
+        matured = bool(observation_watermark and observation_watermark >= ttl_end)
+        return {
+            **base,
+            "outcome_join_status": (
+                "resolved_not_filled" if matured else "pending_fill_horizon"
+            ),
+            "fill_feasible": False if matured else None,
+            "passive_ttl_end": ttl_end.isoformat(),
+            "matching_fresh_bbo_observation_count": len(matching),
+            "net_return_bps": 0.0 if matured else None,
+        }
+    fill_ts = fill["ts"]
+    path = [item for item in matching if item["ts"] >= fill_ts]
+    hold_end = fill_ts + timedelta(seconds=max_hold_sec)
+    target_hit = next(
+        (
+            item
+            for item in path
+            if item["ts"] <= hold_end and float(item["bid"]) >= float(target_price or 0)
+        ),
+        None,
+    )
+    adverse_hit = next(
+        (
+            item
+            for item in path
+            if item["ts"] <= hold_end
+            and adverse_price is not None
+            and float(item["bid"]) <= adverse_price
+        ),
+        None,
+    )
+    first_hit = None
+    outcome = "pending_timeout_horizon"
+    if target_hit is not None and (
+        adverse_hit is None or target_hit["ts"] <= adverse_hit["ts"]
+    ):
+        first_hit = target_hit
+        outcome = "resolved_target_first"
+    elif adverse_hit is not None:
+        first_hit = adverse_hit
+        outcome = "resolved_adverse_first"
+    timeout_endpoint = next((item for item in path if item["ts"] >= hold_end), None)
+    if first_hit is None and timeout_endpoint is not None:
+        if (
+            timeout_endpoint["ts"] - hold_end
+        ).total_seconds() <= RISKY_MICRO_MAX_ENDPOINT_LAG_SEC:
+            first_hit = timeout_endpoint
+            outcome = "resolved_timeout"
+    exit_price = None
+    if first_hit is not None:
+        exit_price = (
+            float(target_price)
+            if outcome == "resolved_target_first" and target_price is not None
+            else float(first_hit["bid"])
+        )
+    net_return_bps = (
+        ((exit_price / entry_price) - 1.0) * 10_000.0 - total_cost_bps
+        if exit_price is not None
+        else None
+    )
+    return {
+        **base,
+        "outcome_join_status": outcome,
+        "fill_feasible": True,
+        "fill_ts": fill_ts.isoformat(),
+        "fill_price": entry_price,
+        "fill_touch_ask": fill["ask"],
+        "fill_bbo_source": fill["source"],
+        "first_hit_ts": first_hit["ts"].isoformat() if first_hit else None,
+        "exit_price": exit_price,
+        "net_return_bps": (
+            round(net_return_bps, 6) if net_return_bps is not None else None
+        ),
+        "horizons": [
+            _risky_micro_horizon_measurement(
+                path,
+                fill_ts=fill_ts,
+                fill_price=entry_price,
+                horizon_sec=horizon,
+                total_cost_bps=total_cost_bps,
+            )
+            for horizon in RISKY_MICRO_HORIZONS_SEC
+        ],
+    }
+
+
 def _build_risky_micro_episode_source_candidates(
     pipeline_path: Path,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Summarize source-only passive episode projections without live authority."""
+    """Summarize and join source-only passive episodes without live authority."""
 
     status_counts: Counter[str] = Counter()
     reason_counts: Counter[str] = Counter()
     source_stage_counts: Counter[str] = Counter()
+    source_category_counts: Counter[str] = Counter()
     unique_symbols: set[str] = set()
     seen: set[tuple[str, str, str, str]] = set()
     rows: list[dict[str, Any]] = []
+    observation_watermark: datetime | None = None
     for row in iter_jsonl(pipeline_path):
+        row_ts = _risky_micro_ts(_event_ts(row))
+        if row_ts is not None and (
+            observation_watermark is None or row_ts > observation_watermark
+        ):
+            observation_watermark = row_ts
         if (
             str(row.get("stage") or "")
             != "risky_micro_episode_source_candidate_observed"
@@ -4465,26 +4789,25 @@ def _build_risky_micro_episode_source_candidates(
         status = str(fields.get("risky_micro_episode_status") or "unknown")
         reason = str(fields.get("risky_micro_episode_reason") or "unknown")
         source_stage = str(fields.get("risky_micro_episode_source_stage") or "unknown")
-        dedupe_key = (
-            str(row.get("record_id") or ""),
-            code,
-            source_stage,
-            status,
-        )
+        dedupe_key = (str(row.get("record_id") or ""), code, source_stage, status)
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
+        venue, session = _risky_micro_venue_session(fields)
         if code:
             unique_symbols.add(code)
         status_counts[status] += 1
         reason_counts[reason] += 1
         source_stage_counts[source_stage] += 1
+        source_category_counts[_risky_micro_source_category(source_stage)] += 1
         rows.append(
             {
                 "ts": _event_ts(row),
                 "record_id": row.get("record_id"),
                 "stock_code": code,
                 "stock_name": _event_name(row),
+                "effective_venue": venue,
+                "market_session_bucket": session,
                 "status": status,
                 "reason": reason,
                 "source_stage": source_stage,
@@ -4499,6 +4822,9 @@ def _build_risky_micro_episode_source_candidates(
                 ),
                 "tick_window_span_sec": fields.get(
                     "risky_micro_episode_tick_window_span_sec", "-"
+                ),
+                "tick_context_source": fields.get(
+                    "risky_micro_episode_tick_context_source", "unknown"
                 ),
                 "positive_micro_support": _boolish(
                     fields.get("risky_micro_episode_positive_micro_support")
@@ -4515,8 +4841,17 @@ def _build_risky_micro_episode_source_candidates(
                 "hypothetical_target_price": _safe_int(
                     fields.get("risky_micro_episode_hypothetical_target_price")
                 ),
+                "hypothetical_adverse_price": _safe_int(
+                    fields.get("risky_micro_episode_hypothetical_adverse_price")
+                ),
                 "gross_target_bps": _safe_int(
                     fields.get("risky_micro_episode_gross_target_bps")
+                ),
+                "adverse_limit_bps": _safe_int(
+                    fields.get("risky_micro_episode_adverse_limit_bps")
+                ),
+                "conservative_total_cost_bps": _safe_int(
+                    fields.get("risky_micro_episode_conservative_total_cost_bps")
                 ),
                 "passive_ttl_sec": _safe_int(
                     fields.get("risky_micro_episode_passive_ttl_sec")
@@ -4543,12 +4878,71 @@ def _build_risky_micro_episode_source_candidates(
                 "outcome_join_required": _boolish(
                     fields.get("risky_micro_episode_outcome_join_required")
                 ),
-                "outcome_join_status": fields.get(
-                    "risky_micro_episode_outcome_join_status",
-                    "pending_executable_fill_and_3_10_20_30_second_path_consumer",
-                ),
             }
         )
+
+    observations_by_code: dict[str, list[dict[str, Any]]] = {
+        code: [] for code in unique_symbols
+    }
+    if observations_by_code:
+        for row in iter_jsonl(pipeline_path):
+            code = _event_code(row)
+            if code not in observations_by_code:
+                continue
+            ts = _risky_micro_ts(_event_ts(row))
+            if ts is None:
+                continue
+            bid, ask, source = _risky_micro_fresh_executable_bbo(row)
+            if bid is None or ask is None:
+                continue
+            venue, session = _risky_micro_venue_session(_fields(row))
+            observations_by_code[code].append(
+                {
+                    "ts": ts,
+                    "bid": bid,
+                    "ask": ask,
+                    "source": source,
+                    "venue": venue,
+                    "session": session,
+                }
+            )
+    outcome_counts: Counter[str] = Counter()
+    resolved_eligible_net_bps: list[float] = []
+    resolved_eligible_count = 0
+    for candidate in rows:
+        observations = sorted(
+            observations_by_code.get(str(candidate.get("stock_code") or ""), []),
+            key=lambda item: item["ts"],
+        )
+        outcome = _join_risky_micro_executable_outcome(
+            candidate,
+            observations,
+            observation_watermark=observation_watermark,
+        )
+        candidate.update(outcome)
+        outcome_status = str(outcome.get("outcome_join_status") or "unknown")
+        outcome_counts[outcome_status] += 1
+        if outcome.get(
+            "outcome_evaluation_role"
+        ) == "eligible_source_candidate" and outcome_status.startswith("resolved_"):
+            resolved_eligible_count += 1
+            net_bps = _safe_float(outcome.get("net_return_bps"))
+            if net_bps is not None:
+                resolved_eligible_net_bps.append(net_bps)
+
+    observed_categories = {
+        category for category in source_category_counts if category != "other"
+    }
+    unobserved_categories = [
+        category
+        for category in RISKY_MICRO_EXPECTED_SOURCE_CATEGORIES
+        if category not in observed_categories
+    ]
+    daily_source_quality_adjusted_ev_pct = (
+        round(sum(resolved_eligible_net_bps) / resolved_eligible_count / 100.0, 6)
+        if resolved_eligible_count
+        else None
+    )
     return {
         "risky_micro_episode_observation_count": len(rows),
         "risky_micro_episode_unique_symbol_count": len(unique_symbols),
@@ -4564,6 +4958,15 @@ def _build_risky_micro_episode_source_candidates(
             {"source_stage": key, "count": value}
             for key, value in source_stage_counts.most_common()
         ],
+        "risky_micro_episode_source_category_counts": [
+            {"source_category": key, "count": value}
+            for key, value in source_category_counts.most_common()
+        ],
+        "risky_micro_episode_expected_source_categories": list(
+            RISKY_MICRO_EXPECTED_SOURCE_CATEGORIES
+        ),
+        "risky_micro_episode_unobserved_source_categories": unobserved_categories,
+        "risky_micro_episode_source_coverage_complete": not unobserved_categories,
         "risky_micro_episode_source_only_candidate_count": status_counts.get(
             "source_only_candidate", 0
         ),
@@ -4574,7 +4977,19 @@ def _build_risky_micro_episode_source_candidates(
             "excluded_excessive_risk", 0
         ),
         "risky_micro_episode_candidate_projection_ready": bool(rows),
-        "risky_micro_episode_executable_outcome_join_ready": False,
+        "risky_micro_episode_outcome_join_consumer_implemented": True,
+        "risky_micro_episode_outcome_join_status_counts": [
+            {"status": key, "count": value}
+            for key, value in outcome_counts.most_common()
+        ],
+        "risky_micro_episode_resolved_eligible_episode_count": resolved_eligible_count,
+        "risky_micro_episode_daily_source_quality_adjusted_ev_pct": daily_source_quality_adjusted_ev_pct,
+        "risky_micro_episode_source_quality_adjusted_ev_pct": None,
+        "risky_micro_episode_ev_decision_authority": "daily_source_only_diagnostic_not_promotion_authority",
+        "risky_micro_episode_executable_outcome_join_ready": resolved_eligible_count
+        > 0,
+        "risky_micro_episode_promotion_review_sample_floor_met": False,
+        "risky_micro_episode_promotion_review_sample_floor_reason": "rolling_30_resolved_10_symbols_3_dates_not_owned_by_intraday_daily_report",
     }, rows
 
 
@@ -5038,6 +5453,24 @@ def build_report(
                     "live_promotion_from_candidate_counts",
                 ],
             },
+            "risky_micro_episode_executable_outcome": {
+                "metric_role": "source_only_counterfactual_outcome",
+                "decision_authority": "source_only_no_runtime_apply",
+                "window_policy": "fresh_executable_bbo_3_10_20_30_second_path",
+                "sample_floor": (
+                    "rolling_30_resolved_episodes_10_symbols_3_dates_for_promotion_review"
+                ),
+                "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                "source_quality_gate": (
+                    "passive_ask_touch_and_fresh_executable_bid_with_exact_venue_session"
+                ),
+                "forbidden_uses": [
+                    *FORBIDDEN_USES,
+                    "daily_only_ev_runtime_promotion",
+                    "cross_venue_outcome_join",
+                    "mark_price_fill_or_exit_substitution",
+                ],
+            },
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "source_quality": {
@@ -5376,6 +5809,22 @@ def write_outputs(
         f"{summary.get('risky_micro_episode_status_counts')}",
         f"- risky_micro_episode_reason_counts: "
         f"{summary.get('risky_micro_episode_reason_counts')}",
+        f"- risky_micro_episode_source_category_counts: "
+        f"{summary.get('risky_micro_episode_source_category_counts')}",
+        f"- risky_micro_episode_unobserved_source_categories: "
+        f"{summary.get('risky_micro_episode_unobserved_source_categories')}",
+        f"- risky_micro_episode_source_coverage_complete: "
+        f"{summary.get('risky_micro_episode_source_coverage_complete')}",
+        f"- risky_micro_episode_outcome_join_status_counts: "
+        f"{summary.get('risky_micro_episode_outcome_join_status_counts')}",
+        f"- risky_micro_episode_resolved_eligible_episode_count: "
+        f"{summary.get('risky_micro_episode_resolved_eligible_episode_count')}",
+        f"- risky_micro_episode_daily_source_quality_adjusted_ev_pct: "
+        f"{summary.get('risky_micro_episode_daily_source_quality_adjusted_ev_pct')}",
+        f"- risky_micro_episode_ev_decision_authority: "
+        f"{summary.get('risky_micro_episode_ev_decision_authority')}",
+        f"- risky_micro_episode_promotion_review_sample_floor_met: "
+        f"{summary.get('risky_micro_episode_promotion_review_sample_floor_met')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
         f"- consumer_readiness: {summary.get('consumer_readiness')}",
         "",
@@ -5443,13 +5892,17 @@ def write_outputs(
             lines.append(
                 "- ts={ts} code={stock_code} name={stock_name} status={status} "
                 "reason={reason} source_stage={source_stage} block={source_block_reason} "
+                "venue={effective_venue} session={market_session_bucket} "
                 "bbo={best_bid}/{best_ask} spread_bps={spread_bps} "
                 "tick_accel={tick_acceleration_ratio} tick_span={tick_window_span_sec} "
+                "tick_source={tick_context_source} "
                 "positive_micro={positive_micro_support} adverse={adverse_micro_detected} "
                 "large_sell={large_sell_detected} passive_entry={hypothetical_entry_price} "
-                "target={hypothetical_target_price} target_bps={gross_target_bps} "
+                "target={hypothetical_target_price} adverse_price={hypothetical_adverse_price} "
+                "target_bps={gross_target_bps} adverse_bps={adverse_limit_bps} "
                 "ttl={passive_ttl_sec}s max_hold={max_hold_sec}s "
-                "quantity_owner={quantity_owner} outcome_join={outcome_join_status}".format(
+                "quantity_owner={quantity_owner} outcome_join={outcome_join_status} "
+                "fill={fill_feasible}@{fill_price} exit={exit_price} net_bps={net_return_bps}".format(
                     **item
                 )
             )

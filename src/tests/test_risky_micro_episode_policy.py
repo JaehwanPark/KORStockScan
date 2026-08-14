@@ -30,7 +30,9 @@ def test_theborn_like_wide_spread_case_is_recheck_not_live_candidate():
     assert result["risky_micro_episode_hypothetical_entry_price"] < 16_310
     assert result["risky_micro_episode_runtime_effect"] is False
     assert result["risky_micro_episode_broker_order_forbidden"] is True
-    assert result["risky_micro_episode_metric_role"] == "source_candidate_classification"
+    assert (
+        result["risky_micro_episode_metric_role"] == "source_candidate_classification"
+    )
     assert result["risky_micro_episode_outcome_join_required"] is True
 
 
@@ -48,9 +50,14 @@ def test_confirmed_fresh_case_builds_cost_aware_passive_source_plan():
 
     assert result["risky_micro_episode_status"] == "source_only_candidate"
     assert result["risky_micro_episode_gross_target_bps"] == 33
+    assert result["risky_micro_episode_adverse_limit_bps"] == 33
     assert (
         result["risky_micro_episode_hypothetical_target_price"]
         > result["risky_micro_episode_hypothetical_entry_price"]
+    )
+    assert (
+        result["risky_micro_episode_hypothetical_adverse_price"]
+        < result["risky_micro_episode_hypothetical_entry_price"]
     )
     assert "risky_micro_episode_hypothetical_quantity" not in result
     assert (
@@ -61,7 +68,10 @@ def test_confirmed_fresh_case_builds_cost_aware_passive_source_plan():
     assert result["risky_micro_episode_independent_episode_or_widget_owner"] is False
     assert result["risky_micro_episode_scale_in_allowed"] is False
     assert result["risky_micro_episode_residual_multi_leg_allowed"] is False
-    assert result["risky_micro_episode_primary_decision_metric"] == "candidate_status_counts"
+    assert (
+        result["risky_micro_episode_primary_decision_metric"]
+        == "candidate_status_counts"
+    )
 
 
 def test_adverse_micro_and_stale_bbo_fail_closed():

@@ -115,6 +115,51 @@ def test_rising_missed_risky_micro_episode_requires_strictly_positive_ofi():
     assert result["risky_micro_episode_reason"] == "positive_micro_support_not_confirmed"
 
 
+def test_risky_micro_episode_reuses_fresh_trusted_tp1_tick_window_provenance():
+    result = state_handlers._evaluate_rising_missed_risky_micro_episode_source_only(
+        stock={
+            "code": "475560",
+            "name": "THEBORN",
+            "rising_missed_tp1_submit_context_at": time.time(),
+            "rising_missed_tp1_submit_context_evaluation_id": "tp1-eval-1",
+            "rising_missed_tp1_submit_context_candidate_allowed": True,
+            "rising_missed_tp1_submit_context_tick_acceleration": 1.12,
+            "rising_missed_tp1_submit_context_tick_acceleration_fresh": True,
+            "rising_missed_tp1_submit_context_tick_acceleration_source": (
+                "trusted_ws_signed_0b_10tick_received_ts"
+            ),
+            "rising_missed_tp1_submit_context_tick_acceleration_age_sec": 0.2,
+            "rising_missed_tp1_submit_context_tick_window_span_sec": 8.0,
+            "rising_missed_tp1_submit_context_tick_window_sample_count": 10,
+            "rising_missed_tp1_submit_context_true_ofi_ewma": 0.05,
+            "rising_missed_tp1_submit_context_top_depth_ratio": 1.2,
+        },
+        runtime={},
+        latency_gate={"quote_age_ms": 100.0},
+        ws_data={
+            "orderbook": {
+                "asks": [{"price": 16_310, "volume": 50}],
+                "bids": [{"price": 16_220, "volume": 50}],
+            }
+        },
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_qi": 0.50,
+            "orderbook_micro_ofi_norm": 0.0,
+        },
+        microstructure_fields={},
+        source_stage="latency_block",
+        source_block_reason="wide_spread",
+        rising_missed_entry_lineage=True,
+    )
+
+    assert result["risky_micro_episode_status"] == "source_only_candidate"
+    assert result["risky_micro_episode_tick_acceleration_ratio"] == 1.12
+    assert result["risky_micro_episode_tick_window_span_sec"] == 8.0
+    assert result["risky_micro_episode_tick_context_fallback_applied"] is True
+    assert result["risky_micro_episode_runtime_effect"] is False
+
+
 def test_scanner_fast_precheck_never_hydrates_promotion_runtime_context(monkeypatch):
     hydrated = []
     stock = {

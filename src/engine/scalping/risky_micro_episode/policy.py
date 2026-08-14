@@ -14,6 +14,7 @@ from typing import Any
 from src.trading.order.tick_utils import (
     get_tick_size,
     move_price_by_ticks,
+    move_price_down_by_bps,
     move_price_up_by_bps,
 )
 
@@ -33,6 +34,7 @@ class RiskyMicroEpisodeConfig:
     marketable_spread_bps: float = 15.0
     conservative_total_cost_bps: int = 23
     desired_net_profit_bps: int = 10
+    adverse_limit_bps: int = 33
     passive_ttl_sec: int = 3
     max_hold_sec: int = 20
     proposed_per_symbol_daily_episode_cap: int = 1
@@ -55,6 +57,7 @@ class RiskyMicroEpisodeConfig:
             min(
                 self.conservative_total_cost_bps,
                 self.desired_net_profit_bps,
+                self.adverse_limit_bps,
                 self.passive_ttl_sec,
                 self.max_hold_sec,
                 self.proposed_per_symbol_daily_episode_cap,
@@ -144,10 +147,15 @@ def evaluate_risky_micro_episode(
     )
     passive_entry_price = 0
     target_price = 0
+    adverse_price = 0
     if bbo_valid:
         bid_plus_one = move_price_by_ticks(bid, 1)
         passive_entry_price = bid_plus_one if bid_plus_one < ask else bid
         target_price = move_price_up_by_bps(passive_entry_price, gross_target_bps)
+        adverse_price = move_price_down_by_bps(
+            passive_entry_price,
+            policy.adverse_limit_bps,
+        )
 
     status = "not_applicable"
     reason = "not_rising_missed_lineage"
@@ -218,11 +226,13 @@ def evaluate_risky_micro_episode(
         "risky_micro_episode_entry_style": "passive_limit_no_chase",
         "risky_micro_episode_hypothetical_entry_price": passive_entry_price,
         "risky_micro_episode_hypothetical_target_price": target_price,
+        "risky_micro_episode_hypothetical_adverse_price": adverse_price,
         "risky_micro_episode_conservative_total_cost_bps": (
             policy.conservative_total_cost_bps
         ),
         "risky_micro_episode_desired_net_profit_bps": policy.desired_net_profit_bps,
         "risky_micro_episode_gross_target_bps": gross_target_bps,
+        "risky_micro_episode_adverse_limit_bps": policy.adverse_limit_bps,
         "risky_micro_episode_passive_ttl_sec": policy.passive_ttl_sec,
         "risky_micro_episode_max_hold_sec": policy.max_hold_sec,
         "risky_micro_episode_proposed_per_symbol_daily_cap": (

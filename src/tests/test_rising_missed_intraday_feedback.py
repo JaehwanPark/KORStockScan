@@ -120,7 +120,232 @@ def test_risky_micro_episode_source_candidates_are_consumed_by_feedback_report(
     assert candidate["outcome_join_required"] is True
     assert candidate["quantity_is_tuning_axis"] is False
     assert candidate["independent_episode_or_widget_owner"] is False
-    assert report["summary"]["risky_micro_episode_executable_outcome_join_ready"] is False
+    assert (
+        report["summary"]["risky_micro_episode_executable_outcome_join_ready"] is False
+    )
+    assert (
+        report["summary"]["risky_micro_episode_outcome_join_consumer_implemented"]
+        is True
+    )
+    assert report["summary"]["risky_micro_episode_source_coverage_complete"] is False
+    assert (
+        "entry_ai"
+        in report["summary"]["risky_micro_episode_unobserved_source_categories"]
+    )
+
+
+def test_risky_micro_episode_joins_passive_fill_and_executable_short_path(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    candidate = _event(
+        "micro-2",
+        "475560",
+        "THEBORN",
+        "risky_micro_episode_source_candidate_observed",
+        {
+            "risky_micro_episode_status": "source_only_candidate",
+            "risky_micro_episode_reason": "fresh_passive_cost_aware_episode_candidate",
+            "risky_micro_episode_source_stage": "latency_block",
+            "risky_micro_episode_source_block_reason": "wide_spread",
+            "risky_micro_episode_best_bid": 16_220,
+            "risky_micro_episode_best_ask": 16_310,
+            "risky_micro_episode_quote_age_ms": 100,
+            "risky_micro_episode_hypothetical_entry_price": 16_230,
+            "risky_micro_episode_hypothetical_target_price": 16_290,
+            "risky_micro_episode_hypothetical_adverse_price": 16_170,
+            "risky_micro_episode_gross_target_bps": 33,
+            "risky_micro_episode_adverse_limit_bps": 33,
+            "risky_micro_episode_conservative_total_cost_bps": 23,
+            "risky_micro_episode_passive_ttl_sec": 3,
+            "risky_micro_episode_max_hold_sec": 20,
+            "risky_micro_episode_outcome_join_required": True,
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:10:00+09:00",
+    )
+
+    def bbo(second, bid, ask):
+        return _event(
+            "micro-2",
+            "475560",
+            "THEBORN",
+            "scalping_scanner_fast_precheck",
+            {
+                "market_data_effective_best_bid": bid,
+                "market_data_effective_best_ask": ask,
+                "market_data_effective_quote_age_ms": 100,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+            emitted_at=f"2026-08-14T09:10:{second:02d}+09:00",
+        )
+
+    rows = [
+        candidate,
+        bbo(2, 16_220, 16_230),
+        bbo(5, 16_240, 16_250),
+        bbo(12, 16_290, 16_300),
+        bbo(22, 16_300, 16_310),
+        bbo(32, 16_310, 16_320),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report("2026-08-14", pipeline_path=pipeline_path)
+
+    outcome = report["risky_micro_episode_source_candidate_rows"][0]
+    assert outcome["fill_feasible"] is True
+    assert outcome["outcome_join_status"] == "resolved_target_first"
+    assert outcome["net_return_bps"] > 0
+    assert [item["horizon_sec"] for item in outcome["horizons"]] == [3, 10, 20, 30]
+    assert report["summary"]["risky_micro_episode_resolved_eligible_episode_count"] == 1
+    assert (
+        report["summary"]["risky_micro_episode_executable_outcome_join_ready"] is True
+    )
+    assert (
+        report["summary"]["risky_micro_episode_daily_source_quality_adjusted_ev_pct"]
+        > 0
+    )
+    assert (
+        report["summary"]["risky_micro_episode_source_quality_adjusted_ev_pct"] is None
+    )
+    assert (
+        report["summary"]["risky_micro_episode_ev_decision_authority"]
+        == "daily_source_only_diagnostic_not_promotion_authority"
+    )
+    outcome_contract = report["metric_contracts"][
+        "risky_micro_episode_executable_outcome"
+    ]
+    assert outcome_contract["decision_authority"] == "source_only_no_runtime_apply"
+    assert "cross_venue_outcome_join" in outcome_contract["forbidden_uses"]
+    output_json = tmp_path / "report.json"
+    output_md = tmp_path / "report.md"
+    mod.write_outputs(report, output_json=output_json, output_md=output_md)
+    markdown = output_md.read_text(encoding="utf-8")
+    assert "risky_micro_episode_unobserved_source_categories" in markdown
+    assert "outcome_join=resolved_target_first" in markdown
+    assert "venue=KRX session=KRX_REGULAR" in markdown
+
+
+def test_risky_micro_episode_normalizes_mixed_naive_and_aware_timestamps(tmp_path):
+    target_date = "2026-08-14"
+    pipeline_path = tmp_path / f"pipeline_events_{target_date}.jsonl"
+    candidate_fields = {
+        "risky_micro_episode_status": "source_only_candidate",
+        "risky_micro_episode_reason": "fresh_passive_cost_aware_episode_candidate",
+        "risky_micro_episode_source_stage": "latency_block",
+        "risky_micro_episode_best_bid": 10_000,
+        "risky_micro_episode_best_ask": 10_020,
+        "risky_micro_episode_quote_age_ms": 100,
+        "risky_micro_episode_hypothetical_entry_price": 10_010,
+        "risky_micro_episode_hypothetical_target_price": 10_040,
+        "risky_micro_episode_hypothetical_adverse_price": 9_970,
+        "risky_micro_episode_conservative_total_cost_bps": 23,
+        "risky_micro_episode_passive_ttl_sec": 3,
+        "risky_micro_episode_max_hold_sec": 20,
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+    }
+    rows = [
+        {
+            "ts": f"{target_date}T09:00:00",
+            "stage": "risky_micro_episode_source_candidate_observed",
+            "code": "000001",
+            "fields": candidate_fields,
+        },
+        {
+            "ts": f"{target_date}T09:00:01+09:00",
+            "stage": "market_data_observed",
+            "code": "000001",
+            "fields": {
+                "market_data_effective_best_bid": 10_000,
+                "market_data_effective_best_ask": 10_010,
+                "market_data_effective_quote_age_ms": 10,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+        },
+        {
+            "ts": f"{target_date}T09:00:21+09:00",
+            "stage": "market_data_observed",
+            "code": "000001",
+            "fields": {
+                "market_data_effective_best_bid": 10_050,
+                "market_data_effective_best_ask": 10_060,
+                "market_data_effective_quote_age_ms": 10,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+        },
+    ]
+    pipeline_path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    summary, outcomes = mod._build_risky_micro_episode_source_candidates(pipeline_path)
+
+    outcome = outcomes[0]
+    assert outcome["outcome_join_status"] == "resolved_target_first"
+    assert outcome["decision_authority"] == "source_only_no_runtime_apply"
+    assert summary["risky_micro_episode_resolved_eligible_episode_count"] == 1
+
+
+def test_risky_micro_episode_never_joins_cross_venue_bbo(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    candidate = _event(
+        "micro-venue",
+        "475560",
+        "THEBORN",
+        "risky_micro_episode_source_candidate_observed",
+        {
+            "risky_micro_episode_status": "source_only_candidate",
+            "risky_micro_episode_reason": "fresh_passive_cost_aware_episode_candidate",
+            "risky_micro_episode_source_stage": "latency_block",
+            "risky_micro_episode_hypothetical_entry_price": 10_010,
+            "risky_micro_episode_hypothetical_target_price": 10_040,
+            "risky_micro_episode_hypothetical_adverse_price": 9_970,
+            "risky_micro_episode_conservative_total_cost_bps": 23,
+            "risky_micro_episode_passive_ttl_sec": 3,
+            "risky_micro_episode_max_hold_sec": 20,
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:00:00+09:00",
+    )
+    nxt_bbo = _event(
+        "micro-venue",
+        "475560",
+        "THEBORN",
+        "market_data_observed",
+        {
+            "market_data_effective_best_bid": 10_000,
+            "market_data_effective_best_ask": 10_010,
+            "market_data_effective_quote_age_ms": 10,
+            "effective_venue": "NXT",
+            "market_session_bucket": "nxt_regular",
+        },
+        emitted_at="2026-08-14T09:00:01+09:00",
+    )
+    watermark = _event(
+        "watermark",
+        "475560",
+        "THEBORN",
+        "market_data_observed",
+        {},
+        emitted_at="2026-08-14T09:00:10+09:00",
+    )
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in (candidate, nxt_bbo, watermark)),
+        encoding="utf-8",
+    )
+
+    _, outcomes = mod._build_risky_micro_episode_source_candidates(pipeline_path)
+
+    assert outcomes[0]["outcome_join_status"] == "resolved_not_filled"
+    assert outcomes[0]["matching_fresh_bbo_observation_count"] == 0
 
 
 def test_tp1_label_projection_preserves_plain_counterfactual_provenance():
