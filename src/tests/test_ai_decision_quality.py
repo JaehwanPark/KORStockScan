@@ -1,6 +1,8 @@
 import gzip
+import hashlib
 import json
 import sys
+from copy import deepcopy
 from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -8,6 +10,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.engine.scalping import ai_decision_quality as quality
+from src.engine.scalping.micro_reversion.provider_budget import (
+    PRICING_ARTIFACT_SCHEMA,
+    PRICING_AUTHORITY,
+    pricing_artifact_content_sha256,
+)
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -5966,6 +5973,8 @@ def test_micro_reversion_action_neutral_label_flows_into_three_arm_evaluator():
                 "provider_none": False,
                 "provider_call_attempted": True,
                 "provider_call_succeeded": True,
+                "input_tokens": 120,
+                "output_tokens": 30,
             },
         }
 
@@ -6000,6 +6009,42 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
     materialized_path = tmp_path / "materialized.json"
     bridge_path = tmp_path / "bridge.json"
     output_path = tmp_path / "execution.json"
+    raw_pricing_path = tmp_path / "provider-pricing-source.txt"
+    raw_pricing_bytes = b"reviewed test pricing source\n"
+    raw_pricing_path.write_bytes(raw_pricing_bytes)
+    pricing_path = tmp_path / "provider-pricing.json"
+    pricing_payload = {
+        "schema": PRICING_ARTIFACT_SCHEMA,
+        "artifact_id": "provider-pricing-test-v1",
+        "review_status": "reviewed",
+        "reviewed_at": "2026-08-14T18:00:00+09:00",
+        "effective_from": "2026-08-14",
+        "effective_to": "2026-08-14",
+        "raw_pricing_source_path": raw_pricing_path.name,
+        "raw_pricing_source_bytes_sha256": hashlib.sha256(
+            raw_pricing_bytes
+        ).hexdigest(),
+        "raw_pricing_source_size_bytes": len(raw_pricing_bytes),
+        "prices": [
+            {
+                "provider": "openai",
+                "model": "gpt-test",
+                "input_usd_per_million_tokens": "1",
+                "output_usd_per_million_tokens": "10",
+            }
+        ],
+        "decision_authority": PRICING_AUTHORITY,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    pricing_payload["artifact_content_sha256"] = pricing_artifact_content_sha256(
+        pricing_payload
+    )
+    pricing_path.write_text(json.dumps(pricing_payload), encoding="utf-8")
+    budget_ledger_path = tmp_path / "provider-budget.jsonl"
+    budget_summary_path = tmp_path / "provider-budget-summary.json"
     materialized_path.write_text(json.dumps(materialized), encoding="utf-8")
     bridge_path.write_text(json.dumps(bridge_report), encoding="utf-8")
     monkeypatch.setattr(quality, "_offline_openai_api_keys", lambda: ["test-key"])
@@ -6025,6 +6070,8 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
                 "provider_none": False,
                 "provider_call_attempted": True,
                 "provider_call_succeeded": True,
+                "input_tokens": 120,
+                "output_tokens": 30,
             },
         }
 
@@ -6047,6 +6094,16 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
                 "--write",
                 "--candidate-max-new-requests",
                 "3",
+                "--micro-reversion-provider-pricing",
+                str(pricing_path),
+                "--micro-reversion-provider-daily-attempt-cap",
+                "12",
+                "--micro-reversion-provider-daily-usd-cap",
+                "1",
+                "--micro-reversion-provider-budget-ledger",
+                str(budget_ledger_path),
+                "--micro-reversion-provider-budget-summary",
+                str(budget_summary_path),
             ]
         )
         == 0
@@ -6057,11 +6114,191 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
     assert printed["status"] == "offline_three_arm_execution_complete"
     assert written["result_count"] == 3
     assert written["provider_call_performed"] is True
+    assert budget_ledger_path.exists()
+    assert budget_summary_path.exists()
     assert written["runtime_effect"] is False
     assert written["actual_order_submitted"] is False
     checkpoint_path = output_path.with_name(f"{output_path.stem}.checkpoint.json")
     assert not checkpoint_path.exists()
     assert not quality._micro_reversion_checkpoint_record_dir(checkpoint_path).exists()
+
+
+def test_micro_reversion_cli_ignores_unselected_openai_credentials_for_bedrock_batch(
+    tmp_path, monkeypatch, capsys
+):
+    from src.engine.scalping import ai_stage_coverage_replay
+
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    future_openai_requests = deepcopy(materialized["requests"])
+    future_parent_id = "future-openai-parent"
+    future_label_id = "future-openai-trace:v1"
+    for request in future_openai_requests:
+        request["paired_replay_parent_id"] = future_parent_id
+        request["paired_replay_id"] = (
+            f"{future_parent_id}:{request['micro_reversion_replay_arm']}"
+        )
+        request["decision_trace_id"] = "future-openai-trace"
+        request["outcome_join_key"] = future_label_id
+    for request in materialized["requests"]:
+        candidate = request["candidate"]
+        candidate["provider"] = "bedrock_test"
+        candidate["response_schema_application"] = (
+            "local_expected_only_not_sent_to_bedrock"
+        )
+        candidate["contract_sha256"] = quality._candidate_contract_sha256(
+            candidate
+        )
+    materialized["requests"].extend(future_openai_requests)
+    materialized["request_ids"] = [
+        request["paired_replay_id"] for request in materialized["requests"]
+    ]
+    materialized["request_count"] = len(materialized["requests"])
+    materialized["report_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in materialized.items()
+            if key != "report_content_sha256"
+        }
+    )
+    first_label = _micro_reversion_execution_label(prepared)
+    future_label = {
+        **deepcopy(first_label),
+        "label_id": future_label_id,
+        "decision_trace_id": "future-openai-trace",
+    }
+    materialized_path = tmp_path / "materialized.json"
+    outcome_path = tmp_path / "outcomes.json"
+    output_path = tmp_path / "execution.json"
+    materialized_path.write_text(json.dumps(materialized), encoding="utf-8")
+    outcome_path.write_text(
+        json.dumps({"schema": "test_outcomes_v1", "labels": [first_label, future_label]}),
+        encoding="utf-8",
+    )
+    raw_pricing_path = tmp_path / "provider-pricing-source.txt"
+    raw_pricing_bytes = b"reviewed mixed provider test pricing source\n"
+    raw_pricing_path.write_bytes(raw_pricing_bytes)
+    pricing_path = tmp_path / "provider-pricing.json"
+    pricing_payload = {
+        "schema": PRICING_ARTIFACT_SCHEMA,
+        "artifact_id": "provider-pricing-mixed-test-v1",
+        "review_status": "reviewed",
+        "reviewed_at": "2026-08-14T18:00:00+09:00",
+        "effective_from": "2026-08-14",
+        "effective_to": "2026-08-14",
+        "raw_pricing_source_path": raw_pricing_path.name,
+        "raw_pricing_source_bytes_sha256": hashlib.sha256(
+            raw_pricing_bytes
+        ).hexdigest(),
+        "raw_pricing_source_size_bytes": len(raw_pricing_bytes),
+        "prices": [
+            {
+                "provider": provider,
+                "model": "gpt-test",
+                "input_usd_per_million_tokens": "1",
+                "output_usd_per_million_tokens": "10",
+            }
+            for provider in ("bedrock_test", "openai")
+        ],
+        "decision_authority": PRICING_AUTHORITY,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    pricing_payload["artifact_content_sha256"] = pricing_artifact_content_sha256(
+        pricing_payload
+    )
+    pricing_path.write_text(json.dumps(pricing_payload), encoding="utf-8")
+    key_checks: list[bool] = []
+    bedrock_calls: list[str] = []
+    monkeypatch.setattr(
+        quality,
+        "_offline_openai_api_keys",
+        lambda: key_checks.append(True) or [],
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_execution_result_path",
+        lambda _target_date: output_path,
+    )
+    original_exclusion = quality._micro_reversion_executor_exclusion
+    monkeypatch.setattr(
+        quality,
+        "_micro_reversion_executor_exclusion",
+        lambda request: (
+            None
+            if str((request.get("candidate") or {}).get("provider") or "")
+            == "bedrock_test"
+            else original_exclusion(request)
+        ),
+    )
+
+    def fake_bedrock_runner(request):
+        bedrock_calls.append(str(request["paired_replay_id"]))
+        candidate = request["candidate"]
+        return {
+            "candidate_response": _valid_micro_reversion_entry_response(),
+            "provider_provenance": {
+                "provider": "bedrock_test",
+                "model": candidate["model"],
+                "transport": "bedrock_runtime_offline",
+                "source_transport_contract": candidate["transport"],
+                "response_id": f"response-{request['paired_replay_id']}",
+                "response_sha256": quality._sha256(request["paired_replay_id"]),
+                "provider_none": False,
+                "provider_call_attempted": True,
+                "provider_call_succeeded": True,
+                "input_tokens": 120,
+                "output_tokens": 30,
+            },
+        }
+
+    monkeypatch.setattr(
+        ai_stage_coverage_replay,
+        "execute_bedrock_candidate_single_network_attempt",
+        fake_bedrock_runner,
+    )
+
+    rc = quality.main(
+        [
+            "--date",
+            "2026-08-14",
+            "--mode",
+            "micro_reversion_execute",
+            "--micro-reversion-materialized-requests",
+            str(materialized_path),
+            "--micro-reversion-outcome-labels",
+            str(outcome_path),
+            "--execute-candidate",
+            "--write",
+            "--candidate-max-new-requests",
+            "3",
+            "--micro-reversion-provider-pricing",
+            str(pricing_path),
+            "--micro-reversion-provider-daily-attempt-cap",
+            "12",
+            "--micro-reversion-provider-daily-usd-cap",
+            "1",
+            "--micro-reversion-provider-budget-ledger",
+            str(tmp_path / "provider-budget.jsonl"),
+            "--micro-reversion-provider-budget-summary",
+            str(tmp_path / "provider-budget-summary.json"),
+        ]
+    )
+
+    assert rc == 0
+    assert len(bedrock_calls) == 3
+    assert key_checks == []
+    assert json.loads(capsys.readouterr().out)["status"] == (
+        "offline_three_arm_execution_batch_complete"
+    )
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert written["result_count"] == 3
+    assert written["deferred_request_count"] == 3
 
 
 def test_micro_reversion_execute_cli_rejects_explicit_parallel_workers(
@@ -6224,6 +6461,281 @@ def test_micro_reversion_execution_rejects_schema_valid_missing_provider_provena
     assert report["three_arm_evaluation"]["complete_parent_count"] == 0
 
 
+def test_micro_reversion_execution_budget_never_slices_one_parent_arms():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    calls: list[str] = []
+
+    def runner(request):
+        calls.append(str(request["paired_replay_id"]))
+        raise AssertionError("an incomplete A/B/C parent must not call a provider")
+
+    report = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[_micro_reversion_execution_label(prepared)],
+        execute_candidate=True,
+        candidate_runner=runner,
+        max_new_requests=2,
+    )
+
+    assert calls == []
+    assert report["result_count"] == 0
+    assert report["deferred_request_count"] == 3
+    assert report["status"] == (
+        "offline_three_arm_execution_complete_with_failures_or_exclusions"
+    )
+    assert quality._micro_reversion_execution_exit_code(
+        report=report,
+        execute_candidate=True,
+    ) == 2
+
+
+def test_micro_reversion_execution_commits_one_bounded_parent_per_batch():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    second_requests = deepcopy(materialized["requests"])
+    second_parent_id = "micro-parent-second"
+    second_label_id = "trace-materialize-2:v1"
+    for request in second_requests:
+        request["paired_replay_parent_id"] = second_parent_id
+        request["paired_replay_id"] = (
+            f"{second_parent_id}:{request['micro_reversion_replay_arm']}"
+        )
+        request["decision_trace_id"] = "trace-materialize-2"
+        request["outcome_join_key"] = second_label_id
+    materialized["requests"].extend(second_requests)
+    materialized["request_ids"] = [
+        request["paired_replay_id"] for request in materialized["requests"]
+    ]
+    materialized["request_count"] = len(materialized["requests"])
+    materialized["report_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in materialized.items()
+            if key != "report_content_sha256"
+        }
+    )
+    first_label = _micro_reversion_execution_label(prepared)
+    second_label = {
+        **deepcopy(first_label),
+        "label_id": second_label_id,
+        "decision_trace_id": "trace-materialize-2",
+    }
+    calls: list[str] = []
+
+    def runner(request):
+        calls.append(str(request["paired_replay_id"]))
+        return {
+            "candidate_response": _valid_micro_reversion_entry_response(),
+            "provider_provenance": {
+                "provider": "openai",
+                "model": "gpt-test",
+                "transport": "openai_responses_http_offline",
+                "source_transport_contract": request["candidate"]["transport"],
+                "response_id": f"response-{request['paired_replay_id']}",
+                "response_sha256": quality._sha256(request["paired_replay_id"]),
+                "provider_none": False,
+                "provider_call_attempted": True,
+                "provider_call_succeeded": True,
+            },
+        }
+
+    first_batch = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[first_label, second_label],
+        execute_candidate=True,
+        candidate_runner=runner,
+        max_new_requests=3,
+    )
+
+    assert len(calls) == 3
+    assert first_batch["status"] == "offline_three_arm_execution_batch_complete"
+    assert first_batch["committed_parent_count"] == 1
+    assert first_batch["newly_committed_parent_count"] == 1
+    assert first_batch["result_count"] == 3
+    assert first_batch["deferred_request_count"] == 3
+    assert first_batch["three_arm_evaluation"]["complete_parent_count"] == 1
+    assert quality._micro_reversion_execution_exit_code(
+        report=first_batch,
+        execute_candidate=True,
+    ) == 0
+
+    calls.clear()
+    second_batch = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[first_label, second_label],
+        execute_candidate=True,
+        candidate_runner=runner,
+        existing_result_artifact=first_batch,
+        max_new_requests=3,
+    )
+
+    assert len(calls) == 3
+    assert second_batch["status"] == "offline_three_arm_execution_complete"
+    assert second_batch["committed_parent_count"] == 2
+    assert second_batch["result_count"] == 6
+    assert second_batch["deferred_request_count"] == 0
+    assert second_batch["three_arm_evaluation"]["complete_parent_count"] == 2
+
+
+def test_micro_reversion_batch_allows_unselected_intentional_exclusion():
+    from src.engine.scalping.micro_reversion import ai_quality_cycle as cycle
+
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    supported_requests = deepcopy(materialized["requests"])
+    supported_parent_id = "micro-parent-supported-second"
+    supported_label_id = "trace-supported-second:v1"
+    for request in supported_requests:
+        request["paired_replay_parent_id"] = supported_parent_id
+        request["paired_replay_id"] = (
+            f"{supported_parent_id}:{request['micro_reversion_replay_arm']}"
+        )
+        request["decision_trace_id"] = "trace-supported-second"
+        request["outcome_join_key"] = supported_label_id
+    for request in materialized["requests"]:
+        candidate = request["candidate"]
+        candidate["provider"] = "unsupported_offline_provider"
+        candidate["contract_sha256"] = quality._candidate_contract_sha256(
+            candidate
+        )
+    materialized["requests"].extend(supported_requests)
+    materialized["request_ids"] = [
+        request["paired_replay_id"] for request in materialized["requests"]
+    ]
+    materialized["request_count"] = len(materialized["requests"])
+    materialized["report_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in materialized.items()
+            if key != "report_content_sha256"
+        }
+    )
+    first_label = _micro_reversion_execution_label(prepared)
+    supported_label = {
+        **deepcopy(first_label),
+        "label_id": supported_label_id,
+        "decision_trace_id": "trace-supported-second",
+    }
+    calls: list[str] = []
+
+    def runner(request):
+        calls.append(str(request["paired_replay_id"]))
+        return {
+            "candidate_response": _valid_micro_reversion_entry_response(),
+            "provider_provenance": {
+                "provider": "openai",
+                "model": "gpt-test",
+                "transport": "openai_responses_http_offline",
+                "source_transport_contract": request["candidate"]["transport"],
+                "response_id": f"response-{request['paired_replay_id']}",
+                "response_sha256": quality._sha256(request["paired_replay_id"]),
+                "provider_none": False,
+                "provider_call_attempted": True,
+                "provider_call_succeeded": True,
+            },
+        }
+
+    batch = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[first_label, supported_label],
+        execute_candidate=True,
+        candidate_runner=runner,
+        max_new_requests=3,
+    )
+
+    assert len(calls) == 3
+    assert all(supported_parent_id in request_id for request_id in calls)
+    assert batch["status"] == "offline_three_arm_execution_batch_complete"
+    assert batch["result_count"] == 3
+    assert batch["deferred_request_count"] == 3
+    assert batch["execution_exclusion_count"] == 3
+    assert batch["blocking_execution_exclusion_count"] == 0
+    assert batch["three_arm_evaluation"]["complete_parent_count"] == 1
+    assert quality._micro_reversion_execution_exit_code(
+        report=batch,
+        execute_candidate=True,
+    ) == 0
+
+    def consumer_budget_receipt(report):
+        report_without_hash = deepcopy(
+            {
+                key: value
+                for key, value in report.items()
+                if key != "report_content_sha256"
+            }
+        )
+        for result in report_without_hash["results"]:
+            for attempt in result["replay_result"]["candidate_attempts"]:
+                provenance = attempt["provider_provenance"]
+                reservation_id = f"reservation-{result['paired_replay_id']}"
+                provenance.update(
+                    {
+                        "provider_budget_reservation_id": reservation_id,
+                        "provider_budget_attempt_identity_sha256": (
+                            quality._sha256({"reservation_id": reservation_id})
+                        ),
+                        "provider_budget_settled": True,
+                        "provider_budget_unknown_usage_reservation_retained": False,
+                        "provider_budget_circuit_breaker_open": False,
+                    }
+                )
+        budget_body = {
+            "circuit_breaker_open": False,
+            "committed_cost_usd": "0.5",
+            "daily_usd_cap": "1.0",
+            "reservation_count": len(report_without_hash["results"]),
+            "daily_attempt_cap": 12,
+        }
+        report_without_hash["provider_budget"] = {
+            **budget_body,
+            "summary_content_sha256": quality._sha256(budget_body),
+        }
+        report_without_hash["provider_budget_contract_findings"] = []
+        return {
+            **report_without_hash,
+            "report_content_sha256": cycle._sha256(report_without_hash),
+        }
+
+    cycle_report = consumer_budget_receipt(batch)
+    # This narrow fixture intentionally has no reviewed economic reference, so
+    # the accepted execution contributes no R2 row yet; contract validation
+    # must still accept the supported bounded batch without raising.
+    assert cycle._validated_execution_rows(cycle_report) == []
+
+    def forbidden_rerun(_request):
+        raise AssertionError("a completed bounded batch must be idempotently reusable")
+
+    rerun = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[first_label, supported_label],
+        execute_candidate=True,
+        candidate_runner=forbidden_rerun,
+        existing_result_artifact=batch,
+        max_new_requests=3,
+    )
+
+    assert rerun["status"] == "offline_three_arm_execution_batch_complete"
+    assert rerun["new_result_count"] == 0
+    assert rerun["result_count"] == 3
+    assert rerun["deferred_request_count"] == 3
+    assert quality._micro_reversion_execution_exit_code(
+        report=rerun,
+        execute_candidate=True,
+    ) == 0
+    rerun_for_consumer = consumer_budget_receipt(rerun)
+    assert cycle._validated_execution_rows(rerun_for_consumer) == []
+
+
 def test_micro_reversion_execution_does_not_infer_provider_success_from_hash():
     prepared, source_bundle = _micro_reversion_materialization_fixture()
     materialized = quality.materialize_micro_reversion_offline_requests(
@@ -6264,6 +6776,103 @@ def test_micro_reversion_execution_does_not_infer_provider_success_from_hash():
     )
 
 
+def test_micro_reversion_execution_budget_findings_block_breaker_and_over_cap():
+    report = {
+        "new_result_ids": ["result-current"],
+        "results": [
+            {
+                "result_id": "result-current",
+                "replay_result": {
+                    "candidate_attempts": [
+                        {
+                            "provider_provenance": {
+                                "provider": "openai",
+                                "provider_budget_reservation_id": "reservation-1",
+                                "provider_budget_attempt_identity_sha256": "a" * 64,
+                                "provider_budget_settled": True,
+                                "provider_budget_unknown_usage_reservation_retained": False,
+                                "provider_budget_circuit_breaker_open": False,
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    summary_body = {
+        "circuit_breaker_open": True,
+        "committed_cost_usd": "1.00000001",
+        "daily_usd_cap": "1.0",
+        "reservation_count": 0,
+        "daily_attempt_cap": 12,
+    }
+    summary = {
+        **summary_body,
+        "summary_content_sha256": quality._sha256(summary_body),
+    }
+
+    findings = quality._micro_reversion_execution_budget_findings(
+        report=report,
+        budget_summary=summary,
+    )
+
+    assert "provider_budget_circuit_breaker_open" in findings
+    assert "provider_budget_committed_cost_exceeds_cap" in findings
+    assert "provider_budget_reservation_count_below_result_provenance" in findings
+
+
+def test_micro_reversion_budget_census_allows_cross_day_checkpoint_resume():
+    def result(result_id: str, reservation_id: str) -> dict:
+        return {
+            "result_id": result_id,
+            "replay_result": {
+                "candidate_attempts": [
+                    {
+                        "provider_provenance": {
+                            "provider": "openai",
+                            "provider_budget_reservation_id": reservation_id,
+                            "provider_budget_attempt_identity_sha256": "a" * 64,
+                            "provider_budget_settled": True,
+                            "provider_budget_unknown_usage_reservation_retained": (
+                                False
+                            ),
+                            "provider_budget_circuit_breaker_open": False,
+                        }
+                    }
+                ]
+            },
+        }
+
+    report = {
+        # Arm A was reserved on the prior KST execution date; only B/C belong
+        # to the current daily ledger summary during checkpoint completion.
+        "new_result_ids": ["result-b", "result-c"],
+        "results": [
+            result("result-a", "prior-day-reservation-a"),
+            result("result-b", "current-day-reservation-b"),
+            result("result-c", "current-day-reservation-c"),
+        ],
+    }
+    summary_body = {
+        "circuit_breaker_open": False,
+        "committed_cost_usd": "0.5",
+        "daily_usd_cap": "1.0",
+        "reservation_count": 2,
+        "daily_attempt_cap": 12,
+    }
+    summary = {
+        **summary_body,
+        "summary_content_sha256": quality._sha256(summary_body),
+    }
+
+    findings = quality._micro_reversion_execution_budget_findings(
+        report=report,
+        budget_summary=summary,
+    )
+
+    assert "provider_budget_reservation_count_below_result_provenance" not in findings
+
+
 def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
     prepared, source_bundle = _micro_reversion_materialization_fixture()
     materialized = quality.materialize_micro_reversion_offline_requests(
@@ -6291,25 +6900,70 @@ def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
             },
         }
 
-    first = quality.run_micro_reversion_materialized_requests(
-        materialized_report=materialized,
-        outcome_labels=[label],
-        execute_candidate=True,
-        candidate_runner=first_runner,
-        max_new_requests=1,
-        checkpoint_callback=lambda record: (
-            quality._write_micro_reversion_checkpoint_record(
-                checkpoint_path,
-                record,
-            )
-        ),
-    )
+    checkpoint_writes = 0
 
-    assert first["new_result_count"] == 1
-    assert first["deferred_request_count"] == 2
+    def interrupt_after_first_checkpoint(record):
+        nonlocal checkpoint_writes
+        quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+        checkpoint_writes += 1
+        if checkpoint_writes == 1:
+            raise RuntimeError("simulated_process_interruption")
+
+    # A/B/C is selected as one atomic parent.  Simulate a process interruption
+    # after the first durable checkpoint.  The partial row may prevent a
+    # duplicate call while the remaining arms resume, but must remain hidden
+    # from the public result/evaluator until the whole parent commits.
+    with pytest.raises(RuntimeError, match="simulated_process_interruption"):
+        quality.run_micro_reversion_materialized_requests(
+            materialized_report=materialized,
+            outcome_labels=[label],
+            execute_candidate=True,
+            candidate_runner=first_runner,
+            max_new_requests=3,
+            checkpoint_callback=interrupt_after_first_checkpoint,
+        )
+
     checkpoint = quality._load_micro_reversion_checkpoint(checkpoint_path)
     assert checkpoint["checkpoint_record_count"] == 1
     assert len(checkpoint["results"]) == 1
+    rematerialized = deepcopy(materialized)
+    rematerialized["generated_at"] = "2026-08-14T23:59:59+09:00"
+    rematerialized["report_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in rematerialized.items()
+            if key != "report_content_sha256"
+        }
+    )
+    assert rematerialized["report_content_sha256"] != (
+        materialized["report_content_sha256"]
+    )
+    assert quality._micro_reversion_materialized_request_census_sha256(
+        rematerialized
+    ) == quality._micro_reversion_materialized_request_census_sha256(materialized)
+
+    def forbidden_runner(_request):
+        raise AssertionError("insufficient remaining parent budget must not call")
+
+    still_partial = quality.run_micro_reversion_materialized_requests(
+        materialized_report=rematerialized,
+        outcome_labels=[label],
+        execute_candidate=True,
+        candidate_runner=forbidden_runner,
+        existing_result_artifact=checkpoint,
+        max_new_requests=1,
+    )
+
+    assert still_partial["result_count"] == 0
+    assert still_partial["results"] == []
+    assert still_partial["three_arm_evaluation"]["complete_parent_count"] == 0
+    assert still_partial["reused_result_count"] == 0
+    assert still_partial["provisional_checkpoint_result_count"] == 1
+    assert still_partial["uncommitted_result_count"] == 1
+    assert still_partial["deferred_request_count"] == 3
+    assert still_partial["status"] == (
+        "offline_three_arm_execution_complete_with_failures_or_exclusions"
+    )
 
     second_calls = []
 
@@ -6318,7 +6972,7 @@ def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
         return first_runner(request)
 
     resumed = quality.run_micro_reversion_materialized_requests(
-        materialized_report=materialized,
+        materialized_report=rematerialized,
         outcome_labels=[label],
         execute_candidate=True,
         candidate_runner=second_runner,
@@ -6327,7 +6981,10 @@ def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
     )
 
     assert resumed["status"] == "offline_three_arm_execution_complete"
-    assert resumed["reused_result_count"] == 1
+    assert resumed["reused_result_count"] == 0
+    assert resumed["checkpoint_resume_result_count"] == 1
+    assert resumed["provisional_checkpoint_result_count"] == 1
+    assert resumed["uncommitted_result_count"] == 0
     assert resumed["new_result_count"] == 2
     assert resumed["deferred_request_count"] == 0
     assert len(second_calls) == 2
@@ -8155,6 +8812,7 @@ def test_openai_candidate_parse_gap_is_retryable_and_secret_free(monkeypatch):
             "model": "gpt-test",
             "reasoning_effort": "minimal",
             "system_prompt": "Return JSON.",
+            "max_output_tokens": 900,
         },
         **quality.OFFLINE_CONTRACT,
     }
@@ -8172,6 +8830,7 @@ def test_openai_candidate_parse_gap_is_retryable_and_secret_free(monkeypatch):
     assert "test-secret" not in str(envelope)
     assert captured["store"] is False
     assert captured["input"] == '{"value":1}'
+    assert captured["max_output_tokens"] == 900
     assert captured["reasoning"] == {"effort": "minimal"}
     assert envelope["provider_provenance"]["reasoning_effort"] == "minimal"
     output_schema = captured["text"]["format"]["schema"]
@@ -8235,6 +8894,7 @@ def test_v2_12_semantic_correction_preserves_nonblocking_wait(monkeypatch):
             "provider": "openai",
             "model": "gpt-test",
             "system_prompt": "V2.12 base prompt.",
+            "max_output_tokens": 900,
             "prompt_version": (
                 f"{quality.DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION}"
                 "_entry"
@@ -8301,6 +8961,7 @@ def test_v2_14_correction_names_mandatory_invalidation_fact_path(monkeypatch):
             "provider": "openai",
             "model": "gpt-test",
             "system_prompt": "V2.14 base prompt.",
+            "max_output_tokens": 900,
             "prompt_version": "decision_quality_v2_14_setup_risk_entry",
             "semantic_validator_version": (
                 quality.ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
@@ -9469,3 +10130,79 @@ def test_rematerialize_detailed_replay_accepts_hash_pinned_historical_snapshot(
             ),
             prepared_request_snapshot_path=snapshot_path,
         )
+
+
+def test_micro_reversion_budgeted_runner_reserves_each_schema_attempt_and_settles(
+    tmp_path,
+):
+    class FakeLedger:
+        def __init__(self):
+            self.reservations = []
+            self.settlements = []
+            self.summary_paths = []
+
+        def reserve_attempt(self, identity, *, token_ceiling):
+            self.reservations.append((identity, token_ceiling))
+            return SimpleNamespace(
+                reservation_id=f"reservation-{identity.attempt_number}",
+                attempt_identity_sha256=identity.content_sha256,
+                reserved_cost_usd="0.01",
+            )
+
+        def settle_attempt(self, identity, **usage):
+            self.settlements.append((identity, usage))
+            return SimpleNamespace(
+                actual_cost_usd="0.001",
+                circuit_breaker_open=False,
+            )
+
+        def write_summary(self, path):
+            self.summary_paths.append(path)
+
+    ledger = FakeLedger()
+
+    def base_runner(_request):
+        return {
+            "candidate_response": {"action": "WAIT"},
+            "provider_provenance": {
+                "provider": "openai",
+                "input_tokens": 123,
+                "output_tokens": 45,
+                "response_sha256": "a" * 64,
+            },
+        }
+
+    runner = quality.build_micro_reversion_budgeted_candidate_runner(
+        target_date="2026-08-14",
+        base_runner=base_runner,
+        budget_ledger=ledger,
+        budget_summary_path=tmp_path / "budget.json",
+    )
+    request = {
+        "paired_replay_parent_id": "parent-1",
+        "paired_replay_id": "request-arm-b",
+        "micro_reversion_replay_arm": "replay_control_exact_plus_micro",
+        "offline_provider_attempt_number": 2,
+        "candidate_input": {"snapshot": "exact"},
+        "candidate": {
+            "provider": "openai",
+            "model": "gpt-test",
+            "max_output_tokens": 900,
+        },
+    }
+
+    result = runner(request)
+
+    assert len(ledger.reservations) == 1
+    identity, ceiling = ledger.reservations[0]
+    assert identity.attempt_number == 2
+    assert identity.parent_id == "parent-1"
+    assert ceiling.max_output_tokens == 900
+    assert len(ledger.settlements) == 1
+    assert ledger.settlements[0][1]["actual_input_tokens"] == 123
+    assert ledger.settlements[0][1]["actual_output_tokens"] == 45
+    assert result["provider_provenance"]["provider_budget_settled"] is True
+    assert result["provider_provenance"]["provider_budget_reservation_id"] == (
+        "reservation-2"
+    )
+    assert ledger.summary_paths == [tmp_path / "budget.json"]

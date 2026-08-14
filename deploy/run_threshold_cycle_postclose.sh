@@ -2,6 +2,126 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Bash reads scripts lazily.  An editor replacing this wrapper while a long
+# postclose run is active can therefore make the running shell parse a mixture
+# of old and new lines.  Execute an immutable, syntax-checked sibling snapshot
+# so source updates affect only the next invocation.
+wrapper_snapshot="${THRESHOLD_CYCLE_WRAPPER_SNAPSHOT_PATH:-}"
+ACTIVE_POSTCLOSE_PID=""
+ACTIVE_POSTCLOSE_PGID=""
+POSTCLOSE_GROUP_STARTING=false
+POSTCLOSE_PENDING_SIGNAL=""
+POSTCLOSE_OPERATING=false
+POSTCLOSE_SIGNAL_GRACE_SEC="${THRESHOLD_CYCLE_SIGNAL_GRACE_SEC:-3}"
+if ! [[ "$POSTCLOSE_SIGNAL_GRACE_SEC" =~ ^[0-9]+$ ]] || [ "$POSTCLOSE_SIGNAL_GRACE_SEC" -gt 30 ]; then
+  POSTCLOSE_SIGNAL_GRACE_SEC=3
+fi
+cleanup_wrapper_snapshot() {
+  local snapshot_dir="${wrapper_snapshot%/*}"
+  local snapshot_name="${wrapper_snapshot##*/}"
+  if [ -n "${wrapper_snapshot:-}" ] \
+    && [ "$snapshot_dir" = "$SCRIPT_DIR" ] \
+    && [[ "$snapshot_name" == .run_threshold_cycle_postclose.snapshot.*.sh ]] \
+    && [ -e "$wrapper_snapshot" ]; then
+    rm -f -- "$wrapper_snapshot"
+  fi
+}
+terminate_active_postclose_group() {
+  local signal_name="${1:-TERM}"
+  local active_pid="${ACTIVE_POSTCLOSE_PID:-}"
+  local active_pgid="${ACTIVE_POSTCLOSE_PGID:-}"
+  local deadline=$((SECONDS + POSTCLOSE_SIGNAL_GRACE_SEC))
+  if [[ "$active_pgid" =~ ^[0-9]+$ ]] && [ "$active_pgid" -gt 1 ]; then
+    kill -s "$signal_name" -- "-$active_pgid" 2>/dev/null || true
+    # A just-launched supervisor deliberately stops before starting the real
+    # command.  Resume the owned group after queuing the terminating signal so
+    # catchable signals can take effect without waiting for escalation.
+    kill -CONT -- "-$active_pgid" 2>/dev/null || true
+    while kill -0 -- "-$active_pgid" 2>/dev/null; do
+      if [ "$SECONDS" -ge "$deadline" ]; then
+        kill -KILL -- "-$active_pgid" 2>/dev/null || true
+        break
+      fi
+      sleep 0.05
+    done
+  elif [[ "$active_pid" =~ ^[0-9]+$ ]] && [ "$active_pid" -gt 1 ]; then
+    kill -s "$signal_name" "$active_pid" 2>/dev/null || true
+  fi
+  if [[ "$active_pid" =~ ^[0-9]+$ ]] && [ "$active_pid" -gt 1 ]; then
+    wait "$active_pid" 2>/dev/null || true
+  fi
+  ACTIVE_POSTCLOSE_PID=""
+  ACTIVE_POSTCLOSE_PGID=""
+}
+terminate_wrapper_children() {
+  local signal_name="${1:-TERM}"
+  local child_pids
+  local child_pid
+  terminate_active_postclose_group "$signal_name"
+  # `jobs -pr` returns only waitable children owned by this shell. Avoid a
+  # process-table scan whose stale PID could be reused by an unrelated process.
+  child_pids="$(jobs -pr 2>/dev/null || true)"
+  for child_pid in $child_pids; do
+    if [[ "$child_pid" =~ ^[0-9]+$ ]] && [ "$child_pid" -ne "$$" ]; then
+      kill -s "$signal_name" "$child_pid" 2>/dev/null || true
+      kill -KILL "$child_pid" 2>/dev/null || true
+      wait "$child_pid" 2>/dev/null || true
+    fi
+  done
+}
+handle_wrapper_signal() {
+  local signal_name="${1:-TERM}"
+  local exit_code=143
+  local reason="terminated"
+  if [ "$POSTCLOSE_GROUP_STARTING" = "true" ]; then
+    POSTCLOSE_PENDING_SIGNAL="$signal_name"
+    return 0
+  fi
+  case "$signal_name" in
+    HUP) exit_code=129; reason="hangup" ;;
+    INT) exit_code=130; reason="interrupted" ;;
+    TERM) exit_code=143; reason="terminated" ;;
+  esac
+  terminate_wrapper_children "$signal_name"
+  if [ "$POSTCLOSE_OPERATING" = "true" ]; then
+    mark_postclose_failed "$reason" "$exit_code"
+    restart_postclose_bot_if_requested
+  fi
+  exit "$exit_code"
+}
+trap cleanup_wrapper_snapshot EXIT
+trap 'handle_wrapper_signal HUP' HUP
+trap 'handle_wrapper_signal INT' INT
+trap 'handle_wrapper_signal TERM' TERM
+if [ "${THRESHOLD_CYCLE_WRAPPER_SNAPSHOT_EXECUTED:-false}" != "true" ]; then
+  wrapper_snapshot_ready=false
+  for _snapshot_attempt in 1 2 3; do
+    wrapper_snapshot="$(mktemp "$SCRIPT_DIR/.run_threshold_cycle_postclose.snapshot.XXXXXX.sh")"
+    cp -- "${BASH_SOURCE[0]}" "$wrapper_snapshot"
+    chmod 700 "$wrapper_snapshot"
+    if bash -n "$wrapper_snapshot"; then
+      wrapper_snapshot_ready=true
+      break
+    fi
+    rm -f -- "$wrapper_snapshot"
+    wrapper_snapshot=""
+    sleep 0.1
+  done
+  if [ "$wrapper_snapshot_ready" != "true" ]; then
+    echo "[threshold-cycle] wrapper snapshot validation failed source=${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+  export THRESHOLD_CYCLE_WRAPPER_SNAPSHOT_EXECUTED=true
+  export THRESHOLD_CYCLE_WRAPPER_SNAPSHOT_PATH="$wrapper_snapshot"
+  exec bash "$wrapper_snapshot" "$@"
+fi
+# The exec'd shell already holds the immutable inode open.  Unlink it before
+# doing any provider or postclose work so TERM/HUP/KILL cannot accumulate a
+# sibling snapshot or leave a separate postclose child behind.
+cleanup_wrapper_snapshot
+wrapper_snapshot=""
+
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
@@ -80,6 +200,11 @@ RUN_PIPELINE_EVENT_VERBOSITY_REPORT="${THRESHOLD_CYCLE_RUN_PIPELINE_EVENT_VERBOS
 RUN_OBSERVATION_SOURCE_QUALITY_AUDIT="${THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_AUDIT:-true}"
 RUN_OPENING_ROTATION_PROFILE_TUNING="retired"
 RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION="${THRESHOLD_CYCLE_RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION:-true}"
+RUN_MAIN_AI_QUALITY_R0_R3="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_R0_R3:-true}"
+MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY:-true}"
+MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP:-12}"
+MAIN_AI_QUALITY_DAILY_USD_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_DAILY_USD_CAP:-1.0}"
+MAIN_AI_QUALITY_PARENT_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_PARENT_CAP:-1}"
 RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION="${THRESHOLD_CYCLE_RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION:-true}"
 RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT="${THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT:-false}"
 RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}"
@@ -169,6 +294,8 @@ POSTCLOSE_BOT_ISOLATION_MARKER="$PROJECT_DIR/tmp/postclose_bot_isolation.json"
 AI_CORRECTION_FINAL_STATUS="not_run"
 AUTOMATION_TRIGGER_DECISION_REPORT_JSON="$PROJECT_DIR/data/report/automation_chain_trigger_decision/automation_chain_trigger_decision_${TARGET_DATE}.json"
 AUTOMATION_TRIGGER_DECISION_CACHE_MARKER="$PROJECT_DIR/tmp/automation_trigger_decision_${TARGET_DATE}_$$.cached"
+AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP="$PROJECT_DIR/tmp/automation_trigger_decision_${TARGET_DATE}_$$.out"
+BACKFILL_OUTPUT_TEMP="$PROJECT_DIR/tmp/threshold_cycle_backfill_${TARGET_DATE}_$$.out"
 
 mkdir -p "$PROJECT_DIR/logs" "$STATUS_DIR" "$PROJECT_DIR/tmp"
 rm -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER"
@@ -326,7 +453,7 @@ stop_postclose_bot_if_requested() {
     echo "[threshold-cycle] stopping bot for postclose resource isolation session=$POSTCLOSE_BOT_SESSION action=$POSTCLOSE_BOT_ACTION"
     tmux kill-session -t "$POSTCLOSE_BOT_SESSION" 2>/dev/null || true
     write_postclose_bot_isolation_marker
-    sleep "$POSTCLOSE_BOT_RESTART_WAIT_SEC"
+    run_postclose_cmd sleep "$POSTCLOSE_BOT_RESTART_WAIT_SEC"
   else
     echo "[threshold-cycle] bot stop skipped reason=session_not_running session=$POSTCLOSE_BOT_SESSION action=$POSTCLOSE_BOT_ACTION"
     if [ "$POSTCLOSE_BOT_ACTION" = "restart" ]; then
@@ -371,29 +498,118 @@ cleanup_threshold_cycle_snapshot_temp() {
   if [ -n "${SNAPSHOT_TEMP_PATH:-}" ] && [ -f "$SNAPSHOT_TEMP_PATH" ]; then
     rm -f -- "$SNAPSHOT_TEMP_PATH"
   fi
+  if [ -n "${BACKFILL_OUTPUT_TEMP:-}" ] && [ -f "$BACKFILL_OUTPUT_TEMP" ]; then
+    rm -f -- "$BACKFILL_OUTPUT_TEMP"
+  fi
+  if [ -n "${AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP:-}" ] \
+    && [ -f "$AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP" ]; then
+    rm -f -- "$AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP"
+  fi
+  if [ -n "${AUTOMATION_TRIGGER_DECISION_CACHE_MARKER:-}" ] \
+    && [ -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER" ]; then
+    rm -f -- "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER"
+  fi
+  cleanup_wrapper_snapshot
 }
 
 trap 'rc=$?; mark_postclose_failed command_failed "$rc"; restart_postclose_bot_if_requested; exit "$rc"' ERR
-trap 'mark_postclose_failed interrupted 130; restart_postclose_bot_if_requested; exit 130' INT
-trap 'mark_postclose_failed terminated 143; restart_postclose_bot_if_requested; exit 143' TERM
 trap 'cleanup_threshold_cycle_snapshot_temp' EXIT
-
-detect_postclose_recovery_reuse_mode
-started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-write_postclose_status running started 0 0
-emit_postclose_marker "[START] threshold-cycle postclose target_date=$TARGET_DATE max_iterations=$MAX_ITERATIONS recovery_reuse=$POSTCLOSE_RECOVERY_REUSE_MODE started_at=$started_at"
-stop_postclose_bot_if_requested
+POSTCLOSE_OPERATING=true
 
 run_postclose_cmd() {
   local cmd=("$@")
+  local command_pid
+  local command_rc=0
+  local observed_pgid=""
+  local observed_state=""
+  local observed_process=""
+  local pending_signal=""
+  local supervisor_shell="${BASH:-bash}"
   if command -v nice >/dev/null 2>&1; then
     cmd=(nice -n "$POSTCLOSE_NICE_LEVEL" "${cmd[@]}")
   fi
   if command -v ionice >/dev/null 2>&1 && [[ "$POSTCLOSE_IONICE_CLASS" -ge 0 ]]; then
     cmd=(ionice -c "$POSTCLOSE_IONICE_CLASS" -n "$POSTCLOSE_IONICE_LEVEL" -t "${cmd[@]}")
   fi
-  korstockscan_apply_taskset "$POSTCLOSE_CPU_AFFINITY" "${cmd[@]}"
+  if command -v taskset >/dev/null 2>&1 \
+    && [[ -n "$POSTCLOSE_CPU_AFFINITY" ]] \
+    && [[ "$(korstockscan_nproc)" -gt 1 ]]; then
+    cmd=(taskset -c "$POSTCLOSE_CPU_AFFINITY" "${cmd[@]}")
+  fi
+  if ! command -v setsid >/dev/null 2>&1 \
+    || ! command -v ps >/dev/null 2>&1 \
+    || [ ! -x "$supervisor_shell" ]; then
+    echo "[threshold-cycle] process-group isolation unavailable command=${cmd[0]}" >&2
+    return 127
+  fi
+  POSTCLOSE_GROUP_STARTING=true
+  POSTCLOSE_PENDING_SIGNAL=""
+  # Keep a verified process-group leader alive even for commands such as
+  # `true` that finish before the parent can inspect /proc.  The supervisor
+  # stops before spawning the real command; the parent validates PID == PGID
+  # and only then resumes it.  Signals received in this launch window are
+  # recorded by handle_wrapper_signal and delivered to the verified group.
+  setsid -- "$supervisor_shell" -c '
+    kill -STOP "$$"
+    "$@" <&0 &
+    supervised_pid=$!
+    wait "$supervised_pid"
+    exit "$?"
+  ' postclose-command-supervisor "${cmd[@]}" <&0 &
+  command_pid=$!
+  ACTIVE_POSTCLOSE_PID="$command_pid"
+  for _pgid_attempt in {1..100}; do
+    observed_process="$(ps -o pgid=,stat= -p "$command_pid" 2>/dev/null || true)"
+    read -r observed_pgid observed_state <<< "$observed_process"
+    observed_pgid="${observed_pgid//[[:space:]]/}"
+    if [ "$observed_pgid" = "$command_pid" ] && [[ "$observed_state" == *T* ]]; then
+      break
+    fi
+    if ! kill -0 "$command_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.01
+  done
+  if [ "$observed_pgid" != "$command_pid" ] || [[ "$observed_state" != *T* ]]; then
+    if [ "$observed_pgid" = "$command_pid" ]; then
+      kill -KILL -- "-$command_pid" 2>/dev/null || true
+    else
+      kill -KILL "$command_pid" 2>/dev/null || true
+    fi
+    wait "$command_pid" 2>/dev/null || command_rc=$?
+    if [ "$command_rc" -eq 0 ]; then
+      command_rc=125
+    fi
+    ACTIVE_POSTCLOSE_PID=""
+    ACTIVE_POSTCLOSE_PGID=""
+    POSTCLOSE_GROUP_STARTING=false
+    pending_signal="$POSTCLOSE_PENDING_SIGNAL"
+    POSTCLOSE_PENDING_SIGNAL=""
+    if [ -n "$pending_signal" ]; then
+      handle_wrapper_signal "$pending_signal"
+    fi
+    echo "[threshold-cycle] process-group isolation failed pid=$command_pid observed_pgid=${observed_pgid:-missing} observed_state=${observed_state:-missing}" >&2
+    return "$command_rc"
+  fi
+  ACTIVE_POSTCLOSE_PGID="$command_pid"
+  POSTCLOSE_GROUP_STARTING=false
+  pending_signal="$POSTCLOSE_PENDING_SIGNAL"
+  POSTCLOSE_PENDING_SIGNAL=""
+  if [ -n "$pending_signal" ]; then
+    handle_wrapper_signal "$pending_signal"
+  fi
+  kill -CONT -- "-$command_pid"
+  wait "$command_pid" || command_rc=$?
+  ACTIVE_POSTCLOSE_PID=""
+  ACTIVE_POSTCLOSE_PGID=""
+  return "$command_rc"
 }
+
+detect_postclose_recovery_reuse_mode
+started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+write_postclose_status running started 0 0
+emit_postclose_marker "[START] threshold-cycle postclose target_date=$TARGET_DATE max_iterations=$MAX_ITERATIONS recovery_reuse=$POSTCLOSE_RECOVERY_REUSE_MODE started_at=$started_at"
+stop_postclose_bot_if_requested
 
 reusable_completed_artifact() {
   local json_path="$1"
@@ -640,7 +856,7 @@ print(str(any(item.startswith("sample_age_sec=") or item in {"sampler_missing", 
   if [ "$stale" != "true" ] || [ ! -x "$POSTCLOSE_RESOURCE_SAMPLER_CMD" ]; then
     return 1
   fi
-  if "$POSTCLOSE_RESOURCE_SAMPLER_CMD" >/dev/null 2>&1; then
+  if run_postclose_cmd "$POSTCLOSE_RESOURCE_SAMPLER_CMD" >/dev/null 2>&1; then
     echo "[threshold-cycle] resource sampler refreshed label=$label waited=${waited}s command=$POSTCLOSE_RESOURCE_SAMPLER_CMD" >&2
     return 0
   fi
@@ -668,7 +884,7 @@ wait_for_postclose_resources() {
     fi
     refresh_postclose_resource_sample_if_stale "$label" "$waited" "$status" || true
     echo "[threshold-cycle] resource guard wait label=$label waited=${waited}s status=$status" >&2
-    sleep "$POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC"
+    run_postclose_cmd sleep "$POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC"
     waited=$((waited + POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC))
   done
 }
@@ -676,7 +892,7 @@ wait_for_postclose_resources() {
 cleanup_threshold_cycle_snapshots() {
   local snapshot_dir="$1"
   local retention_days="$2"
-  python3 - "$snapshot_dir" "$retention_days" <<'PY'
+  run_postclose_cmd python3 - "$snapshot_dir" "$retention_days" <<'PY'
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -756,7 +972,7 @@ wait_for_file_artifact() {
     if [ "$waited" -eq 0 ]; then
       echo "[threshold-cycle] waiting for artifact label=$label path=$path"
     fi
-    sleep "$ARTIFACT_WAIT_INTERVAL_SEC"
+    run_postclose_cmd sleep "$ARTIFACT_WAIT_INTERVAL_SEC"
     waited=$((waited + ARTIFACT_WAIT_INTERVAL_SEC))
   done
 
@@ -781,7 +997,7 @@ wait_for_json_artifact() {
     if [ "$waited" -eq 0 ]; then
       echo "[threshold-cycle] waiting for artifact label=$label path=$path json_check=pending"
     fi
-    sleep "$ARTIFACT_WAIT_INTERVAL_SEC"
+    run_postclose_cmd sleep "$ARTIFACT_WAIT_INTERVAL_SEC"
     waited=$((waited + ARTIFACT_WAIT_INTERVAL_SEC))
   done
 }
@@ -869,8 +1085,10 @@ threshold_cycle_ev_refresh_decision() {
 automation_trigger_decision() {
   local step_id="$1"
   local decision="run"
+  AUTOMATION_TRIGGER_DECISION_RESULT="run"
   if [ ! -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER" ]; then
-    if THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
+    if run_postclose_cmd env \
+      THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
       THRESHOLD_CYCLE_FORCE_DEEP_AUDITS="$FORCE_DEEP_AUDITS" \
       THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH="$FORCE_WORKORDER_BRANCH" \
       THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_WINDOWS="${RUN_LIFECYCLE_BUCKET_WINDOWS:-true}" \
@@ -909,16 +1127,17 @@ print(decision)
 PY
     )"; then
       if [ "$decision" = "skip" ] || [ "$decision" = "disabled_success" ]; then
-        printf 'skip\n'
+        AUTOMATION_TRIGGER_DECISION_RESULT="skip"
         return 0
       fi
       if [ "$decision" = "run" ]; then
-        printf 'run\n'
         return 0
       fi
     fi
   fi
-  if decision="$(THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
+  rm -f -- "$AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP"
+  if run_postclose_cmd env \
+    THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
     THRESHOLD_CYCLE_FORCE_DEEP_AUDITS="$FORCE_DEEP_AUDITS" \
     THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH="$FORCE_WORKORDER_BRANCH" \
     THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_WINDOWS="${RUN_LIFECYCLE_BUCKET_WINDOWS:-true}" \
@@ -934,13 +1153,14 @@ PY
     PYTHONPATH=. "$VENV_PY" -m src.engine.automation.automation_chain_trigger_decision \
       --date "$TARGET_DATE" \
       --scope all \
-      --step "$step_id" 2>/dev/null)"; then
+      --step "$step_id" >"$AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP" 2>/dev/null; then
+    decision="$(<"$AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP")"
     if [ "$decision" = "skip" ] || [ "$decision" = "disabled_success" ]; then
-      printf 'skip\n'
-      return 0
+      AUTOMATION_TRIGGER_DECISION_RESULT="skip"
     fi
   fi
-  printf 'run\n'
+  rm -f -- "$AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP"
+  return 0
 }
 
 automation_trigger_reason() {
@@ -1058,16 +1278,17 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
   if [ "$i" = "1" ] && [ "$USE_SNAPSHOT" = "true" ] && [ "${REUSE_EXISTING_SNAPSHOT:-false}" != "true" ]; then
     resume_args=(--overwrite)
   fi
-  out="$(
-    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.backfill_threshold_cycle_events \
-      --date "$TARGET_DATE" \
-      --mode incremental \
-      "${resume_args[@]}" \
-      "${SOURCE_ARGS[@]}" \
-      --max-input-lines-per-chunk "$MAX_INPUT_LINES" \
-      --max-output-lines-per-partition "$MAX_OUTPUT_LINES" \
-      --max-cpu-busy-pct "$MAX_CPU_BUSY_PCT"
-  )"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.backfill_threshold_cycle_events \
+    --date "$TARGET_DATE" \
+    --mode incremental \
+    "${resume_args[@]}" \
+    "${SOURCE_ARGS[@]}" \
+    --max-input-lines-per-chunk "$MAX_INPUT_LINES" \
+    --max-output-lines-per-partition "$MAX_OUTPUT_LINES" \
+    --max-cpu-busy-pct "$MAX_CPU_BUSY_PCT" \
+    > "$BACKFILL_OUTPUT_TEMP"
+  out="$(<"$BACKFILL_OUTPUT_TEMP")"
+  rm -f -- "$BACKFILL_OUTPUT_TEMP"
   echo "$out"
   summary_json="$(
     printf '%s\n' "$out" | "$VENV_PY" -c '
@@ -1098,12 +1319,12 @@ else:
       break
     fi
     echo "[threshold-cycle] availability guard wait target_date=$TARGET_DATE reason=$paused_reason waited=${compact_availability_waited}s"
-    sleep "$COMPACT_AVAILABILITY_WAIT_INTERVAL_SEC"
+    run_postclose_cmd sleep "$COMPACT_AVAILABILITY_WAIT_INTERVAL_SEC"
     compact_availability_waited=$((compact_availability_waited + COMPACT_AVAILABILITY_WAIT_INTERVAL_SEC))
     continue
   fi
   compact_availability_waited=0
-  sleep 1
+  run_postclose_cmd sleep 1
 done
 
 if [ "${completed:-false}" != "true" ]; then
@@ -1122,7 +1343,7 @@ if [ "${completed:-false}" != "true" ]; then
 fi
 
 if [ "$RUN_SIM_POST_SELL_FEEDBACK" = "true" ] || [ "$RUN_SIM_POST_SELL_FEEDBACK" = "1" ]; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.sniper_post_sell_feedback \
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.sniper_post_sell_feedback \
     --date "$TARGET_DATE" \
     --backfill-sim-candidates \
     --evaluate-sim \
@@ -1438,7 +1659,8 @@ if [ "$RUN_LIFECYCLE_BUCKET_DISCOVERY" = "true" ] || [ "$RUN_LIFECYCLE_BUCKET_DI
     for lifecycle_bucket_window in "${lifecycle_bucket_window_items[@]}"; do
       lifecycle_bucket_window="$(printf '%s' "$lifecycle_bucket_window" | tr -d '[:space:]')"
       [ -n "$lifecycle_bucket_window" ] || continue
-      if [ "$(automation_trigger_decision "lifecycle_window_${lifecycle_bucket_window}")" = "skip" ]; then
+      automation_trigger_decision "lifecycle_window_${lifecycle_bucket_window}"
+      if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ]; then
         skip_triggered_step "lifecycle_bucket_windows_${lifecycle_bucket_window}" "fresh_outputs_no_trigger"
         continue
       fi
@@ -1525,14 +1747,14 @@ if [ "$RUN_LATENCY_CLASSIFIER_RECOMMENDATION" = "true" ] || [ "$RUN_LATENCY_CLAS
 fi
 
 if { [ "$RUN_PANIC_SELL_DEFENSE_REPORT" = "true" ] || [ "$RUN_PANIC_SELL_DEFENSE_REPORT" = "1" ]; } && { [ "$RUN_MARKET_PANIC_BREADTH_REPORT" = "true" ] || [ "$RUN_MARKET_PANIC_BREADTH_REPORT" = "1" ]; }; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.market_panic_breadth_collector \
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.market_panic_breadth_collector \
     --date "$TARGET_DATE"
   wait_for_json_artifact \
     "$PROJECT_DIR/data/report/market_panic_breadth/market_panic_breadth_${TARGET_DATE}.json" \
     "market_panic_breadth_postclose"
 fi
 if [ "$RUN_PANIC_SELL_DEFENSE_REPORT" = "true" ] || [ "$RUN_PANIC_SELL_DEFENSE_REPORT" = "1" ]; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.panic_sell_defense_report \
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.panic_sell_defense_report \
     --date "$TARGET_DATE"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/panic_sell_defense/panic_sell_defense_${TARGET_DATE}.json" \
@@ -1603,7 +1825,7 @@ while true; do
     break
   fi
   echo "[threshold-cycle] ai correction retry target_date=$TARGET_DATE next_attempt=$((ai_correction_attempt + 1)) delay=${AI_CORRECTION_RETRY_DELAY_SEC}s status=$ai_correction_status" >&2
-	  sleep "$AI_CORRECTION_RETRY_DELAY_SEC"
+	  run_postclose_cmd sleep "$AI_CORRECTION_RETRY_DELAY_SEC"
 	  ai_correction_attempt=$((ai_correction_attempt + 1))
 	done
 	AI_CORRECTION_FINAL_STATUS="$ai_correction_status"
@@ -1737,7 +1959,8 @@ else
   echo "[threshold-cycle] swing pattern lab automation skipped by swing postclose operator policy"
 fi
 if [ "$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" = "1" ]; then
-  if [ "$(automation_trigger_decision "pattern_lab_currentness_audit")" = "skip" ]; then
+  automation_trigger_decision "pattern_lab_currentness_audit"
+  if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ]; then
     skip_triggered_step "pattern_lab_currentness_audit" "fresh_outputs_no_trigger"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json" \
@@ -1754,7 +1977,8 @@ if [ "$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_CURR
   fi
 fi
 if [ "$RUN_PATTERN_LAB_AI_REVIEW" = "true" ] || [ "$RUN_PATTERN_LAB_AI_REVIEW" = "1" ]; then
-  if [ "$(automation_trigger_decision "pattern_lab_ai_review")" = "skip" ]; then
+  automation_trigger_decision "pattern_lab_ai_review"
+  if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ]; then
     skip_triggered_step "pattern_lab_ai_review" "fresh_outputs_no_trigger"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
@@ -1811,7 +2035,8 @@ if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT
     "pipeline_event_verbosity"
 fi
 if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then
-  if [ "$(automation_trigger_decision "observation_source_quality_audit")" = "skip" ]; then
+  automation_trigger_decision "observation_source_quality_audit"
+  if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ]; then
     skip_triggered_step "observation_source_quality_audit" "fresh_outputs_no_trigger"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
@@ -1848,6 +2073,43 @@ if [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "true" ] || [ "$RUN_AI_D
     "$PROJECT_DIR/data/report/entry_candidate_lifecycle_state/entry_candidate_lifecycle_state_${TARGET_DATE}.json" \
     "entry_candidate_lifecycle_state"
 fi
+if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ] || [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "1" ]; then
+  main_ai_quality_args=(
+    --date "$TARGET_DATE"
+    --write
+    --daily-attempt-cap "$MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP"
+    --daily-usd-cap "$MAIN_AI_QUALITY_DAILY_USD_CAP"
+    --parent-cap "$MAIN_AI_QUALITY_PARENT_CAP"
+  )
+  if [ "$MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY" = "true" ] || [ "$MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY" = "1" ]; then
+    main_ai_quality_args+=(--execute-provider-replay)
+  fi
+  main_ai_quality_rc=0
+  main_ai_quality_failure_reason=""
+  wait_for_postclose_resources "main_ai_quality_r0_r3" || {
+    main_ai_quality_rc=$?
+    main_ai_quality_failure_reason="resource_wait_failed"
+  }
+  if [ "$main_ai_quality_rc" -eq 0 ]; then
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
+      -m src.engine.scalping.micro_reversion.ai_quality_cycle \
+      "${main_ai_quality_args[@]}" || {
+        main_ai_quality_rc=$?
+        main_ai_quality_failure_reason="cycle_command_failed_or_deferred"
+      }
+  fi
+  if [ "$main_ai_quality_rc" -eq 0 ]; then
+    if ! wait_for_json_artifact \
+      "$PROJECT_DIR/data/report/main_ai_quality_r0_r3/main_ai_quality_r0_r3_cycle_${TARGET_DATE}.json" \
+      "main_ai_quality_r0_r3"; then
+      main_ai_quality_rc=1
+      main_ai_quality_failure_reason="artifact_missing_or_invalid"
+    fi
+  fi
+  if [ "$main_ai_quality_rc" -ne 0 ]; then
+    emit_postclose_marker "[WARN] main-ai-quality-r0-r3 target_date=$TARGET_DATE rc=$main_ai_quality_rc reason=$main_ai_quality_failure_reason runtime_effect=false actual_order_submitted=false"
+  fi
+fi
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
@@ -1859,7 +2121,8 @@ if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECI
     "ai_decision_action_outcome_calibration"
 fi
 if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ] || [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "1" ]; then
-  if [ "$(automation_trigger_decision "codebase_performance_workorder")" = "skip" ]; then
+  automation_trigger_decision "codebase_performance_workorder"
+  if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ]; then
     skip_triggered_step "codebase_performance_workorder" "fresh_outputs_no_trigger"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/codebase_performance_workorder/codebase_performance_workorder_${TARGET_DATE}.json" \
@@ -1913,7 +2176,8 @@ if [ "$RUN_PRODUCER_GAP_DISCOVERY" = "true" ] || [ "$RUN_PRODUCER_GAP_DISCOVERY"
     "$PROJECT_DIR/data/report/producer_gap_source_bundle/producer_gap_source_bundle_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/producer_gap_source_bundle/producer_gap_source_bundle_${TARGET_DATE}.md" \
     "producer_gap_source_bundle"
-  if [ "$(automation_trigger_decision "producer_gap_discovery")" != "skip" ]; then
+  automation_trigger_decision "producer_gap_discovery"
+  if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" != "skip" ]; then
     wait_for_postclose_resources "producer_gap_discovery"
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.producer_gap_discovery \
       --date "$TARGET_DATE" \
@@ -1933,7 +2197,8 @@ if [ "$RUN_PRODUCER_GAP_DISCOVERY" = "true" ] || [ "$RUN_PRODUCER_GAP_DISCOVERY"
   fi
 fi
 if [ "$RUN_STAGE_HOOK_WORKORDER_DISCOVERY" = "true" ] || [ "$RUN_STAGE_HOOK_WORKORDER_DISCOVERY" = "1" ]; then
-  if [ "$(automation_trigger_decision "stage_hook_workorder_discovery")" != "skip" ]; then
+  automation_trigger_decision "stage_hook_workorder_discovery"
+  if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" != "skip" ]; then
     wait_for_postclose_resources "stage_hook_workorder_discovery"
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.stage_hook_workorder_discovery \
       --date "$TARGET_DATE" \
@@ -1952,7 +2217,8 @@ if [ "$RUN_STAGE_HOOK_WORKORDER_DISCOVERY" = "true" ] || [ "$RUN_STAGE_HOOK_WORK
   fi
 fi
 if [ "$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD" = "true" ] || [ "$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD" = "1" ]; then
-  if [ "$(automation_trigger_decision "stage_hook_runtime_scaffold")" != "skip" ]; then
+  automation_trigger_decision "stage_hook_runtime_scaffold"
+  if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" != "skip" ]; then
     wait_for_postclose_resources "stage_hook_runtime_scaffold"
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.stage_hook_runtime_scaffold --date "$TARGET_DATE" || \
       echo "[threshold-cycle] stage hook runtime scaffold returned fail-closed report (non-fatal); downstream verification will consume artifact" >&2
@@ -1970,7 +2236,8 @@ if [ "$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD" = "true" ] || [ "$RUN_STAGE_HOOK_RUNTIME
 fi
 run_threshold_cycle_ev_and_wait "pre_workorder"
 if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
-  if [ "$(automation_trigger_decision "workorder_branch")" = "skip" ]; then
+  automation_trigger_decision "workorder_branch"
+  if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ]; then
     skip_triggered_step "code_improvement_workorder_branch" "fresh_outputs_no_trigger"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
@@ -1992,7 +2259,8 @@ run_threshold_cycle_ev_and_wait "post_workorder_refresh" \
   "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
   "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md"
 if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "1" ]; then
-  if [ "$(automation_trigger_decision "pattern_lab_propagation_audit")" = "skip" ]; then
+  automation_trigger_decision "pattern_lab_propagation_audit"
+  if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ]; then
     skip_triggered_step "pattern_lab_propagation_audit" "fresh_outputs_no_trigger"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
@@ -2035,7 +2303,8 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.md" \
   "runtime_approval_summary"
-if [ "$(automation_trigger_decision "runtime_apply_gap_audit")" = "skip" ]; then
+automation_trigger_decision "runtime_apply_gap_audit"
+if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ]; then
   skip_triggered_step "runtime_apply_gap_audit" "fresh_outputs_no_trigger"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_${TARGET_DATE}.json" \
@@ -2141,11 +2410,11 @@ wait_for_report_artifact   "$PROJECT_DIR/data/report/runtime_approval_summary/ru
 wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"
-PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status succeeded completed 0 1
 emit_postclose_marker "[STATUS] machine_microstructure_policy_approval target_date=$TARGET_DATE enabled=$RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL runtime_effect=false"
-emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT limit_down_watch_report=$RUN_LIMIT_DOWN_WATCH_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT opening_rotation_profile_tuning=$RUN_OPENING_ROTATION_PROFILE_TUNING ai_decision_quality_daily_materialization=$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION ai_decision_action_outcome_calibration=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_sim_overnight=$RUN_SCALP_SIM_OVERNIGHT_REPORT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM entry_split_order_plan=$RUN_ENTRY_SPLIT_ORDER_PLAN scale_in_split_order_plan=$RUN_SCALE_IN_SPLIT_ORDER_PLAN entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_quality_calibration=$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION scalping_avg_down_recovery_calibration=$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR samsung_machine_entry_tuning=$RUN_SAMSUNG_MACHINE_ENTRY_TUNING low_price_two_leg_tuning=$RUN_LOW_PRICE_TWO_LEG_TUNING low_price_two_leg_candidate_recommendation=$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION machine_microstructure_attribution=$RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION one_share_threshold_opportunity=$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY one_share_threshold_opportunity_ai_provider=$ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_PROVIDER institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT microstructure_reaction_context=$RUN_MICROSTRUCTURE_REACTION_CONTEXT lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT ldm_hypothesis_parent_refinement=$RUN_LDM_HYPOTHESIS_PARENT_REFINEMENT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW force_lifecycle_bucket_windows=$FORCE_LIFECYCLE_BUCKET_WINDOWS force_deep_audits=$FORCE_DEEP_AUDITS force_workorder_branch=$FORCE_WORKORDER_BRANCH runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE scalp_sim_auto_approval_control_tower=$RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION tuning_performance_control_tower=$RUN_TUNING_PERFORMANCE_CONTROL_TOWER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true key_lineage_ledger=true conversion_lane=true next_stage2_checklist=true finished_at=$finished_at"
+emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT limit_down_watch_report=$RUN_LIMIT_DOWN_WATCH_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT opening_rotation_profile_tuning=$RUN_OPENING_ROTATION_PROFILE_TUNING ai_decision_quality_daily_materialization=$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION main_ai_quality_r0_r3=$RUN_MAIN_AI_QUALITY_R0_R3 main_ai_quality_provider_replay=$MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY ai_decision_action_outcome_calibration=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_sim_overnight=$RUN_SCALP_SIM_OVERNIGHT_REPORT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM entry_split_order_plan=$RUN_ENTRY_SPLIT_ORDER_PLAN scale_in_split_order_plan=$RUN_SCALE_IN_SPLIT_ORDER_PLAN entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_quality_calibration=$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION scalping_avg_down_recovery_calibration=$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR samsung_machine_entry_tuning=$RUN_SAMSUNG_MACHINE_ENTRY_TUNING low_price_two_leg_tuning=$RUN_LOW_PRICE_TWO_LEG_TUNING low_price_two_leg_candidate_recommendation=$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION machine_microstructure_attribution=$RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION one_share_threshold_opportunity=$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY one_share_threshold_opportunity_ai_provider=$ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_PROVIDER institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT microstructure_reaction_context=$RUN_MICROSTRUCTURE_REACTION_CONTEXT lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT ldm_hypothesis_parent_refinement=$RUN_LDM_HYPOTHESIS_PARENT_REFINEMENT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW force_lifecycle_bucket_windows=$FORCE_LIFECYCLE_BUCKET_WINDOWS force_deep_audits=$FORCE_DEEP_AUDITS force_workorder_branch=$FORCE_WORKORDER_BRANCH runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE scalp_sim_auto_approval_control_tower=$RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION tuning_performance_control_tower=$RUN_TUNING_PERFORMANCE_CONTROL_TOWER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true key_lineage_ledger=true conversion_lane=true next_stage2_checklist=true finished_at=$finished_at"
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain_final"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
   --date "$TARGET_DATE" \

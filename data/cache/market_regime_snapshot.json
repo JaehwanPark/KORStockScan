@@ -1,20 +1,20 @@
 {
-  "timestamp": "2026-08-14T14:41:30.488305",
-  "vix_close": 14.630000114440918,
-  "vix_ma3": 14.820000012715658,
+  "timestamp": "2026-08-14T23:24:25.648881",
+  "vix_close": 14.59000015258789,
+  "vix_ma3": 14.59000015258789,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 81.54000091552734,
-  "wti_rsi": 51.99030850050714,
-  "wti_macd": 0.22337732096988816,
-  "wti_macd_signal": 0.14909879802997114,
+  "wti_close": 81.18000030517578,
+  "wti_rsi": 51.40193429475968,
+  "wti_macd": 0.1946593235629308,
+  "wti_macd_signal": 0.14335519854857967,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -11.552230441308197,
+  "wti_from_recent_high_pct": -11.942728977828331,
   "oil_reversal": true,
   "oil_pullback_relief": true,
-  "fng_value": 66.0285714285714,
-  "fng_prev": 66.0285714285714,
+  "fng_value": 67.7428571428571,
+  "fng_prev": 67.9142857142857,
   "fng_description": "greed",
   "fng_extreme_fear": false,
   "fng_recovery": false,
@@ -25,11 +25,11 @@
   "swing_recovery_gate_label": "READY",
   "recovery_gate_reason": "recovery_signal_ready",
   "oil_only_recovery_prior": false,
-  "market_regime_continuous_score": 90.5643,
+  "market_regime_continuous_score": 91.4214,
   "market_regime_continuous_label": "RISK_ON",
   "market_regime_component_scores": {
     "vix_level": 25.0,
-    "fear_greed_level": 18.0143,
+    "fear_greed_level": 18.8714,
     "domestic_breadth": 35.0,
     "oil_relief": 10.0,
     "local_model": 2.55
@@ -44,8 +44,8 @@
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 66.0285714285714,
-    "fng_prev": 66.0285714285714,
+    "fng_curr": 67.7428571428571,
+    "fng_prev": 67.9142857142857,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
@@ -70,7 +70,7 @@
       },
       "component_scores": {
         "vix_level": 25.0,
-        "fear_greed_level": 18.0143,
+        "fear_greed_level": 18.8714,
         "domestic_breadth": 35.0,
         "oil_relief": 10.0,
         "local_model": 2.55
@@ -90,12 +90,12 @@
       "total_valid": 146,
       "bull_regime": 0,
       "safe_pool_count": 9,
-      "candidate_count": 296,
+      "candidate_count": 295,
       "selection_mode": "SELECTED",
-      "diagnostics_date": "2026-08-13 00:00:00"
+      "diagnostics_date": "2026-08-14 00:00:00"
     },
     "local_breadth_signal": "bullish"
   },
   "cached_session_date": "2026-08-14",
-  "cached_at": "2026-08-14T14:41:30.501811+09:00"
+  "cached_at": "2026-08-14T23:24:25.654354+09:00"
 }

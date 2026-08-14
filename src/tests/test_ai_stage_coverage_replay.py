@@ -383,6 +383,126 @@ def test_bedrock_offline_executor_emits_canonical_provider_provenance(monkeypatc
     )
 
 
+def test_budgeted_bedrock_executor_disables_two_key_retry(monkeypatch, tmp_path):
+    provider_class = replay.BedrockNovaProvider
+    profile = replay.qwen3_32b_profile_from_env()
+    calls = []
+    reservations = []
+    summary_paths = []
+
+    class Client:
+        def __init__(self, key_index):
+            self.key_index = key_index
+
+        def converse(self, **_kwargs):
+            calls.append(self.key_index)
+            raise RuntimeError("429 throttling")
+
+    def single_attempt_provider(*, key_rotation_enabled):
+        assert key_rotation_enabled is False
+        return provider_class(
+            api_keys=["key-1", "key-2"],
+            key_rotation_enabled=key_rotation_enabled,
+            client_factory=lambda key_index, **_kwargs: Client(key_index),
+        )
+
+    class OneAttemptBudget:
+        @staticmethod
+        def reserve_attempt(identity, *, token_ceiling):
+            if reservations:
+                raise AssertionError("one-attempt cap exceeded before network call")
+            reservations.append((identity, token_ceiling))
+            return SimpleNamespace(
+                reservation_id="reservation-1",
+                attempt_identity_sha256=identity.content_sha256,
+                reserved_cost_usd="0.01",
+            )
+
+        @staticmethod
+        def settle_attempt(*_args, **_kwargs):
+            raise AssertionError("failed provider attempt must retain its reservation")
+
+        @staticmethod
+        def write_summary(path):
+            summary_paths.append(path)
+
+    monkeypatch.setattr(replay, "BedrockNovaProvider", single_attempt_provider)
+    monkeypatch.setattr(replay, "qwen3_32b_profile_from_env", lambda: profile)
+    request = {
+        "paired_replay_parent_id": "parent-1",
+        "paired_replay_id": "request-arm-c",
+        "micro_reversion_replay_arm": "replay_candidate_exact_plus_micro",
+        "offline_provider_attempt_number": 1,
+        "exact_payload": {"price": 100},
+        "control": {"provider": "bedrock", "model": "qwen3_32b"},
+        "candidate": {
+            "provider": "bedrock",
+            "model": "qwen3_32b",
+            "system_prompt": "Return JSON",
+            "max_output_tokens": profile.max_output_tokens,
+        },
+        **replay.CONTRACT,
+    }
+    runner = replay.quality.build_micro_reversion_budgeted_candidate_runner(
+        target_date="2026-08-14",
+        base_runner=replay.execute_bedrock_candidate_single_network_attempt,
+        budget_ledger=OneAttemptBudget(),
+        budget_summary_path=tmp_path / "budget-summary.json",
+    )
+
+    try:
+        runner(request)
+    except RuntimeError as exc:
+        assert "429 throttling" in str(exc)
+    else:
+        raise AssertionError("retryable first-key failure must fail closed")
+
+    assert len(reservations) == 1
+    assert calls == [0]
+    assert summary_paths == [tmp_path / "budget-summary.json"]
+
+
+def test_budgeted_bedrock_executor_rejects_output_limit_above_reservation(monkeypatch):
+    profile = replay.qwen3_32b_profile_from_env()
+    oversized_profile = type(profile)(
+        **{
+            **profile.__dict__,
+            "max_output_tokens": profile.max_output_tokens + 1,
+        }
+    )
+    provider_created = False
+
+    def provider_factory(**_kwargs):
+        nonlocal provider_created
+        provider_created = True
+        raise AssertionError("provider must not be created before output-limit gate")
+
+    monkeypatch.setattr(
+        replay, "qwen3_32b_profile_from_env", lambda: oversized_profile
+    )
+    monkeypatch.setattr(replay, "BedrockNovaProvider", provider_factory)
+    request = {
+        "exact_payload": {"price": 100},
+        "control": {"provider": "bedrock", "model": "qwen3_32b"},
+        "candidate": {
+            "provider": "bedrock",
+            "model": "qwen3_32b",
+            "system_prompt": "Return JSON",
+            "max_output_tokens": profile.max_output_tokens,
+        },
+        **replay.CONTRACT,
+    }
+
+    try:
+        replay.execute_bedrock_candidate_single_network_attempt(request)
+    except ValueError as exc:
+        assert str(exc) == "bedrock_budgeted_profile_exceeds_reserved_output_tokens"
+    else:
+        raise AssertionError("oversized provider output limit must fail closed")
+
+    assert provider_created is False
+
+
 def test_prepare_holding_flow_preserves_endpoint_and_extracts_marked_context():
     holding_context = {
         "schema": "holding_decision_context_v1",

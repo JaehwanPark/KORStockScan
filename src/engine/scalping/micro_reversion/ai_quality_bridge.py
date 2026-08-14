@@ -63,6 +63,7 @@ REPORT_SCHEMA = "micro_reversion_ai_quality_bridge_v1"
 BRIDGE_CONFIG_SCHEMA = "micro_reversion_ai_quality_bridge_config_v1"
 BRIDGE_PRODUCER_VERSION = "micro_reversion_ai_quality_bridge_v1_3"
 COST_PROFILE_SCHEMA = "micro_reversion_reviewed_cost_profile_v1"
+COST_CATALOG_SCHEMA = "micro_reversion_reviewed_cost_catalog_v2"
 
 MARKET_SCHEMAS = {
     "scalp_micro_reversion_market_stream_point_v1",
@@ -361,6 +362,8 @@ class BridgeConfig:
     cost_profile_artifact_payload_json: str = ""
     cost_profile_effective_date: str = ""
     cost_profile_venues: tuple[str, ...] = ()
+    cost_profile_catalog_payload_json: str = ""
+    cost_profile_catalog_content_sha256: str = ""
 
     def __post_init__(self) -> None:
         if self.context_lookback_sec <= 0 or self.active_wave_max_age_sec <= 0:
@@ -420,9 +423,15 @@ class BridgeConfig:
             normalized_venues = tuple(
                 sorted({normalize_venue(value) for value in self.cost_profile_venues})
             )
+            catalog_payload_json = str(
+                self.cost_profile_catalog_payload_json or ""
+            ).strip()
+            catalog_content_hash = str(
+                self.cost_profile_catalog_content_sha256 or ""
+            ).strip()
+            catalog_mode = bool(catalog_payload_json or catalog_content_hash)
             if (
-                self.statutory_sell_tax_bps is None
-                or not source
+                not source
                 or source.startswith(("missing_", "operator_"))
                 or not artifact_id
                 or len(artifact_hash) != 64
@@ -450,36 +459,60 @@ class BridgeConfig:
                 raise ValueError("verified cost profile artifact is invalid") from exc
             if not isinstance(artifact_payload, dict):
                 raise ValueError("verified cost profile artifact must be an object")
-            expected_artifact_fields = {
-                "schema": COST_PROFILE_SCHEMA,
-                "artifact_id": artifact_id,
-                "effective_date": effective_date,
-                "venues": list(normalized_venues),
-                "instrument_scope": "domestic_common_or_preferred_stock",
-                "source": source,
-                "buy_fee_bps": self.buy_fee_bps,
-                "sell_fee_bps": self.sell_fee_bps,
-                "statutory_sell_tax_bps": self.statutory_sell_tax_bps,
-                "uncertainty_buffer_bps": self.uncertainty_buffer_bps,
-            }
-            if any(
-                artifact_payload.get(field) != expected
-                for field, expected in expected_artifact_fields.items()
-            ):
-                raise ValueError(
-                    "verified cost profile artifact fields do not match config"
-                )
-            computed_artifact_hash = hashlib.sha256(
-                json.dumps(
+            if catalog_mode:
+                if (
+                    not catalog_payload_json
+                    or len(catalog_content_hash) != 64
+                    or any(
+                        character not in "0123456789abcdef"
+                        for character in catalog_content_hash
+                    )
+                    or artifact_payload_json != catalog_payload_json
+                    or artifact_payload.get("schema") != COST_CATALOG_SCHEMA
+                    or artifact_payload.get("content_sha256")
+                    != catalog_content_hash
+                ):
+                    raise ValueError("verified cost catalog contract invalid")
+                _validate_cost_catalog_payload(
                     artifact_payload,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    default=str,
-                ).encode("utf-8")
-            ).hexdigest()
-            if computed_artifact_hash != artifact_hash:
-                raise ValueError("verified cost profile artifact hash mismatch")
+                    target_date=date.fromisoformat(effective_date),
+                )
+                computed_artifact_hash = _producer_sha256(artifact_payload)
+                if computed_artifact_hash != artifact_hash:
+                    raise ValueError("verified cost catalog artifact hash mismatch")
+            else:
+                if self.statutory_sell_tax_bps is None:
+                    raise ValueError("verified cost profile statutory tax missing")
+                expected_artifact_fields = {
+                    "schema": COST_PROFILE_SCHEMA,
+                    "artifact_id": artifact_id,
+                    "effective_date": effective_date,
+                    "venues": list(normalized_venues),
+                    "instrument_scope": "domestic_common_or_preferred_stock",
+                    "source": source,
+                    "buy_fee_bps": self.buy_fee_bps,
+                    "sell_fee_bps": self.sell_fee_bps,
+                    "statutory_sell_tax_bps": self.statutory_sell_tax_bps,
+                    "uncertainty_buffer_bps": self.uncertainty_buffer_bps,
+                }
+                if any(
+                    artifact_payload.get(field) != expected
+                    for field, expected in expected_artifact_fields.items()
+                ):
+                    raise ValueError(
+                        "verified cost profile artifact fields do not match config"
+                    )
+                computed_artifact_hash = hashlib.sha256(
+                    json.dumps(
+                        artifact_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        default=str,
+                    ).encode("utf-8")
+                ).hexdigest()
+                if computed_artifact_hash != artifact_hash:
+                    raise ValueError("verified cost profile artifact hash mismatch")
         if (
             isinstance(self.adverse_label_bps, bool)
             or not isinstance(self.adverse_label_bps, (int, float))
@@ -568,6 +601,161 @@ def _producer_sha256(value: Any) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(serialized).hexdigest()
+
+
+def _validate_cost_catalog_payload(
+    payload: Mapping[str, Any], *, target_date: date
+) -> None:
+    if (
+        payload.get("schema") != COST_CATALOG_SCHEMA
+        or payload.get("verification_status") != "verified"
+        or payload.get("verified") is not True
+        or payload.get("target_date") != target_date.isoformat()
+    ):
+        raise ValueError("verified_cost_catalog_header_invalid")
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+    ):
+        if payload.get(field) is not expected:
+            raise ValueError(f"verified_cost_catalog_authority_invalid:{field}")
+    declared_hash = str(payload.get("content_sha256") or "")
+    content = {key: value for key, value in payload.items() if key != "content_sha256"}
+    if declared_hash != _producer_sha256(content):
+        raise ValueError("verified_cost_catalog_content_sha256_mismatch")
+    profiles = payload.get("profiles")
+    if not isinstance(profiles, list) or not profiles:
+        raise ValueError("verified_cost_catalog_profiles_missing")
+    if payload.get("profile_count") != len(profiles):
+        raise ValueError("verified_cost_catalog_profile_count_mismatch")
+    profile_ids: set[str] = set()
+    for profile in profiles:
+        if not isinstance(profile, Mapping):
+            raise ValueError("verified_cost_catalog_profile_invalid")
+        profile_id = str(profile.get("profile_id") or "")
+        if not profile_id or profile_id in profile_ids:
+            raise ValueError("verified_cost_catalog_profile_id_invalid")
+        profile_ids.add(profile_id)
+        declared_profile_hash = str(profile.get("content_sha256") or "")
+        profile_content = {
+            key: value for key, value in profile.items() if key != "content_sha256"
+        }
+        if declared_profile_hash != _producer_sha256(profile_content):
+            raise ValueError("verified_cost_catalog_profile_hash_mismatch")
+        bridge_payload = profile.get("bridge_reviewed_cost_payload")
+        if (
+            not isinstance(bridge_payload, Mapping)
+            or bridge_payload.get("schema") != COST_PROFILE_SCHEMA
+            or profile.get("bridge_reviewed_cost_payload_sha256")
+            != _producer_sha256(bridge_payload)
+        ):
+            raise ValueError("verified_cost_catalog_bridge_payload_invalid")
+        try:
+            effective_from = date.fromisoformat(
+                str(profile.get("effective_from") or "")
+            )
+            effective_to = (
+                None
+                if profile.get("effective_to") in (None, "")
+                else date.fromisoformat(str(profile.get("effective_to")))
+            )
+        except ValueError as exc:
+            raise ValueError("verified_cost_catalog_profile_window_invalid") from exc
+        if target_date < effective_from or (
+            effective_to is not None and target_date > effective_to
+        ):
+            raise ValueError("verified_cost_catalog_profile_not_effective")
+        for scope_field in (
+            "venues",
+            "listing_markets",
+            "instrument_types",
+            "instrument_tax_classes",
+        ):
+            scope = profile.get(scope_field)
+            if not isinstance(scope, list) or not scope or not all(
+                isinstance(value, str) and value.strip() for value in scope
+            ):
+                raise ValueError(
+                    f"verified_cost_catalog_profile_scope_invalid:{scope_field}"
+                )
+        for numeric_field in (
+            "buy_fee_bps",
+            "sell_fee_bps",
+            "statutory_sell_tax_bps",
+            "uncertainty_buffer_bps",
+        ):
+            value = profile.get(numeric_field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) < 0
+            ):
+                raise ValueError(
+                    f"verified_cost_catalog_profile_numeric_invalid:{numeric_field}"
+                )
+
+
+def _resolved_cost_profile(
+    *,
+    config: BridgeConfig,
+    observed_date: date | None,
+    venue: str,
+    symbol_metadata: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    if not config.cost_profile_catalog_payload_json:
+        if not config.cost_profile_verified:
+            return None
+        return {
+            "profile_id": config.cost_profile_artifact_id,
+            "profile_content_sha256": config.cost_profile_artifact_sha256,
+            "effective_from": config.cost_profile_effective_date,
+            "effective_to": None,
+            "venues": list(config.cost_profile_venues),
+            "listing_markets": [symbol_metadata.get("listing_market")],
+            "instrument_types": [symbol_metadata.get("instrument_type")],
+            "instrument_tax_classes": [symbol_metadata.get("instrument_tax_class")],
+            "buy_fee_bps": config.buy_fee_bps,
+            "sell_fee_bps": config.sell_fee_bps,
+            "statutory_sell_tax_bps": config.statutory_sell_tax_bps,
+            "uncertainty_buffer_bps": config.uncertainty_buffer_bps,
+        }
+    if observed_date is None:
+        return None
+    catalog = json.loads(config.cost_profile_catalog_payload_json)
+    normalized_venue = normalize_venue(venue)
+    listing_market = str(symbol_metadata.get("listing_market") or "")
+    instrument_type = str(symbol_metadata.get("instrument_type") or "")
+    tax_class = str(symbol_metadata.get("instrument_tax_class") or "")
+    matches: list[Mapping[str, Any]] = []
+    for profile in catalog.get("profiles") or []:
+        if not isinstance(profile, Mapping):
+            continue
+        try:
+            effective_from = date.fromisoformat(
+                str(profile.get("effective_from") or "")
+            )
+            effective_to = (
+                None
+                if profile.get("effective_to") in (None, "")
+                else date.fromisoformat(str(profile.get("effective_to")))
+            )
+        except ValueError:
+            continue
+        if (
+            effective_from <= observed_date
+            and (effective_to is None or observed_date <= effective_to)
+            and normalized_venue in (profile.get("venues") or [])
+            and listing_market in (profile.get("listing_markets") or [])
+            and instrument_type in (profile.get("instrument_types") or [])
+            and tax_class in (profile.get("instrument_tax_classes") or [])
+        ):
+            matches.append(profile)
+    if len(matches) > 1:
+        raise ValueError("verified_cost_catalog_profile_ambiguous")
+    return matches[0] if matches else None
 
 
 def _stored_semantic_sha256(value: Any) -> str:
@@ -1594,10 +1782,6 @@ def _economics(
         observed_date = date.fromisoformat(str(snapshot_date or ""))
     except ValueError:
         observed_date = None
-    try:
-        effective_date = date.fromisoformat(config.cost_profile_effective_date)
-    except ValueError:
-        effective_date = None
     metadata_listing_market = normalize_listing_market(
         symbol_metadata.get("listing_market")
     )
@@ -1615,10 +1799,29 @@ def _economics(
             instrument_type=metadata_instrument_type,
         )
     )
+    resolved_profile = _resolved_cost_profile(
+        config=config,
+        observed_date=observed_date,
+        venue=normalized_venue,
+        symbol_metadata=symbol_metadata,
+    )
+    try:
+        effective_date = (
+            None
+            if resolved_profile is None
+            else date.fromisoformat(str(resolved_profile.get("effective_from") or ""))
+        )
+    except ValueError:
+        effective_date = None
+    resolved_tax_bps = (
+        None
+        if resolved_profile is None
+        else _finite_float(resolved_profile.get("statutory_sell_tax_bps"))
+    )
     tax_scope_matches = bool(
         metadata_tax_profile is not None
-        and config.statutory_sell_tax_bps is not None
-        and metadata_tax_profile.statutory_sell_tax_bps == config.statutory_sell_tax_bps
+        and resolved_tax_bps is not None
+        and metadata_tax_profile.statutory_sell_tax_bps == resolved_tax_bps
         and metadata_tax_profile.instrument_tax_class.value
         == symbol_metadata.get("instrument_tax_class")
     )
@@ -1627,19 +1830,43 @@ def _economics(
         and observed_date is not None
         and effective_date is not None
         and observed_date >= effective_date
-        and normalized_venue in config.cost_profile_venues
+        and resolved_profile is not None
+        and normalized_venue in (resolved_profile.get("venues") or [])
         and symbol_metadata.get("symbol_metadata_status") == "verified"
         and symbol_metadata.get("instrument_type") == InstrumentType.EQUITY.value
         and tax_scope_matches
     )
-    cost_ready = config.statutory_sell_tax_bps is not None
+    resolved_buy_fee_bps = (
+        None
+        if resolved_profile is None
+        else _finite_float(resolved_profile.get("buy_fee_bps"))
+    )
+    resolved_sell_fee_bps = (
+        None
+        if resolved_profile is None
+        else _finite_float(resolved_profile.get("sell_fee_bps"))
+    )
+    resolved_uncertainty_bps = (
+        None
+        if resolved_profile is None
+        else _finite_float(resolved_profile.get("uncertainty_buffer_bps"))
+    )
+    cost_ready = all(
+        value is not None
+        for value in (
+            resolved_buy_fee_bps,
+            resolved_sell_fee_bps,
+            resolved_tax_bps,
+            resolved_uncertainty_bps,
+        )
+    )
     fixed_cost = (
         None
         if not cost_ready
-        else config.buy_fee_bps
-        + config.sell_fee_bps
-        + float(config.statutory_sell_tax_bps)
-        + config.uncertainty_buffer_bps
+        else float(resolved_buy_fee_bps)
+        + float(resolved_sell_fee_bps)
+        + float(resolved_tax_bps)
+        + float(resolved_uncertainty_bps)
     )
     all_in = (
         None
@@ -1692,13 +1919,29 @@ def _economics(
         "instrument_tax_class": symbol_metadata.get("instrument_tax_class"),
         "cost_profile_artifact_id": config.cost_profile_artifact_id or None,
         "cost_profile_artifact_sha256": (config.cost_profile_artifact_sha256 or None),
-        "cost_profile_effective_date": (config.cost_profile_effective_date or None),
-        "cost_profile_venues": list(config.cost_profile_venues),
-        "buy_fee_bps": config.buy_fee_bps if cost_ready else None,
-        "sell_fee_bps": config.sell_fee_bps if cost_ready else None,
-        "statutory_sell_tax_bps": config.statutory_sell_tax_bps,
+        "cost_profile_effective_date": (
+            None if resolved_profile is None else resolved_profile.get("effective_from")
+        ),
+        "cost_profile_venues": (
+            [] if resolved_profile is None else list(resolved_profile.get("venues") or [])
+        ),
+        "cost_catalog_content_sha256": (
+            config.cost_profile_catalog_content_sha256 or None
+        ),
+        "selected_cost_profile_id": (
+            None if resolved_profile is None else resolved_profile.get("profile_id")
+        ),
+        "selected_cost_profile_content_sha256": (
+            None
+            if resolved_profile is None
+            else resolved_profile.get("content_sha256")
+            or resolved_profile.get("profile_content_sha256")
+        ),
+        "buy_fee_bps": resolved_buy_fee_bps if cost_ready else None,
+        "sell_fee_bps": resolved_sell_fee_bps if cost_ready else None,
+        "statutory_sell_tax_bps": resolved_tax_bps,
         "uncertainty_buffer_bps": (
-            config.uncertainty_buffer_bps if cost_ready else None
+            resolved_uncertainty_bps if cost_ready else None
         ),
         "counterfactual_roundtrip_execution_bps": execution_bps,
         "spread_double_counted": False,
@@ -3190,13 +3433,24 @@ def build_future_outcome(
     depth_times_us = tuple(
         _timestamp_us(row.get("local_receive_timestamp")) for row in depths
     )
+    evidence_economics = evidence.get("economics")
+    evidence_economics = (
+        evidence_economics if isinstance(evidence_economics, Mapping) else {}
+    )
+    evidence_cost_parts = [
+        _finite_float(evidence_economics.get(field))
+        for field in (
+            "buy_fee_bps",
+            "sell_fee_bps",
+            "statutory_sell_tax_bps",
+            "uncertainty_buffer_bps",
+        )
+    ]
     fixed_cost = (
-        None
-        if selected_config.statutory_sell_tax_bps is None
-        else selected_config.buy_fee_bps
-        + selected_config.sell_fee_bps
-        + selected_config.statutory_sell_tax_bps
-        + selected_config.uncertainty_buffer_bps
+        sum(float(value) for value in evidence_cost_parts if value is not None)
+        if evidence_economics.get("cost_profile_verified") is True
+        and all(value is not None for value in evidence_cost_parts)
+        else None
     )
     outcome_eligibility_blockers: list[str] = []
     evidence_source_quality = evidence.get("source_quality")
@@ -4202,6 +4456,9 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
             "cost_profile_artifact_sha256",
             "cost_profile_effective_date",
             "cost_profile_venues",
+            "cost_catalog_content_sha256",
+            "selected_cost_profile_id",
+            "selected_cost_profile_content_sha256",
             "symbol_metadata_status",
             "symbol_metadata_record_sha256",
             "symbol_master_artifact_sha256",
@@ -6243,7 +6500,43 @@ def _iter_jsonl_with_content_provenance(
 
 def _verified_cost_config_from_path(path: Path, *, target_date: date) -> BridgeConfig:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or payload.get("schema") != COST_PROFILE_SCHEMA:
+    if not isinstance(payload, dict):
+        raise ValueError("verified_cost_profile_schema_invalid")
+    if payload.get("schema") == COST_CATALOG_SCHEMA:
+        _validate_cost_catalog_payload(payload, target_date=target_date)
+        venues = tuple(
+            sorted(
+                {
+                    normalize_venue(venue)
+                    for profile in payload.get("profiles") or []
+                    for venue in (profile.get("venues") or [])
+                }
+            )
+        )
+        canonical_payload_json = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return BridgeConfig(
+            statutory_sell_tax_bps=None,
+            buy_fee_bps=0.0,
+            sell_fee_bps=0.0,
+            uncertainty_buffer_bps=0.0,
+            cost_profile_source="canonical_economic_reference_v2_catalog",
+            cost_profile_verified=True,
+            cost_profile_artifact_id=str(payload.get("artifact_id") or ""),
+            cost_profile_artifact_sha256=_producer_sha256(payload),
+            cost_profile_artifact_payload_json=canonical_payload_json,
+            cost_profile_effective_date=target_date.isoformat(),
+            cost_profile_venues=venues,
+            cost_profile_catalog_payload_json=canonical_payload_json,
+            cost_profile_catalog_content_sha256=str(
+                payload.get("content_sha256") or ""
+            ),
+        )
+    if payload.get("schema") != COST_PROFILE_SCHEMA:
         raise ValueError("verified_cost_profile_schema_invalid")
     numeric_fields: dict[str, float] = {}
     for field in (
@@ -6313,7 +6606,8 @@ def main(argv: list[str] | None = None) -> int:
         "--verified-cost-profile",
         type=Path,
         help=(
-            "Reviewed micro_reversion_reviewed_cost_profile_v1 artifact; "
+            "Reviewed micro_reversion_reviewed_cost_profile_v1 or canonical "
+            "micro_reversion_reviewed_cost_catalog_v2 artifact; "
             "must be paired with --symbol-master."
         ),
     )

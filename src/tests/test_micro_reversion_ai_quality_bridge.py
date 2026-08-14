@@ -728,6 +728,107 @@ def test_verified_cost_artifact_rejects_non_native_or_nonfinite_numbers(
         )
 
 
+def test_verified_cost_catalog_resolves_symbol_and_venue_specific_profile(
+    tmp_path,
+) -> None:
+    def profile(*, venue: str, buy_fee_bps: float) -> dict:
+        profile_id = f"profile-{venue.lower()}"
+        bridge_payload = {
+            "schema": bridge_module.COST_PROFILE_SCHEMA,
+            "artifact_id": profile_id,
+            "effective_date": "2026-08-01",
+            "venues": [venue],
+            "instrument_scope": "domestic_common_or_preferred_stock",
+            "source": f"canonical_economic_reference_v2:{profile_id}",
+            "buy_fee_bps": buy_fee_bps,
+            "sell_fee_bps": 0.2,
+            "statutory_sell_tax_bps": 20.0,
+            "uncertainty_buffer_bps": 3.0,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        body = {
+            "profile_id": profile_id,
+            "effective_from": "2026-08-01",
+            "effective_to": None,
+            "venues": [venue],
+            "listing_markets": ["KOSPI"],
+            "instrument_types": ["EQUITY"],
+            "instrument_tax_classes": ["ordinary_taxable_equity_20bps"],
+            "buy_fee_bps": buy_fee_bps,
+            "sell_fee_bps": 0.2,
+            "statutory_sell_tax_bps": 20.0,
+            "uncertainty_buffer_bps": 3.0,
+            "bridge_reviewed_cost_payload": bridge_payload,
+            "bridge_reviewed_cost_payload_sha256": _producer_hash(bridge_payload),
+            "verification_status": "verified",
+            "verified": True,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        return {**body, "content_sha256": _producer_hash(body)}
+
+    profiles = [
+        profile(venue="KRX", buy_fee_bps=0.1),
+        profile(venue="NXT", buy_fee_bps=0.7),
+    ]
+    body = {
+        "schema": bridge_module.COST_CATALOG_SCHEMA,
+        "artifact_id": "catalog-2026-08-14",
+        "target_date": "2026-08-14",
+        "verification_status": "verified",
+        "verified": True,
+        "profile_count": len(profiles),
+        "census": {"profile_count": len(profiles)},
+        "profiles": profiles,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    catalog = {**body, "content_sha256": _producer_hash(body)}
+    path = tmp_path / "reviewed_cost_catalog.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+
+    config = bridge_module._verified_cost_config_from_path(
+        path, target_date=datetime.fromisoformat("2026-08-14").date()
+    )
+    metadata = {
+        "symbol_metadata_status": "verified",
+        "listing_market": "KOSPI",
+        "instrument_type": "EQUITY",
+        "instrument_tax_class": "ordinary_taxable_equity_20bps",
+    }
+    krx = _economics(
+        liquidity={"counterfactual_liquidity_qty_grid": []},
+        config=config,
+        venue="KRX",
+        snapshot_date="2026-08-14",
+        symbol_metadata=metadata,
+    )
+    nxt = _economics(
+        liquidity={"counterfactual_liquidity_qty_grid": []},
+        config=config,
+        venue="NXT",
+        snapshot_date="2026-08-14",
+        symbol_metadata=metadata,
+    )
+
+    assert krx["cost_profile_verified"] is True
+    assert krx["selected_cost_profile_id"] == "profile-krx"
+    assert krx["buy_fee_bps"] == pytest.approx(0.1)
+    assert nxt["cost_profile_verified"] is True
+    assert nxt["selected_cost_profile_id"] == "profile-nxt"
+    assert nxt["buy_fee_bps"] == pytest.approx(0.7)
+    assert krx["cost_profile_artifact_sha256"] == nxt[
+        "cost_profile_artifact_sha256"
+    ]
+
+
 def test_verified_symbol_metadata_is_hash_bound_and_trace_guessing_is_forbidden() -> (
     None
 ):
@@ -1058,6 +1159,7 @@ def test_future_outcome_is_separate_and_uses_executable_bid_after_cost() -> None
         depth_rows=[_depth()],
         event_references=[_reference()],
         config=_verified_config(),
+        verified_symbol_metadata=_verified_symbol_metadata(),
     )
     future = [
         _market(
@@ -1109,10 +1211,12 @@ def test_future_outcome_is_separate_and_uses_executable_bid_after_cost() -> None
     assert outcome["notional_net_profit_eligible"] is False
     assert outcome["economic_promotion_evidence_eligible"] is False
     assert outcome["economic_promotion_authority"] is False
+    mature_horizons = [row for row in outcome["horizons"] if row["mature"] is True]
+    assert mature_horizons
     assert all(
-        row["action_neutral_executable_end_return_bps"] is None
-        and row["action_neutral_path_sha256"] is None
-        for row in outcome["horizons"]
+        row["action_neutral_executable_end_return_bps"] is not None
+        and len(row["action_neutral_path_sha256"]) == 64
+        for row in mature_horizons
     )
     assert "future_outcome" not in evidence
     assert "horizons" not in evidence

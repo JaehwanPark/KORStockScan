@@ -1,9 +1,376 @@
 import json
 import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
+
+
+def test_postclose_wrapper_executes_syntax_checked_immutable_snapshot():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "THRESHOLD_CYCLE_WRAPPER_SNAPSHOT_EXECUTED" in script
+    assert 'mktemp "$SCRIPT_DIR/.run_threshold_cycle_postclose.snapshot.' in script
+    assert 'cp -- "${BASH_SOURCE[0]}" "$wrapper_snapshot"' in script
+    assert 'bash -n "$wrapper_snapshot"' in script
+    assert 'exec bash "$wrapper_snapshot" "$@"' in script
+    assert 'export THRESHOLD_CYCLE_WRAPPER_SNAPSHOT_PATH="$wrapper_snapshot"' in script
+    assert "trap cleanup_wrapper_snapshot EXIT" in script
+    assert "terminate_wrapper_children" in script
+    assert "trap 'handle_wrapper_signal HUP' HUP" in script
+    assert "trap 'handle_wrapper_signal INT' INT" in script
+    assert "trap 'handle_wrapper_signal TERM' TERM" in script
+    assert 'mark_postclose_failed "$reason" "$exit_code"' in script
+    assert 'rm -f -- "$wrapper_snapshot"' in script
+
+
+def test_postclose_wrapper_snapshot_is_removed_when_child_fails(tmp_path):
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+    preamble = script[: script.index('PROJECT_DIR="${PROJECT_DIR:-')]
+    wrapper = tmp_path / "run_threshold_cycle_postclose.sh"
+    wrapper.write_text(preamble + "\nexit 9\n", encoding="utf-8")
+    wrapper.chmod(0o700)
+
+    result = subprocess.run(
+        ["bash", str(wrapper)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 9
+    assert list(tmp_path.glob(".run_threshold_cycle_postclose.snapshot.*.sh")) == []
+
+
+def test_postclose_wrapper_snapshot_exec_keeps_one_pid_and_cleans_on_term(tmp_path):
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+    preamble = script[: script.index('PROJECT_DIR="${PROJECT_DIR:-')]
+    wrapper = tmp_path / "run_threshold_cycle_postclose.sh"
+    pid_path = tmp_path / "executed.pid"
+    child_pid_path = tmp_path / "child.pid"
+    wrapper.write_text(
+        preamble
+        + f'\nprintf "%s" "$$" > "{pid_path}"\n'
+        + "( trap 'exit 0' TERM; while :; do :; done ) &\n"
+        + f'child_pid=$!\nprintf "%s" "$child_pid" > "{child_pid_path}"\n'
+        + 'wait "$child_pid"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o700)
+
+    process = subprocess.Popen(
+        ["bash", str(wrapper)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={**os.environ, "THRESHOLD_CYCLE_SIGNAL_GRACE_SEC": "1"},
+    )
+    try:
+        for _attempt in range(200):
+            if pid_path.exists() and child_pid_path.exists():
+                break
+            time.sleep(0.01)
+        assert pid_path.exists()
+        assert child_pid_path.exists()
+        assert int(pid_path.read_text(encoding="utf-8")) == process.pid
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        process.terminate()
+        assert process.wait(timeout=5) == 143
+        with pytest.raises(ProcessLookupError):
+            os.kill(child_pid, 0)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+    assert list(tmp_path.glob(".run_threshold_cycle_postclose.snapshot.*.sh")) == []
+
+
+@pytest.mark.parametrize(
+    ("signal_number", "expected_return_code", "expected_reason"),
+    [
+        (signal.SIGHUP, 129, "hangup"),
+        (signal.SIGINT, 130, "interrupted"),
+        (signal.SIGTERM, 143, "terminated"),
+    ],
+)
+def test_postclose_wrapper_terminates_foreground_process_group_on_signal(
+    tmp_path, signal_number, expected_return_code, expected_reason
+):
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+    preamble = script[: script.index('PROJECT_DIR="${PROJECT_DIR:-')]
+    function_start = script.index("run_postclose_cmd() {")
+    function_end = script.index("\n}\n", function_start) + 3
+    run_function = script[function_start:function_end]
+    child_pid_path = tmp_path / "foreground.pid"
+    grandchild_pid_path = tmp_path / "grandchild.pid"
+    failure_marker_path = tmp_path / "failure-marker"
+    restart_marker_path = tmp_path / "restart-marker"
+    child_script = tmp_path / "ignore-signals.sh"
+    child_script.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "trap '' HUP INT TERM",
+                f'printf "%s" "$$" > "{child_pid_path}"',
+                "( trap '' HUP INT TERM; while :; do :; done ) &",
+                "grandchild_pid=$!",
+                f'printf "%s" "$grandchild_pid" > "{grandchild_pid_path}"',
+                'wait "$grandchild_pid"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    child_script.chmod(0o700)
+    wrapper = tmp_path / "run_threshold_cycle_postclose.sh"
+    wrapper.write_text(
+        preamble
+        + "\nPOSTCLOSE_NICE_LEVEL=0\n"
+        + "POSTCLOSE_IONICE_CLASS=-1\n"
+        + 'POSTCLOSE_IONICE_LEVEL=0\nPOSTCLOSE_CPU_AFFINITY=""\n'
+        + f'mark_postclose_failed() {{ printf "%s:%s" "$1" "$2" > "{failure_marker_path}"; }}\n'
+        + f'restart_postclose_bot_if_requested() {{ : > "{restart_marker_path}"; }}\n'
+        + "POSTCLOSE_OPERATING=true\n"
+        + run_function
+        + f'\nrun_postclose_cmd bash "{child_script}"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o700)
+
+    process = subprocess.Popen(
+        ["bash", str(wrapper)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={**os.environ, "THRESHOLD_CYCLE_SIGNAL_GRACE_SEC": "1"},
+    )
+    try:
+        for _attempt in range(300):
+            if child_pid_path.exists() and grandchild_pid_path.exists():
+                break
+            time.sleep(0.01)
+        assert child_pid_path.exists()
+        assert grandchild_pid_path.exists()
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        grandchild_pid = int(grandchild_pid_path.read_text(encoding="utf-8"))
+        process.send_signal(signal_number)
+        assert process.wait(timeout=5) == expected_return_code
+        assert failure_marker_path.read_text(encoding="utf-8") == (
+            f"{expected_reason}:{expected_return_code}"
+        )
+        assert restart_marker_path.exists()
+        for terminated_pid in (child_pid, grandchild_pid):
+            for _attempt in range(200):
+                try:
+                    os.kill(terminated_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.01)
+            else:
+                pytest.fail(f"signalled descendant still alive: {terminated_pid}")
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+    assert list(tmp_path.glob(".run_threshold_cycle_postclose.snapshot.*.sh")) == []
+
+
+def test_postclose_group_runner_accepts_fast_success_and_fails_closed_without_setsid(
+    tmp_path,
+):
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+    function_start = script.index("run_postclose_cmd() {")
+    function_end = script.index("\n}\n", function_start) + 3
+    run_function = script[function_start:function_end]
+    common = (
+        "POSTCLOSE_NICE_LEVEL=0\n"
+        "POSTCLOSE_IONICE_CLASS=-1\n"
+        "POSTCLOSE_IONICE_LEVEL=0\n"
+        'POSTCLOSE_CPU_AFFINITY=""\n'
+        "POSTCLOSE_GROUP_STARTING=false\n"
+        'POSTCLOSE_PENDING_SIGNAL=""\n'
+        'ACTIVE_POSTCLOSE_PID=""\n'
+        'ACTIVE_POSTCLOSE_PGID=""\n'
+    )
+    fast_wrapper = tmp_path / "fast-command.sh"
+    fast_wrapper.write_text(
+        "#!/usr/bin/env bash\nset -Eeuo pipefail\n"
+        + common
+        + run_function
+        + "\nfor _attempt in {1..20}; do run_postclose_cmd true; done\n"
+        + "run_postclose_cmd bash -c "
+        + "'IFS= read -r value; [ \"$value\" = payload ]' <<< payload\n",
+        encoding="utf-8",
+    )
+    fast_result = subprocess.run(
+        ["/bin/bash", str(fast_wrapper)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert fast_result.returncode == 0, fast_result.stderr
+
+    empty_path = tmp_path / "empty-path"
+    empty_path.mkdir()
+    no_setsid_wrapper = tmp_path / "no-setsid.sh"
+    no_setsid_wrapper.write_text(
+        "#!/usr/bin/env bash\nset -u\n"
+        + common
+        + run_function
+        + "\nrun_postclose_cmd true\n",
+        encoding="utf-8",
+    )
+    no_setsid_result = subprocess.run(
+        ["/bin/bash", str(no_setsid_wrapper)],
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, "PATH": str(empty_path)},
+    )
+    assert no_setsid_result.returncode == 127
+    assert "process-group isolation unavailable" in no_setsid_result.stderr
+
+
+def test_postclose_signal_during_group_startup_is_delivered_after_verification(
+    tmp_path,
+):
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+    preamble = script[: script.index('PROJECT_DIR="${PROJECT_DIR:-')]
+    function_start = script.index("run_postclose_cmd() {")
+    function_end = script.index("\n}\n", function_start) + 3
+    run_function = script[function_start:function_end]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    ps_started = tmp_path / "ps-started"
+    fake_ps = fake_bin / "ps"
+    fake_ps.write_text(
+        "#!/usr/bin/env bash\n"
+        + f': > "{ps_started}"\n'
+        + "sleep 0.4\nexec /usr/bin/ps \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake_ps.chmod(0o700)
+    child_started = tmp_path / "child-started"
+    child_script = tmp_path / "child.sh"
+    child_script.write_text(
+        "#!/usr/bin/env bash\n"
+        + f': > "{child_started}"\n'
+        + "while :; do :; done\n",
+        encoding="utf-8",
+    )
+    child_script.chmod(0o700)
+    wrapper = tmp_path / "startup-signal.sh"
+    wrapper.write_text(
+        preamble
+        + "\nPOSTCLOSE_NICE_LEVEL=0\nPOSTCLOSE_IONICE_CLASS=-1\n"
+        + 'POSTCLOSE_IONICE_LEVEL=0\nPOSTCLOSE_CPU_AFFINITY=""\n'
+        + run_function
+        + f'\nrun_postclose_cmd bash "{child_script}"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o700)
+
+    process = subprocess.Popen(
+        ["bash", str(wrapper)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "THRESHOLD_CYCLE_SIGNAL_GRACE_SEC": "1",
+        },
+    )
+    try:
+        for _attempt in range(200):
+            if ps_started.exists():
+                break
+            time.sleep(0.01)
+        assert ps_started.exists()
+        process.terminate()
+        assert process.wait(timeout=5) == 143
+        assert not child_started.exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+
+def test_postclose_long_commands_are_not_run_inside_command_substitutions():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" '
+        "-m src.engine.backfill_threshold_cycle_events" in script
+    )
+    assert '> "$BACKFILL_OUTPUT_TEMP"' in script
+    assert 'out="$(\n    run_postclose_cmd' not in script
+    assert "$(automation_trigger_decision" not in script
+    assert "AUTOMATION_TRIGGER_DECISION_RESULT" in script
+    assert 'pgrep -P "$$"' not in script
+
+
+@pytest.mark.parametrize(
+    ("exit_mode", "expected_rc"),
+    [("normal", 0), ("failure", 7), ("signal", 143)],
+)
+def test_postclose_per_run_trigger_cache_is_removed_on_exit(
+    tmp_path, exit_mode, expected_rc
+):
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+    function_start = script.index("cleanup_threshold_cycle_snapshot_temp() {")
+    function_end = script.index("\n}\n", function_start) + 3
+    cleanup_function = script[function_start:function_end]
+    marker = tmp_path / "automation-trigger.cached"
+    marker.write_text("", encoding="utf-8")
+    wrapper = tmp_path / "cleanup-trigger-cache.sh"
+    wrapper.write_text(
+        "#!/usr/bin/env bash\nset -Eeuo pipefail\n"
+        + 'SNAPSHOT_TEMP_PATH=""\nBACKFILL_OUTPUT_TEMP=""\n'
+        + 'AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP=""\n'
+        + f'AUTOMATION_TRIGGER_DECISION_CACHE_MARKER="{marker}"\n'
+        + "cleanup_wrapper_snapshot() { :; }\n"
+        + cleanup_function
+        + "\ntrap cleanup_threshold_cycle_snapshot_temp EXIT\n"
+        + (
+            "exit 0\n"
+            if exit_mode == "normal"
+            else (
+                "trap 'exit 143' TERM\nkill -TERM \"$$\"\n"
+                if exit_mode == "signal"
+                else "exit 7\n"
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["/bin/bash", str(wrapper)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == expected_rc
+    assert not marker.exists()
 
 
 def test_postclose_daily_ev_receives_disabled_report_scope():
@@ -946,6 +1313,132 @@ def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibra
         "ai_decision_quality_daily_materialization="
         "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" in script
     )
+
+
+def test_postclose_wrapper_runs_bounded_main_ai_quality_r0_r3_after_exact_chain():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        'RUN_MAIN_AI_QUALITY_R0_R3="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_R0_R3:-true}"'
+        in script
+    )
+    assert (
+        'MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY:-true}"'
+        in script
+    )
+    assert (
+        'MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP:-12}"'
+        in script
+    )
+    assert (
+        'MAIN_AI_QUALITY_DAILY_USD_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_DAILY_USD_CAP:-1.0}"'
+        in script
+    )
+    exact_index = script.index("-m src.engine.scalping.ai_decision_quality")
+    cycle_index = script.index(
+        "-m src.engine.scalping.micro_reversion.ai_quality_cycle"
+    )
+    calibration_index = script.index(
+        "-m src.engine.scalping.ai_action_outcome_calibration"
+    )
+    assert exact_index < cycle_index < calibration_index
+    cycle_block_start = script.rindex(
+        'if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ]',
+        0,
+        cycle_index,
+    )
+    cycle_block_end = script.index(
+        'if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ]',
+        cycle_index,
+    )
+    cycle_block = script[cycle_block_start:cycle_block_end]
+    assert "--execute-provider-replay" in cycle_block
+    assert "--daily-attempt-cap" in cycle_block
+    assert "--daily-usd-cap" in cycle_block
+    assert "--parent-cap" in cycle_block
+    assert "main_ai_quality_rc=0" in cycle_block
+    assert "runtime_effect=false actual_order_submitted=false" in cycle_block
+    assert "if ! wait_for_json_artifact" in cycle_block
+    assert 'main_ai_quality_failure_reason="artifact_missing_or_invalid"' in cycle_block
+
+
+@pytest.mark.parametrize(
+    (
+        "resource_rc",
+        "command_rc",
+        "artifact_rc",
+        "expected_reason",
+        "expect_cycle_call",
+        "expect_artifact_wait",
+    ),
+    [
+        (17, 0, 0, "resource_wait_failed", False, False),
+        (0, 23, 0, "cycle_command_failed_or_deferred", True, False),
+        (0, 0, 1, "artifact_missing_or_invalid", True, True),
+    ],
+)
+def test_postclose_wrapper_isolates_main_ai_quality_failures(
+    resource_rc,
+    command_rc,
+    artifact_rc,
+    expected_reason,
+    expect_cycle_call,
+    expect_artifact_wait,
+):
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+    start = script.index(
+        'if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ]'
+    )
+    end = script.index(
+        'if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ]',
+        start,
+    )
+    cycle_block = script[start:end]
+    harness = "\n".join(
+        [
+            """
+set -Eeuo pipefail
+RUN_MAIN_AI_QUALITY_R0_R3=true
+MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY=true
+MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP=12
+MAIN_AI_QUALITY_DAILY_USD_CAP=1
+MAIN_AI_QUALITY_PARENT_CAP=1
+TARGET_DATE=2026-08-14
+PROJECT_DIR=/tmp/korstockscan-wrapper-test
+VENV_PY=/tmp/unused-python
+""",
+            f"RESOURCE_RC={resource_rc}",
+            f"COMMAND_RC={command_rc}",
+            f"ARTIFACT_RC={artifact_rc}",
+            """
+wait_for_postclose_resources() { return "$RESOURCE_RC"; }
+run_postclose_cmd() { echo cycle_called; return "$COMMAND_RC"; }
+wait_for_json_artifact() { echo artifact_waited; return "$ARTIFACT_RC"; }
+emit_postclose_marker() { echo "$1"; }
+""",
+            cycle_block,
+            """
+echo unrelated_postclose_continues
+""",
+        ]
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", harness],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"reason={expected_reason}" in result.stdout
+    assert "unrelated_postclose_continues" in result.stdout
+    assert ("cycle_called" in result.stdout) is expect_cycle_call
+    assert ("artifact_waited" in result.stdout) is expect_artifact_wait
 
 
 def test_entry_setup_paired_replay_has_separate_late_offline_cron():

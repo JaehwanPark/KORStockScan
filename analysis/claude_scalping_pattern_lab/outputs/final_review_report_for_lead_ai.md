@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-08-13 21:12:02
-분석 기간: 2026-06-05 ~ 2026-08-13
+생성일: 2026-08-14 22:26:51
+분석 기간: 2026-06-05 ~ 2026-08-14
 
 ---
 
@@ -11,21 +11,21 @@
 
 | 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |
 |---|---:|---:|---:|---:|---|
-| full_fill | 197 | 65.5% | +0.470% | +10.320% | ✓ |
+| full_fill | 203 | 65.5% | +0.450% | +10.360% | ✓ |
 | split-entry | 32 | 43.8% | -0.180% | -31.370% | ✓ |
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=53`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=37.7%`, `gatekeeper_eval_ms_p95=0ms`, `budget_pass_to_submitted_rate=1.4%`
+- `WAIT65~79 total_candidates=49`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=42.9%`, `gatekeeper_eval_ms_p95=0ms`, `budget_pass_to_submitted_rate=1.7%`
 
 - `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
 
 ### 1-2. 손실 패턴 Top 5
 
 **#1** — 코호트: `full_fill` / 청산규칙: `scalp_soft_stop_pct`
-- 빈도: 26건 | 손익 중앙값: -3.670% | 기여손익: -99.890%
-- 보유시간 중앙값: 3205.5초
+- 빈도: 27건 | 손익 중앙값: -3.670% | 기여손익: -103.110%
+- 보유시간 중앙값: 3172.0초
 - 선행 조건: 없음
 
 **#2** — 코호트: `full_fill` / 청산규칙: `scalp_hard_stop_pct`
@@ -51,7 +51,7 @@
 ### 1-3. 수익 패턴 Top 5
 
 **#1** — 코호트: `full_fill` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
-- 빈도: 99건 | 손익 중앙값: +1.300% | 기여손익: +152.070%
+- 빈도: 103건 | 손익 중앙값: +1.280% | 기여손익: +155.330%
 
 **#2** — 코호트: `split-entry` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
 - 빈도: 13건 | 손익 중앙값: +1.100% | 기여손익: +15.160%
@@ -68,16 +68,16 @@
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 48245건 | 차단 비율: 99.3% | 관찰 일수: 34일
+- 차단 건수 합계: 50583건 | 차단 비율: 99.3% | 관찰 일수: 35일
 
 **#2** — `overbought gate miss`
-- 차단 건수 합계: 6572건 | 차단 비율: 94.8% | 관찰 일수: 34일
+- 차단 건수 합계: 6973건 | 차단 비율: 95.0% | 관찰 일수: 35일
 
 **#3** — `latency guard miss`
-- 차단 건수 합계: 5489건 | 차단 비율: 93.9% | 관찰 일수: 34일
+- 차단 건수 합계: 5772건 | 차단 비율: 94.0% | 관찰 일수: 35일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 34일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 35일
 
 ---
 
@@ -87,7 +87,7 @@
 
 - rebase_integrity_flag: 16건
 - partial_then_expand_flag: 59건
-- same_symbol_repeat_flag: 1289건
+- same_symbol_repeat_flag: 1290건
 - same_ts_multi_rebase_flag: 24건
 
 ### 2-2. 전역 손절 강화 비권고 이유

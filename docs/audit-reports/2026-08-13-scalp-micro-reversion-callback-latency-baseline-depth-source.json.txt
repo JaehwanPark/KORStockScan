@@ -121,12 +121,12 @@
     "snapshot_stale_after_sec": 30.0
   },
   "benchmark_module_sha256": "b789f9308961ee94d3322fa58e0354aaebacdb398ee3576619ba8a25ecd5938f",
-  "forward_collector_sha256": "dbc9663fa7ed57821b05a7895e1e6c5b9dd0bf2b07d9c05df75946f855aec4bb",
+  "forward_collector_sha256": "d39b059450a24e717855c50e5c310fd1582c96c74332ada285970a1fed7e7b2f",
   "path_journal_sha256": "793d1b360723ba9fe0d31cec62e34d8187c7be2cd68f3b5b5ae49867170c8d18",
   "path_capture_sha256": "5688253327561080077dfbecfda5e4dc7e8e14120ff77fc5c89255fc501ccda6",
   "p2_replay_sha256": "2cc8cb78aa4c827afa9c894022bc130e10daaf596ae9f3d963a589fa89904b96",
   "onset_quality_sha256": "595658610c7ba829f8f274c8ff56b64e0c1209c395724b1845c78d99640e8974",
-  "storage_maintenance_sha256": "aa7ec72ffbdb6b6d402138cf667c7bd669b10cf867c21af518acda4d3080bc27",
+  "storage_maintenance_sha256": "07c11299d63c194624f5fc6ed461124f4e72686e963bffb9a3d4aa52e5fd3f59",
   "kiwoom_websocket_sha256": "ea70d1502b9580605f260eff7e5067f5aa7502b94bec9489d11c673372faf1d3",
   "canary_guard_config_sha256": "28a1b8355003d979fd02a4d43a7e8144bc252d14698fa934068b8d56b7daabd5",
   "source_exclusion_manifest_sha256": "f9e9c0b9cad91c9b300e818b91921f4cfae850ab0fe3666ba9e49bd686fac0f8",
@@ -146,6 +146,22 @@
       "previous": "3d3d22db027078fcaf322c5fd3377236bafc3b77c6c88e08c8ce0c867b73de40",
       "current": "ea70d1502b9580605f260eff7e5067f5aa7502b94bec9489d11c673372faf1d3",
       "reason": "source_only_observation_registration_and_delivery_isolation_with_same_5000x5_callback_preflight_zero_drop_zero_worker_error_p95_0.025582ms_p99_0.040011ms_frozen_limits_unchanged",
+      "runtime_effect": false
+    },
+    {
+      "updated_at_kst": "2026-08-14T23:10:48+09:00",
+      "field": "forward_collector_sha256",
+      "previous": "dbc9663fa7ed57821b05a7895e1e6c5b9dd0bf2b07d9c05df75946f855aec4bb",
+      "current": "d39b059450a24e717855c50e5c310fd1582c96c74332ada285970a1fed7e7b2f",
+      "reason": "exact_registration_symbol_venue_identity_validation_with_same_5000x5_callback_preflight_zero_drop_zero_worker_error_internal_p95_0.025002ms_p99_0.031173ms_frozen_limits_unchanged",
+      "runtime_effect": false
+    },
+    {
+      "updated_at_kst": "2026-08-14T23:10:48+09:00",
+      "field": "storage_maintenance_sha256",
+      "previous": "aa7ec72ffbdb6b6d402138cf667c7bd669b10cf867c21af518acda4d3080bc27",
+      "current": "07c11299d63c194624f5fc6ed461124f4e72686e963bffb9a3d4aa52e5fd3f59",
+      "reason": "compression_recovery_and_explicit_purge_authority_separation_validated_by_storage_targeted_tests_no_canary_limit_change",
       "runtime_effect": false
     }
   ],

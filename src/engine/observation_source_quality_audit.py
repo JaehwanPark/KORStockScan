@@ -2789,9 +2789,11 @@ def _reviewed_unknown_reason_for_stage_field(
             "entry_ai_price_canary_applied",
             "entry_ai_price_canary_fallback",
             "entry_ai_price_feature_packet_source_block",
+            "krx_direct_canary_live_ai_wait_submit_block",
             "order_bundle_submitted",
             "pre_submit_micro_unavailable_block",
             "pre_submit_entry_ai_authority_guard_block",
+            "real_weak_ai_micro_entry_block",
             "rising_missed_async_commit_phase",
             "rising_missed_entry_ai_async_result_applied",
             "rising_missed_entry_ai_async_result_unusable",
@@ -3391,7 +3393,13 @@ def _reviewed_unknown_reason_for_stage_field(
                 route_partition_reason = route_partition_text
             if not (
                 route_partition_not_used
-                and "route_snapshots_unavailable" in route_partition_reason
+                and any(
+                    reason in route_partition_reason
+                    for reason in {
+                        "route_snapshots_unavailable",
+                        "candle_route_snapshot_missing",
+                    }
+                )
             ):
                 return False
         result_blocked = (

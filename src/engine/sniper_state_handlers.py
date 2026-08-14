@@ -81,6 +81,10 @@ from src.engine.scalping.ai_decision_trace import record_ai_decision_trace
 from src.engine.scalping.entry_candidate_lifecycle_state import (
     observe_candidate_transition_safe,
 )
+from src.engine.scalping.main_lifecycle_journal import (
+    pipeline_lifecycle_fields_safe,
+    pipeline_lifecycle_stage_mapped,
+)
 from src.engine.scalping.entry_setup_live_policy import (
     mark_exploration_probe_cap_fail_closed,
     read_exploration_probe_submit_count,
@@ -8652,13 +8656,31 @@ def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
         ):
             should_refresh_active_seed = True
     if source_stage and score_value is not None and should_refresh_active_seed:
-        fields.update(
-            _scalp_active_seed_match_fields(
-                score_value=score_value,
-                source_stage=source_stage,
-                fields=fields,
-            )
+        match_input_fields = dict(fields)
+        refreshed_match_fields = _scalp_active_seed_match_fields(
+            score_value=score_value,
+            source_stage=source_stage,
+            fields=match_input_fields,
         )
+        # A carried simulator position can contain yesterday's active seed.
+        # Revalidation must replace the whole seed provenance surface: merely
+        # updating the no-match fields leaves the stale id/matched-id list in
+        # later events and makes a non-match look like policy consumption.
+        for key in _SCALP_SIM_ACTIVE_SEED_CONTEXT_KEYS:
+            fields.pop(key, None)
+        fields.update(refreshed_match_fields)
+        if str(match_input_fields.get("ldm_hypothesis_matched") or "").lower() in {
+            "true",
+            "1",
+            "yes",
+        }:
+            hypothesis_quota_policy = str(
+                match_input_fields.get("quota_policy")
+                or match_input_fields.get("scalp_sim_candidate_window_quota_policy")
+                or ""
+            ).strip()
+            if hypothesis_quota_policy:
+                fields["quota_policy"] = hypothesis_quota_policy
     if fields:
         fields["would_real_submit"] = False
     fields.update(bucket_policy_fields)
@@ -12679,6 +12701,24 @@ def _log_entry_pipeline(stock, code, stage, **fields):
                 "[RISKY_MICRO_BBO_OBSERVER] registration failed open without "
                 f"runtime effect code={code or '-'}: {exc}"
             )
+    lifecycle_stage_mapped = pipeline_lifecycle_stage_mapped(
+        pipeline="ENTRY_PIPELINE",
+        source_stage=stage,
+    )
+    for reserved_key in tuple(merged_fields):
+        if reserved_key.startswith("main_lifecycle_") or (
+            reserved_key == "attempt_id" and lifecycle_stage_mapped
+        ):
+            merged_fields.pop(reserved_key, None)
+    merged_fields.update(
+        pipeline_lifecycle_fields_safe(
+            stock,
+            code,
+            pipeline="ENTRY_PIPELINE",
+            source_stage=stage,
+            source_fields=merged_fields,
+        )
+    )
     _remember_scanner_terminal_block(stock, stage, merged_fields)
     observe_candidate_transition_safe(stock, code, stage, merged_fields)
     emit_pipeline_event(
@@ -19379,6 +19419,24 @@ def _log_holding_pipeline(stock, code, stage, **fields):
             stock,
             stage=stage,
             actual_order_submitted=fields.get("actual_order_submitted"),
+        )
+    )
+    lifecycle_stage_mapped = pipeline_lifecycle_stage_mapped(
+        pipeline="HOLDING_PIPELINE",
+        source_stage=stage,
+    )
+    for reserved_key in tuple(fields):
+        if reserved_key.startswith("main_lifecycle_") or (
+            reserved_key == "attempt_id" and lifecycle_stage_mapped
+        ):
+            fields.pop(reserved_key, None)
+    fields.update(
+        pipeline_lifecycle_fields_safe(
+            stock,
+            code,
+            pipeline="HOLDING_PIPELINE",
+            source_stage=stage,
+            source_fields=fields,
         )
     )
     observe_candidate_transition_safe(stock, code, stage, fields)

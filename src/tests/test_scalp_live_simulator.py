@@ -2882,6 +2882,63 @@ def test_scalp_sim_candidate_window_context_refreshes_stale_seed_id_with_same_pr
     assert fields["active_seed_match_source"] == "current_preopen_active_policy"
 
 
+def test_scalp_sim_candidate_window_context_clears_stale_seed_on_no_match(
+    monkeypatch, tmp_path
+):
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_other",
+                        "source_parent_bucket_id": "parent_other",
+                        "status": "active",
+                        "observable_prefix": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_blocked_ai_score",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_AUTO_POLICY_ENABLED=True,
+        SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+        SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-06-01",
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_AUTO_POLICY_CACHE.clear()
+
+    fields = state_handlers._scalp_sim_candidate_window_context_fields(
+        {
+            "scalp_sim_candidate_window_expansion": True,
+            "scalp_sim_candidate_window_source_stage": "first_ai_wait",
+            "scalp_sim_candidate_window_original_score": "61.0",
+            "scalp_sim_active_priority_seed_matched": True,
+            "active_seed_id": "rising_missed_prior_stale",
+            "active_seed_matched_ids": ["rising_missed_prior_stale"],
+            "active_seed_match_source": "current_preopen_active_policy",
+            "active_seed_candidate_observable_prefix": json.dumps(
+                {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_wait6579",
+                },
+                sort_keys=True,
+            ),
+        }
+    )
+
+    assert fields["scalp_sim_active_priority_seed_matched"] is False
+    assert fields["active_seed_match_source"] == "no_match"
+    assert "active_seed_id" not in fields
+    assert "active_seed_matched_ids" not in fields
+
+
 def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(
     monkeypatch, tmp_path
 ):

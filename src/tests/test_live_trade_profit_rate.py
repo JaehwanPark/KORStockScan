@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import src.engine.sniper_execution_receipts as receipts
 import src.engine.sniper_s15_fast_track as s15
@@ -362,6 +362,7 @@ def test_sell_receipt_persists_net_profit_rate(monkeypatch):
         (),
         {
             "buy_price": 100000.0,
+            "buy_qty": 1,
             "status": "SELL_ORDERED",
             "sell_price": 0,
             "sell_time": None,
@@ -371,7 +372,12 @@ def test_sell_receipt_persists_net_profit_rate(monkeypatch):
 
     receipts.DB = _ReceiptDB(record)
     receipts.event_bus = _Bus()
-    monkeypatch.setattr(receipts, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    logged = {}
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: logged.update(kwargs),
+    )
 
     receipts._update_db_for_sell(
         7,
@@ -385,6 +391,13 @@ def test_sell_receipt_persists_net_profit_rate(monkeypatch):
     assert record.status == "COMPLETED"
     assert record.sell_price == 100100
     assert record.profit_rate == -0.13
+    assert logged["sell_qty"] == 1
+    assert logged["main_lifecycle_broker_reconciled"] is True
+    assert logged["main_lifecycle_reconciled_final_exit"] is True
+    assert logged["main_lifecycle_realized_net_pnl_krw"] == -130
+    assert logged["main_lifecycle_fees_taxes_krw"] == 230
+    assert "main_lifecycle_slippage_krw" not in logged
+    assert logged["observed_at"] == datetime(2026, 4, 7, 9, 0, 0)
     assert receipts.event_bus.events
     _, payload = receipts.event_bus.events[-1]
     assert "-0.13%" in payload["message"]
@@ -508,6 +521,10 @@ def test_scalp_revive_sell_receipt_declares_real_execution_contract(monkeypatch)
     assert logged["buy_qty"] == 7
     assert logged["realized_pnl_krw"] == 230
     assert logged["realized_pnl_krw_source"] == "broker_fill_prices_fee_aware"
+    assert logged["main_lifecycle_broker_reconciled"] is False
+    assert logged["main_lifecycle_reconciled_final_exit"] is False
+    assert logged["main_lifecycle_realized_net_pnl_krw"] == 230
+    assert logged["main_lifecycle_fees_taxes_krw"] == 70
 
 
 def test_sell_receipt_propagates_scale_in_counterfactual_diagnostics(monkeypatch):
@@ -1871,6 +1888,7 @@ def test_holding_state_uses_net_profit_rate_for_sell_decision(monkeypatch):
         "buy_price": 100000,
         "buy_qty": 1,
     }
+    observed_at = datetime(2026, 8, 14, 10, 0, 0)
 
     state_handlers.handle_holding_state(
         stock=stock,
@@ -1878,6 +1896,8 @@ def test_holding_state_uses_net_profit_rate_for_sell_decision(monkeypatch):
         ws_data={"curr": 100100},
         admin_id=1,
         market_regime="BULL",
+        now_ts=observed_at.replace(tzinfo=timezone(timedelta(hours=9))).timestamp(),
+        now_dt=observed_at,
         radar=None,
         ai_engine=None,
     )

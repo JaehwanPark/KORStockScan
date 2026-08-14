@@ -4384,7 +4384,24 @@ def _active_sim_priority_handoff_status(
             )
             if str(item).strip()
         }
-        if truthy(fields.get("scalp_sim_active_priority_seed_matched")):
+        explicit_match_value = fields.get("scalp_sim_active_priority_seed_matched")
+        explicitly_not_matched = (
+            explicit_match_value is not None and not truthy(explicit_match_value)
+        )
+        match_source = str(fields.get("active_seed_match_source") or "").strip()
+        if explicitly_not_matched and match_source in {
+            "no_match",
+            "inactive_seed_blocked",
+            "policy_stale_source_date_mismatch",
+            "policy_source_date_missing",
+        }:
+            # Older runtime rows could carry a prior seed id through a refreshed
+            # no-match context.  The explicit non-match contract is authoritative:
+            # preserve the candidate prefix diagnosis, but do not classify the
+            # stale id as a consumed policy key.
+            matched_seed_ids = set()
+            seed_id = ""
+        if truthy(explicit_match_value):
             matched_seed_ids.update(same_prefix_active_ids)
         observed_seed_ids.update(matched_seed_ids)
         referenced_runtime_seed_ids.update(

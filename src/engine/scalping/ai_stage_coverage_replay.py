@@ -27,6 +27,7 @@ from src.engine.ai_prompt_contracts import (
 )
 from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine.bedrock_nova_provider import (
+    BedrockNovaModelProfile,
     BedrockNovaProvider,
     qwen3_32b_profile_from_env,
 )
@@ -413,6 +414,7 @@ def execute_bedrock_candidate(
     request: dict[str, Any],
     *,
     provider: BedrockNovaProvider | None = None,
+    profile: BedrockNovaModelProfile | None = None,
 ) -> dict[str, Any]:
     """Run the entry-price candidate on the captured Qwen3 control route only."""
 
@@ -434,7 +436,7 @@ def execute_bedrock_candidate(
         or str(candidate.get("model") or "") != "qwen3_32b"
     ):
         raise ValueError("provider_or_model_control_mismatch")
-    profile = qwen3_32b_profile_from_env()
+    profile = profile or qwen3_32b_profile_from_env()
     prompt = str(candidate.get("system_prompt") or "")
     correction_errors = [
         str(value)
@@ -570,6 +572,37 @@ def execute_bedrock_candidate(
         "candidate_response": payload,
         "provider_provenance": provenance,
     }
+
+
+def execute_bedrock_candidate_single_network_attempt(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    """Run one budgeted offline attempt without internal key rotation.
+
+    The caller reserves one provider attempt before entering this function.
+    Disabling the provider's otherwise-valid key rotation keeps that reservation
+    in one-to-one correspondence with at most one Bedrock ``converse`` request.
+    The shared provider default remains unchanged for non-budgeted/live callers.
+    """
+
+    candidate = request.get("candidate") or {}
+    reserved_max_output_tokens = candidate.get("max_output_tokens")
+    if (
+        isinstance(reserved_max_output_tokens, bool)
+        or not isinstance(reserved_max_output_tokens, int)
+        or reserved_max_output_tokens <= 0
+    ):
+        raise ValueError("bedrock_budgeted_max_output_tokens_invalid")
+    profile = qwen3_32b_profile_from_env()
+    if profile.family != str(candidate.get("model") or ""):
+        raise ValueError("bedrock_budgeted_profile_family_mismatch")
+    if profile.max_output_tokens > reserved_max_output_tokens:
+        raise ValueError("bedrock_budgeted_profile_exceeds_reserved_output_tokens")
+    return execute_bedrock_candidate(
+        request,
+        provider=BedrockNovaProvider(key_rotation_enabled=False),
+        profile=profile,
+    )
 
 
 def canonicalize_entry_price_economically_equivalent_action(
