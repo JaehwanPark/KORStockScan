@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 from bisect import bisect_right
 from collections import defaultdict
 from datetime import datetime
@@ -21,7 +22,9 @@ DEPTH_JOIN_SCHEMA = "scalp_micro_reversion_depth_join_v1"
 DEPTH_JOIN_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_offline_depth_context",
     "decision_authority": "offline_research_join_only",
-    "window_policy": "latest_past_same_symbol_venue_session_with_freshness_limit",
+    "window_policy": (
+        "latest_past_same_symbol_venue_session_sequence_epoch_with_freshness_limit"
+    ),
     "sample_floor": "five_trading_days_and_200_mature_events_gate_b_only",
     "primary_decision_metric": "past_only_depth_join_coverage_pct",
     "source_quality_gate": (
@@ -29,7 +32,7 @@ DEPTH_JOIN_METRIC_CONTRACT = {
     ),
     "forbidden_uses": (
         "future_depth_join",
-        "cross_symbol_venue_or_session_join",
+        "cross_symbol_venue_session_or_sequence_epoch_join",
         "missing_depth_imputation",
         "touch_or_depth_as_real_fill",
         "broker_order_submission",
@@ -54,7 +57,7 @@ def read_depth_rows(paths: Iterable[Path | str]) -> tuple[dict[str, Any], ...]:
                 if not line.strip():
                     continue
                 payload = json.loads(line)
-                _validate_depth_row(payload)
+                validate_depth_row(payload)
                 rows.append(payload)
     return tuple(rows)
 
@@ -73,23 +76,20 @@ def join_latest_past_depth(
 
     if max_age_ms < 0:
         raise ValueError("max_age_ms must not be negative")
-    by_series: dict[tuple[str, str, str], list[tuple[int, dict[str, Any]]]] = (
+    by_series: dict[tuple[str, str, str, int], list[tuple[int, dict[str, Any]]]] = (
         defaultdict(list)
     )
-    seen_sequences: dict[tuple[str, str, str], set[tuple[int, int]]] = defaultdict(set)
+    seen_sequences: dict[tuple[str, str, str, int], set[int]] = defaultdict(set)
     for depth in depth_rows:
-        _validate_depth_row(depth)
+        validate_depth_row(depth)
         key = _series_key(depth)
-        sequence_key = (
-            int(depth.get("sequence_epoch") or 0),
-            int(depth.get("series_sequence") or 0),
-        )
+        sequence_key = int(depth.get("series_sequence") or 0)
         if sequence_key in seen_sequences[key]:
             raise ValueError("duplicate depth series sequence")
         seen_sequences[key].add(sequence_key)
-        received_ms = _timestamp_ms(depth.get("local_receive_timestamp"))
-        by_series[key].append((received_ms, depth))
-    receive_times: dict[tuple[str, str, str], tuple[int, ...]] = {}
+        received_us = _timestamp_us(depth.get("local_receive_timestamp"))
+        by_series[key].append((received_us, depth))
+    receive_times: dict[tuple[str, str, str, int], tuple[int, ...]] = {}
     for key, values in by_series.items():
         values.sort(key=lambda row: (row[0], int(row[1].get("series_sequence") or 0)))
         receive_times[key] = tuple(value[0] for value in values)
@@ -100,15 +100,15 @@ def join_latest_past_depth(
         if payload.get("bid_depth") is not None or payload.get("ask_depth") is not None:
             raise ValueError("canonical 0B row must not contain prejoined depth")
         key = _series_key(payload)
-        market_received_ms = _timestamp_ms(payload.get("local_receive_timestamp"))
+        market_received_us = _timestamp_us(payload.get("local_receive_timestamp"))
         candidates = by_series.get(key, ())
-        index = bisect_right(receive_times.get(key, ()), market_received_ms) - 1
+        index = bisect_right(receive_times.get(key, ()), market_received_us) - 1
         status = "missing_same_series_depth"
-        age_ms: int | None = None
+        age_ms: float | None = None
         selected: dict[str, Any] | None = None
         if index >= 0 and candidates:
-            selected_receive_ms, candidate = candidates[index]
-            age_ms = market_received_ms - selected_receive_ms
+            selected_receive_us, candidate = candidates[index]
+            age_ms = (market_received_us - selected_receive_us) / 1_000.0
             if age_ms <= max_age_ms:
                 selected = candidate
                 status = "joined_fresh_past_depth"
@@ -145,7 +145,7 @@ def join_latest_past_depth(
     return tuple(joined)
 
 
-def _validate_depth_row(payload: object) -> None:
+def validate_depth_row(payload: object) -> None:
     if not isinstance(payload, dict):
         raise ValueError("depth JSONL row must be an object")
     if (
@@ -164,16 +164,31 @@ def _validate_depth_row(payload: object) -> None:
         or payload.get("trading_runtime_effect") is not False
     ):
         raise ValueError("depth authority contract is invalid")
-    _series_key(payload)
-    exchange_ms = _timestamp_ms(payload.get("exchange_timestamp"))
-    receive_ms = _timestamp_ms(payload.get("local_receive_timestamp"))
-    if receive_ms < exchange_ms:
-        raise ValueError("depth receive timestamp precedes exchange timestamp")
-    if int(payload.get("source_sequence") or 0) <= 0:
-        raise ValueError("depth source sequence must be positive")
-    if int(payload.get("sequence_epoch") or 0) <= 0:
+    sequence_epoch = payload.get("sequence_epoch")
+    if (
+        isinstance(sequence_epoch, bool)
+        or not isinstance(sequence_epoch, int)
+        or sequence_epoch <= 0
+    ):
         raise ValueError("depth sequence epoch must be positive")
-    if payload.get("source_sequence") != payload.get("series_sequence"):
+    _series_key(payload)
+    exchange_us = _timestamp_us(payload.get("exchange_timestamp"))
+    receive_us = _timestamp_us(payload.get("local_receive_timestamp"))
+    if receive_us < exchange_us:
+        raise ValueError("depth receive timestamp precedes exchange timestamp")
+    source_sequence = payload.get("source_sequence")
+    series_sequence = payload.get("series_sequence")
+    if (
+        isinstance(source_sequence, bool)
+        or not isinstance(source_sequence, int)
+        or source_sequence <= 0
+    ):
+        raise ValueError("depth source sequence must be positive")
+    if (
+        isinstance(series_sequence, bool)
+        or not isinstance(series_sequence, int)
+        or source_sequence != series_sequence
+    ):
         raise ValueError("depth source and series sequences must match")
     for field in ("best_bid", "best_ask"):
         if float(payload.get(field) or 0) <= 0:
@@ -184,19 +199,82 @@ def _validate_depth_row(payload: object) -> None:
         value = payload.get(field)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError("depth totals must be nonnegative integers")
+    for side in ("bid", "ask"):
+        raw_levels = payload.get(f"{side}_levels")
+        if not isinstance(raw_levels, (list, tuple)) or not raw_levels:
+            raise ValueError(f"depth {side} levels must not be empty")
+        levels: list[tuple[int, float, int]] = []
+        for raw in raw_levels:
+            if not isinstance(raw, (list, tuple)) or len(raw) != 3:
+                raise ValueError(f"depth {side} level shape is invalid")
+            level, price, quantity = raw
+            if (
+                isinstance(level, bool)
+                or not isinstance(level, int)
+                or level <= 0
+                or isinstance(quantity, bool)
+                or not isinstance(quantity, int)
+                or quantity < 0
+                or isinstance(price, bool)
+                or not isinstance(price, (int, float))
+                or not math.isfinite(float(price))
+                or float(price) <= 0
+            ):
+                raise ValueError(f"depth {side} level value is invalid")
+            levels.append((level, float(price), quantity))
+        if tuple(row[0] for row in levels) != tuple(range(1, len(levels) + 1)):
+            raise ValueError(f"depth {side} levels must be contiguous")
+        if side == "ask" and any(
+            left[1] >= right[1]
+            for left, right in zip(levels, levels[1:], strict=False)
+        ):
+            raise ValueError("depth ask prices must increase")
+        if side == "bid" and any(
+            left[1] <= right[1]
+            for left, right in zip(levels, levels[1:], strict=False)
+        ):
+            raise ValueError("depth bid prices must decrease")
+        if levels[0][1] != float(payload[f"best_{side}"]):
+            raise ValueError(f"depth best {side} conflicts with level one")
+        if int(payload[f"{side}_depth"]) < sum(row[2] for row in levels):
+            raise ValueError(f"depth {side} total does not cover retained levels")
+    route_totals = payload.get("route_depth_totals")
+    if not isinstance(route_totals, dict):
+        raise ValueError("depth route totals are missing")
+    combined = route_totals.get("combined")
+    if not isinstance(combined, dict) or (
+        combined.get("bid") != payload.get("bid_depth")
+        or combined.get("ask") != payload.get("ask_depth")
+    ):
+        raise ValueError("depth combined route totals conflict")
+    for totals in route_totals.values():
+        if not isinstance(totals, dict):
+            raise ValueError("depth route totals must be objects")
+        for quantity in totals.values():
+            if quantity is not None and (
+                isinstance(quantity, bool)
+                or not isinstance(quantity, int)
+                or quantity < 0
+            ):
+                raise ValueError("depth route total is invalid")
 
 
-def _series_key(payload: dict[str, Any]) -> tuple[str, str, str]:
-    key = tuple(
-        str(payload.get(field) or "").strip().upper()
-        for field in ("symbol", "venue", "session_bucket")
-    )
-    if not all(key):
-        raise ValueError("depth join requires symbol, venue, and session")
-    return key  # type: ignore[return-value]
+def _series_key(payload: dict[str, Any]) -> tuple[str, str, str, int]:
+    symbol = str(payload.get("symbol") or "").strip().upper()
+    venue = str(payload.get("venue") or "").strip().upper()
+    session_bucket = str(payload.get("session_bucket") or "").strip().upper()
+    try:
+        sequence_epoch = int(payload.get("sequence_epoch") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("depth join sequence_epoch is invalid") from exc
+    if not all((symbol, venue, session_bucket)) or sequence_epoch <= 0:
+        raise ValueError(
+            "depth join requires symbol, venue, session, and sequence_epoch"
+        )
+    return symbol, venue, session_bucket, sequence_epoch
 
 
-def _timestamp_ms(value: object) -> int:
+def _timestamp_us(value: object) -> int:
     text = str(value or "").strip()
     if text.endswith("Z"):
         text = f"{text[:-1]}+00:00"
@@ -206,4 +284,4 @@ def _timestamp_ms(value: object) -> int:
         raise ValueError("depth join timestamp must be ISO-8601") from exc
     if parsed.tzinfo is None:
         raise ValueError("depth join timestamp must include timezone")
-    return int(parsed.timestamp() * 1_000)
+    return int(parsed.timestamp() * 1_000_000)

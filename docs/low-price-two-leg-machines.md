@@ -140,6 +140,26 @@ the primary metric.  Trading dates before machine observation began, or dates
 without an observation, are disclosed as coverage gaps but are not imputed as
 outcomes and are not backfilled from historical market replay.
 
+After the active-profile tuning and expanded-candidate research reports are
+available, `machine_microstructure_attribution` discovers both inventories
+again and joins target-date micro-reversion 0B/0D paths to signal anchors.  A
+new active or prospective profile is therefore present even when its micro
+producer has no rows.  That condition is reported as an explicit coverage gap,
+never as a zero return, and blocks only the supplemental micro context; the
+existing actual-state tuning and candidate path continues unchanged.  This
+companion report is diagnostic-only and has no PREOPEN or broker authority.
+Repairable gaps feed the next KRX date's bounded source-only 0B/0D collection
+set.  The current dynamic episode universe also remains in the shared four-symbol
+daily `micro_policy_sample_accumulation` rotation so a one-day repair does not
+leave the policy evidence discontinuous; manual-control exclusions are deliberately
+not applied to collection or evaluation.  A micro-conditioned episode-policy review opens only after the
+same owner/symbol/session has at least five observed trading days and 20 matched
+anchors, BBO coverage of at least 95%, depth-window coverage of at least 90%,
+no invalid contract rows, and positive cost-adjusted paired EV in rolling
+5/10/20-day windows without worse p10 or held/unresolved outcomes.  The first
+runtime linkage still requires a new bounded family, rollback, and explicit
+operator approval, and may apply only through an exact-date PREOPEN artifact.
+
 From `2026-08-14`, each attempted row must match the exact-date PREOPEN applied
 policy hash and fields. Target validation uses that applied policy, so the
 operator-approved Kakao morning +3-tick target is not compared with the compiled

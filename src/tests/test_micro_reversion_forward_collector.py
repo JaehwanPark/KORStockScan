@@ -1171,6 +1171,34 @@ def test_ws_producer_hook_routes_0b_and_0d_without_cross_call(monkeypatch) -> No
     assert collector.depth_calls == 1
 
 
+def test_ws_source_only_collection_reaches_collector_not_trading_event(monkeypatch) -> None:
+    class RecordingCollector:
+        def __init__(self) -> None:
+            self.trade_calls = 0
+
+        def observe_kiwoom_0b(self, *_args, **_kwargs):
+            self.trade_calls += 1
+
+    collector = RecordingCollector()
+    manager = KiwoomWSManager("test-token")
+    manager._micro_reversion_forward_collector = collector
+    manager._micro_reversion_observation_items_by_code = {
+        "000001": "000001_AL"
+    }
+    manager._micro_reversion_observation_only_codes.add("000001")
+    monkeypatch.setattr(
+        "src.engine.kiwoom_websocket.observe_raw_market_data",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("source-only data must not reach another observer")
+        ),
+    )
+
+    manager._queue_tick_event("000001", _snapshot(), realtime_type="0B")
+
+    assert collector.trade_calls == 1
+    assert manager._pending_tick_events == {}
+
+
 def test_ws_stop_retains_collector_until_retryable_close_succeeds(monkeypatch) -> None:
     class RetryCollector:
         def __init__(self) -> None:

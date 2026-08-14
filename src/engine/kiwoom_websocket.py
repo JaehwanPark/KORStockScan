@@ -11,6 +11,7 @@ from collections import OrderedDict, deque
 from queue import Queue, Empty
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # 💡 [Level 1 & 2 적용] 독립 로거 및 싱글톤 이벤트 버스 임포트
 from src.utils.logger import log_error
@@ -53,12 +54,18 @@ def _load_system_config():
 
 
 WS_CONDITION_SEARCH_ENABLED_ENV = "KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED"
-# Official Kiwoom reference gate (retrieved 2026-08-13T08:00:25+09:00):
+# Official Kiwoom reference gate (re-verified 2026-08-14T15:32:56+09:00):
 # upstream SHA 69642586f7d84ba9fd8a6faf1f1537c7fda6568b; inspected
 # kiwoom_docs/실시간시세.md, kiwoom/realtime/packets.py,
 # kiwoom/realtime/{events,decoders,schemas,stream}.py, kiwoom/core/ws_client.py,
-# and the upstream Postman collection. 0B FID 10 owns current price;
-# KRX/NXT/SOR items use 005930/005930_NX/005930_AL and REG refresh=1.
+# kiwoom/_data/kiwoom_api_spec.json, and the upstream Postman collection.
+# REG refresh=1 retains existing registrations; source-only repair requests use
+# only the documented 0B trade and 0D depth types. 0B FID 10 owns current price;
+# KRX/NXT/SOR items use 005930/005930_NX/005930_AL.
+KST = ZoneInfo("Asia/Seoul")
+COMMAND_MICRO_REVERSION_OBSERVATION_SET = (
+    "COMMAND_MICRO_REVERSION_OBSERVATION_SET"
+)
 WS_PINNED_OBSERVATION_ITEMS_ENV = "KORSTOCKSCAN_WS_PINNED_OBSERVATION_ITEMS"
 WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC_ENV = (
     "KORSTOCKSCAN_WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC"
@@ -331,6 +338,9 @@ class KiwoomWSManager:
         self._last_persistent_repair_rebuild_ts = 0.0
         self._registered_items_by_code = {}
         self._pinned_unreg_notice_codes = set()
+        self._micro_reversion_observation_items_by_code = {}
+        self._micro_reversion_observation_only_codes = set()
+        self._micro_reversion_observation_notice_codes = set()
         # Most subscriptions can be considered live after any quote packet.
         # Scanner entry is stricter: its short-window tape requires a post-REG
         # 0B receipt, not merely a 0D order-book update.
@@ -351,6 +361,10 @@ class KiwoomWSManager:
         self.event_bus = EventBus()
         self.event_bus.subscribe("COMMAND_WS_REG", self._handle_reg_event)
         self.event_bus.subscribe("COMMAND_WS_UNREG", self._handle_unreg_event)
+        self.event_bus.subscribe(
+            COMMAND_MICRO_REVERSION_OBSERVATION_SET,
+            self._handle_micro_reversion_observation_set,
+        )
         # 💡 [추가] 최초 접속인지, 끊겼다가 다시 붙은(재접속) 것인지 구분하는 플래그
         self.is_reconnected = False
         self.condition_dict = {}  # 💡 [추가] 일련번호(seq)와 검색식 이름을 매핑할 사전
@@ -947,7 +961,52 @@ class KiwoomWSManager:
             registered_items = tuple(
                 self._registered_items_by_code.get(normalized) or ()
             )
-        return is_pinned_ws_observation_registration(normalized, registered_items)
+            micro_observation = bool(
+                normalized in self.subscribed_codes
+                and normalized in self._micro_reversion_observation_items_by_code
+            )
+        return micro_observation or is_pinned_ws_observation_registration(
+            normalized, registered_items
+        )
+
+    def is_micro_reversion_observation_only_subscription(self, code):
+        normalized = self._normalize_code(code)
+        if not normalized:
+            return False
+        with self.lock:
+            return normalized in self._micro_reversion_observation_only_codes
+
+    def retain_micro_reversion_as_observation_only(self, code):
+        """Demote an inactive runtime code back to its exact source-only role."""
+
+        normalized = self._normalize_code(code)
+        if not normalized:
+            return False
+        with self.lock:
+            registered_items = tuple(
+                self._registered_items_by_code.get(normalized) or ()
+            )
+            if is_pinned_ws_observation_registration(normalized, registered_items):
+                return False
+            desired_item = self._micro_reversion_observation_items_by_code.get(
+                normalized
+            )
+            if not desired_item:
+                return False
+            already_observation_only = (
+                normalized in self._micro_reversion_observation_only_codes
+            )
+            self._micro_reversion_observation_only_codes.add(normalized)
+        if not already_observation_only:
+            self.execute_subscribe(
+                [desired_item],
+                force=True,
+                source="micro_reversion_collection_feedback_demotion",
+                remove_before_reg=True,
+                realtime_types=("0B", "0D"),
+                observation_only=True,
+            )
+        return True
 
     def _items_by_code(self, normalized_codes, register_items):
         items_by_code = {}
@@ -989,7 +1048,12 @@ class KiwoomWSManager:
         return any(self._safe_float(value, 0.0) > 0 for value in type_ts.values())
 
     def _apply_registered_item_budget(
-        self, normalized_codes, register_items, *, enforce=False
+        self,
+        normalized_codes,
+        register_items,
+        *,
+        enforce=False,
+        replacement_codes=(),
     ):
         if not enforce:
             return normalized_codes, register_items, []
@@ -998,6 +1062,7 @@ class KiwoomWSManager:
             return normalized_codes, register_items, []
 
         items_by_code = self._items_by_code(normalized_codes, register_items)
+        replacement_code_set = set(replacement_codes or ())
         allowed_codes = []
         allowed_items = []
         skipped_codes = []
@@ -1016,7 +1081,11 @@ class KiwoomWSManager:
                 delta_items = [
                     item for item in candidate_items if item not in existing_items
                 ]
-                if code not in self.subscribed_codes:
+                if code in replacement_code_set:
+                    required_delta = max(
+                        0, len(candidate_items) - len(existing_items)
+                    )
+                elif code not in self.subscribed_codes:
                     required_delta = len(candidate_items)
                 else:
                     required_delta = len(delta_items)
@@ -1969,6 +2038,13 @@ class KiwoomWSManager:
             self._observe_micro_reversion_forward(
                 code, data, realtime_type=normalized_realtime_type
             )
+        normalized_code = self._normalize_code(code)
+        with self.lock:
+            observation_only = (
+                normalized_code in self._micro_reversion_observation_only_codes
+            )
+        if observation_only:
+            return
         if normalized_realtime_type in {"0B", "0D"}:
             try:
                 observe_raw_market_data(
@@ -2267,6 +2343,14 @@ class KiwoomWSManager:
         except Exception:
             pass
 
+        try:
+            self.event_bus.unsubscribe(
+                COMMAND_MICRO_REVERSION_OBSERVATION_SET,
+                self._handle_micro_reversion_observation_set,
+            )
+        except Exception:
+            pass
+
         ws = self.websocket
         if ws and self.loop and self.loop.is_running():
             try:
@@ -2483,7 +2567,27 @@ class KiwoomWSManager:
         print("📝 [WS] 장운영구분(0s) 감시망 등록 완료!")
 
         if self.subscribed_codes:
-            await self._send_reg(list(self.subscribed_codes))
+            with self.lock:
+                observation_only_codes = set(
+                    self._micro_reversion_observation_only_codes
+                )
+                observation_items = [
+                    self._micro_reversion_observation_items_by_code[code]
+                    for code in sorted(observation_only_codes)
+                    if code in self._micro_reversion_observation_items_by_code
+                ]
+                trading_codes = sorted(
+                    set(self.subscribed_codes).difference(observation_only_codes)
+                )
+            if trading_codes:
+                await self._send_reg(trading_codes)
+            if observation_items:
+                await self._send_reg(
+                    observation_items,
+                    replace_existing=not bool(trading_codes),
+                    realtime_types=("0B", "0D"),
+                    source="micro_reversion_collection_feedback_reconnect",
+                )
 
     def _cancel_pending_futures(self):
         with self._pending_future_lock:
@@ -3643,7 +3747,7 @@ class KiwoomWSManager:
         try:
             normalized_codes = self._normalize_subscribe_codes(codes)
             if not normalized_codes:
-                return
+                return False
 
             items_by_code_snapshot = (
                 items_by_code_snapshot
@@ -3678,23 +3782,23 @@ class KiwoomWSManager:
                 )
             remove_items = list(OrderedDict.fromkeys(remove_items))
             if not remove_items:
-                return
+                return False
 
             for _ in range(100):
                 if self._stop_event.is_set():
-                    return
+                    return False
                 if self.websocket and self._session_ready.is_set():
                     break
                 await asyncio.sleep(0.1)
 
             if self._stop_event.is_set():
-                return
+                return False
 
             if not (self.websocket and self._session_ready.is_set()):
                 print(
                     f"⚠️ [WS] 로그인 준비가 완료되지 않아 REMOVE 전송 실패: {normalized_codes}"
                 )
-                return
+                return False
 
             batch_size = min(
                 int(getattr(TRADING_RULES, "WS_REG_BATCH_SIZE", 20) or 20), 50
@@ -3704,7 +3808,7 @@ class KiwoomWSManager:
                 self._chunked(remove_items, batch_size), start=1
             ):
                 if self._stop_event.is_set() or not self.websocket:
-                    return
+                    return False
                 remove_packet = {
                     "trnm": "REMOVE",
                     "grp_no": "1",
@@ -3739,11 +3843,13 @@ class KiwoomWSManager:
                     f"items={batch_items}"
                 )
                 await asyncio.sleep(0.05)
+            return True
         except asyncio.CancelledError:
-            return
+            return False
         except Exception as e:
             log_error(f"🚨 [WS] _send_remove 에러 발생: {e}")
             print(f"🚨 [WS] _send_remove 내부 치명적 에러 발생: {e}")
+            return False
 
     async def _send_reg(
         self,
@@ -3756,9 +3862,21 @@ class KiwoomWSManager:
         remove_before_reg=False,
         source="",
         repair_cycle="",
+        realtime_types=None,
+        replacement_codes=(),
+        trading_promotion_codes=(),
     ):
         try:
             remove_before_reg = self._flag_enabled(remove_before_reg, default=False)
+            requested_realtime_types = self._normalize_required_realtime_types(
+                realtime_types
+            ) or ("0B", "0D", "0w", "0F")
+            replacement_code_set = set(
+                self._normalize_subscribe_codes(replacement_codes)
+            )
+            trading_promotion_code_set = set(
+                self._normalize_subscribe_codes(trading_promotion_codes)
+            )
             normalized_codes, register_items = self._resolve_ws_register_items(
                 codes,
                 include_alternate_route=include_alternate_route,
@@ -3772,6 +3890,7 @@ class KiwoomWSManager:
                     normalized_codes,
                     register_items,
                     enforce=enforce_item_budget,
+                    replacement_codes=replacement_code_set,
                 )
             )
             if budget_skipped_codes:
@@ -3813,12 +3932,18 @@ class KiwoomWSManager:
 
             if self.websocket and self._session_ready.is_set():
                 if remove_before_reg:
-                    await self._send_remove(
+                    remove_sent = await self._send_remove(
                         normalized_codes,
                         update_local_state=False,
                         source=source,
                         reason="remove_before_reg_recovery",
                     )
+                    if not remove_sent:
+                        log_error(
+                            "[WS] REMOVE-before-REG failed; replacement REG blocked "
+                            f"codes={normalized_codes} source={source or '-'}"
+                        )
+                        return
                     await asyncio.sleep(0.1)
                 batch_size = min(
                     int(getattr(TRADING_RULES, "WS_REG_BATCH_SIZE", 20) or 20), 50
@@ -3830,6 +3955,7 @@ class KiwoomWSManager:
                     f"batch_size={batch_size}, alternate={include_alternate_route}, "
                     f"replace_existing={replace_existing}, source={source or '-'}, "
                     f"repair_cycle={repair_cycle or '-'}, "
+                    f"realtime_types={requested_realtime_types}, "
                     f"remove_before_reg={remove_before_reg})"
                 )
                 for batch_index, batch_codes in enumerate(
@@ -3848,26 +3974,28 @@ class KiwoomWSManager:
                         "grp_no": "1",
                         "refresh": "1",
                         "data": [
-                            {"item": batch_items, "type": ["0B"]},
-                            {"item": batch_items, "type": ["0D"]},
-                            {"item": batch_items, "type": ["0w"]},
-                            {"item": batch_items, "type": ["0F"]},
+                            {"item": batch_items, "type": [realtime_type]}
+                            for realtime_type in requested_realtime_types
                         ],
                     }
                     await self.websocket.send(json.dumps(reg_packet))
                     reg_sent_at = time.time()
                     with self.lock:
                         self.subscribed_codes.update(batch_codes)
+                        self._micro_reversion_observation_only_codes.difference_update(
+                            batch_code_set.intersection(trading_promotion_code_set)
+                        )
                         for code in batch_codes:
                             self._registered_items_by_code[code] = tuple(
                                 register_items_by_code.get(code) or ()
                             )
                             target = self._ensure_target_defaults(code)
-                            target["program_subscription_requested_at"] = reg_sent_at
-                            if "0w" not in (target.get("received_types") or set()):
-                                target["program_missing_reason"] = (
-                                    "program_0w_awaiting_first_observation"
-                                )
+                            if "0w" in requested_realtime_types:
+                                target["program_subscription_requested_at"] = reg_sent_at
+                                if "0w" not in (target.get("received_types") or set()):
+                                    target["program_missing_reason"] = (
+                                        "program_0w_awaiting_first_observation"
+                                    )
                     print(
                         "📡 [WS] 종목 등록 패킷 전송 완료(실수신 대기): "
                         f"grp_no=1 refresh=1 batch={batch_index}/{total_batches} "
@@ -3896,6 +4024,8 @@ class KiwoomWSManager:
         repair_cycle="",
         remove_before_reg=None,
         required_realtime_types=None,
+        realtime_types=None,
+        observation_only=False,
     ):
         if not codes:
             return
@@ -3905,7 +4035,34 @@ class KiwoomWSManager:
             return
 
         force = self._flag_enabled(force, default=False)
+        observation_only = self._flag_enabled(observation_only, default=False)
         normalized_codes = self._normalize_subscribe_codes(codes)
+        requested_item_by_code = {}
+        for raw_code in codes:
+            normalized = self._normalize_code(raw_code)
+            explicit_item = self._explicit_ws_item(raw_code, normalized)
+            if normalized and explicit_item:
+                requested_item_by_code[normalized] = explicit_item
+        with self.lock:
+            existing_source_only = set(normalized_codes).intersection(
+                self._micro_reversion_observation_only_codes
+            )
+            transitioned_source_only = (
+                set() if observation_only else existing_source_only
+            )
+            source_only_replacement = (
+                existing_source_only if observation_only and force else set()
+            )
+            if observation_only:
+                self._micro_reversion_observation_only_codes.update(
+                    code
+                    for code in normalized_codes
+                    if code not in self.subscribed_codes
+                )
+            else:
+                self._micro_reversion_observation_only_codes.difference_update(
+                    set(normalized_codes).difference(transitioned_source_only)
+                )
         required_realtime_types = self._normalize_required_realtime_types(
             required_realtime_types
         )
@@ -3918,15 +4075,33 @@ class KiwoomWSManager:
         new_targets = (
             normalized_codes
             if force
-            else [c for c in normalized_codes if c not in self.subscribed_codes]
+            else [
+                code
+                for code in normalized_codes
+                if code not in self.subscribed_codes
+                or code in transitioned_source_only
+            ]
         )
         send_ready = bool(
             self.loop and self.loop.is_running() and not self._stop_event.is_set()
         )
         if send_ready:
-            new_targets, skipped_recent = self._filter_recent_reg_targets(
-                new_targets, force=force
+            transition_targets = [
+                code
+                for code in new_targets
+                if code in transitioned_source_only or code in source_only_replacement
+            ]
+            regular_targets = [
+                code for code in new_targets if code not in transitioned_source_only
+            ]
+            allowed_regular, skipped_recent = self._filter_recent_reg_targets(
+                regular_targets, force=force
             )
+            new_targets = [
+                code
+                for code in new_targets
+                if code in transition_targets or code in allowed_regular
+            ]
             if skipped_recent:
                 print(
                     "⏳ [WS] 최근 REG 중복 생략: "
@@ -3942,8 +4117,11 @@ class KiwoomWSManager:
             )
             if remove_before_reg is None:
                 remove_before_reg = (
-                    persistent_repair
-                    and self._persistent_repair_remove_before_reg_enabled()
+                    bool(transitioned_source_only or source_only_replacement)
+                    or (
+                        persistent_repair
+                        and self._persistent_repair_remove_before_reg_enabled()
+                    )
                 )
             else:
                 remove_before_reg = self._flag_enabled(remove_before_reg, default=False)
@@ -3985,9 +4163,12 @@ class KiwoomWSManager:
                         f"max_codes={self._alternate_route_max_codes()} "
                         f"ttl_sec={self._alternate_route_ttl_sec():.1f}"
                     )
+            send_targets = [
+                requested_item_by_code.get(code, code) for code in new_targets
+            ]
             future = asyncio.run_coroutine_threadsafe(
                 self._send_reg(
-                    new_targets,
+                    send_targets,
                     replace_existing=replace_existing,
                     enforce_item_budget=enforce_item_budget,
                     include_alternate_route=include_alternate_route,
@@ -3995,6 +4176,11 @@ class KiwoomWSManager:
                     remove_before_reg=remove_before_reg,
                     source=source,
                     repair_cycle=repair_cycle,
+                    realtime_types=realtime_types,
+                    replacement_codes=(
+                        transitioned_source_only | source_only_replacement
+                    ),
+                    trading_promotion_codes=transitioned_source_only,
                 ),
                 self.loop,
             )
@@ -4026,25 +4212,46 @@ class KiwoomWSManager:
 
         normalized_codes = set(self._normalize_subscribe_codes(codes))
         with self.lock:
-            retained_codes = {
+            widget_retained_codes = {
                 code
                 for code in normalized_codes
                 if is_pinned_ws_observation_registration(
                     code, tuple(self._registered_items_by_code.get(code) or ())
                 )
             }
+            micro_retained_codes = normalized_codes.intersection(
+                self._micro_reversion_observation_items_by_code
+            )
+            micro_retained_codes.difference_update(widget_retained_codes)
+            retained_codes = widget_retained_codes | micro_retained_codes
         normalized_codes.difference_update(retained_codes)
-        if retained_codes:
+        if widget_retained_codes:
             with self.lock:
-                first_notice_codes = retained_codes.difference(
+                first_notice_codes = widget_retained_codes.difference(
                     self._pinned_unreg_notice_codes
                 )
-                self._pinned_unreg_notice_codes.update(retained_codes)
+                self._pinned_unreg_notice_codes.update(widget_retained_codes)
             if first_notice_codes:
                 print(
                     "📌 [WS] 비교전용 관측 구독 REMOVE 생략: "
                     f"codes={sorted(first_notice_codes)} "
                     "authority=widget_ws_price_comparison_only"
+                )
+        if micro_retained_codes:
+            for code in sorted(micro_retained_codes):
+                self.retain_micro_reversion_as_observation_only(code)
+            with self.lock:
+                first_notice_codes = micro_retained_codes.difference(
+                    self._micro_reversion_observation_notice_codes
+                )
+                self._micro_reversion_observation_notice_codes.update(
+                    micro_retained_codes
+                )
+            if first_notice_codes:
+                print(
+                    "📌 [WS] micro-reversion source-only 관측 구독 REMOVE 생략: "
+                    f"codes={sorted(first_notice_codes)} "
+                    "authority=next_session_market_data_observation_only"
                 )
         if not normalized_codes:
             return
@@ -4067,6 +4274,8 @@ class KiwoomWSManager:
                 self._persistent_repair_stuck_until_ts.pop(code, None)
                 self._persistent_repair_overflow_codes.pop(code, None)
                 self._required_realtime_types_by_code.pop(code, None)
+                self._micro_reversion_observation_only_codes.discard(code)
+                self._micro_reversion_observation_notice_codes.discard(code)
         if self.loop and self.loop.is_running() and not self._stop_event.is_set():
             future = asyncio.run_coroutine_threadsafe(
                 self._send_remove(
@@ -4097,6 +4306,109 @@ class KiwoomWSManager:
                     print(f"🚨 [WS] REMOVE 스레드 통신 간 에러 발생: {e}")
 
             future.add_done_callback(on_complete)
+
+    def _normalize_micro_reversion_observation_items(self, items):
+        normalized = OrderedDict()
+        for raw_item in items or ():
+            item = str(raw_item or "").strip().upper()
+            code = self._normalize_code(item)
+            if (
+                len(code) != 6
+                or not code.isdigit()
+                or item not in {code, f"{code}_NX", f"{code}_AL"}
+                or code in normalized
+            ):
+                return None
+            normalized[code] = item
+        return dict(normalized)
+
+    def _configure_micro_reversion_observation_items(
+        self, items, *, source, protected_runtime_codes=()
+    ):
+        new_items_by_code = self._normalize_micro_reversion_observation_items(items)
+        if new_items_by_code is None:
+            log_error(
+                "[WS] micro-reversion observation set rejected: invalid or "
+                "duplicate registration item"
+            )
+            return False
+        protected_codes = set(
+            self._normalize_subscribe_codes(protected_runtime_codes or ())
+        )
+
+        with self.lock:
+            old_items_by_code = dict(
+                self._micro_reversion_observation_items_by_code
+            )
+            retired_or_changed = {
+                code
+                for code, old_item in old_items_by_code.items()
+                if new_items_by_code.get(code) != old_item
+            }
+            removable_codes = retired_or_changed.intersection(
+                self._micro_reversion_observation_only_codes
+            )
+            for code in retired_or_changed:
+                self._micro_reversion_observation_items_by_code.pop(code, None)
+                self._micro_reversion_observation_only_codes.discard(code)
+                self._micro_reversion_observation_notice_codes.discard(code)
+
+        if removable_codes:
+            self.execute_unsubscribe(sorted(removable_codes))
+
+        with self.lock:
+            self._micro_reversion_observation_items_by_code.update(new_items_by_code)
+            subscribe_items = [
+                item
+                for code, item in new_items_by_code.items()
+                if code not in self.subscribed_codes and code not in protected_codes
+            ]
+
+        if subscribe_items:
+            self.execute_subscribe(
+                subscribe_items,
+                source=source,
+                realtime_types=("0B", "0D"),
+                observation_only=True,
+            )
+        print(
+            "📌 [WS] micro-reversion source-only 관측 집합 반영: "
+            f"requested={len(new_items_by_code)} subscribed_now={len(subscribe_items)} "
+            f"retired={len(retired_or_changed)} "
+            f"runtime_protected={len(set(new_items_by_code) & protected_codes)} "
+            "trading_runtime_effect=false"
+        )
+        return True
+
+    def _handle_micro_reversion_observation_set(self, payload):
+        if self._stop_event.is_set() or not isinstance(payload, dict):
+            return
+        effective_date = str(payload.get("effective_date") or "")
+        today = datetime.now(KST).date().isoformat()
+        valid_authority = bool(
+            effective_date == today
+            and payload.get("decision_authority")
+            == "next_session_market_data_observation_only"
+            and payload.get("runtime_effect") is False
+            and payload.get("market_data_subscription_effect") is True
+            and payload.get("trading_runtime_effect") is False
+            and payload.get("trading_decision_effect") is False
+            and payload.get("actual_order_submitted") is False
+            and payload.get("broker_order_forbidden") is True
+            and payload.get("manual_control_exclusion_applied") is False
+        )
+        if not valid_authority:
+            log_error(
+                "[WS] micro-reversion observation set rejected: "
+                f"effective_date={effective_date or '-'} today={today} "
+                "reason=stale_or_authority_contract"
+            )
+            return
+        self._configure_micro_reversion_observation_items(
+            payload.get("registration_items") or (),
+            source=str(payload.get("source") or "micro_reversion_collection_feedback"),
+            protected_runtime_codes=payload.get("protected_runtime_codes") or (),
+        )
 
     def _handle_reg_event(self, payload):
         if self._stop_event.is_set():

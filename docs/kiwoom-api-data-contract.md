@@ -273,6 +273,37 @@ reactivate it.
 - This change adds no REG/REMOVE request, subscription item, order, threshold,
   provider, quantity, cap, broker-guard, or bot-state authority.
 
+### 2026-08-14 Micro-Reversion Gap Collection Feedback Gate
+
+- Re-verified at `2026-08-14T15:32:56+09:00` against current upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/실시간시세.md`, `kiwoom/realtime/packets.py`,
+  `kiwoom/realtime/events.py`, `kiwoom/realtime/decoders.py`,
+  `kiwoom/realtime/schemas.py`, `kiwoom/realtime/stream.py`,
+  `kiwoom/core/ws_client.py`, `kiwoom/_data/kiwoom_api_spec.json`, and
+  `postman/kiwoom-openapi.postman_collection.json` for REG/REMOVE, `refresh`,
+  item suffixes, type arrays, 0B, and 0D.
+- Official REG keeps prior item/type registrations with `refresh=1`; `data[].type`
+  is an array and the official builders accept caller-selected realtime types.
+  The collection feedback path therefore registers only `0B` and `0D`. It does
+  not add order/position type `00`, program type `0w`, or broker type `0F`.
+- The exact-date target preserves plain code as KRX, `_NX` as NXT, and `_AL` as
+  integrated SOR. One route is selected per symbol per date; an `_AL` row remains
+  SOR and is never relabeled as an underlying KRX/NXT event.
+- Registration is bounded by the existing WS item budget and the daily feedback
+  budget. Source-only ticks reach only the micro forward collector and are
+  suppressed before the common realtime trading event and other strategy
+  observers. A normal runtime target for the same code first removes the old
+  route, registers the normal route/types, and only after successful transport
+  send removes that suppression; REMOVE failure stays fail-closed. No
+  order/account/quantity/cooldown/stale/hard-safety guard is changed.
+- The next exact-date set replaces the prior source-only set, and reconnect
+  restoration keeps source-only codes on 0B/0D only. Manual-control exclusions
+  are not collection filters. The target artifact and runtime event require
+  `market_data_subscription_effect=true`, `trading_runtime_effect=false`,
+  `trading_decision_effect=false`,
+  `actual_order_submitted=false`, and `broker_order_forbidden=true`.
+
 ### 2026-08-10 Micro-Reversion 0B Timestamp-Regression Gate
 
 - Retrieved at `2026-08-10T12:13:31+09:00` from upstream commit

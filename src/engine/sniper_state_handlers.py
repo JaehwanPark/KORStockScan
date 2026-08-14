@@ -332,6 +332,11 @@ ACTIVE_TARGETS = None
 WS_MANAGER = None
 _SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY: dict[str, dict[str, Any]] = {}
 _SMOOTHING_NON_REVIVE_POST_SELL_MAX_ACTIVE_ARMS = 8
+_RISKY_MICRO_EXECUTABLE_BBO_REGISTRY: dict[str, dict[str, Any]] = {}
+_RISKY_MICRO_EXECUTABLE_BBO_MAX_ACTIVE_SYMBOLS = 16
+_RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC = 45.0
+_RISKY_MICRO_EXECUTABLE_BBO_EMIT_INTERVAL_SEC = 1.0
+_RISKY_MICRO_EXECUTABLE_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 _GREENFIELD_TELEGRAM_KEYS: set[str] = set()
 _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
 _DEEP_RECOVERY_AVG_DOWN_REASON = "deep_recovery_avg_down"
@@ -12640,6 +12645,40 @@ def _log_entry_pipeline(stock, code, stage, **fields):
             merged_fields.setdefault("ai_decision_trace_id", parent_trace_id)
         if parent_snapshot_id not in {"", "-"}:
             merged_fields.setdefault("ai_input_snapshot_id", parent_snapshot_id)
+    if stage == "risky_micro_episode_source_candidate_observed":
+        try:
+            merged_fields.update(
+                register_risky_micro_episode_executable_bbo_observer(
+                    stock,
+                    code,
+                    candidate_fields=merged_fields,
+                    now_ts=time.time(),
+                )
+            )
+        except Exception as exc:
+            merged_fields.update(
+                {
+                    "risky_micro_episode_horizon_observer_registered": False,
+                    "risky_micro_episode_horizon_observer_status": (
+                        "registration_exception_fail_open"
+                    ),
+                    "risky_micro_episode_horizon_observer_error": str(exc)[:160],
+                    "risky_micro_episode_horizon_observer_runtime_effect": False,
+                    "risky_micro_episode_horizon_observer_allowed_runtime_apply": (
+                        False
+                    ),
+                    "risky_micro_episode_horizon_observer_actual_order_submitted": (
+                        False
+                    ),
+                    "risky_micro_episode_horizon_observer_broker_order_forbidden": (
+                        True
+                    ),
+                }
+            )
+            log_info(
+                "[RISKY_MICRO_BBO_OBSERVER] registration failed open without "
+                f"runtime effect code={code or '-'}: {exc}"
+            )
     _remember_scanner_terminal_block(stock, stage, merged_fields)
     observe_candidate_transition_safe(stock, code, stage, merged_fields)
     emit_pipeline_event(
@@ -32832,6 +32871,477 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
         tick_context_source == "trusted_tp1_ws_signed_0b_10tick_context"
     )
     return result
+
+
+def register_risky_micro_episode_executable_bbo_observer(
+    stock: dict,
+    code: str,
+    *,
+    candidate_fields: dict[str, Any],
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    """Retain one bounded WS path for source-only executable outcomes.
+
+    The registry records fresh BBO snapshots only.  It has no broker, order,
+    threshold, provider, scanner-slot, or target-lifecycle authority.
+    """
+
+    observed_at = float(time.time() if now_ts is None else now_ts)
+    normalized_code = str(code or "").strip()[:6]
+    fields = candidate_fields if isinstance(candidate_fields, dict) else {}
+    status = str(fields.get("risky_micro_episode_status") or "").strip()
+    eligible = status in {"source_only_candidate", "recheck_required"}
+    base = {
+        "risky_micro_episode_horizon_observer_registered": False,
+        "risky_micro_episode_horizon_observer_status": (
+            "not_eligible_status" if not eligible else "not_registered"
+        ),
+        "risky_micro_episode_horizon_observer_runtime_effect": False,
+        "risky_micro_episode_horizon_observer_allowed_runtime_apply": False,
+        "risky_micro_episode_horizon_observer_actual_order_submitted": False,
+        "risky_micro_episode_horizon_observer_broker_order_forbidden": True,
+        "risky_micro_episode_horizon_observer_duration_sec": (
+            _RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC
+        ),
+        "risky_micro_episode_horizon_observer_emit_interval_sec": (
+            _RISKY_MICRO_EXECUTABLE_BBO_EMIT_INTERVAL_SEC
+        ),
+    }
+    if not eligible:
+        return base
+    if not normalized_code:
+        return {
+            **base,
+            "risky_micro_episode_horizon_observer_status": "stock_code_missing",
+        }
+
+    venue = str(
+        fields.get("rising_missed_effective_venue")
+        or fields.get("effective_venue")
+        or fields.get("venue")
+        or ""
+    ).strip().upper()
+    session = str(
+        fields.get("rising_missed_market_session_bucket")
+        or fields.get("market_session_bucket")
+        or ""
+    ).strip()
+    normalized_session = session.strip().lower()
+    allowed_sessions_by_venue = {
+        "KRX": {"krx_regular"},
+        "NXT": {
+            "nxt",
+            "nxt_open_observe",
+            "nxt_entry_window",
+            "nxt_close_only",
+            "nxt_regular_overlap",
+            "nxt_aftermarket",
+        },
+        "PREMARKET_KRX_LIKE": {
+            "krx_like_premarket",
+            "premarket_krx_like",
+            "nxt_premarket",
+        },
+    }
+    if (
+        venue not in allowed_sessions_by_venue
+        or normalized_session not in allowed_sessions_by_venue.get(venue, set())
+        or any(
+            marker in normalized_session
+            for marker in ("missing", "unknown", "conflict")
+        )
+    ):
+        return {
+            **base,
+            "risky_micro_episode_horizon_observer_status": (
+                "venue_or_session_source_quality_blocked"
+            ),
+        }
+
+    registration_key = f"{normalized_code}|{venue}|{session.upper()}"
+    expires_at = observed_at + _RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC
+    with ENTRY_LOCK:
+        for stale_key, stale in list(_RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.items()):
+            if _safe_float(stale.get("expires_at_epoch"), 0.0) <= observed_at:
+                _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.pop(stale_key, None)
+        existing = _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.get(registration_key)
+        if (
+            existing is None
+            and len(_RISKY_MICRO_EXECUTABLE_BBO_REGISTRY)
+            >= _RISKY_MICRO_EXECUTABLE_BBO_MAX_ACTIVE_SYMBOLS
+        ):
+            return {
+                **base,
+                "risky_micro_episode_horizon_observer_status": "capacity_rejected",
+                "risky_micro_episode_horizon_observer_registration_key": (
+                    registration_key
+                ),
+            }
+
+    if not retain_ws_subscription_until(normalized_code, expires_at):
+        return {
+            **base,
+            "risky_micro_episode_horizon_observer_status": "ws_retention_rejected",
+            "risky_micro_episode_horizon_observer_registration_key": (
+                registration_key
+            ),
+        }
+
+    log_context = {
+        key: (stock or {}).get(key)
+        for key in (
+            "id",
+            "name",
+            "code",
+            "strategy",
+            "position_tag",
+            "scanner_promotion_id",
+            "scanner_promotion_reason",
+        )
+    }
+    with ENTRY_LOCK:
+        existing = _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.get(registration_key)
+        if (
+            existing is None
+            and len(_RISKY_MICRO_EXECUTABLE_BBO_REGISTRY)
+            >= _RISKY_MICRO_EXECUTABLE_BBO_MAX_ACTIVE_SYMBOLS
+        ):
+            return {
+                **base,
+                "risky_micro_episode_horizon_observer_status": (
+                    "capacity_rejected_after_retention"
+                ),
+                "risky_micro_episode_horizon_observer_registration_key": (
+                    registration_key
+                ),
+            }
+        if existing is None:
+            _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY[registration_key] = {
+                "registration_key": registration_key,
+                "code": normalized_code,
+                "venue": venue,
+                "session": session,
+                "registered_at_epoch": observed_at,
+                "expires_at_epoch": expires_at,
+                "last_emit_epoch": 0.0,
+                "candidate_count": 1,
+                "observation_count": 0,
+                "fresh_bbo_count": 0,
+                "log_context": log_context,
+            }
+            registration_status = "registered"
+        else:
+            existing["expires_at_epoch"] = max(
+                _safe_float(existing.get("expires_at_epoch"), observed_at),
+                expires_at,
+            )
+            existing["candidate_count"] = _safe_int(
+                existing.get("candidate_count"), 0
+            ) + 1
+            existing_log_context = existing.get("log_context")
+            existing_log_context = (
+                existing_log_context
+                if isinstance(existing_log_context, dict)
+                else {}
+            )
+            if log_context.get("name") and not existing_log_context.get("name"):
+                existing["log_context"] = log_context
+            expires_at = _safe_float(existing.get("expires_at_epoch"), expires_at)
+            registration_status = "extended_existing"
+
+    return {
+        **base,
+        "risky_micro_episode_horizon_observer_registered": True,
+        "risky_micro_episode_horizon_observer_status": registration_status,
+        "risky_micro_episode_horizon_observer_registration_key": registration_key,
+        "risky_micro_episode_horizon_observer_expires_at_epoch": round(
+            expires_at, 3
+        ),
+    }
+
+
+def _risky_micro_route_scoped_0d_bbo(
+    ws_data: dict[str, Any],
+    *,
+    code: str,
+    venue: str,
+    session: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Select the newest exact-route 0D snapshot without relabeling venues."""
+
+    def _epoch_in_candidate_session(epoch: float) -> bool:
+        local_time = datetime.fromtimestamp(epoch, tz=_KST).time()
+        normalized = session.strip().lower()
+        if normalized == "krx_regular":
+            return datetime_time(9, 0) <= local_time <= TIME_15_30
+        if normalized in {"krx_like_premarket", "premarket_krx_like", "nxt_premarket"}:
+            return datetime_time(8, 0) <= local_time < datetime_time(8, 50)
+        if normalized in {"nxt", "nxt_regular_overlap"}:
+            if normalized == "nxt_regular_overlap":
+                return datetime_time(9, 0) <= local_time <= TIME_15_30
+            return datetime_time(8, 0) <= local_time < TIME_20_00
+        if normalized == "nxt_open_observe":
+            return datetime_time(16, 0) <= local_time < datetime_time(16, 10)
+        if normalized == "nxt_entry_window":
+            return datetime_time(16, 10) <= local_time < TIME_SCALPING_NEW_BUY_CUTOFF
+        if normalized in {"nxt_close_only", "nxt_aftermarket"}:
+            start = (
+                TIME_SCALPING_NEW_BUY_CUTOFF
+                if normalized == "nxt_close_only"
+                else TIME_15_30
+            )
+            return start <= local_time < TIME_20_00
+        return False
+
+    route_snapshots = ws_data.get("realtime_type_snapshots_by_route")
+    route_snapshots = route_snapshots if isinstance(route_snapshots, dict) else {}
+    required_venues = (
+        {"NXT", "PREMARKET_KRX_LIKE"}
+        if venue == "PREMARKET_KRX_LIKE"
+        else {venue}
+    )
+    required_route = "krx_regular" if venue == "KRX" else "nxt_only"
+    matches: list[dict[str, Any]] = []
+    exact_route_outside_session = False
+    for route_snapshot in route_snapshots.values():
+        if not isinstance(route_snapshot, dict):
+            continue
+        snapshot = route_snapshot.get("0D")
+        if not isinstance(snapshot, dict):
+            continue
+        observed_venue = str(snapshot.get("effective_venue") or "").strip().upper()
+        observed_route = str(snapshot.get("market_route") or "").strip()
+        observed_item = str(snapshot.get("item") or "").strip().upper()
+        observed_code = observed_item.split("_", 1)[0][-6:]
+        if (
+            observed_venue not in required_venues
+            or observed_route.lower() != required_route
+            or observed_code != code
+        ):
+            continue
+        observed_epoch = _safe_float(snapshot.get("observed_epoch"), 0.0)
+        if observed_epoch <= 0:
+            continue
+        if not _epoch_in_candidate_session(observed_epoch):
+            exact_route_outside_session = True
+            continue
+        matches.append(snapshot)
+
+    if not matches:
+        return {}, {
+            "risky_micro_episode_horizon_observer_route_scope_status": (
+                "exact_0d_route_snapshot_outside_candidate_session"
+                if exact_route_outside_session
+                else "exact_0d_route_snapshot_missing"
+            ),
+            "risky_micro_episode_horizon_observer_observed_venue": "-",
+            "risky_micro_episode_horizon_observer_observed_route": "-",
+            "risky_micro_episode_horizon_observer_observed_item": "-",
+        }
+
+    snapshot = max(
+        matches,
+        key=lambda item: _safe_float(item.get("observed_epoch"), 0.0),
+    )
+    orderbook = snapshot.get("orderbook")
+    orderbook = orderbook if isinstance(orderbook, dict) else {}
+    asks = orderbook.get("asks")
+    bids = orderbook.get("bids")
+    ask = asks[0] if isinstance(asks, list) and asks else {}
+    bid = bids[0] if isinstance(bids, list) and bids else {}
+    ask = ask if isinstance(ask, dict) else {}
+    bid = bid if isinstance(bid, dict) else {}
+    best_ask = _safe_int(ask.get("price"), 0)
+    best_bid = _safe_int(bid.get("price"), 0)
+    observed_epoch = _safe_float(snapshot.get("observed_epoch"), 0.0)
+    scoped_ws = {
+        "curr": int(round((best_ask + best_bid) / 2.0))
+        if best_ask > 0 and best_bid > 0
+        else 0,
+        "best_ask": best_ask,
+        "best_bid": best_bid,
+        "best_ask_qty": _safe_int(ask.get("volume") or ask.get("qty"), 0),
+        "best_bid_qty": _safe_int(bid.get("volume") or bid.get("qty"), 0),
+        "orderbook": copy.deepcopy(orderbook),
+        "last_ws_update_ts": observed_epoch,
+    }
+    return scoped_ws, {
+        "risky_micro_episode_horizon_observer_route_scope_status": (
+            "exact_0d_route_snapshot"
+        ),
+        "risky_micro_episode_horizon_observer_observed_venue": str(
+            snapshot.get("effective_venue") or "-"
+        ),
+        "risky_micro_episode_horizon_observer_observed_route": str(
+            snapshot.get("market_route") or "-"
+        ),
+        "risky_micro_episode_horizon_observer_observed_item": str(
+            snapshot.get("item") or "-"
+        ),
+    }
+
+
+def observe_risky_micro_episode_executable_bbo_paths(
+    *, now_ts: float | None = None
+) -> dict[str, int]:
+    """Emit bounded fresh-BBO provenance for detached risky-micro outcomes."""
+
+    observed_at = float(time.time() if now_ts is None else now_ts)
+    with ENTRY_LOCK:
+        registrations = [
+            copy.deepcopy(item)
+            for item in _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.values()
+            if isinstance(item, dict)
+        ]
+    emitted_count = 0
+    fresh_bbo_count = 0
+    closed_count = 0
+    failed_count = 0
+    for registration in registrations:
+        registration_key = str(registration.get("registration_key") or "")
+        code = str(registration.get("code") or "").strip()[:6]
+        expires_at = _safe_float(registration.get("expires_at_epoch"), 0.0)
+        last_emit = _safe_float(registration.get("last_emit_epoch"), 0.0)
+        if observed_at > expires_at:
+            with ENTRY_LOCK:
+                if (
+                    _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.pop(
+                        registration_key, None
+                    )
+                    is not None
+                ):
+                    closed_count += 1
+            continue
+        if (
+            last_emit > 0
+            and observed_at - last_emit
+            < _RISKY_MICRO_EXECUTABLE_BBO_EMIT_INTERVAL_SEC
+        ):
+            continue
+
+        ws_data: dict[str, Any] = {}
+        fresh = False
+        try:
+            if WS_MANAGER is not None and hasattr(WS_MANAGER, "get_latest_data"):
+                latest = WS_MANAGER.get_latest_data(code) or {}
+                if isinstance(latest, dict):
+                    ws_data = latest
+            scoped_ws, route_scope_fields = _risky_micro_route_scoped_0d_bbo(
+                ws_data,
+                code=code,
+                venue=str(registration.get("venue") or "").strip().upper(),
+                session=str(registration.get("session") or "").strip(),
+            )
+            _, market_fields = build_market_data_enrichment(
+                ws_data=scoped_ws,
+                now_ts=observed_at,
+                max_ws_age_ms=_RISKY_MICRO_EXECUTABLE_BBO_MAX_QUOTE_AGE_MS,
+            )
+            bid = _safe_int(market_fields.get("market_data_effective_best_bid"), 0)
+            ask = _safe_int(market_fields.get("market_data_effective_best_ask"), 0)
+            quote_age_ms = _safe_float(
+                market_fields.get("market_data_effective_quote_age_ms"), None
+            )
+            fresh = bool(
+                route_scope_fields.get(
+                    "risky_micro_episode_horizon_observer_route_scope_status"
+                )
+                == "exact_0d_route_snapshot"
+                and market_fields.get("market_data_effective_price_source") == "ws"
+                and bid > 0
+                and ask >= bid
+                and quote_age_ms is not None
+                and 0.0
+                <= quote_age_ms
+                <= _RISKY_MICRO_EXECUTABLE_BBO_MAX_QUOTE_AGE_MS
+            )
+            log_context = registration.get("log_context")
+            stock = dict(log_context) if isinstance(log_context, dict) else {}
+            event_fields = _canonicalize_rising_missed_venue_fields(
+                {
+                    **market_fields,
+                    **route_scope_fields,
+                    "effective_venue": registration.get("venue"),
+                    "market_session_bucket": registration.get("session"),
+                    "risky_micro_episode_horizon_observer_registration_key": (
+                        registration_key
+                    ),
+                    "risky_micro_episode_horizon_observer_observed_at_epoch": round(
+                        observed_at, 3
+                    ),
+                    "risky_micro_episode_horizon_observer_quote_fresh": fresh,
+                    "risky_micro_episode_horizon_observer_source": (
+                        "ws_route_scoped_0d_snapshot"
+                    ),
+                    "metric_role": "source_quality_instrumentation",
+                    "decision_authority": (
+                        "report_only_bounded_executable_bbo_observer_no_order_authority"
+                    ),
+                    "window_policy": "same_symbol_venue_session_1s_until_45s",
+                    "sample_floor": "not_applicable_instrumentation",
+                    "primary_decision_metric": (
+                        "fresh_executable_bbo_horizon_coverage"
+                    ),
+                    "source_quality_gate": (
+                        "exact_symbol_venue_session_0d_and_fresh_bbo_age_le_1000ms"
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": (
+                        "broker_order_submit|broker_order_cancel|scanner_slot_authority|"
+                        "entry_or_exit_authority|threshold_or_provider_change|"
+                        "stale_quote_or_hard_safety_bypass"
+                    ),
+                }
+            )
+            emit_pipeline_event(
+                "ENTRY_PIPELINE",
+                stock.get("name"),
+                code,
+                "risky_micro_episode_executable_bbo_observed",
+                record_id=stock.get("id"),
+                fields=event_fields,
+            )
+            emitted_count += 1
+            if fresh:
+                fresh_bbo_count += 1
+        except Exception as exc:
+            failed_count += 1
+            log_info(
+                "[RISKY_MICRO_BBO_OBSERVER] row failed without runtime effect "
+                f"code={code or '-'} registration={registration_key or '-'}: {exc}"
+            )
+        finally:
+            with ENTRY_LOCK:
+                current = _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.get(registration_key)
+                if current is not None:
+                    current["last_emit_epoch"] = observed_at
+                    current["observation_count"] = _safe_int(
+                        current.get("observation_count"), 0
+                    ) + 1
+                    if fresh:
+                        current["fresh_bbo_count"] = _safe_int(
+                            current.get("fresh_bbo_count"), 0
+                        ) + 1
+                    if observed_at >= _safe_float(
+                        current.get("expires_at_epoch"), 0.0
+                    ):
+                        _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.pop(
+                            registration_key, None
+                        )
+                        closed_count += 1
+
+    with ENTRY_LOCK:
+        active_count = len(_RISKY_MICRO_EXECUTABLE_BBO_REGISTRY)
+    return {
+        "active_registration_count": active_count,
+        "emitted_event_count": emitted_count,
+        "fresh_bbo_event_count": fresh_bbo_count,
+        "closed_registration_count": closed_count,
+        "failed_operation_count": failed_count,
+    }
 
 
 def _evaluate_rising_missed_tick_speed_entry_guard(

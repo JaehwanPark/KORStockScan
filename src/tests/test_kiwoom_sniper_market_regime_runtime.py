@@ -1,5 +1,6 @@
 import inspect
 import os
+from datetime import datetime
 from queue import SimpleQueue
 import threading
 import time
@@ -5253,6 +5254,39 @@ def test_initial_ws_registration_groups_caps_scanner_hot_tier(monkeypatch, tmp_p
     assert priority_codes == ["000001", "000002"]
     assert scanner_codes == ["100002", "100003"]
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
+
+
+def test_micro_collection_feedback_publishes_exact_date_source_only_set(monkeypatch):
+    published = []
+    monkeypatch.setenv("SCALP_MICRO_REVERSION_OBSERVER_ENABLED", "true")
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "load_exact_date_collection_targets",
+        lambda effective_date: {
+            "status": "loaded",
+            "effective_date": effective_date,
+            "registration_items": ["111111_AL", "222222_NX"],
+        },
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.event_bus,
+        "publish",
+        lambda topic, payload: published.append((topic, payload)),
+    )
+
+    result = kiwoom_sniper_v2._publish_micro_reversion_collection_target_set(
+        now=datetime(2026, 8, 18, 8, 30),
+        protected_runtime_codes=["111111", "333333_AL", "bad"],
+    )
+
+    assert result["status"] == "loaded"
+    assert published[0][0] == "COMMAND_MICRO_REVERSION_OBSERVATION_SET"
+    assert published[0][1]["effective_date"] == "2026-08-18"
+    assert published[0][1]["registration_items"] == ["111111_AL", "222222_NX"]
+    assert published[0][1]["protected_runtime_codes"] == ["111111", "333333"]
+    assert published[0][1]["trading_runtime_effect"] is False
+    assert published[0][1]["market_data_subscription_effect"] is True
+    assert published[0][1]["manual_control_exclusion_applied"] is False
 
 
 def test_swing_watching_default_off_excludes_ws_and_runtime(monkeypatch):

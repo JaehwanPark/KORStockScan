@@ -12,6 +12,7 @@ WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
 Environment="KORSTOCKSCAN_WIDGET_EXPANSION_TELEGRAM_ENABLED=true"
 ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_collector_expansion_recommendation --write --notify --source-wait-sec 900 --source-poll-sec 30
+ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.machine_microstructure_attribution --write --print-summary
 TimeoutStartSec=1200
 Restart=on-failure
 RestartSec=300

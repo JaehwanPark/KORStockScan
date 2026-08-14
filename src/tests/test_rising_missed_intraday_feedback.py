@@ -163,6 +163,11 @@ def test_risky_micro_episode_joins_passive_fill_and_executable_short_path(tmp_pa
             "risky_micro_episode_outcome_join_required": True,
             "effective_venue": "KRX",
             "market_session_bucket": "krx_regular",
+            "risky_micro_episode_horizon_observer_registered": True,
+            "risky_micro_episode_horizon_observer_status": "registered",
+            "risky_micro_episode_horizon_observer_registration_key": (
+                "475560|KRX|KRX_REGULAR"
+            ),
         },
         emitted_at="2026-08-14T09:10:00+09:00",
     )
@@ -172,13 +177,14 @@ def test_risky_micro_episode_joins_passive_fill_and_executable_short_path(tmp_pa
             "micro-2",
             "475560",
             "THEBORN",
-            "scalping_scanner_fast_precheck",
+            "risky_micro_episode_executable_bbo_observed",
             {
                 "market_data_effective_best_bid": bid,
                 "market_data_effective_best_ask": ask,
                 "market_data_effective_quote_age_ms": 100,
                 "effective_venue": "KRX",
                 "market_session_bucket": "krx_regular",
+                "risky_micro_episode_horizon_observer_quote_fresh": True,
             },
             emitted_at=f"2026-08-14T09:10:{second:02d}+09:00",
         )
@@ -218,6 +224,19 @@ def test_risky_micro_episode_joins_passive_fill_and_executable_short_path(tmp_pa
         for item in outcome["entry_profile_outcomes"]
     )
     assert report["summary"]["risky_micro_episode_resolved_eligible_episode_count"] == 1
+    assert (
+        report["summary"][
+            "risky_micro_episode_horizon_observer_registered_candidate_count"
+        ]
+        == 1
+    )
+    assert report["summary"]["risky_micro_episode_horizon_observer_event_count"] == 5
+    assert (
+        report["summary"][
+            "risky_micro_episode_horizon_observer_fresh_bbo_event_count"
+        ]
+        == 5
+    )
     assert (
         report["summary"]["risky_micro_episode_executable_outcome_join_ready"] is True
     )
@@ -438,11 +457,20 @@ def test_risky_micro_episode_never_joins_cross_venue_bbo(tmp_path):
         encoding="utf-8",
     )
 
-    _, outcomes = mod._build_risky_micro_episode_source_candidates(pipeline_path)
+    summary, outcomes = mod._build_risky_micro_episode_source_candidates(pipeline_path)
 
     assert outcomes[0]["outcome_join_status"] == "pending_fill_horizon"
     assert outcomes[0]["matching_fresh_bbo_observation_count"] == 0
     assert outcomes[0]["matching_fresh_bbo_watermark"] is None
+    assert (
+        outcomes[0]["outcome_instrumentation_gap"]
+        == "fresh_bbo_fill_horizon_missing"
+    )
+    assert outcomes[0]["outcome_instrumentation_gap_matured"] is True
+    assert summary["risky_micro_episode_matured_pending_outcome_gap_count"] == 1
+    assert summary["risky_micro_episode_matured_pending_outcome_gap_counts"] == [
+        {"gap": "fresh_bbo_fill_horizon_missing", "count": 1}
+    ]
 
 
 def test_risky_micro_episode_resolves_not_filled_only_with_matching_bbo_watermark(

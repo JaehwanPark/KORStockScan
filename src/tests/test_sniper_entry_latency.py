@@ -160,6 +160,315 @@ def test_risky_micro_episode_reuses_fresh_trusted_tp1_tick_window_provenance():
     assert result["risky_micro_episode_runtime_effect"] is False
 
 
+def test_risky_micro_episode_observer_retains_and_emits_fresh_executable_bbo(
+    monkeypatch,
+):
+    started_at = 10_000.0
+    retained = []
+    logs = []
+    state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "retain_ws_subscription_until",
+        lambda code, until_ts: retained.append((code, until_ts)) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        type(
+            "Manager",
+            (),
+            {
+                "get_latest_data": lambda _self, _code: {
+                    "realtime_type_snapshots_by_route": {
+                        "KRX|krx_regular": {
+                            "0D": {
+                                "realtime_type": "0D",
+                                "observed_epoch": started_at + 1.0,
+                                "item": "005930",
+                                "market_suffix": "KRX",
+                                "market_route": "krx_regular",
+                                "effective_venue": "KRX",
+                                "orderbook": {
+                                    "asks": [{"price": 10_020, "volume": 21}],
+                                    "bids": [{"price": 10_000, "volume": 34}],
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda _pipeline, _name, _code, stage, **kwargs: logs.append(
+            (stage, kwargs["fields"])
+        ),
+    )
+
+    registration = (
+        state_handlers.register_risky_micro_episode_executable_bbo_observer(
+            {
+                "id": 7,
+                "name": "TEST",
+                "code": "005930",
+                "strategy": "SCALPING",
+                "position_tag": "SCANNER",
+            },
+            "005930",
+            candidate_fields={
+                "risky_micro_episode_status": "source_only_candidate",
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+            now_ts=started_at,
+        )
+    )
+    observed = state_handlers.observe_risky_micro_episode_executable_bbo_paths(
+        now_ts=started_at + 1.0
+    )
+
+    assert registration["risky_micro_episode_horizon_observer_registered"] is True
+    assert registration["risky_micro_episode_horizon_observer_status"] == "registered"
+    assert retained == [
+        (
+            "005930",
+            started_at
+            + state_handlers._RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC,
+        )
+    ]
+    assert observed == {
+        "active_registration_count": 1,
+        "emitted_event_count": 1,
+        "fresh_bbo_event_count": 1,
+        "closed_registration_count": 0,
+        "failed_operation_count": 0,
+    }
+    assert logs[0][0] == "risky_micro_episode_executable_bbo_observed"
+    fields = logs[0][1]
+    assert fields["market_data_effective_best_bid"] == 10_000
+    assert fields["market_data_effective_best_ask"] == 10_020
+    assert fields["risky_micro_episode_horizon_observer_quote_fresh"] is True
+    assert (
+        fields["risky_micro_episode_horizon_observer_route_scope_status"]
+        == "exact_0d_route_snapshot"
+    )
+    assert fields["risky_micro_episode_horizon_observer_observed_venue"] == "KRX"
+    assert fields["runtime_effect"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+    closed = state_handlers.observe_risky_micro_episode_executable_bbo_paths(
+        now_ts=started_at
+        + state_handlers._RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC
+        + 0.1
+    )
+    assert closed["closed_registration_count"] == 1
+    assert state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY == {}
+
+
+def test_risky_micro_episode_observer_does_not_relabel_cross_venue_bbo(monkeypatch):
+    started_at = 11_000.0
+    logs = []
+    state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "retain_ws_subscription_until",
+        lambda _code, _until_ts: True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        type(
+            "Manager",
+            (),
+            {
+                "get_latest_data": lambda _self, _code: {
+                    "realtime_type_snapshots_by_route": {
+                        "NXT|nxt_entry_window": {
+                            "0D": {
+                                "observed_epoch": started_at + 1.0,
+                                "item": "005930_NX",
+                                "market_route": "nxt_entry_window",
+                                "effective_venue": "NXT",
+                                "orderbook": {
+                                    "asks": [{"price": 10_020, "volume": 21}],
+                                    "bids": [{"price": 10_000, "volume": 34}],
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda _pipeline, _name, _code, stage, **kwargs: logs.append(
+            (stage, kwargs["fields"])
+        ),
+    )
+
+    registration = (
+        state_handlers.register_risky_micro_episode_executable_bbo_observer(
+            {"id": 10, "name": "TEST", "code": "005930"},
+            "005930",
+            candidate_fields={
+                "risky_micro_episode_status": "source_only_candidate",
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+            now_ts=started_at,
+        )
+    )
+    observed = state_handlers.observe_risky_micro_episode_executable_bbo_paths(
+        now_ts=started_at + 1.0
+    )
+
+    assert registration["risky_micro_episode_horizon_observer_registered"] is True
+    assert observed["emitted_event_count"] == 1
+    assert observed["fresh_bbo_event_count"] == 0
+    fields = logs[0][1]
+    assert fields["risky_micro_episode_horizon_observer_quote_fresh"] is False
+    assert (
+        fields["risky_micro_episode_horizon_observer_route_scope_status"]
+        == "exact_0d_route_snapshot_missing"
+    )
+    assert fields["market_data_effective_best_bid"] == "-"
+    assert fields["market_data_effective_best_ask"] == "-"
+
+
+def test_risky_micro_episode_observer_rejects_route_snapshot_outside_session():
+    observed_at = datetime(
+        2026, 8, 14, 16, 0, tzinfo=state_handlers._KST
+    ).timestamp()
+    scoped, provenance = state_handlers._risky_micro_route_scoped_0d_bbo(
+        {
+            "realtime_type_snapshots_by_route": {
+                "KRX|krx_regular": {
+                    "0D": {
+                        "observed_epoch": observed_at,
+                        "item": "005930",
+                        "market_route": "krx_regular",
+                        "effective_venue": "KRX",
+                        "orderbook": {
+                            "asks": [{"price": 10_020, "volume": 21}],
+                            "bids": [{"price": 10_000, "volume": 34}],
+                        },
+                    }
+                }
+            }
+        },
+        code="005930",
+        venue="KRX",
+        session="krx_regular",
+    )
+
+    assert scoped == {}
+    assert (
+        provenance["risky_micro_episode_horizon_observer_route_scope_status"]
+        == "exact_0d_route_snapshot_outside_candidate_session"
+    )
+
+
+def test_risky_micro_candidate_log_registers_bounded_observer(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        state_handlers,
+        "register_risky_micro_episode_executable_bbo_observer",
+        lambda *_args, **_kwargs: {
+            "risky_micro_episode_horizon_observer_registered": True,
+            "risky_micro_episode_horizon_observer_status": "registered",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_remember_scanner_terminal_block", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        state_handlers, "observe_candidate_transition_safe", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_maybe_register_rising_missed_nxt_downstream_block_sampler",
+        lambda *_args: None,
+    )
+
+    state_handlers._log_entry_pipeline(
+        {
+            "id": 8,
+            "name": "TEST",
+            "code": "005930",
+            "strategy": "SCALPING",
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        "005930",
+        "risky_micro_episode_source_candidate_observed",
+        risky_micro_episode_status="source_only_candidate",
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+    )
+
+    event_fields = emitted[0][1]["fields"]
+    assert event_fields["risky_micro_episode_horizon_observer_registered"] is True
+    assert event_fields["risky_micro_episode_horizon_observer_status"] == "registered"
+    assert event_fields["actual_order_submitted"] is False
+
+
+def test_risky_micro_registration_exception_does_not_drop_candidate_event(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        state_handlers,
+        "register_risky_micro_episode_executable_bbo_observer",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_remember_scanner_terminal_block", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        state_handlers, "observe_candidate_transition_safe", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_maybe_register_rising_missed_nxt_downstream_block_sampler",
+        lambda *_args: None,
+    )
+
+    state_handlers._log_entry_pipeline(
+        {"id": 9, "name": "TEST", "code": "005930"},
+        "005930",
+        "risky_micro_episode_source_candidate_observed",
+        risky_micro_episode_status="source_only_candidate",
+        runtime_effect=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+    )
+
+    assert len(emitted) == 1
+    event_fields = emitted[0][1]["fields"]
+    assert event_fields["risky_micro_episode_horizon_observer_registered"] is False
+    assert (
+        event_fields["risky_micro_episode_horizon_observer_status"]
+        == "registration_exception_fail_open"
+    )
+    assert event_fields["runtime_effect"] is False
+
+
 def test_scanner_fast_precheck_never_hydrates_promotion_runtime_context(monkeypatch):
     hydrated = []
     stock = {

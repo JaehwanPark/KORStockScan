@@ -1343,6 +1343,34 @@ def test_send_reg_preserves_explicit_nxt_only_item(monkeypatch):
     assert manager._registered_items_by_code["039490"] == ("039490_NX",)
 
 
+def test_send_reg_source_only_types_are_limited_to_0b_and_0d(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code",
+        lambda code: code,
+    )
+
+    asyncio.run(
+        manager._send_reg(
+            ["039490_NX"],
+            realtime_types=("0B", "0D"),
+            source="micro_reversion_collection_feedback",
+        )
+    )
+
+    payload = json.loads(fake_ws.sent[0])
+    assert payload["refresh"] == "1"
+    assert [row["type"] for row in payload["data"]] == [["0B"], ["0D"]]
+    assert all(row["item"] == ["039490_NX"] for row in payload["data"])
+    assert not manager.realtime_data["039490"].get(
+        "program_subscription_requested_at"
+    )
+
+
 def test_send_reg_uses_single_effective_route_by_default(monkeypatch):
     manager = KiwoomWSManager("test-token")
     fake_ws = _FakeWS([])
@@ -1498,6 +1526,293 @@ def test_execute_unsubscribe_retains_widget_comparison_observation(monkeypatch):
     assert manager.subscribed_codes == {"005930"}
     assert manager._registered_items_by_code == {"005930": ("005930_AL",)}
     assert manager.realtime_data["005930"]["curr"] == 242_000
+
+
+def test_execute_unsubscribe_retains_micro_collection_as_source_only(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"111111"}
+    manager._registered_items_by_code = {"111111": ("111111_AL",)}
+    manager._micro_reversion_observation_items_by_code = {
+        "111111": "111111_AL"
+    }
+    manager.realtime_data = {"111111": {"curr": 1000}}
+
+    manager.execute_unsubscribe(["111111"])
+
+    assert manager.subscribed_codes == {"111111"}
+    assert manager.is_micro_reversion_observation_only_subscription("111111") is True
+    assert manager.realtime_data["111111"]["curr"] == 1000
+
+
+def test_widget_observation_registration_is_not_reclassified_as_micro_only(
+    monkeypatch,
+):
+    monkeypatch.delenv(kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV, raising=False)
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"005930"}
+    manager._registered_items_by_code = {"005930": ("005930_AL",)}
+    manager._micro_reversion_observation_items_by_code = {
+        "005930": "005930_AL"
+    }
+
+    manager.execute_unsubscribe(["005930"])
+
+    assert manager.subscribed_codes == {"005930"}
+    assert manager.is_micro_reversion_observation_only_subscription("005930") is False
+
+
+def test_micro_collection_demotion_replaces_route_with_source_only_types(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager.subscribed_codes = {"111111"}
+    manager._registered_items_by_code = {"111111": ("111111",)}
+    manager._micro_reversion_observation_items_by_code = {
+        "111111": "111111_AL"
+    }
+    captured = []
+
+    def fake_send_reg(codes, **kwargs):
+        captured.append((list(codes), kwargs))
+
+        async def complete():
+            return None
+
+        return complete()
+
+    def fake_schedule(coro, loop):
+        coro.close()
+        return type(
+            "FakeFuture", (), {"add_done_callback": lambda self, callback: None}
+        )()
+
+    monkeypatch.setattr(manager, "_send_reg", fake_send_reg)
+    monkeypatch.setattr(
+        kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule
+    )
+
+    assert manager.retain_micro_reversion_as_observation_only("111111") is True
+    assert manager.retain_micro_reversion_as_observation_only("111111") is True
+
+    assert captured[0][0] == ["111111_AL"]
+    assert captured[0][1]["remove_before_reg"] is True
+    assert captured[0][1]["realtime_types"] == ("0B", "0D")
+    assert captured[0][1]["replacement_codes"] == {"111111"}
+    assert captured[0][1]["trading_promotion_codes"] == set()
+    assert len(captured) == 1
+
+
+def test_micro_collection_set_rotation_removes_old_source_only_code(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager._micro_reversion_observation_items_by_code = {
+        "111111": "111111_AL"
+    }
+    manager._micro_reversion_observation_only_codes = {"111111"}
+    manager.subscribed_codes = {"111111"}
+    manager._registered_items_by_code = {"111111": ("111111_AL",)}
+    removed = []
+    subscribed = []
+    monkeypatch.setattr(
+        manager,
+        "execute_unsubscribe",
+        lambda codes: removed.extend(codes),
+    )
+    monkeypatch.setattr(
+        manager,
+        "execute_subscribe",
+        lambda codes, **kwargs: subscribed.append((list(codes), kwargs)),
+    )
+
+    assert manager._configure_micro_reversion_observation_items(
+        ["222222_NX"], source="test"
+    )
+
+    assert removed == ["111111"]
+    assert subscribed[0][0] == ["222222_NX"]
+    assert subscribed[0][1]["realtime_types"] == ("0B", "0D")
+    assert subscribed[0][1]["observation_only"] is True
+    assert manager._micro_reversion_observation_items_by_code == {
+        "222222": "222222_NX"
+    }
+
+
+def test_micro_collection_set_does_not_race_boot_runtime_registration(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    subscribed = []
+    monkeypatch.setattr(
+        manager,
+        "execute_subscribe",
+        lambda codes, **kwargs: subscribed.append((list(codes), kwargs)),
+    )
+
+    assert manager._configure_micro_reversion_observation_items(
+        ["111111_AL", "222222_NX"],
+        source="test",
+        protected_runtime_codes=["111111"],
+    )
+
+    assert subscribed[0][0] == ["222222_NX"]
+    assert manager._micro_reversion_observation_items_by_code == {
+        "111111": "111111_AL",
+        "222222": "222222_NX",
+    }
+    assert manager.is_micro_reversion_observation_only_subscription("111111") is False
+
+
+def test_real_subscription_stays_source_only_until_replacement_reg_is_sent():
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.subscribed_codes = {"111111"}
+    manager._micro_reversion_observation_items_by_code = {
+        "111111": "111111_AL"
+    }
+    manager._micro_reversion_observation_only_codes = {"111111"}
+
+    manager.execute_subscribe(["111111"], source="scanner_runtime_target_attach")
+
+    assert manager.is_micro_reversion_observation_only_subscription("111111") is True
+    assert manager.subscribed_codes == {"111111"}
+    assert manager.retain_micro_reversion_as_observation_only("111111") is True
+    assert manager.is_micro_reversion_observation_only_subscription("111111") is True
+
+
+def test_execute_subscribe_preserves_source_only_route_item(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    captured = []
+
+    def fake_send_reg(codes, **kwargs):
+        captured.append((list(codes), kwargs))
+
+        async def complete():
+            return None
+
+        return complete()
+
+    def fake_schedule(coro, loop):
+        coro.close()
+        return type(
+            "FakeFuture", (), {"add_done_callback": lambda self, callback: None}
+        )()
+
+    monkeypatch.setattr(manager, "_send_reg", fake_send_reg)
+    monkeypatch.setattr(
+        kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule
+    )
+
+    manager.execute_subscribe(
+        ["222222_NX"],
+        source="micro_reversion_collection_feedback",
+        realtime_types=("0B", "0D"),
+        observation_only=True,
+    )
+
+    assert captured[0][0] == ["222222_NX"]
+    assert captured[0][1]["realtime_types"] == ("0B", "0D")
+
+
+def test_real_subscription_requests_source_only_route_replacement(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager.subscribed_codes = {"111111"}
+    manager._registered_items_by_code = {"111111": ("111111_NX",)}
+    manager._micro_reversion_observation_items_by_code = {
+        "111111": "111111_NX"
+    }
+    manager._micro_reversion_observation_only_codes = {"111111"}
+    captured = []
+
+    def fake_send_reg(codes, **kwargs):
+        captured.append((list(codes), kwargs))
+
+        async def complete():
+            return None
+
+        return complete()
+
+    def fake_schedule(coro, loop):
+        coro.close()
+        return type(
+            "FakeFuture", (), {"add_done_callback": lambda self, callback: None}
+        )()
+
+    monkeypatch.setattr(manager, "_send_reg", fake_send_reg)
+    monkeypatch.setattr(
+        kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule
+    )
+
+    manager.execute_subscribe(["111111"], source="scanner_runtime_target_attach")
+
+    assert captured[0][0] == ["111111"]
+    assert captured[0][1]["remove_before_reg"] is True
+    assert manager.is_micro_reversion_observation_only_subscription("111111") is True
+
+
+def test_successful_replacement_reg_releases_source_only_suppression(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+    manager.subscribed_codes = {"111111"}
+    manager._registered_items_by_code = {"111111": ("111111_NX",)}
+    manager._micro_reversion_observation_only_codes = {"111111"}
+    monkeypatch.setenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "1")
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code",
+        lambda code: f"{code}_AL",
+    )
+
+    asyncio.run(
+        manager._send_reg(
+            ["111111"],
+            remove_before_reg=True,
+            enforce_item_budget=True,
+            replacement_codes=("111111",),
+            trading_promotion_codes=("111111",),
+        )
+    )
+
+    sent = [json.loads(payload) for payload in fake_ws.sent]
+    assert sent[0]["trnm"] == "REMOVE"
+    assert sent[0]["data"][0]["item"] == ["111111_NX"]
+    assert sent[1]["trnm"] == "REG"
+    assert sent[1]["data"][0]["item"] == ["111111_AL"]
+    assert manager.is_micro_reversion_observation_only_subscription("111111") is False
+
+
+def test_failed_remove_keeps_source_only_suppression_and_blocks_promotion_reg(
+    monkeypatch,
+):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+    manager.subscribed_codes = {"111111"}
+    manager._registered_items_by_code = {"111111": ("111111_NX",)}
+    manager._micro_reversion_observation_only_codes = {"111111"}
+
+    async def failed_remove(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(manager, "_send_remove", failed_remove)
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code",
+        lambda code: f"{code}_AL",
+    )
+
+    asyncio.run(
+        manager._send_reg(
+            ["111111"],
+            remove_before_reg=True,
+            replacement_codes=("111111",),
+            trading_promotion_codes=("111111",),
+        )
+    )
+
+    assert fake_ws.sent == []
+    assert manager.is_micro_reversion_observation_only_subscription("111111") is True
 
 
 def test_widget_observation_item_does_not_consume_trading_item_budget(monkeypatch):
@@ -1698,7 +2013,9 @@ def test_execute_subscribe_string_false_force_does_not_resubscribe(monkeypatch):
     def fake_schedule(coro, loop):
         coro.close()
         scheduled.append(coro)
-        return SimpleNamespace(add_done_callback=lambda callback: None)
+        return type(
+            "FakeFuture", (), {"add_done_callback": lambda self, callback: None}
+        )()
 
     monkeypatch.setattr(
         kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule

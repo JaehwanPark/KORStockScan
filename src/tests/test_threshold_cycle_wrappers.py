@@ -176,6 +176,40 @@ def test_postclose_wrapper_runs_daily_low_price_candidate_recommendation_and_adm
     )
 
 
+def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_reports():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert (
+        'RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION="${THRESHOLD_CYCLE_RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION:-true}"'
+        in script
+    )
+    tuning_idx = script.index("-m src.engine.monitoring.low_price_two_leg_tuning")
+    expansion_idx = script.index(
+        "-m src.engine.monitoring.low_price_two_leg_expanded_candidate_research"
+    )
+    attribution_idx = script.index(
+        "-m src.engine.monitoring.machine_microstructure_attribution"
+    )
+    assert tuning_idx < expansion_idx < attribution_idx
+    assert 'wait_for_postclose_resources "machine_microstructure_attribution"' in script
+    assert "machine_microstructure_attribution_${TARGET_DATE}.json" in script
+    assert (
+        "machine_microstructure_attribution=$RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION"
+        in script
+    )
+
+    widget_expansion_service = Path(
+        "deploy/systemd/korstockscan-widget-expansion-recommendation.service"
+    ).read_text(encoding="utf-8")
+    expansion_idx = widget_expansion_service.index(
+        "src.engine.monitoring.widget_collector_expansion_recommendation"
+    )
+    refresh_idx = widget_expansion_service.index(
+        "src.engine.monitoring.machine_microstructure_attribution"
+    )
+    assert expansion_idx < refresh_idx
+
+
 def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_without_bedrock_lite_shadow():
     script = Path("deploy/run_scalp_sim_overnight_preclose.sh").read_text(
         encoding="utf-8"

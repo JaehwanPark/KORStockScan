@@ -5318,18 +5318,51 @@ def _build_risky_micro_episode_source_candidates(
                 "outcome_join_required": _boolish(
                     fields.get("risky_micro_episode_outcome_join_required")
                 ),
+                "horizon_observer_registered": _boolish(
+                    fields.get(
+                        "risky_micro_episode_horizon_observer_registered"
+                    )
+                ),
+                "horizon_observer_registration_status": str(
+                    fields.get("risky_micro_episode_horizon_observer_status")
+                    or "not_instrumented"
+                ),
+                "horizon_observer_registration_key": str(
+                    fields.get(
+                        "risky_micro_episode_horizon_observer_registration_key"
+                    )
+                    or "-"
+                ),
             }
         )
 
     observations_by_code: dict[str, list[dict[str, Any]]] = {
         code: [] for code in unique_symbols
     }
+    pipeline_watermark: datetime | None = None
+    horizon_observer_event_count = 0
+    horizon_observer_fresh_bbo_event_count = 0
     if observations_by_code:
         for row in iter_jsonl(pipeline_path):
+            row_ts = _risky_micro_ts(_event_ts(row))
+            if row_ts is not None and (
+                pipeline_watermark is None or row_ts > pipeline_watermark
+            ):
+                pipeline_watermark = row_ts
             code = _event_code(row)
             if code not in observations_by_code:
                 continue
-            ts = _risky_micro_ts(_event_ts(row))
+            if str(row.get("stage") or "") == (
+                "risky_micro_episode_executable_bbo_observed"
+            ):
+                horizon_observer_event_count += 1
+                if _boolish(
+                    _fields(row).get(
+                        "risky_micro_episode_horizon_observer_quote_fresh"
+                    )
+                ):
+                    horizon_observer_fresh_bbo_event_count += 1
+            ts = row_ts
             if ts is None:
                 continue
             bid, ask, source = _risky_micro_fresh_executable_bbo(row)
@@ -5351,6 +5384,7 @@ def _build_risky_micro_episode_source_candidates(
     resolved_eligible_count = 0
     recheck_diagnostic_net_bps: list[float] = []
     recheck_diagnostic_resolved_count = 0
+    matured_pending_gap_counts: Counter[str] = Counter()
     for candidate in rows:
         observations = sorted(
             observations_by_code.get(str(candidate.get("stock_code") or ""), []),
@@ -5362,6 +5396,38 @@ def _build_risky_micro_episode_source_candidates(
         )
         candidate.update(outcome)
         outcome_status = str(outcome.get("outcome_join_status") or "unknown")
+        maturity_deadline: datetime | None = None
+        if outcome_status == "pending_fill_horizon":
+            candidate_ts = _risky_micro_ts(str(candidate.get("ts") or ""))
+            if candidate_ts is not None:
+                maturity_deadline = candidate_ts + timedelta(
+                    seconds=max(_safe_int(candidate.get("passive_ttl_sec")), 0)
+                )
+        elif outcome_status == "pending_timeout_horizon":
+            fill_ts = _risky_micro_ts(str(outcome.get("fill_ts") or ""))
+            if fill_ts is not None:
+                maturity_deadline = fill_ts + timedelta(
+                    seconds=max(_safe_int(candidate.get("max_hold_sec")), 0)
+                )
+        if (
+            maturity_deadline is not None
+            and pipeline_watermark is not None
+            and pipeline_watermark >= maturity_deadline
+        ):
+            gap = (
+                "fresh_bbo_fill_horizon_missing"
+                if outcome_status == "pending_fill_horizon"
+                else "fresh_bbo_exit_horizon_missing"
+            )
+            candidate.update(
+                {
+                    "outcome_instrumentation_gap": gap,
+                    "outcome_instrumentation_gap_matured": True,
+                    "outcome_maturity_deadline": maturity_deadline.isoformat(),
+                    "outcome_pipeline_watermark": pipeline_watermark.isoformat(),
+                }
+            )
+            matured_pending_gap_counts[gap] += 1
         outcome_counts[outcome_status] += 1
         if outcome.get(
             "outcome_evaluation_role"
@@ -5398,6 +5464,12 @@ def _build_risky_micro_episode_source_candidates(
     }
     projection_origin_counts = Counter(
         str(row.get("source_projection_origin") or "unknown") for row in rows
+    )
+    horizon_registration_status_counts = Counter(
+        str(row.get("horizon_observer_registration_status") or "not_instrumented")
+        for row in rows
+        if str(row.get("source_projection_origin") or "")
+        == "runtime_explicit_candidate_event"
     )
     return {
         "risky_micro_episode_observation_count": len(rows),
@@ -5466,6 +5538,26 @@ def _build_risky_micro_episode_source_candidates(
             {"status": key, "count": value}
             for key, value in outcome_counts.most_common()
         ],
+        "risky_micro_episode_matured_pending_outcome_gap_counts": [
+            {"gap": key, "count": value}
+            for key, value in matured_pending_gap_counts.most_common()
+        ],
+        "risky_micro_episode_matured_pending_outcome_gap_count": sum(
+            matured_pending_gap_counts.values()
+        ),
+        "risky_micro_episode_horizon_observer_registration_status_counts": [
+            {"status": key, "count": value}
+            for key, value in horizon_registration_status_counts.most_common()
+        ],
+        "risky_micro_episode_horizon_observer_registered_candidate_count": sum(
+            1 for row in rows if row.get("horizon_observer_registered")
+        ),
+        "risky_micro_episode_horizon_observer_event_count": (
+            horizon_observer_event_count
+        ),
+        "risky_micro_episode_horizon_observer_fresh_bbo_event_count": (
+            horizon_observer_fresh_bbo_event_count
+        ),
         "risky_micro_episode_resolved_eligible_episode_count": resolved_eligible_count,
         "risky_micro_episode_daily_source_quality_adjusted_ev_pct": daily_source_quality_adjusted_ev_pct,
         "risky_micro_episode_recheck_diagnostic_resolved_count": (
@@ -6360,6 +6452,30 @@ def build_report(
                     "source_quality_gap_as_real_order_authority",
                 ],
             },
+            "risky_micro_episode_bounded_bbo_observer": {
+                "metric_role": "source_quality_instrumentation",
+                "decision_authority": (
+                    "report_only_bounded_executable_bbo_observer_no_order_authority"
+                ),
+                "window_policy": (
+                    "same_symbol_venue_session_1s_until_45s_after_runtime_candidate"
+                ),
+                "sample_floor": "not_applicable_instrumentation",
+                "primary_decision_metric": (
+                    "fresh_executable_bbo_horizon_coverage"
+                ),
+                "source_quality_gate": (
+                    "exact_symbol_venue_session_0d_and_fresh_bbo_age_le_1000ms"
+                ),
+                "forbidden_uses": [
+                    *FORBIDDEN_USES,
+                    "broker_order_submission",
+                    "broker_order_cancel",
+                    "scanner_slot_authority",
+                    "entry_or_exit_authority",
+                    "stale_quote_or_hard_safety_bypass",
+                ],
+            },
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "source_quality": {
@@ -6720,6 +6836,16 @@ def write_outputs(
         f"{summary.get('risky_micro_episode_natural_sample_absent_categories')}",
         f"- risky_micro_episode_outcome_join_status_counts: "
         f"{summary.get('risky_micro_episode_outcome_join_status_counts')}",
+        f"- risky_micro_episode_matured_pending_outcome_gap_counts: "
+        f"{summary.get('risky_micro_episode_matured_pending_outcome_gap_counts')}",
+        f"- risky_micro_episode_horizon_observer_registration_status_counts: "
+        f"{summary.get('risky_micro_episode_horizon_observer_registration_status_counts')}",
+        f"- risky_micro_episode_horizon_observer_registered_candidate_count: "
+        f"{summary.get('risky_micro_episode_horizon_observer_registered_candidate_count')}",
+        f"- risky_micro_episode_horizon_observer_event_count: "
+        f"{summary.get('risky_micro_episode_horizon_observer_event_count')}",
+        f"- risky_micro_episode_horizon_observer_fresh_bbo_event_count: "
+        f"{summary.get('risky_micro_episode_horizon_observer_fresh_bbo_event_count')}",
         f"- risky_micro_episode_instrumentation_gap_counts: "
         f"{summary.get('risky_micro_episode_instrumentation_gap_counts')}",
         f"- risky_micro_episode_resolved_eligible_episode_count: "

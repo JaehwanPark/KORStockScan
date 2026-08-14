@@ -51,6 +51,21 @@
   성숙하지 않은 경우에만 전일 파라미터를 그대로 carry-forward한다. 이 경로는
   새 파라미터를 적용하지 않으며 source-quality 실패, 실주문 terminal failure,
   누적 후보 결함이 확인되면 사용하지 않고 해당 세션을 차단한다.
+- 장후 `machine_microstructure_attribution`은 당일 위젯 calibration, prospective
+  signal research, 21:15 collector-expansion recommendation 종목 inventory를
+  micro-reversion 0B/0D 경로에 결합한다. 20:10 1차 산출 뒤 expansion service가
+  같은 날짜 report를 원자 갱신하므로 늦게 추가된 후보도 누락하지 않는다. micro
+  symbol 또는 entry-anchor window가 없으면 명시적 coverage gap으로 남긴다. 결손을
+  0수익으로 간주하지 않고 기존 위젯 EV와 exact-date policy 생성도 차단하지 않는다.
+  repairable gap은 다음 거래일 bounded source-only 0B/0D 수집 대상으로 되먹임하며,
+  일회 수집 뒤 표본이 끊기지 않도록 현재 동적 위젯 universe도 일 4종목 공통
+  한도 안에서 `micro_policy_sample_accumulation`으로 회전 관찰한다. 수동관리
+  제외목록은 이 수집·평가 단계에 적용하지 않는다. 이 연결은
+  diagnostic-only이며 주문이나 위젯 policy 선택 권한이 없다. micro 조건이 위젯
+  policy를 실제로 바꾸려면 동일 symbol/session 5거래일·matched anchor 20건,
+  BBO 95%·depth 90%, 비용 반영 paired rolling 5/10/20일 EV 양수와 downside
+  비악화가 필요하다. 최초 bounded runtime family 연결은 별도 사용자 승인을 거쳐
+  exact-date PREOPEN으로만 열린다.
 - 모든 위젯 execution policy는 장후에 일일 완료 에피소드 상한 1~5회를 같은
   종목·세션·setup·목표·cooldown 조건으로 비교한다. 1~3회는 기존 비용차감
   누적 EV/chronological holdout 순위로 선택하며, 4회 또는 5회로 자동 확대하려면

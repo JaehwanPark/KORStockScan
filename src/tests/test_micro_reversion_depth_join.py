@@ -12,13 +12,19 @@ from src.engine.scalping.micro_reversion.path_journal import (
 )
 
 
-def _depth_row(*, received: str, sequence: int = 1, venue: str = "KRX") -> dict:
+def _depth_row(
+    *,
+    received: str,
+    sequence: int = 1,
+    venue: str = "KRX",
+    sequence_epoch: int = 123,
+) -> dict:
     return MarketDepthPoint(
         symbol="000001",
         exchange_timestamp=received,
         local_receive_timestamp=received,
         source_sequence=sequence,
-        sequence_epoch=123,
+        sequence_epoch=sequence_epoch,
         series_sequence=sequence,
         venue=venue,
         session_bucket=f"{venue}_REGULAR",
@@ -40,13 +46,16 @@ def _depth_row(*, received: str, sequence: int = 1, venue: str = "KRX") -> dict:
     ).as_dict()
 
 
-def _market_row(*, received: str, venue: str = "KRX") -> dict:
+def _market_row(
+    *, received: str, venue: str = "KRX", sequence_epoch: int = 123
+) -> dict:
     return {
         "symbol": "000001",
         "venue": venue,
         "session_bucket": f"{venue}_REGULAR",
         "local_receive_timestamp": received,
         "exchange_timestamp": received,
+        "sequence_epoch": sequence_epoch,
         "bid_depth": None,
         "ask_depth": None,
         "decision_authority": "canonical_market_stream_observation_only",
@@ -88,6 +97,20 @@ def test_join_never_crosses_venue_and_marks_stale() -> None:
     assert stale["depth_join_status"] == "stale_past_depth"
     assert stale["bid_depth"] is None
     assert wrong_venue["depth_join_status"] == "missing_same_series_depth"
+
+
+def test_join_never_crosses_sequence_epoch() -> None:
+    depth = _depth_row(
+        received="2026-08-08T09:00:00.000+09:00", sequence_epoch=122
+    )
+    market = _market_row(
+        received="2026-08-08T09:00:00.100+09:00", sequence_epoch=123
+    )
+
+    joined = join_latest_past_depth((market,), (depth,), max_age_ms=500)[0]
+
+    assert joined["depth_join_status"] == "missing_same_series_depth"
+    assert "depth_context" not in joined
 
 
 def test_join_rejects_duplicate_depth_sequence_and_prejoined_market_row() -> None:

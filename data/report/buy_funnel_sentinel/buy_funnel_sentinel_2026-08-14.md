@@ -15,29 +15,29 @@
 
 ## 근거
 
-- as_of: `2026-08-14T14:30:04`
+- as_of: `2026-08-14T15:20:03`
 - baseline_date: `2026-08-13`
-- ai_confirmed unique: `74`
-- budget_pass unique: `113`
-- latency_pass unique: `35`
-- submitted unique: `8`
-- holding_started unique: `4`
-- budget/ai unique: `152.7%` (baseline `91.4`)
-- submitted/ai unique: `10.8%` (baseline `2.9`)
+- ai_confirmed unique: `82`
+- budget_pass unique: `128`
+- latency_pass unique: `41`
+- submitted unique: `10`
+- holding_started unique: `6`
+- budget/ai unique: `156.1%` (baseline `95.0`)
+- submitted/ai unique: `12.2%` (baseline `6.2`)
 - economic bundles: `observed=1, valid=1, probe_only=1, partial_residual=0, full=0`
 - economic submitted/requested: `qty=1/3 (33.3%), notional=10350/30960 (33.4%)`
 - economic participation by venue: `{'KRX': {'bundle_count': 1, 'probe_only_bundle_count': 1, 'partial_residual_bundle_count': 0, 'full_submitted_bundle_count': 0, 'requested_qty': 3, 'submitted_qty': 1, 'requested_notional_krw': 30960, 'submitted_notional_krw': 10350, 'submitted_qty_to_requested_qty_pct': 33.3, 'submitted_notional_to_requested_notional_pct': 33.4}}`
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `blocked_strength_momentum:below_window_buy_value=534, blocked_strength_momentum:insufficient_history=448, blocked_overbought:-=341, latency_block:latency_state_danger=232, blocked_strength_momentum:below_strength_base=205`
+- top blockers: `blocked_strength_momentum:below_window_buy_value=554, blocked_strength_momentum:insufficient_history=466, blocked_overbought:-=401, latency_block:latency_state_danger=266, blocked_strength_momentum:below_strength_base=236`
 - swing blockers: `-`
-- upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=105, first_ai_wait:-=43, wait65_79_ev_candidate:score_70.0=42, blocked_ai_score:score_4.0=31, blocked_ai_score:score_70.0=30`
-- AI terminal reasons: `ai_terminal:entry_policy_no_buy_score_prior=110, ai_terminal:first_ai_wait_big_bite_not_confirmed=43`
-- AI actions: `events={'DROP': 167, 'NOT_EVALUATED': 1, 'WAIT': 115}, unique={'DROP': 167, 'NOT_EVALUATED': 1, 'WAIT': 115}`
-- budget/AI lineage: `{'status': 'explicit_ai_trace_budget_block_observed', 'pipeline_stage_order_contract': 'latest_watching_ai_to_budget_precheck_to_final_authority_revalidation', 'raw_ai_budget_census_is_causal': False, 'ai_trace_count': 311, 'ai_trace_source_stage_counts': {'ai_confirmed': 283, 'early_accel_strong_bundle_recheck_corrected': 15, 'early_accel_strong_bundle_recheck_failed': 13}, 'budget_or_block_event_count': 598, 'lineage_contract_event_count': 598, 'lineage_contract_coverage_pct': 100.0, 'pre_ai_parent_not_expected_event_count': 509, 'lineage_join_eligible_event_count': 38, 'lineage_contract_missing_event_count': 0, 'lineage_field_present_count': 38, 'parent_trace_missing_when_expected_event_count': 0, 'parent_attempt_without_trusted_result_event_count': 51, 'ai_attempt_result_unavailable_parent_not_expected_event_count': 51, 'parent_trace_missing_without_attempt_event_count': 0, 'lineage_exact_trusted_count': 35, 'lineage_untrusted_or_stale_event_count': 3, 'lineage_untrusted_or_stale_reason_counts': {'attempt_untrusted': 1, 'source_stale': 1, 'trace_id_mismatch': 1}, 'lineage_joined_event_count': 35, 'exact_parent_trace_unresolved_event_count': 0, 'lineage_join_coverage_pct': 92.11, 'raw_event_lineage_join_coverage_pct': 5.85, 'lineage_join_coverage_denominator': 'events_with_a_trusted_ai_result_expected; excludes_pre_ai_and_explicit_attempt_result_unavailable', 'linked_budget_pass_trace_count': 25, 'linked_budget_block_trace_count': 3, 'linked_stage_counts': {'blocked_zero_qty': 3, 'budget_pass': 32}, 'runtime_effect': False, 'allowed_runtime_apply': False}`
-- latency blockers: `latency_block:latency_state_danger=232, latency_block:tp1_direct_recheck_positive_micro_not_recovered=1`
-- price guards: `entry_ai_price_canary_fallback:low_confidence=136, entry_ai_price_canary_fallback:pre_submit_price_guard=2`
-- quote refresh: `attempted=102, applied=43, latency_recovered=13, submitted_after_refresh=0`
-- quote refresh downstream: `{'armed_expired_before_submit': 2, 'entry_ai_authority_revalidation': 11}`
+- upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=119, wait65_79_ev_candidate:score_70.0=49, first_ai_wait:-=48, blocked_ai_score:score_70.0=33, blocked_ai_score:score_4.0=33`
+- AI terminal reasons: `ai_terminal:entry_policy_no_buy_score_prior=117, ai_terminal:first_ai_wait_big_bite_not_confirmed=48`
+- AI actions: `events={'DROP': 181, 'NOT_EVALUATED': 1, 'WAIT': 132}, unique={'DROP': 181, 'NOT_EVALUATED': 1, 'WAIT': 132}`
+- budget/AI lineage: `{'status': 'explicit_ai_trace_budget_block_observed', 'pipeline_stage_order_contract': 'latest_watching_ai_to_budget_precheck_to_final_authority_revalidation', 'raw_ai_budget_census_is_causal': False, 'ai_trace_count': 344, 'ai_trace_source_stage_counts': {'ai_confirmed': 314, 'early_accel_strong_bundle_recheck_corrected': 16, 'early_accel_strong_bundle_recheck_failed': 14}, 'budget_or_block_event_count': 680, 'lineage_contract_event_count': 680, 'lineage_contract_coverage_pct': 100.0, 'pre_ai_parent_not_expected_event_count': 587, 'lineage_join_eligible_event_count': 42, 'lineage_contract_missing_event_count': 0, 'lineage_field_present_count': 42, 'parent_trace_missing_when_expected_event_count': 0, 'parent_attempt_without_trusted_result_event_count': 51, 'ai_attempt_result_unavailable_parent_not_expected_event_count': 51, 'parent_trace_missing_without_attempt_event_count': 0, 'lineage_exact_trusted_count': 39, 'lineage_untrusted_or_stale_event_count': 3, 'lineage_untrusted_or_stale_reason_counts': {'attempt_untrusted': 1, 'source_stale': 1, 'trace_id_mismatch': 1}, 'lineage_joined_event_count': 39, 'exact_parent_trace_unresolved_event_count': 0, 'lineage_join_coverage_pct': 92.86, 'raw_event_lineage_join_coverage_pct': 5.74, 'lineage_join_coverage_denominator': 'events_with_a_trusted_ai_result_expected; excludes_pre_ai_and_explicit_attempt_result_unavailable', 'linked_budget_pass_trace_count': 28, 'linked_budget_block_trace_count': 3, 'linked_stage_counts': {'blocked_zero_qty': 3, 'budget_pass': 36}, 'runtime_effect': False, 'allowed_runtime_apply': False}`
+- latency blockers: `latency_block:latency_state_danger=266, latency_block:tp1_direct_recheck_positive_micro_not_recovered=1`
+- price guards: `entry_ai_price_canary_fallback:low_confidence=146, entry_ai_price_canary_fallback:pre_submit_price_guard=2`
+- quote refresh: `attempted=115, applied=49, latency_recovered=14, submitted_after_refresh=0`
+- quote refresh downstream: `{'armed_expired_before_submit': 2, 'entry_ai_authority_revalidation': 12}`
 
 ## 금지된 자동변경
 
@@ -55,6 +55,6 @@
 
 ## Window Summary
 
-- `5m`: ai=2, budget=4, latency=0, submitted=0, top=`blocked_overbought:-=16, blocked_strength_momentum:below_window_buy_value=9, blocked_strength_momentum:insufficient_history=5`, swing=`-`, upstream=`first_ai_wait:-=1, wait65_79_ev_candidate:score_70.0=1`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=1`
-- `10m`: ai=6, budget=7, latency=1, submitted=0, top=`blocked_overbought:-=24, blocked_strength_momentum:below_strength_base=13, blocked_strength_momentum:insufficient_history=12`, swing=`-`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=4, first_ai_wait:-=2, wait65_79_ev_candidate:score_70.0=2`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=2, ai_terminal:entry_policy_no_buy_score_prior=2`
-- `30m`: ai=13, budget=20, latency=4, submitted=1, top=`blocked_overbought:-=43, blocked_strength_momentum:insufficient_history=27, blocked_strength_momentum:below_strength_base=25`, swing=`-`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=6, wait65_79_ev_candidate:score_70.0=4, first_ai_wait:-=3`, ai_terminal=`ai_terminal:entry_policy_no_buy_score_prior=6, ai_terminal:first_ai_wait_big_bite_not_confirmed=3`
+- `5m`: ai=2, budget=5, latency=1, submitted=0, top=`blocked_strength_momentum:below_strength_base=6, latency_block:latency_state_danger=4, blocked_vpw:-=4`, swing=`-`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=4, first_ai_wait:-=1`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=1`
+- `10m`: ai=8, budget=10, latency=5, submitted=2, top=`blocked_overbought:-=13, blocked_strength_momentum:below_strength_base=10, blocked_vpw:-=7`, swing=`-`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=5, first_ai_wait:-=3, wait65_79_ev_candidate:score_70.0=1`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=3, ai_terminal:entry_policy_no_buy_score_prior=2`
+- `30m`: ai=16, budget=26, latency=7, submitted=2, top=`blocked_overbought:-=42, blocked_strength_momentum:below_strength_base=26, latency_block:latency_state_danger=25`, swing=`-`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=9, first_ai_wait:-=5, wait65_79_ev_candidate:score_70.0=3`, ai_terminal=`ai_terminal:entry_policy_no_buy_score_prior=5, ai_terminal:first_ai_wait_big_bite_not_confirmed=5`
