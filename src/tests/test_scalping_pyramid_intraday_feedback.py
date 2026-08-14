@@ -1252,6 +1252,106 @@ def test_whole_day_real_entry_lifecycle_reconciles_all_venues_and_entry_states(
     assert "state=holding" in markdown
 
 
+def test_real_entry_lifecycle_reconstructs_legacy_full_close_realized_pnl(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-29.jsonl"
+    rows = [
+        _event(
+            811,
+            "811811",
+            "legacy-revive",
+            "order_bundle_submitted",
+            {
+                "actual_order_submitted": True,
+                "requested_qty": 2,
+                "order_no": "K811",
+                "effective_venue": "KRX",
+            },
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            811,
+            "811811",
+            "legacy-revive",
+            "holding_started",
+            {"buy_qty": 2, "buy_price": 10_000, "effective_venue": "KRX"},
+        ),
+        _event(
+            811,
+            "811811",
+            "legacy-revive",
+            "sell_completed",
+            {"sell_qty": 2, "sell_price": 10_100, "profit_rate": 0.77},
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-29", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    lifecycle = report["whole_day_real_entry_lifecycle_rows"][0]
+    summary = report["summary"]["whole_day_real_entry_lifecycle"]
+
+    assert lifecycle["realized_pnl_krw"] == 154
+    assert lifecycle["realized_pnl_krw_source"] == (
+        "reconstructed_same_cycle_full_close_fee_aware"
+    )
+    assert summary["realized_pnl_krw_known_count"] == 1
+    assert summary["realized_pnl_krw_missing_count"] == 0
+    assert summary["realized_pnl_krw_source_counts"] == [
+        {
+            "source": "reconstructed_same_cycle_full_close_fee_aware",
+            "count": 1,
+        }
+    ]
+
+
+def test_real_entry_lifecycle_does_not_reconstruct_partial_sell_pnl(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-29.jsonl"
+    rows = [
+        _event(
+            812,
+            "812812",
+            "partial-close",
+            "order_bundle_submitted",
+            {"actual_order_submitted": True, "requested_qty": 2, "order_no": "K812"},
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            812,
+            "812812",
+            "partial-close",
+            "holding_started",
+            {"buy_qty": 2, "buy_price": 10_000},
+        ),
+        _event(
+            812,
+            "812812",
+            "partial-close",
+            "sell_completed",
+            {"sell_qty": 1, "sell_price": 10_100, "profit_rate": 0.77},
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-29", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    assert (
+        report["whole_day_real_entry_lifecycle_rows"][0].get("realized_pnl_krw") is None
+    )
+    assert (
+        report["summary"]["whole_day_real_entry_lifecycle"][
+            "realized_pnl_krw_missing_count"
+        ]
+        == 1
+    )
+
+
 def test_post_probe_confirmation_reconstructs_event_time_and_excludes_after_terminal(
     tmp_path,
 ):

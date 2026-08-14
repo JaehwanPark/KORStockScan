@@ -485,6 +485,7 @@ def test_scalp_revive_sell_receipt_declares_real_execution_contract(monkeypatch)
         target_stock={"name": "TEST", "position_tag": "SCANNER"},
         code="123456",
         exec_price=10_100,
+        exec_qty=3,
         now=datetime(2026, 7, 23, 10, 0, 0),
         profit_rate=0.77,
         safe_buy_price=10_000,
@@ -502,7 +503,11 @@ def test_scalp_revive_sell_receipt_declares_real_execution_contract(monkeypatch)
         logged["primary_decision_metric"] == "confirmed_sell_fill_price_and_profit_rate"
     )
     assert logged["sell_price"] == 10_100
-    assert logged["sell_qty"] == 7
+    assert logged["sell_qty"] == 3
+    assert logged["buy_price"] == "10000.00"
+    assert logged["buy_qty"] == 7
+    assert logged["realized_pnl_krw"] == 230
+    assert logged["realized_pnl_krw_source"] == "broker_fill_prices_fee_aware"
 
 
 def test_sell_receipt_propagates_scale_in_counterfactual_diagnostics(monkeypatch):

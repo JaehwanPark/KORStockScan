@@ -10,6 +10,7 @@ from typing import Any
 from src.engine.scalping.rising_missed_one_share_entry import (
     SCOUT_AI_ATTRIBUTION_SCHEMA,
 )
+from src.engine.trade_profit import calculate_net_realized_pnl, get_trade_cost_rate
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
@@ -466,9 +467,39 @@ def _update_real_entry_lifecycle(item: dict[str, Any], row: dict[str, Any]) -> N
         realized_pnl = _safe_float(fields.get("realized_pnl_krw"), None)
         if realized_pnl is not None:
             item["realized_pnl_krw"] = int(round(realized_pnl))
+            item["realized_pnl_krw_source"] = str(
+                fields.get("realized_pnl_krw_source") or "sell_completed_event"
+            )
         sell_price = _safe_float(fields.get("sell_price"), None)
         if sell_price is not None:
             item["sell_price"] = sell_price
+        # Older scalp-revive receipts carried the exact broker sell fill and
+        # net profit rate but omitted KRW PnL. Reconstruct only when the same
+        # position cycle proves a full-quantity close; never infer from a
+        # partial fill, mark price, or unmatched quantity.
+        if realized_pnl is None:
+            buy_price = _safe_float(
+                fields.get("buy_price") or item.get("average_fill_price"), None
+            )
+            filled_qty = max(0, int(item.get("filled_qty") or 0))
+            sell_qty = int(_safe_float(fields.get("sell_qty"), 0.0) or 0)
+            if (
+                buy_price is not None
+                and buy_price > 0
+                and sell_price is not None
+                and sell_price > 0
+                and filled_qty > 0
+                and sell_qty == filled_qty
+            ):
+                item["realized_pnl_krw"] = calculate_net_realized_pnl(
+                    buy_price,
+                    sell_price,
+                    filled_qty,
+                )
+                item["realized_pnl_krw_source"] = (
+                    "reconstructed_same_cycle_full_close_fee_aware"
+                )
+                item["realized_pnl_cost_rate"] = get_trade_cost_rate()
 
 
 def _canonical_expansion_outcome_label(item: dict[str, Any]) -> str:
@@ -709,6 +740,11 @@ def _real_entry_lifecycle_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for item in closed
         if item.get("realized_pnl_krw") is not None
     ]
+    pnl_source_counts = Counter(
+        str(item.get("realized_pnl_krw_source") or "missing_source")
+        for item in closed
+        if item.get("realized_pnl_krw") is not None
+    )
     realized_pnl_missing_count = len(closed) - len(pnl_values)
     return {
         "submitted_cycle_count": len(rows),
@@ -743,6 +779,10 @@ def _real_entry_lifecycle_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "realized_pnl_krw_known_sum": sum(pnl_values),
         "realized_pnl_krw_known_count": len(pnl_values),
         "realized_pnl_krw_missing_count": realized_pnl_missing_count,
+        "realized_pnl_krw_source_counts": [
+            {"source": source, "count": count}
+            for source, count in sorted(pnl_source_counts.items())
+        ],
         "realized_pnl_source_quality_state": (
             "complete"
             if closed and realized_pnl_missing_count == 0
@@ -3425,7 +3465,9 @@ def build_report(
             ),
             "source_quality_gate": (
                 "record_joined_actual_order_submit_fill_cancel_sell_with_explicit_"
-                "effective_venue_and_non_null_sell_profit_for_closed_cycles"
+                "effective_venue_and_non_null_sell_profit_for_closed_cycles; "
+                "realized_pnl_requires_event_value_or_same_cycle_full_quantity_"
+                "broker_fill_price_reconstruction_with_fee_aware_provenance"
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
@@ -3745,12 +3787,14 @@ def write_outputs(
             "state={lifecycle_state} planned_qty={planned_qty} "
             "submitted_qty={broker_submitted_qty} filled_qty={filled_qty} "
             "final={final_profit_rate} realized_pnl_krw={realized_pnl_krw} "
+            "realized_pnl_source={realized_pnl_krw_source} "
             "canonical={canonical_expansion_outcome_label}".format(
                 **{
                     **item,
                     "market_session_bucket": item.get("market_session_bucket"),
                     "final_profit_rate": item.get("final_profit_rate"),
                     "realized_pnl_krw": item.get("realized_pnl_krw"),
+                    "realized_pnl_krw_source": item.get("realized_pnl_krw_source"),
                     "canonical_expansion_outcome_label": item.get(
                         "canonical_expansion_outcome_label"
                     ),

@@ -1709,6 +1709,7 @@ def _handle_scalp_revive_sell_execution(
     target_stock: dict[str, Any],
     code: str,
     exec_price: int,
+    exec_qty: int,
     now: datetime,
     profit_rate: float,
     safe_buy_price: float,
@@ -1757,6 +1758,17 @@ def _handle_scalp_revive_sell_execution(
                 exec_price=exec_price,
                 profit_rate=profit_rate,
             )
+            position_buy_qty = int(
+                float(
+                    getattr(record, "buy_qty", 0) or target_stock.get("buy_qty", 0) or 0
+                )
+            )
+            completed_sell_qty = max(0, int(exec_qty or 0))
+            realized_pnl_krw = calculate_net_realized_pnl(
+                safe_buy_price,
+                exec_price,
+                completed_sell_qty,
+            )
             _log_holding_pipeline(
                 target_stock.get("name"),
                 code,
@@ -1780,7 +1792,11 @@ def _handle_scalp_revive_sell_execution(
                     "broker_guard_bypass|bot_restart"
                 ),
                 sell_price=int(exec_price or 0),
-                sell_qty=int(getattr(record, "buy_qty", 0) or 0),
+                sell_qty=completed_sell_qty,
+                buy_price=f"{safe_buy_price:.2f}",
+                buy_qty=position_buy_qty,
+                realized_pnl_krw=realized_pnl_krw,
+                realized_pnl_krw_source="broker_fill_prices_fee_aware",
                 profit_rate=f"{profit_rate:+.2f}",
                 exit_rule=target_stock.get("last_exit_rule") or "-",
                 exit_decision_source=target_stock.get("last_exit_decision_source")
@@ -4401,6 +4417,7 @@ def handle_real_execution(exec_data):
                     target_stock=target_stock,
                     code=code,
                     exec_price=exec_price,
+                    exec_qty=exec_qty,
                     now=now,
                     profit_rate=profit_rate,
                     safe_buy_price=safe_buy_price,

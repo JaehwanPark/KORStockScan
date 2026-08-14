@@ -284,6 +284,11 @@ def _event_executable_bbo(
             "pre_submit_ws_snapshot_refresh_best_ask",
         ),
         (
+            "entry_ai_price_ws_snapshot_refresh_bbo",
+            "entry_ai_price_ws_snapshot_refresh_best_bid",
+            "entry_ai_price_ws_snapshot_refresh_best_ask",
+        ),
+        (
             "pre_submit_rest_orderbook_refresh_bbo",
             "pre_submit_rest_orderbook_refresh_best_bid",
             "pre_submit_rest_orderbook_refresh_best_ask",
@@ -1097,6 +1102,8 @@ def _quote_age_ms(fields: dict[str, Any]) -> float | None:
         "rising_missed_scout_quality_guard_quote_age_ms",
         "quote_consistency_ws_age_ms",
         "quote_age_ms",
+        "entry_ai_price_ws_snapshot_refresh_age_ms",
+        "orderbook_micro_observer_last_quote_age_ms",
         "pre_submit_quote_refresh_age_ms",
     ):
         value = _safe_float(fields.get(key))
@@ -4514,6 +4521,8 @@ def _risky_micro_quote_age_ms(fields: dict[str, Any]) -> float | None:
         "quote_age_ms",
         "ws_age_ms",
         "pre_submit_effective_quote_age_ms",
+        "entry_ai_price_ws_snapshot_refresh_age_ms",
+        "orderbook_micro_observer_last_quote_age_ms",
         "observed_mark_gap_fresh_quote_age_ms",
         "risky_micro_episode_quote_age_ms",
     )
@@ -4553,12 +4562,14 @@ def _risky_micro_projection_from_block_event(
         "rising_missed_tp1_tick_acceleration",
         "rising_missed_tp1_submit_context_tick_acceleration",
         "rising_missed_tp1_ws_tick_acceleration",
+        "rising_missed_tick_acceleration_ratio",
         "tick_acceleration_ratio",
     )
     tick_window_span_sec = _first_risky_micro_float(
         fields,
         "rising_missed_tp1_ws_momentum_window_span_sec",
         "rising_missed_tp1_submit_context_tick_window_span_sec",
+        "rising_missed_tick_window_span_sec",
         "tick_window_span_sec",
     )
     if source_category == "tp1" and not any(

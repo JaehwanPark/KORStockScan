@@ -957,13 +957,36 @@ def trip_probe_runtime_circuit(reason: str, *, now: datetime | None = None) -> N
 
 
 def _reserve_probe_runtime_bundle(
-    *, stock: dict[str, Any], total_qty: int, now: datetime | None = None
+    *,
+    stock: dict[str, Any],
+    total_qty: int,
+    submit_contract: dict[str, Any],
+    now: datetime | None = None,
 ) -> tuple[str, str]:
     config = _probe_runtime_config(now=now)
     if not config["enabled"]:
         return "", "probe_runtime_inactive"
     if config["probe_qty"] != 1:
         return "", "probe_qty_must_equal_one"
+    if not isinstance(submit_contract, dict):
+        return "", "probe_submit_contract_invalid"
+    contract = dict(submit_contract)
+    continuation = contract.get("continuation")
+    continuation = continuation if isinstance(continuation, dict) else {}
+    continuation_requested_qty = _safe_int(continuation.get("requested_qty"), 0)
+    continuation_residual_qty = _safe_int(continuation.get("residual_qty"), 0)
+    continuation_quantities = [
+        _safe_int(value, 0) for value in continuation.get("residual_quantities") or []
+    ]
+    if (
+        continuation_requested_qty != total_qty
+        or continuation_residual_qty != total_qty - 1
+        or not continuation_quantities
+        or any(value <= 0 for value in continuation_quantities)
+        or sum(continuation_quantities) != continuation_residual_qty
+        or _safe_int(contract.get("probe_submit_best_ask"), 0) <= 0
+    ):
+        return "", "probe_submit_contract_invalid"
     target_date = _kst_date(now)
     with _PROBE_RUNTIME_STATE_LOCK:
         payload = _load_probe_runtime_state(target_date)
@@ -991,6 +1014,7 @@ def _reserve_probe_runtime_bundle(
         nonce = f"{target_date}:{code}:{time_ns()}:{current_count + 1}"
         bundle_id = f"{code}-probe-{hashlib.sha1(nonce.encode()).hexdigest()[:12]}"
         payload.setdefault("bundles", {})[bundle_id] = {
+            **contract,
             "bundle_id": bundle_id,
             "phase": "planned",
             "code": code,
@@ -3481,46 +3505,53 @@ def apply_entry_split_order_policy(
     probe_config = _probe_runtime_config(now=now)
     probe_eligible, probe_eligibility_reason = _probe_first_eligible(stock, total_qty)
     if probe_config["enabled"] and probe_eligible:
+        probe_variant_id = f"{split_variant_id}__{PROBE_VARIANT_SUFFIX}"
+        common_fields = {
+            "entry_split_order_policy_applied": True,
+            "entry_split_order_policy_version": policy.get("policy_version"),
+            "entry_split_order_policy_mode": policy_mode,
+            "entry_split_order_variant_id": probe_variant_id,
+            "entry_split_order_policy_variant_id": policy_split_variant_id,
+            "entry_split_order_bucket": bucket,
+            "entry_split_order_runtime_default_policy_applied": fallback_policy_applied,
+            "entry_split_order_operator_fallback_authorized": bool(
+                policy.get("entry_split_order_operator_fallback_authorized")
+            ),
+            "entry_split_order_price_offsets_ticks": ",".join(
+                str(item) for item in applied_offsets
+            ),
+            "entry_split_order_price_offsets_pct": (
+                ",".join(str(item) for item in pct_offsets) if pct_offsets else ""
+            ),
+            "entry_split_order_qty_weight_min": first_weight,
+            "entry_split_order_qty_weight_max": min(
+                _safe_float(bucket_policy.get("qty_weight_max"), first_weight)
+                or first_weight,
+                first_weight,
+            ),
+        }
+        continuation = _build_probe_continuation(
+            base_order=base_order,
+            total_qty=total_qty,
+            desired_legs=desired_legs,
+            first_weight=first_weight,
+            applied_offsets=applied_offsets,
+            pct_offsets=pct_offsets,
+            common_fields=common_fields,
+        )
         bundle_id, reservation_reason = _reserve_probe_runtime_bundle(
             stock=stock,
             total_qty=total_qty,
+            submit_contract={
+                "continuation": continuation,
+                "probe_submit_best_ask": market_first_reference_price,
+                "timeout_sec": probe_config["timeout_sec"],
+                "max_slippage_bps": probe_config["max_slippage_bps"],
+                "anchor_mode": probe_config["anchor_mode"],
+            },
             now=now,
         )
         if bundle_id:
-            probe_variant_id = f"{split_variant_id}__{PROBE_VARIANT_SUFFIX}"
-            common_fields = {
-                "entry_split_order_policy_applied": True,
-                "entry_split_order_policy_version": policy.get("policy_version"),
-                "entry_split_order_policy_mode": policy_mode,
-                "entry_split_order_variant_id": probe_variant_id,
-                "entry_split_order_policy_variant_id": policy_split_variant_id,
-                "entry_split_order_bucket": bucket,
-                "entry_split_order_runtime_default_policy_applied": fallback_policy_applied,
-                "entry_split_order_operator_fallback_authorized": bool(
-                    policy.get("entry_split_order_operator_fallback_authorized")
-                ),
-                "entry_split_order_price_offsets_ticks": ",".join(
-                    str(item) for item in applied_offsets
-                ),
-                "entry_split_order_price_offsets_pct": (
-                    ",".join(str(item) for item in pct_offsets) if pct_offsets else ""
-                ),
-                "entry_split_order_qty_weight_min": first_weight,
-                "entry_split_order_qty_weight_max": min(
-                    _safe_float(bucket_policy.get("qty_weight_max"), first_weight)
-                    or first_weight,
-                    first_weight,
-                ),
-            }
-            continuation = _build_probe_continuation(
-                base_order=base_order,
-                total_qty=total_qty,
-                desired_legs=desired_legs,
-                first_weight=first_weight,
-                applied_offsets=applied_offsets,
-                pct_offsets=pct_offsets,
-                common_fields=common_fields,
-            )
             probe_order = {
                 **base_order,
                 **common_fields,

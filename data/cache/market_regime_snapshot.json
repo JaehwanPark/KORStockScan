@@ -1,20 +1,20 @@
 {
-  "timestamp": "2026-08-14T12:26:53.664119",
+  "timestamp": "2026-08-14T14:32:39.798226",
   "vix_close": 14.630000114440918,
   "vix_ma3": 14.820000012715658,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 81.27999877929688,
-  "wti_rsi": 50.67807232064212,
-  "wti_macd": 0.20519812370062596,
-  "wti_macd_signal": 0.13272263769802414,
+  "wti_close": 81.3499984741211,
+  "wti_rsi": 51.68500799258222,
+  "wti_macd": 0.20822043105714272,
+  "wti_macd_signal": 0.14606742004742207,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -11.834259001179126,
+  "wti_from_recent_high_pct": -11.75832918995181,
   "oil_reversal": true,
   "oil_pullback_relief": true,
-  "fng_value": 66.1428571428571,
-  "fng_prev": 66.1428571428571,
+  "fng_value": 66.0285714285714,
+  "fng_prev": 66.0285714285714,
   "fng_description": "greed",
   "fng_extreme_fear": false,
   "fng_recovery": false,
@@ -25,11 +25,11 @@
   "swing_recovery_gate_label": "READY",
   "recovery_gate_reason": "recovery_signal_ready",
   "oil_only_recovery_prior": false,
-  "market_regime_continuous_score": 90.6214,
+  "market_regime_continuous_score": 90.5643,
   "market_regime_continuous_label": "RISK_ON",
   "market_regime_component_scores": {
     "vix_level": 25.0,
-    "fear_greed_level": 18.0714,
+    "fear_greed_level": 18.0143,
     "domestic_breadth": 35.0,
     "oil_relief": 10.0,
     "local_model": 2.55
@@ -44,8 +44,8 @@
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 66.1428571428571,
-    "fng_prev": 66.1428571428571,
+    "fng_curr": 66.0285714285714,
+    "fng_prev": 66.0285714285714,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
@@ -70,7 +70,7 @@
       },
       "component_scores": {
         "vix_level": 25.0,
-        "fear_greed_level": 18.0714,
+        "fear_greed_level": 18.0143,
         "domestic_breadth": 35.0,
         "oil_relief": 10.0,
         "local_model": 2.55
@@ -97,5 +97,5 @@
     "local_breadth_signal": "bullish"
   },
   "cached_session_date": "2026-08-14",
-  "cached_at": "2026-08-14T12:26:53.670178+09:00"
+  "cached_at": "2026-08-14T14:32:39.804466+09:00"
 }

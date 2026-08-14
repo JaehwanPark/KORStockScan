@@ -579,6 +579,39 @@ def test_risky_micro_episode_derives_tp1_block_source_without_runtime_authority(
     assert "tp1" not in summary["risky_micro_episode_natural_sample_absent_categories"]
 
 
+def test_risky_micro_projection_uses_entry_price_executable_snapshot_provenance():
+    row = _event(
+        "entry-price-derived",
+        "475560",
+        "THEBORN",
+        "entry_ai_price_input_preflight_block",
+        {
+            "forced_entry_reason": "rising_missed_one_share_entry",
+            "rising_missed_entry_lineage": True,
+            "entry_ai_price_ws_snapshot_refresh_best_bid": 10_000,
+            "entry_ai_price_ws_snapshot_refresh_best_ask": 10_020,
+            "entry_ai_price_ws_snapshot_refresh_age_ms": 25,
+            "rising_missed_tp1_submit_context_tick_acceleration": 1.2,
+            "rising_missed_tp1_submit_context_tick_window_span_sec": 5,
+            "rising_missed_tp1_submit_context_true_ofi_ewma": 0.1,
+            "rising_missed_tp1_submit_context_top_depth_ratio": 1.5,
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:00:00+09:00",
+    )
+
+    projected = mod._risky_micro_projection_from_block_event(row)
+
+    assert projected is not None
+    assert projected["risky_micro_episode_bbo_valid"] is True
+    assert projected["risky_micro_episode_quote_fresh"] is True
+    assert projected["risky_micro_episode_source_bbo_provenance"] == (
+        "entry_ai_price_ws_snapshot_refresh_bbo"
+    )
+    assert projected["risky_micro_episode_instrumentation_gap"] == "none"
+
+
 def test_risky_micro_rolling_requires_30_resolved_10_symbols_3_dates(
     tmp_path, monkeypatch
 ):
@@ -3644,6 +3677,33 @@ def test_latency_and_tick_counterfactuals_reject_mark_only_mfe(tmp_path):
     assert report["summary"]["submit_safety_executable_bbo_required_count"] == 1
     assert report["summary"]["submit_safety_executable_bbo_entry_source_gap_count"] == 1
     assert report["summary"]["submit_safety_executable_bbo_labeled_count"] == 0
+
+
+def test_submit_safety_preserves_entry_ai_exact_bbo_freshness_provenance():
+    block = mod._submit_safety_block_row(
+        _event(
+            904,
+            "000904",
+            "entry-ai-exact-bbo",
+            "rising_missed_tick_speed_entry_block",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "reason": "tick_speed_guard",
+                "entry_ai_price_ws_snapshot_refresh_best_bid": 1000,
+                "entry_ai_price_ws_snapshot_refresh_best_ask": 1005,
+                "entry_ai_price_ws_snapshot_refresh_age_ms": 25,
+            },
+            emitted_at="2026-08-14T09:00:00+09:00",
+        )
+    )
+
+    assert block["block_price"] == 1005
+    assert block["block_price_source"] == (
+        "entry_ai_price_ws_snapshot_refresh_bbo:executable_ask"
+    )
+    assert block["executable_bbo_state"] == "pass"
+    assert block["quote_age_ms"] == 25
+    assert block["quote_age_sec"] == 0.025
 
 
 def test_latency_false_negative_preserves_runtime_dynamic_age_provenance():
