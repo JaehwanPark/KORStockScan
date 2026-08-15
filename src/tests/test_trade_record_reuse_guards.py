@@ -108,6 +108,7 @@ def test_get_active_targets_excludes_s15_fast_track_owned_rows(monkeypatch):
         assert "effective_venue" in query
         assert "scanner_promotion_id" in query
         assert "scanner_source_signature as source_signature" in query
+        assert "status IN ('HOLDING', 'BUY_ORDERED', 'SELL_ORDERED')" in query
         return pd.DataFrame(
             [
                 {

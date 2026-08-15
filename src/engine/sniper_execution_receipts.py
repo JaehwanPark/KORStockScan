@@ -1,11 +1,17 @@
 """Order execution receipt handlers for the sniper engine."""
 
+import hashlib
+import json
 import os
+import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from sqlalchemy import and_, or_
 
 from src.database.models import RecommendationHistory
 from src.engine.scalping.opening_rotation import (
@@ -67,6 +73,8 @@ _probe_fill_continuation_callback = None
 _scalp_exit_completed_callback = None
 _smoothing_non_revive_post_sell_register_callback = None
 _broker_snapshot_refresh_callback = None
+_persist_fast_state_callback = None
+_finalize_fast_state_callback = None
 
 # Receipt module의 임시/DB 작업은 독립 락으로 직렬화하고,
 # ACTIVE_TARGETS 같은 shared runtime truth는 주입된 _STATE_LOCK(실운영에서는 ENTRY_LOCK)으로만 만집니다.
@@ -74,6 +82,19 @@ _broker_snapshot_refresh_callback = None
 RECEIPT_LOCK = threading.RLock()
 _STATE_LOCK = None
 _KST = ZoneInfo("Asia/Seoul")
+SELL_RECEIPT_RECOVERY_DIR = Path(
+    os.getenv(
+        "KORSTOCKSCAN_SELL_RECEIPT_RECOVERY_DIR",
+        "data/runtime/sell_receipt_recovery",
+    )
+)
+_SELL_RECEIPT_RECOVERY_SCHEMA = "sell_receipt_recovery_v1"
+_SELL_RECEIPT_RECOVERY_MAX_AGE_SEC = 36 * 60 * 60
+_SELL_RECEIPT_RECOVERY_ORPHAN_MAX_AGE_SEC = 180 * 24 * 60 * 60
+_SELL_RECEIPT_RECOVERY_MAX_BYTES = 1_000_000
+_SELL_RECEIPT_RECOVERY_PRUNE_INTERVAL_SEC = 60 * 60
+_SELL_RECEIPT_RECOVERY_LAST_PRUNE_AT = 0.0
+_EXECUTION_SIGNATURES_PER_ORDER_MAX = 512
 
 _MAIN_LIFECYCLE_GENERATED_PIPELINE_FIELDS = frozenset(
     {
@@ -124,6 +145,69 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except Exception:
         return int(default)
+
+
+def _optional_abs_int(value: Any) -> int | None:
+    if value is None or not str(value).strip():
+        return None
+    normalized = str(value).strip()
+    if not re.fullmatch(r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)", normalized):
+        return None
+    try:
+        return abs(int(normalized.replace(",", "")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _broker_execution_context(
+    exec_data: dict[str, Any], *, received_at: datetime
+) -> tuple[datetime, dict[str, Any]]:
+    """Resolve FID 908 on the local trading date and retain venue provenance."""
+
+    raw_time = str(exec_data.get("broker_execution_time_raw", "") or "").strip()
+    observed_at = received_at
+    time_source = "local_receive_time_fallback"
+    if raw_time.isdigit() and len(raw_time) == 6:
+        try:
+            parsed_time = datetime.strptime(raw_time[:6], "%H%M%S").time()
+            candidate = datetime.combine(
+                received_at.date(), parsed_time, tzinfo=received_at.tzinfo
+            )
+            if candidate - received_at > timedelta(hours=12):
+                candidate -= timedelta(days=1)
+            elif received_at - candidate > timedelta(hours=12):
+                candidate += timedelta(days=1)
+            observed_at = candidate
+            time_source = "official_fid_908"
+        except ValueError:
+            pass
+    actual_venue = str(exec_data.get("actual_execution_venue", "") or "").upper()
+    if actual_venue not in {"KRX", "NXT"}:
+        actual_venue = ""
+    venue_source = (
+        "official_fid_2134_2135"
+        if actual_venue
+        else "official_exchange_fields_ambiguous_or_missing"
+    )
+    fields = {
+        "broker_execution_time_raw": raw_time or "-",
+        "broker_execution_time_source": time_source,
+        "broker_execution_received_at": received_at.isoformat(),
+        "broker_execution_observed_at": observed_at.isoformat(),
+        "broker_actual_execution_venue": actual_venue or "UNKNOWN",
+        "broker_actual_execution_venue_source": venue_source,
+        "broker_actual_exchange_code": str(
+            exec_data.get("actual_exchange_code", "") or "-"
+        ),
+        "broker_actual_exchange_name": str(
+            exec_data.get("actual_exchange_name", "") or "-"
+        ),
+        "broker_sor_flag": str(exec_data.get("sor_flag", "") or "-").upper(),
+        "broker_execution_provenance_complete": bool(
+            time_source == "official_fid_908" and actual_venue
+        ),
+    }
+    return observed_at, fields
 
 
 def _safe_bool(value: Any) -> bool:
@@ -279,6 +363,18 @@ _MAIN_LIFECYCLE_SNAPSHOT_KEYS = (
     "last_watching_ai_decision_trace_id",
     "last_watching_ai_attempt_decision_trace_id",
 )
+_BROKER_EXECUTION_PROVENANCE_KEYS = (
+    "broker_execution_time_raw",
+    "broker_execution_time_source",
+    "broker_execution_received_at",
+    "broker_execution_observed_at",
+    "broker_actual_execution_venue",
+    "broker_actual_execution_venue_source",
+    "broker_actual_exchange_code",
+    "broker_actual_exchange_name",
+    "broker_sor_flag",
+    "broker_execution_provenance_complete",
+)
 _GENERAL_ENTRY_MARGIN_POSITION_KEYS = (
     "general_entry_margin_authority_reason",
     "general_entry_margin_cash_guard_bypassed",
@@ -301,10 +397,13 @@ _GENERAL_ENTRY_MARGIN_POSITION_KEYS = (
 _BUY_RECEIPT_SNAPSHOT_KEYS = (
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
+    *_BROKER_EXECUTION_PROVENANCE_KEYS,
     "buy_execution_notified",
     "buy_price",
     "buy_qty",
     "initial_buy_qty",
+    "last_entry_receipt_economics_complete",
+    "last_entry_receipt_execution_no",
     "scale_in_filled_qty",
     "code",
     "actual_order_submitted",
@@ -343,6 +442,7 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
 _SELL_RECEIPT_SNAPSHOT_KEYS = (
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
+    *_BROKER_EXECUTION_PROVENANCE_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
     "actual_order_submitted",
     "broker_order_forbidden",
@@ -419,6 +519,7 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
 _ADD_RECEIPT_SNAPSHOT_KEYS = (
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
+    *_BROKER_EXECUTION_PROVENANCE_KEYS,
     "actual_order_submitted",
     "add_count",
     "avg_down_count",
@@ -442,6 +543,8 @@ _ADD_RECEIPT_SNAPSHOT_KEYS = (
     "last_add_reason",
     "last_add_economic_direction",
     "last_add_avg_price_improved",
+    "last_add_receipt_economics_complete",
+    "last_add_receipt_execution_no",
     "shallow_volatility_avg_down_count",
     "shallow_volatility_avg_down_last_at",
     "simulation_book",
@@ -466,6 +569,8 @@ _PENDING_ADD_META_KEYS = (
     "_add_receipt_requested_by_order_no",
     "_add_receipt_filled_by_order_no",
     "_add_receipt_filled_amount_by_order_no",
+    "_add_receipt_economics_complete_by_order_no",
+    "_add_receipt_executions_by_order_no",
     "pending_add_notice_by_order_no",
     "scale_in_receipt_reconciled_before_ordno_bind",
     "add_order_time",
@@ -493,7 +598,22 @@ _POSITION_PEAK_RESET_KEYS = (
     "position_peak_restored_price",
     "position_peak_runtime_price",
 )
+_NXT_TP1_PARTIAL_RESET_KEYS = (
+    "nxt_rising_missed_tp1_partial_pending",
+    "nxt_rising_missed_tp1_partial_applied",
+    "nxt_rising_missed_tp1_partial_requested_qty",
+    "nxt_rising_missed_tp1_partial_filled_qty",
+    "nxt_rising_missed_tp1_partial_fill_amount",
+    "nxt_rising_missed_tp1_partial_avg_sell_price",
+    "nxt_rising_missed_tp1_partial_original_qty",
+    "nxt_rising_missed_tp1_partial_completed_at",
+    "nxt_rising_missed_tp1_partial_realized_profit_pct",
+    "nxt_rising_missed_tp1_partial_realized_pnl_krw",
+    "nxt_rising_missed_tp1_partial_executions_by_no",
+)
+_SELL_EXECUTION_RECEIPT_STATE_KEY = "_sell_execution_receipt_state"
 _SELL_REVIVE_RESET_KEYS = (
+    *_NXT_TP1_PARTIAL_RESET_KEYS,
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     "odno",
     "order_time",
@@ -506,6 +626,10 @@ _SELL_REVIVE_RESET_KEYS = (
     "sell_ord_no",
     "sell_order_time",
     "sell_target_price",
+    _SELL_EXECUTION_RECEIPT_STATE_KEY,
+    "sell_reconciled_remaining_qty",
+    "sell_partial_exit_carry_active",
+    "sell_partial_exit_recovery_required",
     "exit_requested",
     "exit_order_type",
     "exit_order_time",
@@ -523,8 +647,13 @@ _SELL_REVIVE_RESET_KEYS = (
     "requested_buy_qty",
     "initial_buy_qty",
     "scale_in_filled_qty",
+    "scale_in_locked",
     "_entry_receipt_filled_by_order_no",
     "_entry_receipt_requested_by_order_no",
+    "_entry_receipt_filled_amount_by_order_no",
+    "_entry_receipt_economics_complete_by_order_no",
+    "_entry_receipt_executions_by_order_no",
+    "entry_receipt_reconciled_before_ordno_bind",
     "entry_partial_fill_notified_qty",
     "entry_partial_fill_deferred_notice",
     "entry_partial_fill_deferred_at",
@@ -614,6 +743,7 @@ _SELL_REVIVE_RESET_KEYS = (
     "rising_missed_scout_upgraded",
 )
 _SELL_COMPLETE_RESET_KEYS = (
+    *_NXT_TP1_PARTIAL_RESET_KEYS,
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
     "smoothing_source_only_path_journals",
@@ -623,6 +753,10 @@ _SELL_COMPLETE_RESET_KEYS = (
     "sell_execution_order_no",
     "sell_order_time",
     "sell_target_price",
+    _SELL_EXECUTION_RECEIPT_STATE_KEY,
+    "sell_reconciled_remaining_qty",
+    "sell_partial_exit_carry_active",
+    "sell_partial_exit_recovery_required",
     "exit_requested",
     "exit_order_type",
     "exit_order_time",
@@ -640,6 +774,10 @@ _SELL_COMPLETE_RESET_KEYS = (
     "scale_in_filled_qty",
     "_entry_receipt_filled_by_order_no",
     "_entry_receipt_requested_by_order_no",
+    "_entry_receipt_filled_amount_by_order_no",
+    "_entry_receipt_economics_complete_by_order_no",
+    "_entry_receipt_executions_by_order_no",
+    "entry_receipt_reconciled_before_ordno_bind",
     "entry_partial_fill_notified_qty",
     "entry_partial_fill_deferred_notice",
     "entry_partial_fill_deferred_at",
@@ -736,10 +874,15 @@ _SELL_COMPLETE_RESET_KEYS = (
 )
 _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY = "_entry_receipt_filled_by_order_no"
 _ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY = "_entry_receipt_requested_by_order_no"
+_ENTRY_RECEIPT_AMOUNT_BY_ORDER_KEY = "_entry_receipt_filled_amount_by_order_no"
+_ENTRY_RECEIPT_ECONOMICS_BY_ORDER_KEY = "_entry_receipt_economics_complete_by_order_no"
+_ENTRY_RECEIPT_EXECUTIONS_BY_ORDER_KEY = "_entry_receipt_executions_by_order_no"
 _ENTRY_RECEIPT_NO_ORDER_KEY = "__entry_without_order_no__"
 _ADD_RECEIPT_FILLED_BY_ORDER_KEY = "_add_receipt_filled_by_order_no"
 _ADD_RECEIPT_REQUESTED_BY_ORDER_KEY = "_add_receipt_requested_by_order_no"
 _ADD_RECEIPT_AMOUNT_BY_ORDER_KEY = "_add_receipt_filled_amount_by_order_no"
+_ADD_RECEIPT_ECONOMICS_BY_ORDER_KEY = "_add_receipt_economics_complete_by_order_no"
+_ADD_RECEIPT_EXECUTIONS_BY_ORDER_KEY = "_add_receipt_executions_by_order_no"
 _ADD_RECEIPT_NO_ORDER_KEY = "__add_without_order_no__"
 
 
@@ -758,6 +901,8 @@ def bind_execution_dependencies(
     scalp_exit_completed_callback=None,
     smoothing_non_revive_post_sell_register_callback=None,
     broker_snapshot_refresh_callback=None,
+    persist_fast_state_callback=None,
+    finalize_fast_state_callback=None,
     state_machine=None,
     **_unused_kwargs,
 ):
@@ -772,6 +917,7 @@ def bind_execution_dependencies(
     global _probe_fill_continuation_callback, _scalp_exit_completed_callback
     global _smoothing_non_revive_post_sell_register_callback
     global _broker_snapshot_refresh_callback
+    global _persist_fast_state_callback, _finalize_fast_state_callback
 
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
@@ -801,9 +947,13 @@ def bind_execution_dependencies(
         )
     if broker_snapshot_refresh_callback is not None:
         _broker_snapshot_refresh_callback = broker_snapshot_refresh_callback
+    if persist_fast_state_callback is not None:
+        _persist_fast_state_callback = persist_fast_state_callback
+    if finalize_fast_state_callback is not None:
+        _finalize_fast_state_callback = finalize_fast_state_callback
 
 
-def _log_holding_pipeline(
+def _log_holding_pipeline_impl(
     name,
     code,
     target_id,
@@ -853,6 +1003,21 @@ def _log_holding_pipeline(
     )
 
 
+def _log_holding_pipeline(*args, **kwargs):
+    """Keep receipt custody independent from optional telemetry failures."""
+
+    try:
+        return _log_holding_pipeline_impl(*args, **kwargs)
+    except Exception as exc:
+        stage = args[3] if len(args) > 3 else kwargs.get("stage", "-")
+        code = args[1] if len(args) > 1 else kwargs.get("code", "-")
+        log_error(
+            f"[HOLDING_PIPELINE_RECEIPT_LOG_FAILED] code={code or '-'} "
+            f"stage={stage or '-'}: {exc}"
+        )
+        return None
+
+
 def _trailing_continuation_receipt_fields(stock: dict[str, Any]) -> dict[str, Any]:
     """Carry the exact recheck lineage into the terminal broker receipt."""
     return {
@@ -882,9 +1047,7 @@ def _main_lifecycle_exit_economics_fields(
         return {}
     gross_pnl_krw = (sell_price - buy_price) * sell_qty
     fields = {
-        "main_lifecycle_realized_net_pnl_krw": round(
-            realized_net_pnl_krw, 4
-        ),
+        "main_lifecycle_realized_net_pnl_krw": round(realized_net_pnl_krw, 4),
     }
     implied_fees_taxes_krw = gross_pnl_krw - realized_net_pnl_krw
     if implied_fees_taxes_krw >= -0.01:
@@ -914,6 +1077,582 @@ def _main_lifecycle_exit_economics_fields(
             resolved_basis_source or "explicit_exit_decision_price"
         )
     return fields
+
+
+def _resolve_sell_execution_receipt(
+    target_stock: dict[str, Any],
+    *,
+    order_no: str,
+    exec_price: int,
+    cumulative_exec_qty: int,
+    expected_position_qty: int,
+    buy_price: float,
+    order_qty: int | None,
+    remaining_qty: int | None,
+    cumulative_exec_amount: int | None,
+    execution_no: str,
+    unit_exec_price: int | None,
+    unit_exec_qty: int | None,
+) -> dict[str, Any]:
+    """Reconcile one Kiwoom 00 SELL receipt without treating it as final early.
+
+    FID 911 is the order's cumulative fill quantity in observed packets.  FIDs
+    900/902 provide the exact order/remaining quantity pair and FID 903 provides
+    cumulative fill notional.  Runtime completion is allowed only when the
+    cumulative quantity closes the full tracked position; partial receipts stay
+    in ``SELL_ORDERED`` and remain broker-receipt observations only.
+    """
+
+    normalized_order_no = str(order_no or "").strip()
+    if not normalized_order_no:
+        return {"status": "invalid", "reason": "sell_receipt_order_number_missing"}
+    raw_cumulative_qty = max(0, int(cumulative_exec_qty or 0))
+    tracked_position_qty = max(0, int(expected_position_qty or 0))
+    official_order_qty = max(0, int(order_qty or 0)) if order_qty is not None else 0
+    if raw_cumulative_qty <= 0 or tracked_position_qty <= 0:
+        return {"status": "invalid", "reason": "sell_receipt_quantity_missing"}
+
+    raw_state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    state = dict(raw_state) if isinstance(raw_state, dict) else {}
+    state_position_qty = max(
+        0, _safe_int(state.get("position_qty", state.get("expected_qty")), 0)
+    )
+    if state_position_qty > 0 and state_position_qty != tracked_position_qty:
+        return {
+            "status": "invalid",
+            "reason": "sell_receipt_position_quantity_changed",
+        }
+    position_qty = state_position_qty or tracked_position_qty
+    carried_qty = max(0, _safe_int(state.get("carried_qty"), 0))
+    carried_amount = max(0, _safe_int(state.get("carried_amount"), 0))
+    carried_net_pnl = _safe_float(state.get("carried_net_pnl_krw"), 0.0)
+    carried_economics_complete = bool(state.get("carried_economics_complete", True))
+    carried_quantity_contract_complete = bool(
+        state.get("carried_quantity_contract_complete", True)
+    )
+    carried_unit_fill_consistent = bool(state.get("carried_unit_fill_consistent", True))
+    prior_orders = state.get("prior_orders")
+    prior_orders = dict(prior_orders) if isinstance(prior_orders, dict) else {}
+    prior_order = prior_orders.get(normalized_order_no)
+    if isinstance(prior_order, dict):
+        prior_expected_qty = max(0, _safe_int(prior_order.get("expected_qty"), 0))
+        prior_qty = max(0, _safe_int(prior_order.get("cumulative_qty"), 0))
+        prior_amount = max(0, _safe_int(prior_order.get("cumulative_amount"), 0))
+        prior_remaining = max(0, _safe_int(prior_order.get("remaining_qty"), 0))
+        prior_executions = prior_order.get("executions_by_no")
+        prior_executions = (
+            dict(prior_executions) if isinstance(prior_executions, dict) else {}
+        )
+        signature = _execution_receipt_signature(
+            cumulative_qty=raw_cumulative_qty,
+            order_qty=order_qty,
+            remaining_qty=remaining_qty,
+            cumulative_exec_amount=cumulative_exec_amount,
+            unit_exec_price=unit_exec_price,
+            unit_exec_qty=unit_exec_qty,
+        )
+        conflict = _execution_number_conflict_reason(
+            {normalized_order_no: prior_executions},
+            order_key=normalized_order_no,
+            execution_no=execution_no,
+            signature=signature,
+        )
+        if conflict:
+            return {"status": "invalid", "reason": conflict}
+        delayed = _resolve_cumulative_buy_order_receipt(
+            raw_price=exec_price,
+            raw_cumulative_qty=raw_cumulative_qty,
+            requested_qty=prior_expected_qty,
+            previous_qty=prior_qty,
+            previous_amount=prior_amount,
+            previous_economics_complete=bool(
+                prior_order.get("economics_complete", True)
+            ),
+            order_qty=order_qty,
+            remaining_qty=remaining_qty,
+            cumulative_exec_amount=cumulative_exec_amount,
+            unit_exec_price=unit_exec_price,
+            unit_exec_qty=unit_exec_qty,
+        )
+        if delayed.get("status") == "invalid":
+            return {
+                **delayed,
+                "reason": str(delayed.get("reason") or "").replace(
+                    "buy_receipt_", "sell_receipt_terminal_order_", 1
+                ),
+            }
+        if delayed.get("status") == "duplicate":
+            return {
+                "status": "duplicate",
+                "reason": "sell_receipt_terminal_order_duplicate",
+                "final": False,
+            }
+
+        holder = {normalized_order_no: prior_executions}
+        _remember_execution_number(
+            holder,
+            order_key=normalized_order_no,
+            execution_no=execution_no,
+            signature=signature,
+        )
+        updated_prior = dict(prior_order)
+        updated_prior.update(
+            {
+                "expected_qty": max(
+                    0, _safe_int(delayed.get("requested_qty"), prior_expected_qty)
+                ),
+                "cumulative_qty": max(0, _safe_int(delayed.get("cumulative_qty"), 0)),
+                "cumulative_amount": max(
+                    0, _safe_int(delayed.get("cumulative_amount"), 0)
+                ),
+                "remaining_qty": max(
+                    0, _safe_int(delayed.get("remaining_qty"), prior_remaining)
+                ),
+                "economics_complete": delayed.get("economics_complete") is True,
+                "quantity_contract_complete": (
+                    delayed.get("quantity_contract_complete") is True
+                ),
+                "unit_fill_consistent": (
+                    bool(prior_order.get("unit_fill_consistent", True))
+                    and delayed.get("unit_fill_consistent") is True
+                ),
+                "executions_by_no": holder[normalized_order_no],
+            }
+        )
+        prior_orders[normalized_order_no] = updated_prior
+        updated_carried_qty = sum(
+            max(0, _safe_int(item.get("cumulative_qty"), 0))
+            for item in prior_orders.values()
+            if isinstance(item, dict)
+        )
+        updated_carried_amount = sum(
+            max(0, _safe_int(item.get("cumulative_amount"), 0))
+            for item in prior_orders.values()
+            if isinstance(item, dict)
+        )
+        active_qty = max(0, _safe_int(state.get("cumulative_qty"), 0))
+        active_amount = max(0, _safe_int(state.get("cumulative_amount"), 0))
+        aggregate_qty = updated_carried_qty + active_qty
+        aggregate_amount = updated_carried_amount + active_amount
+        if aggregate_qty > position_qty:
+            return {
+                "status": "invalid",
+                "reason": "sell_receipt_terminal_order_aggregate_exceeds_position",
+            }
+        aggregate_net_pnl = calculate_net_realized_pnl(
+            buy_price,
+            aggregate_amount / aggregate_qty,
+            aggregate_qty,
+        )
+        carried_net_pnl = calculate_net_realized_pnl(
+            buy_price,
+            updated_carried_amount / updated_carried_qty,
+            updated_carried_qty,
+        )
+        state_order_no = str(state.get("order_no") or "").strip()
+        replacement_reconciliation_required = bool(
+            state_order_no
+            and state_order_no != normalized_order_no
+            and int(delayed.get("incremental_qty") or 0) > 0
+        )
+        final = bool(
+            not state_order_no
+            and aggregate_qty == position_qty
+            and delayed.get("final") is True
+        )
+        state.update(
+            {
+                "prior_orders": prior_orders,
+                "carried_qty": updated_carried_qty,
+                "carried_amount": updated_carried_amount,
+                "carried_net_pnl_krw": round(carried_net_pnl, 4),
+                "carried_economics_complete": all(
+                    isinstance(item, dict) and item.get("economics_complete") is True
+                    for item in prior_orders.values()
+                ),
+                "carried_quantity_contract_complete": all(
+                    isinstance(item, dict)
+                    and item.get("quantity_contract_complete") is True
+                    for item in prior_orders.values()
+                ),
+                "carried_unit_fill_consistent": all(
+                    isinstance(item, dict) and item.get("unit_fill_consistent") is True
+                    for item in prior_orders.values()
+                ),
+                "aggregate_cumulative_qty": aggregate_qty,
+                "aggregate_cumulative_amount": aggregate_amount,
+                "cumulative_net_pnl_krw": round(aggregate_net_pnl, 4),
+                "remaining_qty": max(0, position_qty - aggregate_qty),
+                "final": final,
+                "replacement_reconciliation_required": (
+                    replacement_reconciliation_required
+                ),
+                "replacement_order_no": (
+                    state_order_no if replacement_reconciliation_required else ""
+                ),
+                "replacement_invalidated_by_late_order_no": (
+                    normalized_order_no if replacement_reconciliation_required else ""
+                ),
+            }
+        )
+        target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = state
+        previous_aggregate_qty = aggregate_qty - int(delayed["incremental_qty"])
+        previous_aggregate_amount = aggregate_amount - int(
+            delayed["incremental_amount"]
+        )
+        previous_net_pnl = (
+            calculate_net_realized_pnl(
+                buy_price,
+                previous_aggregate_amount / previous_aggregate_qty,
+                previous_aggregate_qty,
+            )
+            if previous_aggregate_qty > 0 and previous_aggregate_amount > 0
+            else 0.0
+        )
+        return {
+            "status": (
+                "replacement_reconcile_required"
+                if replacement_reconciliation_required
+                else ("final" if final else "partial")
+            ),
+            "reason": (
+                "sell_receipt_terminal_order_late_final"
+                if final
+                else "sell_receipt_terminal_order_late_fill"
+            ),
+            "final": final,
+            "order_no": normalized_order_no,
+            "execution_no": str(execution_no or "").strip(),
+            "expected_qty": position_qty,
+            "order_expected_qty": prior_expected_qty,
+            "remaining_qty": max(0, position_qty - aggregate_qty),
+            "order_cumulative_qty": int(delayed["cumulative_qty"]),
+            "order_cumulative_amount": int(delayed["cumulative_amount"]),
+            "cumulative_qty": aggregate_qty,
+            "cumulative_amount": aggregate_amount,
+            "cumulative_avg_price": aggregate_amount / aggregate_qty,
+            "cumulative_net_pnl_krw": round(aggregate_net_pnl, 4),
+            "incremental_qty": int(delayed["incremental_qty"]),
+            "incremental_amount": int(delayed["incremental_amount"]),
+            "incremental_price": float(delayed["incremental_price"]),
+            "incremental_net_pnl_krw": round(aggregate_net_pnl - previous_net_pnl, 4),
+            "economics_complete": bool(
+                state.get("carried_economics_complete")
+                and state.get("economics_complete", True)
+            ),
+            "quantity_contract_complete": bool(
+                state.get("carried_quantity_contract_complete")
+                and state.get("quantity_contract_complete", True)
+            ),
+            "unit_fill_consistent": bool(
+                state.get("carried_unit_fill_consistent")
+                and state.get("unit_fill_consistent", True)
+            ),
+            "unit_exec_qty": unit_exec_qty,
+            "unit_exec_price": unit_exec_price,
+            "unit_qty_matches_delta": delayed.get("unit_qty_matches_delta"),
+            "unit_price_matches_delta": delayed.get("unit_price_matches_delta"),
+        }
+
+    state_order_no = str(state.get("order_no") or "")
+    if state_order_no and state_order_no != normalized_order_no:
+        return {
+            "status": "invalid",
+            "reason": "sell_receipt_order_changed_before_reconciliation",
+        }
+    expected_active_qty = max(0, position_qty - carried_qty)
+    state_expected_active_qty = max(0, _safe_int(state.get("expected_qty"), 0))
+    if state_order_no and state_expected_active_qty > 0:
+        if state_expected_active_qty != expected_active_qty:
+            return {
+                "status": "invalid",
+                "reason": "sell_receipt_active_order_quantity_changed",
+            }
+        expected_active_qty = state_expected_active_qty
+    if official_order_qty > 0 and official_order_qty != expected_active_qty:
+        return {
+            "status": "invalid",
+            "reason": "sell_receipt_order_position_quantity_mismatch",
+        }
+    if raw_cumulative_qty > expected_active_qty:
+        return {
+            "status": "invalid",
+            "reason": "sell_receipt_cumulative_quantity_exceeds_position",
+        }
+    executions = state.get("executions_by_no")
+    executions = dict(executions) if isinstance(executions, dict) else {}
+    signature = _execution_receipt_signature(
+        cumulative_qty=raw_cumulative_qty,
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+        cumulative_exec_amount=cumulative_exec_amount,
+        unit_exec_price=unit_exec_price,
+        unit_exec_qty=unit_exec_qty,
+    )
+    conflict = _execution_number_conflict_reason(
+        {normalized_order_no: executions},
+        order_key=normalized_order_no,
+        execution_no=execution_no,
+        signature=signature,
+    )
+    if conflict:
+        return {"status": "invalid", "reason": conflict}
+    official_remaining_qty = (
+        max(0, int(remaining_qty)) if remaining_qty is not None else None
+    )
+    if (
+        official_remaining_qty is not None
+        and raw_cumulative_qty + official_remaining_qty != expected_active_qty
+    ):
+        return {
+            "status": "invalid",
+            "reason": "sell_receipt_remaining_quantity_conflict",
+        }
+
+    previous_qty = max(0, _safe_int(state.get("cumulative_qty"), 0))
+    previous_amount = max(0, _safe_int(state.get("cumulative_amount"), 0))
+    previous_aggregate_qty = carried_qty + previous_qty
+    previous_aggregate_amount = carried_amount + previous_amount
+    previous_aggregate_net_pnl = (
+        calculate_net_realized_pnl(
+            buy_price,
+            previous_aggregate_amount / previous_aggregate_qty,
+            previous_aggregate_qty,
+        )
+        if previous_aggregate_qty > 0 and previous_aggregate_amount > 0
+        else carried_net_pnl
+    )
+    if raw_cumulative_qty < previous_qty:
+        return {
+            "status": "invalid",
+            "reason": "sell_receipt_cumulative_quantity_regressed",
+        }
+    incremental_qty = raw_cumulative_qty - previous_qty
+    if incremental_qty <= 0:
+        if (
+            cumulative_exec_amount is not None
+            and max(0, int(cumulative_exec_amount)) != previous_amount
+        ):
+            return {
+                "status": "invalid",
+                "reason": "sell_receipt_duplicate_quantity_amount_conflict",
+            }
+        if (
+            official_remaining_qty is not None
+            and official_remaining_qty != expected_active_qty - previous_qty
+        ):
+            return {
+                "status": "invalid",
+                "reason": "sell_receipt_duplicate_quantity_remaining_conflict",
+            }
+        return {
+            "status": "duplicate",
+            "reason": "sell_receipt_duplicate_cumulative_quantity",
+            "final": bool(state.get("final")),
+        }
+
+    official_cumulative_amount = (
+        max(0, int(cumulative_exec_amount))
+        if cumulative_exec_amount is not None
+        else None
+    )
+    economics_complete = bool(
+        state.get("economics_complete", True) and carried_economics_complete
+    )
+    if official_cumulative_amount is not None:
+        if official_cumulative_amount <= previous_amount:
+            return {
+                "status": "invalid",
+                "reason": "sell_receipt_cumulative_amount_not_increasing",
+            }
+        incremental_amount = official_cumulative_amount - previous_amount
+        cumulative_amount = official_cumulative_amount
+    else:
+        resolved_price = max(0, int(unit_exec_price or exec_price or 0))
+        if resolved_price <= 0:
+            return {
+                "status": "invalid",
+                "reason": "sell_receipt_incremental_price_missing",
+            }
+        incremental_amount = resolved_price * incremental_qty
+        cumulative_amount = previous_amount + incremental_amount
+        # Quantity can still close custody safely, but missing FID 903 cannot
+        # support exact multi-fill economics or R0 promotion evidence.
+        economics_complete = False
+    if incremental_amount <= 0:
+        return {
+            "status": "invalid",
+            "reason": "sell_receipt_incremental_amount_invalid",
+        }
+    incremental_price = incremental_amount / incremental_qty
+    aggregate_qty = carried_qty + raw_cumulative_qty
+    aggregate_amount = carried_amount + cumulative_amount
+    aggregate_net_pnl = calculate_net_realized_pnl(
+        buy_price,
+        aggregate_amount / aggregate_qty,
+        aggregate_qty,
+    )
+    incremental_net_pnl = aggregate_net_pnl - previous_aggregate_net_pnl
+    unit_qty_matches_delta = (
+        None if unit_exec_qty is None else int(unit_exec_qty) == incremental_qty
+    )
+    unit_price_matches_delta = (
+        None
+        if unit_exec_price is None
+        else int(unit_exec_price) * incremental_qty == incremental_amount
+    )
+    unit_fill_consistent = bool(
+        carried_unit_fill_consistent
+        and unit_qty_matches_delta is True
+        and unit_price_matches_delta is True
+    )
+    quantity_contract_complete = bool(
+        carried_quantity_contract_complete
+        and official_order_qty > 0
+        and official_remaining_qty is not None
+    )
+    final = bool(
+        aggregate_qty == position_qty
+        and raw_cumulative_qty == expected_active_qty
+        and official_remaining_qty == 0
+    )
+    state = {
+        "order_no": normalized_order_no,
+        "position_qty": position_qty,
+        "expected_qty": expected_active_qty,
+        "cumulative_qty": raw_cumulative_qty,
+        "remaining_qty": position_qty - aggregate_qty,
+        "cumulative_amount": cumulative_amount,
+        "cumulative_net_pnl_krw": round(aggregate_net_pnl, 4),
+        "aggregate_cumulative_qty": aggregate_qty,
+        "aggregate_cumulative_amount": aggregate_amount,
+        "carried_qty": carried_qty,
+        "carried_amount": carried_amount,
+        "carried_net_pnl_krw": round(carried_net_pnl, 4),
+        "carried_economics_complete": carried_economics_complete,
+        "carried_quantity_contract_complete": (carried_quantity_contract_complete),
+        "carried_unit_fill_consistent": carried_unit_fill_consistent,
+        "prior_orders": prior_orders,
+        "economics_complete": economics_complete,
+        "quantity_contract_complete": quantity_contract_complete,
+        "unit_fill_consistent": unit_fill_consistent,
+        "final": final,
+        "last_execution_no": str(execution_no or "").strip(),
+    }
+    holder = {normalized_order_no: executions}
+    _remember_execution_number(
+        holder,
+        order_key=normalized_order_no,
+        execution_no=execution_no,
+        signature=signature,
+    )
+    state["executions_by_no"] = holder[normalized_order_no]
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = state
+    return {
+        "status": "final" if final else "partial",
+        "reason": "sell_receipt_full_position_reconciled"
+        if final
+        else "sell_receipt_partial_fill",
+        "final": final,
+        "order_no": normalized_order_no,
+        "execution_no": str(execution_no or "").strip(),
+        "expected_qty": position_qty,
+        "order_expected_qty": expected_active_qty,
+        "remaining_qty": (
+            official_remaining_qty
+            if official_remaining_qty is not None
+            else position_qty - aggregate_qty
+        ),
+        "order_cumulative_qty": raw_cumulative_qty,
+        "order_cumulative_amount": cumulative_amount,
+        "cumulative_qty": aggregate_qty,
+        "cumulative_amount": aggregate_amount,
+        "cumulative_avg_price": aggregate_amount / aggregate_qty,
+        "cumulative_net_pnl_krw": round(aggregate_net_pnl, 4),
+        "incremental_qty": incremental_qty,
+        "incremental_amount": incremental_amount,
+        "incremental_price": incremental_price,
+        "incremental_net_pnl_krw": round(incremental_net_pnl, 4),
+        "economics_complete": economics_complete,
+        "quantity_contract_complete": quantity_contract_complete,
+        "unit_fill_consistent": unit_fill_consistent,
+        "unit_exec_qty": unit_exec_qty,
+        "unit_exec_price": unit_exec_price,
+        "unit_qty_matches_delta": unit_qty_matches_delta,
+        "unit_price_matches_delta": unit_price_matches_delta,
+    }
+
+
+def _log_standard_sell_partial_execution(
+    target_stock: dict[str, Any],
+    *,
+    code: str,
+    target_id: int,
+    now: datetime,
+    receipt: dict[str, Any],
+    buy_price: float,
+) -> None:
+    reconciled_remaining_qty = max(0, int(receipt.get("remaining_qty") or 0))
+    target_stock["buy_qty"] = reconciled_remaining_qty
+    target_stock["sell_reconciled_remaining_qty"] = reconciled_remaining_qty
+    target_stock["scale_in_locked"] = True
+    target_stock["sell_partial_exit_carry_active"] = True
+    try:
+        with DB.get_session() as session:
+            session.query(RecommendationHistory).filter_by(id=target_id).update(
+                {"scale_in_locked": True}
+            )
+    except Exception as exc:
+        log_error(
+            f"[SELL_PARTIAL_GUARD_PERSIST_FAILED] "
+            f"{target_stock.get('name')}({code}) id={target_id}: {exc}"
+        )
+    _persist_sell_receipt_recovery_or_interlock(
+        target_stock,
+        code=code,
+        reason="standard_partial_sell_receipt",
+    )
+    economics_fields: dict[str, Any] = {}
+    if receipt.get("economics_complete") is True:
+        economics_fields = _main_lifecycle_exit_economics_fields(
+            target_stock,
+            buy_price=buy_price,
+            sell_price=float(receipt["incremental_price"]),
+            sell_qty=int(receipt["incremental_qty"]),
+            realized_net_pnl_krw=float(receipt["incremental_net_pnl_krw"]),
+        )
+    _log_holding_pipeline(
+        target_stock.get("name"),
+        code,
+        target_id,
+        "sell_partial_fill_progress",
+        candidate_stock=target_stock,
+        observed_at=now,
+        observe_candidate_lifecycle=False,
+        order_no=receipt.get("order_no") or "-",
+        execution_no=receipt.get("execution_no") or "-",
+        sell_price=round(float(receipt["incremental_price"]), 4),
+        sell_qty=int(receipt["incremental_qty"]),
+        cumulative_sell_qty=int(receipt["cumulative_qty"]),
+        remaining_sell_qty=int(receipt["remaining_qty"]),
+        main_lifecycle_exit_qty=int(receipt["incremental_qty"]),
+        main_lifecycle_exit_price=round(float(receipt["incremental_price"]), 4),
+        main_lifecycle_broker_reconciled=False,
+        main_lifecycle_reconciled_final_exit=False,
+        sell_receipt_economics_complete=bool(receipt.get("economics_complete")),
+        sell_receipt_quantity_contract_complete=bool(
+            receipt.get("quantity_contract_complete")
+        ),
+        sell_receipt_unit_fill_consistent=bool(
+            receipt.get("unit_fill_consistent", True)
+        ),
+        sell_receipt_unit_qty_matches_delta=receipt.get("unit_qty_matches_delta"),
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        runtime_effect=True,
+        **_broker_execution_provenance_fields(target_stock),
+        **economics_fields,
+    )
 
 
 def _run_probe_fill_continuation(target_stock: dict[str, Any], code: str) -> None:
@@ -946,6 +1685,415 @@ def _receipt_snapshot(
     target_stock: dict[str, Any], keys: tuple[str, ...]
 ) -> dict[str, Any]:
     return {key: target_stock.get(key) for key in keys}
+
+
+def _broker_execution_provenance_fields(
+    target_stock: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        key: target_stock.get(key)
+        for key in _BROKER_EXECUTION_PROVENANCE_KEYS
+        if key in target_stock
+    }
+
+
+def _sell_receipt_recovery_path(target_id: Any) -> Path | None:
+    try:
+        normalized_id = int(target_id)
+    except (TypeError, ValueError):
+        return None
+    if normalized_id <= 0:
+        return None
+    return SELL_RECEIPT_RECOVERY_DIR / f"{normalized_id}.json"
+
+
+def prune_sell_receipt_recovery_files(
+    *,
+    now_epoch: float | None = None,
+    force: bool = False,
+    active_target_ids: set[int] | None = None,
+) -> None:
+    """Bound abandoned exact journals and crash-left atomic temp files."""
+
+    global _SELL_RECEIPT_RECOVERY_LAST_PRUNE_AT
+    current_epoch = time.time() if now_epoch is None else float(now_epoch)
+    if (
+        not force
+        and current_epoch - _SELL_RECEIPT_RECOVERY_LAST_PRUNE_AT
+        < _SELL_RECEIPT_RECOVERY_PRUNE_INTERVAL_SEC
+    ):
+        return
+    _SELL_RECEIPT_RECOVERY_LAST_PRUNE_AT = current_epoch
+    protected_target_ids = {
+        int(value) for value in (active_target_ids or set()) if _safe_int(value, 0) > 0
+    }
+    try:
+        candidates = list(SELL_RECEIPT_RECOVERY_DIR.iterdir())
+    except Exception:
+        return
+    for candidate in candidates:
+        try:
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            name = candidate.name
+            is_journal = bool(re.fullmatch(r"[1-9]\d*\.json", name))
+            is_atomic_temp = bool(
+                re.fullmatch(r"\.[1-9]\d*\.json\.\d+\.\d+\.tmp", name)
+            )
+            if not (is_journal or is_atomic_temp):
+                continue
+            if is_journal:
+                journal_target_id = _safe_int(name.removesuffix(".json"), 0)
+                if journal_target_id in protected_target_ids:
+                    continue
+                retention_sec = _SELL_RECEIPT_RECOVERY_ORPHAN_MAX_AGE_SEC
+            else:
+                retention_sec = _SELL_RECEIPT_RECOVERY_MAX_AGE_SEC + 300
+            if current_epoch - candidate.stat().st_mtime <= retention_sec:
+                continue
+            candidate.unlink(missing_ok=True)
+        except Exception:
+            continue
+
+
+def persist_sell_receipt_recovery(target_stock: dict[str, Any]) -> bool:
+    """Atomically journal one active partial SELL ledger for restart recovery."""
+
+    path = _sell_receipt_recovery_path(target_stock.get("id"))
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    final_pending_db_commit = bool(
+        isinstance(state, dict) and state.get("final_pending_db_commit") is True
+    )
+    if (
+        path is None
+        or not isinstance(state, dict)
+        or (state.get("final") is True and not final_pending_db_commit)
+    ):
+        return False
+    position_qty = max(0, _safe_int(state.get("position_qty"), 0))
+    aggregate_qty = max(
+        0,
+        _safe_int(
+            state.get("aggregate_cumulative_qty"),
+            _safe_int(state.get("carried_qty"), 0)
+            + _safe_int(state.get("cumulative_qty"), 0),
+        ),
+    )
+    code = str(target_stock.get("code") or "").strip()[:6]
+    aggregate_valid = (
+        aggregate_qty == position_qty
+        if final_pending_db_commit
+        else 0 < aggregate_qty < position_qty
+    )
+    if not code or position_qty <= 0 or not aggregate_valid:
+        return False
+    payload = {
+        "schema": _SELL_RECEIPT_RECOVERY_SCHEMA,
+        "target_id": int(target_stock["id"]),
+        "code": code,
+        "position_qty": position_qty,
+        "buy_price": _safe_float(target_stock.get("buy_price"), 0.0),
+        "updated_at_epoch": time.time(),
+        "updated_at_kst": datetime.now(_KST).isoformat(),
+        "receipt_state": state,
+    }
+    canonical = json.dumps(
+        payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    )
+    if len(canonical.encode("utf-8")) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+        log_error(
+            f"[SELL_RECEIPT_RECOVERY_PERSIST_BLOCKED] {code} "
+            "reason=journal_size_limit_exceeded"
+        )
+        return False
+    document = {
+        "payload": payload,
+        "payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+    encoded = json.dumps(
+        document, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    temp_path = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.parent.is_symlink() or path.is_symlink():
+            raise RuntimeError("sell_receipt_recovery_symlink_forbidden")
+        prune_sell_receipt_recovery_files(
+            now_epoch=float(payload["updated_at_epoch"]),
+            active_target_ids={
+                _safe_int(item.get("id"), 0)
+                for item in (ACTIVE_TARGETS or [])
+                if isinstance(item, dict) and _safe_int(item.get("id"), 0) > 0
+            }
+            | {int(target_stock["id"])},
+        )
+        with temp_path.open("xb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        return True
+    except Exception as exc:
+        log_error(
+            f"[SELL_RECEIPT_RECOVERY_PERSIST_FAILED] {code} "
+            f"id={target_stock.get('id')}: {exc}"
+        )
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
+
+
+def _persist_sell_receipt_recovery_or_interlock(
+    target_stock: dict[str, Any], *, code: str, reason: str
+) -> bool:
+    """Persist custody state or prevent every follow-up order mutation."""
+
+    if persist_sell_receipt_recovery(target_stock):
+        target_stock.pop("sell_receipt_durability_blocked", None)
+        target_stock.pop("sell_receipt_durability_reason", None)
+        return True
+    target_stock.update(
+        {
+            "scale_in_locked": True,
+            "sell_partial_exit_recovery_required": True,
+            "sell_cancel_reconciliation_required": True,
+            "sell_cancel_reconciliation_source": (
+                f"sell_receipt_durability_failed:{reason}"
+            ),
+            "sell_receipt_durability_blocked": True,
+            "sell_receipt_durability_reason": reason,
+        }
+    )
+    log_error(
+        f"[SELL_RECEIPT_DURABILITY_BLOCKED] "
+        f"{target_stock.get('name', code)}({code}) id={target_stock.get('id')} "
+        f"reason={reason}; replacement/retry/scale-in remain blocked"
+    )
+    _request_broker_snapshot_refresh(
+        code,
+        reason=f"sell_receipt_durability_failed:{reason}",
+    )
+    return False
+
+
+def load_sell_receipt_recovery(
+    *,
+    target_id: Any,
+    code: str,
+    position_qty: int,
+    broker_remaining_qty: int,
+    now_epoch: float | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Load a checksum-verified same-cycle ledger matching broker inventory."""
+
+    path = _sell_receipt_recovery_path(target_id)
+    if path is None or not path.exists() or not path.is_file() or path.is_symlink():
+        return None, "journal_missing"
+    try:
+        raw = path.read_bytes()
+        if len(raw) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+            return None, "journal_size_limit_exceeded"
+        document = json.loads(raw.decode("utf-8"))
+        payload = document.get("payload") if isinstance(document, dict) else None
+        if not isinstance(payload, dict):
+            return None, "journal_payload_invalid"
+        canonical = json.dumps(
+            payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        )
+        expected_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        if str(document.get("payload_sha256") or "") != expected_hash:
+            return None, "journal_checksum_mismatch"
+        if payload.get("schema") != _SELL_RECEIPT_RECOVERY_SCHEMA:
+            return None, "journal_schema_mismatch"
+        if int(payload.get("target_id") or 0) != int(target_id):
+            return None, "journal_target_id_mismatch"
+        if str(payload.get("code") or "").strip()[:6] != str(code or "").strip()[:6]:
+            return None, "journal_code_mismatch"
+        updated_at = float(payload.get("updated_at_epoch") or 0.0)
+        current_epoch = time.time() if now_epoch is None else float(now_epoch)
+        # Exact active-target journals are custody evidence, not a rolling
+        # report cache.  Do not expire them across weekends, holidays, or an
+        # extended outage; startup pruning receives the active target IDs and
+        # removes only old orphan journals.
+        if updated_at <= 0:
+            return None, "journal_timestamp_missing"
+        if updated_at - current_epoch > 300:
+            return None, "journal_future_timestamp"
+        state = payload.get("receipt_state")
+        final_pending_db_commit = bool(
+            isinstance(state, dict) and state.get("final_pending_db_commit") is True
+        )
+        if not isinstance(state, dict) or (
+            state.get("final") is True and not final_pending_db_commit
+        ):
+            return None, "journal_receipt_state_invalid"
+        expected_position_qty = max(0, int(position_qty or 0))
+        if (
+            max(0, _safe_int(payload.get("position_qty"), 0)) != expected_position_qty
+            or max(0, _safe_int(state.get("position_qty"), 0)) != expected_position_qty
+        ):
+            return None, "journal_position_quantity_mismatch"
+        aggregate_qty = max(
+            0,
+            _safe_int(
+                state.get("aggregate_cumulative_qty"),
+                _safe_int(state.get("carried_qty"), 0)
+                + _safe_int(state.get("cumulative_qty"), 0),
+            ),
+        )
+        if expected_position_qty - aggregate_qty != max(
+            0, int(broker_remaining_qty or 0)
+        ):
+            return None, "journal_broker_remaining_quantity_mismatch"
+        return dict(state), "journal_exact_match"
+    except Exception as exc:
+        return None, f"journal_read_failed:{type(exc).__name__}"
+
+
+def clear_sell_receipt_recovery(target_id: Any) -> bool:
+    path = _sell_receipt_recovery_path(target_id)
+    if path is None:
+        return False
+    try:
+        if path.is_symlink():
+            raise RuntimeError("sell_receipt_recovery_symlink_forbidden")
+        path.unlink(missing_ok=True)
+        if path.parent.exists():
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        return True
+    except Exception as exc:
+        log_error(f"[SELL_RECEIPT_RECOVERY_CLEAR_FAILED] id={target_id}: {exc}")
+        return False
+
+
+def reconcile_committed_sell_receipt_recovery_files() -> dict[str, int]:
+    """Finish post-commit control-plane cleanup after a process crash.
+
+    A final receipt is journaled before the DB transaction.  If the process
+    dies after that transaction commits but before the same-symbol re-entry
+    callback and journal unlink, the completed DB row is authoritative and no
+    broker order may be replayed.  This startup pass performs only the missing
+    callback/cleanup against checksum-bound receipt evidence.
+    """
+
+    result = {"scanned": 0, "reconciled": 0, "deferred": 0, "invalid": 0}
+    if SELL_RECEIPT_RECOVERY_DIR.is_symlink():
+        result["invalid"] += 1
+        return result
+    try:
+        candidates = sorted(SELL_RECEIPT_RECOVERY_DIR.glob("*.json"))
+    except Exception:
+        result["deferred"] += 1
+        return result
+    for path in candidates:
+        result["scanned"] += 1
+        if path.is_symlink() or not path.is_file():
+            result["invalid"] += 1
+            continue
+        try:
+            raw = path.read_bytes()
+            if len(raw) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+                raise ValueError("journal_size_limit_exceeded")
+            document = json.loads(raw.decode("utf-8"))
+            payload = document.get("payload") if isinstance(document, dict) else None
+            if not isinstance(payload, dict):
+                raise ValueError("journal_payload_invalid")
+            canonical = json.dumps(
+                payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+            )
+            if (
+                str(document.get("payload_sha256") or "")
+                != hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            ):
+                raise ValueError("journal_checksum_mismatch")
+            state = payload.get("receipt_state")
+            if (
+                payload.get("schema") != _SELL_RECEIPT_RECOVERY_SCHEMA
+                or not isinstance(state, dict)
+                or state.get("final") is not True
+                or state.get("final_pending_db_commit") is not True
+            ):
+                # Active partial journals remain owned by normal inventory
+                # reconciliation and are intentionally not touched here.
+                continue
+            target_id = _safe_int(payload.get("target_id"), 0)
+            code = str(payload.get("code") or "").strip()[:6]
+            snapshot = state.get("finalization_receipt_snapshot")
+            if target_id <= 0 or len(code) != 6 or not isinstance(snapshot, dict):
+                raise ValueError("final_journal_identity_invalid")
+            with DB.get_session() as session:
+                record = (
+                    session.query(RecommendationHistory).filter_by(id=target_id).first()
+                )
+                if (
+                    not record
+                    or str(record.status or "").strip().upper() != "COMPLETED"
+                ):
+                    result["deferred"] += 1
+                    continue
+                if not record.sell_time or _safe_float(record.sell_price, 0.0) <= 0:
+                    result["deferred"] += 1
+                    continue
+                strategy = normalize_strategy(
+                    state.get("finalization_strategy")
+                    or getattr(record, "strategy", None)
+                    or snapshot.get("strategy")
+                    or "KOSPI_ML"
+                )
+                position_tag = normalize_position_tag(
+                    strategy,
+                    getattr(record, "position_tag", None)
+                    or snapshot.get("position_tag"),
+                )
+                profit_rate = _safe_float(record.profit_rate, 0.0)
+                sell_price = _safe_int(record.sell_price, 0)
+            if strategy == "SCALPING":
+                if not callable(_scalp_exit_completed_callback):
+                    result["deferred"] += 1
+                    continue
+                try:
+                    callback_result = _scalp_exit_completed_callback(
+                        code,
+                        profit_rate=profit_rate,
+                        exit_price=sell_price,
+                        exit_rule=snapshot.get("last_exit_rule") or "-",
+                        completed_at=record.sell_time.timestamp(),
+                        position_tag=position_tag,
+                    )
+                except Exception as exc:
+                    result["deferred"] += 1
+                    log_error(
+                        f"[SELL_POSTCOMMIT_CALLBACK_DEFERRED] id={target_id}: {exc}"
+                    )
+                    continue
+                if not isinstance(callback_result, dict) or (
+                    callback_result.get("reconciled") is False
+                    and callback_result.get("reason")
+                    != "active_reentry_context_missing"
+                ):
+                    result["deferred"] += 1
+                    continue
+            if not clear_sell_receipt_recovery(target_id):
+                result["deferred"] += 1
+                continue
+            result["reconciled"] += 1
+        except Exception as exc:
+            result["invalid"] += 1
+            log_error(f"[SELL_POSTCOMMIT_RECOVERY_BLOCKED] path={path.name}: {exc}")
+    return result
 
 
 def _probe_residual_scale_in_receipt_fields(
@@ -1121,6 +2269,272 @@ def _add_receipt_order_key(order_no: str) -> str:
     return normalized or _ADD_RECEIPT_NO_ORDER_KEY
 
 
+def _execution_receipt_signature(
+    *,
+    cumulative_qty: int,
+    order_qty: int | None,
+    remaining_qty: int | None,
+    cumulative_exec_amount: int | None,
+    unit_exec_price: int | None,
+    unit_exec_qty: int | None,
+) -> dict[str, int | None]:
+    """Return the immutable quantity/economics identity of one FID 909 fill."""
+
+    return {
+        "cumulative_qty": max(0, int(cumulative_qty or 0)),
+        "order_qty": None if order_qty is None else max(0, int(order_qty)),
+        "remaining_qty": (
+            None if remaining_qty is None else max(0, int(remaining_qty))
+        ),
+        "cumulative_exec_amount": (
+            None
+            if cumulative_exec_amount is None
+            else max(0, int(cumulative_exec_amount))
+        ),
+        "unit_exec_price": (
+            None if unit_exec_price is None else max(0, int(unit_exec_price))
+        ),
+        "unit_exec_qty": (
+            None if unit_exec_qty is None else max(0, int(unit_exec_qty))
+        ),
+    }
+
+
+def _execution_number_conflict_reason(
+    executions_by_order: dict[str, Any] | None,
+    *,
+    order_key: str,
+    execution_no: str,
+    signature: dict[str, int | None],
+) -> str | None:
+    """Reject reuse of one broker execution number with changed payload truth."""
+
+    normalized_execution_no = str(execution_no or "").strip()
+    if not normalized_execution_no:
+        return None
+    order_executions = (
+        executions_by_order.get(order_key)
+        if isinstance(executions_by_order, dict)
+        else None
+    )
+    if not isinstance(order_executions, dict):
+        return None
+    previous_signature = order_executions.get(normalized_execution_no)
+    if previous_signature is None:
+        if len(order_executions) >= _EXECUTION_SIGNATURES_PER_ORDER_MAX:
+            return "receipt_execution_ledger_capacity_exceeded"
+        seen_cumulative_qty = [
+            _safe_int(item.get("cumulative_qty"), -1)
+            for item in order_executions.values()
+            if isinstance(item, dict)
+        ]
+        if seen_cumulative_qty and _safe_int(signature.get("cumulative_qty"), 0) <= max(
+            seen_cumulative_qty
+        ):
+            return "receipt_new_execution_number_without_positive_delta"
+        return None
+    if previous_signature != signature:
+        return "receipt_execution_number_reused_with_changed_payload"
+    return None
+
+
+def _remember_execution_number(
+    executions_by_order: dict[str, Any],
+    *,
+    order_key: str,
+    execution_no: str,
+    signature: dict[str, int | None],
+) -> None:
+    normalized_execution_no = str(execution_no or "").strip()
+    if not normalized_execution_no:
+        return
+    order_executions = executions_by_order.get(order_key)
+    if not isinstance(order_executions, dict):
+        order_executions = {}
+        executions_by_order[order_key] = order_executions
+    order_executions[normalized_execution_no] = dict(signature)
+
+
+def _receipt_nested_map(target_stock: dict[str, Any], key: str) -> dict[str, Any]:
+    raw_map = target_stock.get(key)
+    if not isinstance(raw_map, dict):
+        raw_map = {}
+        target_stock[key] = raw_map
+    return raw_map
+
+
+def _receipt_known_order_numbers(
+    target_stock: dict[str, Any],
+    *,
+    pending_orders_key: str | None,
+    scalar_order_keys: tuple[str, ...],
+    ledger_keys: tuple[str, ...],
+    missing_order_key: str,
+) -> set[str]:
+    known: set[str] = set()
+    if pending_orders_key:
+        pending_orders = target_stock.get(pending_orders_key) or []
+        if isinstance(pending_orders, list):
+            for pending_order in pending_orders:
+                if not isinstance(pending_order, dict):
+                    continue
+                order_no = str(pending_order.get("ord_no", "") or "").strip()
+                if order_no:
+                    known.add(order_no)
+    for scalar_key in scalar_order_keys:
+        raw_value = str(target_stock.get(scalar_key, "") or "").strip()
+        known.update(part.strip() for part in raw_value.split(",") if part.strip())
+    for ledger_key in ledger_keys:
+        raw_map = target_stock.get(ledger_key)
+        if not isinstance(raw_map, dict):
+            continue
+        known.update(
+            str(raw_key).strip()
+            for raw_key in raw_map
+            if str(raw_key).strip() and str(raw_key).strip() != missing_order_key
+        )
+    return known
+
+
+def _bind_entry_receipt_identity(
+    target_stock: dict[str, Any],
+    *,
+    code: str,
+    order_no: str,
+    order_qty: int | None,
+    remaining_qty: int | None,
+) -> tuple[str | None, dict[str, Any] | None, bool, str | None]:
+    """Resolve one BUY receipt to an exact order, binding only an unambiguous race."""
+
+    normalized_order_no = str(order_no or "").strip()
+    pending_orders = [
+        pending_order
+        for pending_order in (target_stock.get("pending_entry_orders") or [])
+        if isinstance(pending_order, dict)
+    ]
+    known_order_nos = _receipt_known_order_numbers(
+        target_stock,
+        pending_orders_key="pending_entry_orders",
+        scalar_order_keys=("odno",),
+        ledger_keys=(
+            _ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY,
+            _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY,
+            _ENTRY_RECEIPT_AMOUNT_BY_ORDER_KEY,
+            _ENTRY_RECEIPT_ECONOMICS_BY_ORDER_KEY,
+            _ENTRY_RECEIPT_EXECUTIONS_BY_ORDER_KEY,
+        ),
+        missing_order_key=_ENTRY_RECEIPT_NO_ORDER_KEY,
+    )
+    blank_pending_orders = [
+        pending_order
+        for pending_order in pending_orders
+        if not str(pending_order.get("ord_no", "") or "").strip()
+    ]
+    if not normalized_order_no:
+        if blank_pending_orders or len(known_order_nos) != 1:
+            reason = (
+                "entry_receipt_order_number_missing"
+                if not known_order_nos and not blank_pending_orders
+                else "entry_receipt_order_number_ambiguous"
+            )
+            return None, None, False, reason
+        normalized_order_no = next(iter(known_order_nos))
+
+    exact_pending_order = next(
+        (
+            pending_order
+            for pending_order in pending_orders
+            if str(pending_order.get("ord_no", "") or "").strip() == normalized_order_no
+        ),
+        None,
+    )
+    terminal_order = get_terminal_entry_order(normalized_order_no)
+    terminal_code = str((terminal_order or {}).get("stock_code", "") or "").strip()[:6]
+    terminal_target_id = str((terminal_order or {}).get("target_id", "") or "").strip()
+    current_target_id = str(target_stock.get("id", "") or "").strip()
+    terminal_target_matches = bool(
+        terminal_order is not None
+        and terminal_code == code
+        and terminal_target_id
+        and terminal_target_id == current_target_id
+        and str(target_stock.get("status", "") or "").strip().upper()
+        in {"WATCHING", "BUY_ORDERED", "HOLDING"}
+    )
+    if (
+        exact_pending_order is not None
+        or normalized_order_no in known_order_nos
+        or terminal_target_matches
+    ):
+        return normalized_order_no, exact_pending_order, False, None
+
+    # A broker execution can beat the REST/order-notice response. Bind that race
+    # only when FID 900/902 identify one exact still-unbound order leg.
+    if order_qty is None or int(order_qty) <= 0 or remaining_qty is None:
+        return None, None, False, "entry_receipt_unknown_order_number"
+    official_order_qty = max(0, int(order_qty))
+    blank_candidates = [
+        pending_order
+        for pending_order in pending_orders
+        if not str(pending_order.get("ord_no", "") or "").strip()
+        and (
+            official_order_qty <= 0
+            or max(0, int(pending_order.get("qty", 0) or 0)) == official_order_qty
+        )
+    ]
+    if len(blank_candidates) > 1:
+        return None, None, False, "entry_receipt_unbound_order_ambiguous"
+    if known_order_nos and not blank_candidates:
+        return None, None, False, "entry_receipt_unknown_order_number"
+    if len(blank_candidates) != 1:
+        return None, None, False, "entry_receipt_unbound_order_not_identified"
+
+    return normalized_order_no, blank_candidates[0], True, None
+
+
+def _resolve_add_receipt_identity(
+    target_stock: dict[str, Any],
+    *,
+    order_no: str,
+    order_qty: int | None,
+    remaining_qty: int | None,
+) -> tuple[str | None, bool, str | None]:
+    """Resolve an add receipt order key without ever using an ambiguous sentinel."""
+
+    normalized_order_no = str(order_no or "").strip()
+    known_order_nos = _receipt_known_order_numbers(
+        target_stock,
+        pending_orders_key=None,
+        scalar_order_keys=("pending_add_ord_no", "add_odno"),
+        ledger_keys=(
+            _ADD_RECEIPT_REQUESTED_BY_ORDER_KEY,
+            _ADD_RECEIPT_FILLED_BY_ORDER_KEY,
+            _ADD_RECEIPT_AMOUNT_BY_ORDER_KEY,
+            _ADD_RECEIPT_ECONOMICS_BY_ORDER_KEY,
+            _ADD_RECEIPT_EXECUTIONS_BY_ORDER_KEY,
+            "_add_receipt_leg_meta_by_order_no",
+        ),
+        missing_order_key=_ADD_RECEIPT_NO_ORDER_KEY,
+    )
+    if not normalized_order_no:
+        if len(known_order_nos) != 1:
+            reason = (
+                "add_receipt_order_number_missing"
+                if not known_order_nos
+                else "add_receipt_order_number_ambiguous"
+            )
+            return None, False, reason
+        return next(iter(known_order_nos)), False, None
+    if normalized_order_no in known_order_nos:
+        return normalized_order_no, False, None
+    if known_order_nos:
+        return None, False, "add_receipt_unknown_order_number"
+    if order_qty is None or remaining_qty is None:
+        return None, False, "add_receipt_unbound_order_contract_missing"
+    if int(order_qty) <= 0:
+        return None, False, "add_receipt_unbound_order_quantity_invalid"
+    return normalized_order_no, True, None
+
+
 def _entry_receipt_int_map(target_stock: dict[str, Any], key: str) -> dict[str, int]:
     raw_map = target_stock.get(key)
     if not isinstance(raw_map, dict):
@@ -1240,87 +2654,576 @@ def _append_pending_add_order_no(target_stock: dict[str, Any], order_no: str) ->
     return True
 
 
+def _resolve_cumulative_buy_order_receipt(
+    *,
+    raw_price: int,
+    raw_cumulative_qty: int,
+    requested_qty: int,
+    previous_qty: int,
+    previous_amount: int,
+    previous_economics_complete: bool,
+    order_qty: int | None,
+    remaining_qty: int | None,
+    cumulative_exec_amount: int | None,
+    unit_exec_price: int | None,
+    unit_exec_qty: int | None,
+) -> dict[str, Any]:
+    """Return one exact delta from a Kiwoom 00 cumulative BUY receipt."""
+
+    raw_qty = max(0, int(raw_cumulative_qty or 0))
+    known_requested_qty = max(0, int(requested_qty or 0))
+    official_order_qty = max(0, int(order_qty or 0)) if order_qty is not None else 0
+    if raw_qty <= 0:
+        return {"status": "invalid", "reason": "buy_receipt_quantity_missing"}
+    if (
+        known_requested_qty > 0
+        and official_order_qty > 0
+        and known_requested_qty != official_order_qty
+    ):
+        return {
+            "status": "invalid",
+            "reason": "buy_receipt_requested_quantity_conflict",
+        }
+    expected_qty = known_requested_qty or official_order_qty
+    prior_qty = max(0, int(previous_qty or 0))
+    prior_amount = max(0, int(previous_amount or 0))
+    official_remaining_qty = (
+        max(0, int(remaining_qty)) if remaining_qty is not None else None
+    )
+    if official_remaining_qty is not None:
+        receipt_expected_qty = raw_qty + official_remaining_qty
+        if expected_qty > 0 and receipt_expected_qty != expected_qty:
+            return {
+                "status": "invalid",
+                "reason": (
+                    "buy_receipt_duplicate_quantity_remaining_conflict"
+                    if raw_qty == prior_qty
+                    else "buy_receipt_remaining_quantity_conflict"
+                ),
+            }
+        expected_qty = expected_qty or receipt_expected_qty
+    if expected_qty > 0 and raw_qty > expected_qty:
+        return {
+            "status": "invalid",
+            "reason": "buy_receipt_cumulative_quantity_exceeds_order",
+        }
+
+    if raw_qty < prior_qty:
+        return {
+            "status": "invalid",
+            "reason": "buy_receipt_cumulative_quantity_regressed",
+        }
+
+    official_cumulative_amount = (
+        max(0, int(cumulative_exec_amount))
+        if cumulative_exec_amount is not None
+        else None
+    )
+    if raw_qty == prior_qty:
+        if (
+            official_cumulative_amount is not None
+            and prior_amount > 0
+            and official_cumulative_amount != prior_amount
+        ):
+            return {
+                "status": "invalid",
+                "reason": "buy_receipt_duplicate_quantity_amount_conflict",
+            }
+        repaired_amount = official_cumulative_amount or prior_amount
+        return {
+            "status": "duplicate",
+            "reason": "buy_receipt_duplicate_cumulative_quantity",
+            "requested_qty": expected_qty,
+            "cumulative_qty": raw_qty,
+            "remaining_qty": (
+                official_remaining_qty
+                if official_remaining_qty is not None
+                else max(0, expected_qty - raw_qty)
+            ),
+            "cumulative_amount": repaired_amount,
+            "economics_complete": bool(
+                previous_economics_complete and repaired_amount > 0
+            ),
+            "final": bool(expected_qty > 0 and raw_qty == expected_qty),
+        }
+
+    incremental_qty = raw_qty - prior_qty
+    economics_complete = bool(previous_economics_complete)
+    unit_price = max(0, int(unit_exec_price or 0))
+    unit_qty_matches_delta = (
+        None if unit_exec_qty is None else int(unit_exec_qty) == incremental_qty
+    )
+    if official_cumulative_amount is not None:
+        if prior_amount > 0:
+            if official_cumulative_amount <= prior_amount:
+                return {
+                    "status": "invalid",
+                    "reason": "buy_receipt_cumulative_amount_not_increasing",
+                }
+            incremental_amount = official_cumulative_amount - prior_amount
+        elif prior_qty <= 0:
+            incremental_amount = official_cumulative_amount
+        elif unit_qty_matches_delta is True and unit_price > 0:
+            incremental_amount = unit_price * incremental_qty
+            if official_cumulative_amount < incremental_amount:
+                return {
+                    "status": "invalid",
+                    "reason": "buy_receipt_cumulative_amount_unit_conflict",
+                }
+            economics_complete = False
+        else:
+            return {
+                "status": "invalid",
+                "reason": "buy_receipt_prior_cumulative_amount_missing",
+            }
+        cumulative_amount = official_cumulative_amount
+    else:
+        economics_complete = False
+        fallback_price = unit_price if unit_qty_matches_delta is True else 0
+        if fallback_price <= 0:
+            fallback_price = max(0, int(raw_price or 0))
+            economics_complete = False
+        if fallback_price <= 0:
+            return {
+                "status": "invalid",
+                "reason": "buy_receipt_incremental_price_missing",
+            }
+        incremental_amount = fallback_price * incremental_qty
+        cumulative_amount = prior_amount + incremental_amount
+    if incremental_amount <= 0 or cumulative_amount <= 0:
+        return {
+            "status": "invalid",
+            "reason": "buy_receipt_incremental_amount_invalid",
+        }
+
+    unit_price_matches_delta = (
+        None
+        if unit_exec_price is None
+        else int(unit_exec_price) * incremental_qty == incremental_amount
+    )
+    unit_fill_consistent = bool(
+        unit_qty_matches_delta is True and unit_price_matches_delta is True
+    )
+    quantity_contract_complete = bool(
+        official_order_qty > 0 and official_remaining_qty is not None
+    )
+    final = bool(
+        expected_qty > 0 and raw_qty == expected_qty and official_remaining_qty == 0
+    )
+    return {
+        "status": "final" if final else "partial",
+        "reason": (
+            "buy_receipt_full_order_reconciled" if final else "buy_receipt_partial_fill"
+        ),
+        "final": final,
+        "requested_qty": expected_qty,
+        "remaining_qty": (
+            official_remaining_qty
+            if official_remaining_qty is not None
+            else max(0, expected_qty - raw_qty)
+        ),
+        "cumulative_qty": raw_qty,
+        "cumulative_amount": cumulative_amount,
+        "incremental_qty": incremental_qty,
+        "incremental_amount": incremental_amount,
+        "incremental_price": incremental_amount / incremental_qty,
+        "economics_complete": economics_complete,
+        "quantity_contract_complete": quantity_contract_complete,
+        "unit_fill_consistent": unit_fill_consistent,
+        "unit_qty_matches_delta": unit_qty_matches_delta,
+        "unit_price_matches_delta": unit_price_matches_delta,
+    }
+
+
+def _resolve_fast_sell_execution_receipt(
+    state: dict[str, Any],
+    *,
+    order_no: str,
+    exec_price: int,
+    cumulative_exec_qty: int,
+    order_qty: int | None,
+    remaining_qty: int | None,
+    cumulative_exec_amount: int | None,
+    execution_no: str,
+    unit_exec_price: int | None,
+    unit_exec_qty: int | None,
+) -> dict[str, Any]:
+    """Apply one S15 SELL cumulative receipt to a per-order ledger.
+
+    Fast-track cancel/retry orders each restart FID 911/903 at zero. Keeping a
+    single global previous cumulative drops fills from the replacement order.
+    """
+
+    normalized_order_no = str(order_no or "").strip()
+    if not normalized_order_no:
+        return {"status": "invalid", "reason": "fast_sell_order_number_missing"}
+    raw_ledgers = state.get("sell_receipts_by_order_no")
+    ledgers = raw_ledgers if isinstance(raw_ledgers, dict) else {}
+    prior_raw = ledgers.get(normalized_order_no)
+    prior = dict(prior_raw) if isinstance(prior_raw, dict) else {}
+    executions = prior.get("executions_by_no")
+    executions = dict(executions) if isinstance(executions, dict) else {}
+    signature = _execution_receipt_signature(
+        cumulative_qty=cumulative_exec_qty,
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+        cumulative_exec_amount=cumulative_exec_amount,
+        unit_exec_price=unit_exec_price,
+        unit_exec_qty=unit_exec_qty,
+    )
+    conflict = _execution_number_conflict_reason(
+        {normalized_order_no: executions},
+        order_key=normalized_order_no,
+        execution_no=execution_no,
+        signature=signature,
+    )
+    if conflict:
+        return {"status": "invalid", "reason": conflict}
+
+    requested_qty = max(0, _safe_int(prior.get("requested_qty"), 0))
+    if requested_qty <= 0 and order_qty is not None:
+        requested_qty = max(0, int(order_qty))
+    receipt = _resolve_cumulative_buy_order_receipt(
+        raw_price=exec_price,
+        raw_cumulative_qty=cumulative_exec_qty,
+        requested_qty=requested_qty,
+        previous_qty=max(0, _safe_int(prior.get("cumulative_qty"), 0)),
+        previous_amount=max(0, _safe_int(prior.get("cumulative_amount"), 0)),
+        previous_economics_complete=bool(prior.get("economics_complete", True)),
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+        cumulative_exec_amount=cumulative_exec_amount,
+        unit_exec_price=unit_exec_price,
+        unit_exec_qty=unit_exec_qty,
+    )
+    if receipt.get("status") == "invalid":
+        return receipt
+
+    holder = {normalized_order_no: executions}
+    _remember_execution_number(
+        holder,
+        order_key=normalized_order_no,
+        execution_no=execution_no,
+        signature=signature,
+    )
+    executions = holder[normalized_order_no]
+    if receipt.get("status") == "duplicate":
+        return receipt
+
+    next_ledgers = dict(ledgers)
+    next_ledgers[normalized_order_no] = {
+        "requested_qty": max(0, _safe_int(receipt.get("requested_qty"), 0)),
+        "cumulative_qty": max(0, _safe_int(receipt.get("cumulative_qty"), 0)),
+        "remaining_qty": max(0, _safe_int(receipt.get("remaining_qty"), 0)),
+        "cumulative_amount": max(0, _safe_int(receipt.get("cumulative_amount"), 0)),
+        "economics_complete": receipt.get("economics_complete") is True,
+        "quantity_contract_complete": (
+            receipt.get("quantity_contract_complete") is True
+        ),
+        "unit_fill_consistent": receipt.get("unit_fill_consistent") is True,
+        "executions_by_no": executions,
+    }
+    aggregate_qty = sum(
+        max(0, _safe_int(item.get("cumulative_qty"), 0))
+        for item in next_ledgers.values()
+        if isinstance(item, dict)
+    )
+    aggregate_amount = sum(
+        max(0, _safe_int(item.get("cumulative_amount"), 0))
+        for item in next_ledgers.values()
+        if isinstance(item, dict)
+    )
+    buy_qty = max(0, _safe_int(state.get("cum_buy_qty"), 0))
+    if aggregate_qty > buy_qty > 0:
+        return {
+            "status": "invalid",
+            "reason": "fast_sell_aggregate_quantity_exceeds_position",
+        }
+    quantity_contract_complete = bool(
+        next_ledgers
+        and all(
+            isinstance(item, dict) and item.get("quantity_contract_complete") is True
+            for item in next_ledgers.values()
+        )
+    )
+    economics_complete = bool(
+        next_ledgers
+        and all(
+            isinstance(item, dict) and item.get("economics_complete") is True
+            for item in next_ledgers.values()
+        )
+    )
+    unit_fill_consistent = bool(
+        next_ledgers
+        and all(
+            isinstance(item, dict) and item.get("unit_fill_consistent") is True
+            for item in next_ledgers.values()
+        )
+    )
+    position_complete = bool(
+        buy_qty > 0
+        and aggregate_qty == buy_qty
+        and receipt.get("final") is True
+        and quantity_contract_complete
+    )
+    state["sell_receipts_by_order_no"] = next_ledgers
+    state["cum_sell_qty"] = aggregate_qty
+    state["cum_sell_amount"] = aggregate_amount
+    state["avg_sell_price"] = _avg_from_totals(aggregate_amount, aggregate_qty)
+    state["sell_receipt_economics_complete"] = economics_complete
+    state["sell_receipt_quantity_contract_complete"] = quantity_contract_complete
+    state["sell_receipt_unit_fill_consistent"] = unit_fill_consistent
+    state["sell_receipt_position_complete"] = position_complete
+    return {
+        **receipt,
+        "aggregate_cumulative_qty": aggregate_qty,
+        "aggregate_cumulative_amount": aggregate_amount,
+        "position_complete": position_complete,
+    }
+
+
 def _resolve_entry_effective_fill_qty(
     *,
     target_stock: dict[str, Any],
     code: str,
     order_no: str,
+    exec_price: int,
     exec_qty: int,
-) -> tuple[int, int, int]:
-    """Return the entry fill delta that may be applied to runtime truth.
+    order_qty: int | None = None,
+    remaining_qty: int | None = None,
+    cumulative_exec_amount: int | None = None,
+    execution_no: str = "",
+    unit_exec_price: int | None = None,
+    unit_exec_qty: int | None = None,
+) -> dict[str, Any]:
+    """Reconcile an entry order's cumulative receipt to one exact fill delta."""
 
-    Kiwoom execution notices can repeat a final fill or report cumulative
-    quantities for the same order number. Entry orders with a known requested
-    quantity must therefore be capped by remaining leg quantity before mutating
-    buy_qty/avg price. The per-order ledger intentionally survives terminal
-    entry-order grace so delayed duplicate receipts do not inflate position size.
-    """
-
-    order_key = _entry_receipt_order_key(order_no)
+    (
+        resolved_order_no,
+        pending_order,
+        bind_after_validation,
+        identity_error,
+    ) = _bind_entry_receipt_identity(
+        target_stock,
+        code=code,
+        order_no=order_no,
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+    )
+    if identity_error:
+        return {"status": "invalid", "reason": identity_error}
+    terminal_entry_receipt = bool(
+        resolved_order_no and get_terminal_entry_order(resolved_order_no) is not None
+    )
+    order_key = _entry_receipt_order_key(resolved_order_no or "")
     requested_by_order = _entry_receipt_int_map(
         target_stock, _ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY
     )
     filled_by_order = _entry_receipt_int_map(
         target_stock, _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY
     )
+    amount_by_order = _entry_receipt_int_map(
+        target_stock, _ENTRY_RECEIPT_AMOUNT_BY_ORDER_KEY
+    )
+    economics_by_order = _entry_receipt_int_map(
+        target_stock, _ENTRY_RECEIPT_ECONOMICS_BY_ORDER_KEY
+    )
+    executions_by_order = _receipt_nested_map(
+        target_stock, _ENTRY_RECEIPT_EXECUTIONS_BY_ORDER_KEY
+    )
+    execution_signature = _execution_receipt_signature(
+        cumulative_qty=exec_qty,
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+        cumulative_exec_amount=cumulative_exec_amount,
+        unit_exec_price=unit_exec_price,
+        unit_exec_qty=unit_exec_qty,
+    )
+    execution_conflict = _execution_number_conflict_reason(
+        executions_by_order,
+        order_key=order_key,
+        execution_no=execution_no,
+        signature=execution_signature,
+    )
+    if execution_conflict:
+        return {"status": "invalid", "reason": execution_conflict}
 
-    pending_order = None
-    for order in target_stock.get("pending_entry_orders") or []:
-        if str(order.get("ord_no", "") or "").strip() == str(order_no or "").strip():
-            pending_order = order
-            break
-
-    requested_qty = int(requested_by_order.get(order_key, 0) or 0)
-    if pending_order is not None:
-        requested_qty = max(requested_qty, int(pending_order.get("qty", 0) or 0))
+    ledger_requested_qty = max(0, int(requested_by_order.get(order_key, 0) or 0))
+    pending_requested_qty = (
+        max(0, int(pending_order.get("qty", 0) or 0))
+        if pending_order is not None
+        else 0
+    )
+    if (
+        ledger_requested_qty > 0
+        and pending_requested_qty > 0
+        and ledger_requested_qty != pending_requested_qty
+    ):
+        return {
+            "status": "invalid",
+            "reason": "entry_receipt_requested_ledger_conflict",
+        }
+    requested_qty = ledger_requested_qty or pending_requested_qty
+    if requested_qty <= 0 and order_qty is not None:
+        requested_qty = max(0, int(order_qty))
     if requested_qty <= 0:
-        requested_qty = int(
-            target_stock.get(
-                "entry_requested_qty", target_stock.get("requested_buy_qty", 0)
-            )
-            or 0
+        requested_qty = max(
+            0,
+            int(
+                target_stock.get(
+                    "entry_requested_qty",
+                    target_stock.get("requested_buy_qty", 0),
+                )
+                or 0
+            ),
         )
 
-    already_filled = int(filled_by_order.get(order_key, 0) or 0)
-    if pending_order is not None:
-        already_filled = max(
-            already_filled, int(pending_order.get("filled_qty", 0) or 0)
+    ledger_filled_qty = max(0, int(filled_by_order.get(order_key, 0) or 0))
+    pending_filled_qty = (
+        max(0, int(pending_order.get("filled_qty", 0) or 0))
+        if pending_order is not None
+        else 0
+    )
+    already_filled = max(ledger_filled_qty, pending_filled_qty)
+    receipt = _resolve_cumulative_buy_order_receipt(
+        raw_price=exec_price,
+        raw_cumulative_qty=exec_qty,
+        requested_qty=requested_qty,
+        previous_qty=already_filled,
+        previous_amount=max(0, int(amount_by_order.get(order_key, 0) or 0)),
+        previous_economics_complete=bool(economics_by_order.get(order_key, 1)),
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+        cumulative_exec_amount=cumulative_exec_amount,
+        unit_exec_price=unit_exec_price,
+        unit_exec_qty=unit_exec_qty,
+    )
+    if receipt.get("status") == "invalid":
+        return receipt
+
+    cumulative_qty = max(0, int(receipt.get("cumulative_qty") or 0))
+    cumulative_amount = max(0, int(receipt.get("cumulative_amount") or 0))
+    requested_qty = max(0, int(receipt.get("requested_qty") or requested_qty))
+    if receipt.get("status") != "duplicate":
+        bundle_requested_qty = max(
+            0,
+            _safe_int(
+                target_stock.get(
+                    "entry_requested_qty",
+                    target_stock.get("requested_buy_qty", 0),
+                ),
+                0,
+            ),
         )
+        bundle_filled_qty = max(0, _safe_int(target_stock.get("entry_filled_qty"), 0))
+        if (
+            bundle_requested_qty > 0
+            and bundle_filled_qty + int(receipt["incremental_qty"])
+            > bundle_requested_qty
+        ):
+            return {
+                "status": "invalid",
+                "reason": "entry_receipt_bundle_quantity_exceeded",
+            }
 
-    if requested_qty > 0:
-        requested_by_order[order_key] = requested_qty
-        remaining_qty = max(0, requested_qty - already_filled)
-        if remaining_qty <= 0:
-            log_info(
-                f"[ENTRY_FILL_IGNORED] {target_stock.get('name')}({code}) "
-                f"ord_no={order_no or '-'} raw_fill_qty={exec_qty} "
-                f"already_filled={already_filled}/{requested_qty} reason=duplicate_or_cumulative_receipt"
-            )
-            if pending_order is not None:
-                pending_order["filled_qty"] = already_filled
-                pending_order["status"] = "FILLED"
-            return 0, requested_qty, already_filled
+    _remember_execution_number(
+        executions_by_order,
+        order_key=order_key,
+        execution_no=execution_no,
+        signature=execution_signature,
+    )
 
-        effective_qty = min(int(exec_qty or 0), remaining_qty)
-        if effective_qty < int(exec_qty or 0):
-            log_info(
-                f"[ENTRY_FILL_CAPPED] {target_stock.get('name')}({code}) "
-                f"ord_no={order_no or '-'} raw_fill_qty={exec_qty} "
-                f"effective_fill_qty={effective_qty} already_filled={already_filled}/{requested_qty} "
-                "reason=cumulative_or_over_requested_receipt"
-            )
-    else:
-        effective_qty = int(exec_qty or 0)
-
-    new_filled = already_filled + effective_qty
-    filled_by_order[order_key] = new_filled
+    if bind_after_validation:
+        assert pending_order is not None
+        pending_order["ord_no"] = str(resolved_order_no or "")
+        if not str(target_stock.get("odno", "") or "").strip():
+            target_stock["odno"] = str(resolved_order_no or "")
+        target_stock["entry_receipt_reconciled_before_ordno_bind"] = True
+    requested_by_order[order_key] = requested_qty
+    filled_by_order[order_key] = cumulative_qty
+    if cumulative_amount > 0:
+        amount_by_order[order_key] = cumulative_amount
+    economics_by_order[order_key] = int(bool(receipt.get("economics_complete")))
     if pending_order is not None:
-        pending_order["filled_qty"] = new_filled
+        pending_order["filled_qty"] = cumulative_qty
         pending_order["status"] = (
-            "FILLED" if requested_qty > 0 and new_filled >= requested_qty else "PARTIAL"
+            "FILLED"
+            if requested_qty > 0 and cumulative_qty >= requested_qty
+            else "PARTIAL"
         )
-        pending_order["last_effective_fill_qty"] = effective_qty
-    return effective_qty, requested_qty, new_filled
+        pending_order["last_effective_fill_qty"] = int(
+            receipt.get("incremental_qty") or 0
+        )
+    receipt["order_no"] = resolved_order_no
+    receipt["terminal_entry_order_receipt"] = terminal_entry_receipt
+    return receipt
+
+
+def _cancel_replacement_buys_after_late_parent_fill(
+    target_stock: dict[str, Any], *, code: str, filled_order_no: str
+) -> bool:
+    """Cancel every active child BUY after a terminal parent fills late.
+
+    A REST cancel acknowledgement does not make the parent terminal.  If the
+    parent fills after a replacement was accepted, leaving the child live can
+    overbuy the position.  Keep all identities until broker reconciliation.
+    """
+
+    candidates = []
+    for order in target_stock.get("pending_entry_orders") or ():
+        if not isinstance(order, dict):
+            continue
+        order_no = str(order.get("ord_no") or "").strip()
+        if not order_no or order_no == str(filled_order_no or "").strip():
+            continue
+        requested = max(0, _safe_int(order.get("qty"), 0))
+        filled = max(0, _safe_int(order.get("filled_qty"), 0))
+        status = str(order.get("status") or "").strip().upper()
+        if requested > filled and status not in {"FILLED", "CANCELLED", "REJECTED"}:
+            candidates.append(order)
+    if not candidates:
+        return True
+
+    from src.engine import kiwoom_orders
+
+    all_acknowledged = True
+    for order in candidates:
+        order_no = str(order.get("ord_no") or "").strip()
+        try:
+            result = kiwoom_orders.send_cancel_order(
+                code=code,
+                orig_ord_no=order_no,
+                token=KIWOOM_TOKEN,
+                qty=0,
+                dmst_stex_tp=(
+                    order.get("broker_route")
+                    or order.get("effective_dmst_stex_tp")
+                    or target_stock.get("entry_execution_broker_route")
+                ),
+            )
+            acknowledged = _is_ok_response(result)
+        except Exception as exc:
+            acknowledged = False
+            log_error(
+                f"[ENTRY_REPLACEMENT_CANCEL_FAILED] {code} ord_no={order_no}: {exc}"
+            )
+        order["status"] = "CANCEL_PENDING"
+        order["late_parent_fill_cancel_acknowledged"] = bool(acknowledged)
+        order["late_parent_fill_cancel_requested_at"] = time.time()
+        all_acknowledged = all_acknowledged and acknowledged
+
+    target_stock["entry_cancel_reconciliation_required"] = True
+    target_stock["entry_cancel_reconciliation_source"] = (
+        "late_parent_fill_replacement_cancel_acknowledged"
+        if all_acknowledged
+        else "late_parent_fill_replacement_cancel_unconfirmed"
+    )
+    target_stock["entry_replacement_submit_forbidden"] = True
+    target_stock["scale_in_locked"] = True
+    _request_broker_snapshot_refresh(
+        code, reason="late_parent_fill_replacement_cancel_reconciliation"
+    )
+    return False
 
 
 def _resolve_add_effective_fill(
@@ -1330,7 +3233,13 @@ def _resolve_add_effective_fill(
     order_no: str,
     exec_price: int,
     exec_qty: int,
-) -> tuple[int, int, int, int, int, int, bool]:
+    order_qty: int | None = None,
+    remaining_qty: int | None = None,
+    cumulative_exec_amount: int | None = None,
+    execution_no: str = "",
+    unit_exec_price: int | None = None,
+    unit_exec_qty: int | None = None,
+) -> dict[str, Any]:
     """Return the add-buy fill delta and effective incremental price.
 
     Kiwoom add-buy execution notices can arrive as cumulative order fill
@@ -1340,15 +3249,28 @@ def _resolve_add_effective_fill(
     cumulative notional.
     """
 
-    raw_qty = int(exec_qty or 0)
-    raw_price = int(exec_price or 0)
+    raw_qty = max(0, int(exec_qty or 0))
+    raw_price = max(0, int(exec_price or 0))
     bundle_requested_qty = int(target_stock.get("pending_add_qty", 0) or 0)
     bundle_already_filled = int(target_stock.get("pending_add_filled_qty", 0) or 0)
     bundle_already_amount = int(target_stock.get("pending_add_filled_amount", 0) or 0)
     if raw_qty <= 0:
-        return 0, raw_price, bundle_requested_qty, bundle_already_filled, 0, 0, False
+        return {"status": "invalid", "reason": "add_receipt_quantity_missing"}
 
-    order_key = _add_receipt_order_key(order_no)
+    (
+        resolved_order_no,
+        reconciled_before_ordno_bind,
+        identity_error,
+    ) = _resolve_add_receipt_identity(
+        target_stock,
+        order_no=order_no,
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+    )
+    if identity_error:
+        return {"status": "invalid", "reason": identity_error}
+    normalized_order_no = str(resolved_order_no or "").strip()
+    order_key = _add_receipt_order_key(normalized_order_no)
     requested_by_order = _entry_receipt_int_map(
         target_stock, _ADD_RECEIPT_REQUESTED_BY_ORDER_KEY
     )
@@ -1358,118 +3280,136 @@ def _resolve_add_effective_fill(
     amount_by_order = _entry_receipt_int_map(
         target_stock, _ADD_RECEIPT_AMOUNT_BY_ORDER_KEY
     )
+    economics_by_order = _entry_receipt_int_map(
+        target_stock, _ADD_RECEIPT_ECONOMICS_BY_ORDER_KEY
+    )
+    executions_by_order = _receipt_nested_map(
+        target_stock, _ADD_RECEIPT_EXECUTIONS_BY_ORDER_KEY
+    )
+    execution_signature = _execution_receipt_signature(
+        cumulative_qty=exec_qty,
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+        cumulative_exec_amount=cumulative_exec_amount,
+        unit_exec_price=unit_exec_price,
+        unit_exec_qty=unit_exec_qty,
+    )
+    execution_conflict = _execution_number_conflict_reason(
+        executions_by_order,
+        order_key=order_key,
+        execution_no=execution_no,
+        signature=execution_signature,
+    )
+    if execution_conflict:
+        return {"status": "invalid", "reason": execution_conflict}
     pending_ord_nos = set(_pending_add_order_numbers(target_stock))
-    reconciled_before_ordno_bind = False
 
-    normalized_order_no = str(order_no or "").strip()
+    order_requested_qty = max(0, int(requested_by_order.get(order_key, 0) or 0))
+    leg_meta_qty = max(
+        0,
+        _safe_int(
+            _add_receipt_leg_meta(target_stock, normalized_order_no).get("qty"), 0
+        ),
+    )
     if (
-        normalized_order_no
-        and normalized_order_no not in pending_ord_nos
-        and not pending_ord_nos
+        order_requested_qty > 0
+        and leg_meta_qty > 0
+        and order_requested_qty != leg_meta_qty
     ):
-        _append_pending_add_order_no(target_stock, normalized_order_no)
-        pending_ord_nos.add(normalized_order_no)
-        reconciled_before_ordno_bind = True
-        target_stock["scale_in_receipt_reconciled_before_ordno_bind"] = True
-
-    order_requested_qty = int(requested_by_order.get(order_key, 0) or 0)
+        return {
+            "status": "invalid",
+            "reason": "add_receipt_requested_ledger_conflict",
+        }
+    order_requested_qty = order_requested_qty or leg_meta_qty
     if order_requested_qty <= 0:
-        if not normalized_order_no:
+        if order_qty is not None:
+            order_requested_qty = max(0, int(order_qty))
+        elif not normalized_order_no:
             order_requested_qty = bundle_requested_qty
-        elif bundle_requested_qty > 0 and raw_qty >= bundle_requested_qty:
+        elif len(pending_ord_nos) <= 1 and bundle_requested_qty > 0:
             order_requested_qty = bundle_requested_qty
         else:
             order_requested_qty = raw_qty
-    elif (
-        normalized_order_no
-        and bundle_requested_qty > order_requested_qty
-        and order_requested_qty < raw_qty <= bundle_requested_qty
-    ):
-        order_requested_qty = raw_qty
-    if order_requested_qty > 0:
-        requested_by_order[order_key] = max(
-            int(requested_by_order.get(order_key, 0) or 0), order_requested_qty
-        )
 
     order_already_filled = int(filled_by_order.get(order_key, 0) or 0)
     order_already_amount = int(amount_by_order.get(order_key, 0) or 0)
+    receipt = _resolve_cumulative_buy_order_receipt(
+        raw_price=raw_price,
+        raw_cumulative_qty=raw_qty,
+        requested_qty=order_requested_qty,
+        previous_qty=order_already_filled,
+        previous_amount=order_already_amount,
+        previous_economics_complete=bool(economics_by_order.get(order_key, 1)),
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+        cumulative_exec_amount=cumulative_exec_amount,
+        unit_exec_price=unit_exec_price,
+        unit_exec_qty=unit_exec_qty,
+    )
+    if receipt.get("status") == "invalid":
+        return receipt
 
-    if bundle_requested_qty <= 0:
-        effective_qty = raw_qty
-        effective_price = raw_price
-    else:
-        bundle_remaining_qty = max(0, bundle_requested_qty - bundle_already_filled)
-        order_remaining_qty = (
-            max(0, order_requested_qty - order_already_filled)
-            if order_requested_qty > 0
-            else bundle_remaining_qty
-        )
-        remaining_qty = min(bundle_remaining_qty, order_remaining_qty)
-        if remaining_qty <= 0:
-            log_info(
-                f"[ADD_FILL_IGNORED] {target_stock.get('name')}({code}) "
-                f"ord_no={order_no or '-'} raw_fill_qty={raw_qty} "
-                f"already_filled={bundle_already_filled}/{bundle_requested_qty} "
-                f"order_filled={order_already_filled}/{order_requested_qty} "
-                "reason=duplicate_or_cumulative_receipt"
-            )
-            return (
-                0,
-                raw_price,
-                bundle_requested_qty,
-                bundle_already_filled,
-                order_requested_qty,
-                order_already_filled,
-                reconciled_before_ordno_bind,
-            )
+    effective_qty = max(0, int(receipt.get("incremental_qty") or 0))
+    if (
+        receipt.get("status") != "duplicate"
+        and bundle_requested_qty > 0
+        and bundle_already_filled + effective_qty > bundle_requested_qty
+    ):
+        return {
+            "status": "invalid",
+            "reason": "add_receipt_bundle_quantity_exceeded",
+        }
 
-        effective_qty = min(raw_qty, remaining_qty)
-        effective_price = raw_price
+    _remember_execution_number(
+        executions_by_order,
+        order_key=order_key,
+        execution_no=execution_no,
+        signature=execution_signature,
+    )
 
-        if (
-            order_already_filled > 0
-            and raw_qty > remaining_qty
-            and order_requested_qty > 0
-            and raw_qty <= order_requested_qty
-        ):
-            cumulative_amount = raw_price * raw_qty
-            delta_amount = cumulative_amount - order_already_amount
-            if delta_amount > 0:
-                effective_price = max(1, int(round(delta_amount / effective_qty)))
-                log_info(
-                    f"[ADD_FILL_CUMULATIVE_NORMALIZED] {target_stock.get('name')}({code}) "
-                    f"ord_no={order_no or '-'} raw_fill_qty={raw_qty} effective_fill_qty={effective_qty} "
-                    f"raw_avg_price={raw_price} effective_price={effective_price} "
-                    f"order_filled={order_already_filled}/{order_requested_qty}"
-                )
-        elif effective_qty < raw_qty:
-            log_info(
-                f"[ADD_FILL_CAPPED] {target_stock.get('name')}({code}) "
-                f"ord_no={order_no or '-'} raw_fill_qty={raw_qty} "
-                f"effective_fill_qty={effective_qty} already_filled={bundle_already_filled}/{bundle_requested_qty} "
-                f"order_filled={order_already_filled}/{order_requested_qty} "
-                "reason=over_requested_receipt"
-            )
-
-    new_order_filled = order_already_filled + effective_qty
-    new_bundle_filled = bundle_already_filled + effective_qty
+    order_requested_qty = max(
+        0, int(receipt.get("requested_qty") or order_requested_qty)
+    )
+    new_order_filled = max(0, int(receipt.get("cumulative_qty") or 0))
+    new_order_amount = max(0, int(receipt.get("cumulative_amount") or 0))
+    requested_by_order[order_key] = order_requested_qty
     filled_by_order[order_key] = new_order_filled
-    amount_by_order[order_key] = order_already_amount + (
-        effective_price * effective_qty
-    )
+    if new_order_amount > 0:
+        amount_by_order[order_key] = new_order_amount
+    economics_by_order[order_key] = int(bool(receipt.get("economics_complete")))
+    if reconciled_before_ordno_bind:
+        _append_pending_add_order_no(target_stock, normalized_order_no)
+        target_stock["scale_in_receipt_reconciled_before_ordno_bind"] = True
+    if receipt.get("status") == "duplicate":
+        receipt.update(
+            {
+                "bundle_requested_qty": bundle_requested_qty,
+                "bundle_filled_qty": bundle_already_filled,
+                "order_requested_qty": order_requested_qty,
+                "order_filled_qty": new_order_filled,
+                "reconciled_before_ordno_bind": reconciled_before_ordno_bind,
+                "order_no": normalized_order_no,
+            }
+        )
+        return receipt
+
+    new_bundle_filled = bundle_already_filled + effective_qty
+    incremental_amount = max(0, int(receipt.get("incremental_amount") or 0))
     target_stock["pending_add_filled_qty"] = new_bundle_filled
-    target_stock["pending_add_filled_amount"] = bundle_already_amount + (
-        effective_price * effective_qty
+    target_stock["pending_add_filled_amount"] = (
+        bundle_already_amount + incremental_amount
     )
-    return (
-        effective_qty,
-        effective_price,
-        bundle_requested_qty,
-        new_bundle_filled,
-        order_requested_qty,
-        new_order_filled,
-        reconciled_before_ordno_bind,
+    receipt.update(
+        {
+            "bundle_requested_qty": bundle_requested_qty,
+            "bundle_filled_qty": new_bundle_filled,
+            "order_requested_qty": order_requested_qty,
+            "order_filled_qty": new_order_filled,
+            "reconciled_before_ordno_bind": reconciled_before_ordno_bind,
+            "order_no": normalized_order_no,
+        }
     )
+    return receipt
 
 
 def _clear_runtime_keys(target_stock: dict[str, Any], keys: tuple[str, ...]) -> None:
@@ -1516,29 +3456,38 @@ def _normalize_sell_pending_message_for_realized_result(
 def _publish_sell_execution_message(
     *, name: str, pending_msg: str, audience: str, exec_price: int, profit_rate: float
 ) -> None:
-    result_label = "[익절 완료]" if profit_rate > 0 else "[손절 완료]"
-    if pending_msg:
-        final_msg = _normalize_sell_pending_message_for_realized_result(
-            pending_msg,
-            result_label=result_label,
-            profit_rate=profit_rate,
-        )
-        final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
+    try:
+        result_label = "[익절 완료]" if profit_rate > 0 else "[손절 완료]"
+        if pending_msg:
+            final_msg = _normalize_sell_pending_message_for_realized_result(
+                pending_msg,
+                result_label=result_label,
+                profit_rate=profit_rate,
+            )
+            final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
+            event_bus.publish(
+                "TELEGRAM_BROADCAST",
+                {"message": final_msg, "audience": audience, "parse_mode": "HTML"},
+            )
+            return
+
+        sign = f"🎊 {result_label}" if profit_rate > 0 else f"📉 {result_label}"
         event_bus.publish(
             "TELEGRAM_BROADCAST",
-            {"message": final_msg, "audience": audience, "parse_mode": "HTML"},
+            {
+                "message": f"{sign} **[{name}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`",
+                "audience": audience,
+                "parse_mode": "HTML",
+            },
         )
-        return
-
-    sign = f"🎊 {result_label}" if profit_rate > 0 else f"📉 {result_label}"
-    event_bus.publish(
-        "TELEGRAM_BROADCAST",
-        {
-            "message": f"{sign} **[{name}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`",
-            "audience": audience,
-            "parse_mode": "HTML",
-        },
-    )
+    except Exception as exc:
+        # Completion custody has already been committed by both callers.  A
+        # notification outage must not make them report transaction failure
+        # and replay the same broker receipt as an uncommitted sell.
+        log_error(
+            f"[SELL_COMPLETION_NOTIFICATION_FAILED] {name or '-'} "
+            f"price={exec_price} profit_rate={profit_rate}: {exc}"
+        )
 
 
 def _resolve_sell_execution_context(
@@ -1554,10 +3503,8 @@ def _resolve_sell_execution_context(
             safe_buy_price = (
                 float(record.buy_price) if record.buy_price is not None else 0.0
             )
-            if safe_buy_price > 0:
-                profit_rate = calculate_net_profit_rate(safe_buy_price, exec_price)
-            else:
-                profit_rate = 0.0
+            profit_rate = 0.0
+            if safe_buy_price <= 0:
                 log_error(
                     f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다."
                 )
@@ -1589,8 +3536,162 @@ def _finalize_standard_sell_execution(
     strategy: str,
     is_scalp_revive: bool,
     code: str,
+    sell_receipt: dict[str, Any],
     order_no: str = "",
 ) -> None:
+    if sell_receipt.get("status") != "final" or sell_receipt.get("final") is not True:
+        log_error(
+            f"[SELL_RECEIPT_FINALIZE_BLOCKED] {target_stock.get('name', code)}({code}) "
+            f"status={sell_receipt.get('status')} reason={sell_receipt.get('reason')}"
+        )
+        return
+    target_stock["sell_execution_order_no"] = str(order_no or "").strip() or "-"
+    smoothing_registration = {
+        "registered": False,
+        "status": "not_applicable",
+        "active_arm_count": 0,
+        "expires_at_epoch": None,
+    }
+    if (
+        strategy == "SCALPING"
+        and not is_scalp_revive
+        and callable(_smoothing_non_revive_post_sell_register_callback)
+    ):
+        try:
+            callback_result = _smoothing_non_revive_post_sell_register_callback(
+                target_stock,
+                code,
+                now_ts=now.timestamp(),
+            )
+            if isinstance(callback_result, dict):
+                smoothing_registration.update(callback_result)
+        except Exception as exc:
+            smoothing_registration["status"] = "registration_callback_error"
+            log_error(
+                "[SMOOTHING_POST_SELL] non-revive registration failed "
+                f"code={code}: {exc}"
+            )
+    sell_receipt_snapshot = _receipt_snapshot(target_stock, _SELL_RECEIPT_SNAPSHOT_KEYS)
+    sell_receipt_snapshot.update(
+        {
+            "smoothing_non_revive_post_sell_registered": bool(
+                smoothing_registration.get("registered")
+            ),
+            "smoothing_non_revive_post_sell_registration_status": str(
+                smoothing_registration.get("status") or "unknown"
+            ),
+            "smoothing_non_revive_post_sell_active_arm_count": _safe_int(
+                smoothing_registration.get("active_arm_count"), 0
+            ),
+            "smoothing_non_revive_post_sell_expires_at_epoch": (
+                smoothing_registration.get("expires_at_epoch")
+            ),
+            "sell_execution_expected_qty": int(sell_receipt["expected_qty"]),
+            "sell_execution_cumulative_qty": int(sell_receipt["cumulative_qty"]),
+            "sell_execution_cumulative_amount": int(sell_receipt["cumulative_amount"]),
+            "sell_execution_cumulative_net_pnl_krw": float(
+                sell_receipt["cumulative_net_pnl_krw"]
+            ),
+            "sell_execution_final_leg_qty": int(sell_receipt["incremental_qty"]),
+            "sell_execution_final_leg_price": float(sell_receipt["incremental_price"]),
+            "sell_execution_final_leg_net_pnl_krw": float(
+                sell_receipt["incremental_net_pnl_krw"]
+            ),
+            "sell_execution_execution_no": str(
+                sell_receipt.get("execution_no") or ""
+            ).strip()
+            or "-",
+            "sell_execution_receipt_economics_complete": bool(
+                sell_receipt.get("economics_complete")
+            ),
+            "sell_execution_receipt_quantity_contract_complete": bool(
+                sell_receipt.get("quantity_contract_complete")
+            ),
+            "sell_execution_receipt_unit_fill_consistent": bool(
+                sell_receipt.get("unit_fill_consistent", True)
+            ),
+        }
+    )
+    # The broker-final receipt must remain durable until the DB transaction is
+    # committed.  Previously a daemon thread was started only after the journal
+    # and runtime state were cleared, so a process kill could lose the only
+    # exact quantity/economics evidence while DB still said SELL_ORDERED.
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    if not isinstance(state, dict):
+        state = {}
+    state.update(
+        {
+            "position_qty": int(sell_receipt["expected_qty"]),
+            "aggregate_cumulative_qty": int(sell_receipt["cumulative_qty"]),
+            "aggregate_cumulative_amount": int(sell_receipt["cumulative_amount"]),
+            "cumulative_net_pnl_krw": float(sell_receipt["cumulative_net_pnl_krw"]),
+            "remaining_qty": 0,
+            "final": True,
+            "final_pending_db_commit": True,
+            "finalization_exec_price": int(exec_price),
+            "finalization_now_iso": now.isoformat(),
+            "finalization_strategy": str(strategy),
+            "finalization_is_scalp_revive": bool(is_scalp_revive),
+            "finalization_order_no": str(order_no or "").strip(),
+            "finalization_receipt_snapshot": json.loads(
+                json.dumps(sell_receipt_snapshot, ensure_ascii=True, default=str)
+            ),
+            "receipt_updated_at_epoch": time.time(),
+        }
+    )
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = state
+    target_stock.update(
+        {
+            "status": "SELL_ORDERED",
+            "scale_in_locked": True,
+            "sell_partial_exit_carry_active": True,
+            "sell_partial_exit_recovery_required": True,
+            "sell_cancel_reconciliation_required": True,
+            "sell_cancel_reconciliation_source": "final_receipt_db_commit_pending",
+        }
+    )
+    if not _persist_sell_receipt_recovery_or_interlock(
+        target_stock,
+        code=code,
+        reason="final_sell_receipt_before_db_commit",
+    ):
+        log_error(
+            f"[SELL_FINAL_DURABILITY_BLOCKED] {target_stock.get('name', code)}({code}) "
+            "final receipt journal could not be persisted; DB finalization withheld"
+        )
+        return
+    if not _update_db_for_sell(
+        target_id,
+        exec_price,
+        now,
+        sell_receipt_snapshot,
+        strategy,
+        is_scalp_revive,
+    ):
+        log_error(
+            f"[SELL_FINAL_DB_COMMIT_DEFERRED] {target_stock.get('name', code)}({code}) "
+            "durable final receipt retained for startup/periodic recovery"
+        )
+        return
+    _complete_standard_sell_runtime_after_db(
+        target_id=target_id,
+        target_stock=target_stock,
+        code=code,
+        now=now,
+        order_no=order_no,
+    )
+
+
+def _complete_standard_sell_runtime_after_db(
+    *,
+    target_id: int,
+    target_stock: dict[str, Any],
+    code: str,
+    now: datetime,
+    order_no: str,
+) -> None:
+    """Publish runtime terminal state only after durable DB completion."""
+
     try:
         POSITION_PEAK_LEDGER.remove_for_stock(target_stock)
     except Exception as exc:
@@ -1638,63 +3739,48 @@ def _finalize_standard_sell_execution(
             sold_at=now.astimezone().isoformat() if now.tzinfo else now.isoformat(),
         )
     move_orders_to_terminal(target_stock, reason="sell_completed_cleanup")
-    target_stock["sell_execution_order_no"] = str(order_no or "").strip() or "-"
-    smoothing_registration = {
-        "registered": False,
-        "status": "not_applicable",
-        "active_arm_count": 0,
-        "expires_at_epoch": None,
-    }
-    if (
-        strategy == "SCALPING"
-        and not is_scalp_revive
-        and callable(_smoothing_non_revive_post_sell_register_callback)
-    ):
-        try:
-            callback_result = _smoothing_non_revive_post_sell_register_callback(
-                target_stock,
-                code,
-                now_ts=now.timestamp(),
-            )
-            if isinstance(callback_result, dict):
-                smoothing_registration.update(callback_result)
-        except Exception as exc:
-            smoothing_registration["status"] = "registration_callback_error"
-            log_error(
-                "[SMOOTHING_POST_SELL] non-revive registration failed "
-                f"code={code}: {exc}"
-            )
-    sell_receipt_snapshot = _receipt_snapshot(target_stock, _SELL_RECEIPT_SNAPSHOT_KEYS)
-    sell_receipt_snapshot.update(
-        {
-            "smoothing_non_revive_post_sell_registered": bool(
-                smoothing_registration.get("registered")
-            ),
-            "smoothing_non_revive_post_sell_registration_status": str(
-                smoothing_registration.get("status") or "unknown"
-            ),
-            "smoothing_non_revive_post_sell_active_arm_count": _safe_int(
-                smoothing_registration.get("active_arm_count"), 0
-            ),
-            "smoothing_non_revive_post_sell_expires_at_epoch": (
-                smoothing_registration.get("expires_at_epoch")
-            ),
-        }
-    )
+    clear_sell_receipt_recovery(target_id)
     _clear_runtime_keys(target_stock, _SELL_COMPLETE_RESET_KEYS)
     target_stock.pop("pending_sell_msg", None)
-    threading.Thread(
-        target=_update_db_for_sell,
-        args=(
-            target_id,
-            exec_price,
-            now,
-            sell_receipt_snapshot,
-            strategy,
-            is_scalp_revive,
-        ),
-        daemon=True,
-    ).start()
+
+
+def recover_final_sell_receipt(target_stock: dict[str, Any]) -> bool:
+    """Finish a crash-surviving broker-final receipt from its exact journal."""
+
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    if not isinstance(state, dict) or state.get("final_pending_db_commit") is not True:
+        return False
+    snapshot = state.get("finalization_receipt_snapshot")
+    if not isinstance(snapshot, dict):
+        return False
+    target_id = _safe_int(target_stock.get("id"), 0)
+    code = str(target_stock.get("code") or "").strip()[:6]
+    try:
+        now = datetime.fromisoformat(str(state.get("finalization_now_iso") or ""))
+    except (TypeError, ValueError):
+        return False
+    exec_price = _safe_int(state.get("finalization_exec_price"), 0)
+    strategy = str(state.get("finalization_strategy") or "KOSPI_ML")
+    is_scalp_revive = bool(state.get("finalization_is_scalp_revive"))
+    if target_id <= 0 or not code or exec_price <= 0:
+        return False
+    if not _update_db_for_sell(
+        target_id,
+        exec_price,
+        now,
+        dict(snapshot),
+        strategy,
+        is_scalp_revive,
+    ):
+        return False
+    _complete_standard_sell_runtime_after_db(
+        target_id=target_id,
+        target_stock=target_stock,
+        code=code,
+        now=now,
+        order_no=str(state.get("finalization_order_no") or ""),
+    )
+    return True
 
 
 def _handle_nxt_rising_missed_tp1_partial_sell_execution(
@@ -1707,6 +3793,12 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
     exec_qty: int,
     now: datetime,
     safe_buy_price: float,
+    order_qty: int | None = None,
+    remaining_qty: int | None = None,
+    cumulative_exec_amount: int | None = None,
+    execution_no: str = "",
+    unit_exec_price: int | None = None,
+    unit_exec_qty: int | None = None,
 ) -> None:
     requested_qty = max(
         0,
@@ -1716,37 +3808,103 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
         0,
         _safe_int(target_stock.get("nxt_rising_missed_tp1_partial_filled_qty"), 0),
     )
-    remaining_to_fill = max(0, requested_qty - filled_before)
-    effective_exec_qty = min(max(0, exec_qty), remaining_to_fill)
-    if requested_qty <= 0 or effective_exec_qty <= 0:
+    fill_amount_before = max(
+        0,
+        _safe_int(target_stock.get("nxt_rising_missed_tp1_partial_fill_amount"), 0),
+    )
+    executions = target_stock.get("nxt_rising_missed_tp1_partial_executions_by_no")
+    executions = dict(executions) if isinstance(executions, dict) else {}
+    signature = _execution_receipt_signature(
+        cumulative_qty=exec_qty,
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+        cumulative_exec_amount=cumulative_exec_amount,
+        unit_exec_price=unit_exec_price,
+        unit_exec_qty=unit_exec_qty,
+    )
+    execution_conflict = _execution_number_conflict_reason(
+        {str(order_no or "").strip(): executions},
+        order_key=str(order_no or "").strip(),
+        execution_no=execution_no,
+        signature=signature,
+    )
+    if execution_conflict:
         log_error(
-            f"⚠️ [NXT_TP1_PARTIAL_RECEIPT] {target_stock.get('name')}({code}) "
-            f"invalid fill requested={requested_qty} filled={filled_before} exec_qty={exec_qty}"
+            f"[NXT_TP1_PARTIAL_RECEIPT_BLOCKED] {target_stock.get('name')}({code}) "
+            f"reason={execution_conflict} ord_no={order_no or '-'}"
+        )
+        _request_broker_snapshot_refresh(
+            code, reason="nxt_tp1_execution_number_conflict"
         )
         return
+    receipt = _resolve_cumulative_buy_order_receipt(
+        raw_price=exec_price,
+        raw_cumulative_qty=exec_qty,
+        requested_qty=requested_qty,
+        previous_qty=filled_before,
+        previous_amount=fill_amount_before,
+        previous_economics_complete=True,
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+        cumulative_exec_amount=cumulative_exec_amount,
+        unit_exec_price=unit_exec_price,
+        unit_exec_qty=unit_exec_qty,
+    )
+    custody_contract_complete = bool(
+        receipt.get("status") not in {"invalid", "duplicate"}
+        and receipt.get("economics_complete") is True
+        and receipt.get("quantity_contract_complete") is True
+    )
+    source_unit_contract_complete = bool(
+        receipt.get("unit_fill_consistent") is True
+        and unit_exec_price is not None
+        and unit_exec_qty is not None
+    )
+    source_execution_identity_complete = bool(str(execution_no or "").strip())
+    if receipt.get("status") == "duplicate":
+        return
+    if requested_qty <= 0 or not custody_contract_complete:
+        log_error(
+            f"[NXT_TP1_PARTIAL_RECEIPT_BLOCKED] {target_stock.get('name')}({code}) "
+            f"reason={receipt.get('reason') or 'exact_contract_incomplete'} "
+            f"requested={requested_qty} filled={filled_before} exec_qty={exec_qty}"
+        )
+        _request_broker_snapshot_refresh(code, reason="nxt_tp1_receipt_contract_gap")
+        return
+    effective_exec_qty = max(0, int(receipt.get("incremental_qty") or 0))
+    effective_exec_amount = max(0, int(receipt.get("incremental_amount") or 0))
+    effective_exec_price = float(receipt.get("incremental_price") or 0.0)
+    if effective_exec_qty <= 0 or effective_exec_amount <= 0:
+        return
+    holder = {str(order_no or "").strip(): executions}
+    if source_execution_identity_complete:
+        _remember_execution_number(
+            holder,
+            order_key=str(order_no or "").strip(),
+            execution_no=execution_no,
+            signature=signature,
+        )
+    target_stock["nxt_rising_missed_tp1_partial_executions_by_no"] = holder[
+        str(order_no or "").strip()
+    ]
     partial_decision_price = _safe_float(target_stock.get("sell_target_price"), 0.0)
     partial_realized_net_pnl_krw = calculate_net_realized_pnl(
         safe_buy_price,
-        exec_price,
+        effective_exec_price,
         effective_exec_qty,
     )
     partial_lifecycle_economics = _main_lifecycle_exit_economics_fields(
         target_stock,
         buy_price=safe_buy_price,
-        sell_price=float(exec_price),
+        sell_price=effective_exec_price,
         sell_qty=effective_exec_qty,
         realized_net_pnl_krw=partial_realized_net_pnl_krw,
         decision_price=partial_decision_price,
-        decision_basis_source=(
-            "nxt_rising_missed_tp1_partial_sell_target_price"
-        ),
+        decision_basis_source=("nxt_rising_missed_tp1_partial_sell_target_price"),
     )
 
-    filled_qty = filled_before + effective_exec_qty
-    fill_amount = max(
-        0,
-        _safe_int(target_stock.get("nxt_rising_missed_tp1_partial_fill_amount"), 0),
-    ) + (exec_price * effective_exec_qty)
+    filled_qty = int(receipt["cumulative_qty"])
+    fill_amount = int(receipt["cumulative_amount"])
     original_qty = max(
         requested_qty,
         _safe_int(
@@ -1762,6 +3920,51 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
         filled_qty,
     )
     target_stock["buy_qty"] = runner_qty
+    target_stock["scale_in_locked"] = True
+    target_stock["sell_partial_exit_carry_active"] = True
+    cumulative_realized_pnl_krw = calculate_net_realized_pnl(
+        safe_buy_price,
+        fill_amount / filled_qty,
+        filled_qty,
+    )
+    # Journal the in-flight TP1 order as well as the completed TP1 carry.  A
+    # restart between cumulative packets must be able to reconstruct the
+    # special partial-order consumer instead of leaving a locked DB position
+    # with no replay target.
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = {
+        "order_no": str(order_no or "").strip(),
+        "position_qty": original_qty,
+        "expected_qty": requested_qty,
+        "cumulative_qty": filled_qty,
+        "remaining_qty": runner_qty,
+        "cumulative_amount": fill_amount,
+        "cumulative_net_pnl_krw": round(cumulative_realized_pnl_krw, 4),
+        "aggregate_cumulative_qty": filled_qty,
+        "aggregate_cumulative_amount": fill_amount,
+        "carried_qty": 0,
+        "carried_amount": 0,
+        "carried_net_pnl_krw": 0.0,
+        "carried_economics_complete": True,
+        "carried_quantity_contract_complete": True,
+        "carried_unit_fill_consistent": source_unit_contract_complete,
+        "prior_orders": {},
+        "economics_complete": True,
+        "quantity_contract_complete": True,
+        "unit_fill_consistent": source_unit_contract_complete,
+        "execution_identity_complete": source_execution_identity_complete,
+        "final": False,
+        "last_execution_no": str(execution_no or "").strip(),
+        "executions_by_no": holder[str(order_no or "").strip()],
+        "partial_order_kind": "nxt_rising_missed_tp1",
+        "partial_order_requested_qty": requested_qty,
+        "receipt_updated_at_epoch": time.time(),
+    }
+    target_stock["sell_reconciled_remaining_qty"] = runner_qty
+    journal_persisted = _persist_sell_receipt_recovery_or_interlock(
+        target_stock,
+        code=code,
+        reason="nxt_tp1_partial_fill_progress",
+    )
     partial_completed = filled_qty >= requested_qty
     try:
         with DB.get_session() as session:
@@ -1769,8 +3972,12 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
                 session.query(RecommendationHistory).filter_by(id=target_id).first()
             )
             if record:
-                record.status = "HOLDING" if partial_completed else "SELL_ORDERED"
-                record.buy_qty = runner_qty
+                record.status = (
+                    "HOLDING"
+                    if partial_completed and journal_persisted
+                    else "SELL_ORDERED"
+                )
+                record.scale_in_locked = True
     except Exception as exc:
         log_error(f"🚨 [DB 에러] ID {target_id} NXT TP1 체결수량 반영 실패: {exc}")
 
@@ -1788,28 +3995,106 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
             filled_qty=filled_qty,
             requested_qty=requested_qty,
             runner_qty=runner_qty,
-            fill_price=exec_price,
+            fill_price=round(effective_exec_price, 4),
+            execution_no=execution_no or "-",
+            sell_receipt_economics_complete=True,
+            sell_receipt_quantity_contract_complete=True,
+            sell_receipt_unit_fill_consistent=source_unit_contract_complete,
             main_lifecycle_exit_qty=effective_exec_qty,
-            main_lifecycle_exit_price=exec_price,
+            main_lifecycle_exit_price=round(effective_exec_price, 4),
             **partial_lifecycle_economics,
             actual_order_submitted=True,
             broker_order_forbidden=False,
             runtime_effect=True,
+            **_broker_execution_provenance_fields(target_stock),
         )
         return
 
-    avg_sell_price = _safe_int(
+    avg_sell_price = _safe_float(
         target_stock.get("nxt_rising_missed_tp1_partial_avg_sell_price"),
-        exec_price,
+        effective_exec_price,
     )
     realized_profit_pct = (
         calculate_net_profit_rate(safe_buy_price, avg_sell_price)
         if safe_buy_price > 0
         else 0.0
     )
-    realized_pnl_krw = round(
-        ((avg_sell_price - safe_buy_price) * filled_qty) if safe_buy_price > 0 else 0.0
+    realized_pnl_krw = calculate_net_realized_pnl(
+        safe_buy_price, avg_sell_price, filled_qty
     )
+    prior_order = {
+        "expected_qty": requested_qty,
+        "cumulative_qty": filled_qty,
+        "cumulative_amount": fill_amount,
+        "remaining_qty": 0,
+        "economics_complete": True,
+        "quantity_contract_complete": True,
+        "unit_fill_consistent": source_unit_contract_complete,
+        "execution_identity_complete": source_execution_identity_complete,
+        "executions_by_no": holder[str(order_no or "").strip()],
+    }
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = {
+        "order_no": "",
+        "position_qty": original_qty,
+        "expected_qty": 0,
+        "cumulative_qty": 0,
+        "remaining_qty": runner_qty,
+        "cumulative_amount": 0,
+        "cumulative_net_pnl_krw": round(realized_pnl_krw, 4),
+        "aggregate_cumulative_qty": filled_qty,
+        "aggregate_cumulative_amount": fill_amount,
+        "carried_qty": filled_qty,
+        "carried_amount": fill_amount,
+        "carried_net_pnl_krw": round(realized_pnl_krw, 4),
+        "carried_economics_complete": True,
+        "carried_quantity_contract_complete": True,
+        "carried_unit_fill_consistent": source_unit_contract_complete,
+        "prior_orders": {str(order_no or "").strip(): prior_order},
+        "economics_complete": True,
+        "quantity_contract_complete": True,
+        "unit_fill_consistent": source_unit_contract_complete,
+        "execution_identity_complete": source_execution_identity_complete,
+        "final": False,
+        "last_execution_no": "",
+        "executions_by_no": {},
+        "partial_order_kind": "nxt_rising_missed_tp1",
+        "partial_order_requested_qty": requested_qty,
+        "receipt_updated_at_epoch": time.time(),
+    }
+    target_stock["sell_reconciled_remaining_qty"] = runner_qty
+    carried_journal_persisted = _persist_sell_receipt_recovery_or_interlock(
+        target_stock,
+        code=code,
+        reason="nxt_tp1_partial_fill_completed",
+    )
+    if not carried_journal_persisted:
+        target_stock["status"] = "SELL_ORDERED"
+        target_stock["nxt_rising_missed_tp1_partial_pending"] = False
+        target_stock["nxt_rising_missed_tp1_partial_applied"] = False
+        return
+    try:
+        with DB.get_session() as session:
+            record = (
+                session.query(RecommendationHistory).filter_by(id=target_id).first()
+            )
+            if record:
+                record.status = "HOLDING"
+                record.scale_in_locked = True
+    except Exception as exc:
+        target_stock.update(
+            {
+                "status": "SELL_ORDERED",
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": (
+                    "nxt_tp1_carried_db_status_commit_failed"
+                ),
+            }
+        )
+        log_error(
+            f"[NXT_TP1_CARRY_DB_COMMIT_BLOCKED] "
+            f"{target_stock.get('name')}({code}) id={target_id}: {exc}"
+        )
+        return
     target_stock["status"] = "HOLDING"
     target_stock["nxt_rising_missed_tp1_partial_pending"] = False
     target_stock["nxt_rising_missed_tp1_partial_applied"] = True
@@ -1833,10 +4118,14 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
         observed_at=now,
         observe_candidate_lifecycle=False,
         ord_no=order_no or "-",
+        execution_no=execution_no or "-",
         sell_price=avg_sell_price,
         sold_qty=filled_qty,
         main_lifecycle_exit_qty=effective_exec_qty,
-        main_lifecycle_exit_price=exec_price,
+        main_lifecycle_exit_price=round(effective_exec_price, 4),
+        sell_receipt_economics_complete=True,
+        sell_receipt_quantity_contract_complete=True,
+        sell_receipt_unit_fill_consistent=source_unit_contract_complete,
         **partial_lifecycle_economics,
         runner_qty=runner_qty,
         realized_profit_pct=f"{realized_profit_pct:+.2f}",
@@ -1845,6 +4134,7 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
         actual_order_submitted=True,
         runtime_effect=True,
         decision_authority="nxt_rising_missed_tp1_partial_runner_canary",
+        **_broker_execution_provenance_fields(target_stock),
     )
     log_info(
         f"[NXT_TP1_PARTIAL_COMPLETED] {target_stock.get('name')}({code}) "
@@ -1878,8 +4168,11 @@ def _handle_scalp_revive_sell_execution(
     profit_rate: float,
     safe_buy_price: float,
     strategy: str,
+    sell_receipt: dict[str, Any],
     order_no: str = "",
 ) -> bool:
+    if sell_receipt.get("status") != "final" or sell_receipt.get("final") is not True:
+        return False
     revived_position_tag = normalize_position_tag(
         "SCALPING",
         target_stock.get("position_tag")
@@ -1892,12 +4185,46 @@ def _handle_scalp_revive_sell_execution(
             )
             if not record:
                 return False
+            prior_status = str(getattr(record, "status", "") or "").strip().upper()
+            if prior_status == "COMPLETED":
+                return bool(
+                    record.sell_time and _safe_float(record.sell_price, 0.0) > 0
+                )
+            if prior_status not in {"HOLDING", "SELL_ORDERED"}:
+                log_error(
+                    f"[SELL_RECEIPT_DB_RECONCILE_BLOCKED] ID {target_id} "
+                    f"unexpected_status={prior_status or '-'}"
+                )
+                return False
+            position_buy_qty = int(
+                float(
+                    getattr(record, "buy_qty", 0) or target_stock.get("buy_qty", 0) or 0
+                )
+            )
+            completed_sell_qty = int(sell_receipt.get("cumulative_qty") or 0)
+            if position_buy_qty <= 0 or completed_sell_qty != position_buy_qty:
+                log_error(
+                    f"[SCALP_REVIVE_SELL_RECONCILE_BLOCKED] {code} "
+                    f"filled={completed_sell_qty} position={position_buy_qty}"
+                )
+                return False
+            completed_sell_amount = int(sell_receipt.get("cumulative_amount") or 0)
+            position_weighted_sell_price = int(
+                round(completed_sell_amount / completed_sell_qty)
+            )
+            realized_pnl_krw = float(sell_receipt.get("cumulative_net_pnl_krw") or 0.0)
+            profit_rate = (
+                realized_pnl_krw / (safe_buy_price * completed_sell_qty) * 100.0
+                if safe_buy_price > 0
+                else 0.0
+            )
             record.status = "COMPLETED"
-            record.sell_price = exec_price
+            record.sell_price = position_weighted_sell_price
             record.sell_time = now
             record.profit_rate = profit_rate
             log_info(
-                f"🎉 [매매 완료: ID {target_id}] {code} 실매도가: {exec_price:,}원 / 수익률: {profit_rate}%"
+                f"🎉 [매매 완료: ID {target_id}] {code} "
+                f"실매도가: {position_weighted_sell_price:,}원 / 수익률: {profit_rate}%"
             )
 
             new_record = RecommendationHistory(
@@ -1914,27 +4241,32 @@ def _handle_scalp_revive_sell_execution(
             session.add(new_record)
             session.flush()
             new_watch_id = new_record.id
+            # Persist both the completed position and its replacement WATCHING
+            # row before publishing any completion evidence.
+            session.commit()
 
             _publish_sell_execution_message(
                 name=target_stock.get("name") or "-",
                 pending_msg=target_stock.get("pending_sell_msg") or "",
                 audience=_receipt_audience(target_stock),
-                exec_price=exec_price,
+                exec_price=position_weighted_sell_price,
                 profit_rate=profit_rate,
             )
-            position_buy_qty = int(
-                float(
-                    getattr(record, "buy_qty", 0) or target_stock.get("buy_qty", 0) or 0
+            final_leg_qty = int(sell_receipt.get("incremental_qty") or 0)
+            final_leg_price = float(sell_receipt.get("incremental_price") or 0.0)
+            final_leg_net_pnl = float(
+                sell_receipt.get("incremental_net_pnl_krw") or 0.0
+            )
+            final_leg_economics = (
+                _main_lifecycle_exit_economics_fields(
+                    target_stock,
+                    buy_price=safe_buy_price,
+                    sell_price=final_leg_price,
+                    sell_qty=final_leg_qty,
+                    realized_net_pnl_krw=final_leg_net_pnl,
                 )
-            )
-            completed_sell_qty = max(0, int(exec_qty or 0))
-            realized_pnl_krw = calculate_net_realized_pnl(
-                safe_buy_price,
-                exec_price,
-                completed_sell_qty,
-            )
-            reconciled_full_exit = (
-                position_buy_qty > 0 and completed_sell_qty == position_buy_qty
+                if sell_receipt.get("economics_complete") is True
+                else {}
             )
             _log_holding_pipeline(
                 target_stock.get("name"),
@@ -1944,6 +4276,7 @@ def _handle_scalp_revive_sell_execution(
                 candidate_stock=target_stock,
                 observed_at=now,
                 order_no=str(order_no or "").strip() or "-",
+                execution_no=sell_receipt.get("execution_no") or "-",
                 metric_role="execution_quality_real_only",
                 decision_authority="broker_sell_fill_observation_only",
                 window_policy="same_position_cycle_broker_fill",
@@ -1959,12 +4292,12 @@ def _handle_scalp_revive_sell_execution(
                     "threshold_mutation|provider_route_change|quantity_cap_release|"
                     "broker_guard_bypass|bot_restart"
                 ),
-                sell_price=int(exec_price or 0),
+                sell_price=position_weighted_sell_price,
                 sell_qty=completed_sell_qty,
-                main_lifecycle_exit_qty=completed_sell_qty,
-                main_lifecycle_exit_price=int(exec_price or 0),
-                main_lifecycle_broker_reconciled=reconciled_full_exit,
-                main_lifecycle_reconciled_final_exit=reconciled_full_exit,
+                main_lifecycle_exit_qty=final_leg_qty,
+                main_lifecycle_exit_price=round(final_leg_price, 4),
+                main_lifecycle_broker_reconciled=True,
+                main_lifecycle_reconciled_final_exit=True,
                 buy_price=f"{safe_buy_price:.2f}",
                 buy_qty=position_buy_qty,
                 realized_pnl_krw=realized_pnl_krw,
@@ -1975,14 +4308,9 @@ def _handle_scalp_revive_sell_execution(
                 or "MANUAL",
                 revive=True,
                 new_watch_id=int(new_watch_id or 0),
+                **_broker_execution_provenance_fields(target_stock),
                 **_trailing_continuation_receipt_fields(target_stock),
-                **_main_lifecycle_exit_economics_fields(
-                    target_stock,
-                    buy_price=safe_buy_price,
-                    sell_price=float(exec_price or 0),
-                    sell_qty=completed_sell_qty,
-                    realized_net_pnl_krw=realized_pnl_krw,
-                ),
+                **final_leg_economics,
                 **scout_ai_execution_attribution_fields(
                     target_stock,
                     stage="sell_completed",
@@ -1996,7 +4324,7 @@ def _handle_scalp_revive_sell_execution(
                     code=code,
                     sell_time=now,
                     buy_price=safe_buy_price,
-                    sell_price=exec_price,
+                    sell_price=position_weighted_sell_price,
                     profit_rate=profit_rate,
                     buy_qty=int(
                         float(
@@ -2033,6 +4361,7 @@ def _handle_scalp_revive_sell_execution(
         revived_position_tag=revived_position_tag,
         revived_at_ts=now.timestamp(),
     )
+    clear_sell_receipt_recovery(target_id)
     return True
 
 
@@ -2156,6 +4485,8 @@ def _find_buy_bundle_match(code: str, normalized_order_no: str):
             stock
             for stock in ACTIVE_TARGETS
             if str(stock.get("code", "")).strip()[:6] == code
+            and str(stock.get("status", "") or "").strip().upper()
+            in {"WATCHING", "BUY_ORDERED", "HOLDING"}
             and any(
                 str(order.get("ord_no", "") or "").strip() == normalized_order_no
                 for order in (stock.get("pending_entry_orders") or [])
@@ -2170,11 +4501,17 @@ def _find_terminal_entry_target(normalized_order_no: str):
     if not terminal_match:
         return None
     stock_code = str(terminal_match.get("stock_code", "") or "").strip()[:6]
+    terminal_target_id = str(terminal_match.get("target_id", "") or "").strip()
+    if not terminal_target_id:
+        return None
     return next(
         (
             stock
             for stock in ACTIVE_TARGETS
             if str(stock.get("code", "")).strip()[:6] == stock_code
+            and str(stock.get("id", "") or "").strip() == terminal_target_id
+            and str(stock.get("status", "") or "").strip().upper()
+            in {"WATCHING", "BUY_ORDERED", "HOLDING"}
         ),
         None,
     )
@@ -2197,7 +4534,15 @@ def _find_add_order_match(code: str, normalized_order_no: str):
     )
 
 
-def _find_execution_target(code, exec_type, order_no):
+def _find_execution_target(
+    code,
+    exec_type,
+    order_no,
+    *,
+    order_qty=None,
+    remaining_qty=None,
+    cumulative_exec_qty=None,
+):
     """실제체결 대상 runtime truth 매칭.
 
     BUY 우선순위:
@@ -2227,6 +4572,26 @@ def _find_execution_target(code, exec_type, order_no):
         status_key = "BUY_ORDERED"
         order_key = "odno"
     else:
+        if normalized_order_no:
+            receipt_ledger_matches = []
+            for stock in ACTIVE_TARGETS:
+                if str(stock.get("code", "")).strip()[:6] != code:
+                    continue
+                receipt_state = stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+                if not isinstance(receipt_state, dict):
+                    continue
+                prior_orders = receipt_state.get("prior_orders")
+                known_receipt_orders = {
+                    str(receipt_state.get("order_no") or "").strip()
+                }
+                if isinstance(prior_orders, dict):
+                    known_receipt_orders.update(
+                        str(item or "").strip() for item in prior_orders
+                    )
+                if normalized_order_no in known_receipt_orders:
+                    receipt_ledger_matches.append(stock)
+            if len(receipt_ledger_matches) == 1:
+                return receipt_ledger_matches[0]
         opening_target_candidates = [
             stock
             for stock in ACTIVE_TARGETS
@@ -2257,7 +4622,7 @@ def _find_execution_target(code, exec_type, order_no):
             for stock in opening_target_candidates
             if bool(stock.get("opening_rotation_profit_target_submit_pending"))
         ]
-        if len(opening_submitting) == 1:
+        if not normalized_order_no and len(opening_submitting) == 1:
             return opening_submitting[0]
         status_key = "SELL_ORDERED"
         order_key = "sell_odno"
@@ -2296,6 +4661,33 @@ def _find_execution_target(code, exec_type, order_no):
         ]
         if len(pending_add_candidates) == 1:
             return pending_add_candidates[0]
+
+    # A broker-provided SELL order number must match the current order or the
+    # preserved receipt ledger exactly.  Falling back by symbol can attach a
+    # delayed receipt from an older order/generation to the live position.
+    if exec_type == "SELL" and normalized_order_no:
+        submit_pending_candidates = [
+            stock
+            for stock in status_candidates
+            if bool(stock.get("sell_submit_pending"))
+            and _safe_int(stock.get("sell_submit_requested_qty"), 0) > 0
+        ]
+        if len(submit_pending_candidates) == 1:
+            candidate = submit_pending_candidates[0]
+            requested_qty = _safe_int(candidate.get("sell_submit_requested_qty"), 0)
+            official_qty = _safe_int(order_qty, 0)
+            official_remaining = (
+                _safe_int(remaining_qty, -1) if remaining_qty is not None else -1
+            )
+            official_cumulative = _safe_int(cumulative_exec_qty, 0)
+            if (
+                official_qty == requested_qty
+                and official_remaining >= 0
+                and official_cumulative > 0
+                and official_cumulative + official_remaining == official_qty
+            ):
+                return candidate
+        return None
 
     if len(status_candidates) == 1:
         return status_candidates[0]
@@ -2338,19 +4730,49 @@ def _execution_ignore_context(code: str, exec_type: str, order_no: str) -> str:
 
 
 def _find_order_notice_target(code, exec_type, order_no):
-    target = _find_execution_target(code, exec_type, order_no)
-    if target:
-        return target
+    """Resolve notices only against an order identity already owned locally.
 
-    status_key = "BUY_ORDERED" if exec_type == "BUY" else "SELL_ORDERED"
-    status_candidates = [
-        stock
-        for stock in ACTIVE_TARGETS
-        if str(stock.get("code", "")).strip()[:6] == code
-        and stock.get("status") == status_key
-    ]
-    if len(status_candidates) == 1:
-        return status_candidates[0]
+    ORDER_NOTICE does not include the 900/902 quantity pair.  It therefore
+    cannot safely bind a blank entry/add leg by symbol before ORDER_EXECUTED.
+    """
+
+    normalized_order_no = str(order_no or "").strip()
+    if not normalized_order_no:
+        return None
+    if exec_type == "BUY":
+        for finder in (
+            _find_buy_bundle_match,
+            _find_add_order_match,
+        ):
+            target = finder(code, normalized_order_no)
+            if target:
+                return target
+        target = _find_terminal_entry_target(normalized_order_no)
+        if target and str(target.get("code") or "").strip()[:6] == code:
+            return target
+        exact = [
+            stock
+            for stock in ACTIVE_TARGETS
+            if str(stock.get("code", "")).strip()[:6] == code
+            and str(stock.get("odno", "") or "").strip() == normalized_order_no
+            and str(stock.get("status", "") or "").strip().upper()
+            in {"BUY_ORDERED", "HOLDING"}
+        ]
+        return exact[0] if len(exact) == 1 else None
+    if exec_type == "SELL":
+        exact = [
+            stock
+            for stock in ACTIVE_TARGETS
+            if str(stock.get("code", "")).strip()[:6] == code
+            and normalized_order_no
+            in {
+                str(stock.get("sell_odno", "") or "").strip(),
+                str(stock.get("sell_ord_no", "") or "").strip(),
+                str(stock.get("opening_rotation_profit_target_order_no") or "").strip(),
+                str(stock.get("preset_tp_ord_no", "") or "").strip(),
+            }
+        ]
+        return exact[0] if len(exact) == 1 else None
     return None
 
 
@@ -2362,8 +4784,7 @@ def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, st
             bool(target_stock.get("pending_add_order"))
             and str(target_stock.get("status") or "") == "HOLDING"
         ):
-            if order_no:
-                _append_pending_add_order_no(target_stock, order_no)
+            if order_no in set(_pending_add_order_numbers(target_stock)):
                 notices = target_stock.get("pending_add_notice_by_order_no")
                 if not isinstance(notices, dict):
                     notices = {}
@@ -2377,29 +4798,27 @@ def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, st
                 )
             return
 
-        pending_orders = target_stock.get("pending_entry_orders") or []
+        pending_orders = [
+            pending_order
+            for pending_order in (target_stock.get("pending_entry_orders") or [])
+            if isinstance(pending_order, dict)
+        ]
         exact_match = None
-        blank_match = None
-
         for order in pending_orders:
             existing_ord_no = str(order.get("ord_no", "") or "").strip()
             if existing_ord_no == order_no:
                 exact_match = order
                 break
-            if not existing_ord_no and blank_match is None:
-                blank_match = order
-
-        target_order = exact_match or blank_match
+        target_order = exact_match
         if target_order:
-            if not str(target_order.get("ord_no", "") or "").strip():
-                target_order["ord_no"] = order_no
-                changed = True
             target_order["notice_status"] = status
             target_order["notice_at"] = time.time()
             changed = True
 
-        if order_no and not str(target_stock.get("odno", "") or "").strip():
-            target_stock["odno"] = order_no
+        known_target_order_no = str(target_stock.get("odno", "") or "").strip()
+        if order_no == known_target_order_no:
+            target_stock["entry_order_notice_status"] = status
+            target_stock["entry_order_notice_at"] = time.time()
             changed = True
 
     elif exec_type == "SELL":
@@ -2819,9 +5238,34 @@ def _update_db_for_buy(target_id, exec_price, now, receipt_snapshot):
             initial_buy_qty = _safe_int(receipt_snapshot.get("initial_buy_qty"), 0)
             if initial_buy_qty > 0:
                 update_fields["initial_buy_qty"] = initial_buy_qty
-            session.query(RecommendationHistory).filter_by(id=target_id).update(
-                update_fields
+            nonterminal_monotonic = session.query(RecommendationHistory).filter_by(
+                id=target_id
             )
+            nonterminal_monotonic = nonterminal_monotonic.filter(
+                or_(
+                    RecommendationHistory.status.is_(None),
+                    and_(
+                        ~RecommendationHistory.status.in_(
+                            ("SELL_ORDERED", "COMPLETED", "EXPIRED")
+                        ),
+                        or_(
+                            RecommendationHistory.status != "HOLDING",
+                            RecommendationHistory.buy_qty.is_(None),
+                            RecommendationHistory.buy_qty <= buy_qty,
+                        ),
+                    ),
+                )
+            )
+            updated_rows = nonterminal_monotonic.update(
+                update_fields, synchronize_session=False
+            )
+
+        if not updated_rows:
+            log_info(
+                f"[BUY_DB_RECEIPT_STALE_SKIPPED] ID {target_id} "
+                f"snapshot_qty={buy_qty} reason=terminal_or_newer_db_state"
+            )
+            return
 
         log_info(
             f"✅ [영수증: ID {target_id}] {receipt_snapshot.get('code')} "
@@ -3071,6 +5515,14 @@ def _update_db_for_add(
 ):
     """비동기로 실행되는 추가매수 체결 DB 업데이트"""
     try:
+        new_avg = float(receipt_snapshot.get("buy_price") or exec_price or 0)
+        new_qty = int(receipt_snapshot.get("buy_qty") or 0)
+        if new_qty <= 0 or new_avg <= 0:
+            log_error(
+                f"[ADD_DB_RECEIPT_BLOCKED] ID {target_id} "
+                f"invalid snapshot avg={new_avg} qty={new_qty}"
+            )
+            return
         with DB.get_session() as session:
             record = (
                 session.query(RecommendationHistory).filter_by(id=target_id).first()
@@ -3080,62 +5532,86 @@ def _update_db_for_add(
 
             old_price = float(record.buy_price) if record.buy_price is not None else 0.0
             old_qty = int(record.buy_qty or 0)
-            new_avg = float(receipt_snapshot.get("buy_price") or exec_price or 0)
-            new_qty = int(receipt_snapshot.get("buy_qty") or 0)
-
-            record.buy_price = new_avg
-            record.buy_qty = new_qty
-            record.add_count = int(
-                receipt_snapshot.get("add_count", record.add_count or 0) or 0
-            )
-            record.avg_down_count = int(
-                receipt_snapshot.get("avg_down_count", record.avg_down_count or 0) or 0
-            )
-            record.pyramid_count = int(
-                receipt_snapshot.get("pyramid_count", record.pyramid_count or 0) or 0
-            )
+            update_fields: dict[str, Any] = {
+                "buy_price": new_avg,
+                "buy_qty": new_qty,
+                "add_count": int(
+                    receipt_snapshot.get("add_count", record.add_count or 0) or 0
+                ),
+                "avg_down_count": int(
+                    receipt_snapshot.get("avg_down_count", record.avg_down_count or 0)
+                    or 0
+                ),
+                "pyramid_count": int(
+                    receipt_snapshot.get("pyramid_count", record.pyramid_count or 0)
+                    or 0
+                ),
+                "scale_in_filled_qty": _safe_int(
+                    receipt_snapshot.get("scale_in_filled_qty"),
+                    _safe_int(getattr(record, "scale_in_filled_qty", 0), 0)
+                    + int(exec_qty or 0),
+                ),
+                "last_add_type": add_type,
+                "last_add_reason": str(
+                    receipt_snapshot.get("last_add_reason") or ""
+                ).strip(),
+                "last_add_at": now,
+                "shallow_volatility_avg_down_count": int(
+                    receipt_snapshot.get(
+                        "shallow_volatility_avg_down_count",
+                        getattr(record, "shallow_volatility_avg_down_count", 0) or 0,
+                    )
+                    or 0
+                ),
+                "scale_in_locked": bool(receipt_snapshot.get("scale_in_locked", False)),
+            }
             initial_buy_qty = _safe_int(
                 receipt_snapshot.get("initial_buy_qty"),
                 _safe_int(getattr(record, "initial_buy_qty", 0), 0),
             )
             if initial_buy_qty > 0:
-                record.initial_buy_qty = initial_buy_qty
-            record.scale_in_filled_qty = _safe_int(
-                receipt_snapshot.get("scale_in_filled_qty"),
-                _safe_int(getattr(record, "scale_in_filled_qty", 0), 0)
-                + int(exec_qty or 0),
-            )
-            record.last_add_type = add_type
-            record.last_add_reason = str(
-                receipt_snapshot.get("last_add_reason") or ""
-            ).strip()
-            record.last_add_at = now
-            record.shallow_volatility_avg_down_count = int(
-                receipt_snapshot.get(
-                    "shallow_volatility_avg_down_count",
-                    getattr(record, "shallow_volatility_avg_down_count", 0) or 0,
-                )
-                or 0
-            )
+                update_fields["initial_buy_qty"] = initial_buy_qty
             shallow_last_at = float(
                 receipt_snapshot.get("shallow_volatility_avg_down_last_at") or 0.0
             )
             if shallow_last_at > 0:
-                record.shallow_volatility_avg_down_last_at = datetime.fromtimestamp(
-                    shallow_last_at
+                update_fields["shallow_volatility_avg_down_last_at"] = (
+                    datetime.fromtimestamp(
+                        shallow_last_at,
+                    )
                 )
-            record.scale_in_locked = bool(
-                receipt_snapshot.get("scale_in_locked", False)
-            )
             # 보호선 보정값을 DB에도 반영 (있을 때만)
             if receipt_snapshot.get("trailing_stop_price") is not None:
-                record.trailing_stop_price = float(
+                update_fields["trailing_stop_price"] = float(
                     receipt_snapshot.get("trailing_stop_price") or 0
                 )
             if receipt_snapshot.get("hard_stop_price") is not None:
-                record.hard_stop_price = float(
+                update_fields["hard_stop_price"] = float(
                     receipt_snapshot.get("hard_stop_price") or 0
                 )
+            monotonic_holding = session.query(RecommendationHistory).filter_by(
+                id=target_id
+            )
+            monotonic_holding = monotonic_holding.filter(
+                and_(
+                    RecommendationHistory.status == "HOLDING",
+                    or_(
+                        RecommendationHistory.buy_qty.is_(None),
+                        RecommendationHistory.buy_qty < new_qty,
+                    ),
+                )
+            )
+            updated_rows = monotonic_holding.update(
+                update_fields,
+                synchronize_session=False,
+            )
+
+        if not updated_rows:
+            log_info(
+                f"[ADD_DB_RECEIPT_STALE_SKIPPED] ID {target_id} "
+                f"snapshot_qty={new_qty} reason=terminal_or_newer_db_state"
+            )
+            return
 
         log_info(
             f"✅ [영수증: ID {target_id}] {receipt_snapshot.get('code')} 추가매수 체결 반영 "
@@ -3158,15 +5634,26 @@ def _update_db_for_add(
 
 def _update_db_for_sell(
     target_id, exec_price, now, receipt_snapshot, strategy, is_scalp_revive
-):
-    """비동기로 실행되는 SELL 체결 DB 업데이트 및 알림 (스캘핑 부활 제외)"""
+) -> bool:
+    """Commit an exact SELL receipt and report whether the transaction closed."""
     try:
         with DB.get_session() as session:
             record = (
                 session.query(RecommendationHistory).filter_by(id=target_id).first()
             )
             if not record:
-                return
+                return False
+            prior_status = str(getattr(record, "status", "") or "").strip().upper()
+            if prior_status == "COMPLETED":
+                return bool(
+                    record.sell_time and _safe_float(record.sell_price, 0.0) > 0
+                )
+            if prior_status not in {"HOLDING", "SELL_ORDERED"}:
+                log_error(
+                    f"[SELL_RECEIPT_DB_RECONCILE_BLOCKED] ID {target_id} "
+                    f"unexpected_status={prior_status or '-'}"
+                )
+                return False
 
             safe_buy_price = (
                 float(record.buy_price) if record.buy_price is not None else 0.0
@@ -3190,42 +5677,61 @@ def _update_db_for_sell(
                 receipt_snapshot.get("pre_add_avg_price"), 0.0
             )
             pre_add_qty = _safe_int(receipt_snapshot.get("pre_add_qty"), 0)
-            if pre_add_avg_price > 0 and pre_add_qty > 0:
-                no_scale_in_counterfactual_profit_pct = calculate_net_profit_rate(
-                    pre_add_avg_price, exec_price
+            position_runner_qty = _safe_int(getattr(record, "buy_qty", 0), 0)
+            if position_runner_qty <= 0:
+                position_runner_qty = _safe_int(receipt_snapshot.get("buy_qty"), 0)
+            completed_runner_qty = _safe_int(
+                receipt_snapshot.get("sell_execution_cumulative_qty"), 0
+            )
+            if position_runner_qty <= 0 or completed_runner_qty != position_runner_qty:
+                log_error(
+                    f"[SELL_RECEIPT_DB_RECONCILE_BLOCKED] ID {target_id} "
+                    f"filled={completed_runner_qty} position={position_runner_qty}"
                 )
-                receipt_snapshot["no_scale_in_counterfactual_profit_pct"] = round(
-                    float(no_scale_in_counterfactual_profit_pct),
-                    4,
+                return False
+            runner_sell_amount = _safe_int(
+                receipt_snapshot.get("sell_execution_cumulative_amount"), 0
+            )
+            if runner_sell_amount <= 0:
+                log_error(
+                    f"[SELL_RECEIPT_DB_RECONCILE_BLOCKED] ID {target_id} "
+                    "cumulative sell amount missing"
                 )
-                receipt_snapshot["scale_in_incremental_realized_delta_pct"] = round(
-                    float(profit_rate) - float(no_scale_in_counterfactual_profit_pct),
-                    4,
-                )
-
+                return False
+            runner_weighted_sell_price = runner_sell_amount / completed_runner_qty
             record.status = "COMPLETED"
             record.sell_time = now
-            completed_runner_qty = _safe_int(getattr(record, "buy_qty", 0), 0)
-            if completed_runner_qty <= 0:
-                completed_runner_qty = _safe_int(receipt_snapshot.get("buy_qty"), 0)
-            completed_buy_qty = completed_runner_qty + partial_qty
-            position_weighted_sell_price = int(exec_price or 0)
-            runner_realized_pnl_krw = calculate_net_realized_pnl(
-                safe_buy_price,
-                exec_price,
-                completed_runner_qty,
+            cumulative_includes_partial = bool(
+                partial_qty > 0 and completed_runner_qty == position_runner_qty
+            )
+            completed_buy_qty = (
+                completed_runner_qty
+                if cumulative_includes_partial
+                else completed_runner_qty + partial_qty
+            )
+            position_weighted_sell_price = int(round(runner_weighted_sell_price))
+            runner_realized_pnl_krw = _safe_float(
+                receipt_snapshot.get("sell_execution_cumulative_net_pnl_krw"),
+                calculate_net_realized_pnl(
+                    safe_buy_price,
+                    runner_weighted_sell_price,
+                    completed_runner_qty,
+                ),
             )
             partial_realized_pnl_krw = 0
-            if partial_qty > 0 and partial_amount > 0 and safe_buy_price > 0:
+            if (
+                not cumulative_includes_partial
+                and partial_qty > 0
+                and partial_amount > 0
+                and safe_buy_price > 0
+            ):
                 partial_avg_sell_price = partial_amount / partial_qty
                 partial_realized_pnl_krw = calculate_net_realized_pnl(
                     safe_buy_price,
                     partial_avg_sell_price,
                     partial_qty,
                 )
-                total_sell_amount = partial_amount + (
-                    int(exec_price or 0) * completed_runner_qty
-                )
+                total_sell_amount = partial_amount + (runner_sell_amount)
                 position_weighted_sell_price = int(
                     round(total_sell_amount / max(1, completed_buy_qty))
                 )
@@ -3236,6 +5742,23 @@ def _update_db_for_sell(
                     * 100.0
                     if total_notional > 0
                     else 0.0
+                )
+            elif safe_buy_price > 0 and completed_runner_qty > 0:
+                profit_rate = (
+                    runner_realized_pnl_krw
+                    / (safe_buy_price * completed_runner_qty)
+                    * 100.0
+                )
+            if pre_add_avg_price > 0 and pre_add_qty > 0:
+                no_scale_in_counterfactual_profit_pct = calculate_net_profit_rate(
+                    pre_add_avg_price, position_weighted_sell_price
+                )
+                receipt_snapshot["no_scale_in_counterfactual_profit_pct"] = round(
+                    float(no_scale_in_counterfactual_profit_pct), 4
+                )
+                receipt_snapshot["scale_in_incremental_realized_delta_pct"] = round(
+                    float(profit_rate) - float(no_scale_in_counterfactual_profit_pct),
+                    4,
                 )
             record.buy_qty = completed_buy_qty
             record.sell_price = position_weighted_sell_price
@@ -3263,47 +5786,45 @@ def _update_db_for_sell(
                 }
             )
 
+            # Commit custody truth before emitting completion notifications or
+            # source-only lifecycle evidence.  A crash after those emissions
+            # but before the transaction committed could otherwise advertise a
+            # completed position while the durable DB row remained active.
+            session.flush()
+            session.commit()
+
             log_info(
                 f"🎉 [매매 완료: ID {target_id}] {receipt_snapshot.get('code')} "
-                f"실매도가: {exec_price:,}원 / 수익률: {profit_rate}%"
+                f"실매도가: {position_weighted_sell_price:,}원 / 수익률: {profit_rate}%"
             )
 
-            if (
-                strategy == "SCALPING"
-                and completed_position_tag != OPENING_ROTATION_POSITION_TAG
-                and callable(_scalp_exit_completed_callback)
-            ):
-                try:
-                    callback_result = _scalp_exit_completed_callback(
-                        str(receipt_snapshot.get("code", "")).strip()[:6],
-                        profit_rate=profit_rate,
-                        exit_price=exec_price,
-                        exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
-                        completed_at=now.timestamp(),
-                        position_tag=completed_position_tag,
-                    )
-                    if (
-                        isinstance(callback_result, dict)
-                        and callback_result.get("reconciled") is False
-                        and callback_result.get("reason")
-                        != "active_reentry_context_missing"
-                    ):
-                        log_error(
-                            "[RISING_MISSED_REENTRY] sell receipt reconciliation "
-                            f"deferred to sell_completed fallback (id={target_id}, "
-                            f"reason={callback_result.get('reason')})"
-                        )
-                except Exception as exc:
-                    log_error(
-                        "[RISING_MISSED_REENTRY] sell receipt reconciliation "
-                        f"failed (id={target_id}): {exc}"
-                    )
             _publish_sell_execution_message(
                 name=receipt_snapshot.get("name") or "-",
                 pending_msg=receipt_snapshot.get("pending_sell_msg") or "",
                 audience=_receipt_audience(receipt_snapshot),
-                exec_price=exec_price,
+                exec_price=position_weighted_sell_price,
                 profit_rate=profit_rate,
+            )
+            final_leg_qty = _safe_int(
+                receipt_snapshot.get("sell_execution_final_leg_qty"), 0
+            )
+            final_leg_price = _safe_float(
+                receipt_snapshot.get("sell_execution_final_leg_price"), 0.0
+            )
+            final_leg_net_pnl_krw = _safe_float(
+                receipt_snapshot.get("sell_execution_final_leg_net_pnl_krw"), 0.0
+            )
+            final_leg_economics = (
+                _main_lifecycle_exit_economics_fields(
+                    receipt_snapshot,
+                    buy_price=safe_buy_price,
+                    sell_price=final_leg_price,
+                    sell_qty=final_leg_qty,
+                    realized_net_pnl_krw=final_leg_net_pnl_krw,
+                )
+                if receipt_snapshot.get("sell_execution_receipt_economics_complete")
+                is True
+                else {}
             )
             _log_holding_pipeline(
                 receipt_snapshot.get("name"),
@@ -3313,13 +5834,31 @@ def _update_db_for_sell(
                 candidate_stock=receipt_snapshot,
                 observed_at=now,
                 order_no=receipt_snapshot.get("sell_execution_order_no") or "-",
+                execution_no=(
+                    receipt_snapshot.get("sell_execution_execution_no") or "-"
+                ),
                 sell_price=position_weighted_sell_price,
-                last_sell_fill_price=int(exec_price or 0),
+                last_sell_fill_price=round(final_leg_price, 4),
                 sell_qty=completed_buy_qty,
-                main_lifecycle_exit_qty=completed_runner_qty,
-                main_lifecycle_exit_price=int(exec_price or 0),
-                main_lifecycle_broker_reconciled=completed_runner_qty > 0,
-                main_lifecycle_reconciled_final_exit=completed_runner_qty > 0,
+                main_lifecycle_exit_qty=final_leg_qty,
+                main_lifecycle_exit_price=round(final_leg_price, 4),
+                main_lifecycle_broker_reconciled=True,
+                main_lifecycle_reconciled_final_exit=True,
+                sell_execution_receipt_economics_complete=bool(
+                    receipt_snapshot.get(
+                        "sell_execution_receipt_economics_complete", False
+                    )
+                ),
+                sell_execution_receipt_quantity_contract_complete=bool(
+                    receipt_snapshot.get(
+                        "sell_execution_receipt_quantity_contract_complete", False
+                    )
+                ),
+                sell_execution_receipt_unit_fill_consistent=bool(
+                    receipt_snapshot.get(
+                        "sell_execution_receipt_unit_fill_consistent", False
+                    )
+                ),
                 position_weighted_sell_price=position_weighted_sell_price,
                 profit_rate=f"{profit_rate:+.2f}",
                 exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
@@ -3365,13 +5904,8 @@ def _update_db_for_sell(
                 ),
                 effective_venue=receipt_snapshot.get("last_sell_execution_cohort", "-"),
                 actual_order_submitted=True,
-                **_main_lifecycle_exit_economics_fields(
-                    receipt_snapshot,
-                    buy_price=safe_buy_price,
-                    sell_price=float(exec_price or 0),
-                    sell_qty=completed_runner_qty,
-                    realized_net_pnl_krw=runner_realized_pnl_krw,
-                ),
+                **_broker_execution_provenance_fields(receipt_snapshot),
+                **final_leg_economics,
                 **scout_ai_execution_attribution_fields(
                     receipt_snapshot,
                     stage="sell_completed",
@@ -3452,7 +5986,7 @@ def _update_db_for_sell(
                     code=str(receipt_snapshot.get("code", "")).strip()[:6],
                     sell_time=now,
                     buy_price=safe_buy_price,
-                    sell_price=exec_price,
+                    sell_price=position_weighted_sell_price,
                     profit_rate=profit_rate,
                     buy_qty=int(
                         float(
@@ -3478,31 +6012,49 @@ def _update_db_for_sell(
                 log_error(
                     f"[POST_SELL] candidate record failed (id={target_id}): {exc}"
                 )
-        # Opening same-symbol re-entry is released only after the DB session
-        # has committed the completed receipt.  The broker receipt itself is
-        # the reconciliation truth; common cooldowns remain untouched.
-        if (
-            strategy == "SCALPING"
-            and completed_position_tag == OPENING_ROTATION_POSITION_TAG
-            and callable(_scalp_exit_completed_callback)
-        ):
-            callback_result = _scalp_exit_completed_callback(
-                str(receipt_snapshot.get("code", "")).strip()[:6],
-                profit_rate=profit_rate,
-                exit_price=exec_price,
-                exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
-                completed_at=now.timestamp(),
-                position_tag=completed_position_tag,
-            )
-            if not isinstance(callback_result, dict) or not callback_result.get(
-                "reconciled"
-            ):
-                log_error(
-                    "[OPENING_ROTATION_REENTRY] completed receipt did not release "
-                    f"the symbol (id={target_id}, result={callback_result})"
+        # Same-symbol re-entry is released only after the DB session has
+        # committed the completed receipt.  A failed commit must never grant
+        # a new entry while the old custody row is still active.
+        if strategy == "SCALPING" and callable(_scalp_exit_completed_callback):
+            try:
+                callback_result = _scalp_exit_completed_callback(
+                    str(receipt_snapshot.get("code", "")).strip()[:6],
+                    profit_rate=profit_rate,
+                    exit_price=position_weighted_sell_price,
+                    exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
+                    completed_at=now.timestamp(),
+                    position_tag=completed_position_tag,
                 )
+                opening_rotation = (
+                    completed_position_tag == OPENING_ROTATION_POSITION_TAG
+                )
+                reconciliation_failed = bool(
+                    not isinstance(callback_result, dict)
+                    or (
+                        callback_result.get("reconciled") is False
+                        and callback_result.get("reason")
+                        != "active_reentry_context_missing"
+                    )
+                )
+                if reconciliation_failed:
+                    prefix = (
+                        "OPENING_ROTATION_REENTRY"
+                        if opening_rotation
+                        else "RISING_MISSED_REENTRY"
+                    )
+                    log_error(
+                        f"[{prefix}] completed receipt did not release the symbol "
+                        f"(id={target_id}, result={callback_result})"
+                    )
+            except Exception as exc:
+                log_error(
+                    "[SELL_COMPLETED_REENTRY] post-commit reconciliation failed "
+                    f"(id={target_id}, error={exc})"
+                )
+        return True
     except Exception as e:
         log_error(f"🚨 [DB 에러] ID {target_id} SELL 처리 중 에러: {e}")
+        return False
 
 
 def _handle_add_buy_execution(
@@ -3514,24 +6066,49 @@ def _handle_add_buy_execution(
     exec_price: int,
     exec_qty: int,
     now: datetime,
+    order_qty: int | None = None,
+    remaining_qty: int | None = None,
+    cumulative_exec_amount: int | None = None,
+    execution_no: str = "",
+    unit_exec_price: int | None = None,
+    unit_exec_qty: int | None = None,
 ) -> None:
-    (
-        effective_qty,
-        effective_price,
-        requested_qty,
-        filled_qty,
-        order_requested_qty,
-        order_filled_qty,
-        reconciled_before_ordno_bind,
-    ) = _resolve_add_effective_fill(
+    add_receipt = _resolve_add_effective_fill(
         target_stock=target_stock,
         code=code,
         order_no=order_no,
         exec_price=exec_price,
         exec_qty=exec_qty,
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+        cumulative_exec_amount=cumulative_exec_amount,
+        execution_no=execution_no,
+        unit_exec_price=unit_exec_price,
+        unit_exec_qty=unit_exec_qty,
     )
+    if add_receipt.get("status") == "invalid":
+        log_error(
+            f"[ADD_RECEIPT_RECONCILE_BLOCKED] {target_stock.get('name')}({code}) "
+            f"ord_no={order_no or '-'} reason={add_receipt.get('reason')} "
+            f"raw_qty={exec_qty} order_qty={order_qty} remaining_qty={remaining_qty}"
+        )
+        _request_broker_snapshot_refresh(
+            code, reason="scale_in_buy_receipt_reconcile_blocked"
+        )
+        return
+    if add_receipt.get("status") == "duplicate":
+        return
+    order_no = str(add_receipt.get("order_no") or order_no or "").strip()
+    effective_qty = int(add_receipt["incremental_qty"])
     if effective_qty <= 0:
         return
+    effective_price = float(add_receipt["incremental_price"])
+    incremental_amount = int(add_receipt["incremental_amount"])
+    requested_qty = int(add_receipt.get("bundle_requested_qty") or 0)
+    filled_qty = int(add_receipt.get("bundle_filled_qty") or 0)
+    order_requested_qty = int(add_receipt.get("order_requested_qty") or 0)
+    order_filled_qty = int(add_receipt.get("order_filled_qty") or 0)
+    reconciled_before_ordno_bind = bool(add_receipt.get("reconciled_before_ordno_bind"))
     exec_qty = effective_qty
     exec_price = effective_price
     add_type = (target_stock.get("pending_add_type") or "").upper()
@@ -3562,7 +6139,7 @@ def _handle_add_buy_execution(
     if old_qty > 0:
         total_qty = old_qty + exec_qty
         new_avg = _avg_from_totals(
-            (old_price * old_qty) + (exec_price * exec_qty), total_qty
+            (old_price * old_qty) + incremental_amount, total_qty
         )
     else:
         new_avg = exec_price
@@ -3589,9 +6166,13 @@ def _handle_add_buy_execution(
     target_stock["status"] = "HOLDING"
     target_stock["buy_price"] = new_avg
     target_stock["buy_qty"] = new_qty
-    target_stock["pre_add_avg_price"] = round(float(old_price or 0.0), 4)
+    pre_add_avg_price = float(
+        target_stock.get("pending_add_initial_buy_price") or old_price or 0.0
+    )
+    pre_add_qty = _safe_int(target_stock.get("pending_add_initial_buy_qty"), old_qty)
+    target_stock["pre_add_avg_price"] = round(pre_add_avg_price, 4)
     target_stock["post_add_avg_price"] = round(float(new_avg or 0.0), 4)
-    target_stock["pre_add_qty"] = int(old_qty or 0)
+    target_stock["pre_add_qty"] = int(pre_add_qty or 0)
     target_stock["post_add_qty"] = int(new_qty or 0)
     target_stock["last_add_type"] = add_type
     pending_add_reason = str(target_stock.get("pending_add_reason") or "").strip()
@@ -3599,7 +6180,11 @@ def _handle_add_buy_execution(
     target_stock["last_add_economic_direction"] = add_economic_direction
     target_stock["last_add_avg_price_improved"] = avg_price_improved
     target_stock["last_add_at"] = now
-    target_stock["last_add_fill_price"] = int(exec_price or 0)
+    target_stock["last_add_fill_price"] = round(float(exec_price or 0), 4)
+    target_stock["last_add_receipt_execution_no"] = execution_no or "-"
+    target_stock["last_add_receipt_economics_complete"] = bool(
+        add_receipt.get("economics_complete")
+    )
     now_ts = time.time()
     target_stock["last_add_time"] = now_ts
     if add_type == "AVG_DOWN" and pending_add_reason in {
@@ -3728,12 +6313,24 @@ def _handle_add_buy_execution(
         broker_order_forbidden=False,
         add_type=add_type,
         order_no=order_no or "-",
-        fill_price=int(exec_price or 0),
+        execution_no=execution_no or "-",
+        fill_price=round(float(exec_price or 0.0), 4),
         fill_qty=int(exec_qty or 0),
         bundle_requested_qty=int(requested_qty or 0),
         bundle_filled_qty=int(filled_qty or 0),
         order_requested_qty=int(order_requested_qty or 0),
         order_filled_qty=int(order_filled_qty or 0),
+        remaining_qty=int(add_receipt.get("remaining_qty") or 0),
+        cumulative_exec_amount=int(add_receipt.get("cumulative_amount") or 0),
+        receipt_economics_complete=bool(add_receipt.get("economics_complete")),
+        receipt_quantity_contract_complete=bool(
+            add_receipt.get("quantity_contract_complete")
+        ),
+        receipt_unit_fill_consistent=bool(
+            add_receipt.get("unit_fill_consistent", True)
+        ),
+        receipt_unit_qty_matches_delta=add_receipt.get("unit_qty_matches_delta"),
+        **_broker_execution_provenance_fields(target_stock),
         **split_leg_fields,
         scale_in_receipt_reconciled_before_ordno_bind=bool(
             reconciled_before_ordno_bind
@@ -3747,7 +6344,9 @@ def _handle_add_buy_execution(
         add_economic_direction=add_economic_direction,
         avg_price_improved=avg_price_improved,
         add_reference_avg_price=f"{add_reference_avg_price:.2f}",
-        pre_add_avg_price=f"{float(old_price or 0):.2f}",
+        pre_add_avg_price=f"{pre_add_avg_price:.2f}",
+        pre_add_qty=int(pre_add_qty or 0),
+        post_add_qty=int(new_qty or 0),
         post_add_avg_price=f"{float(new_avg or 0):.2f}",
         shallow_volatility_avg_down_count=int(
             target_stock.get("shallow_volatility_avg_down_count", 0) or 0
@@ -3773,17 +6372,47 @@ def _handle_entry_buy_execution(
     exec_price: int,
     exec_qty: int,
     now: datetime,
+    order_qty: int | None = None,
+    remaining_qty: int | None = None,
+    cumulative_exec_amount: int | None = None,
+    execution_no: str = "",
+    unit_exec_price: int | None = None,
+    unit_exec_qty: int | None = None,
 ) -> None:
-    effective_exec_qty, order_requested_qty, order_filled_qty = (
-        _resolve_entry_effective_fill_qty(
-            target_stock=target_stock,
-            code=code,
-            order_no=order_no,
-            exec_qty=exec_qty,
-        )
+    entry_receipt = _resolve_entry_effective_fill_qty(
+        target_stock=target_stock,
+        code=code,
+        order_no=order_no,
+        exec_price=exec_price,
+        exec_qty=exec_qty,
+        order_qty=order_qty,
+        remaining_qty=remaining_qty,
+        cumulative_exec_amount=cumulative_exec_amount,
+        execution_no=execution_no,
+        unit_exec_price=unit_exec_price,
+        unit_exec_qty=unit_exec_qty,
     )
+    if entry_receipt.get("status") == "invalid":
+        log_error(
+            f"[ENTRY_RECEIPT_RECONCILE_BLOCKED] {target_stock.get('name')}({code}) "
+            f"ord_no={order_no or '-'} reason={entry_receipt.get('reason')} "
+            f"raw_qty={exec_qty} order_qty={order_qty} remaining_qty={remaining_qty}"
+        )
+        _request_broker_snapshot_refresh(
+            code, reason="entry_buy_receipt_reconcile_blocked"
+        )
+        return
+    if entry_receipt.get("status") == "duplicate":
+        return
+    order_no = str(entry_receipt.get("order_no") or order_no or "").strip()
+    effective_exec_qty = int(entry_receipt["incremental_qty"])
     if effective_exec_qty <= 0:
         return
+    incremental_exec_amount = int(entry_receipt["incremental_amount"])
+    effective_exec_price = float(entry_receipt["incremental_price"])
+    order_requested_qty = int(entry_receipt.get("requested_qty") or 0)
+    order_filled_qty = int(entry_receipt.get("cumulative_qty") or 0)
+    exec_price = effective_exec_price
 
     old_qty = int(target_stock.get("buy_qty") or 0)
     old_price = float(target_stock.get("buy_price") or 0)
@@ -3798,7 +6427,7 @@ def _handle_entry_buy_execution(
     new_qty = old_qty + effective_exec_qty
     if old_qty > 0:
         new_avg = _avg_from_totals(
-            (old_price * old_qty) + (exec_price * effective_exec_qty),
+            (old_price * old_qty) + incremental_exec_amount,
             old_qty + effective_exec_qty,
         )
     else:
@@ -3835,9 +6464,19 @@ def _handle_entry_buy_execution(
     target_stock["entry_filled_qty"] = (
         int(target_stock.get("entry_filled_qty", 0) or 0) + effective_exec_qty
     )
-    target_stock["entry_fill_amount"] = int(
-        target_stock.get("entry_fill_amount", 0) or 0
-    ) + (exec_price * effective_exec_qty)
+    target_stock["entry_fill_amount"] = (
+        int(target_stock.get("entry_fill_amount", 0) or 0) + incremental_exec_amount
+    )
+    target_stock["last_entry_receipt_execution_no"] = execution_no or "-"
+    target_stock["last_entry_receipt_economics_complete"] = bool(
+        entry_receipt.get("economics_complete")
+    )
+    if entry_receipt.get("terminal_entry_order_receipt") is True:
+        _cancel_replacement_buys_after_late_parent_fill(
+            target_stock,
+            code=code,
+            filled_order_no=str(entry_receipt.get("order_no") or order_no or ""),
+        )
     target_stock["buy_time"] = now
     if not target_stock.get("holding_started_at"):
         target_stock["holding_started_at"] = now
@@ -4294,11 +6933,22 @@ def _handle_entry_buy_execution(
         candidate_stock=target_stock,
         observed_at=now,
         order_no=order_no or "-",
-        fill_price=int(exec_price or 0),
+        execution_no=execution_no or "-",
+        fill_price=round(float(exec_price or 0.0), 4),
         fill_qty=int(effective_exec_qty or 0),
         raw_fill_qty=int(exec_qty or 0),
         order_requested_qty=int(order_requested_qty or 0),
         order_filled_qty=int(order_filled_qty or 0),
+        order_remaining_qty=int(entry_receipt.get("remaining_qty") or 0),
+        cumulative_exec_amount=int(entry_receipt.get("cumulative_amount") or 0),
+        receipt_economics_complete=bool(entry_receipt.get("economics_complete")),
+        receipt_quantity_contract_complete=bool(
+            entry_receipt.get("quantity_contract_complete")
+        ),
+        receipt_unit_fill_consistent=bool(
+            entry_receipt.get("unit_fill_consistent", True)
+        ),
+        receipt_unit_qty_matches_delta=entry_receipt.get("unit_qty_matches_delta"),
         cum_filled_qty=int(cum_filled_qty or 0),
         requested_qty=int(requested_entry_qty or 0),
         remaining_qty=int(remaining_qty or 0),
@@ -4309,6 +6959,7 @@ def _handle_entry_buy_execution(
         preset_tp_ord_no_before=preset_tp_ord_no_before or "-",
         preset_tp_ord_no_after=preset_tp_ord_no_after or "-",
         sync_status=preset_sync_status,
+        **_broker_execution_provenance_fields(target_stock),
         **_probe_venue_provenance_fields(target_stock),
     )
     if strategy == "SCALPING" and is_default_position_tag(strategy, pos_tag):
@@ -4350,6 +7001,7 @@ def _handle_entry_buy_execution(
         forbidden_uses="runtime_threshold_apply/provider_route_change/bot_restart/sim_execution_quality_claim",
         actual_order_submitted=True,
         broker_order_forbidden=False,
+        execution_no=execution_no or "-",
         strategy=target_stock.get("strategy"),
         position_tag=target_stock.get("position_tag"),
         opening_rotation_entry_time_bucket=target_stock.get(
@@ -4406,16 +7058,26 @@ def _handle_entry_buy_execution(
         **_receipt_snapshot(target_stock, _GENERAL_ENTRY_MARGIN_POSITION_KEYS),
         buy_price=f"{float(new_avg or 0):.2f}",
         buy_qty=int(new_qty or 0),
-        fill_price=int(exec_price or 0),
+        fill_price=round(float(exec_price or 0.0), 4),
         fill_qty=int(effective_exec_qty or 0),
         raw_fill_qty=int(exec_qty or 0),
         order_requested_qty=int(order_requested_qty or 0),
         order_filled_qty=int(order_filled_qty or 0),
+        order_remaining_qty=int(entry_receipt.get("remaining_qty") or 0),
+        cumulative_exec_amount=int(entry_receipt.get("cumulative_amount") or 0),
+        receipt_economics_complete=bool(entry_receipt.get("economics_complete")),
+        receipt_quantity_contract_complete=bool(
+            entry_receipt.get("quantity_contract_complete")
+        ),
+        receipt_unit_fill_consistent=bool(
+            entry_receipt.get("unit_fill_consistent", True)
+        ),
         entry_mode=entry_mode,
         entry_submit_ai_score=(
             f"{float(submit_ai_score):.1f}" if submit_ai_score is not None else "-"
         ),
         holding_ai_score_seeded_from_entry=holding_ai_seeded,
+        **_broker_execution_provenance_fields(target_stock),
         **_probe_venue_provenance_fields(target_stock),
         **scout_ai_execution_attribution_fields(
             target_stock,
@@ -4478,19 +7140,30 @@ def handle_real_execution(exec_data):
     exec_type = str(exec_data.get("type", "")).upper()
     order_no = str(exec_data.get("order_no", "") or "").strip()
 
-    try:
-        exec_price = int(float(exec_data.get("price", 0) or 0))
-    except Exception:
-        exec_price = 0
-
-    try:
-        exec_qty = int(float(exec_data.get("qty", 0) or 0))
-    except Exception:
-        exec_qty = 0
-
-    if not code or exec_price <= 0:
+    if exec_type not in {"BUY", "SELL"}:
+        log_error(
+            f"[EXECUTION_SIDE_BLOCKED] code={code or '-'} "
+            f"order_no={order_no or '-'} type={exec_type or '-'}"
+        )
         return
 
+    exec_price = _optional_abs_int(exec_data.get("price")) or 0
+    exec_qty = _optional_abs_int(exec_data.get("qty")) or 0
+
+    order_qty = _optional_abs_int(exec_data.get("order_qty"))
+    remaining_qty = _optional_abs_int(exec_data.get("remaining_qty"))
+    cumulative_exec_amount = _optional_abs_int(exec_data.get("cumulative_exec_amount"))
+    execution_no = str(exec_data.get("execution_no", "") or "").strip()
+    unit_exec_price = _optional_abs_int(exec_data.get("unit_exec_price"))
+    unit_exec_qty = _optional_abs_int(exec_data.get("unit_exec_qty"))
+
+    if not code or exec_qty <= 0:
+        return
+
+    received_at = datetime.now(_KST)
+    broker_observed_at, broker_execution_fields = _broker_execution_context(
+        exec_data, received_at=received_at
+    )
     state = _get_fast_state(code)
     if state and exec_qty > 0:
         with state["lock"]:
@@ -4498,11 +7171,105 @@ def handle_real_execution(exec_data):
 
             if exec_type == "BUY":
                 if order_no and order_no == str(state.get("buy_ord_no", "")):
-                    state["cum_buy_qty"] += exec_qty
-                    state["cum_buy_amount"] += exec_price * exec_qty
-                    state["avg_buy_price"] = _avg_from_totals(
-                        state["cum_buy_amount"], state["cum_buy_qty"]
+                    prior_buy_qty = max(
+                        0,
+                        int(
+                            state.get(
+                                "last_buy_receipt_cumulative_qty",
+                                state.get("cum_buy_qty", 0),
+                            )
+                            or 0
+                        ),
                     )
+                    prior_buy_amount = max(
+                        0,
+                        int(
+                            state.get(
+                                "last_buy_receipt_cumulative_amount",
+                                state.get("cum_buy_amount", 0),
+                            )
+                            or 0
+                        ),
+                    )
+                    buy_executions = state.get("buy_receipt_executions_by_no")
+                    buy_executions = (
+                        dict(buy_executions) if isinstance(buy_executions, dict) else {}
+                    )
+                    buy_signature = _execution_receipt_signature(
+                        cumulative_qty=exec_qty,
+                        order_qty=order_qty,
+                        remaining_qty=remaining_qty,
+                        cumulative_exec_amount=cumulative_exec_amount,
+                        unit_exec_price=unit_exec_price,
+                        unit_exec_qty=unit_exec_qty,
+                    )
+                    execution_conflict = _execution_number_conflict_reason(
+                        {order_no: buy_executions},
+                        order_key=order_no,
+                        execution_no=execution_no,
+                        signature=buy_signature,
+                    )
+                    fast_buy_receipt = (
+                        {
+                            "status": "invalid",
+                            "reason": execution_conflict,
+                        }
+                        if execution_conflict
+                        else _resolve_cumulative_buy_order_receipt(
+                            raw_price=exec_price,
+                            raw_cumulative_qty=exec_qty,
+                            requested_qty=max(0, int(state.get("req_buy_qty", 0) or 0)),
+                            previous_qty=prior_buy_qty,
+                            previous_amount=prior_buy_amount,
+                            previous_economics_complete=bool(
+                                state.get("buy_receipt_economics_complete", True)
+                            ),
+                            order_qty=order_qty,
+                            remaining_qty=remaining_qty,
+                            cumulative_exec_amount=cumulative_exec_amount,
+                            unit_exec_price=unit_exec_price,
+                            unit_exec_qty=unit_exec_qty,
+                        )
+                    )
+                    if fast_buy_receipt.get("status") == "invalid":
+                        state["buy_receipt_source_gap"] = str(
+                            fast_buy_receipt.get("reason") or "fast_buy_receipt_invalid"
+                        )
+                        log_error(
+                            f"[FAST_BUY_RECEIPT_RECONCILE_BLOCKED] {code} "
+                            f"ord_no={order_no} reason={fast_buy_receipt.get('reason')}"
+                        )
+                        _request_broker_snapshot_refresh(
+                            code, reason="fast_buy_receipt_reconcile_blocked"
+                        )
+                    else:
+                        holder = {order_no: buy_executions}
+                        _remember_execution_number(
+                            holder,
+                            order_key=order_no,
+                            execution_no=execution_no,
+                            signature=buy_signature,
+                        )
+                        state["buy_receipt_executions_by_no"] = holder[order_no]
+                        if fast_buy_receipt.get("status") != "duplicate":
+                            state["cum_buy_qty"] += int(
+                                fast_buy_receipt["incremental_qty"]
+                            )
+                            state["cum_buy_amount"] += int(
+                                fast_buy_receipt["incremental_amount"]
+                            )
+                            state["avg_buy_price"] = _avg_from_totals(
+                                state["cum_buy_amount"], state["cum_buy_qty"]
+                            )
+                            state["last_buy_receipt_cumulative_qty"] = int(
+                                fast_buy_receipt["cumulative_qty"]
+                            )
+                            state["last_buy_receipt_cumulative_amount"] = int(
+                                fast_buy_receipt["cumulative_amount"]
+                            )
+                            state["buy_receipt_economics_complete"] = bool(
+                                fast_buy_receipt.get("economics_complete")
+                            )
                     state["updated_at"] = _now_ts()
                     matched = True
 
@@ -4512,22 +7279,62 @@ def handle_real_execution(exec_data):
                     str(state.get("pending_cancel_ord_no", "") or ""),
                 }
                 if order_no and order_no in valid_sell_ord_nos:
-                    state["cum_sell_qty"] += exec_qty
-                    state["cum_sell_amount"] += exec_price * exec_qty
-                    state["avg_sell_price"] = _avg_from_totals(
-                        state["cum_sell_amount"], state["cum_sell_qty"]
+                    fast_sell_receipt = _resolve_fast_sell_execution_receipt(
+                        state,
+                        order_no=order_no,
+                        exec_price=exec_price,
+                        cumulative_exec_qty=exec_qty,
+                        order_qty=order_qty,
+                        remaining_qty=remaining_qty,
+                        cumulative_exec_amount=cumulative_exec_amount,
+                        execution_no=execution_no,
+                        unit_exec_price=unit_exec_price,
+                        unit_exec_qty=unit_exec_qty,
                     )
+                    if fast_sell_receipt.get("status") == "invalid":
+                        state["sell_receipt_source_gap"] = str(
+                            fast_sell_receipt.get("reason")
+                            or "fast_sell_receipt_invalid"
+                        )
+                        log_error(
+                            f"[FAST_SELL_RECEIPT_RECONCILE_BLOCKED] {code} "
+                            f"ord_no={order_no} "
+                            f"reason={fast_sell_receipt.get('reason')}"
+                        )
+                        _request_broker_snapshot_refresh(
+                            code, reason="fast_sell_receipt_reconcile_blocked"
+                        )
                     state["updated_at"] = _now_ts()
                     matched = True
 
+            if matched:
+                state.update(broker_execution_fields)
+
         if matched:
+            persisted = True
+            if callable(_persist_fast_state_callback):
+                persisted = bool(_persist_fast_state_callback(code, state))
+            if not persisted:
+                with state["lock"]:
+                    state["status"] = "RECOVERY_REQUIRED"
+                    state["s15_recovery_reason"] = "receipt_persistence_failed"
+                return
+            if exec_type == "SELL" and callable(_finalize_fast_state_callback):
+                _finalize_fast_state_callback(code, state)
             return
 
-    now = datetime.now()
+    now = broker_observed_at
     now_t = now.time()
 
     with _active_state_lock():
-        target_stock = _find_execution_target(code, exec_type, order_no)
+        target_stock = _find_execution_target(
+            code,
+            exec_type,
+            order_no,
+            order_qty=order_qty,
+            remaining_qty=remaining_qty,
+            cumulative_exec_qty=exec_qty,
+        )
         if not target_stock:
             ignore_context = _execution_ignore_context(code, exec_type, order_no)
             log_info(
@@ -4542,6 +7349,7 @@ def handle_real_execution(exec_data):
                 f"🚨 [영수증] 종목 {code}의 고유 ID가 메모리에 없습니다. DB 업데이트가 불가능합니다."
             )
             return
+        target_stock.update(broker_execution_fields)
         is_scalp_revive = False
 
         # ==========================================
@@ -4568,12 +7376,21 @@ def handle_real_execution(exec_data):
                     exec_price=exec_price,
                     exec_qty=exec_qty,
                     now=now,
+                    order_qty=order_qty,
+                    remaining_qty=remaining_qty,
+                    cumulative_exec_amount=cumulative_exec_amount,
+                    execution_no=execution_no,
+                    unit_exec_price=unit_exec_price,
+                    unit_exec_qty=unit_exec_qty,
                 )
             elif pending_add and str(target_stock.get("status") or "") == "HOLDING":
                 log_info(
                     f"[ADD_FILL_IGNORED] {target_stock.get('name')}({code}) "
                     f"ord_no={order_no or '-'} pending_add_ord_no={pending_ord_no or '-'} "
                     "reason=order_not_in_pending_add_bundle"
+                )
+                _request_broker_snapshot_refresh(
+                    code, reason="scale_in_buy_receipt_order_identity_blocked"
                 )
             else:
                 _handle_entry_buy_execution(
@@ -4584,6 +7401,12 @@ def handle_real_execution(exec_data):
                     exec_price=exec_price,
                     exec_qty=exec_qty,
                     now=now,
+                    order_qty=order_qty,
+                    remaining_qty=remaining_qty,
+                    cumulative_exec_amount=cumulative_exec_amount,
+                    execution_no=execution_no,
+                    unit_exec_price=unit_exec_price,
+                    unit_exec_qty=unit_exec_qty,
                 )
 
         elif exec_type == "SELL":
@@ -4592,7 +7415,9 @@ def handle_real_execution(exec_data):
             )
             if not sell_context:
                 return
-            _, safe_buy_price, profit_rate, strategy, is_scalp_revive = sell_context
+            record, safe_buy_price, profit_rate, strategy, is_scalp_revive = (
+                sell_context
+            )
 
             if target_stock.get("nxt_rising_missed_tp1_partial_pending"):
                 _handle_nxt_rising_missed_tp1_partial_sell_execution(
@@ -4604,6 +7429,133 @@ def handle_real_execution(exec_data):
                     exec_qty=exec_qty,
                     now=now,
                     safe_buy_price=safe_buy_price,
+                    order_qty=order_qty,
+                    remaining_qty=remaining_qty,
+                    cumulative_exec_amount=cumulative_exec_amount,
+                    execution_no=execution_no,
+                    unit_exec_price=unit_exec_price,
+                    unit_exec_qty=unit_exec_qty,
+                )
+                return
+
+            sell_receipt = _resolve_sell_execution_receipt(
+                target_stock,
+                order_no=order_no,
+                exec_price=exec_price,
+                cumulative_exec_qty=exec_qty,
+                expected_position_qty=(
+                    _safe_int(getattr(record, "buy_qty", 0), 0)
+                    or _safe_int(target_stock.get("buy_qty"), 0)
+                ),
+                buy_price=safe_buy_price,
+                order_qty=order_qty,
+                remaining_qty=remaining_qty,
+                cumulative_exec_amount=cumulative_exec_amount,
+                execution_no=execution_no,
+                unit_exec_price=unit_exec_price,
+                unit_exec_qty=unit_exec_qty,
+            )
+            if sell_receipt.get("status") == "invalid":
+                log_error(
+                    f"[SELL_RECEIPT_RECONCILE_BLOCKED] "
+                    f"{target_stock.get('name')}({code}) ord_no={order_no or '-'} "
+                    f"reason={sell_receipt.get('reason')} raw_qty={exec_qty} "
+                    f"order_qty={order_qty} remaining_qty={remaining_qty}"
+                )
+                _request_broker_snapshot_refresh(
+                    code, reason="sell_receipt_reconcile_blocked"
+                )
+                return
+            if sell_receipt.get("status") == "duplicate":
+                return
+            if order_no and target_stock.get("sell_submit_pending"):
+                target_stock["sell_odno"] = order_no
+                target_stock.pop("sell_submit_pending", None)
+                target_stock.pop("sell_submit_requested_qty", None)
+                target_stock.pop("sell_submit_started_at", None)
+            if sell_receipt.get("status") == "replacement_reconcile_required":
+                replacement_order_no = str(
+                    target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY, {}).get(
+                        "replacement_order_no", ""
+                    )
+                    or ""
+                ).strip()
+                cancel_confirmed = False
+                if replacement_order_no:
+                    try:
+                        from src.engine import sniper_trade_utils
+
+                        cancel_result = (
+                            sniper_trade_utils.send_cancel_order_with_exchange_retry(
+                                code=code,
+                                orig_ord_no=replacement_order_no,
+                                token=KIWOOM_TOKEN,
+                                qty=0,
+                            )
+                        )
+                        cancel_confirmed = _is_ok_response(cancel_result)
+                    except Exception as exc:
+                        log_error(
+                            f"[SELL_REPLACEMENT_CANCEL_FAILED] {code} "
+                            f"ord_no={replacement_order_no}: {exc}"
+                        )
+                target_stock.update(
+                    {
+                        "status": "SELL_ORDERED",
+                        "sell_odno": replacement_order_no,
+                        "sell_cancel_reconciliation_required": True,
+                        "sell_cancel_reconciliation_source": (
+                            "late_prior_fill_replacement_cancel_acknowledged"
+                            if cancel_confirmed
+                            else "late_prior_fill_replacement_cancel_unconfirmed"
+                        ),
+                        "sell_cancel_reconciliation_retry_at": time.time() + 1.0,
+                    }
+                )
+                _persist_sell_receipt_recovery_or_interlock(
+                    target_stock,
+                    code=code,
+                    reason="late_prior_fill_replacement_cancel",
+                )
+                _request_broker_snapshot_refresh(
+                    code,
+                    reason="late_prior_fill_replacement_reconciliation",
+                )
+                return
+            if sell_receipt.get("status") == "partial":
+                _log_standard_sell_partial_execution(
+                    target_stock,
+                    code=code,
+                    target_id=target_id,
+                    now=now,
+                    receipt=sell_receipt,
+                    buy_price=safe_buy_price,
+                )
+                return
+            if not all(
+                (
+                    sell_receipt.get("economics_complete") is True,
+                    sell_receipt.get("quantity_contract_complete") is True,
+                )
+            ):
+                log_error(
+                    f"[SELL_RECEIPT_FINAL_CONTRACT_BLOCKED] "
+                    f"{target_stock.get('name')}({code}) ord_no={order_no or '-'} "
+                    f"economics_complete={sell_receipt.get('economics_complete')} "
+                    f"quantity_contract_complete="
+                    f"{sell_receipt.get('quantity_contract_complete')}"
+                )
+                _request_broker_snapshot_refresh(
+                    code, reason="sell_receipt_final_contract_incomplete"
+                )
+                return
+
+            effective_exec_price = int(
+                round(float(sell_receipt.get("incremental_price") or 0.0))
+            )
+            if effective_exec_price <= 0:
+                _request_broker_snapshot_refresh(
+                    code, reason="sell_receipt_effective_price_missing"
                 )
                 return
 
@@ -4612,24 +7564,26 @@ def handle_real_execution(exec_data):
                     target_id=target_id,
                     target_stock=target_stock,
                     code=code,
-                    exec_price=exec_price,
+                    exec_price=effective_exec_price,
                     exec_qty=exec_qty,
                     now=now,
                     profit_rate=profit_rate,
                     safe_buy_price=safe_buy_price,
                     strategy=strategy,
+                    sell_receipt=sell_receipt,
                     order_no=order_no,
                 ):
                     return
             else:
                 _finalize_standard_sell_execution(
                     target_id=target_id,
-                    exec_price=exec_price,
+                    exec_price=effective_exec_price,
                     now=now,
                     target_stock=target_stock,
                     strategy=strategy,
                     is_scalp_revive=is_scalp_revive,
                     code=code,
+                    sell_receipt=sell_receipt,
                     order_no=order_no,
                 )
 
