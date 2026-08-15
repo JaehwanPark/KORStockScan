@@ -164,6 +164,13 @@ if ! PYTHONPATH=. "$VENV_PY" \
   --notify; then
   echo "[WARN] machine microstructure policy approval ledger failed target_date=$TARGET_DATE runtime_apply_unchanged=true"
 fi
+if ! PYTHONPATH=. "$VENV_PY" \
+  -m src.engine.automation.main_ai_quality_runtime_family \
+  --phase preopen \
+  --target-date "$TARGET_DATE" \
+  --write; then
+  echo "[WARN] main AI quality runtime family not applied target_date=$TARGET_DATE exact_candidate_or_standing_intent_not_ready=true runtime_apply_unchanged=true"
+fi
 
 args=(--date "$TARGET_DATE" --apply-mode "$APPLY_MODE")
 if [ -n "$SOURCE_DATE" ]; then

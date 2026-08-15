@@ -177,10 +177,71 @@ DECISION_ALLOWED_STATES = {
 }
 
 # Candidate producers cannot grant runtime authority to their own output.
-# Families enter this source-owned registry only together with a real PREOPEN
-# consumer, rollback/receipt implementation, and tests.  It is deliberately
-# empty while this module remains an observation/approval control plane.
-TRUSTED_RUNTIME_FAMILY_REGISTRY: Mapping[str, Mapping[str, Any]] = {}
+# This first entry is source-owned and names a concrete PREOPEN consumer,
+# rollback, apply-receipt, and post-apply-attribution implementation.  Its
+# bounded contract changes only the entry prompt from the exact hot-v1 hash to
+# the reviewed V2.6 hash for KRX regular; all broker/safety/provider/quantity
+# authority remains outside the family.
+MAIN_AI_QUALITY_RUNTIME_FAMILY = "main_ai_quality_entry_prompt_contract_v1"
+MAIN_AI_QUALITY_BOUNDED_CONTRACT = {
+    "schema": "main_ai_quality_entry_prompt_bounded_contract_v1",
+    "stage": "entry",
+    "axis": "prompt_contract_effect",
+    "effective_venue": "KRX",
+    "session_bucket": "KRX_REGULAR",
+    "instrument_scope": "effective_date_official_kospi_kosdaq_common_stock_only",
+    "current_prompt_version": "hot_v1",
+    "recommended_prompt_version": "decision_quality_v2_6",
+    "apply_timing": "next_krx_trading_date_preopen_before_0800_kst",
+    "rollback": "automatic_configured_prompt_fallback_on_any_contract_gap",
+    "forbidden_changes": [
+        "provider_or_model",
+        "order_price_or_quantity",
+        "threshold_or_cap",
+        "bot_process_state",
+        "broker_account_order_cooldown_guard",
+        "hard_protect_or_emergency_safety",
+    ],
+}
+MAIN_AI_QUALITY_BOUNDED_CONTRACT_SHA256 = hashlib.sha256(
+    json.dumps(
+        MAIN_AI_QUALITY_BOUNDED_CONTRACT,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+).hexdigest()
+TRUSTED_RUNTIME_FAMILY_REGISTRY: Mapping[str, Mapping[str, Any]] = {
+    MAIN_AI_QUALITY_RUNTIME_FAMILY: {
+        "enabled": True,
+        "stage": "entry",
+        "axis": "prompt_contract_effect",
+        "bounded_contract_sha256": MAIN_AI_QUALITY_BOUNDED_CONTRACT_SHA256,
+        "preopen_consumer": (
+            "src.engine.automation.main_ai_quality_runtime_family.preopen_apply"
+        ),
+        "apply_receipt_owner": "main_ai_quality_runtime_family_preopen_apply",
+        "post_apply_attribution_owner": (
+            "main_ai_quality_runtime_family_post_apply_attribution"
+        ),
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "bounded_values": {
+            "current": (
+                "922c6ccebe50be668c195acbe8f3a795aec9dacf3e4be09adc4174547d1be10e"
+            ),
+            "recommended": (
+                "ca3b73e0ce857929d8fb0d0e667223163f8cb358c2054bedac7f62a0f1f3b0d0"
+            ),
+        },
+        "direct_order_authority": False,
+        "provider_route_authority": False,
+        "quantity_authority": False,
+        "hard_safety_authority": False,
+        "receipt_content_sha256_required": True,
+        "requires_post_apply_attribution_before_auto_chain": True,
+    }
+}
 
 METRIC_CONTRACT = {
     "metric_role": "operator_approval_control_plane",
@@ -592,6 +653,25 @@ def _registry_entry_sha256(entry: Mapping[str, Any] | None) -> str | None:
     return hashlib.sha256(_canonical_json(entry)).hexdigest() if entry else None
 
 
+def _required_receipt_hash_valid(
+    receipt: Mapping[str, Any], registry_entry: Mapping[str, Any] | None
+) -> bool:
+    if not (registry_entry or {}).get("receipt_content_sha256_required"):
+        return True
+    body = {
+        key: value for key, value in receipt.items() if key != "receipt_content_sha256"
+    }
+    expected = hashlib.sha256(
+        json.dumps(
+            body,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return receipt.get("receipt_content_sha256") == expected
+
+
 def runtime_design_errors(
     candidate: Mapping[str, Any],
     *,
@@ -649,6 +729,18 @@ def runtime_design_errors(
         or registry_entry.get("bounded_contract_sha256")
         != design.get("bounded_contract_sha256")
         or registry_entry.get("preopen_consumer") != design.get("preopen_consumer")
+        or (
+            "effective_venue" in registry_entry
+            and registry_entry.get("effective_venue") != design.get("effective_venue")
+        )
+        or (
+            "session_bucket" in registry_entry
+            and registry_entry.get("session_bucket") != design.get("session_bucket")
+        )
+        or (
+            "bounded_values" in registry_entry
+            and registry_entry.get("bounded_values") != bounded_values
+        )
         or not str(registry_entry.get("apply_receipt_owner") or "").strip()
         or registry_entry.get("post_apply_attribution_owner")
         != (post_apply_attribution or {}).get("owner")
@@ -1652,6 +1744,8 @@ def _handoff_matches_entry(
         and handoff.get("runtime_family") == design.get("runtime_family")
         and handoff.get("stage") == design.get("stage")
         and handoff.get("axis") == design.get("axis")
+        and handoff.get("effective_venue") == design.get("effective_venue")
+        and handoff.get("session_bucket") == design.get("session_bucket")
         and handoff.get("bounded_contract_sha256")
         == design.get("bounded_contract_sha256")
         and handoff.get("runtime_registry_entry_sha256") == registry_digest
@@ -1743,6 +1837,7 @@ def _apply_family_receipts(
             != str(registry_digest or "")
             or receipt.get("same_stage_owner_conflict_free") is not True
             or receipt.get("hard_safety_and_broker_guards_preserved") is not True
+            or not _required_receipt_hash_valid(receipt, registry_entry)
         ):
             continue
         status = str(receipt.get("status") or "")
@@ -1780,6 +1875,10 @@ def _apply_family_receipts(
                 receipt.get("runtime_effect") is not True
                 or receipt.get("runtime_apply_performed") is not True
                 or receipt.get("actual_order_submitted") is not False
+                or (
+                    (registry_entry or {}).get("direct_order_authority") is False
+                    and receipt.get("broker_order_forbidden") is not True
+                )
                 or receipt.get("receipt_owner")
                 != (registry_entry or {}).get("apply_receipt_owner")
                 or not _applied_receipt_time_is_valid(
@@ -1796,6 +1895,10 @@ def _apply_family_receipts(
                 receipt.get("runtime_effect") is not False
                 or receipt.get("runtime_apply_performed") is not False
                 or receipt.get("actual_order_submitted") is not False
+                or (
+                    (registry_entry or {}).get("direct_order_authority") is False
+                    and receipt.get("broker_order_forbidden") is not True
+                )
                 or receipt.get("post_apply_attribution_complete") is not True
                 or receipt.get("receipt_owner")
                 != (registry_entry or {}).get("post_apply_attribution_owner")
@@ -1812,7 +1915,15 @@ def _apply_family_receipts(
             entry["state"] = STATE_POST_APPLY_ATTRIBUTED
         entry["state_reason"] = status
         family = str(design.get("runtime_family") or "")
-        if family and status == "applied_guard_passed":
+        requires_post_apply = bool(
+            (registry_entry or {}).get(
+                "requires_post_apply_attribution_before_auto_chain"
+            )
+        )
+        if family and (
+            (requires_post_apply and status == "post_apply_attribution_complete")
+            or (not requires_post_apply and status == "applied_guard_passed")
+        ):
             enrollments[family] = {
                 "runtime_family": family,
                 "stage": design.get("stage"),
@@ -1820,8 +1931,16 @@ def _apply_family_receipts(
                 "bounded_contract_sha256": design.get("bounded_contract_sha256"),
                 "runtime_registry_entry_sha256": registry_digest,
                 "first_approved_queue_key": entry.get("queue_key"),
-                "first_apply_receipt": str(path),
+                "first_apply_receipt": (
+                    str(entry.get("family_apply_receipt") or "")
+                    if requires_post_apply
+                    else str(path)
+                ),
+                "post_apply_attribution_receipt": (
+                    str(path) if requires_post_apply else None
+                ),
                 "enrolled_after_guarded_apply": True,
+                "enrolled_after_post_apply_attribution": requires_post_apply,
             }
     return enrollments
 
@@ -1844,14 +1963,20 @@ def _validated_existing_enrollments(
         ):
             continue
         entry = by_key.get(str(raw.get("first_approved_queue_key") or ""))
-        if entry is None or entry.get("state") not in {
-            STATE_APPLIED,
-            STATE_POST_APPLY_ATTRIBUTED,
-        }:
+        registry_entry = _trusted_registry_entry(str(family), runtime_registry)
+        requires_post_apply = bool(
+            (registry_entry or {}).get(
+                "requires_post_apply_attribution_before_auto_chain"
+            )
+        )
+        if entry is None or entry.get("state") not in (
+            {STATE_POST_APPLY_ATTRIBUTED}
+            if requires_post_apply
+            else {STATE_APPLIED, STATE_POST_APPLY_ATTRIBUTED}
+        ):
             continue
         candidate = entry.get("candidate") or {}
         design = candidate.get("runtime_design") or {}
-        registry_entry = _trusted_registry_entry(str(family), runtime_registry)
         registry_digest = _registry_entry_sha256(registry_entry)
         if (
             str(design.get("runtime_family") or "") != str(family)
@@ -1886,10 +2011,15 @@ def _validated_existing_enrollments(
             or receipt.get("runtime_effect") is not True
             or receipt.get("runtime_apply_performed") is not True
             or receipt.get("actual_order_submitted") is not False
+            or (
+                (registry_entry or {}).get("direct_order_authority") is False
+                and receipt.get("broker_order_forbidden") is not True
+            )
             or receipt.get("receipt_owner")
             != (registry_entry or {}).get("apply_receipt_owner")
             or receipt.get("same_stage_owner_conflict_free") is not True
             or receipt.get("hard_safety_and_broker_guards_preserved") is not True
+            or not _required_receipt_hash_valid(receipt, registry_entry)
             or not _applied_receipt_time_is_valid(
                 receipt,
                 entry,
@@ -1897,6 +2027,42 @@ def _validated_existing_enrollments(
             )
         ):
             continue
+        if requires_post_apply:
+            if raw.get("enrolled_after_post_apply_attribution") is not True:
+                continue
+            attribution_path = Path(
+                str(raw.get("post_apply_attribution_receipt") or "")
+            )
+            try:
+                attribution_path.resolve().relative_to(receipt_root)
+            except (OSError, ValueError):
+                continue
+            attribution = _load_json(attribution_path)
+            if (
+                not attribution
+                or attribution.get("schema") != APPLY_RECEIPT_SCHEMA
+                or attribution.get("status") != "post_apply_attribution_complete"
+                or attribution.get("queue_key") != entry.get("queue_key")
+                or attribution.get("candidate_sha256") != entry.get("candidate_sha256")
+                or attribution.get("source_apply_receipt") != str(receipt_path)
+                or attribution.get("post_apply_attribution_complete") is not True
+                or attribution.get("runtime_effect") is not False
+                or attribution.get("runtime_apply_performed") is not False
+                or attribution.get("actual_order_submitted") is not False
+                or (
+                    (registry_entry or {}).get("direct_order_authority") is False
+                    and attribution.get("broker_order_forbidden") is not True
+                )
+                or attribution.get("receipt_owner")
+                != (registry_entry or {}).get("post_apply_attribution_owner")
+                or not _required_receipt_hash_valid(attribution, registry_entry)
+                or not _attribution_receipt_time_is_valid(
+                    attribution,
+                    entry,
+                    as_of=as_of,
+                )
+            ):
+                continue
         validated[str(family)] = dict(raw)
     return validated
 
@@ -2393,6 +2559,14 @@ def schedule_preopen_handoffs(
             if (
                 not isinstance(enrollment, Mapping)
                 or enrollment.get("enrolled_after_guarded_apply") is not True
+                or (
+                    (_trusted_registry_entry(family, runtime_registry) or {}).get(
+                        "requires_post_apply_attribution_before_auto_chain"
+                    )
+                    is True
+                    and enrollment.get("enrolled_after_post_apply_attribution")
+                    is not True
+                )
                 or enrollment.get("stage") != design.get("stage")
                 or enrollment.get("axis") != design.get("axis")
                 or enrollment.get("bounded_contract_sha256")
@@ -2421,6 +2595,8 @@ def schedule_preopen_handoffs(
             "runtime_family": design.get("runtime_family"),
             "stage": design.get("stage"),
             "axis": design.get("axis"),
+            "effective_venue": design.get("effective_venue"),
+            "session_bucket": design.get("session_bucket"),
             "bounded_values": design.get("bounded_values"),
             "bounded_contract_sha256": design.get("bounded_contract_sha256"),
             "runtime_registry_entry_sha256": registry_digest,

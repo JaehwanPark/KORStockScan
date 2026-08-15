@@ -92,6 +92,9 @@ from src.engine.scalping.entry_setup_evidence import (  # noqa: E402
 from src.engine.scalping.entry_setup_live_policy import (  # noqa: E402
     resolve_live_prompt_policy,
 )
+from src.engine.scalping.main_ai_quality_live_policy import (  # noqa: E402
+    resolve_main_ai_quality_live_policy,
+)
 from src.engine.scalping.entry_price_live_policy import (  # noqa: E402
     resolve_entry_price_live_policy,
 )
@@ -125,11 +128,13 @@ from src.engine.ai_prompt_contracts import (
     REALTIME_ANALYSIS_PROMPT_DUAL,
     SCALPING_OVERNIGHT_DECISION_PROMPT,
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_v2_detailed_system_prompt,
+    decision_quality_v2_system_prompt,
     decision_quality_v2_7_probe_system_prompt,
     decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
@@ -1956,6 +1961,13 @@ class GPTSniperEngine:
                 )
                 or "hot_v1"
             ).strip()
+            if selected_version == DECISION_QUALITY_V2_PROMPT_VERSION:
+                return (
+                    decision_quality_v2_system_prompt("entry"),
+                    "scalping_entry",
+                    DECISION_QUALITY_V2_PROMPT_VERSION,
+                    "watching",
+                )
             if selected_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION:
                 return (
                     decision_quality_v2_7_probe_system_prompt("entry"),
@@ -7795,6 +7807,7 @@ class GPTSniperEngine:
         entry_adm_runtime = None
         lifecycle_ai_runtime = None
         entry_setup_live_policy = {}
+        main_ai_quality_live_policy = {}
         entry_setup_evidence = None
         replay_context = None
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
@@ -7846,20 +7859,85 @@ class GPTSniperEngine:
                     or (ws_data.get("session") if isinstance(ws_data, dict) else None)
                 ),
             )
+            main_ai_quality_live_policy = resolve_main_ai_quality_live_policy(
+                configured_prompt_version=configured_entry_prompt_version,
+                stock_code=(
+                    pre_prompt_snapshot.get("stock_code")
+                    or (
+                        candle_context.get("stock_code")
+                        if isinstance(candle_context, dict)
+                        else None
+                    )
+                    or (
+                        ws_data.get("stock_code") if isinstance(ws_data, dict) else None
+                    )
+                    or (ws_data.get("code") if isinstance(ws_data, dict) else None)
+                ),
+                effective_venue=(
+                    pre_prompt_snapshot.get("effective_venue")
+                    or (
+                        candle_context.get("venue")
+                        if isinstance(candle_context, dict)
+                        else None
+                    )
+                    or (
+                        ws_data.get("effective_venue")
+                        if isinstance(ws_data, dict)
+                        else None
+                    )
+                    or (ws_data.get("venue") if isinstance(ws_data, dict) else None)
+                ),
+                session_bucket=(
+                    pre_prompt_snapshot.get("session_bucket")
+                    or (
+                        candle_context.get("session")
+                        if isinstance(candle_context, dict)
+                        else None
+                    )
+                    or (
+                        ws_data.get("session_bucket")
+                        if isinstance(ws_data, dict)
+                        else None
+                    )
+                    or (ws_data.get("session") if isinstance(ws_data, dict) else None)
+                ),
+            )
+            if (
+                entry_setup_live_policy.get("enabled") is True
+                and main_ai_quality_live_policy.get("enabled") is True
+            ):
+                entry_setup_live_policy = {
+                    **entry_setup_live_policy,
+                    "enabled": False,
+                    "status": "fallback_same_stage_owner_conflict",
+                    "runtime_effect": False,
+                }
+                main_ai_quality_live_policy = {
+                    **main_ai_quality_live_policy,
+                    "enabled": False,
+                    "status": "fallback_same_stage_owner_conflict",
+                    "runtime_effect": False,
+                }
+            selected_runtime_prompt_version = (
+                main_ai_quality_live_policy.get("selected_prompt_version")
+                if main_ai_quality_live_policy.get("enabled") is True
+                else (
+                    entry_setup_live_policy.get("selected_prompt_version")
+                    if entry_setup_live_policy.get("enabled") is True
+                    else None
+                )
+            )
             prompt, prompt_type, prompt_version, normalized_profile = (
                 self._resolve_scalping_prompt(
                     prompt_profile,
-                    prompt_version_override=(
-                        entry_setup_live_policy.get("selected_prompt_version")
-                        if entry_setup_live_policy.get("enabled") is True
-                        else None
-                    ),
+                    prompt_version_override=selected_runtime_prompt_version,
                 )
             )
             decision_quality_v2_7_selected = (
                 prompt_version
                 in {
                     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_PROMPT_VERSION,
                     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
                     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
                     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
@@ -8505,6 +8583,29 @@ class GPTSniperEngine:
                     "ai_trace_prompt_type": prompt_type,
                 }
             )
+            if main_ai_quality_live_policy.get("enabled") is True:
+                trace_metadata_extra.update(
+                    {
+                        "main_ai_quality_live_policy_status": (
+                            main_ai_quality_live_policy.get("status")
+                        ),
+                        "main_ai_quality_live_policy_target_date": (
+                            main_ai_quality_live_policy.get("target_date")
+                        ),
+                        "main_ai_quality_live_policy_candidate_id": (
+                            main_ai_quality_live_policy.get("candidate_id")
+                        ),
+                        "main_ai_quality_live_policy_candidate_sha256": (
+                            main_ai_quality_live_policy.get("candidate_sha256")
+                        ),
+                        "main_ai_quality_live_policy_activation_sha256": (
+                            main_ai_quality_live_policy.get(
+                                "activation_artifact_sha256"
+                            )
+                        ),
+                        "main_ai_quality_live_policy_runtime_effect": True,
+                    }
+                )
             if decision_quality_v2_14_selected:
                 trace_metadata_extra.update(
                     {

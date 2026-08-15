@@ -1665,6 +1665,14 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
             "entry_setup_live_policy_activation_sha256": "activation-sha",
             "entry_setup_live_policy_candidate_contract_sha256": "candidate-sha",
             "entry_setup_live_policy_runtime_effect": True,
+            "main_ai_quality_live_policy_status": (
+                "active_exact_bound_prompt_contract"
+            ),
+            "main_ai_quality_live_policy_target_date": "2026-08-07",
+            "main_ai_quality_live_policy_candidate_id": "candidate-exact-1",
+            "main_ai_quality_live_policy_candidate_sha256": "a" * 64,
+            "main_ai_quality_live_policy_activation_sha256": "b" * 64,
+            "main_ai_quality_live_policy_runtime_effect": True,
             "entry_probe_first_required": True,
             "entry_ai_full_entry_forbidden": True,
             "entry_recent_exit_context_status": "active",
@@ -1711,6 +1719,15 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
     assert pending_row["entry_setup_live_policy_max_daily_exploration_probes"] == 3
     assert pending_row["entry_setup_live_policy_source_date"] == "2026-08-06"
     assert pending_row["entry_setup_live_policy_target_date"] == "2026-08-07"
+    assert trace_row["main_ai_quality_live_policy_status"] == (
+        "active_exact_bound_prompt_contract"
+    )
+    assert trace_row["main_ai_quality_live_policy_candidate_id"] == (
+        "candidate-exact-1"
+    )
+    assert pending_row["main_ai_quality_live_policy_target_date"] == "2026-08-07"
+    assert pending_row["main_ai_quality_live_policy_activation_sha256"] == "b" * 64
+    assert pending_row["main_ai_quality_live_policy_runtime_effect"] is True
     assert pending_row["entry_probe_first_required"] is True
     assert pending_row["entry_ai_full_entry_forbidden"] is True
     assert pending_row["entry_recent_exit_context_status"] == "active"

@@ -191,7 +191,7 @@ def _execution_report(
             {"parent_id": parent_id, "arm": arm, "kind": "candidate_input"}
         )
         prompt_sha256 = cycle._sha256(
-            {"parent_id": parent_id, "arm": arm, "kind": "prompt"}
+            {"arm": arm, "kind": "stable_prompt_contract_text"}
         )
         prompt_contract_sha256 = (
             "1" * 64 if arm != "replay_candidate_exact_plus_micro" else "2" * 64
@@ -1631,7 +1631,7 @@ def test_historical_execution_rejects_self_rehashed_provider_and_join_receipts(
     elif mutation == "provider_attempt_hash":
         report["results"][0]["replay_result"]["candidate_attempts"][0][
             "provider_provenance"
-        ]["provider_budget_attempt_identity_sha256"] = "x" * 64
+        ]["provider_budget_attempt_identity_sha256"] = ("x" * 64)
         _reseal_execution_result_ids(report)
     elif mutation == "provider_cost_underreported":
         report["provider_budget"]["committed_cost_usd"] = "0.01"

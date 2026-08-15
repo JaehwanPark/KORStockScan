@@ -74,8 +74,12 @@ def _candidate(*, candidate_id: str = "main-ai-quality-one") -> dict:
         "tuning_axis": mod.TUNING_AXIS,
         "current_contract_sha256": "c" * 64,
         "recommended_contract_sha256": "d" * 64,
+        "current_prompt_sha256": "c" * 64,
+        "recommended_prompt_sha256": "d" * 64,
         "reviewed_cost_profile_sha256": "e" * 64,
         "symbol_master_artifact_sha256": "f" * 64,
+        "latest_symbol_master_source_date": "2026-08-31",
+        "latest_symbol_master_artifact_sha256": "f" * 64,
         "rolling_window_sha256": "a" * 64,
         "evidence_contract": _evidence(),
         "runtime_design_status": "design_required_no_registered_consumer",
@@ -138,7 +142,9 @@ def test_unique_exact_candidate_is_bound_but_never_approved_or_scheduled() -> No
         ),
     ],
 )
-def test_missing_or_drifted_registry_fails_closed(registry: dict, expected: str) -> None:
+def test_missing_or_drifted_registry_fails_closed(
+    registry: dict, expected: str
+) -> None:
     authorization = _authorization(
         registry_sha=("0" * 64 if registry else _sha(_registry_entry()))
     )
@@ -167,7 +173,7 @@ def test_multiple_exact_candidates_and_unknown_prompt_fail_closed() -> None:
     assert tied["candidate_binding"] is None
 
     unknown = _candidate()
-    unknown["recommended_contract_sha256"] = "9" * 64
+    unknown["recommended_prompt_sha256"] = "9" * 64
     unknown["candidate_sha256"] = _sha(
         {
             key: value

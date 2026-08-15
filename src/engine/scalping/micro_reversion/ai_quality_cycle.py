@@ -1205,6 +1205,7 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
     )
 
     result_contracts: dict[str, dict[str, str]] = defaultdict(dict)
+    result_prompt_hashes: dict[str, dict[str, str]] = defaultdict(dict)
     for result in results:
         if not isinstance(result, Mapping):
             raise ValueError("execution_report_result_invalid")
@@ -1217,8 +1218,10 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
         parent = str(result.get("paired_replay_parent_id") or "")
         arm = str(result.get("micro_reversion_replay_arm") or "")
         contract_hash = str(result.get("prompt_contract_sha256") or "")
-        if parent and arm and contract_hash:
+        prompt_hash = str(result.get("prompt_sha256") or "")
+        if parent and arm and contract_hash and _valid_sha256(prompt_hash):
             result_contracts[parent][arm] = contract_hash
+            result_prompt_hashes[parent][arm] = prompt_hash
     completed_parent_ids = {
         parent_id
         for parent_id, contracts in result_contracts.items()
@@ -1240,9 +1243,14 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
         parent = str(row.get("paired_replay_parent_id") or "")
         arms = row.get("arms")
         contracts = result_contracts.get(parent, {})
+        prompt_hashes = result_prompt_hashes.get(parent, {})
         if not parent or not isinstance(arms, Mapping):
             _execution_census_error("evaluation_row_shape_invalid")
-        if set(arms) != set(EXPECTED_ARMS) or set(contracts) != set(EXPECTED_ARMS):
+        if (
+            set(arms) != set(EXPECTED_ARMS)
+            or set(contracts) != set(EXPECTED_ARMS)
+            or set(prompt_hashes) != set(EXPECTED_ARMS)
+        ):
             _execution_census_error("evaluation_result_arm_binding_mismatch")
         micro_control = arms["replay_control_exact_plus_micro"]
         candidate = arms["replay_candidate_exact_plus_micro"]
@@ -1277,6 +1285,12 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
                 "stock_code": str(row.get("stock_code") or ""),
                 "control_contract_sha256": contracts["replay_control_exact_plus_micro"],
                 "candidate_contract_sha256": contracts[
+                    "replay_candidate_exact_plus_micro"
+                ],
+                "control_prompt_sha256": prompt_hashes[
+                    "replay_control_exact_plus_micro"
+                ],
+                "candidate_prompt_sha256": prompt_hashes[
                     "replay_candidate_exact_plus_micro"
                 ],
                 "control_action": str(micro_control.get("action") or "UNKNOWN"),
@@ -1454,7 +1468,9 @@ def _validate_current_execution_artifact(
         "blocking_execution_exclusions"
     ) != expected_blocking_exclusions or report.get(
         "blocking_execution_exclusion_count"
-    ) != len(expected_blocking_exclusions):
+    ) != len(
+        expected_blocking_exclusions
+    ):
         raise ValueError("current_execution_blocking_exclusion_census_mismatch")
     report_status = report.get("status")
     if (
@@ -2494,9 +2510,10 @@ def build_rolling_source_only_candidates(
 
     global_candidate_blockers = sorted(set(global_candidate_blockers))
 
-    grouped: dict[tuple[str, str, str, str, str, str, str], list[dict[str, Any]]] = (
-        defaultdict(list)
-    )
+    grouped: dict[
+        tuple[str, str, str, str, str, str, str, str, str],
+        list[dict[str, Any]],
+    ] = defaultdict(list)
     for row in joined_rows:
         key = (
             str(row.get("decision_stage") or ""),
@@ -2506,6 +2523,8 @@ def build_rolling_source_only_candidates(
             str(row.get("candidate_contract_sha256") or ""),
             str(row.get("selected_cost_profile_id") or ""),
             str(row.get("selected_cost_profile_content_sha256") or ""),
+            str(row.get("control_prompt_sha256") or ""),
+            str(row.get("candidate_prompt_sha256") or ""),
         )
         grouped[key].append(row)
 
@@ -2550,6 +2569,28 @@ def build_rolling_source_only_candidates(
             }
             for binding in reference_bindings
         ]
+        latest_reference_date = max(
+            (row["target_date"] for row in reference_binding_rows), default=""
+        )
+        latest_symbol_master_hashes = {
+            row["symbol_master_artifact_sha256"]
+            for row in reference_binding_rows
+            if row["target_date"] == latest_reference_date
+        }
+        latest_symbol_master_artifact_sha256 = (
+            next(iter(latest_symbol_master_hashes))
+            if len(latest_symbol_master_hashes) == 1
+            else ""
+        )
+        if (
+            not latest_reference_date
+            or len(latest_symbol_master_hashes) != 1
+            or not _valid_sha256(latest_symbol_master_artifact_sha256)
+        ):
+            all_gates_pass = False
+            gate_findings["identity"] = [
+                "latest_symbol_master_artifact_binding_not_unique"
+            ]
         reference_bindings_sha256 = _sha256(reference_binding_rows)
         partition = {
             "decision_stage": key[0],
@@ -2559,8 +2600,14 @@ def build_rolling_source_only_candidates(
             "candidate_contract_sha256": key[4],
             "selected_cost_profile_id": key[5],
             "selected_cost_profile_content_sha256": key[6],
+            "current_prompt_sha256": key[7],
+            "recommended_prompt_sha256": key[8],
             "economic_reference_bindings_sha256": reference_bindings_sha256,
             "economic_reference_binding_count": len(reference_binding_rows),
+            "latest_symbol_master_source_date": latest_reference_date,
+            "latest_symbol_master_artifact_sha256": (
+                latest_symbol_master_artifact_sha256
+            ),
             "source_row_count": len(rows),
             "source_dates": sorted({row["target_date"] for row in rows}),
             "windows": windows,
@@ -2578,10 +2625,16 @@ def build_rolling_source_only_candidates(
             "tuning_axis": "prompt_contract_effect",
             "current_contract_sha256": key[3],
             "recommended_contract_sha256": key[4],
+            "current_prompt_sha256": key[7],
+            "recommended_prompt_sha256": key[8],
             "selected_cost_profile_id": key[5],
             "selected_cost_profile_content_sha256": key[6],
             "economic_reference_bindings_sha256": reference_bindings_sha256,
             "economic_reference_binding_count": len(reference_binding_rows),
+            "latest_symbol_master_source_date": latest_reference_date,
+            "latest_symbol_master_artifact_sha256": (
+                latest_symbol_master_artifact_sha256
+            ),
             "rolling_window_sha256": _sha256(windows),
             "evidence_contract": {
                 "clean_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
