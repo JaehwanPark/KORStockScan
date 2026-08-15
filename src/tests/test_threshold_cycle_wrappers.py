@@ -1337,11 +1337,11 @@ def test_postclose_wrapper_runs_bounded_main_ai_quality_r0_r3_after_exact_chain(
         in script
     )
     assert (
-        'MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP:-96}"'
+        'MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP:-78}"'
         in script
     )
     assert (
-        'MAIN_AI_QUALITY_PARENT_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_PARENT_CAP:-8}"'
+        'MAIN_AI_QUALITY_PARENT_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_PARENT_CAP:-26}"'
         in script
     )
     assert (

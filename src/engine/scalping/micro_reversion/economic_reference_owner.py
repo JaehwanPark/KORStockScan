@@ -474,10 +474,12 @@ def _load_policy(path: Path, *, target_date: date) -> tuple[dict[str, Any], byte
         "observation_window_end": "2026-08-14",
         "evaluated_call_counts": [676, 369, 781, 1113, 999],
         "evaluated_call_median": 781,
-        "daily_parent_cap": 8,
+        "target_share_of_evaluated_median_pct": 10.0,
+        "daily_parent_cap": 26,
         "logical_requests_per_parent": 3,
+        "maximum_logical_request_count": 78,
         "maximum_schema_attempts_per_request": 4,
-        "daily_attempt_cap": 96,
+        "daily_attempt_cap": 78,
         "source_artifacts": expected_source_artifacts,
     }:
         raise EconomicReferenceOwnerError(
