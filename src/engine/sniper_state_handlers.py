@@ -1025,6 +1025,7 @@ TRADING_RULES = None
 PUBLISH_GATEKEEPER_REPORT = None
 SHOULD_BLOCK_SWING_ENTRY = None
 SCANNER_GENERATION_SUBMIT_GUARD = None
+BROKER_SNAPSHOT_REFRESH_CALLBACK = None
 CONFIRM_CANCEL_OR_RELOAD_REMAINING = None
 SEND_EXIT_BEST_IOC = None
 DUAL_PERSONA_ENGINE = None
@@ -11394,11 +11395,13 @@ def bind_state_dependencies(
     send_exit_best_ioc=None,
     dual_persona_engine=None,
     scanner_generation_submit_guard=None,
+    broker_snapshot_refresh_callback=None,
 ):
     global KIWOOM_TOKEN, DB, EVENT_BUS, ACTIVE_TARGETS, COOLDOWNS, ALERTED_STOCKS, HIGHEST_PRICES
     global LAST_AI_CALL_TIMES, LAST_LOG_TIMES, TRADING_RULES, PUBLISH_GATEKEEPER_REPORT
     global SHOULD_BLOCK_SWING_ENTRY, CONFIRM_CANCEL_OR_RELOAD_REMAINING, SEND_EXIT_BEST_IOC
     global DUAL_PERSONA_ENGINE, WS_MANAGER, SCANNER_GENERATION_SUBMIT_GUARD
+    global BROKER_SNAPSHOT_REFRESH_CALLBACK
 
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
@@ -11434,6 +11437,22 @@ def bind_state_dependencies(
         DUAL_PERSONA_ENGINE = dual_persona_engine
     if scanner_generation_submit_guard is not None:
         SCANNER_GENERATION_SUBMIT_GUARD = scanner_generation_submit_guard
+    if broker_snapshot_refresh_callback is not None:
+        BROKER_SNAPSHOT_REFRESH_CALLBACK = broker_snapshot_refresh_callback
+
+
+def _request_broker_snapshot_refresh(code: str, *, reason: str) -> None:
+    callback = BROKER_SNAPSHOT_REFRESH_CALLBACK
+    if callback is None:
+        return
+    try:
+        callback(code=str(code or "").strip()[:6], reason=str(reason or "state"))
+    except Exception as exc:
+        log_error(
+            "[BROKER_SNAPSHOT_REFRESH_REQUEST] "
+            f"code={str(code or '').strip()[:6] or '-'} reason={reason or '-'} "
+            f"failed={exc}"
+        )
 
 
 def sanitize_pending_add_states(active_targets=None):
@@ -26022,6 +26041,110 @@ def _dispatch_scalp_preset_exit(
     rem_qty = _confirm_cancel_or_reload_remaining(
         code, orig_ord_no, KIWOOM_TOKEN, expected_qty
     )
+    remaining_confirmation_state = str(
+        getattr(
+            rem_qty,
+            "confirmation_state",
+            "confirmed_positive" if rem_qty > 0 else "unknown",
+        )
+    )
+    remaining_confirmation_source = str(
+        getattr(rem_qty, "source", "legacy_positive_quantity" if rem_qty > 0 else "unknown")
+    )
+    remaining_successful_exchanges = "|".join(
+        getattr(rem_qty, "successful_exchanges", ()) or ()
+    ) or "-"
+    if remaining_confirmation_state == "unknown":
+        retry_at = float(now_ts) + max(
+            1.0, _safe_float(_rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30), 30.0)
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "status": "HOLDING",
+                "exit_requested": False,
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": remaining_confirmation_source,
+                "sell_cancel_reconciliation_retry_at": retry_at,
+                "fast_exit_retry_pending": bool(fast_exit),
+                "fast_exit_retry_reason": "cancel_inventory_confirmation_unknown",
+                "fast_exit_retry_at": retry_at,
+            },
+        )
+        if target_id and DB is not None:
+            try:
+                with DB.get_session() as session:
+                    session.query(RecommendationHistory).filter_by(
+                        id=target_id
+                    ).update({"status": "HOLDING"})
+            except Exception as exc:
+                log_error(
+                    f"[SELL_CANCEL_RECONCILIATION] {stock.get('name')}({code}) "
+                    f"DB HOLDING preserve failed: {exc}"
+                )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "sell_cancel_inventory_confirmation_deferred",
+            confirmation_state=remaining_confirmation_state,
+            confirmation_source=remaining_confirmation_source,
+            successful_exchanges=remaining_successful_exchanges,
+            retry_at=retry_at,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+            metric_role="hard_safety",
+            decision_authority="cancel_inventory_reconciliation_only",
+            window_policy="same_exit_attempt_until_all_venue_inventory_confirmed",
+            sample_floor="not_applicable_runtime_guard",
+            primary_decision_metric="broker_remaining_quantity_confirmation_state",
+            source_quality_gate="kt00018_all_venue_or_positive_position_proof",
+            forbidden_uses="quantity_guess|phantom_sell_submit|broker_guard_bypass",
+        )
+        return
+    if remaining_confirmation_state == "verified_zero":
+        set_fields = {
+            "status": "SELL_ORDERED",
+            "exit_requested": True,
+            "sell_cancel_reconciliation_required": True,
+            "sell_cancel_reconciliation_source": remaining_confirmation_source,
+            "sell_cancel_reconciliation_retry_at": float(now_ts)
+            + max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30)),
+        }
+        if orig_ord_no:
+            set_fields["sell_odno"] = str(orig_ord_no)
+        _mutate_stock_state(stock, set_fields=set_fields)
+        if target_id and DB is not None:
+            try:
+                with DB.get_session() as session:
+                    session.query(RecommendationHistory).filter_by(
+                        id=target_id
+                    ).update({"status": "SELL_ORDERED"})
+            except Exception as exc:
+                log_error(
+                    f"[SELL_CANCEL_ZERO_INVENTORY] {stock.get('name')}({code}) "
+                    f"DB reconciliation state failed: {exc}"
+                )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "sell_cancel_verified_zero_receipt_pending",
+            confirmation_state=remaining_confirmation_state,
+            confirmation_source=remaining_confirmation_source,
+            successful_exchanges=remaining_successful_exchanges,
+            broker_order_no=orig_ord_no or "-",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+            metric_role="broker_reconciliation_guard",
+            decision_authority="exact_receipt_or_account_replay_required",
+            window_policy="same_cancelled_sell_generation",
+            sample_floor="all_venue_verified_zero_inventory",
+            primary_decision_metric="terminal_sell_receipt_reconciled",
+            source_quality_gate="all_venue_zero_plus_exact_order_identity",
+            forbidden_uses="new_sell_submit|quantity_guess|synthetic_completion",
+        )
+        return
     ws_context = dict(ws_data or {})
     ws_context.setdefault("curr", curr_p)
     if (
@@ -40527,6 +40650,19 @@ def _scale_in_exit_authority_block_reason(stock: dict | None) -> str:
 
     if not isinstance(stock, dict):
         return "invalid_position_state"
+    sell_receipt_state = stock.get("_sell_execution_receipt_state")
+    if (
+        stock.get("sell_partial_exit_carry_active")
+        or stock.get("nxt_rising_missed_tp1_partial_pending")
+        or stock.get("nxt_rising_missed_tp1_partial_applied")
+    ) or (
+        isinstance(sell_receipt_state, dict)
+        and (
+            _safe_int(sell_receipt_state.get("carried_qty"), 0) > 0
+            or _safe_int(sell_receipt_state.get("cumulative_qty"), 0) > 0
+        )
+    ):
+        return "partial_sell_receipt_reconciliation_active"
     status = str(stock.get("status") or "").strip().upper()
     if status in {"SELL_ORDERED", "COMPLETED", "SOLD", "CLOSED"}:
         return f"position_status_{status.lower()}"
@@ -71885,6 +72021,18 @@ def _maybe_submit_nxt_rising_missed_tp1_partial_runner(
         "nxt_rising_missed_tp1_partial_applied"
     ):
         return False
+    sell_receipt_state = stock.get("_sell_execution_receipt_state")
+    if (
+        stock.get("sell_partial_exit_carry_active")
+        or (
+            isinstance(sell_receipt_state, dict)
+            and (
+                _safe_int(sell_receipt_state.get("aggregate_cumulative_qty"), 0) > 0
+                or _safe_int(sell_receipt_state.get("carried_qty"), 0) > 0
+            )
+        )
+    ):
+        return False
     if _has_active_sell_order_pending(stock) or _has_open_pending_entry_orders(stock):
         return False
     if not admin_id or curr_price <= 0 or buy_price <= 0:
@@ -72189,6 +72337,79 @@ def _resolve_entry_cancel_exchange_from_unfilled_snapshot(
     }
 
 
+def _order_terminal_inventory_reconciliation(
+    stock: dict,
+    code: str,
+    order_nos: list[str] | tuple[str, ...] | set[str],
+    *,
+    expected_runtime_qty: int,
+) -> tuple[bool, str, int | None]:
+    """Prove order absence and exact all-venue custody before identity cleanup."""
+
+    normalized_orders = {
+        str(value or "").strip() for value in order_nos if str(value or "").strip()
+    }
+    if not normalized_orders or not code or not KIWOOM_TOKEN:
+        return False, "order_identity_or_runtime_context_missing", None
+    same_symbol_targets = [
+        target
+        for target in (ACTIVE_TARGETS or [])
+        if isinstance(target, dict)
+        and str(target.get("code") or "").strip()[:6] == code
+        and str(target.get("status") or "").upper()
+        in {"BUY_ORDERED", "HOLDING", "SELL_ORDERED"}
+    ]
+    target_ids = {
+        _safe_int(target.get("id"), 0)
+        for target in same_symbol_targets
+        if _safe_int(target.get("id"), 0) > 0
+    }
+    if len(target_ids) > 1:
+        return False, "same_symbol_custody_allocation_ambiguous", None
+    try:
+        rows, source_meta = kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta(
+            KIWOOM_TOKEN,
+            all_stk_tp="0",
+            trde_tp="0",
+            stex_tp="0",
+        )
+    except Exception:
+        return False, "open_order_snapshot_failed", None
+    if not bool((source_meta or {}).get("request_succeeded", False)):
+        return False, "open_order_snapshot_unverified", None
+    open_order_nos = {
+        str(
+            (row or {}).get("ord_no")
+            or (row or {}).get("odno")
+            or ((row or {}).get("raw") or {}).get("ord_no")
+            or ((row or {}).get("raw") or {}).get("odno")
+            or ""
+        ).strip()
+        for row in (rows or [])
+        if isinstance(row, dict)
+    }
+    if normalized_orders.intersection(open_order_nos):
+        return False, "order_still_open", None
+    try:
+        inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
+    except Exception:
+        return False, "inventory_query_failed", None
+    successful = {
+        str(exchange or "").strip().upper()
+        for exchange in (successful_exchanges or set())
+    }
+    if not {"KRX", "NXT"}.issubset(successful):
+        return False, "inventory_all_venues_not_verified", None
+    broker_qty = sum(
+        max(0, _safe_int((item or {}).get("qty"), 0))
+        for item in (inventory or [])
+        if str((item or {}).get("code") or "").strip()[:6] == code
+    )
+    if broker_qty != max(0, int(expected_runtime_qty or 0)):
+        return False, "inventory_receipt_quantity_mismatch", broker_qty
+    return True, "terminal_absence_and_inventory_exact", broker_qty
+
+
 def _cancel_pending_entry_orders(
     stock, code, *, force=False, expired_only=False, now_ts=None, cancel_reason=None
 ):
@@ -72224,6 +72445,7 @@ def _cancel_pending_entry_orders(
         entry_filled_before_cancel = _entry_bundle_filled_qty(stock)
         had_failure = False
         cancelled_any = False
+        cancel_ack_orders: list[dict] = []
         bundle_cancel_cooldown_eligible = False
         for order in open_orders:
             ord_no = str(order.get("ord_no", "") or "").strip()
@@ -72410,10 +72632,11 @@ def _cancel_pending_entry_orders(
                 for keyword in ["취소가능수량", "잔고", "주문없음", "체결"]
             )
             if is_success or already_resolved:
-                order["status"] = "CANCELLED"
                 cancelled_at = time.time()
-                order["cancelled_at"] = cancelled_at
-                cancelled_any = True
+                order["cancel_acknowledged_at"] = cancelled_at
+                order["cancel_ack_order_no"] = cancel_ord_no
+                order["cancel_terminal_pending"] = True
+                cancel_ack_orders.append(order)
                 _log_entry_pipeline(
                     stock,
                     code,
@@ -72515,6 +72738,45 @@ def _cancel_pending_entry_orders(
 
         if had_failure:
             return "failed"
+
+        if cancel_ack_orders:
+            reconciled, reconcile_reason, broker_qty = (
+                _order_terminal_inventory_reconciliation(
+                    stock,
+                    code,
+                    [order.get("ord_no") for order in cancel_ack_orders],
+                    expected_runtime_qty=_entry_bundle_filled_qty(stock),
+                )
+            )
+            if not reconciled:
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "entry_cancel_terminal_reconciliation_required": True,
+                        "entry_cancel_terminal_reconciliation_reason": reconcile_reason,
+                        "entry_cancel_terminal_broker_qty": (
+                            broker_qty if broker_qty is not None else "unknown"
+                        ),
+                    },
+                )
+                _request_broker_snapshot_refresh(
+                    code,
+                    reason="entry_cancel_terminal_reconciliation_required",
+                )
+                return "pending"
+            for order in cancel_ack_orders:
+                order["status"] = "CANCELLED"
+                order["cancelled_at"] = time.time()
+                order.pop("cancel_terminal_pending", None)
+            cancelled_any = True
+            _mutate_stock_state(
+                stock,
+                pop_fields=[
+                    "entry_cancel_terminal_reconciliation_required",
+                    "entry_cancel_terminal_reconciliation_reason",
+                    "entry_cancel_terminal_broker_qty",
+                ],
+            )
 
         remaining_open_orders = _open_entry_split_orders(stock)
         if remaining_open_orders:
@@ -73909,6 +74171,43 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             cancel_order["cancelled_at"] = time.time()
             cancel_order["entry_reprice_cancel_ord_no"] = cancel_ord_no
 
+    terminal_reconciled, terminal_reason, terminal_broker_qty = (
+        _order_terminal_inventory_reconciliation(
+            stock,
+            code,
+            [candidate.get("ord_no") for candidate in orders_to_cancel],
+            expected_runtime_qty=_entry_bundle_filled_qty(stock),
+        )
+    )
+    if not terminal_reconciled:
+        with ENTRY_LOCK:
+            for cancel_order in orders_to_cancel:
+                cancel_order["status"] = (
+                    "PARTIAL"
+                    if _coerce_int_value(cancel_order.get("filled_qty")) > 0
+                    else "OPEN"
+                )
+                cancel_order["entry_reprice_cancel_terminal_pending"] = True
+            stock["entry_reprice_cancel_terminal_pending"] = True
+            stock["entry_reprice_cancel_terminal_reason"] = terminal_reason
+            stock["entry_reprice_cancel_terminal_broker_qty"] = (
+                terminal_broker_qty
+                if terminal_broker_qty is not None
+                else "unknown"
+            )
+        _request_broker_snapshot_refresh(
+            code,
+            reason="entry_reprice_cancel_terminal_reconciliation_required",
+        )
+        return "pending_terminal"
+
+    with ENTRY_LOCK:
+        for cancel_order in orders_to_cancel:
+            cancel_order.pop("entry_reprice_cancel_terminal_pending", None)
+        stock.pop("entry_reprice_cancel_terminal_pending", None)
+        stock.pop("entry_reprice_cancel_terminal_reason", None)
+        stock.pop("entry_reprice_cancel_terminal_broker_qty", None)
+
     post_cancel_filled_qty = _entry_bundle_filled_qty(stock)
     if (
         bundle_reprice or allow_partial_holding_reprice
@@ -73930,6 +74229,16 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             entry_reprice_filled_qty_before_cancel=entry_bundle_filled_qty,
         )
         return "failed"
+
+    requested_bundle_qty = max(
+        0,
+        _safe_int(stock.get("entry_requested_qty"), 0)
+        or _safe_int(stock.get("requested_buy_qty"), 0),
+    )
+    if requested_bundle_qty > 0:
+        qty = max(0, requested_bundle_qty - post_cancel_filled_qty)
+    if qty <= 0:
+        return "resolved_without_resubmit"
 
     target_price = int(decision.target_price or 0)
     _log_entry_pipeline(
@@ -77535,6 +77844,17 @@ def handle_holding_state(
     if stock.get("exit_token"):
         return
 
+    # A cancelled SELL with an unknown inventory result must not fall through
+    # to another exit submission.  Re-query on the recorded backoff cadence and
+    # release HOLDING only after the all-venue inventory and receipt ledger
+    # agree; zero inventory still requires an exact terminal receipt/replay.
+    if _sell_cancel_reconciliation_blocks_holding(
+        stock,
+        code,
+        now_ts=float(now_ts),
+    ):
+        return
+
     cooldowns = COOLDOWNS
     alerted_stocks = ALERTED_STOCKS
     highest_prices = HIGHEST_PRICES
@@ -81123,6 +81443,12 @@ def handle_holding_state(
     if is_sell_signal:
         if stock.get("exit_token"):
             return
+        if _pending_add_blocks_sell_dispatch(
+            stock,
+            code,
+            now_ts=float(now_ts),
+        ):
+            return
         if str(exit_rule or "").strip() == "scalp_trailing_take_profit":
             if _rest_quote_only_hard_stop_confirmation_block(
                 stock,
@@ -81781,6 +82107,19 @@ def handle_holding_state(
                 profit_rate=profit_rate,
             )
             return
+        if stock.get("sell_partial_exit_recovery_required"):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "sell_restart_receipt_recovery_blocked",
+                runtime_effect=True,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                decision_authority="sell_execution_replay_recovery_guard",
+                source_quality_gate="exact_same_position_execution_replay_required",
+                broker_holding_qty=stock.get("broker_holding_qty", "-"),
+            )
+            return
         buy_qty = mem_buy_qty
         probe_phase = str(stock.get("entry_split_probe_phase") or "").strip()
         probe_receipt_qty_authoritative = bool(
@@ -81842,6 +82181,42 @@ def handle_holding_state(
         except Exception as e:
             log_error(f"🚨 [DB 조회 에러] ID {target_id} 수량 조회 실패: {e}")
 
+        reconciled_remaining_qty = _safe_int(
+            stock.get("sell_reconciled_remaining_qty"), 0
+        )
+        if reconciled_remaining_qty > 0:
+            receipt_state = stock.get("_sell_execution_receipt_state")
+            receipt_state = (
+                receipt_state if isinstance(receipt_state, dict) else {}
+            )
+            receipt_position_qty = max(
+                0,
+                _safe_int(
+                    receipt_state.get("position_qty"),
+                    _safe_int(stock.get("buy_qty"), 0),
+                ),
+            )
+            receipt_carried_qty = max(
+                0, _safe_int(receipt_state.get("carried_qty"), 0)
+            )
+            exact_remaining_qty = max(0, receipt_position_qty - receipt_carried_qty)
+            if exact_remaining_qty != reconciled_remaining_qty:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "sell_retry_quantity_reconciliation_blocked",
+                    receipt_position_qty=receipt_position_qty,
+                    receipt_carried_qty=receipt_carried_qty,
+                    ledger_remaining_qty=exact_remaining_qty,
+                    broker_reconciled_remaining_qty=reconciled_remaining_qty,
+                    runtime_effect=True,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    decision_authority="sell_retry_quantity_reconciliation",
+                )
+                return
+            buy_qty = reconciled_remaining_qty
+
         if had_open_pending_entry_orders:
             requested_sell_qty = buy_qty
             if entry_filled_before_sell_cancel > 0:
@@ -81880,7 +82255,9 @@ def handle_holding_state(
             log_info(
                 f"⚠️ [{stock['name']}] 고유 ID({target_id})의 수량이 0주입니다. 실제 키움 잔고로 폴백합니다..."
             )
-            real_inventory, _ = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
+            real_inventory, successful_inventory_exchanges = (
+                kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
+            )
             real_stock = next(
                 (
                     item
@@ -81890,13 +82267,34 @@ def handle_holding_state(
                 None,
             )
 
-            if real_stock and _safe_int(real_stock.get("qty"), 0) > 0:
+            same_code_peers = [
+                item
+                for item in (ACTIVE_TARGETS or [])
+                if item is not stock
+                and str((item or {}).get("code") or "").strip()[:6] == code
+                and str((item or {}).get("status") or "").strip().upper()
+                in {"HOLDING", "SELL_ORDERED"}
+            ]
+            if (
+                real_stock
+                and _safe_int(real_stock.get("qty"), 0) > 0
+                and not same_code_peers
+            ):
                 buy_qty = _safe_int(real_stock.get("qty"), 0)
                 _mutate_stock_state(stock, set_fields={"buy_qty": buy_qty})
                 log_info(
                     f"🔄 [수량 폴백] 실제 계좌에서 총 잔고 {buy_qty}주를 매도합니다. "
                     "(다중 매매건 합산 수량일 수 있음)"
                 )
+            elif real_stock and same_code_peers:
+                log_error(
+                    f"[SELL_QTY_RECONCILE_BLOCKED] {stock['name']}({code}) "
+                    "account-total quantity cannot be attributed across multiple positions"
+                )
+            stock["sell_zero_qty_inventory_successful_exchanges"] = sorted(
+                str(item or "").strip().upper()
+                for item in (successful_inventory_exchanges or set())
+            )
 
         if not admin_id and not _is_any_simulated_position(stock, strategy):
             log_error(f"🚨 [매도실패] {stock['name']}: 관리자 ID가 없습니다.")
@@ -82048,19 +82446,29 @@ def handle_holding_state(
 
         if buy_qty <= 0:
             log_error(
-                f"🚨 [매도실패] {stock['name']}: 실제 잔고도 0주입니다! 강제 완료(COMPLETED) 처리."
+                f"🚨 [매도실패] {stock['name']}: target-scoped 수량을 확인할 수 없어 "
+                "exact receipt reconciliation 전 SELL_ORDERED를 유지합니다."
             )
             try:
                 with DB.get_session() as session:
                     session.query(RecommendationHistory).filter_by(id=target_id).update(
-                        {"status": "COMPLETED"}
+                        {"status": "SELL_ORDERED"}
                     )
             except Exception as e:
-                log_error(f"🚨 [DB 에러] {stock['name']} COMPLETED 전환 실패: {e}")
+                log_error(
+                    f"🚨 [DB 에러] {stock['name']} SELL_ORDERED 유지 실패: {e}"
+                )
 
-            _mutate_stock_state(stock, set_fields={"status": "COMPLETED"})
-            with ENTRY_LOCK:
-                HIGHEST_PRICES.pop(code, None)
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "SELL_ORDERED",
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        "zero_target_quantity_exact_receipt_required"
+                    ),
+                },
+            )
             return
 
         exit_greenfield_decision = _greenfield_decision_for_stock(
@@ -82558,6 +82966,9 @@ def handle_holding_state(
             set_fields={
                 "status": "SELL_ORDERED",
                 "sell_target_price": sell_order_price or curr_p,
+                "sell_submit_pending": True,
+                "sell_submit_requested_qty": int(buy_qty or 0),
+                "sell_submit_started_at": float(now_ts),
             },
         )
 
@@ -82627,7 +83038,15 @@ def handle_holding_state(
             }
             if ord_no:
                 set_fields["sell_odno"] = ord_no
-            _mutate_stock_state(stock, set_fields=set_fields)
+            _mutate_stock_state(
+                stock,
+                set_fields=set_fields,
+                pop_fields=[
+                    "sell_submit_pending",
+                    "sell_submit_requested_qty",
+                    "sell_submit_started_at",
+                ],
+            )
             stock.pop("_sell_order_retry_backoff_logged_key", None)
             sell_order_log_fields = dict(sell_time_block_fields or {})
             sell_order_log_fields.update(exit_extra_fields or {})
@@ -82743,27 +83162,38 @@ def handle_holding_state(
             err_msg = str(res.get("return_msg", "") if isinstance(res, dict) else "")
             sellable_qty = _extract_sellable_qty_from_error(err_msg)
 
-            # '매도가능수량 부족'은 0주인 경우에만 완료로 간주한다.
-            # 양수 수량이면 실계좌 잔고가 남아있는 상태이므로 HOLDING으로 복구해 재시도한다.
-            if "매도가능수량" in err_msg and sellable_qty == 0:
+            # Available-quantity errors are not execution receipts.  Zero can
+            # mean a raced full fill and a positive mismatch can mean a hidden
+            # partial fill; neither may synthesize COMPLETED or rebase position
+            # quantity without exact broker execution reconciliation.
+            if "매도가능수량" in err_msg:
                 log_error(
-                    f"🚨 [{stock['name']}] 잔고 0주(이미 매도됨). COMPLETED로 강제 전환."
+                    f"🚨 [{stock['name']}] 매도가능수량 충돌. exact receipt 확인 전 "
+                    "SELL_ORDERED reconciliation 상태를 유지합니다."
                 )
-                new_status = "COMPLETED"
+                new_status = "SELL_ORDERED"
+                retry_backoff_fields = _mark_sell_order_failure_retry_backoff(
+                    stock,
+                    error=err_msg or "sellable_quantity_conflict",
+                    now_ts=now_ts,
+                )
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "sell_cancel_reconciliation_required": True,
+                        "sell_cancel_reconciliation_source": (
+                            "sell_submit_available_quantity_conflict"
+                        ),
+                        "sell_cancel_reconciliation_retry_at": (
+                            retry_backoff_fields.get("retry_backoff_until_ts")
+                            or now_ts
+                        ),
+                    },
+                )
             else:
-                if "매도가능수량" in err_msg and sellable_qty and sellable_qty > 0:
-                    prev_qty = _safe_int(stock.get("buy_qty"), 0)
-                    if prev_qty != sellable_qty:
-                        _mutate_stock_state(stock, set_fields={"buy_qty": sellable_qty})
-                        log_error(
-                            f"⚠️ [{stock['name']}] 매도가능수량 불일치 감지 "
-                            f"(요청:{prev_qty}주, 가능:{sellable_qty}주). "
-                            "HOLDING 복구 후 재시도 대상으로 유지합니다."
-                        )
-                else:
-                    log_error(
-                        f"🚨 [{stock['name']}] 일시적 매도 실패! HOLDING으로 원상복구."
-                    )
+                log_error(
+                    f"🚨 [{stock['name']}] 일시적 매도 실패! HOLDING으로 원상복구."
+                )
                 new_status = "HOLDING"
                 retry_backoff_fields = _mark_sell_order_failure_retry_backoff(
                     stock,
@@ -82771,14 +83201,6 @@ def handle_holding_state(
                     now_ts=now_ts,
                 )
                 stock.pop("_sell_order_retry_backoff_logged_key", None)
-            if new_status == "COMPLETED":
-                retry_backoff_fields = {
-                    "retry_backoff_applied": False,
-                    "retry_backoff_sec": 0,
-                    "retry_backoff_until_ts": 0.0,
-                    "sell_order_failure_count": 0,
-                }
-
             _mutate_stock_state(
                 stock,
                 set_fields={"status": new_status},
@@ -82787,6 +83209,9 @@ def handle_holding_state(
                     "sell_order_time",
                     "pending_sell_msg",
                     "sell_target_price",
+                    "sell_submit_pending",
+                    "sell_submit_requested_qty",
+                    "sell_submit_started_at",
                 ],
             )
             _log_holding_pipeline(
@@ -82813,9 +83238,6 @@ def handle_holding_state(
                     f"🚨 [DB 에러] {stock['name']} 예외 상태({new_status}) 업데이트 실패: {e}"
                 )
 
-            if new_status == "COMPLETED":
-                with ENTRY_LOCK:
-                    HIGHEST_PRICES.pop(code, None)
         return
 
     # --------------------------------------------------------
@@ -83607,6 +84029,8 @@ def _clear_pending_add_meta(stock, reason=None):
             "_add_receipt_requested_by_order_no",
             "_add_receipt_filled_by_order_no",
             "_add_receipt_filled_amount_by_order_no",
+            "_add_receipt_economics_complete_by_order_no",
+            "_add_receipt_executions_by_order_no",
             "_add_receipt_leg_meta_by_order_no",
             "pending_add_notice_by_order_no",
             "scale_in_receipt_reconciled_before_ordno_bind",
@@ -83824,6 +84248,130 @@ def _pending_add_split_bundle_hard_expired(
     )
 
 
+def _pending_add_blocks_sell_dispatch(
+    stock: dict, code: str, *, now_ts: float
+) -> bool:
+    """Cancel and reconcile every ADD leg before any SELL can be submitted."""
+
+    if not bool(stock.get("pending_add_order")):
+        return False
+    retry_at = _safe_float(stock.get("pending_add_exit_reconcile_retry_at"), 0.0)
+    if retry_at > now_ts:
+        return True
+    retry_sec = max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30))
+    ord_nos = _split_pending_add_ord_nos(stock)
+    if not ord_nos or not code or not KIWOOM_TOKEN:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "scale_in_locked": True,
+                "pending_add_exit_reconciliation_required": True,
+                "pending_add_exit_reconciliation_source": (
+                    "pending_add_identity_or_runtime_context_missing"
+                ),
+                "pending_add_exit_reconcile_retry_at": now_ts + retry_sec,
+            },
+        )
+        return True
+
+    for ord_no in ord_nos:
+        sniper_trade_utils.send_cancel_order_with_exchange_retry(
+            code=code,
+            orig_ord_no=ord_no,
+            token=KIWOOM_TOKEN,
+            qty=0,
+        )
+
+    try:
+        rows, source_meta = kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta(
+            KIWOOM_TOKEN,
+            all_stk_tp="0",
+            trde_tp="0",
+            stex_tp="0",
+        )
+        snapshot_ok = bool((source_meta or {}).get("request_succeeded", False))
+    except Exception:
+        rows = []
+        snapshot_ok = False
+    open_order_nos = {
+        str(
+            (row or {}).get("ord_no")
+            or (row or {}).get("odno")
+            or ((row or {}).get("raw") or {}).get("ord_no")
+            or ((row or {}).get("raw") or {}).get("odno")
+            or ""
+        ).strip()
+        for row in (rows or [])
+        if isinstance(row, dict)
+    }
+    terminal_absence = bool(
+        snapshot_ok and not any(ord_no in open_order_nos for ord_no in ord_nos)
+    )
+
+    try:
+        inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
+        successful = {
+            str(exchange or "").strip().upper()
+            for exchange in (successful_exchanges or set())
+        }
+        matching = next(
+            (
+                item
+                for item in (inventory or [])
+                if str((item or {}).get("code") or "").strip()[:6] == code
+            ),
+            None,
+        )
+        broker_qty = (
+            max(0, _safe_int((matching or {}).get("qty"), 0))
+            if {"KRX", "NXT"}.issubset(successful)
+            else None
+        )
+    except Exception:
+        broker_qty = None
+    runtime_qty = max(0, _safe_int(stock.get("buy_qty"), 0))
+    reconciled = bool(
+        terminal_absence and broker_qty is not None and broker_qty == runtime_qty
+    )
+    if reconciled:
+        _clear_pending_add_meta(stock, reason="exit_dispatch_exact_reconciliation")
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "last_pending_add_exit_reconciled_at": now_ts,
+                "last_pending_add_exit_reconciled_qty": runtime_qty,
+            },
+            pop_fields=[
+                "pending_add_exit_reconciliation_required",
+                "pending_add_exit_reconciliation_source",
+                "pending_add_exit_reconcile_retry_at",
+            ],
+        )
+        return False
+
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "scale_in_locked": True,
+            "pending_add_exit_reconciliation_required": True,
+            "pending_add_exit_reconciliation_source": (
+                "open_order_still_active"
+                if not terminal_absence
+                else "inventory_receipt_quantity_mismatch"
+            ),
+            "pending_add_exit_reconcile_retry_at": now_ts + retry_sec,
+            "pending_add_exit_broker_qty": (
+                broker_qty if broker_qty is not None else "unknown"
+            ),
+        },
+    )
+    _request_broker_snapshot_refresh(
+        code,
+        reason="pending_add_exit_reconciliation_required",
+    )
+    return True
+
+
 def _cancel_or_reconcile_pending_add(stock, reason, *, expired_only=False, now_ts=None):
     """
     보수적으로 pending add를 정리합니다.
@@ -83855,15 +84403,11 @@ def _cancel_or_reconcile_pending_add(stock, reason, *, expired_only=False, now_t
             reason=f"{reason}_missing_ordno",
             note="pending add missing order number; scale_in_locked applied",
         )
-        _rollback_unfilled_defensive_avg_down_usage(
-            stock, reason=f"{reason}_missing_ordno"
-        )
-        _clear_pending_add_meta(stock, reason=f"{reason}_missing_ordno")
         log_error(
-            f"[ADD_CANCELLED] {stock.get('name')}({code}) pending add missing order number. "
-            "scale_in_locked=True for manual reconciliation."
+            f"[ADD_BLOCKED] {stock.get('name')}({code}) pending add missing order number. "
+            "identity retained and scale_in_locked until broker reconciliation."
         )
-        return {"cleared": True, "reason": f"{reason}_missing_ordno"}
+        return {"cleared": False, "reason": f"{reason}_missing_ordno"}
 
     if not code or not KIWOOM_TOKEN:
         _mutate_stock_state(stock, set_fields={"scale_in_locked": True})
@@ -83985,12 +84529,11 @@ def _cancel_or_reconcile_pending_add(stock, reason, *, expired_only=False, now_t
                 reason=f"{reason}_uncertain",
                 note=f"cancel uncertain: {err_msg}",
             )
-            _clear_pending_add_meta(stock, reason=f"{reason}_uncertain")
             log_error(
-                f"[ADD_CANCELLED] {stock.get('name')}({code}) pending add uncertain after cancel attempt. "
-                "scale_in_locked=True for manual/account reconciliation."
+                f"[ADD_BLOCKED] {stock.get('name')}({code}) pending add uncertain after cancel attempt. "
+                "identity/ledger retained for late receipt and account reconciliation."
             )
-            return {"cleared": True, "reason": f"{reason}_uncertain"}
+            return {"cleared": False, "reason": f"{reason}_uncertain"}
 
         log_error(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) pending add cancel failed; keeping pending. "
@@ -83999,6 +84542,40 @@ def _cancel_or_reconcile_pending_add(stock, reason, *, expired_only=False, now_t
         return {"cleared": False, "reason": "cancel_failed"}
 
     if cancelled_ord_nos:
+        reconciled, reconcile_reason, broker_qty = (
+            _order_terminal_inventory_reconciliation(
+                stock,
+                code,
+                cancelled_ord_nos,
+                expected_runtime_qty=_safe_int(stock.get("buy_qty"), 0),
+            )
+        )
+        if not reconciled:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "scale_in_locked": True,
+                    "pending_add_terminal_reconciliation_required": True,
+                    "pending_add_terminal_reconciliation_reason": reconcile_reason,
+                    "pending_add_terminal_broker_qty": (
+                        broker_qty if broker_qty is not None else "unknown"
+                    ),
+                },
+            )
+            _persist_scale_in_flags(stock)
+            _request_broker_snapshot_refresh(
+                code,
+                reason="pending_add_terminal_reconciliation_required",
+            )
+            return {"cleared": False, "reason": reconcile_reason}
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "pending_add_terminal_reconciliation_required",
+                "pending_add_terminal_reconciliation_reason",
+                "pending_add_terminal_broker_qty",
+            ],
+        )
         remaining_ord_nos = [
             item for item in ord_nos if item not in set(cancelled_ord_nos)
         ]
@@ -84008,6 +84585,14 @@ def _cancel_or_reconcile_pending_add(stock, reason, *, expired_only=False, now_t
         filled_amount_by_order = stock.get("_add_receipt_filled_amount_by_order_no")
         if not isinstance(filled_amount_by_order, dict):
             filled_amount_by_order = {}
+        economics_by_order = stock.get(
+            "_add_receipt_economics_complete_by_order_no"
+        )
+        if not isinstance(economics_by_order, dict):
+            economics_by_order = {}
+        executions_by_order = stock.get("_add_receipt_executions_by_order_no")
+        if not isinstance(executions_by_order, dict):
+            executions_by_order = {}
         cancelled_qty = sum(
             _safe_int(requested_by_order.get(item), 0)
             or _safe_int((meta_by_order.get(item) or {}).get("qty"), 0)
@@ -84018,6 +84603,8 @@ def _cancel_or_reconcile_pending_add(stock, reason, *, expired_only=False, now_t
             meta_by_order.pop(item, None)
             filled_by_order.pop(item, None)
             filled_amount_by_order.pop(item, None)
+            economics_by_order.pop(item, None)
+            executions_by_order.pop(item, None)
         if remaining_ord_nos:
             remaining_qty = sum(
                 _safe_int(requested_by_order.get(item), 0) for item in remaining_ord_nos
@@ -84036,6 +84623,8 @@ def _cancel_or_reconcile_pending_add(stock, reason, *, expired_only=False, now_t
                 "_add_receipt_requested_by_order_no": requested_by_order,
                 "_add_receipt_filled_by_order_no": filled_by_order,
                 "_add_receipt_filled_amount_by_order_no": filled_amount_by_order,
+                "_add_receipt_economics_complete_by_order_no": economics_by_order,
+                "_add_receipt_executions_by_order_no": executions_by_order,
                 "_add_receipt_leg_meta_by_order_no": meta_by_order,
             }
             if filled_qty > 0:
@@ -84088,7 +84677,6 @@ def _sanitize_pending_add_states(active_targets):
             if not stock.get("pending_add_ord_no"):
                 _mutate_stock_state(stock, set_fields={"scale_in_locked": True})
                 _persist_scale_in_flags(stock)
-                _clear_pending_add_meta(stock, reason="recovery_no_ordno")
                 continue
             # 오래된 pending은 정리
             pending_ts = float(stock.get("pending_add_requested_at", 0) or 0)
@@ -86310,6 +86898,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "_add_receipt_requested_by_order_no": {},
             "_add_receipt_filled_by_order_no": {},
             "_add_receipt_filled_amount_by_order_no": {},
+            "_add_receipt_economics_complete_by_order_no": {},
+            "_add_receipt_executions_by_order_no": {},
             "_add_receipt_leg_meta_by_order_no": {},
             "pending_add_notice_by_order_no": {},
             "add_order_time": pending_registered_at,
@@ -86896,6 +87486,427 @@ def handle_sell_ordered_state(stock, code):
         process_sell_cancellation(stock, code, orig_ord_no, DB)
 
 
+def _broker_position_qty_for_sell_reconciliation(code, target_stock=None):
+    """Return an exact cross-venue broker quantity, or ``None`` when unknown."""
+
+    if target_stock is not None:
+        matching_targets = [
+            item
+            for item in (ACTIVE_TARGETS or [])
+            if str((item or {}).get("code") or "").strip()[:6]
+            == str(code or "").strip()[:6]
+            and str((item or {}).get("status") or "").strip().upper()
+            in {"HOLDING", "SELL_ORDERED"}
+        ]
+        if any(item is not target_stock for item in matching_targets):
+            return None, "multi_position_symbol_requires_execution_reconciliation"
+
+    inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
+    successful = {
+        str(exchange or "").strip().upper()
+        for exchange in (successful_exchanges or set())
+    }
+    matching = next(
+        (
+            item
+            for item in (inventory or [])
+            if str(item.get("code") or "").strip()[:6]
+            == str(code or "").strip()[:6]
+        ),
+        None,
+    )
+    if matching is not None:
+        matched_qty = max(0, _safe_int(matching.get("qty"), 0))
+        if matched_qty > 0:
+            return matched_qty, "kt00018_position_found"
+        if {"KRX", "NXT"}.issubset(successful):
+            return 0, "kt00018_all_venues_zero_row"
+        return None, "kt00018_partial_venue_zero_row"
+    if {"KRX", "NXT"}.issubset(successful):
+        return 0, "kt00018_all_venues_position_absent"
+    return None, "kt00018_partial_venue_confirmation"
+
+
+def _sell_order_terminal_absence_confirmed(code: str, order_no: str) -> tuple[bool, str]:
+    """Require a successful ka10075 snapshot proving one canceled SELL is absent."""
+
+    normalized_order_no = str(order_no or "").strip()
+    if not normalized_order_no:
+        return False, "sell_order_number_missing"
+    try:
+        rows, source_meta = kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta(
+            KIWOOM_TOKEN,
+            all_stk_tp="0",
+            trde_tp="0",
+            stex_tp="0",
+        )
+    except Exception as exc:
+        return False, f"unfilled_snapshot_failed:{type(exc).__name__}"
+    if not bool((source_meta or {}).get("request_succeeded", False)):
+        return False, "unfilled_snapshot_unconfirmed"
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        row_code = str(
+            row.get("code")
+            or row.get("stk_cd")
+            or (row.get("raw") or {}).get("stk_cd")
+            or ""
+        ).strip()[:6]
+        row_order_no = str(
+            row.get("ord_no")
+            or row.get("odno")
+            or (row.get("raw") or {}).get("ord_no")
+            or (row.get("raw") or {}).get("odno")
+            or ""
+        ).strip()
+        if row_order_no == normalized_order_no and (
+            not row_code or row_code == str(code or "").strip()[:6]
+        ):
+            return False, "sell_order_still_open"
+    return True, "ka10075_terminal_absence_confirmed"
+
+
+def _sell_cancel_reconciliation_blocks_holding(
+    stock: dict, code: str, *, now_ts: float
+) -> bool:
+    """Retry a deferred cancel/inventory check without allowing a duplicate SELL."""
+
+    if not bool(stock.get("sell_cancel_reconciliation_required")):
+        return False
+    retry_at = _safe_float(stock.get("sell_cancel_reconciliation_retry_at"), 0.0)
+    if retry_at > now_ts:
+        return True
+
+    retry_sec = max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30))
+    try:
+        broker_qty, inventory_source = _broker_position_qty_for_sell_reconciliation(
+            code, stock
+        )
+    except Exception as exc:
+        broker_qty = None
+        inventory_source = f"inventory_lookup_failed:{type(exc).__name__}"
+
+    if broker_qty is None:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": inventory_source,
+                "sell_cancel_reconciliation_retry_at": now_ts + retry_sec,
+            },
+        )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "sell_cancel_inventory_confirmation_deferred",
+            confirmation_state="unknown",
+            confirmation_source=inventory_source,
+            retry_at=now_ts + retry_sec,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+            metric_role="hard_safety",
+            decision_authority="cancel_inventory_reconciliation_only",
+            window_policy="same_exit_attempt_until_all_venue_inventory_confirmed",
+            sample_floor="not_applicable_runtime_guard",
+            primary_decision_metric="broker_remaining_quantity_confirmation_state",
+            source_quality_gate="kt00018_all_venue_or_positive_position_proof",
+            forbidden_uses="quantity_guess|duplicate_sell_submit|broker_guard_bypass",
+        )
+        return True
+
+    if broker_qty == 0:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "status": "SELL_ORDERED",
+                "exit_requested": True,
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": (
+                    "zero_inventory_exact_receipt_required"
+                ),
+                "sell_cancel_reconciliation_retry_at": now_ts + retry_sec,
+            },
+        )
+        target_id = stock.get("id")
+        if target_id and DB is not None:
+            try:
+                with DB.get_session() as session:
+                    session.query(RecommendationHistory).filter_by(
+                        id=target_id
+                    ).update({"status": "SELL_ORDERED"})
+            except Exception as exc:
+                log_error(
+                    f"[SELL_CANCEL_ZERO_INVENTORY] {stock.get('name')}({code}) "
+                    f"DB reconciliation state failed: {exc}"
+                )
+        return True
+
+    orig_ord_no = stock.get("sell_odno") or stock.get("sell_ord_no") or ""
+    reconciliation = _rotate_cancelled_sell_receipt_ledger(
+        stock,
+        orig_ord_no=orig_ord_no,
+        broker_qty=broker_qty,
+    )
+    if not bool(reconciliation.get("reconciled")):
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": (
+                    f"{inventory_source}:{reconciliation.get('reason') or 'receipt_gap'}"
+                ),
+                "sell_cancel_reconciliation_retry_at": now_ts + retry_sec,
+            },
+        )
+        return True
+
+    receipt_state = stock.get("_sell_execution_receipt_state")
+    carry_active = bool(
+        isinstance(receipt_state, dict)
+        and (
+            _safe_int(receipt_state.get("carried_qty"), 0) > 0
+            or _safe_int(receipt_state.get("cumulative_qty"), 0) > 0
+        )
+    )
+    holding_fields = {
+        "status": "HOLDING",
+        "buy_qty": int(broker_qty),
+        "exit_requested": False,
+        "sell_reconciled_remaining_qty": int(broker_qty),
+    }
+    if carry_active:
+        holding_fields.update(
+            {
+                "scale_in_locked": True,
+                "sell_partial_exit_carry_active": True,
+            }
+        )
+    _mutate_stock_state(
+        stock,
+        set_fields=holding_fields,
+        pop_fields=[
+            "sell_odno",
+            "sell_ord_no",
+            "sell_order_time",
+            "pending_sell_msg",
+            "sell_target_price",
+            "exit_token",
+            "fast_exit_token",
+            "sell_cancel_reconciliation_required",
+            "sell_cancel_reconciliation_source",
+            "sell_cancel_reconciliation_retry_at",
+        ],
+    )
+    target_id = stock.get("id")
+    if target_id and DB is not None:
+        try:
+            with DB.get_session() as session:
+                session.query(RecommendationHistory).filter_by(id=target_id).update(
+                    {
+                        "status": "HOLDING",
+                        **({"scale_in_locked": True} if carry_active else {}),
+                    }
+                )
+        except Exception as exc:
+            log_error(
+                f"[SELL_CANCEL_RECONCILIATION] {stock.get('name')}({code}) "
+                f"DB HOLDING preserve failed: {exc}"
+            )
+    return True
+
+
+def _rotate_cancelled_sell_receipt_ledger(
+    stock, *, orig_ord_no, broker_qty
+):
+    """Carry one cancelled order's exact fills into the position-level ledger."""
+
+    with ENTRY_LOCK:
+        return _rotate_cancelled_sell_receipt_ledger_locked(
+            stock,
+            orig_ord_no=orig_ord_no,
+            broker_qty=broker_qty,
+        )
+
+
+def _rotate_cancelled_sell_receipt_ledger_locked(
+    stock, *, orig_ord_no, broker_qty
+):
+    """Locked implementation for receipt-ledger generation rotation."""
+
+    state_key = "_sell_execution_receipt_state"
+    raw_state = stock.get(state_key)
+    state = dict(raw_state) if isinstance(raw_state, dict) else {}
+    active_order_no = str(state.get("order_no") or "").strip()
+    active_qty = max(0, _safe_int(state.get("cumulative_qty"), 0))
+    carried_qty = max(0, _safe_int(state.get("carried_qty"), 0))
+    prior_orders = state.get("prior_orders")
+    prior_orders = dict(prior_orders) if isinstance(prior_orders, dict) else {}
+    normalized_order_no = str(orig_ord_no or "").strip()
+    if active_order_no and active_order_no != normalized_order_no:
+        return {
+            "required": True,
+            "reconciled": False,
+            "reason": "cancel_order_receipt_identity_mismatch",
+        }
+
+    position_qty = max(
+        0,
+        _safe_int(
+            state.get("position_qty"),
+            _safe_int(stock.get("buy_qty"), 0),
+        ),
+    )
+    if not active_qty and normalized_order_no not in prior_orders:
+        expected_unfilled_position_qty = max(0, position_qty - carried_qty)
+        if (
+            broker_qty is not None
+            and int(broker_qty) == expected_unfilled_position_qty
+        ):
+            if active_order_no == normalized_order_no:
+                state.update(
+                    {
+                        "order_no": "",
+                        "expected_qty": 0,
+                        "cumulative_qty": 0,
+                        "cumulative_amount": 0,
+                        "remaining_qty": expected_unfilled_position_qty,
+                        "final": False,
+                        "last_execution_no": "",
+                        "executions_by_no": {},
+                        "replacement_reconciliation_required": False,
+                        "replacement_order_no": "",
+                        "replacement_invalidated_by_late_order_no": "",
+                    }
+                )
+                stock[state_key] = state
+                try:
+                    from src.engine import (
+                        sniper_execution_receipts as _receipt_handlers,
+                    )
+
+                    _receipt_handlers.persist_sell_receipt_recovery(stock)
+                except Exception as exc:
+                    log_error(
+                        f"[SELL_RECEIPT_RECOVERY_PERSIST_FAILED] "
+                        f"{stock.get('name')} id={stock.get('id')}: {exc}"
+                    )
+            stock["sell_reconciled_remaining_qty"] = expected_unfilled_position_qty
+            return {
+                "required": False,
+                "reconciled": True,
+                "reason": "no_partial_fill",
+                "remaining_qty": expected_unfilled_position_qty,
+            }
+        return {
+            "required": True,
+            "reconciled": False,
+            "reason": "broker_quantity_changed_without_receipt",
+            "expected_remaining_qty": expected_unfilled_position_qty,
+            "broker_qty": broker_qty,
+        }
+    aggregate_qty = max(
+        0,
+        _safe_int(
+            state.get("aggregate_cumulative_qty"), carried_qty + active_qty
+        ),
+    )
+    expected_remaining_qty = max(0, position_qty - aggregate_qty)
+    if broker_qty is None or int(broker_qty) != expected_remaining_qty:
+        return {
+            "required": True,
+            "reconciled": False,
+            "reason": "cancelled_partial_inventory_mismatch",
+            "expected_remaining_qty": expected_remaining_qty,
+            "broker_qty": broker_qty,
+        }
+    if normalized_order_no in prior_orders and not active_order_no:
+        stock["sell_reconciled_remaining_qty"] = expected_remaining_qty
+        return {
+            "required": True,
+            "reconciled": True,
+            "reason": "cancelled_partial_already_carried",
+            "remaining_qty": expected_remaining_qty,
+        }
+
+    active_amount = max(0, _safe_int(state.get("cumulative_amount"), 0))
+    active_expected_qty = max(0, _safe_int(state.get("expected_qty"), 0))
+    prior_orders[normalized_order_no] = {
+        "expected_qty": active_expected_qty,
+        "cumulative_qty": active_qty,
+        "cumulative_amount": active_amount,
+        "remaining_qty": max(0, active_expected_qty - active_qty),
+        "economics_complete": bool(state.get("economics_complete")),
+        "quantity_contract_complete": bool(
+            state.get("quantity_contract_complete")
+        ),
+        "unit_fill_consistent": bool(state.get("unit_fill_consistent", True)),
+        "executions_by_no": dict(state.get("executions_by_no") or {}),
+    }
+    aggregate_amount = max(
+        0,
+        _safe_int(
+            state.get("aggregate_cumulative_amount"),
+            _safe_int(state.get("carried_amount"), 0) + active_amount,
+        ),
+    )
+    aggregate_net_pnl = _safe_float(state.get("cumulative_net_pnl_krw"), 0.0)
+    state.update(
+        {
+            "order_no": "",
+            "expected_qty": 0,
+            "cumulative_qty": 0,
+            "cumulative_amount": 0,
+            "position_qty": position_qty,
+            "remaining_qty": expected_remaining_qty,
+            "carried_qty": aggregate_qty,
+            "carried_amount": aggregate_amount,
+            "carried_net_pnl_krw": aggregate_net_pnl,
+            "carried_economics_complete": bool(state.get("economics_complete")),
+            "carried_quantity_contract_complete": bool(
+                state.get("quantity_contract_complete")
+            ),
+            "carried_unit_fill_consistent": bool(
+                state.get("unit_fill_consistent", True)
+            ),
+            "prior_orders": prior_orders,
+            "final": False,
+            "last_execution_no": "",
+            "executions_by_no": {},
+        }
+    )
+    stock[state_key] = state
+    stock["sell_reconciled_remaining_qty"] = expected_remaining_qty
+    if str(state.get("partial_order_kind") or "") == "nxt_rising_missed_tp1":
+        stock.update(
+            {
+                "nxt_rising_missed_tp1_partial_pending": False,
+                "nxt_rising_missed_tp1_partial_applied": True,
+                "nxt_rising_missed_tp1_partial_filled_qty": aggregate_qty,
+                "nxt_rising_missed_tp1_partial_fill_amount": aggregate_amount,
+                "buy_qty": expected_remaining_qty,
+                "scale_in_locked": True,
+                "sell_partial_exit_carry_active": True,
+            }
+        )
+    try:
+        from src.engine import sniper_execution_receipts as _receipt_handlers
+
+        _receipt_handlers.persist_sell_receipt_recovery(stock)
+    except Exception as exc:
+        log_error(
+            f"[SELL_RECEIPT_RECOVERY_PERSIST_FAILED] {stock.get('name')} "
+            f"id={stock.get('id')}: {exc}"
+        )
+    return {
+        "required": True,
+        "reconciled": True,
+        "reason": "cancelled_partial_carried",
+        "remaining_qty": expected_remaining_qty,
+    }
+
+
 def process_sell_cancellation(stock, code, orig_ord_no, db):
     """미체결 매도 주문을 전량 취소하고 상태를 다시 HOLDING으로 되돌립니다."""
     if _manual_control_exclusion_blocked(
@@ -86926,36 +87937,129 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
         is_success = True
 
     if is_success:
+        terminal_absent, terminal_source = _sell_order_terminal_absence_confirmed(
+            code, orig_ord_no
+        )
+        if not terminal_absent:
+            retry_sec = max(
+                1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30)
+            )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "SELL_ORDERED",
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": terminal_source,
+                    "sell_cancel_reconciliation_retry_at": time.time() + retry_sec,
+                },
+            )
+            try:
+                with db.get_session() as session:
+                    session.query(RecommendationHistory).filter_by(
+                        id=target_id
+                    ).update({"status": "SELL_ORDERED"})
+            except Exception as exc:
+                log_error(
+                    f"[SELL_CANCEL_TERMINAL_PROOF] {stock.get('name')}({code}) "
+                    f"DB preserve failed: {exc}"
+                )
+            return False
+        # A successful cancel acknowledgement does not prove that no fill raced
+        # the cancellation.  Always reconcile the current broker position with
+        # the receipt ledger before releasing HOLDING/retry authority.
+        try:
+            broker_qty, inventory_source = (
+                _broker_position_qty_for_sell_reconciliation(code, stock)
+            )
+        except Exception as exc:
+            broker_qty = None
+            inventory_source = "inventory_lookup_failed"
+            log_error(f"⚠️ [{stock['name']}] 매도 취소 후 잔고 재확인 실패: {exc}")
+        retry_sec = max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30))
+        with ENTRY_LOCK:
+            receipt_reconciliation = _rotate_cancelled_sell_receipt_ledger_locked(
+                stock,
+                orig_ord_no=orig_ord_no,
+                broker_qty=broker_qty,
+            )
+            reconciliation_ok = bool(receipt_reconciliation.get("reconciled"))
+            if reconciliation_ok:
+                receipt_state = stock.get("_sell_execution_receipt_state")
+                carry_active = bool(
+                    isinstance(receipt_state, dict)
+                    and _safe_int(receipt_state.get("carried_qty"), 0) > 0
+                )
+                holding_fields = {
+                    "status": "HOLDING",
+                    "exit_requested": False,
+                    "fast_exit_retry_pending": False,
+                    "fast_exit_retry_reason": "",
+                    "fast_exit_retry_at": 0.0,
+                }
+                if carry_active:
+                    holding_fields.update(
+                        {
+                            "scale_in_locked": True,
+                            "sell_partial_exit_carry_active": True,
+                        }
+                    )
+                _mutate_stock_state(
+                    stock,
+                    set_fields=holding_fields,
+                    pop_fields=[
+                        "sell_odno",
+                        "sell_ord_no",
+                        "sell_order_time",
+                        "pending_sell_msg",
+                        "sell_target_price",
+                        "exit_token",
+                        "fast_exit_token",
+                        "sell_cancel_reconciliation_required",
+                        "sell_cancel_reconciliation_source",
+                        "sell_cancel_reconciliation_retry_at",
+                    ],
+                )
+            else:
+                carry_active = False
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "status": "SELL_ORDERED",
+                        "sell_cancel_reconciliation_required": True,
+                        "sell_cancel_reconciliation_source": inventory_source,
+                        "sell_cancel_reconciliation_retry_at": time.time()
+                        + retry_sec,
+                    },
+                )
+        if not reconciliation_ok:
+            _log_holding_pipeline(
+                stock,
+                code,
+                "sell_cancel_reconciliation_deferred",
+                inventory_source=inventory_source,
+                broker_qty=broker_qty if broker_qty is not None else "-",
+                expected_remaining_qty=receipt_reconciliation.get(
+                    "expected_remaining_qty", "-"
+                ),
+                reason=receipt_reconciliation.get("reason"),
+                retry_sec=retry_sec,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                decision_authority="sell_cancel_receipt_inventory_reconciliation",
+            )
+            return False
         log_info(
             f"✅ [{stock['name']}] 미체결 매도 주문 취소 성공! HOLDING(보유) 상태로 복귀합니다."
-        )
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "status": "HOLDING",
-                "exit_requested": False,
-                "fast_exit_retry_pending": False,
-                "fast_exit_retry_reason": "",
-                "fast_exit_retry_at": 0.0,
-            },
-            pop_fields=[
-                "sell_odno",
-                "sell_ord_no",
-                "sell_order_time",
-                "pending_sell_msg",
-                "sell_target_price",
-                "exit_token",
-                "fast_exit_token",
-                "sell_cancel_reconciliation_required",
-                "sell_cancel_reconciliation_source",
-                "sell_cancel_reconciliation_retry_at",
-            ],
         )
 
         try:
             with db.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update(
-                    {"status": "HOLDING"}
+                    {
+                        "status": "HOLDING",
+                        **({"scale_in_locked": True} if carry_active else {}),
+                    }
                 )
         except Exception as e:
             log_error(
@@ -86967,121 +88071,124 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
     if any(
         keyword in err_msg for keyword in ["취소가능수량", "잔고", "주문없음", "체결"]
     ):
+        terminal_absent, terminal_source = _sell_order_terminal_absence_confirmed(
+            code, orig_ord_no
+        )
         broker_qty = None
         inventory_source = "inventory_lookup_failed"
         try:
-            inventory, successful_exchanges = kiwoom_orders.get_my_inventory(
-                KIWOOM_TOKEN
+            broker_qty, inventory_source = (
+                _broker_position_qty_for_sell_reconciliation(code, stock)
             )
-            successful = {
-                str(exchange or "").strip().upper()
-                for exchange in (successful_exchanges or set())
-            }
-            matching = next(
-                (
-                    item
-                    for item in (inventory or [])
-                    if str(item.get("code") or "").strip()[:6]
-                    == str(code or "").strip()[:6]
-                ),
-                None,
-            )
-            if matching is not None:
-                broker_qty = max(0, _safe_int(matching.get("qty"), 0))
-                inventory_source = "kt00018_position_found"
-            elif {"KRX", "NXT"}.issubset(successful):
-                broker_qty = 0
-                inventory_source = "kt00018_all_venues_position_absent"
-            else:
-                inventory_source = "kt00018_partial_venue_confirmation"
         except Exception as exc:
             log_error(f"⚠️ [{stock['name']}] 매도 취소 실패 후 잔고 재확인 실패: {exc}")
 
         if broker_qty == 0:
-            new_status = "COMPLETED"
-            log_info(f"💡 [{stock['name']}] 전 거래소 잔고 0주 확인. COMPLETED로 전환.")
+            new_status = "SELL_ORDERED"
+            log_error(
+                f"[SELL_CANCEL_ZERO_INVENTORY_RECEIPT_REQUIRED] {stock['name']}({code}) "
+                "broker inventory is zero but an exact final receipt is missing"
+            )
             _mutate_stock_state(
                 stock,
                 set_fields={
                     "status": new_status,
-                    "exit_requested": False,
-                    "fast_exit_retry_pending": False,
-                    "fast_exit_retry_reason": "",
-                    "fast_exit_retry_at": 0.0,
-                    "sell_order_retry_backoff_until_ts": 0.0,
-                    "sell_order_retry_backoff_sec": 0,
-                    "sell_order_failure_count": 0,
-                    "last_sell_order_error": "",
-                    "last_sell_order_failed_at": 0.0,
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        "zero_inventory_exact_receipt_required"
+                    ),
+                    "sell_cancel_reconciliation_retry_at": time.time()
+                    + max(
+                        1,
+                        _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30),
+                    ),
                 },
-                pop_fields=[
-                    "sell_odno",
-                    "sell_ord_no",
-                    "sell_order_time",
-                    "pending_sell_msg",
-                    "sell_target_price",
-                    "exit_token",
-                    "fast_exit_token",
-                    "sell_cancel_reconciliation_required",
-                    "sell_cancel_reconciliation_source",
-                    "sell_cancel_reconciliation_retry_at",
-                ],
             )
-            with ENTRY_LOCK:
-                HIGHEST_PRICES.pop(code, None)
         elif broker_qty is not None and broker_qty > 0:
-            new_status = "HOLDING"
-            log_info(
-                f"♻️ [{stock['name']}] 브로커 잔고 {broker_qty}주 확인. "
-                "COMPLETED 오판 없이 HOLDING으로 복구."
-            )
-            retry_fields = _mark_sell_order_failure_retry_backoff(
+            receipt_reconciliation = _rotate_cancelled_sell_receipt_ledger(
                 stock,
-                error=err_msg,
-                now_ts=time.time(),
-            )
-            _mutate_stock_state(
-                stock,
-                set_fields={
-                    "status": new_status,
-                    "buy_qty": broker_qty,
-                    "exit_requested": False,
-                    "fast_exit_retry_pending": False,
-                    "fast_exit_retry_reason": "",
-                    "fast_exit_retry_at": 0.0,
-                },
-                pop_fields=[
-                    "sell_odno",
-                    "sell_ord_no",
-                    "sell_order_time",
-                    "pending_sell_msg",
-                    "sell_target_price",
-                    "exit_token",
-                    "fast_exit_token",
-                    "sell_cancel_reconciliation_required",
-                    "sell_cancel_reconciliation_source",
-                    "sell_cancel_reconciliation_retry_at",
-                ],
-            )
-            _log_holding_pipeline(
-                stock,
-                code,
-                "sell_cancel_reconciled_holding",
-                cancel_error=err_msg,
+                orig_ord_no=orig_ord_no,
                 broker_qty=broker_qty,
-                inventory_source=inventory_source,
-                actual_order_submitted=False,
-                broker_order_forbidden=True,
-                runtime_effect=True,
-                metric_role="broker_reconciliation_guard",
-                decision_authority="sell_cancel_inventory_reconciliation",
-                window_policy="same_cancel_attempt_current_broker_inventory",
-                sample_floor="not_applicable_runtime_guard",
-                primary_decision_metric="broker_confirmed_remaining_qty",
-                source_quality_gate="kt00018_positive_position_or_all_venues_absent",
-                forbidden_uses="cancel_error_text_as_fill_proof|duplicate_sell_submit",
-                **retry_fields,
             )
+            original_qty = max(0, _safe_int(stock.get("buy_qty"), 0))
+            no_hidden_fill = bool(
+                not receipt_reconciliation.get("required")
+                and broker_qty == original_qty
+            )
+            if terminal_absent and (
+                receipt_reconciliation.get("reconciled") or no_hidden_fill
+            ):
+                new_status = "HOLDING"
+                stock["sell_reconciled_remaining_qty"] = broker_qty
+                log_info(
+                    f"♻️ [{stock['name']}] 브로커 잔고 {broker_qty}주와 "
+                    "체결 ledger 일치. HOLDING으로 복구."
+                )
+                retry_fields = _mark_sell_order_failure_retry_backoff(
+                    stock,
+                    error=err_msg,
+                    now_ts=time.time(),
+                )
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "status": new_status,
+                        "exit_requested": False,
+                        "fast_exit_retry_pending": False,
+                        "fast_exit_retry_reason": "",
+                        "fast_exit_retry_at": 0.0,
+                    },
+                    pop_fields=[
+                        "sell_odno",
+                        "sell_ord_no",
+                        "sell_order_time",
+                        "pending_sell_msg",
+                        "sell_target_price",
+                        "exit_token",
+                        "fast_exit_token",
+                        "sell_cancel_reconciliation_required",
+                        "sell_cancel_reconciliation_source",
+                        "sell_cancel_reconciliation_retry_at",
+                    ],
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "sell_cancel_reconciled_holding",
+                    cancel_error=err_msg,
+                    broker_qty=broker_qty,
+                    inventory_source=inventory_source,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    runtime_effect=True,
+                    metric_role="broker_reconciliation_guard",
+                    decision_authority="sell_cancel_inventory_reconciliation",
+                    window_policy="same_cancel_attempt_current_broker_inventory",
+                    sample_floor="not_applicable_runtime_guard",
+                    primary_decision_metric="broker_confirmed_remaining_qty",
+                    source_quality_gate="kt00018_positive_position_or_all_venues_absent",
+                    forbidden_uses="cancel_error_text_as_fill_proof|duplicate_sell_submit",
+                    **retry_fields,
+                )
+            else:
+                new_status = "SELL_ORDERED"
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "status": new_status,
+                        "sell_cancel_reconciliation_required": True,
+                        "sell_cancel_reconciliation_source": (
+                            terminal_source
+                            if not terminal_absent
+                            else "positive_inventory_receipt_gap"
+                        ),
+                        "sell_cancel_reconciliation_retry_at": time.time()
+                        + max(
+                            1,
+                            _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30),
+                        ),
+                    },
+                )
         else:
             new_status = "SELL_ORDERED"
             retry_sec = max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30))
