@@ -63,9 +63,7 @@ def test_broker_receipt_pipeline_preserves_exact_lifecycle_identity(
         "market_session_bucket": "regular",
         "last_watching_ai_decision_trace_id": "trace-701",
     }
-    broker_observed_at = datetime(
-        2026, 8, 14, 10, 1, 2, 345_000
-    )
+    broker_observed_at = datetime(2026, 8, 14, 10, 1, 2, 345_000)
 
     execution_receipts._log_holding_pipeline(
         stock["name"],
@@ -115,15 +113,9 @@ def test_broker_receipt_pipeline_preserves_exact_lifecycle_identity(
         "market_session_bucket",
         "last_watching_ai_decision_trace_id",
     }
-    assert required_snapshot_keys <= set(
-        execution_receipts._BUY_RECEIPT_SNAPSHOT_KEYS
-    )
-    assert required_snapshot_keys <= set(
-        execution_receipts._SELL_RECEIPT_SNAPSHOT_KEYS
-    )
-    assert required_snapshot_keys <= set(
-        execution_receipts._ADD_RECEIPT_SNAPSHOT_KEYS
-    )
+    assert required_snapshot_keys <= set(execution_receipts._BUY_RECEIPT_SNAPSHOT_KEYS)
+    assert required_snapshot_keys <= set(execution_receipts._SELL_RECEIPT_SNAPSHOT_KEYS)
+    assert required_snapshot_keys <= set(execution_receipts._ADD_RECEIPT_SNAPSHOT_KEYS)
 
 
 def test_missing_lineage_cannot_retain_caller_supplied_identity(
@@ -149,9 +141,7 @@ def test_missing_lineage_cannot_retain_caller_supplied_identity(
         candidate_stock={"id": 701, "code": "005930"},
         attempt_id="spoofed-attempt",
         main_lifecycle_id="mlc-00000000000000000000000000000000",
-        main_lifecycle_identity_schema=(
-            "main_scalping_lifecycle_pipeline_identity_v1"
-        ),
+        main_lifecycle_identity_schema=("main_scalping_lifecycle_pipeline_identity_v1"),
         main_lifecycle_runtime_effect=True,
         main_lifecycle_order_authority=True,
         main_lifecycle_provider_authority=True,
@@ -202,9 +192,7 @@ def test_exit_economics_uses_exact_decision_price_or_omits_slippage() -> None:
         "main_lifecycle_realized_net_pnl_krw": 12,
         "main_lifecycle_slippage_krw": 20.0,
         "main_lifecycle_slippage_basis_price": 10_010.0,
-        "main_lifecycle_slippage_basis_source": (
-            "exit_decision_executable_sell_price"
-        ),
+        "main_lifecycle_slippage_basis_source": ("exit_decision_executable_sell_price"),
     }
 
     no_basis = execution_receipts._main_lifecycle_exit_economics_fields(
@@ -231,7 +219,7 @@ def test_current_receipt_rows_preserve_lifecycle_but_fail_close_raw_fill_gap(
         "last_watching_ai_decision_trace_id": "trace-801",
     }
     kst = timezone(timedelta(hours=9))
-    started_at = datetime(2026, 8, 14, 9, 0, tzinfo=kst)
+    started_at = datetime(2026, 8, 15, 9, 0, tzinfo=kst)
 
     def capture_event(
         pipeline: str,
@@ -363,7 +351,7 @@ def test_current_receipt_rows_preserve_lifecycle_but_fail_close_raw_fill_gap(
         encoding="utf-8",
     )
     report = build_daily_report(
-        "2026-08-14",
+        "2026-08-15",
         source_path=source,
         reviewed_cost_profile_sha256=COST_HASH,
         reviewed_cost_profile_verified=True,
@@ -390,12 +378,8 @@ def test_current_receipt_rows_preserve_lifecycle_but_fail_close_raw_fill_gap(
     assert row["broker_execution_entry_covered_qty"] == 0.0
     assert row["broker_execution_exit_covered_qty"] == 0.0
     assert "broker_execution_raw_provenance_gap" in row["promotion_blockers"]
-    assert "broker_execution_entry_qty_coverage_incomplete" in row[
-        "promotion_blockers"
-    ]
-    assert "broker_execution_exit_qty_coverage_incomplete" in row[
-        "promotion_blockers"
-    ]
+    assert "broker_execution_entry_qty_coverage_incomplete" in row["promotion_blockers"]
+    assert "broker_execution_exit_qty_coverage_incomplete" in row["promotion_blockers"]
     assert row["promotion_evidence_eligible"] is False
     assert report["promotion_evidence_eligible_count"] == 0
     assert report["runtime_authority"] is False
@@ -416,7 +400,7 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
 ) -> None:
     events: list[dict[str, Any]] = []
     kst = timezone(timedelta(hours=9))
-    started_at = datetime(2026, 8, 14, 9, 0, tzinfo=kst)
+    started_at = datetime(2026, 8, 15, 9, 0, tzinfo=kst)
     stock = {
         "id": 901,
         "code": "005930",
@@ -458,6 +442,12 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
 
         def query(self, *_args: Any) -> _Query:
             return _Query()
+
+        def flush(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            return None
 
     class _DB:
         def get_session(self) -> _Session:
@@ -512,6 +502,14 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
 
     monkeypatch.setattr(execution_receipts, "DB", _DB())
     monkeypatch.setattr(execution_receipts, "event_bus", None)
+    monkeypatch.setattr(execution_receipts, "ACTIVE_TARGETS", [stock])
+    monkeypatch.setattr(execution_receipts, "highest_prices", {})
+    monkeypatch.setattr(execution_receipts, "_get_fast_state", lambda _code: None)
+    monkeypatch.setattr(
+        execution_receipts,
+        "_resolve_sell_execution_context",
+        lambda *_args: (record, 10_000.0, 0.0, "SCALPING", False),
+    )
     monkeypatch.setattr(execution_receipts, "emit_pipeline_event", capture_event)
     monkeypatch.setattr(
         execution_receipts,
@@ -583,10 +581,18 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
         order_no="PARTIAL-901",
         exec_price=10_020,
         exec_qty=2,
+        order_qty=4,
+        remaining_qty=2,
+        cumulative_exec_amount=20_040,
+        execution_no="PARTIAL-E1",
+        unit_exec_price=10_020,
+        unit_exec_qty=2,
         now=(started_at + timedelta(seconds=6)).replace(tzinfo=None),
         safe_buy_price=10_000,
     )
-    assert record.buy_qty == 8
+    # DB preserves the original position basis until the final exact receipt;
+    # the durable receipt ledger owns the runner quantity meanwhile.
+    assert record.buy_qty == 10
     assert stock["buy_qty"] == 8
     execution_receipts._handle_nxt_rising_missed_tp1_partial_sell_execution(
         target_id=stock["id"],
@@ -594,24 +600,40 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
         code=stock["code"],
         order_no="PARTIAL-901",
         exec_price=10_020,
-        exec_qty=2,
+        exec_qty=4,
+        order_qty=4,
+        remaining_qty=0,
+        cumulative_exec_amount=40_080,
+        execution_no="PARTIAL-E2",
+        unit_exec_price=10_020,
+        unit_exec_qty=2,
         now=(started_at + timedelta(seconds=7)).replace(tzinfo=None),
         safe_buy_price=10_000,
     )
-    assert record.buy_qty == 6
+    assert record.buy_qty == 10
     assert stock["buy_qty"] == 6
 
-    receipt_snapshot = execution_receipts._receipt_snapshot(
-        stock, execution_receipts._SELL_RECEIPT_SNAPSHOT_KEYS
-    )
-    receipt_snapshot["sell_execution_order_no"] = "RUNNER-901"
-    execution_receipts._update_db_for_sell(
-        stock["id"],
-        10_010,
-        (started_at + timedelta(seconds=10)).replace(tzinfo=None),
-        receipt_snapshot,
-        "SCALPING",
-        False,
+    stock["status"] = "SELL_ORDERED"
+    stock["sell_odno"] = "RUNNER-901"
+    execution_receipts.handle_real_execution(
+        {
+            "code": stock["code"],
+            "type": "SELL",
+            "order_no": "RUNNER-901",
+            "price": 10_010,
+            "qty": 6,
+            "order_qty": 6,
+            "remaining_qty": 0,
+            "cumulative_exec_amount": 60_060,
+            "execution_no": "RUNNER-E1",
+            "unit_exec_price": 10_010,
+            "unit_exec_qty": 6,
+            "broker_execution_time_raw": "090010",
+            "actual_execution_venue": "KRX",
+            "actual_exchange_code": "1",
+            "actual_exchange_name": "KRX",
+            "sor_flag": "N",
+        }
     )
 
     source = tmp_path / "partial_runner_pipeline.jsonl"
@@ -620,7 +642,7 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
         encoding="utf-8",
     )
     report = build_daily_report(
-        "2026-08-14",
+        "2026-08-15",
         source_path=source,
         reviewed_cost_profile_sha256=COST_HASH,
         reviewed_cost_profile_verified=True,

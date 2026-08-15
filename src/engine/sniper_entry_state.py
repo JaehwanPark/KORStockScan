@@ -44,6 +44,7 @@ def move_orders_to_terminal(
     entry_mode = str(stock.get("entry_mode", "") or "unknown")
     stock_name = str(stock.get("name", "") or "")
     strategy = str(stock.get("strategy", "") or "")
+    target_id = stock.get("id")
 
     for order in stock.get("pending_entry_orders") or []:
         ord_no = str(order.get("ord_no", "") or "").strip()
@@ -56,6 +57,7 @@ def move_orders_to_terminal(
             "leg_type": str(order.get("tag", "") or "unknown"),
             "entry_mode": entry_mode,
             "strategy": strategy,
+            "target_id": target_id,
             "expire_at": now + float(grace_seconds),
             "reason": reason,
         }

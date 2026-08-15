@@ -67,6 +67,17 @@ _PIPELINE_TP_RE = re.compile(
 _SCALPING_RUNTIME_ARCHIVE_CUTOFF_DATE = date.fromisoformat(
     SCALPING_RUNTIME_ARCHIVE_CUTOFF_DATE
 )
+_INVENTORY_CUSTODY_REQUIRED_EXCHANGES = frozenset({"KRX", "NXT"})
+
+
+def _inventory_custody_snapshot_complete(successful_exchanges) -> bool:
+    """Return whether integrated KRX/NXT position custody is authoritative."""
+
+    successful = {
+        str(exchange or "").strip().upper()
+        for exchange in (successful_exchanges or set())
+    }
+    return _INVENTORY_CUSTODY_REQUIRED_EXCHANGES.issubset(successful)
 
 
 def bind_sync_dependencies(
@@ -300,6 +311,61 @@ def _to_float(value):
         return float(value or 0)
     except Exception:
         return 0.0
+
+
+def _strict_inventory_nonnegative_int(value, *, field: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"inventory_{field}_boolean_invalid")
+    normalized = str(value if value is not None else "0").strip()
+    if not re.fullmatch(r"[+]?(?:\d{1,3}(?:,\d{3})+|\d+)", normalized):
+        raise ValueError(f"inventory_{field}_integer_contract_invalid")
+    return int(normalized.replace(",", ""))
+
+
+def _aggregate_inventory_by_code(inventory) -> dict[str, dict]:
+    """Aggregate KRX/NXT rows without cloning or dropping one venue quantity."""
+
+    aggregated: dict[str, dict] = {}
+    for raw_item in inventory or []:
+        if not isinstance(raw_item, dict):
+            continue
+        code = str(raw_item.get("code") or "").strip()[:6]
+        if len(code) != 6 or not code.isdigit():
+            continue
+        qty = _strict_inventory_nonnegative_int(raw_item.get("qty"), field="qty")
+        raw_price = (
+            raw_item.get("buy_price")
+            or raw_item.get("purchase_price")
+            or raw_item.get("pchs_avg_pric")
+            or 0
+        )
+        price = float(
+            _strict_inventory_nonnegative_int(raw_price, field="buy_price")
+        )
+        current = aggregated.setdefault(
+            code,
+            {
+                "code": code,
+                "name": str(
+                    raw_item.get("name")
+                    or raw_item.get("stock_name")
+                    or raw_item.get("stk_nm")
+                    or code
+                ),
+                "qty": 0,
+                "buy_price": 0.0,
+                "_weighted_cost": 0.0,
+                "_source_row_count": 0,
+            },
+        )
+        current["qty"] += qty
+        current["_weighted_cost"] += price * qty
+        current["_source_row_count"] += 1
+    for item in aggregated.values():
+        qty = max(0, _to_int(item.get("qty")))
+        weighted_cost = max(0.0, _to_float(item.pop("_weighted_cost", 0.0)))
+        item["buy_price"] = weighted_cost / qty if qty > 0 else 0.0
+    return aggregated
 
 
 def _trade_type_for_strategy(strategy):
@@ -836,6 +902,107 @@ def _with_state_lock():
     return STATE_LOCK if STATE_LOCK is not None else _DummyLock()
 
 
+def _active_sell_receipt_reconciliation(target_stock):
+    """Return the in-memory SELL receipt ledger while position truth is pinned."""
+
+    if not isinstance(target_stock, dict):
+        return None
+    state = target_stock.get("_sell_execution_receipt_state")
+    if not isinstance(state, dict):
+        return None
+    if (
+        _to_int(state.get("cumulative_qty")) <= 0
+        and _to_int(state.get("carried_qty")) <= 0
+    ):
+        return None
+    return state
+
+
+def _restore_sell_receipt_recovery(
+    *, target_stock, record, code: str, broker_remaining_qty: int
+):
+    """Restore an exact durable partial SELL ledger into runtime memory."""
+
+    if not isinstance(target_stock, dict):
+        return None, "runtime_target_missing"
+    try:
+        from src.engine import sniper_execution_receipts as _receipt_handlers
+
+        state, reason = _receipt_handlers.load_sell_receipt_recovery(
+            target_id=getattr(record, "id", None),
+            code=code,
+            position_qty=_to_int(getattr(record, "buy_qty", 0)),
+            broker_remaining_qty=broker_remaining_qty,
+        )
+    except Exception as exc:
+        return None, f"journal_loader_failed:{type(exc).__name__}"
+    if not isinstance(state, dict):
+        return None, reason
+    active_order_no = str(state.get("order_no") or "").strip()
+    target_stock["_sell_execution_receipt_state"] = state
+    target_stock["buy_qty"] = max(0, int(broker_remaining_qty or 0))
+    target_stock["scale_in_locked"] = True
+    target_stock["sell_partial_exit_carry_active"] = True
+    target_stock["sell_partial_exit_recovery_required"] = False
+    target_stock["sell_reconciled_remaining_qty"] = max(
+        0, int(broker_remaining_qty or 0)
+    )
+    target_stock["sell_cancel_reconciliation_required"] = False
+    target_stock["sell_cancel_reconciliation_source"] = (
+        "durable_sell_receipt_journal_exact_match"
+    )
+    if str(state.get("partial_order_kind") or "") == "nxt_rising_missed_tp1":
+        filled_qty = max(
+            0,
+            _to_int(state.get("aggregate_cumulative_qty"))
+            or (
+                _to_int(state.get("carried_qty")) + _to_int(state.get("cumulative_qty"))
+            ),
+        )
+        fill_amount = max(
+            0,
+            _to_int(state.get("aggregate_cumulative_amount"))
+            or (
+                _to_int(state.get("carried_amount"))
+                + _to_int(state.get("cumulative_amount"))
+            ),
+        )
+        requested_qty = max(0, _to_int(state.get("partial_order_requested_qty")))
+        order_still_active = bool(active_order_no)
+        target_stock.update(
+            {
+                "nxt_rising_missed_tp1_partial_pending": order_still_active,
+                "nxt_rising_missed_tp1_partial_applied": bool(
+                    filled_qty > 0 and not order_still_active
+                ),
+                "nxt_rising_missed_tp1_partial_requested_qty": requested_qty,
+                "nxt_rising_missed_tp1_partial_filled_qty": filled_qty,
+                "nxt_rising_missed_tp1_partial_fill_amount": fill_amount,
+                "nxt_rising_missed_tp1_partial_original_qty": _to_int(
+                    state.get("position_qty")
+                ),
+                "nxt_rising_missed_tp1_partial_avg_sell_price": (
+                    fill_amount / filled_qty if filled_qty > 0 else 0.0
+                ),
+                "nxt_rising_missed_tp1_partial_executions_by_no": dict(
+                    state.get("executions_by_no") or {}
+                ),
+                "nxt_rising_missed_tp1_partial_ord_no": active_order_no,
+            }
+        )
+        if order_still_active:
+            target_stock["sell_order_time"] = time.time()
+    if active_order_no:
+        target_stock["status"] = "SELL_ORDERED"
+        target_stock["sell_odno"] = active_order_no
+    else:
+        target_stock["status"] = "HOLDING"
+        target_stock.pop("sell_odno", None)
+        target_stock.pop("sell_ord_no", None)
+    record.scale_in_locked = True
+    return state, reason
+
+
 def _reconcile_scale_in_lock(record, real_qty, real_buy_uv):
     """
     계좌 truth 기준으로 scale_in_locked 자동 해제 여부를 판단합니다.
@@ -850,6 +1017,12 @@ def _reconcile_scale_in_lock(record, real_qty, real_buy_uv):
         ),
         None,
     )
+    if target_stock and (
+        target_stock.get("sell_partial_exit_carry_active")
+        or target_stock.get("sell_partial_exit_recovery_required")
+        or _active_sell_receipt_reconciliation(target_stock)
+    ):
+        return False
     mem_pending = bool(target_stock.get("pending_add_order")) if target_stock else False
     if mem_pending:
         return False
@@ -908,8 +1081,24 @@ def _remove_manual_control_exclusion_for_completed_holding(
 
 
 def sync_balance_with_db():
-    """봇 시작 시 실제 계좌 잔고와 DB의 HOLDING 기록을 대조하여 정합성을 맞춥니다."""
+    """Reconcile broker inventory with active HOLDING/partial-SELL records at boot."""
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS
+
+    try:
+        from src.engine import sniper_execution_receipts as _receipt_handlers
+
+        _receipt_handlers.prune_sell_receipt_recovery_files(
+            force=True,
+            active_target_ids={
+                _to_int(target.get("id"))
+                for target in (ACTIVE_TARGETS or [])
+                if isinstance(target, dict) and _to_int(target.get("id")) > 0
+            },
+        )
+    except Exception as exc:
+        log_error(
+            f"[SELL_RECEIPT_RECOVERY_PRUNE_FAILED] startup cleanup deferred: {exc}"
+        )
 
     print("🔄 [데이터 동기화] 실제 계좌 잔고와 DB를 대조합니다...")
     if not KIWOOM_TOKEN:
@@ -937,11 +1126,14 @@ def sync_balance_with_db():
             print("⚠️ [동기화 보류] 모든 거래소 잔고 조회 실패, 동기화를 건너뜁니다.")
             return
 
-    real_codes = {
-        str(item.get("code", "")).strip()[:6]: item
-        for item in real_inventory
-        if item.get("code")
-    }
+    try:
+        real_codes = _aggregate_inventory_by_code(real_inventory)
+    except ValueError as exc:
+        log_error(
+            "[STARTUP_INVENTORY_RECONCILIATION_BLOCKED] "
+            f"reason={exc}; DB/runtime custody left unchanged"
+        )
+        return
     try:
         unfilled_rows, unfilled_source_meta = (
             kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta(
@@ -970,19 +1162,38 @@ def sync_balance_with_db():
         open_orders_request_succeeded=unfilled_snapshot_ok,
         captured_at=datetime.now().timestamp(),
     )
+    if not _inventory_custody_snapshot_complete(successful_exchanges):
+        log_error(
+            "[STARTUP_INVENTORY_RECONCILIATION_BLOCKED] "
+            f"required={','.join(sorted(_INVENTORY_CUSTODY_REQUIRED_EXCHANGES))} "
+            f"successful={','.join(sorted(str(value).upper() for value in successful_exchanges)) or '-'}; "
+            "DB/runtime custody left unchanged"
+        )
+        return
 
     def get_exchange(code):
         is_nxt = DB.get_latest_is_nxt(code)
         return "NXT" if is_nxt else "KRX"
 
     pending_manual_control_removals = []
+    pending_final_sell_recoveries: list[dict] = []
     try:
         with DB.get_session() as session:
-            archive_active_records = (
+            custody_owner_records = (
                 session.query(RecommendationHistory)
-                .filter(RecommendationHistory.status.in_(("HOLDING", "SELL_ORDERED")))
+                .filter(
+                    RecommendationHistory.status.in_(
+                        ("BUY_ORDERED", "HOLDING", "SELL_ORDERED")
+                    )
+                )
                 .all()
             )
+            archive_active_records = [
+                record
+                for record in custody_owner_records
+                if str(getattr(record, "status", "") or "").upper()
+                in {"HOLDING", "SELL_ORDERED"}
+            ]
             for record in archive_active_records:
                 code = str(record.stock_code).strip()[:6]
                 exchange = get_exchange(code)
@@ -999,23 +1210,132 @@ def sync_balance_with_db():
                         )
                     )
 
-            db_holdings = (
-                session.query(RecommendationHistory).filter_by(status="HOLDING").all()
-            )
+            db_holdings = [
+                record
+                for record in archive_active_records
+                if str(getattr(record, "status", "") or "").upper() == "HOLDING"
+                or (
+                    str(getattr(record, "status", "") or "").upper() == "SELL_ORDERED"
+                    and bool(getattr(record, "scale_in_locked", False))
+                )
+            ]
             db_holdings = [
                 record
                 for record in db_holdings
-                if str(getattr(record, "status", "") or "").upper() == "HOLDING"
+                if str(getattr(record, "status", "") or "").upper()
+                in {"HOLDING", "SELL_ORDERED"}
             ]
+            active_count_by_code: dict[str, int] = {}
+            for active_record in custody_owner_records:
+                active_code = str(active_record.stock_code).strip()[:6]
+                active_count_by_code[active_code] = (
+                    active_count_by_code.get(active_code, 0) + 1
+                )
 
             for record in db_holdings:
                 code = str(record.stock_code).strip()[:6]
                 name = record.stock_name
                 safe_db_qty = _to_int(record.buy_qty)
+                is_s15_custody = (
+                    str(getattr(record, "strategy", "") or "").upper() == "S15_FAST"
+                )
+
+                # Broker inventory is symbol-aggregate custody.  It cannot be
+                # copied into two episode rows without exact allocation
+                # evidence; doing so doubles both DB and runtime exposure.
+                if active_count_by_code.get(code, 0) > 1:
+                    record.scale_in_locked = True
+                    for target in ACTIVE_TARGETS:
+                        if str(target.get("code", "")).strip()[:6] == code and (
+                            getattr(record, "id", None) is None
+                            or target.get("id") == getattr(record, "id", None)
+                        ):
+                            target.update(
+                                {
+                                    "scale_in_locked": True,
+                                    "broker_symbol_allocation_conflict": True,
+                                    "sell_cancel_reconciliation_required": True,
+                                    "sell_cancel_reconciliation_source": (
+                                        "multiple_active_records_share_symbol"
+                                    ),
+                                }
+                            )
+                    log_error(
+                        "[BROKER_SYMBOL_ALLOCATION_BLOCKED] "
+                        f"{name}({code}) active_records="
+                        f"{active_count_by_code[code]}; aggregate inventory not cloned"
+                    )
+                    continue
 
                 if code not in real_codes:
                     exchange = get_exchange(code)
                     if exchange in successful_exchanges:
+                        if is_s15_custody:
+                            record.scale_in_locked = True
+                            for target in ACTIVE_TARGETS:
+                                if str(target.get("code", "")).strip()[
+                                    :6
+                                ] == code and target.get("id") == getattr(
+                                    record, "id", None
+                                ):
+                                    target.update(
+                                        {
+                                            "scale_in_locked": True,
+                                            "s15_custody_recovery_required": True,
+                                            "broker_holding_qty": 0,
+                                        }
+                                    )
+                            log_error(
+                                "[S15_CUSTODY_SYNC_BLOCKED] "
+                                f"{name}({code}) zero inventory requires S15 journal/receipt recovery"
+                            )
+                            continue
+                        if bool(record.scale_in_locked) and safe_db_qty > 0:
+                            target = next(
+                                (
+                                    item
+                                    for item in ACTIVE_TARGETS
+                                    if str(item.get("code", "")).strip()[:6] == code
+                                    and (
+                                        getattr(record, "id", None) is None
+                                        or item.get("id") == getattr(record, "id", None)
+                                    )
+                                ),
+                                None,
+                            )
+                            if target:
+                                recovered_state, recovery_reason = (
+                                    _restore_sell_receipt_recovery(
+                                        target_stock=target,
+                                        record=record,
+                                        code=code,
+                                        broker_remaining_qty=0,
+                                    )
+                                )
+                                if (
+                                    isinstance(recovered_state, dict)
+                                    and recovered_state.get("final_pending_db_commit")
+                                    is True
+                                ):
+                                    pending_final_sell_recoveries.append(target)
+                                    log_info(
+                                        "[SELL_FINAL_RESTART_RECOVERY_READY] "
+                                        f"{name}({code}) source={recovery_reason}"
+                                    )
+                                    continue
+                                target["scale_in_locked"] = True
+                                target["sell_partial_exit_recovery_required"] = True
+                                target["sell_cancel_reconciliation_required"] = True
+                                target["sell_cancel_reconciliation_source"] = (
+                                    "startup_zero_inventory_execution_replay_required"
+                                )
+                                target["broker_holding_qty"] = 0
+                            log_error(
+                                "[SELL_RESTART_RECONCILIATION_BLOCKED] "
+                                f"{name}({code}) locked DB position has zero broker "
+                                "quantity; preserving position until execution replay"
+                            )
+                            continue
                         print(
                             f"⚠️ [동기화] {name}({code}): 실제 잔고 0주. 상태를 COMPLETED로 강제 변경."
                         )
@@ -1049,6 +1369,74 @@ def sync_balance_with_db():
                         or 0
                     )
                     real_buy_uv = _to_int(raw_price)
+                    if is_s15_custody and safe_db_qty != real_qty:
+                        record.scale_in_locked = True
+                        for target in ACTIVE_TARGETS:
+                            if str(target.get("code", "")).strip()[
+                                :6
+                            ] == code and target.get("id") == getattr(
+                                record, "id", None
+                            ):
+                                target.update(
+                                    {
+                                        "scale_in_locked": True,
+                                        "s15_custody_recovery_required": True,
+                                        "broker_holding_qty": real_qty,
+                                    }
+                                )
+                        log_error(
+                            "[S15_CUSTODY_SYNC_BLOCKED] "
+                            f"{name}({code}) DB qty={safe_db_qty}, broker qty={real_qty}; "
+                            "S15 journal/receipt recovery required"
+                        )
+                        continue
+                    if (
+                        bool(record.scale_in_locked)
+                        and safe_db_qty > 0
+                        and real_qty < safe_db_qty
+                    ):
+                        target = next(
+                            (
+                                item
+                                for item in ACTIVE_TARGETS
+                                if str(item.get("code", "")).strip()[:6] == code
+                                and (
+                                    getattr(record, "id", None) is None
+                                    or item.get("id") == getattr(record, "id", None)
+                                )
+                            ),
+                            None,
+                        )
+                        recovered_state, recovery_reason = (
+                            _restore_sell_receipt_recovery(
+                                target_stock=target,
+                                record=record,
+                                code=code,
+                                broker_remaining_qty=real_qty,
+                            )
+                        )
+                        if recovered_state is not None:
+                            log_info(
+                                "[SELL_RESTART_RECONCILIATION_RECOVERED] "
+                                f"{name}({code}) DB qty={safe_db_qty}, "
+                                f"broker qty={real_qty}, source={recovery_reason}"
+                            )
+                            continue
+                        if target:
+                            target["scale_in_locked"] = True
+                            target["sell_partial_exit_recovery_required"] = True
+                            target["sell_cancel_reconciliation_required"] = True
+                            target["sell_cancel_reconciliation_source"] = (
+                                "startup_quantity_decrease_execution_replay_required:"
+                                f"{recovery_reason}"
+                            )
+                            target["broker_holding_qty"] = real_qty
+                        log_error(
+                            "[SELL_RESTART_RECONCILIATION_BLOCKED] "
+                            f"{name}({code}) locked DB qty={safe_db_qty} exceeds "
+                            f"broker qty={real_qty}; preserving position basis"
+                        )
+                        continue
                     if safe_db_qty != real_qty:
                         print(
                             f"⚠️ [동기화] {name}({code}): 수량 불일치 교정 (DB: {safe_db_qty}주 -> 실제: {real_qty}주)"
@@ -1087,6 +1475,20 @@ def sync_balance_with_db():
     else:
         for code, reason in pending_manual_control_removals:
             _remove_manual_control_exclusion_for_completed_holding(code, reason=reason)
+        for target in pending_final_sell_recoveries:
+            try:
+                from src.engine import sniper_execution_receipts as _receipt_handlers
+
+                if not _receipt_handlers.recover_final_sell_receipt(target):
+                    log_error(
+                        "[SELL_FINAL_RESTART_RECOVERY_DEFERRED] "
+                        f"{target.get('name')}({target.get('code')})"
+                    )
+            except Exception as exc:
+                log_error(
+                    "[SELL_FINAL_RESTART_RECOVERY_FAILED] "
+                    f"{target.get('name')}({target.get('code')}): {exc}"
+                )
 
     print("✅ [데이터 동기화] 완료. 봇 메모리가 실제 계좌와 완벽히 일치합니다.")
 
@@ -1306,11 +1708,14 @@ def periodic_account_sync():
         print("⚠️ [정기 동기화] 모든 거래소 잔고 조회 실패, 동기화를 건너뜁니다.")
         return
 
-    real_codes = {
-        str(item.get("code", "")).strip()[:6]: item
-        for item in real_inventory
-        if item.get("code")
-    }
+    try:
+        real_codes = _aggregate_inventory_by_code(real_inventory)
+    except ValueError as exc:
+        log_error(
+            "[PERIODIC_INVENTORY_RECONCILIATION_BLOCKED] "
+            f"reason={exc}; DB/runtime custody left unchanged"
+        )
+        return
     broker_snapshot_at = datetime.now().timestamp()
     unfilled_snapshot_ok = False
     unfilled_rows = []
@@ -1376,6 +1781,14 @@ def periodic_account_sync():
         open_orders_request_succeeded=unfilled_snapshot_ok,
         captured_at=broker_snapshot_at,
     )
+    if not _inventory_custody_snapshot_complete(successful_exchanges):
+        log_error(
+            "[PERIODIC_INVENTORY_RECONCILIATION_BLOCKED] "
+            f"required={','.join(sorted(_INVENTORY_CUSTODY_REQUIRED_EXCHANGES))} "
+            f"successful={','.join(sorted(str(value).upper() for value in successful_exchanges)) or '-'}; "
+            "DB/runtime custody left unchanged"
+        )
+        return
 
     synced_count = 0
     pending_manual_control_removals = []
@@ -1388,15 +1801,59 @@ def periodic_account_sync():
     try:
         with DB.get_session() as session:
             # 1️⃣ [매도 누락 방어] DB엔 HOLDING/SELL_ORDERED 인데, 실제 계좌엔 없는 경우 -> 팔렸음 (COMPLETED)
-            active_records = (
+            custody_owner_records = (
                 session.query(RecommendationHistory)
-                .filter(RecommendationHistory.status.in_(["HOLDING", "SELL_ORDERED"]))
+                .filter(
+                    RecommendationHistory.status.in_(
+                        ["BUY_ORDERED", "HOLDING", "SELL_ORDERED"]
+                    )
+                )
                 .all()
             )
+            active_records = [
+                record
+                for record in custody_owner_records
+                if str(getattr(record, "status", "") or "").upper()
+                in {"HOLDING", "SELL_ORDERED"}
+            ]
+            active_count_by_code: dict[str, int] = {}
+            for active_record in custody_owner_records:
+                active_code = str(active_record.stock_code or "").strip()[:6]
+                active_count_by_code[active_code] = (
+                    active_count_by_code.get(active_code, 0) + 1
+                )
 
             for record in active_records:
                 code = str(record.stock_code).strip()[:6]
                 exchange = get_exchange(code)
+                is_s15_custody = (
+                    str(getattr(record, "strategy", "") or "").upper() == "S15_FAST"
+                )
+
+                # kt00005 inventory is symbol-aggregate custody.  Never copy
+                # the aggregate into multiple live episode rows: that would
+                # multiply both inventory and realized-PnL authority.
+                if active_count_by_code.get(code, 0) > 1:
+                    record.scale_in_locked = True
+                    with STATE_LOCK:
+                        for target in ACTIVE_TARGETS:
+                            if str(target.get("code", "")).strip()[:6] == code:
+                                target.update(
+                                    {
+                                        "scale_in_locked": True,
+                                        "broker_symbol_allocation_conflict": True,
+                                        "sell_cancel_reconciliation_required": True,
+                                        "sell_cancel_reconciliation_source": (
+                                            "multiple_active_records_share_symbol"
+                                        ),
+                                    }
+                                )
+                    log_error(
+                        "[BROKER_SYMBOL_ALLOCATION_BLOCKED] "
+                        f"{record.stock_name}({code}) active_records="
+                        f"{active_count_by_code[code]}; aggregate inventory not cloned"
+                    )
+                    continue
 
                 if _quarantine_prebaseline_scalping_ghost(
                     record,
@@ -1422,10 +1879,56 @@ def periodic_account_sync():
                                     t
                                     for t in ACTIVE_TARGETS
                                     if str(t.get("code", "")).strip()[:6] == code
+                                    and (
+                                        getattr(record, "id", None) is None
+                                        or t.get("id") == getattr(record, "id", None)
+                                    )
                                 ),
                                 None,
                             )
                             target_snapshot = dict(target_stock or {})
+
+                        if is_s15_custody:
+                            record.scale_in_locked = True
+                            if target_stock is not None:
+                                target_stock.update(
+                                    {
+                                        "scale_in_locked": True,
+                                        "s15_custody_recovery_required": True,
+                                        "broker_holding_qty": 0,
+                                        "broker_snapshot_at": broker_snapshot_at,
+                                    }
+                                )
+                            log_error(
+                                "[S15_CUSTODY_SYNC_BLOCKED] "
+                                f"{record.stock_name}({code}) zero inventory requires "
+                                "S15 journal/receipt recovery"
+                            )
+                            continue
+
+                        active_sell_receipt = _active_sell_receipt_reconciliation(
+                            target_stock
+                        )
+                        if active_sell_receipt is not None:
+                            record.scale_in_locked = True
+                            with STATE_LOCK:
+                                target_stock["scale_in_locked"] = True
+                                target_stock["sell_partial_exit_carry_active"] = True
+                                target_stock["sell_cancel_reconciliation_required"] = (
+                                    True
+                                )
+                                target_stock["sell_cancel_reconciliation_source"] = (
+                                    "periodic_zero_inventory_receipt_replay_required"
+                                )
+                                target_stock["broker_holding_qty"] = 0
+                                target_stock["broker_snapshot_at"] = broker_snapshot_at
+                            log_error(
+                                "[SELL_RECEIPT_SYNC_BLOCKED] "
+                                f"{record.stock_name}({code}) broker qty=0 while a "
+                                "partial SELL ledger is active; preserving DB position "
+                                "until exact receipt replay"
+                            )
+                            continue
 
                         estimated_sell_price = target_snapshot.get(
                             "sell_target_price", 0
@@ -1563,12 +2066,10 @@ def periodic_account_sync():
                                         "same_position_cycle_periodic_account_sync"
                                     ),
                                     "sample_floor": (
-                                        (
-                                            "one_unique_same_day_broker_sell_execution"
-                                            if exact_execution
-                                            else (
-                                                "one_missing_holding_with_no_fill_receipt"
-                                            )
+                                        "one_unique_same_day_broker_sell_execution"
+                                        if exact_execution
+                                        else (
+                                            "one_missing_holding_with_no_fill_receipt"
                                         )
                                     ),
                                     "primary_decision_metric": (
@@ -1581,20 +2082,18 @@ def periodic_account_sync():
                                     "actual_order_submitted": bool(exact_execution),
                                     "broker_order_forbidden": not bool(exact_execution),
                                     "forbidden_uses": (
-                                        (
-                                            "threshold_mutation|provider_change|"
-                                            "order_price_change|quantity_cap_change"
-                                            if exact_execution
-                                            else (
-                                                "realized_pnl|EV|rolling|MTD|"
-                                                "cumulative_tuning|"
-                                                "live_auto_promotion|"
-                                                "runtime_apply_bridge|"
-                                                "threshold_mutation|"
-                                                "provider_change|"
-                                                "order_price_change|"
-                                                "quantity_cap_change"
-                                            )
+                                        "threshold_mutation|provider_change|"
+                                        "order_price_change|quantity_cap_change"
+                                        if exact_execution
+                                        else (
+                                            "realized_pnl|EV|rolling|MTD|"
+                                            "cumulative_tuning|"
+                                            "live_auto_promotion|"
+                                            "runtime_apply_bridge|"
+                                            "threshold_mutation|"
+                                            "provider_change|"
+                                            "order_price_change|"
+                                            "quantity_cap_change"
                                         )
                                     ),
                                     "reconciliation_result": (reconciliation_state),
@@ -1673,6 +2172,39 @@ def periodic_account_sync():
                 else:
                     real_data = real_codes[code]
                     real_qty = _to_int(real_data.get("qty", 0))
+                    with _with_state_lock():
+                        receipt_target = next(
+                            (
+                                target
+                                for target in ACTIVE_TARGETS
+                                if str(target.get("code", "")).strip()[:6] == code
+                                and (
+                                    getattr(record, "id", None) is None
+                                    or target.get("id") == getattr(record, "id", None)
+                                )
+                            ),
+                            None,
+                        )
+                        active_sell_receipt = _active_sell_receipt_reconciliation(
+                            receipt_target
+                        )
+                    if is_s15_custody and _to_int(record.buy_qty) != real_qty:
+                        record.scale_in_locked = True
+                        if receipt_target is not None:
+                            receipt_target.update(
+                                {
+                                    "scale_in_locked": True,
+                                    "s15_custody_recovery_required": True,
+                                    "broker_holding_qty": real_qty,
+                                    "broker_snapshot_at": broker_snapshot_at,
+                                }
+                            )
+                        log_error(
+                            "[S15_CUSTODY_SYNC_BLOCKED] "
+                            f"{record.stock_name}({code}) DB qty={record.buy_qty}, "
+                            f"broker qty={real_qty}; S15 journal/receipt recovery required"
+                        )
+                        continue
                     if unfilled_snapshot_ok:
                         open_orders = open_qty_by_code.get(
                             code, {"open_buy_qty": 0, "open_sell_qty": 0}
@@ -1701,6 +2233,80 @@ def periodic_account_sync():
                         or 0
                     )
                     real_buy_uv = _to_int(raw_price)
+                    sell_recovery_blocked = False
+
+                    if (
+                        active_sell_receipt is None
+                        and bool(record.scale_in_locked)
+                        and _to_int(record.buy_qty) > real_qty >= 0
+                    ):
+                        restored_state, restore_reason = _restore_sell_receipt_recovery(
+                            target_stock=receipt_target,
+                            record=record,
+                            code=code,
+                            broker_remaining_qty=real_qty,
+                        )
+                        if restored_state is not None:
+                            active_sell_receipt = restored_state
+                            log_info(
+                                "[SELL_PERIODIC_RECONCILIATION_RECOVERED] "
+                                f"{record.stock_name}({code}) source={restore_reason}"
+                            )
+                        else:
+                            sell_recovery_blocked = True
+                            if receipt_target is not None:
+                                receipt_target[
+                                    "sell_partial_exit_recovery_required"
+                                ] = True
+                                receipt_target[
+                                    "sell_cancel_reconciliation_required"
+                                ] = True
+                                receipt_target["sell_cancel_reconciliation_source"] = (
+                                    "periodic_quantity_decrease_execution_replay_required:"
+                                    f"{restore_reason}"
+                                )
+
+                    if sell_recovery_blocked:
+                        record.scale_in_locked = True
+                        log_error(
+                            "[SELL_PERIODIC_RECONCILIATION_BLOCKED] "
+                            f"{record.stock_name}({code}) DB qty={record.buy_qty}, "
+                            f"broker qty={real_qty}; exact journal/replay required"
+                        )
+                        continue
+
+                    if active_sell_receipt is not None:
+                        position_qty = _to_int(active_sell_receipt.get("position_qty"))
+                        aggregate_filled_qty = _to_int(
+                            active_sell_receipt.get("aggregate_cumulative_qty")
+                        ) or (
+                            _to_int(active_sell_receipt.get("carried_qty"))
+                            + _to_int(active_sell_receipt.get("cumulative_qty"))
+                        )
+                        expected_broker_qty = max(
+                            0, position_qty - aggregate_filled_qty
+                        )
+                        record.scale_in_locked = True
+                        with _with_state_lock():
+                            receipt_target["scale_in_locked"] = True
+                            receipt_target["sell_partial_exit_carry_active"] = True
+                            receipt_target["broker_holding_qty"] = real_qty
+                            receipt_target["broker_snapshot_at"] = broker_snapshot_at
+                            if real_qty != expected_broker_qty:
+                                receipt_target[
+                                    "sell_cancel_reconciliation_required"
+                                ] = True
+                                receipt_target["sell_cancel_reconciliation_source"] = (
+                                    "periodic_inventory_receipt_quantity_mismatch"
+                                )
+                        if real_qty != expected_broker_qty:
+                            log_error(
+                                "[SELL_RECEIPT_SYNC_BLOCKED] "
+                                f"{record.stock_name}({code}) ledger expected "
+                                f"broker_qty={expected_broker_qty}, observed={real_qty}; "
+                                "preserving receipt position basis"
+                            )
+                        continue
 
                     if real_qty > 0 and _to_int(record.buy_qty) != real_qty:
                         print(
@@ -1734,6 +2340,19 @@ def periodic_account_sync():
 
             for record in pending_records:
                 code = str(record.stock_code).strip()[:6]
+
+                if active_count_by_code.get(code, 0) > 1:
+                    record.scale_in_locked = True
+                    with _with_state_lock():
+                        for target in ACTIVE_TARGETS:
+                            if str(target.get("code", "")).strip()[:6] == code:
+                                target.update(
+                                    {
+                                        "scale_in_locked": True,
+                                        "broker_symbol_allocation_conflict": True,
+                                    }
+                                )
+                    continue
 
                 if code in real_codes:
                     real_data = real_codes[code]

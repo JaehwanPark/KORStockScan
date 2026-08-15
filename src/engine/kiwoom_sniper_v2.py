@@ -142,6 +142,9 @@ from src.engine.sniper_s15_fast_track import (
     _get_fast_state,
     _set_fast_state,
     _pop_fast_state,
+    _persist_fast_state,
+    _finalize_s15_completed_state,
+    _restore_fast_trade_states_from_journal,
     _weighted_avg,
     create_s15_shadow_record,
     update_s15_shadow_record,
@@ -930,6 +933,8 @@ bind_execution_dependencies(
         sniper_state_handlers.register_non_revive_smoothing_post_sell_paths
     ),
     broker_snapshot_refresh_callback=(_request_broker_snapshot_refresh_after_execution),
+    persist_fast_state_callback=_persist_fast_state,
+    finalize_fast_state_callback=_finalize_s15_completed_state,
 )
 
 _STATE_HANDLER_DEPS = {}
@@ -955,6 +960,11 @@ def _ensure_state_handler_deps():
         "send_exit_best_ioc": _send_exit_best_ioc,
         "dual_persona_engine": DUAL_PERSONA_ENGINE,
         "scanner_generation_submit_guard": _scanner_generation_submit_guard,
+        "broker_snapshot_refresh_callback": (
+            _request_broker_snapshot_refresh_after_execution
+        ),
+        "persist_fast_state_callback": _persist_fast_state,
+        "finalize_fast_state_callback": _finalize_s15_completed_state,
     }
     if any(_STATE_HANDLER_DEPS.get(k) is not v for k, v in snapshot.items()):
         bind_state_dependencies(**snapshot)
@@ -11100,13 +11110,31 @@ def run_sniper(is_test_mode=False):
         return
     # Ensure sync module has the token before any balance calls.
     bind_sync_dependencies(kiwoom_token=KIWOOM_TOKEN, conf=CONF)
-    bind_state_dependencies(kiwoom_token=KIWOOM_TOKEN)
+    bind_state_dependencies(
+        kiwoom_token=KIWOOM_TOKEN,
+        broker_snapshot_refresh_callback=(
+            _request_broker_snapshot_refresh_after_execution
+        ),
+    )
     bind_execution_dependencies(kiwoom_token=KIWOOM_TOKEN)
     bind_overnight_dependencies(kiwoom_token=KIWOOM_TOKEN)
     bind_trade_pause_event_bus(event_bus)
 
     radar = SniperRadar(KIWOOM_TOKEN)
     log_info(f"[DEBUG] radar 객체 생성 완료: {radar}")
+    # Load and bind runtime targets before the first broker/DB reconciliation.
+    # Partial SELL recovery needs the exact target id/order identity in memory;
+    # reloading this list after sync would discard a restored durable ledger.
+    ACTIVE_TARGETS = DB.get_active_targets() or []
+    bind_sync_dependencies(active_targets=ACTIVE_TARGETS)
+    bind_execution_dependencies(active_targets=ACTIVE_TARGETS)
+    from src.engine.sniper_execution_receipts import (
+        reconcile_committed_sell_receipt_recovery_files,
+    )
+
+    postcommit_recovery = reconcile_committed_sell_receipt_recovery_files()
+    if postcommit_recovery.get("deferred") or postcommit_recovery.get("invalid"):
+        log_error(f"[SELL_POSTCOMMIT_RECOVERY_PENDING] result={postcommit_recovery}")
     sync_balance_with_db()
     init_market_regime_service()
 
@@ -11329,7 +11357,6 @@ def run_sniper(is_test_mode=False):
         db=DB,
     )
 
-    ACTIVE_TARGETS = DB.get_active_targets() or []
     bind_sync_dependencies(active_targets=ACTIVE_TARGETS)
     bind_condition_dependencies(active_targets=ACTIVE_TARGETS)
     bind_analysis_dependencies(active_targets=ACTIVE_TARGETS)
@@ -11338,6 +11365,7 @@ def run_sniper(is_test_mode=False):
     bind_execution_dependencies(active_targets=ACTIVE_TARGETS)
     bind_overnight_dependencies(active_targets=ACTIVE_TARGETS)
     _restore_armed_candidates_from_database()
+    _restore_fast_trade_states_from_journal()
     # ==========================================
     # 💡 [추가 1] 봇 시작 시 불러온 종목들의 진입 시간 기록
     # ==========================================
