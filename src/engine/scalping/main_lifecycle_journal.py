@@ -51,6 +51,7 @@ PIPELINE_STAGE_MAP: dict[tuple[str, str], str] = {
     ("HOLDING_PIPELINE", "scale_in_executed"): "scale_in",
     ("HOLDING_PIPELINE", "exit_signal"): "exit",
     ("HOLDING_PIPELINE", "sell_order_sent"): "exit",
+    ("HOLDING_PIPELINE", "sell_partial_fill_progress"): "exit",
     ("HOLDING_PIPELINE", "nxt_rising_missed_tp1_partial_fill_progress"): "exit",
     ("HOLDING_PIPELINE", "nxt_rising_missed_tp1_partial_sell_completed"): "exit",
     ("HOLDING_PIPELINE", "sell_completed"): "exit",
@@ -104,7 +105,14 @@ _ALLOWED_DATA_FIELDS = frozenset(
         "paired_replay_arm",
         "actual_broker_order_submitted",
         "broker_order_no",
+        "broker_order_no_list",
         "broker_reconciled",
+        "broker_execution_no",
+        "broker_execution_order_no",
+        "broker_execution_time_source",
+        "broker_execution_time_raw",
+        "broker_actual_execution_venue",
+        "broker_sor_flag",
         "fill_state",
         "fill_qty",
         "fill_price",
@@ -634,6 +642,63 @@ def build_transition(
             raise ValueError("exit_qty_invalid")
         if _positive_number(event_data.get("exit_price")) is None:
             raise ValueError("exit_price_invalid")
+
+    execution_provenance_keys = {
+        "broker_execution_no",
+        "broker_execution_order_no",
+        "broker_execution_time_source",
+        "broker_execution_time_raw",
+        "broker_actual_execution_venue",
+        "broker_sor_flag",
+    }
+    if execution_provenance_keys.intersection(event_data):
+        required_execution_keys = execution_provenance_keys - {"broker_sor_flag"}
+        if not required_execution_keys.issubset(event_data):
+            raise ValueError("broker_execution_provenance_incomplete")
+        execution_stage = bool(
+            normalized_stage == "fill"
+            or (
+                normalized_stage == "scale_in"
+                and event_data.get("scale_in_decision") == "ADD"
+                and "fill_qty" in event_data
+            )
+            or (
+                normalized_stage == "exit"
+                and "exit_qty" in event_data
+                and "exit_price" in event_data
+            )
+        )
+        if not execution_stage:
+            raise ValueError("broker_execution_provenance_stage_invalid")
+        execution_no = str(event_data.get("broker_execution_no") or "").strip()
+        if (
+            not execution_no
+            or len(execution_no) > 128
+            or any(character in execution_no for character in "\r\n\x00")
+        ):
+            raise ValueError("broker_execution_no_invalid")
+        execution_order_no = str(
+            event_data.get("broker_execution_order_no") or ""
+        ).strip()
+        if (
+            not execution_order_no
+            or len(execution_order_no) > 128
+            or any(character in execution_order_no for character in "\r\n\x00,")
+        ):
+            raise ValueError("broker_execution_order_no_invalid")
+        if event_data.get("broker_execution_time_source") != "official_fid_908":
+            raise ValueError("broker_execution_time_source_invalid")
+        raw_execution_time = str(
+            event_data.get("broker_execution_time_raw") or ""
+        ).strip()
+        try:
+            if not re.fullmatch(r"\d{6}", raw_execution_time):
+                raise ValueError
+            datetime.strptime(raw_execution_time, "%H%M%S")
+        except ValueError:
+            raise ValueError("broker_execution_time_raw_invalid") from None
+        if event_data.get("broker_actual_execution_venue") not in {"KRX", "NXT"}:
+            raise ValueError("broker_actual_execution_venue_invalid")
 
     row: dict[str, Any] = {
         "schema": JOURNAL_SCHEMA,

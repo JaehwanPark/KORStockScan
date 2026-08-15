@@ -193,6 +193,39 @@ def _pipeline_event(
     fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_fields = dict(fields or {})
+    if source_stage == "position_rebased_after_fill":
+        source_fields.setdefault("receipt_economics_complete", True)
+        source_fields.setdefault("receipt_quantity_contract_complete", True)
+        source_fields.setdefault("receipt_unit_fill_consistent", True)
+    elif source_stage == "scale_in_executed":
+        source_fields.setdefault("receipt_economics_complete", True)
+        source_fields.setdefault("receipt_quantity_contract_complete", True)
+        source_fields.setdefault("receipt_unit_fill_consistent", True)
+    elif source_stage in {
+        "sell_partial_fill_progress",
+        "nxt_rising_missed_tp1_partial_fill_progress",
+        "nxt_rising_missed_tp1_partial_sell_completed",
+        "sell_completed",
+    }:
+        source_fields.setdefault("sell_execution_receipt_economics_complete", True)
+        source_fields.setdefault(
+            "sell_execution_receipt_quantity_contract_complete", True
+        )
+        source_fields.setdefault("sell_execution_receipt_unit_fill_consistent", True)
+    if source_stage in {
+        "position_rebased_after_fill",
+        "scale_in_executed",
+        "sell_partial_fill_progress",
+        "nxt_rising_missed_tp1_partial_fill_progress",
+        "nxt_rising_missed_tp1_partial_sell_completed",
+        "sell_completed",
+    }:
+        source_fields.setdefault("broker_execution_provenance_complete", True)
+        source_fields.setdefault("broker_execution_time_source", "official_fid_908")
+        source_fields.setdefault("broker_execution_time_raw", "090003")
+        source_fields.setdefault("broker_actual_execution_venue", "KRX")
+        source_fields.setdefault("broker_sor_flag", "N")
+        source_fields.setdefault("execution_no", f"EXEC-{second}")
     lifecycle_fields = pipeline_lifecycle_fields_safe(
         stock,
         stock["code"],
@@ -1148,6 +1181,162 @@ def test_execution_exit_requires_exact_qty_price_and_basis_source(
         "pipeline_slippage_basis_pair_incomplete",
     }
     assert report["promotion_ready"] is False
+
+
+def test_standard_sell_partial_fill_materializes_as_exact_nonterminal_exit_leg() -> None:
+    data, reason = paired._pipeline_transition_data(
+        lifecycle_stage="exit",
+        source_stage="sell_partial_fill_progress",
+        fields={
+            "main_lifecycle_exit_qty": 2,
+            "main_lifecycle_exit_price": 10_010,
+            "main_lifecycle_broker_reconciled": False,
+            "main_lifecycle_reconciled_final_exit": False,
+            "main_lifecycle_realized_net_pnl_krw": 14,
+            "main_lifecycle_fees_taxes_krw": 6,
+            "sell_receipt_economics_complete": True,
+            "sell_receipt_quantity_contract_complete": True,
+            "sell_receipt_unit_fill_consistent": True,
+            "broker_execution_provenance_complete": True,
+            "broker_execution_time_source": "official_fid_908",
+            "broker_execution_time_raw": "090003",
+            "broker_actual_execution_venue": "KRX",
+            "broker_sor_flag": "N",
+            "execution_no": "SELL-PARTIAL-1",
+        },
+    )
+
+    assert reason is None
+    assert data is not None
+    assert data["exit_qty"] == 2
+    assert data["exit_price"] == 10_010
+    assert "reconciled_final_exit" not in data
+    assert data["realized_net_pnl_krw"] == 14
+    assert data["fees_taxes_krw"] == 6
+
+
+@pytest.mark.parametrize(
+    ("lifecycle_stage", "source_stage", "fields", "expected_reason"),
+    (
+        (
+            "fill",
+            "position_rebased_after_fill",
+            {
+                "fill_state": "partial",
+                "fill_qty": 2,
+                "fill_price": 10_000,
+                "receipt_economics_complete": False,
+            },
+            "pipeline_fill_receipt_economics_incomplete",
+        ),
+        (
+            "scale_in",
+            "scale_in_executed",
+            {
+                "actual_order_submitted": True,
+                "fill_qty": 2,
+                "fill_price": 10_000,
+                "receipt_economics_complete": True,
+                "receipt_quantity_contract_complete": False,
+            },
+            "pipeline_scale_in_receipt_quantity_contract_incomplete",
+        ),
+        (
+            "exit",
+            "sell_completed",
+            {
+                "main_lifecycle_exit_qty": 2,
+                "main_lifecycle_exit_price": 10_000,
+                "sell_execution_receipt_economics_complete": True,
+                "sell_execution_receipt_quantity_contract_complete": True,
+                "sell_execution_receipt_unit_fill_consistent": False,
+            },
+            "pipeline_exit_receipt_unit_fill_inconsistent",
+        ),
+        (
+            "exit",
+            "nxt_rising_missed_tp1_partial_sell_completed",
+            {
+                "main_lifecycle_exit_qty": 2,
+                "main_lifecycle_exit_price": 10_000,
+                "broker_execution_provenance_complete": True,
+            },
+            "pipeline_exit_receipt_economics_contract_missing",
+        ),
+        (
+            "exit",
+            "sell_completed",
+            {
+                "main_lifecycle_exit_qty": 2,
+                "main_lifecycle_exit_price": 10_000,
+                "sell_execution_receipt_economics_complete": True,
+                "sell_execution_receipt_quantity_contract_complete": True,
+                "sell_execution_receipt_unit_fill_consistent": True,
+                "broker_execution_provenance_complete": False,
+            },
+            "pipeline_exit_broker_execution_provenance_incomplete",
+        ),
+        (
+            "fill",
+            "position_rebased_after_fill",
+            {
+                "fill_state": "full",
+                "fill_qty": 2,
+                "fill_price": 10_000,
+                "receipt_economics_complete": True,
+                "receipt_quantity_contract_complete": True,
+                "receipt_unit_fill_consistent": True,
+                "broker_execution_provenance_complete": True,
+                "broker_execution_time_source": "local_receive_time_fallback",
+                "broker_actual_execution_venue": "KRX",
+            },
+            "pipeline_fill_broker_execution_time_source_invalid",
+        ),
+        (
+            "exit",
+            "sell_completed",
+            {
+                "main_lifecycle_exit_qty": 2,
+                "main_lifecycle_exit_price": 10_000,
+                "sell_execution_receipt_economics_complete": True,
+                "sell_execution_receipt_quantity_contract_complete": True,
+                "sell_execution_receipt_unit_fill_consistent": True,
+                "broker_execution_provenance_complete": True,
+                "broker_execution_time_source": "official_fid_908",
+                "broker_execution_time_raw": "101530",
+                "broker_actual_execution_venue": "KRX",
+            },
+            "pipeline_exit_broker_execution_number_missing",
+        ),
+        (
+            "scale_in",
+            "scale_in_executed",
+            {
+                "actual_order_submitted": True,
+                "fill_qty": 2,
+                "fill_price": 10_000,
+                "receipt_economics_complete": True,
+                "receipt_quantity_contract_complete": True,
+                "receipt_unit_fill_consistent": True,
+                "broker_execution_provenance_complete": True,
+                "broker_execution_time_source": "official_fid_908",
+                "broker_actual_execution_venue": "UNKNOWN",
+            },
+            "pipeline_scale_in_broker_execution_actual_venue_invalid",
+        ),
+    ),
+)
+def test_execution_receipt_quality_contracts_fail_closed(
+    lifecycle_stage, source_stage, fields, expected_reason
+) -> None:
+    data, reason = paired._pipeline_transition_data(
+        lifecycle_stage=lifecycle_stage,
+        source_stage=source_stage,
+        fields=fields,
+    )
+
+    assert data is None
+    assert reason == expected_reason
 
 
 def test_live_entry_and_holding_loggers_inject_exact_id_without_journal_write(

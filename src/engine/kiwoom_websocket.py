@@ -6,6 +6,7 @@ import threading
 import time
 import copy
 import os
+import re
 import shlex
 from collections import OrderedDict, deque
 from queue import Queue, Empty
@@ -386,6 +387,23 @@ class KiwoomWSManager:
             return abs(int(float(str(val).replace(",", "").strip())))
         except Exception:
             return default
+
+    @classmethod
+    def _optional_abs_int(cls, values, fid):
+        """Return an official numeric FID only when it is actually present."""
+
+        if not isinstance(values, dict) or fid not in values:
+            return None
+        raw_value = values.get(fid)
+        if raw_value is None or not str(raw_value).strip():
+            return None
+        normalized = str(raw_value).strip()
+        if not re.fullmatch(r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)", normalized):
+            return None
+        try:
+            return abs(int(normalized.replace(",", "")))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _safe_signed_int(val, default=0):
@@ -825,19 +843,63 @@ class KiwoomWSManager:
         code = str(values.get("9001", "")).replace("A", "").strip()
         order_no = str(values.get("9203", "")).strip()
         order_type_str = str(values.get("905", "")).strip()
-        exec_price = self._safe_abs_int(values.get("910", "0"), 0)
-        exec_qty = self._safe_abs_int(values.get("911", "0"), 0)
-        if "취소" in order_type_str:
-            exec_type = "BUY_CANCEL" if "매수" in order_type_str else "SELL_CANCEL"
+        numeric_fids = ("900", "902", "903", "910", "911", "914", "915")
+        parsed_numeric = {
+            fid: self._optional_abs_int(values, fid) for fid in numeric_fids
+        }
+        malformed_numeric_fids = [
+            fid
+            for fid in numeric_fids
+            if fid in values
+            and values.get(fid) is not None
+            and str(values.get(fid)).strip()
+            and parsed_numeric[fid] is None
+        ]
+        exec_price = parsed_numeric["910"] or 0
+        exec_qty = parsed_numeric["911"] or 0
+        has_buy = "매수" in order_type_str
+        has_sell = "매도" in order_type_str
+        side_exact = has_buy != has_sell
+        if side_exact:
+            side = "BUY" if has_buy else "SELL"
+            exec_type = f"{side}_CANCEL" if "취소" in order_type_str else side
+            side_gap_reason = ""
         else:
-            exec_type = "BUY" if "매수" in order_type_str else "SELL"
+            exec_type = ""
+            side_gap_reason = "order_side_ambiguous_or_missing"
+        raw_exchange_code = str(values.get("2134", "") or "").strip()
+        raw_exchange_name = str(values.get("2135", "") or "").strip().upper()
+        exchange_by_code = {"1": "KRX", "2": "NXT"}.get(raw_exchange_code, "")
+        exchange_by_name = (
+            raw_exchange_name if raw_exchange_name in {"KRX", "NXT"} else ""
+        )
+        actual_execution_venue = exchange_by_code or exchange_by_name
+        if (
+            exchange_by_code
+            and exchange_by_name
+            and exchange_by_code != exchange_by_name
+        ):
+            actual_execution_venue = ""
         return {
             "status": status,
             "code": code,
             "order_no": order_no,
             "order_type_str": order_type_str,
+            "order_qty": parsed_numeric["900"],
+            "remaining_qty": parsed_numeric["902"],
+            "cumulative_exec_amount": parsed_numeric["903"],
+            "execution_no": str(values.get("909", "") or "").strip(),
             "exec_price": exec_price,
             "exec_qty": exec_qty,
+            "unit_exec_price": parsed_numeric["914"],
+            "unit_exec_qty": parsed_numeric["915"],
+            "numeric_contract_errors": malformed_numeric_fids,
+            "source_gap_reason": side_gap_reason,
+            "broker_execution_time_raw": str(values.get("908", "") or "").strip(),
+            "actual_exchange_code": raw_exchange_code,
+            "actual_exchange_name": raw_exchange_name,
+            "actual_execution_venue": actual_execution_venue,
+            "sor_flag": str(values.get("2136", "") or "").strip().upper(),
             "exec_type": exec_type,
         }
 
@@ -2865,6 +2927,25 @@ class KiwoomWSManager:
                         print(
                             f"📩 [WS 주문상태] {code} | 주문번호: '{order_no}' | 상태: '{status}' | 구분: '{order_type_str}'"
                         )
+                        if not notice["exec_type"]:
+                            log_error(
+                                "[WS_ORDER_RECEIPT_SOURCE_GAP] "
+                                f"code={code or '-'} order_no={order_no or '-'} "
+                                f"reason={notice['source_gap_reason']} "
+                                f"fid905={order_type_str or '-'}"
+                            )
+                            self._enqueue_state_event(
+                                "ORDER_EXECUTION_SOURCE_GAP",
+                                {
+                                    "code": code,
+                                    "order_no": order_no,
+                                    "reason": notice["source_gap_reason"],
+                                    "order_type_str": order_type_str,
+                                    "broker_snapshot_refresh_required": True,
+                                    "runtime_effect": False,
+                                },
+                            )
+                            continue
                         self._enqueue_state_event(
                             "ORDER_NOTICE",
                             {
@@ -2873,6 +2954,19 @@ class KiwoomWSManager:
                                 "type": notice["exec_type"],
                                 "status": status,
                                 "order_type_str": order_type_str,
+                                "broker_execution_time_raw": notice[
+                                    "broker_execution_time_raw"
+                                ],
+                                "actual_exchange_code": notice[
+                                    "actual_exchange_code"
+                                ],
+                                "actual_exchange_name": notice[
+                                    "actual_exchange_name"
+                                ],
+                                "actual_execution_venue": notice[
+                                    "actual_execution_venue"
+                                ],
+                                "sor_flag": notice["sor_flag"],
                                 "time": datetime.now().strftime("%H:%M:%S"),
                             },
                         )
@@ -2886,7 +2980,41 @@ class KiwoomWSManager:
                                 f"🔔 [WS 실제체결] {code} {exec_type} {exec_qty}주 @ {exec_price}원 (주문번호: {order_no})"
                             )
 
-                            if exec_price > 0:
+                            malformed_fids = set(
+                                notice.get("numeric_contract_errors") or []
+                            )
+                            if malformed_fids:
+                                log_error(
+                                    "[WS_ORDER_RECEIPT_NUMERIC_SOURCE_GAP] "
+                                    f"code={code} order_no={order_no or '-'} "
+                                    f"fids={','.join(sorted(malformed_fids))}"
+                                )
+                                self._enqueue_state_event(
+                                    "ORDER_EXECUTION_SOURCE_GAP",
+                                    {
+                                        "code": code,
+                                        "order_no": order_no,
+                                        "reason": "official_integer_fid_malformed",
+                                        "malformed_fids": sorted(malformed_fids),
+                                        "broker_snapshot_refresh_required": True,
+                                        "runtime_effect": False,
+                                    },
+                                )
+
+                            # FID 910 is not custody authority.  When it is
+                            # blank/malformed but 903 supplies exact cumulative
+                            # notional, the receipt consumer can reconstruct the
+                            # leg price while marking unit/source provenance as
+                            # incomplete.  FID 911 remains mandatory for any
+                            # custody mutation.
+                            economics_reconstructable = bool(
+                                exec_price > 0
+                                or (
+                                    notice["cumulative_exec_amount"] is not None
+                                    and notice["cumulative_exec_amount"] > 0
+                                )
+                            )
+                            if exec_qty > 0 and economics_reconstructable:
                                 self._enqueue_state_event(
                                     "ORDER_EXECUTED",
                                     {
@@ -2895,6 +3023,29 @@ class KiwoomWSManager:
                                         "type": exec_type,
                                         "price": exec_price,
                                         "qty": exec_qty,
+                                        "order_qty": notice["order_qty"],
+                                        "remaining_qty": notice["remaining_qty"],
+                                        "cumulative_exec_amount": notice[
+                                            "cumulative_exec_amount"
+                                        ],
+                                        "execution_no": notice["execution_no"],
+                                        "unit_exec_price": notice[
+                                            "unit_exec_price"
+                                        ],
+                                        "unit_exec_qty": notice["unit_exec_qty"],
+                                        "broker_execution_time_raw": notice[
+                                            "broker_execution_time_raw"
+                                        ],
+                                        "actual_exchange_code": notice[
+                                            "actual_exchange_code"
+                                        ],
+                                        "actual_exchange_name": notice[
+                                            "actual_exchange_name"
+                                        ],
+                                        "actual_execution_venue": notice[
+                                            "actual_execution_venue"
+                                        ],
+                                        "sor_flag": notice["sor_flag"],
                                         "time": datetime.now().strftime("%H:%M:%S"),
                                     },
                                 )
