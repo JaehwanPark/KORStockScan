@@ -2009,6 +2009,26 @@ def record_ai_decision_trace(
                 if "entry_setup_live_policy_runtime_effect" in merged
                 else None
             ),
+            "main_ai_quality_live_policy_status": _optional(
+                merged, "main_ai_quality_live_policy_status"
+            ),
+            "main_ai_quality_live_policy_target_date": _optional(
+                merged, "main_ai_quality_live_policy_target_date"
+            ),
+            "main_ai_quality_live_policy_candidate_id": _optional(
+                merged, "main_ai_quality_live_policy_candidate_id"
+            ),
+            "main_ai_quality_live_policy_candidate_sha256": _optional(
+                merged, "main_ai_quality_live_policy_candidate_sha256"
+            ),
+            "main_ai_quality_live_policy_activation_sha256": _optional(
+                merged, "main_ai_quality_live_policy_activation_sha256"
+            ),
+            "main_ai_quality_live_policy_runtime_effect": (
+                bool(merged.get("main_ai_quality_live_policy_runtime_effect"))
+                if "main_ai_quality_live_policy_runtime_effect" in merged
+                else None
+            ),
             "entry_probe_first_required": (
                 bool(merged.get("entry_probe_first_required"))
                 if "entry_probe_first_required" in merged
@@ -2245,6 +2265,24 @@ def record_ai_decision_trace(
             ],
             "entry_setup_live_policy_runtime_effect": trace_row[
                 "entry_setup_live_policy_runtime_effect"
+            ],
+            "main_ai_quality_live_policy_status": trace_row[
+                "main_ai_quality_live_policy_status"
+            ],
+            "main_ai_quality_live_policy_target_date": trace_row[
+                "main_ai_quality_live_policy_target_date"
+            ],
+            "main_ai_quality_live_policy_candidate_id": trace_row[
+                "main_ai_quality_live_policy_candidate_id"
+            ],
+            "main_ai_quality_live_policy_candidate_sha256": trace_row[
+                "main_ai_quality_live_policy_candidate_sha256"
+            ],
+            "main_ai_quality_live_policy_activation_sha256": trace_row[
+                "main_ai_quality_live_policy_activation_sha256"
+            ],
+            "main_ai_quality_live_policy_runtime_effect": trace_row[
+                "main_ai_quality_live_policy_runtime_effect"
             ],
             "entry_probe_first_required": trace_row["entry_probe_first_required"],
             "entry_ai_full_entry_forbidden": trace_row["entry_ai_full_entry_forbidden"],

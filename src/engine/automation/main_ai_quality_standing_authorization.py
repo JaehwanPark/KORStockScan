@@ -10,6 +10,11 @@ evidence and runtime-design gates.
 
 This module never registers a runtime family, mutates runtime state, emits an
 apply-authorizing handoff, calls a provider, or submits an order.
+
+The authorization expiry applies to the first-candidate decision only. A
+caller may bypass that time check for a later candidate only after the trusted
+approval consumer has independently validated a guarded-apply plus post-apply
+attribution enrollment for the exact same bounded family.
 """
 
 from __future__ import annotations
@@ -33,7 +38,10 @@ RESOLUTION_SCHEMA = "main_ai_quality_standing_authorization_resolution_v1"
 R3_SCHEMA = "main_ai_quality_source_only_candidate_manifest_v1"
 SOURCE_CANDIDATE_FAMILY = "main_ai_quality_prompt_contract"
 TUNING_AXIS = "prompt_contract_effect"
-MAX_AUTHORIZATION_LIFETIME = timedelta(days=31)
+# The first 20-clean-trading-day candidate can slip when any source day is
+# excluded.  Keep the one-shot exact hash binding long enough to avoid manual
+# renewal while still bounding the reviewed intent to one calendar quarter.
+MAX_AUTHORIZATION_LIFETIME = timedelta(days=62)
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 SOURCE_ONLY_AUTHORITY: dict[str, Any] = {
@@ -129,9 +137,7 @@ def build_standing_authorization(
     source_family = _exact_nonempty(
         source_candidate_family, "source_candidate_family_not_exact"
     )
-    consumer = _exact_nonempty(
-        expected_preopen_consumer, "preopen_consumer_not_exact"
-    )
+    consumer = _exact_nonempty(expected_preopen_consumer, "preopen_consumer_not_exact")
     venue = _exact_nonempty(effective_venue, "effective_venue_not_exact")
     session = _exact_nonempty(session_bucket, "session_bucket_not_exact")
     if not isinstance(bounded_values, Mapping) or set(bounded_values) != {
@@ -211,9 +217,7 @@ def _authorization_errors(value: Mapping[str, Any]) -> list[str]:
                 if isinstance(value.get("bounded_values"), Mapping)
                 else {}
             ),
-            bounded_contract_sha256=str(
-                value.get("bounded_contract_sha256") or ""
-            ),
+            bounded_contract_sha256=str(value.get("bounded_contract_sha256") or ""),
             evidence_contract=(
                 value.get("evidence_contract")
                 if isinstance(value.get("evidence_contract"), Mapping)
@@ -222,18 +226,14 @@ def _authorization_errors(value: Mapping[str, Any]) -> list[str]:
             expected_runtime_registry_entry_sha256=str(
                 value.get("expected_runtime_registry_entry_sha256") or ""
             ),
-            expected_preopen_consumer=str(
-                value.get("expected_preopen_consumer") or ""
-            ),
+            expected_preopen_consumer=str(value.get("expected_preopen_consumer") or ""),
             effective_venue=str(value.get("effective_venue") or ""),
             session_bucket=str(value.get("session_bucket") or ""),
             source_candidate_family=str(value.get("source_candidate_family") or ""),
         )
     except ValueError as exc:
         errors.append(str(exc))
-    if value.get("evidence_contract_sha256") != _sha256(
-        value.get("evidence_contract")
-    ):
+    if value.get("evidence_contract_sha256") != _sha256(value.get("evidence_contract")):
         errors.append("standing_evidence_contract_hash_mismatch")
     return sorted(set(errors))
 
@@ -260,7 +260,11 @@ def _manifest_errors(value: Mapping[str, Any]) -> list[str]:
         errors.append("r3_manifest_not_candidate_ready")
     if value.get("first_runtime_candidate_auto_apply_performed") is not False:
         errors.append("r3_manifest_prior_auto_apply_state_invalid")
-    ids = [str(row.get("candidate_id") or "") for row in candidates if isinstance(row, Mapping)]
+    ids = [
+        str(row.get("candidate_id") or "")
+        for row in candidates
+        if isinstance(row, Mapping)
+    ]
     hashes = [
         str(row.get("candidate_sha256") or "")
         for row in candidates
@@ -304,6 +308,21 @@ def _candidate_errors(candidate: Mapping[str, Any]) -> list[str]:
         errors.append("r3_candidate_auto_chain_contract_invalid")
     if candidate.get("provider_or_order_authority") is not False:
         errors.append("r3_candidate_provider_or_order_authority_invalid")
+    for field in ("current_prompt_sha256", "recommended_prompt_sha256"):
+        try:
+            _exact_sha(candidate.get(field))
+        except ValueError:
+            errors.append(f"r3_candidate_{field}_invalid")
+    try:
+        _exact_sha(candidate.get("latest_symbol_master_artifact_sha256"))
+    except ValueError:
+        errors.append("r3_candidate_latest_symbol_master_sha256_invalid")
+    try:
+        datetime.strptime(
+            str(candidate.get("latest_symbol_master_source_date") or ""), "%Y-%m-%d"
+        )
+    except ValueError:
+        errors.append("r3_candidate_latest_symbol_master_source_date_invalid")
     return errors
 
 
@@ -321,8 +340,13 @@ def _prior_family_gate_errors(
     prior = []
     for entry in candidates:
         candidate = entry.get("candidate") if isinstance(entry, Mapping) else None
-        design = candidate.get("runtime_design") if isinstance(candidate, Mapping) else None
-        if isinstance(design, Mapping) and design.get("runtime_family") == runtime_family:
+        design = (
+            candidate.get("runtime_design") if isinstance(candidate, Mapping) else None
+        )
+        if (
+            isinstance(design, Mapping)
+            and design.get("runtime_family") == runtime_family
+        ):
             prior.append(entry)
     if prior and any(
         entry.get("state") != approval.STATE_POST_APPLY_ATTRIBUTED for entry in prior
@@ -338,6 +362,7 @@ def resolve_standing_authorization(
     approval_queue: Mapping[str, Any],
     runtime_registry: Mapping[str, Mapping[str, Any]] | None = None,
     now: datetime | None = None,
+    enrolled_continuation: bool = False,
 ) -> dict[str, Any]:
     """Bind at most one exact R3 candidate, while retaining source-only authority."""
 
@@ -352,7 +377,10 @@ def resolve_standing_authorization(
         expires = _aware_kst(str(authorization.get("expires_at_kst") or ""))
     except ValueError:
         expires = checked_at
-    if checked_at >= expires:
+    # Expiry bounds the operator's first-candidate authorization. Once the
+    # exact family has completed guarded apply and post-apply attribution, its
+    # independently validated enrollment owns later same-contract candidates.
+    if checked_at >= expires and not enrolled_continuation:
         blocker_codes.append("standing_authorization_expired")
 
     family = str(authorization.get("runtime_family") or "")
@@ -379,12 +407,12 @@ def resolve_standing_authorization(
             or registry_entry.get("preopen_consumer")
             != authorization.get("expected_preopen_consumer")
             or not str(registry_entry.get("apply_receipt_owner") or "").strip()
-            or not str(
-                registry_entry.get("post_apply_attribution_owner") or ""
-            ).strip()
+            or not str(registry_entry.get("post_apply_attribution_owner") or "").strip()
         ):
             blocker_codes.append("runtime_registry_contract_mismatch")
-    blocker_codes.extend(_prior_family_gate_errors(approval_queue, runtime_family=family))
+    blocker_codes.extend(
+        _prior_family_gate_errors(approval_queue, runtime_family=family)
+    )
     pre_match_control_errors = list(blocker_codes)
 
     candidates = r3_manifest.get("candidates")
@@ -408,9 +436,9 @@ def resolve_standing_authorization(
                 == authorization.get("effective_venue")
                 and candidate.get("session_bucket")
                 == authorization.get("session_bucket")
-                and candidate.get("current_contract_sha256")
+                and candidate.get("current_prompt_sha256")
                 == (authorization.get("bounded_values") or {}).get("current")
-                and candidate.get("recommended_contract_sha256")
+                and candidate.get("recommended_prompt_sha256")
                 == (authorization.get("bounded_values") or {}).get("recommended")
                 and _sha256(candidate.get("evidence_contract"))
                 == authorization.get("evidence_contract_sha256")
@@ -418,14 +446,17 @@ def resolve_standing_authorization(
                 == authorization.get("evidence_contract")
             ):
                 exact_matches.append(candidate)
-            elif (
-                candidate.get("current_contract_sha256")
-                != (authorization.get("bounded_values") or {}).get("current")
-                or candidate.get("recommended_contract_sha256")
-                != (authorization.get("bounded_values") or {}).get("recommended")
+            elif candidate.get("current_prompt_sha256") != (
+                authorization.get("bounded_values") or {}
+            ).get("current") or candidate.get("recommended_prompt_sha256") != (
+                authorization.get("bounded_values") or {}
+            ).get(
+                "recommended"
             ):
                 blocker_codes.append("unreviewed_prompt_contract")
-    control_gates_pass = not pre_match_control_errors and not candidate_validation_errors
+    control_gates_pass = (
+        not pre_match_control_errors and not candidate_validation_errors
+    )
     if len(exact_matches) != 1 or not control_gates_pass:
         blocker_codes.append(
             "matching_candidate_not_unique"
@@ -450,9 +481,7 @@ def resolve_standing_authorization(
             "runtime_family": family,
             "stage": authorization.get("stage"),
             "axis": authorization.get("axis"),
-            "bounded_contract_sha256": authorization.get(
-                "bounded_contract_sha256"
-            ),
+            "bounded_contract_sha256": authorization.get("bounded_contract_sha256"),
         }
         # The R3 schema intentionally carries only source-only aggregate gates.
         # It cannot satisfy evidence_readiness_errors/runtime_design_errors and

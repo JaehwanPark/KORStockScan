@@ -10,9 +10,7 @@ import pytest
 
 
 def test_postclose_wrapper_executes_syntax_checked_immutable_snapshot():
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert "THRESHOLD_CYCLE_WRAPPER_SNAPSHOT_EXECUTED" in script
     assert 'mktemp "$SCRIPT_DIR/.run_threshold_cycle_postclose.snapshot.' in script
@@ -30,9 +28,7 @@ def test_postclose_wrapper_executes_syntax_checked_immutable_snapshot():
 
 
 def test_postclose_wrapper_snapshot_is_removed_when_child_fails(tmp_path):
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     preamble = script[: script.index('PROJECT_DIR="${PROJECT_DIR:-')]
     wrapper = tmp_path / "run_threshold_cycle_postclose.sh"
     wrapper.write_text(preamble + "\nexit 9\n", encoding="utf-8")
@@ -50,9 +46,7 @@ def test_postclose_wrapper_snapshot_is_removed_when_child_fails(tmp_path):
 
 
 def test_postclose_wrapper_snapshot_exec_keeps_one_pid_and_cleans_on_term(tmp_path):
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     preamble = script[: script.index('PROJECT_DIR="${PROJECT_DIR:-')]
     wrapper = tmp_path / "run_threshold_cycle_postclose.sh"
     pid_path = tmp_path / "executed.pid"
@@ -105,9 +99,7 @@ def test_postclose_wrapper_snapshot_exec_keeps_one_pid_and_cleans_on_term(tmp_pa
 def test_postclose_wrapper_terminates_foreground_process_group_on_signal(
     tmp_path, signal_number, expected_return_code, expected_reason
 ):
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     preamble = script[: script.index('PROJECT_DIR="${PROJECT_DIR:-')]
     function_start = script.index("run_postclose_cmd() {")
     function_end = script.index("\n}\n", function_start) + 3
@@ -190,9 +182,7 @@ def test_postclose_wrapper_terminates_foreground_process_group_on_signal(
 def test_postclose_group_runner_accepts_fast_success_and_fails_closed_without_setsid(
     tmp_path,
 ):
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     function_start = script.index("run_postclose_cmd() {")
     function_end = script.index("\n}\n", function_start) + 3
     run_function = script[function_start:function_end]
@@ -253,9 +243,7 @@ def test_postclose_group_runner_accepts_fast_success_and_fails_closed_without_se
 def test_postclose_signal_during_group_startup_is_delivered_after_verification(
     tmp_path, signal_number, expected_return_code
 ):
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     preamble = script[: script.index('PROJECT_DIR="${PROJECT_DIR:-')]
     function_start = script.index("run_postclose_cmd() {")
     function_end = script.index("\n}\n", function_start) + 3
@@ -267,16 +255,14 @@ def test_postclose_signal_during_group_startup_is_delivered_after_verification(
     fake_ps.write_text(
         "#!/usr/bin/env bash\n"
         + f': > "{ps_started}"\n'
-        + "sleep 0.4\nexec /usr/bin/ps \"$@\"\n",
+        + 'sleep 0.4\nexec /usr/bin/ps "$@"\n',
         encoding="utf-8",
     )
     fake_ps.chmod(0o700)
     child_started = tmp_path / "child-started"
     child_script = tmp_path / "child.sh"
     child_script.write_text(
-        "#!/usr/bin/env bash\n"
-        + f': > "{child_started}"\n'
-        + "while :; do :; done\n",
+        "#!/usr/bin/env bash\n" + f': > "{child_started}"\n' + "while :; do :; done\n",
         encoding="utf-8",
     )
     child_script.chmod(0o700)
@@ -319,9 +305,7 @@ def test_postclose_signal_during_group_startup_is_delivered_after_verification(
 
 
 def test_postclose_long_commands_are_not_run_inside_command_substitutions():
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert (
         'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" '
@@ -341,9 +325,7 @@ def test_postclose_long_commands_are_not_run_inside_command_substitutions():
 def test_postclose_per_run_trigger_cache_is_removed_on_exit(
     tmp_path, exit_mode, expected_rc
 ):
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     function_start = script.index("cleanup_threshold_cycle_snapshot_temp() {")
     function_end = script.index("\n}\n", function_start) + 3
     cleanup_function = script[function_start:function_end]
@@ -1324,9 +1306,7 @@ def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibra
 
 
 def test_postclose_wrapper_runs_bounded_main_ai_quality_r0_r3_after_exact_chain():
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert (
         'RUN_MAIN_AI_QUALITY_R0_R3="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_R0_R3:-true}"'
@@ -1352,10 +1332,23 @@ def test_postclose_wrapper_runs_bounded_main_ai_quality_r0_r3_after_exact_chain(
     cycle_index = script.index(
         "-m src.engine.scalping.micro_reversion.ai_quality_cycle"
     )
+    runtime_family_index = script.index(
+        "-m src.engine.automation.main_ai_quality_runtime_family"
+    )
     calibration_index = script.index(
         "-m src.engine.scalping.ai_action_outcome_calibration"
     )
-    assert exact_index < cycle_index < calibration_index
+    assert exact_index < cycle_index < runtime_family_index < calibration_index
+    assert (
+        'RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY:-true}"'
+        in script
+    )
+    runtime_family_block = script[runtime_family_index:calibration_index]
+    assert "--phase postclose" in runtime_family_block
+    assert '--target-date "$TARGET_DATE"' in runtime_family_block
+    assert "--write" in runtime_family_block
+    assert "blocked_fail_closed" in runtime_family_block
+    assert "runtime_effect=false actual_order_submitted=false" in runtime_family_block
     cycle_block_start = script.rindex(
         'if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ]',
         0,
@@ -1399,16 +1392,9 @@ def test_postclose_wrapper_isolates_main_ai_quality_failures(
     expect_cycle_call,
     expect_artifact_wait,
 ):
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
-    start = script.index(
-        'if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ]'
-    )
-    end = script.index(
-        'if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ]',
-        start,
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+    start = script.index('if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ]')
+    end = script.index('if [ "$RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY" = "true" ]', start)
     cycle_block = script[start:end]
     harness = "\n".join(
         [
@@ -1451,6 +1437,39 @@ echo unrelated_postclose_continues
     assert "unrelated_postclose_continues" in result.stdout
     assert ("cycle_called" in result.stdout) is expect_cycle_call
     assert ("artifact_waited" in result.stdout) is expect_artifact_wait
+
+
+def test_postclose_wrapper_isolates_bounded_runtime_family_failure() -> None:
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+    start = script.index('if [ "$RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY" = "true" ]')
+    end = script.index(
+        'if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ]', start
+    )
+    family_block = script[start:end]
+    harness = "\n".join(
+        [
+            """
+set -Eeuo pipefail
+RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY=true
+TARGET_DATE=2026-08-14
+VENV_PY=/tmp/unused-python
+run_postclose_cmd() { echo family_called; return 31; }
+emit_postclose_marker() { echo "$1"; }
+""",
+            family_block,
+            "echo unrelated_postclose_continues",
+        ]
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", harness], text=True, capture_output=True, check=False
+    )
+
+    assert result.returncode == 0
+    assert "family_called" in result.stdout
+    assert "status=blocked_fail_closed" in result.stdout
+    assert "runtime_effect=false actual_order_submitted=false" in result.stdout
+    assert "unrelated_postclose_continues" in result.stdout
 
 
 def test_entry_setup_paired_replay_has_separate_late_offline_cron():
@@ -2471,6 +2490,18 @@ def test_preopen_wrapper_uses_lock_to_avoid_duplicate_bootstrap_run():
     assert "src.engine.automation.machine_microstructure_policy_approval" in script
     assert "--phase preopen" in script
     assert "runtime_apply_unchanged=true" in script
+    approval_index = script.index(
+        "src.engine.automation.machine_microstructure_policy_approval"
+    )
+    runtime_family_index = script.index(
+        "src.engine.automation.main_ai_quality_runtime_family"
+    )
+    assert approval_index < runtime_family_index
+    runtime_family_block = script[runtime_family_index:]
+    assert "--phase preopen" in runtime_family_block
+    assert '--target-date "$TARGET_DATE"' in runtime_family_block
+    assert "--write" in runtime_family_block
+    assert "exact_candidate_or_standing_intent_not_ready=true" in (runtime_family_block)
 
 
 def test_preopen_wrapper_treats_operator_lock_ready_manifest_as_succeeded():

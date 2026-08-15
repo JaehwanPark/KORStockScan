@@ -23,12 +23,14 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    DECISION_QUALITY_V2_PROMPT_VERSION,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
     decision_quality_v2_detailed_system_prompt,
     decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
     decision_quality_v2_7_probe_system_prompt,
+    decision_quality_v2_system_prompt,
 )
 from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine.scalping.entry_ai_gate import evaluate_entry_score_role_gate
@@ -3536,6 +3538,20 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
     assert "entry_risk_unexpected_fields" not in result.get(
         "decision_quality_contract_errors", []
     )
+
+
+def test_decision_quality_v2_6_runtime_override_uses_exact_entry_prompt() -> None:
+    engine = _build_engine()
+
+    prompt, prompt_type, prompt_version, profile = engine._resolve_scalping_prompt(
+        "watching",
+        prompt_version_override=DECISION_QUALITY_V2_PROMPT_VERSION,
+    )
+
+    assert prompt == decision_quality_v2_system_prompt("entry")
+    assert prompt_type == "scalping_entry"
+    assert prompt_version == DECISION_QUALITY_V2_PROMPT_VERSION
+    assert profile == "watching"
 
 
 def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatch):

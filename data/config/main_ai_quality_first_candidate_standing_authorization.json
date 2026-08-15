@@ -1,0 +1,56 @@
+{
+  "actual_order_submitted": false,
+  "allowed_runtime_apply": false,
+  "artifact_content_sha256": "4cd24b2d2f97e0688b6f8c8792557f2f9e74852ad4aa768a5eba3c19dd036448",
+  "axis": "prompt_contract_effect",
+  "bounded_contract_sha256": "8d6cfa74efa8cba403047bab2bbbeebb547f6f6936db799c238eab8c128e7a29",
+  "bounded_values": {
+    "current": "922c6ccebe50be668c195acbe8f3a795aec9dacf3e4be09adc4174547d1be10e",
+    "recommended": "ca3b73e0ce857929d8fb0d0e667223163f8cb358c2054bedac7f62a0f1f3b0d0"
+  },
+  "broker_order_forbidden": true,
+  "consumed_candidate_sha256": null,
+  "decision_authority": "source_only_standing_intent_matching",
+  "effective_venue": "KRX",
+  "evidence_contract": {
+    "clean_baseline_date": "2026-06-05",
+    "minimum_bbo_coverage_pct": 95.0,
+    "minimum_common_parents_20d": 20,
+    "minimum_depth_coverage_pct": 90.0,
+    "minimum_relative_uplift_pct": 1.0,
+    "minimum_unique_symbols_20d": 10,
+    "required_trading_days": [
+      5,
+      10,
+      20
+    ],
+    "requires_nonworse_p10_tail_and_deferred_rate": true,
+    "requires_positive_notional_net_profit_20d": true,
+    "requires_reconciled_actual_lifecycle": true
+  },
+  "evidence_contract_sha256": "9882f61055248e6062f51e36e02e8ce4c028ade0eb3850ce8f98715d87014f23",
+  "expected_preopen_consumer": "src.engine.automation.main_ai_quality_runtime_family.preopen_apply",
+  "expected_runtime_registry_entry_sha256": "dfb1f31e8098bd34d374680b0b643a99f5a501d98bc8bbcfa17b37546e8d40ae",
+  "expires_at_kst": "2026-10-16T09:30:00+09:00",
+  "forbidden_uses": [
+    "use_as_machine_microstructure_operator_decision",
+    "use_as_preopen_apply_handoff",
+    "register_runtime_family_from_source_candidate",
+    "approve_unknown_or_unreviewed_prompt_contract",
+    "approve_multiple_or_tied_candidates",
+    "bypass_previous_post_apply_attribution",
+    "change_order_quantity_provider_bot_threshold_or_hard_safety"
+  ],
+  "one_shot": true,
+  "operator_authorization_id": "operator-main-ai-quality-first-bounded-family-20260815",
+  "operator_instruction": "Implement postclose AI quality R0-R3 automation; automatically apply the first exact candidate and continue tuning, while retaining all runtime/order safety gates.",
+  "reviewed_at_kst": "2026-08-15T09:30:00+09:00",
+  "runtime_apply_performed": false,
+  "runtime_effect": false,
+  "runtime_family": "main_ai_quality_entry_prompt_contract_v1",
+  "schema": "main_ai_quality_first_candidate_standing_authorization_v1",
+  "session_bucket": "KRX_REGULAR",
+  "source_candidate_family": "main_ai_quality_prompt_contract",
+  "stage": "entry",
+  "status": "standing_intent_reviewed_source_only"
+}

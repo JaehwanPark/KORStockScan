@@ -201,6 +201,7 @@ RUN_OBSERVATION_SOURCE_QUALITY_AUDIT="${THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_Q
 RUN_OPENING_ROTATION_PROFILE_TUNING="retired"
 RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION="${THRESHOLD_CYCLE_RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION:-true}"
 RUN_MAIN_AI_QUALITY_R0_R3="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_R0_R3:-true}"
+RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY:-true}"
 MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY:-true}"
 MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP:-78}"
 MAIN_AI_QUALITY_DAILY_USD_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_DAILY_USD_CAP:-1.0}"
@@ -2121,6 +2122,17 @@ if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ] || [ "$RUN_MAIN_AI_QUALITY_R0_R3" =
   fi
   if [ "$main_ai_quality_rc" -ne 0 ]; then
     emit_postclose_marker "[WARN] main-ai-quality-r0-r3 target_date=$TARGET_DATE rc=$main_ai_quality_rc reason=$main_ai_quality_failure_reason runtime_effect=false actual_order_submitted=false"
+  fi
+fi
+if [ "$RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY" = "true" ] || [ "$RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY" = "1" ]; then
+  main_ai_quality_family_rc=0
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
+    -m src.engine.automation.main_ai_quality_runtime_family \
+    --phase postclose \
+    --target-date "$TARGET_DATE" \
+    --write || main_ai_quality_family_rc=$?
+  if [ "$main_ai_quality_family_rc" -ne 0 ]; then
+    emit_postclose_marker "[WARN] main-ai-quality-runtime-family target_date=$TARGET_DATE rc=$main_ai_quality_family_rc status=blocked_fail_closed runtime_effect=false actual_order_submitted=false"
   fi
 fi
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
