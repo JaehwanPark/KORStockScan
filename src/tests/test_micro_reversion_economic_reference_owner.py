@@ -91,12 +91,12 @@ def _policy() -> dict[str, Any]:
             "observation_window_end": "2026-08-14",
             "evaluated_call_counts": [676, 369, 781, 1113, 999],
             "evaluated_call_median": 781,
-            "target_share_of_evaluated_median_pct": 10.0,
-            "daily_parent_cap": 26,
+            "target_share_of_evaluated_median_pct": 50.0,
+            "daily_parent_cap": 130,
             "logical_requests_per_parent": 3,
-            "maximum_logical_request_count": 78,
+            "maximum_logical_request_count": 390,
             "maximum_schema_attempts_per_request": 4,
-            "daily_attempt_cap": 78,
+            "daily_attempt_cap": 390,
             "source_artifacts": [
                 {
                     "target_date": observed_date,
@@ -187,19 +187,19 @@ def test_repository_policy_is_effective_on_requested_start_date() -> None:
     policy, raw = _load_policy(policy_path, target_date=date(2026, 8, 18))
 
     assert policy["effective_from"] == "2026-08-18"
-    assert policy["provider_budget_basis"]["daily_parent_cap"] == 26
-    assert policy["provider_budget_basis"]["maximum_logical_request_count"] == 78
-    assert policy["provider_budget_basis"]["daily_attempt_cap"] == 78
+    assert policy["provider_budget_basis"]["daily_parent_cap"] == 130
+    assert policy["provider_budget_basis"]["maximum_logical_request_count"] == 390
+    assert policy["provider_budget_basis"]["daily_attempt_cap"] == 390
     assert (
         policy["provider_budget_basis"]["daily_parent_cap"]
         * policy["provider_budget_basis"]["logical_requests_per_parent"]
         == policy["provider_budget_basis"]["maximum_logical_request_count"]
     )
-    assert 9.9 <= (
+    assert 49.9 <= (
         100
         * policy["provider_budget_basis"]["daily_attempt_cap"]
         / policy["provider_budget_basis"]["evaluated_call_median"]
-    ) <= 10.0
+    ) <= 50.0
     assert len(policy["provider_budget_basis"]["source_artifacts"]) == 5
     assert raw == policy_path.read_bytes()
 

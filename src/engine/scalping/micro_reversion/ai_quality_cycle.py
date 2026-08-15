@@ -139,8 +139,8 @@ MICRO_REPORT_ROOT = (
 )
 SOURCE_POLICY_ROOT = DATA_DIR / "policy" / "micro_reversion"
 ECONOMIC_POLICY_PATH = DATA_DIR / "config" / "micro_reversion_economic_policy.json"
-DEFAULT_DAILY_ATTEMPT_CAP = 78
-DEFAULT_PARENT_CAP = 26
+DEFAULT_DAILY_ATTEMPT_CAP = 390
+DEFAULT_PARENT_CAP = 130
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -2969,7 +2969,7 @@ def _validate_economic_owner_report(
     budget_basis = report.get("provider_budget_basis")
     if not isinstance(budget_basis, Mapping) or (
         budget_basis.get("evaluated_call_median") != 781
-        or budget_basis.get("target_share_of_evaluated_median_pct") != 10.0
+        or budget_basis.get("target_share_of_evaluated_median_pct") != 50.0
         or budget_basis.get("daily_parent_cap") != DEFAULT_PARENT_CAP
         or budget_basis.get("logical_requests_per_parent") != len(EXPECTED_ARMS)
         or budget_basis.get("maximum_logical_request_count")

@@ -21,8 +21,8 @@
   },
   "policy_id": "main-ai-economic-policy-2026-08-18-v1",
   "provider_budget_basis": {
-    "daily_attempt_cap": 78,
-    "daily_parent_cap": 26,
+    "daily_attempt_cap": 390,
+    "daily_parent_cap": 130,
     "evaluated_call_counts": [
       676,
       369,
@@ -32,11 +32,11 @@
     ],
     "evaluated_call_median": 781,
     "logical_requests_per_parent": 3,
-    "maximum_logical_request_count": 78,
+    "maximum_logical_request_count": 390,
     "maximum_schema_attempts_per_request": 4,
     "observation_window_end": "2026-08-14",
     "observation_window_start": "2026-08-10",
-    "target_share_of_evaluated_median_pct": 10.0,
+    "target_share_of_evaluated_median_pct": 50.0,
     "source_artifacts": [
       {
         "content_sha256": "40e9db47bab0129054184a1f3595f8e007a4024c707d61509e6530c5b5f721bf",

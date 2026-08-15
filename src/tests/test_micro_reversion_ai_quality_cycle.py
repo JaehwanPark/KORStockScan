@@ -2388,6 +2388,6 @@ def test_cycle_cli_returns_nonzero_for_terminal_blocked_artifact(monkeypatch, ca
     monkeypatch.setattr(cycle, "run_cycle", fake_run_cycle)
 
     assert cycle.main(["--date", "2026-08-14", "--write"]) == 2
-    assert observed["daily_attempt_cap"] == cycle.DEFAULT_DAILY_ATTEMPT_CAP == 78
-    assert observed["parent_cap"] == cycle.DEFAULT_PARENT_CAP == 26
+    assert observed["daily_attempt_cap"] == cycle.DEFAULT_DAILY_ATTEMPT_CAP == 390
+    assert observed["parent_cap"] == cycle.DEFAULT_PARENT_CAP == 130
     assert "economic_reference_not_verified" in capsys.readouterr().out
