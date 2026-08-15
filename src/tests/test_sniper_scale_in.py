@@ -1,7 +1,9 @@
 from dataclasses import replace
 from datetime import date, datetime, timedelta, time as dt_time
 from concurrent.futures import ThreadPoolExecutor
+import importlib
 import json
+import sys
 from threading import Lock
 import time
 from types import SimpleNamespace
@@ -15,6 +17,7 @@ import src.engine.sniper_entry_state as entry_state
 import src.engine.sniper_sync as sniper_sync
 import src.engine.trade_pause_control as trade_pause_control
 import src.utils.runtime_flags as runtime_flags
+import src.utils.constants as constants
 from src.engine import kiwoom_orders
 from src.engine.scalping import entry_split_order_plan
 from src.engine.kiwoom_websocket import KiwoomWSManager
@@ -55,6 +58,23 @@ def _mock_exact_order_terminal(monkeypatch):
             expected_runtime_qty,
         ),
     )
+
+
+def _import_telegram_manager_for_test(tmp_path, monkeypatch):
+    config_path = tmp_path / "config_dev.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "TELEGRAM_TOKEN": "123456:test-token",
+                "ADMIN_ID": "test-admin",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(constants, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(constants, "DEV_PATH", config_path)
+    sys.modules.pop("src.notify.telegram_manager", None)
+    return importlib.import_module("src.notify.telegram_manager")
 
 
 def _exact_entry_context():
@@ -31101,6 +31121,7 @@ def test_get_best_levels_from_ws_uses_top_of_book_levels():
 
 
 def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
+    _mock_exact_order_terminal(monkeypatch)
     logs = []
     cancel_calls = []
     monkeypatch.setattr(
@@ -31165,6 +31186,7 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
 
 
 def test_split_entry_cancel_only_expired_leg_keeps_later_legs(monkeypatch):
+    _mock_exact_order_terminal(monkeypatch)
     cancel_calls = []
     logs = []
     monkeypatch.setattr(
@@ -31325,6 +31347,7 @@ def test_entry_split_leg_provenance_overrides_bundle_without_duplicate_keys():
 
 
 def test_market_first_cancel_analytics_uses_guard_price_not_zero(monkeypatch):
+    _mock_exact_order_terminal(monkeypatch)
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -35724,7 +35747,7 @@ def test_holding_sell_still_works_when_paused(monkeypatch):
 
 
 def test_pause_toggle_keeps_file_truth_when_event_publish_fails(tmp_path, monkeypatch):
-    import src.notify.telegram_manager as telegram_manager
+    telegram_manager = _import_telegram_manager_for_test(tmp_path, monkeypatch)
 
     pause_flag = tmp_path / "pause.flag"
     monkeypatch.setattr(runtime_flags, "get_pause_flag_path", lambda: pause_flag)
@@ -35765,8 +35788,8 @@ def test_pause_toggle_keeps_file_truth_when_event_publish_fails(tmp_path, monkey
     assert replies
 
 
-def test_non_admin_pause_request_is_rejected(monkeypatch):
-    import src.notify.telegram_manager as telegram_manager
+def test_non_admin_pause_request_is_rejected(tmp_path, monkeypatch):
+    telegram_manager = _import_telegram_manager_for_test(tmp_path, monkeypatch)
 
     replies = []
     monkeypatch.setattr(
