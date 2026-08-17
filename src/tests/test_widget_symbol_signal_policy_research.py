@@ -32,6 +32,18 @@ class RateLimitResponse:
         return {}
 
 
+def test_completed_research_date_uses_previous_session_before_krx_close():
+    observed = datetime(2026, 8, 18, 7, 10, tzinfo=KST)
+
+    assert research.resolve_completed_research_end_date(observed) == date(2026, 8, 14)
+
+
+def test_completed_research_date_uses_current_session_after_krx_close():
+    observed = datetime(2026, 8, 18, 15, 31, tzinfo=KST)
+
+    assert research.resolve_completed_research_end_date(observed) == date(2026, 8, 18)
+
+
 def _bars(
     values: list[tuple[int, int, int, int, int]],
     *,

@@ -8,10 +8,7 @@ User=ubuntu
 Group=www-data
 WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
-ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_advisory_calibration --write
-ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_auto_trade_policy_calibration --write
-ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_symbol_signal_policy_research --write
-ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_symbol_runtime_policy --write
+ExecStart=/home/ubuntu/KORStockScan/deploy/run_widget_evaluation.sh
 Nice=10
 CPUQuota=20%
 MemoryMax=512M

@@ -1163,7 +1163,9 @@ def write_report(
     return json_path, markdown_path
 
 
-def _default_end_date(now: datetime | None = None) -> date:
+def resolve_completed_research_end_date(now: datetime | None = None) -> date:
+    """Return the latest KRX session whose regular close is complete."""
+
     current = (now or datetime.now(KST)).astimezone(KST)
     candidate = current.date()
     if current.time().replace(tzinfo=None) < time(15, 30) or not is_krx_trading_day(
@@ -1175,6 +1177,12 @@ def _default_end_date(now: datetime | None = None) -> date:
     return candidate
 
 
+def _default_end_date(now: datetime | None = None) -> date:
+    """Compatibility wrapper for existing callers and tests."""
+
+    return resolve_completed_research_end_date(now)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--end-date")
@@ -1184,7 +1192,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     end_date = (
-        date.fromisoformat(args.end_date) if args.end_date else _default_end_date()
+        date.fromisoformat(args.end_date)
+        if args.end_date
+        else resolve_completed_research_end_date()
     )
     expected_dates = _clean_trading_dates(end_date)
     token = kiwoom_utils.get_cached_kiwoom_token()

@@ -362,6 +362,7 @@ class ProcessHealthDetector(BaseDetector):
             details.setdefault("thread_alive", {})[tname] = talive
             if not talive:
                 details.setdefault("stopped_threads", []).append(tname)
+                thread_issues.append(tname)
             elif tage > thread_timeout:
                 thread_issues.append(tname)
 

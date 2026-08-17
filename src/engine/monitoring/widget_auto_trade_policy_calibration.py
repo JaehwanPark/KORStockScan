@@ -283,11 +283,19 @@ def _next_krx_trading_date(target_date: date) -> date:
     return candidate
 
 
-def _resolve_default_target_date() -> date:
+def resolve_completed_policy_target_date() -> date:
+    """Return the latest KRX date complete for every evaluation-chain stage."""
+
     now = datetime.now(KST)
     if is_krx_trading_day(now.date()) and now.time() >= POSTCLOSE_COMPLETE_TIME:
         return now.date()
     return previous_krx_trading_date(now.date())
+
+
+def _resolve_default_target_date() -> date:
+    """Compatibility wrapper for existing callers and tests."""
+
+    return resolve_completed_policy_target_date()
 
 
 def _clock(value: str) -> time:

@@ -22,6 +22,7 @@ from src.engine.monitoring.widget_symbol_signal_policy_research import (
     OWNER,
     REPORT_SCHEMA,
     SYMBOLS,
+    resolve_completed_research_end_date,
 )
 from src.engine.monitoring.samsung_widget_contract import KST
 from src.trading.order.episode_quantity import EPISODE_LEG_QUANTITY
@@ -674,7 +675,7 @@ def main(argv: list[str] | None = None) -> int:
     source_date = (
         date.fromisoformat(args.target_date)
         if args.target_date
-        else datetime.now(KST).date()
+        else resolve_completed_research_end_date()
     )
     research_path = (
         args.research_dir

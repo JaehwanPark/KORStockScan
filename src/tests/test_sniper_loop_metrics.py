@@ -407,6 +407,19 @@ def test_run_sniper_loop_calls_ensure_state_handler_deps():
     ), "_ensure_state_handler_deps() not found in loop top section"
 
 
+def test_state_handler_dependency_snapshot_matches_bind_contract(monkeypatch):
+    """The loop binding must not pass execution-only callback keywords."""
+    from src.engine import kiwoom_sniper_v2 as sniper
+
+    monkeypatch.setattr(sniper, "_STATE_HANDLER_DEPS", {})
+
+    sniper._ensure_state_handler_deps()
+
+    assert "broker_snapshot_refresh_callback" in sniper._STATE_HANDLER_DEPS
+    assert "persist_fast_state_callback" not in sniper._STATE_HANDLER_DEPS
+    assert "finalize_fast_state_callback" not in sniper._STATE_HANDLER_DEPS
+
+
 # ──────────────────────────────────────────────
 # 축 B: _RECENT_SNAPSHOT_SIGNATURES TTL prune
 # ──────────────────────────────────────────────

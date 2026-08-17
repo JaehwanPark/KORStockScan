@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -1952,6 +1953,11 @@ def test_service_single_instance_lock_is_exclusive(tmp_path):
 
 def test_service_symbol_allowlist_selects_only_requested_widgets(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", "A005930")
+    monkeypatch.setattr(
+        service_module.WidgetSymbolRuntimePolicyLoader,
+        "resolve_all",
+        lambda self, observed_date: {},
+    )
 
     specs = service_module._env_specs()
 
@@ -2041,6 +2047,11 @@ def test_service_explicit_samsung_execution_policy_is_attached(monkeypatch):
         "KORSTOCKSCAN_WIDGET_AUTO_TRADER_SAMSUNG_EXECUTION_POLICY",
         engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
     )
+    monkeypatch.setattr(
+        service_module.WidgetSymbolRuntimePolicyLoader,
+        "resolve_all",
+        lambda self, observed_date: {},
+    )
 
     specs = service_module._env_specs()
 
@@ -2061,6 +2072,11 @@ def test_service_unknown_samsung_execution_policy_fails_closed(monkeypatch):
 @pytest.mark.parametrize("value", ["", "999999", "005930,999999"])
 def test_service_symbol_allowlist_fails_closed_for_invalid_values(monkeypatch, value):
     monkeypatch.setenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", value)
+    monkeypatch.setattr(
+        service_module.WidgetSymbolRuntimePolicyLoader,
+        "resolve_all",
+        lambda self, observed_date: {},
+    )
 
     with pytest.raises(ValueError, match="widget_auto_trader_symbols_"):
         service_module._env_specs()
@@ -2070,6 +2086,11 @@ def test_service_symbol_allowlist_omission_preserves_legacy_specs(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", raising=False)
     monkeypatch.delenv(
         "KORSTOCKSCAN_WIDGET_AUTO_TRADER_SAMSUNG_EXECUTION_POLICY", raising=False
+    )
+    monkeypatch.setattr(
+        service_module.WidgetSymbolRuntimePolicyLoader,
+        "resolve_all",
+        lambda self, observed_date: {},
     )
 
     assert service_module._env_specs() == engine.DEFAULT_WIDGET_SPECS
@@ -2112,15 +2133,53 @@ def test_postclose_widget_evaluation_writes_next_day_execution_policy():
     service = Path(
         "deploy/systemd/korstockscan-samsung-widget-evaluation.service"
     ).read_text(encoding="utf-8")
+    wrapper = Path("deploy/run_widget_evaluation.sh").read_text(encoding="utf-8")
 
-    assert "src.engine.monitoring.widget_advisory_calibration --write" in service
-    assert (
-        "src.engine.monitoring.widget_auto_trade_policy_calibration --write" in service
+    assert service.count("ExecStart=") == 1
+    assert "ExecStart=/home/ubuntu/KORStockScan/deploy/run_widget_evaluation.sh" in service
+    assert "resolve_completed_policy_target_date" in wrapper
+    assert "widget_advisory_calibration" in wrapper
+    assert '--target-date "$completed_target_date"' in wrapper
+    assert '--end-date "$completed_target_date"' in wrapper
+
+
+def test_widget_evaluation_wrapper_reuses_one_completed_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    call_log = tmp_path / "calls.log"
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        "if [[ \"${1:-}\" == \"-c\" ]]; then\n"
+        "  printf 'dependency startup banner\\n'\n"
+        "  printf '2026-08-14\\n'\n"
+        "else\n"
+        "  printf '%s\\n' \"$*\" >> \"$CALL_LOG\"\n"
+        "fi\n",
+        encoding="utf-8",
     )
-    assert (
-        "src.engine.monitoring.widget_symbol_signal_policy_research --write" in service
+    fake_python.chmod(0o755)
+    monkeypatch.setenv("KORSTOCKSCAN_PROJECT_DIR", str(Path.cwd()))
+    monkeypatch.setenv("KORSTOCKSCAN_PYTHON_BIN", str(fake_python))
+    monkeypatch.setenv("CALL_LOG", str(call_log))
+
+    completed = subprocess.run(
+        ["bash", "deploy/run_widget_evaluation.sh"],
+        check=False,
+        capture_output=True,
+        text=True,
     )
-    assert "src.engine.monitoring.widget_symbol_runtime_policy --write" in service
+
+    assert completed.returncode == 0, completed.stderr
+    calls = call_log.read_text(encoding="utf-8").splitlines()
+    assert calls == [
+        "-m src.engine.monitoring.widget_advisory_calibration --target-date 2026-08-14 --write",
+        "-m src.engine.monitoring.widget_auto_trade_policy_calibration --target-date 2026-08-14 --write",
+        "-m src.engine.monitoring.widget_symbol_signal_policy_research --end-date 2026-08-14 --write",
+        "-m src.engine.monitoring.widget_symbol_runtime_policy --target-date 2026-08-14 --write",
+    ]
+    assert "completed target_date=2026-08-14" in completed.stdout
 
 
 def test_calibrated_widget_symbol_collector_is_exact_date_policy_gated():

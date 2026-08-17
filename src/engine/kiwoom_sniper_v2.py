@@ -963,8 +963,6 @@ def _ensure_state_handler_deps():
         "broker_snapshot_refresh_callback": (
             _request_broker_snapshot_refresh_after_execution
         ),
-        "persist_fast_state_callback": _persist_fast_state,
-        "finalize_fast_state_callback": _finalize_s15_completed_state,
     }
     if any(_STATE_HANDLER_DEPS.get(k) is not v for k, v in snapshot.items()):
         bind_state_dependencies(**snapshot)
@@ -14767,6 +14765,17 @@ def run_sniper(is_test_mode=False):
         print("\n🛑 스나이퍼 매매 엔진 종료")
 
     finally:
+        try:
+            from src.engine.error_detectors.process_health import (
+                write_heartbeat as _sniper_final_heartbeat,
+            )
+
+            _sniper_final_heartbeat("sniper_engine", alive=False)
+        except Exception as heartbeat_error:
+            log_error(
+                "[SNIPER_HEARTBEAT_FINALIZE_FAILED] "
+                f"error={heartbeat_error}"
+            )
         fast_exit_monitor.stop()
         async_coordinator = getattr(
             run_sniper,

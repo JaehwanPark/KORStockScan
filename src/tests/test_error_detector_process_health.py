@@ -83,6 +83,17 @@ class TestProcessHealthDetector:
         result = detector.check()
         assert result.severity == "pass"
 
+    def test_detector_fails_immediately_when_thread_reports_stopped(self):
+        write_heartbeat("main_loop")
+        write_heartbeat("sniper_engine", alive=False)
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "fail"
+        assert result.details["stopped_threads"] == ["sniper_engine"]
+        assert result.details["thread_status"] == "stale"
+        assert "sniper_engine" in result.summary
+
     def test_detector_fail_when_no_heartbeat(self, monkeypatch):
         if HEARTBEAT_PATH.exists():
             HEARTBEAT_PATH.unlink()
