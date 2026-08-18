@@ -9,3 +9,5 @@
 035720 # manual_operator kakao_low_price_two_leg_owner
 015760 # manual_operator kepco_low_price_two_leg_owner
 476060 # auto_open_loss KRX_OPEN profit=-2.16% stop=-1.40%
+017670 # manual_operator sk_telecom_low_price_two_leg_owner
+028050 # manual_operator samsung_ea_low_price_two_leg_owner
