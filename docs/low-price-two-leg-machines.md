@@ -2,7 +2,7 @@
 
 ## Scope
 
-Thirteen independent regular-session profiles implement the user-selected active
+Twenty independent regular-session profiles implement the user-selected active
 scope. Every profile owns its process, lock, durable state,
 authority artifact, and exact broker-order ledger.
 
@@ -10,28 +10,36 @@ authority artifact, and exact broker-order ledger.
 |---|---|---|---|
 | `samsung_heavy_midday` | 삼성중공업 `010140` | SOR regular | 13:20 through 13:29 |
 | `samsung_heavy_afternoon` | 삼성중공업 `010140` | SOR regular | 14:00 through 14:40 |
-| `sk_eternix_midday` | SK이터닉스 `475150` | SOR regular | 13:30 through 13:54 |
+| `sk_eternix_midday` | SK이터닉스 `475150` | SOR regular | 13:30 through 13:39 |
 | `mirae_asset_morning` | 미래에셋증권 `006800` | SOR regular | 09:35 through 09:44 |
 | `jeju_semiconductor_morning` | 제주반도체 `080220` | SOR regular | 09:10 through 09:49 |
 | `doosan_enerbility_morning` | 두산에너빌리티 `034020` | SOR regular | 09:20 through 09:49 |
 | `hanwha_ocean_late_morning` | 한화오션 `042660` | SOR regular | 10:05 through 10:24 |
 | `kakao_morning` | 카카오 `035720` | SOR regular | 09:20 through 09:39 |
-| `kakao_late_morning` | 카카오 `035720` | SOR regular | 10:05 through 10:34 |
+| `kakao_late_morning` | 카카오 `035720` | SOR regular | 10:05 through 10:24 |
 | `sk_eternix_morning` | SK이터닉스 `475150` | SOR regular | 09:50 through 09:59 |
 | `mirae_asset_midday` | 미래에셋증권 `006800` | SOR regular | 13:15 through 13:24 |
 | `kepco_afternoon` | 한국전력 `015760` | SOR regular | 14:00 through 14:29 |
 | `sk_eternix_afternoon` | SK이터닉스 `475150` | SOR regular | 14:00 through 14:40 |
+| `samsung_heavy_morning` | 삼성중공업 `010140` | SOR regular | 09:20 through 09:29 |
+| `doosan_enerbility_late_morning` | 두산에너빌리티 `034020` | SOR regular | 10:15 through 10:59 |
+| `kakao_midday` | 카카오 `035720` | SOR regular | 13:20 through 13:39 |
+| `sk_telecom_afternoon` | SK텔레콤 `017670` | SOR regular | 14:25 through 14:34 |
+| `samsung_ea_morning` | 삼성E&A `028050` | SOR regular | 09:45 through 09:59 |
+| `samsung_ea_late_morning` | 삼성E&A `028050` | SOR regular | 10:05 through 10:14 |
+| `samsung_ea_afternoon` | 삼성E&A `028050` | SOR regular | 14:05 through 14:34 |
 
-The 30-day calibration and 16-day untouched holdout selected independent entry
+The original 30-day calibration and 16-day untouched holdout selected independent entry
 contracts: Samsung Heavy midday uses 30 bars, drawdown at least 0.75%, and
 near-low at most 0.35%; Samsung Heavy afternoon keeps 30 bars, 1.25%, and
-0.20%; SK Eternix midday uses 20 bars, 2.00%, and 0.75%. From the explicit
+0.20%. The former SK Eternix midday 20-bar/2.00%/0.75% contract is historical
+through 2026-08-18. From the explicit
 2026-08-13 operator quantity change, one signal creates exactly two independent
 10-share limit buys: one at the signal close and one at one tick below (maximum
 20 shares). Entry orders remain valid for five subsequently completed one-minute
 bars. A partial buy fill cancels only the remaining quantity of that exact owned
 order; after cancellation reconciliation, the confirmed filled quantity owns one
-same-quantity +2-tick limit target. There is no
+same-quantity limit target at that profile generation's frozen tick distance. There is no
 stop loss, target timeout, forced sale, or target cancellation; an unclosed
 position remains held.
 
@@ -68,18 +76,57 @@ not a deployment dependency.
 | `mirae_asset_midday` | 45 | 1.00% | 0.50% | close/-1 tick | 5 | +2 ticks |
 | `sk_eternix_afternoon` | 45 | 2.50% | 0.50% | close/-1 tick | 5 | +2 ticks |
 
-Kakao morning keeps its frozen-research +2-tick baseline for the 2026-08-13
+Kakao morning kept its frozen-research +2-tick baseline for the 2026-08-13
 execution record, then applies an explicit user-directed +3-tick target transition
-from the 2026-08-14 exact-date PREOPEN policy. The service consumes that applied
+from the 2026-08-14 through 2026-08-18 exact-date PREOPEN policies. The service consumes that applied
 target instead of the compiled baseline, and the authority artifact records the
 before/after value and effective date. At the observed 39,250/39,200 fills this
 means independent targets of 39,400/39,350. It does not change Kakao late morning,
-any other profile, entry criteria, two-share allocation, no-stop holding, or broker
+any other profile, entry criteria, 10-share-per-leg allocation, no-stop holding, or broker
 guards. Postclose research includes +3 ticks as a source-only execution-plan option;
 ordinary bounded entry tuning cannot change this operator-owned target axis.
-After postclose evidence review, rollback restores +2 ticks in a later exact-date
-PREOPEN policy only when explicitly directed by the user. It never cancels or
-replaces an already-owned target order.
+The 2026-08-19 user-approved profile revision supersedes that historical target
+with the new +4-tick baseline. It never cancels or replaces an already-owned
+target order.
+
+## 2026-08-18 recommendation implementation
+
+The tracked
+`data/config/low_price_two_leg_expanded_profile_evidence_2026-08-18.json`
+projection binds the complete 51-trading-day clean-baseline report, its canonical
+hash, all 14 passing recommendation rows, 35-day calibration, 16-day untouched
+holdout, and the explicit user approval. The revision is effective only from the
+2026-08-19 exact-date PREOPEN artifact. Applied artifacts through 2026-08-18 keep
+the prior 13-profile inventory and policy generation.
+
+Seven existing profiles replace their entry-generation baseline:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---:|---|---:|---:|
+| `mirae_asset_midday` | 13:15~13:24 | 45 | 1.00% | 0.20% | close/-1 tick | 5 | +4 ticks |
+| `sk_eternix_morning` | 09:50~09:59 | 15 | 2.50% | 0.75% | close/-1 tick | 5 | +4 ticks |
+| `sk_eternix_midday` | 13:30~13:39 | 60 | 0.75% | 0.35% | close/-1 tick | 5 | +4 ticks |
+| `doosan_enerbility_morning` | 09:20~09:49 | 15 | 1.75% | 0.20% | close/-1 tick | 5 | +4 ticks |
+| `mirae_asset_morning` | 09:35~09:44 | 30 | 1.75% | 0.75% | close/-1 tick | 5 | +4 ticks |
+| `kakao_morning` | 09:20~09:39 | 15 | 0.75% | 0.35% | close/-1 tick | 5 | +4 ticks |
+| `kakao_late_morning` | 10:05~10:24 | 20 | 0.50% | 0.05% | close/-1 tick | 5 | +4 ticks |
+
+Seven new independent profiles use the following frozen rows:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---:|---|---:|---:|
+| `samsung_heavy_morning` | 09:20~09:29 | 20 | 0.50% | 0.50% | close/-1 tick | 5 | +2 ticks |
+| `doosan_enerbility_late_morning` | 10:15~10:59 | 30 | 1.75% | 0.05% | close/-1 tick | 5 | +2 ticks |
+| `kakao_midday` | 13:20~13:39 | 30 | 0.50% | 0.35% | close/-1 tick | 5 | +2 ticks |
+| `sk_telecom_afternoon` | 14:25~14:34 | 15 | 0.75% | 0.20% | close/-1 tick | 5 | +2 ticks |
+| `samsung_ea_morning` | 09:45~09:59 | 15 | 1.25% | 0.50% | close/-1 tick | 5 | +2 ticks |
+| `samsung_ea_late_morning` | 10:05~10:14 | 20 | 1.50% | 0.20% | close/-1 tick | 5 | +2 ticks |
+| `samsung_ea_afternoon` | 14:05~14:34 | 60 | 1.25% | 0.75% | close/-1 tick | 5 | +2 ticks |
+
+The fixed Theborn Korea `475560` morning observation is not one of these 14
+passing recommendations and remains source-only. Prior-date open or held orders
+remain bound to the entry offsets and target ticks recorded when they were
+created; the new generation cannot cancel, replace, or reinterpret them.
 
 KEPCO afternoon had 16 completed holdout legs and two held legs (11.11% of
 filled legs), with completed-only notional EV `+0.064355%` and held mark
@@ -108,9 +155,10 @@ exact profile and date:
   leg is exactly 10 shares. Legacy owned one-share orders remain valid custody
   state and are never resized retroactively.
 
-Activation uses protected `manual_operator` markers for all eight symbols in
+Activation uses protected `manual_operator` markers for all ten symbols in
 `data/config/manual_control_excluded_codes.txt`. The reviewed installer adds
-the new Kakao and KEPCO markers immediately before enabling the new timers, so
+the new SK Telecom and Samsung E&A markers, as well as the existing Kakao and
+KEPCO safeguards, immediately before enabling the new timers, so
 source implementation alone does not partially transfer their runtime owner.
 This excludes the symbols from
 the primary bot while leaving the Doosan/Hanwha widget owners and episode
@@ -162,8 +210,8 @@ operator approval, and may apply only through an exact-date PREOPEN artifact.
 
 From `2026-08-14`, each attempted row must match the exact-date PREOPEN applied
 policy hash and fields. Target validation uses that applied policy, so the
-operator-approved Kakao morning +3-tick target is not compared with the compiled
-+2-tick baseline. New target reconciliations persist broker `kt00007.cntr_uv`;
+historical Kakao morning +3-tick target is not compared with a different policy
+generation. New target reconciliations persist broker `kt00007.cntr_uv`;
 only broker-priced completed legs contribute to decision EV and its 20-leg floor.
 Older configured-target proxy results remain separately labeled diagnostics.
 
@@ -174,7 +222,7 @@ profile may propose one tightening axis for the next PREOPEN:
 - drawdown from the profile baseline to at most `baseline + 0.25%p`, or
 - near-low proximity from the profile baseline to at most `baseline - 0.10%p`.
 
-Across all thirteen profiles and the existing Samsung regular machines, at most one
+Across all twenty profiles and the existing Samsung regular machines, at most one
 profile/machine and one entry axis may change per day.  The Samsung candidate is
 produced first; if it owns a valid mutation, or its same-date candidate is
 invalid, the lower-price family carries all policies forward. Quantity is fixed
@@ -192,9 +240,9 @@ evidence.
 The 2026-08-12 postclose tuning candidate predates the six-profile expansion.
 For the 2026-08-13 PREOPEN transition only, its exact seven-profile v2 policy is
 validated first and the six newly approved profiles are added at their frozen
-baselines. From the next postclose cycle onward the candidate and applied-policy
-inventory must contain all thirteen profiles; a partial or stale inventory fails
-closed.
+baselines. The candidate and applied-policy inventory contained all thirteen
+profiles through 2026-08-18. From the 2026-08-19 revision it must contain all
+twenty; a partial or stale inventory fails closed.
 
 ## Daily implementation-candidate recommendation
 

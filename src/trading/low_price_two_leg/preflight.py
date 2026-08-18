@@ -14,7 +14,12 @@ from pathlib import Path
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
-from src.trading.low_price_two_leg.profiles import PROFILES, MachineProfile, get_profile
+from src.trading.low_price_two_leg.profiles import (
+    PROFILE_REVISION_EFFECTIVE_DATE,
+    PROFILES,
+    MachineProfile,
+    get_profile,
+)
 from src.trading.low_price_two_leg.policy_runtime import (
     load_applied_profile_policy,
     operator_policy_transitions,
@@ -72,9 +77,53 @@ EXPANDED_RESEARCH_PROFILE_MAP = {
     "mirae_asset_midday": "existing_006800_midday",
     "sk_eternix_afternoon": "existing_475150_afternoon",
 }
+RECOMMENDATION_20260818_EVIDENCE_PATH = (
+    DATA_DIR / "config" / "low_price_two_leg_expanded_profile_evidence_2026-08-18.json"
+)
+RECOMMENDATION_20260818_EVIDENCE_SHA256 = (
+    "3f829f002f5ce53615460c55f9fa71211d286c87443794e1bd506f622544d795"
+)
+RECOMMENDATION_20260818_SOURCE_SHA256 = (
+    "cabcb039571d138d16dc3dafad93fb1b564e993856a6966dd858aaed7d214d41"
+)
+RECOMMENDATION_20260818_PROFILE_MAP = {
+    "mirae_asset_midday": "logic_mirae_asset_midday",
+    "sk_eternix_morning": "logic_sk_eternix_morning",
+    "sk_eternix_midday": "logic_sk_eternix_midday",
+    "doosan_enerbility_morning": "logic_doosan_enerbility_morning",
+    "mirae_asset_morning": "logic_mirae_asset_morning",
+    "kakao_morning": "logic_kakao_morning",
+    "samsung_heavy_morning": "existing_010140_morning",
+    "kakao_late_morning": "logic_kakao_late_morning",
+    "doosan_enerbility_late_morning": "existing_034020_late_morning",
+    "kakao_midday": "existing_035720_midday",
+    "sk_telecom_afternoon": "candidate_017670_afternoon",
+    "samsung_ea_late_morning": "candidate_028050_late_morning",
+    "samsung_ea_afternoon": "candidate_028050_afternoon",
+    "samsung_ea_morning": "candidate_028050_morning",
+}
 
 
-def _research_evidence_contract(profile: MachineProfile) -> dict:
+def _research_evidence_contract(
+    profile: MachineProfile, *, target_date: date | None = None
+) -> dict:
+    recommendation_profile_id = (
+        RECOMMENDATION_20260818_PROFILE_MAP.get(profile.profile_id)
+        if target_date is None or target_date >= PROFILE_REVISION_EFFECTIVE_DATE
+        else None
+    )
+    if recommendation_profile_id:
+        return {
+            "path": RECOMMENDATION_20260818_EVIDENCE_PATH,
+            "sha256": RECOMMENDATION_20260818_EVIDENCE_SHA256,
+            "schema": "low_price_two_leg_user_approved_profile_evidence_v2",
+            "start_date": "2026-06-05",
+            "end_date": "2026-08-18",
+            "trading_date_count": 51,
+            "window": "2026-06-05_through_2026-08-18_51_trading_days",
+            "report_profile_id": recommendation_profile_id,
+            "source_report_sha256": RECOMMENDATION_20260818_SOURCE_SHA256,
+        }
     expanded_profile_id = EXPANDED_RESEARCH_PROFILE_MAP.get(profile.profile_id)
     if expanded_profile_id:
         return {
@@ -86,6 +135,7 @@ def _research_evidence_contract(profile: MachineProfile) -> dict:
             "trading_date_count": 48,
             "window": "2026-06-05_through_2026-08-12_48_trading_days",
             "report_profile_id": expanded_profile_id,
+            "source_report_sha256": EXPANDED_SOURCE_REPORT_SHA256,
         }
     if profile.profile_id in EPISODE_RESEARCH_PROFILE_IDS:
         return {
@@ -141,8 +191,17 @@ def validate_research_evidence(
     path: Path | None = None,
     *,
     expected_sha256: str | None = None,
+    target_date: date | None = None,
 ) -> tuple[bool, str]:
-    contract = _research_evidence_contract(profile)
+    contract = _research_evidence_contract(profile, target_date=target_date)
+    try:
+        evidence_profile = (
+            profile
+            if target_date is None
+            else get_profile(profile.profile_id, target_date=target_date)
+        )
+    except ValueError:
+        return False, "research_profile_not_effective_for_target_date"
     report_path = Path(path or contract["path"])
     expected_digest = str(expected_sha256 or contract["sha256"])
     try:
@@ -169,14 +228,15 @@ def validate_research_evidence(
         "low_price_two_leg_entry_spot_research_v1",
         "low_price_two_leg_episode_policy_research_v1",
         "low_price_two_leg_user_approved_profile_evidence_v1",
+        "low_price_two_leg_user_approved_profile_evidence_v2",
     }:
         return False, "research_report_schema_invalid"
-    source = (payload.get("source_meta") or {}).get(profile.symbol)
+    source = (payload.get("source_meta") or {}).get(evidence_profile.symbol)
     report_profile_id = str(contract["report_profile_id"])
     result = (payload.get("profiles") or {}).get(report_profile_id)
     if not isinstance(source, dict) or not isinstance(result, dict):
         return False, "research_profile_result_missing"
-    policy = profile.policy
+    policy = evidence_profile.policy
     expected_spot = {
         "scan_start": policy.scan_start.strftime("%H:%M"),
         "scan_end": policy.scan_last_bar.strftime("%H:%M"),
@@ -232,7 +292,8 @@ def validate_research_evidence(
             not isinstance(source_report, dict)
             or source_report.get("schema")
             != "low_price_two_leg_expanded_candidate_research_v5"
-            or source_report.get("canonical_sha256") != EXPANDED_SOURCE_REPORT_SHA256
+            or source_report.get("canonical_sha256")
+            != contract.get("source_report_sha256")
         ):
             return False, "research_source_report_provenance_invalid"
         expected_policy = {
@@ -256,8 +317,8 @@ def validate_research_evidence(
         decision_ready = bool(
             result.get("decision") == "holdout_pass_source_only_early_candidate"
             and isinstance(recommendation, dict)
-            and recommendation.get("symbol") == profile.symbol
-            and recommendation.get("session") == profile.session
+            and recommendation.get("symbol") == evidence_profile.symbol
+            and recommendation.get("session") == evidence_profile.session
             and recommendation.get("recommended_spot") == expected_policy
             and recommendation.get("implementation_status")
             == "source_only_requires_review_and_user_approval"
@@ -302,7 +363,11 @@ def validate_research_evidence(
         or int(holdout.get("signal_episodes", 0) or 0) < 3
         or int(holdout.get("completed_legs", 0) or 0) < 4
         or (
-            schema != "low_price_two_leg_user_approved_profile_evidence_v1"
+            schema
+            not in {
+                "low_price_two_leg_user_approved_profile_evidence_v1",
+                "low_price_two_leg_user_approved_profile_evidence_v2",
+            }
             and int(holdout.get("held_legs", 0) or 0) != 0
         )
         or float(holdout.get("notional_weighted_ev_pct", 0.0) or 0.0) <= 0.0
@@ -357,12 +422,13 @@ def _policy_contract(
     *,
     target_date: date,
 ) -> dict:
-    policy = profile.policy
+    effective_profile = get_profile(profile.profile_id, target_date=target_date)
+    policy = effective_profile.policy
     contract = {
         "profile_id": profile.profile_id,
-        "symbol": profile.symbol,
-        "name": profile.name,
-        "session": profile.session,
+        "symbol": effective_profile.symbol,
+        "name": effective_profile.name,
+        "session": effective_profile.session,
         "quantity": EPISODE_TOTAL_QUANTITY,
         "allocation": {
             "leg_quantity": EPISODE_LEG_QUANTITY,
@@ -405,7 +471,8 @@ def build_authority_artifact(
     if not decision.ready:
         raise ValueError("preflight_not_ready")
     observed_at = observed_at.astimezone(KST)
-    research = _research_evidence_contract(profile)
+    target_date = date.fromisoformat(decision.target_date)
+    research = _research_evidence_contract(profile, target_date=target_date)
     return {
         "schema": AUTHORITY_SCHEMA,
         "status": "ready",
@@ -419,7 +486,7 @@ def build_authority_artifact(
             profile,
             applied_policy,
             applied_policy_hash,
-            target_date=date.fromisoformat(decision.target_date),
+            target_date=target_date,
         ),
         "evidence": {
             "path": str(research["path"]),
@@ -523,7 +590,7 @@ def validate_authority(
     ):
         return False, "authority_policy_mismatch"
     evidence = payload.get("evidence")
-    research = _research_evidence_contract(profile)
+    research = _research_evidence_contract(profile, target_date=now.date())
     if (
         not isinstance(evidence, dict)
         or evidence.get("path") != str(research["path"])
@@ -537,7 +604,9 @@ def validate_authority(
         for key in ("max_hold_minutes", "target_timeout", "stop_price")
     ):
         return False, "authority_forced_exit_policy_forbidden"
-    evidence_ready, evidence_reason = validate_research_evidence(profile)
+    evidence_ready, evidence_reason = validate_research_evidence(
+        profile, target_date=now.date()
+    )
     if not evidence_ready:
         return False, f"authority_research_evidence_{evidence_reason}"
     return True, "ready"
@@ -551,12 +620,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--main-bot-active", action="store_true")
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
-    profile = get_profile(args.profile)
     observed_at = datetime.now(tz=KST)
     target_date = (
         date.fromisoformat(args.target_date) if args.target_date else observed_at.date()
     )
-    evidence_ready, evidence_reason = validate_research_evidence(profile)
+    try:
+        profile = get_profile(args.profile, target_date=target_date)
+    except ValueError:
+        print(
+            json.dumps(
+                {
+                    "decision": {
+                        "ready": False,
+                        "target_date": target_date.isoformat(),
+                        "profile_id": args.profile,
+                        "blockers": ["profile_not_effective_for_target_date"],
+                    }
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+    evidence_ready, evidence_reason = validate_research_evidence(
+        profile, target_date=target_date
+    )
     applied_policy, applied_hash, applied_reason = load_applied_profile_policy(
         profile.profile_id, target_date=target_date
     )

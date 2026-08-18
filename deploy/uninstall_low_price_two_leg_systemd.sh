@@ -33,6 +33,20 @@ TIMERS=(
   korstockscan-low-price-two-leg-mirae-asset-midday.timer
   korstockscan-low-price-two-leg-sk-eternix-afternoon-preflight.timer
   korstockscan-low-price-two-leg-sk-eternix-afternoon.timer
+  korstockscan-low-price-two-leg-samsung-heavy-morning-preflight.timer
+  korstockscan-low-price-two-leg-samsung-heavy-morning.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-late-morning.timer
+  korstockscan-low-price-two-leg-kakao-midday-preflight.timer
+  korstockscan-low-price-two-leg-kakao-midday.timer
+  korstockscan-low-price-two-leg-sk-telecom-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-sk-telecom-afternoon.timer
+  korstockscan-low-price-two-leg-samsung-ea-morning-preflight.timer
+  korstockscan-low-price-two-leg-samsung-ea-morning.timer
+  korstockscan-low-price-two-leg-samsung-ea-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-samsung-ea-late-morning.timer
+  korstockscan-low-price-two-leg-samsung-ea-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-samsung-ea-afternoon.timer
 )
 SERVICES=(
   korstockscan-low-price-two-leg@samsung_heavy_midday.service
@@ -65,6 +79,20 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@sk_eternix_morning.service
   korstockscan-low-price-two-leg-preflight@mirae_asset_midday.service
   korstockscan-low-price-two-leg-preflight@sk_eternix_afternoon.service
+  korstockscan-low-price-two-leg@samsung_heavy_morning.service
+  korstockscan-low-price-two-leg@doosan_enerbility_late_morning.service
+  korstockscan-low-price-two-leg@kakao_midday.service
+  korstockscan-low-price-two-leg@sk_telecom_afternoon.service
+  korstockscan-low-price-two-leg@samsung_ea_morning.service
+  korstockscan-low-price-two-leg@samsung_ea_late_morning.service
+  korstockscan-low-price-two-leg@samsung_ea_afternoon.service
+  korstockscan-low-price-two-leg-preflight@samsung_heavy_morning.service
+  korstockscan-low-price-two-leg-preflight@doosan_enerbility_late_morning.service
+  korstockscan-low-price-two-leg-preflight@kakao_midday.service
+  korstockscan-low-price-two-leg-preflight@sk_telecom_afternoon.service
+  korstockscan-low-price-two-leg-preflight@samsung_ea_morning.service
+  korstockscan-low-price-two-leg-preflight@samsung_ea_late_morning.service
+  korstockscan-low-price-two-leg-preflight@samsung_ea_afternoon.service
 )
 FILES=(
   korstockscan-low-price-two-leg@.service

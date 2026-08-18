@@ -11,18 +11,19 @@ from typing import Any
 from src.trading.low_price_two_leg.policy_runtime import (
     APPLIED_DIR,
     APPLIED_SCHEMA,
-    BASELINE_POLICIES,
     CANDIDATE_DIR,
     KST,
     MAX_CANDIDATE_AGE_DAYS,
     apply_operator_policy_transitions,
     applied_path,
     atomic_write_json,
+    baseline_policies_for_target_date,
     baseline_applied_payload,
     candidate_policies_with_current_baselines,
     operator_policy_transitions,
     policy_hash,
     policy_mutations_between,
+    profile_revision_transition,
     validate_applied,
     validate_candidate,
 )
@@ -48,8 +49,26 @@ def _latest_prior_candidate(candidate_dir: Path, target_date: date) -> Path | No
     return max(candidates, default=(None, None), key=lambda item: item[0])[1]
 
 
-def _candidate_policies(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return candidate_policies_with_current_baselines(payload)
+def _candidate_policies(
+    payload: dict[str, Any], *, target_date: date
+) -> dict[str, dict[str, Any]]:
+    return candidate_policies_with_current_baselines(payload, target_date=target_date)
+
+
+def _applied_profile_selection_status(
+    *,
+    profile_id: str,
+    policy: dict[str, Any],
+    candidate: dict[str, Any],
+    profile_revision_applied: bool,
+) -> str:
+    candidate_item = (candidate.get("profiles") or {}).get(profile_id) or {}
+    if profile_revision_applied and candidate_item.get("policy") != policy:
+        return "user_approved_profile_revision_baseline"
+    return str(
+        candidate_item.get("selection_status")
+        or "baseline_added_during_profile_universe_expansion"
+    )
 
 
 def build_applied_policy(
@@ -82,10 +101,11 @@ def build_applied_policy(
         raise ValueError(reason)
     if candidate.get("source_date") != candidate_date.isoformat():
         raise ValueError("candidate_filename_payload_date_mismatch")
-    candidate_policies = _candidate_policies(candidate)
+    candidate_policies = _candidate_policies(candidate, target_date=target_date)
     previous_path = _latest_prior_candidate(candidate_dir, candidate_date)
     previous_policies = {
-        profile_id: dict(policy) for profile_id, policy in BASELINE_POLICIES.items()
+        profile_id: dict(policy)
+        for profile_id, policy in baseline_policies_for_target_date(target_date).items()
     }
     if previous_path is not None:
         try:
@@ -97,12 +117,22 @@ def build_applied_policy(
         valid, reason = validate_candidate(previous)
         if not valid:
             raise ValueError(f"previous_candidate_{reason}")
-        previous_policies = _candidate_policies(previous)
+        previous_policies = _candidate_policies(previous, target_date=target_date)
     expected_mutations = policy_mutations_between(previous_policies, candidate_policies)
     if candidate.get("policy_mutations") != expected_mutations:
         raise ValueError("candidate_policy_mutation_lineage_mismatch")
     policies = apply_operator_policy_transitions(
         candidate_policies, target_date=target_date
+    )
+    revision = profile_revision_transition(target_date)
+    profile_revision_applied = bool(
+        revision
+        and candidate_date < date.fromisoformat(str(revision["effective_target_date"]))
+    )
+    selection_status = (
+        "candidate_validated_profile_revision_applied"
+        if profile_revision_applied
+        else "candidate_applied"
     )
     payload = {
         "schema": APPLIED_SCHEMA,
@@ -111,16 +141,16 @@ def build_applied_policy(
         "source_date": candidate_date.isoformat(),
         "source_candidate": str(candidate_path),
         "source_candidate_hash": str(candidate["policy_hash"]),
-        "selection_status": "candidate_applied",
+        "selection_status": selection_status,
         "policy_hash": policy_hash(policies),
         "policy_mutations": expected_mutations,
         "profiles": {
             profile_id: {
-                "selection_status": str(
-                    (candidate.get("profiles") or {})
-                    .get(profile_id, {})
-                    .get("selection_status")
-                    or "baseline_added_during_profile_universe_expansion"
+                "selection_status": _applied_profile_selection_status(
+                    profile_id=profile_id,
+                    policy=policy,
+                    candidate=candidate,
+                    profile_revision_applied=profile_revision_applied,
                 ),
                 "selected_axis": (candidate.get("profiles") or {})
                 .get(profile_id, {})
@@ -149,10 +179,12 @@ def build_applied_policy(
     transitions = operator_policy_transitions(target_date)
     if transitions:
         payload["operator_policy_transitions"] = transitions
+    if revision:
+        payload["profile_revision_transition"] = revision
     valid, reason = validate_applied(payload, target_date=target_date)
     if not valid:
         raise ValueError(reason)
-    return payload, "candidate_applied"
+    return payload, selection_status
 
 
 def main(argv: list[str] | None = None) -> int:

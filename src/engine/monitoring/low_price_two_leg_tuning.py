@@ -77,6 +77,13 @@ PROFILE_FIRST_OPERATIONAL_DATES = {
     "sk_eternix_afternoon": date(2026, 8, 13),
     "mirae_asset_midday": date(2026, 8, 13),
     "kepco_afternoon": date(2026, 8, 13),
+    "samsung_heavy_morning": date(2026, 8, 19),
+    "doosan_enerbility_late_morning": date(2026, 8, 19),
+    "kakao_midday": date(2026, 8, 19),
+    "sk_telecom_afternoon": date(2026, 8, 19),
+    "samsung_ea_morning": date(2026, 8, 19),
+    "samsung_ea_late_morning": date(2026, 8, 19),
+    "samsung_ea_afternoon": date(2026, 8, 19),
 }
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {

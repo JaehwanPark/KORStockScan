@@ -7,12 +7,16 @@ import json
 import math
 import os
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.trading.low_price_two_leg.profiles import PROFILES
+from src.trading.low_price_two_leg.profiles import (
+    PRE_RECOMMENDATION_PROFILES,
+    PROFILE_REVISION_EFFECTIVE_DATE,
+    PROFILES,
+)
 from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
@@ -51,6 +55,26 @@ CANDIDATE_DIR = DATA_DIR / "threshold_cycle" / "low_price_two_leg" / "candidates
 APPLIED_DIR = DATA_DIR / "threshold_cycle" / "low_price_two_leg" / "applied"
 MAX_CANDIDATE_AGE_DAYS = 7
 CLEAN_BASELINE_DATE = "2026-06-05"
+PRE_RECOMMENDATION_LAST_TARGET_DATE = PROFILE_REVISION_EFFECTIVE_DATE - timedelta(
+    days=1
+)
+PROFILE_REVISION_TRANSITION = {
+    "effective_target_date": PROFILE_REVISION_EFFECTIVE_DATE.isoformat(),
+    "source_date": "2026-08-18",
+    "before_profile_count": 13,
+    "after_profile_count": 20,
+    "recommendation_count": 14,
+    "new_profile_count": 7,
+    "logic_revision_count": 7,
+    "evidence_path": (
+        "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-18.json"
+    ),
+    "evidence_canonical_sha256": (
+        "3f829f002f5ce53615460c55f9fa71211d286c87443794e1bd506f622544d795"
+    ),
+    "decision_authority": "explicit_user_directed_profile_revision_2026_08_18",
+    "existing_order_effect": "none_preserve_prior_policy_custody",
+}
 KAKAO_MORNING_TARGET_TRANSITION = {
     "profile_id": "kakao_morning",
     "axis": "target_ticks",
@@ -68,8 +92,8 @@ KAKAO_MORNING_TARGET_TRANSITION = {
 }
 
 
-def _baseline_policy(profile_id: str) -> dict[str, Any]:
-    policy = PROFILES[profile_id].policy
+def _baseline_policy(profile_id: str, inventory: dict[str, Any]) -> dict[str, Any]:
+    policy = inventory[profile_id].policy
     return {
         "rolling_high_drawdown_pct": policy.rolling_high_drawdown_pct,
         "rolling_low_proximity_pct": policy.rolling_low_proximity_pct,
@@ -81,19 +105,44 @@ def _baseline_policy(profile_id: str) -> dict[str, Any]:
 
 
 BASELINE_POLICIES = {
-    profile_id: _baseline_policy(profile_id) for profile_id in PROFILES
+    profile_id: _baseline_policy(profile_id, PROFILES) for profile_id in PROFILES
 }
-POLICY_BOUNDS = {
-    profile_id: {
-        "drawdown_min": float(policy["rolling_high_drawdown_pct"]),
-        "drawdown_max": round(float(policy["rolling_high_drawdown_pct"]) + 0.25, 6),
-        "near_low_min": round(
-            max(0.05, float(policy["rolling_low_proximity_pct"]) - 0.10), 6
-        ),
-        "near_low_max": float(policy["rolling_low_proximity_pct"]),
+PRE_RECOMMENDATION_BASELINE_POLICIES = {
+    profile_id: _baseline_policy(profile_id, PRE_RECOMMENDATION_PROFILES)
+    for profile_id in PRE_RECOMMENDATION_PROFILES
+}
+
+
+def _policy_bounds(policies: dict[str, dict[str, Any]]) -> dict[str, dict[str, float]]:
+    return {
+        profile_id: {
+            "drawdown_min": float(policy["rolling_high_drawdown_pct"]),
+            "drawdown_max": round(float(policy["rolling_high_drawdown_pct"]) + 0.25, 6),
+            "near_low_min": round(
+                max(0.05, float(policy["rolling_low_proximity_pct"]) - 0.10), 6
+            ),
+            "near_low_max": float(policy["rolling_low_proximity_pct"]),
+        }
+        for profile_id, policy in policies.items()
     }
-    for profile_id, policy in BASELINE_POLICIES.items()
-}
+
+
+POLICY_BOUNDS = _policy_bounds(BASELINE_POLICIES)
+PRE_RECOMMENDATION_POLICY_BOUNDS = _policy_bounds(PRE_RECOMMENDATION_BASELINE_POLICIES)
+
+
+def baseline_policies_for_target_date(
+    target_date: date,
+) -> dict[str, dict[str, Any]]:
+    if target_date < PROFILE_REVISION_EFFECTIVE_DATE:
+        return PRE_RECOMMENDATION_BASELINE_POLICIES
+    return BASELINE_POLICIES
+
+
+def profile_revision_transition(target_date: date) -> dict[str, Any] | None:
+    if target_date < PROFILE_REVISION_EFFECTIVE_DATE:
+        return None
+    return dict(PROFILE_REVISION_TRANSITION)
 
 
 def operator_policy_transitions(target_date: date) -> list[dict[str, Any]]:
@@ -101,7 +150,9 @@ def operator_policy_transitions(target_date: date) -> list[dict[str, Any]]:
         str(KAKAO_MORNING_TARGET_TRANSITION["effective_target_date"])
     )
     return (
-        [dict(KAKAO_MORNING_TARGET_TRANSITION)] if target_date >= effective_date else []
+        [dict(KAKAO_MORNING_TARGET_TRANSITION)]
+        if (effective_date <= target_date <= PRE_RECOMMENDATION_LAST_TARGET_DATE)
+        else []
     )
 
 
@@ -144,8 +195,11 @@ def _finite_number(value: Any) -> float | None:
 def policy_mutations_between(
     before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]
 ) -> list[dict[str, Any]]:
+    if set(before) != set(after):
+        raise ValueError("policy_mutation_profile_inventory_mismatch")
     mutations: list[dict[str, Any]] = []
-    for profile_id, baseline in BASELINE_POLICIES.items():
+    for profile_id in sorted(before):
+        baseline = before[profile_id]
         for axis in baseline:
             if before[profile_id][axis] != after[profile_id][axis]:
                 mutations.append(
@@ -194,12 +248,23 @@ def validate_profile_policy(
     *,
     target_date: date | None = None,
     legacy_two_share_candidate: bool = False,
+    include_operator_transitions: bool = True,
 ) -> tuple[bool, str]:
-    if profile_id not in BASELINE_POLICIES or not isinstance(policy, dict):
+    baselines = (
+        BASELINE_POLICIES
+        if target_date is None
+        else baseline_policies_for_target_date(target_date)
+    )
+    bounds_by_profile = (
+        POLICY_BOUNDS
+        if target_date is None or target_date >= PROFILE_REVISION_EFFECTIVE_DATE
+        else PRE_RECOMMENDATION_POLICY_BOUNDS
+    )
+    if profile_id not in baselines or not isinstance(policy, dict):
         return False, "profile_or_policy_invalid"
-    baseline = BASELINE_POLICIES[profile_id]
+    baseline = baselines[profile_id]
     expected_immutable = dict(baseline)
-    if target_date is not None:
+    if target_date is not None and include_operator_transitions:
         for transition in operator_policy_transitions(target_date):
             if transition["profile_id"] == profile_id:
                 expected_immutable[str(transition["axis"])] = transition["after"]
@@ -227,7 +292,7 @@ def validate_profile_policy(
             return False, f"immutable_{key}_mismatch"
     drawdown = _finite_number(policy.get("rolling_high_drawdown_pct"))
     near_low = _finite_number(policy.get("rolling_low_proximity_pct"))
-    bounds = POLICY_BOUNDS[profile_id]
+    bounds = bounds_by_profile[profile_id]
     if (
         drawdown is None
         or not bounds["drawdown_min"] <= drawdown <= bounds["drawdown_max"]
@@ -283,7 +348,8 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
     if same_stage_guard["mutation_present"] and payload.get("policy_mutations"):
         return False, "candidate_same_stage_owner_conflict"
     profiles = payload.get("profiles")
-    allowed_profile_sets = {frozenset(BASELINE_POLICIES)}
+    source_baselines = baseline_policies_for_target_date(source_date)
+    allowed_profile_sets = {frozenset(source_baselines)}
     if payload.get("schema") == "low_price_two_leg_policy_candidate_v1":
         allowed_profile_sets = {LEGACY_V1_PROFILE_IDS}
     elif source_date <= PRE_EXPANDED_V2_LAST_SOURCE_DATE:
@@ -306,6 +372,8 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
         valid, reason = validate_profile_policy(
             profile_id,
             item.get("policy"),
+            target_date=source_date,
+            include_operator_transitions=False,
             legacy_two_share_candidate=(
                 source_date <= LEGACY_TWO_SHARE_CANDIDATE_LAST_SOURCE_DATE
             ),
@@ -322,13 +390,25 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
 
 def candidate_policies_with_current_baselines(
     payload: dict[str, Any],
+    *,
+    target_date: date | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Normalize a validated candidate across additive profile expansion."""
     valid, reason = validate_candidate(payload)
     if not valid:
         raise ValueError(reason)
+    source_date = date.fromisoformat(str(payload["source_date"]))
+    effective_target_date = target_date or (source_date + timedelta(days=1))
+    target_baselines = baseline_policies_for_target_date(effective_target_date)
+    if (
+        effective_target_date >= PROFILE_REVISION_EFFECTIVE_DATE
+        and source_date < PROFILE_REVISION_EFFECTIVE_DATE
+    ):
+        return {
+            profile_id: dict(policy) for profile_id, policy in target_baselines.items()
+        }
     normalized: dict[str, dict[str, Any]] = {}
-    for profile_id, baseline in BASELINE_POLICIES.items():
+    for profile_id, baseline in target_baselines.items():
         policy = dict(
             (payload.get("profiles") or {}).get(profile_id, {}).get("policy")
             or baseline
@@ -361,11 +441,15 @@ def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
     expected_transitions = operator_policy_transitions(target_date)
     if list(payload.get("operator_policy_transitions") or []) != expected_transitions:
         return False, "applied_operator_policy_transition_invalid"
+    if payload.get("profile_revision_transition") != profile_revision_transition(
+        target_date
+    ):
+        return False, "applied_profile_revision_transition_invalid"
     profiles = payload.get("profiles")
     if not isinstance(profiles, dict):
         return False, "applied_profile_set_invalid"
     profile_ids = frozenset(profiles)
-    allowed_profile_ids = {frozenset(BASELINE_POLICIES)}
+    allowed_profile_ids = {frozenset(baseline_policies_for_target_date(target_date))}
     if target_date <= LEGACY_APPLIED_LAST_TARGET_DATE:
         allowed_profile_ids.add(LEGACY_V1_PROFILE_IDS)
     if profile_ids not in allowed_profile_ids:
@@ -432,8 +516,9 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def baseline_applied_payload(*, target_date: date, reason: str) -> dict[str, Any]:
+    baselines = baseline_policies_for_target_date(target_date)
     policies = apply_operator_policy_transitions(
-        {profile_id: dict(policy) for profile_id, policy in BASELINE_POLICIES.items()},
+        {profile_id: dict(policy) for profile_id, policy in baselines.items()},
         target_date=target_date,
     )
     payload = {
@@ -463,4 +548,7 @@ def baseline_applied_payload(*, target_date: date, reason: str) -> dict[str, Any
     transitions = operator_policy_transitions(target_date)
     if transitions:
         payload["operator_policy_transitions"] = transitions
+    revision = profile_revision_transition(target_date)
+    if revision:
+        payload["profile_revision_transition"] = revision
     return payload

@@ -18,6 +18,12 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
 from src.trading.low_price_two_leg.profiles import PROFILES
 
 
+LEGACY_TEST_RESEARCH_PROFILES = {
+    **expanded.RESEARCH_PROFILES,
+    **expanded._new_symbol_profiles({"017670": "SK텔레콤", "007660": "이수페타시스"}),
+}
+
+
 class FakeResponse:
     status_code = 200
     headers = {}
@@ -367,7 +373,7 @@ def test_dynamic_universe_uses_latest_completed_snapshot_not_after_target(tmp_pa
         '{"latest_date":"2026-08-11","selected_count":1}', encoding="utf-8"
     )
     path.write_text(
-        "date,code,name,close,score_rank\n" "2026-08-11,000990,DB하이텍,93200,2\n",
+        "date,code,name,close,score_rank\n2026-08-11,000990,DB하이텍,93200,2\n",
         encoding="utf-8",
     )
 
@@ -514,7 +520,11 @@ def test_recommendations_rank_profiles_and_enforce_daily_price_cap():
         "007660": {"latest_close_price": 100_500},
     }
 
-    rows = expanded._recommendation_rows(profiles, source_meta)
+    rows = expanded._recommendation_rows(
+        profiles,
+        source_meta,
+        research_profiles=LEGACY_TEST_RESEARCH_PROFILES,
+    )
 
     assert [row["profile_id"] for row in rows] == [
         "existing_080220_afternoon",
@@ -557,6 +567,7 @@ def test_recommendation_accepts_manageable_carry_and_rejects_excess_carry():
             "017670": {"latest_close_price": 65_000},
             "007660": {"latest_close_price": 40_000},
         },
+        research_profiles=LEGACY_TEST_RESEARCH_PROFILES,
     )
 
     assert [row["profile_id"] for row in rows] == ["candidate_017670_midday"]
@@ -852,6 +863,7 @@ def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes
             "017670": {"latest_close_price": 65_000},
             "475150": {"latest_close_price": 25_000},
         },
+        research_profiles=LEGACY_TEST_RESEARCH_PROFILES,
     )
 
     message = expanded.build_telegram_message(_notification_report(rows))

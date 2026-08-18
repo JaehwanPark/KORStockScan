@@ -75,7 +75,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-path", type=Path, default=None)
     parser.add_argument("--lock-path", type=Path, default=None)
     args = parser.parse_args(argv)
-    profile = get_profile(args.profile)
+    runtime_date = datetime.now(tz=KST).date()
+    profile = get_profile(
+        args.profile, target_date=runtime_date if args.live else None
+    )
     live_enabled = bool(
         args.live
         and _env_enabled(profile.enable_env)
@@ -98,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"live authority artifact blocked: {authority_reason}")
             return 4
         applied, applied_hash, applied_reason = load_applied_profile_policy(
-            profile.profile_id, target_date=datetime.now(tz=KST).date()
+            profile.profile_id, target_date=runtime_date
         )
         if applied is None:
             print(f"live applied entry policy blocked: {applied_reason}")

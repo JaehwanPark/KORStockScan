@@ -120,6 +120,18 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 사용자 지시 구현
+
+- [x] `[LowPriceEpisodeRecommendationImplementation0818] 장후 추천 14개 프로필 구현 및 PREOPEN 세대 경계 고정` (`Due: 2026-08-18`, `Slot: POSTCLOSE`, `TimeWindow: 21:45~22:30`, `Track: ScalpingLogic`)
+  - Source: [추천 동결 증거](/home/ubuntu/KORStockScan/data/config/low_price_two_leg_expanded_profile_evidence_2026-08-18.json), [profiles.py](/home/ubuntu/KORStockScan/src/trading/low_price_two_leg/profiles.py), [policy_runtime.py](/home/ubuntu/KORStockScan/src/trading/low_price_two_leg/policy_runtime.py), [lower-price runbook](/home/ubuntu/KORStockScan/docs/low-price-two-leg-machines.md)
+  - 판정: clean baseline 51거래일 추천 통과행 14개를 신규 profile 7개와 기존 profile 로직개선 7개로 정확히 결속했다. 2026-08-18까지 13-profile 과거 세대를 유지하고 2026-08-19 exact-date PREOPEN부터 20-profile 세대를 적용한다.
+  - 보호장치: 더본코리아 morning 고정 관찰은 source-only로 유지한다. 전일 미청산 원장은 생성 당시 entry/target 세대로 검증하며 새 target으로 취소·교체·재해석하지 않는다. 수량 10주×2leg, SOR, 무손절·미청산 보유, owner별 state/order ledger 분리는 변경하지 않는다.
+
+- [ ] `[LowPriceEpisodeNewTimersActivation0819] 신규 7개 episode timer 설치·owner 전환·기동 검증` (`Due: 2026-08-19`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:00`, `Track: RuntimeStability`)
+  - Source: [installer](/home/ubuntu/KORStockScan/deploy/install_low_price_two_leg_systemd.sh), [systemd units](/home/ubuntu/KORStockScan/deploy/systemd), [lower-price runbook](/home/ubuntu/KORStockScan/docs/low-price-two-leg-machines.md)
+  - 판정 기준: 사용자 별도 설치·기동 지시 후에만 신규 7개 timer를 설치하고, SK텔레콤·삼성E&A `manual_operator` exclusion, 20-profile exact-date applied artifact, profile별 authority, timer/service 상태를 확인한다.
+  - 금지: 코드리뷰 완료만으로 systemd install/enable/start, 메인 봇 재기동, 실주문 또는 기존 보유 target 취소·교체를 수행하지 않는다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.

@@ -2,29 +2,41 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from dataclasses import dataclass, replace
+from datetime import date, datetime, time, timedelta
 
 from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_ticks
 
 SAMSUNG_HEAVY_MIDDAY_WINDOW = (time(13, 20), time(13, 29))
 AFTERNOON_WINDOW = (time(14, 0), time(14, 40))
-SK_ETERNIX_MIDDAY_WINDOW = (time(13, 30), time(13, 54))
+SK_ETERNIX_MIDDAY_LEGACY_WINDOW = (time(13, 30), time(13, 54))
+SK_ETERNIX_MIDDAY_WINDOW = (time(13, 30), time(13, 39))
 MIRAE_ASSET_MORNING_WINDOW = (time(9, 35), time(9, 44))
 JEJU_SEMICONDUCTOR_MORNING_WINDOW = (time(9, 10), time(9, 49))
 DOOSAN_ENERBILITY_MORNING_WINDOW = (time(9, 20), time(9, 49))
 HANWHA_OCEAN_LATE_MORNING_WINDOW = (time(10, 5), time(10, 24))
 KAKAO_MORNING_WINDOW = (time(9, 20), time(9, 39))
-KAKAO_LATE_MORNING_WINDOW = (time(10, 5), time(10, 34))
+KAKAO_LATE_MORNING_LEGACY_WINDOW = (time(10, 5), time(10, 34))
+KAKAO_LATE_MORNING_WINDOW = (time(10, 5), time(10, 24))
 SK_ETERNIX_MORNING_WINDOW = (time(9, 50), time(9, 59))
 MIRAE_ASSET_MIDDAY_WINDOW = (time(13, 15), time(13, 24))
 KEPCO_AFTERNOON_WINDOW = (time(14, 0), time(14, 29))
+SAMSUNG_HEAVY_MORNING_WINDOW = (time(9, 20), time(9, 29))
+SAMSUNG_EA_MORNING_WINDOW = (time(9, 45), time(9, 59))
+SAMSUNG_EA_LATE_MORNING_WINDOW = (time(10, 5), time(10, 14))
+DOOSAN_ENERBILITY_LATE_MORNING_WINDOW = (time(10, 15), time(10, 59))
+KAKAO_MIDDAY_WINDOW = (time(13, 20), time(13, 39))
+SAMSUNG_EA_AFTERNOON_WINDOW = (time(14, 5), time(14, 34))
+SK_TELECOM_AFTERNOON_WINDOW = (time(14, 25), time(14, 34))
+PROFILE_REVISION_EFFECTIVE_DATE = date(2026, 8, 19)
 ALLOWED_SYMBOLS = frozenset(
     {
         "006800",
         "010140",
         "015760",
+        "017670",
+        "028050",
         "034020",
         "035720",
         "042660",
@@ -36,16 +48,25 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
     {
         SAMSUNG_HEAVY_MIDDAY_WINDOW,
         AFTERNOON_WINDOW,
+        SK_ETERNIX_MIDDAY_LEGACY_WINDOW,
         SK_ETERNIX_MIDDAY_WINDOW,
         MIRAE_ASSET_MORNING_WINDOW,
         JEJU_SEMICONDUCTOR_MORNING_WINDOW,
         DOOSAN_ENERBILITY_MORNING_WINDOW,
         HANWHA_OCEAN_LATE_MORNING_WINDOW,
         KAKAO_MORNING_WINDOW,
+        KAKAO_LATE_MORNING_LEGACY_WINDOW,
         KAKAO_LATE_MORNING_WINDOW,
         SK_ETERNIX_MORNING_WINDOW,
         MIRAE_ASSET_MIDDAY_WINDOW,
         KEPCO_AFTERNOON_WINDOW,
+        SAMSUNG_HEAVY_MORNING_WINDOW,
+        SAMSUNG_EA_MORNING_WINDOW,
+        SAMSUNG_EA_LATE_MORNING_WINDOW,
+        DOOSAN_ENERBILITY_LATE_MORNING_WINDOW,
+        KAKAO_MIDDAY_WINDOW,
+        SAMSUNG_EA_AFTERNOON_WINDOW,
+        SK_TELECOM_AFTERNOON_WINDOW,
     }
 )
 
@@ -228,7 +249,7 @@ def _profile(
     )
 
 
-PROFILES = {
+_PRE_RECOMMENDATION_PROFILES = {
     profile.profile_id: profile
     for profile in (
         _profile(
@@ -256,7 +277,7 @@ PROFILES = {
             "475150",
             "SK이터닉스",
             "midday",
-            window=SK_ETERNIX_MIDDAY_WINDOW,
+            window=SK_ETERNIX_MIDDAY_LEGACY_WINDOW,
             lookback_bars=20,
             drawdown_pct=2.00,
             near_low_pct=0.75,
@@ -338,7 +359,7 @@ PROFILES = {
             "035720",
             "카카오",
             "late_morning",
-            window=KAKAO_LATE_MORNING_WINDOW,
+            window=KAKAO_LATE_MORNING_LEGACY_WINDOW,
             lookback_bars=15,
             drawdown_pct=0.50,
             near_low_pct=0.35,
@@ -380,9 +401,198 @@ PROFILES = {
     )
 }
 
+PRE_RECOMMENDATION_PROFILES = dict(_PRE_RECOMMENDATION_PROFILES)
+_REVISION_SOURCE = "clean_baseline_35d_calibration_16d_holdout_user_approved_v1"
 
-def get_profile(profile_id: str) -> MachineProfile:
+
+def _revise_profile(
+    profile_id: str,
+    *,
+    window: tuple[time, time] | None = None,
+    lookback_bars: int,
+    drawdown_pct: float,
+    near_low_pct: float,
+    entry_offsets_ticks: tuple[int, int] | None = None,
+    target_ticks: int,
+) -> MachineProfile:
+    prior = PRE_RECOMMENDATION_PROFILES[profile_id]
+    return replace(
+        prior,
+        policy=replace(
+            prior.policy,
+            scan_start=(
+                window or (prior.policy.scan_start, prior.policy.scan_last_bar)
+            )[0],
+            scan_last_bar=(
+                window or (prior.policy.scan_start, prior.policy.scan_last_bar)
+            )[1],
+            lookback_bars=lookback_bars,
+            rolling_high_drawdown_pct=drawdown_pct,
+            rolling_low_proximity_pct=near_low_pct,
+            entry_offsets_ticks=(
+                entry_offsets_ticks or prior.policy.entry_offsets_ticks
+            ),
+            target_ticks=target_ticks,
+            runtime_policy_source=_REVISION_SOURCE,
+            runtime_policy_hash="",
+        ),
+    )
+
+
+PROFILES = dict(PRE_RECOMMENDATION_PROFILES)
+PROFILES.update(
+    {
+        "mirae_asset_midday": _revise_profile(
+            "mirae_asset_midday",
+            lookback_bars=45,
+            drawdown_pct=1.00,
+            near_low_pct=0.20,
+            target_ticks=4,
+        ),
+        "sk_eternix_morning": _revise_profile(
+            "sk_eternix_morning",
+            lookback_bars=15,
+            drawdown_pct=2.50,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "sk_eternix_midday": _revise_profile(
+            "sk_eternix_midday",
+            window=SK_ETERNIX_MIDDAY_WINDOW,
+            lookback_bars=60,
+            drawdown_pct=0.75,
+            near_low_pct=0.35,
+            target_ticks=4,
+        ),
+        "doosan_enerbility_morning": _revise_profile(
+            "doosan_enerbility_morning",
+            lookback_bars=15,
+            drawdown_pct=1.75,
+            near_low_pct=0.20,
+            target_ticks=4,
+        ),
+        "mirae_asset_morning": _revise_profile(
+            "mirae_asset_morning",
+            lookback_bars=30,
+            drawdown_pct=1.75,
+            near_low_pct=0.75,
+            entry_offsets_ticks=(0, -1),
+            target_ticks=4,
+        ),
+        "kakao_morning": _revise_profile(
+            "kakao_morning",
+            lookback_bars=15,
+            drawdown_pct=0.75,
+            near_low_pct=0.35,
+            target_ticks=4,
+        ),
+        "kakao_late_morning": _revise_profile(
+            "kakao_late_morning",
+            window=KAKAO_LATE_MORNING_WINDOW,
+            lookback_bars=20,
+            drawdown_pct=0.50,
+            near_low_pct=0.05,
+            target_ticks=4,
+        ),
+    }
+)
+PROFILES.update(
+    {
+        profile.profile_id: profile
+        for profile in (
+            _profile(
+                "samsung_heavy_morning",
+                "010140",
+                "삼성중공업",
+                "morning",
+                window=SAMSUNG_HEAVY_MORNING_WINDOW,
+                lookback_bars=20,
+                drawdown_pct=0.50,
+                near_low_pct=0.50,
+                runtime_policy_source=_REVISION_SOURCE,
+            ),
+            _profile(
+                "doosan_enerbility_late_morning",
+                "034020",
+                "두산에너빌리티",
+                "late_morning",
+                window=DOOSAN_ENERBILITY_LATE_MORNING_WINDOW,
+                lookback_bars=30,
+                drawdown_pct=1.75,
+                near_low_pct=0.05,
+                runtime_policy_source=_REVISION_SOURCE,
+            ),
+            _profile(
+                "kakao_midday",
+                "035720",
+                "카카오",
+                "midday",
+                window=KAKAO_MIDDAY_WINDOW,
+                lookback_bars=30,
+                drawdown_pct=0.50,
+                near_low_pct=0.35,
+                runtime_policy_source=_REVISION_SOURCE,
+            ),
+            _profile(
+                "sk_telecom_afternoon",
+                "017670",
+                "SK텔레콤",
+                "afternoon",
+                window=SK_TELECOM_AFTERNOON_WINDOW,
+                lookback_bars=15,
+                drawdown_pct=0.75,
+                near_low_pct=0.20,
+                runtime_policy_source=_REVISION_SOURCE,
+            ),
+            _profile(
+                "samsung_ea_late_morning",
+                "028050",
+                "삼성E&A",
+                "late_morning",
+                window=SAMSUNG_EA_LATE_MORNING_WINDOW,
+                lookback_bars=20,
+                drawdown_pct=1.50,
+                near_low_pct=0.20,
+                runtime_policy_source=_REVISION_SOURCE,
+            ),
+            _profile(
+                "samsung_ea_afternoon",
+                "028050",
+                "삼성E&A",
+                "afternoon",
+                window=SAMSUNG_EA_AFTERNOON_WINDOW,
+                lookback_bars=60,
+                drawdown_pct=1.25,
+                near_low_pct=0.75,
+                runtime_policy_source=_REVISION_SOURCE,
+            ),
+            _profile(
+                "samsung_ea_morning",
+                "028050",
+                "삼성E&A",
+                "morning",
+                window=SAMSUNG_EA_MORNING_WINDOW,
+                lookback_bars=15,
+                drawdown_pct=1.25,
+                near_low_pct=0.50,
+                runtime_policy_source=_REVISION_SOURCE,
+            ),
+        )
+    }
+)
+
+
+def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
+    if target_date < PROFILE_REVISION_EFFECTIVE_DATE:
+        return PRE_RECOMMENDATION_PROFILES
+    return PROFILES
+
+
+def get_profile(profile_id: str, *, target_date: date | None = None) -> MachineProfile:
+    inventory = (
+        PROFILES if target_date is None else profiles_for_target_date(target_date)
+    )
     try:
-        return PROFILES[str(profile_id)]
+        return inventory[str(profile_id)]
     except KeyError as exc:
         raise ValueError("unknown_low_price_two_leg_profile") from exc

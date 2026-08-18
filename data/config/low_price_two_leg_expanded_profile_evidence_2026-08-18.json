@@ -1,0 +1,1417 @@
+{
+  "actual_order_submitted": false,
+  "allowed_runtime_apply": false,
+  "approval": {
+    "activation_boundary": "existing_profile_revisions_next_preopen_new_profile_services_require_separate_install_action",
+    "approver": "user_explicit_implementation_instruction_2026_08_18",
+    "effective_target_date": "2026-08-19",
+    "excluded": [
+      "operator_observation_candidate_475560_morning",
+      "non_passing_profiles",
+      "postclose_logic_recommendations_without_current_applied_policy"
+    ],
+    "logic_revision_count": 7,
+    "new_profile_count": 7,
+    "recommendation_count": 14,
+    "scope": "all_fourteen_2026_08_18_passed_recommendations"
+  },
+  "broker_order_forbidden": true,
+  "calibration_trading_day_count": 35,
+  "end_date": "2026-08-18",
+  "holdout_trading_day_count": 16,
+  "profiles": {
+    "candidate_017670_afternoon": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "new_symbol",
+      "name": "SK텔레콤",
+      "profile_id": "candidate_017670_afternoon",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 0.75,
+        "rolling_low_proximity_pct": 0.2,
+        "scan_end": "14:34",
+        "scan_start": "14:25",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 16,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.028833,
+          "signal_episodes": 8
+        },
+        "calibration_first_half": {
+          "completed_legs": 4,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.022841,
+          "signal_episodes": 2
+        },
+        "calibration_second_half": {
+          "completed_legs": 12,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.030902,
+          "signal_episodes": 6
+        },
+        "full": {
+          "completed_legs": 21,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.028509,
+          "signal_episodes": 11
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": null,
+          "completed_legs": 5,
+          "held_leg_rate_per_filled_leg": 0.0,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.027635,
+          "realized_net_profit_krw_per_episode": 47.8,
+          "signal_episodes": 3,
+          "worst_filled_max_adverse_excursion_pct": -0.37037
+        }
+      },
+      "session": "afternoon",
+      "symbol": "017670"
+    },
+    "candidate_028050_afternoon": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "new_symbol",
+      "name": "삼성E&A",
+      "profile_id": "candidate_028050_afternoon",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 60,
+        "rolling_high_drawdown_pct": 1.25,
+        "rolling_low_proximity_pct": 0.75,
+        "scan_end": "14:34",
+        "scan_start": "14:05",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 33,
+          "held_legs": 3,
+          "notional_weighted_ev_pct": 0.049339,
+          "signal_episodes": 19
+        },
+        "calibration_first_half": {
+          "completed_legs": 18,
+          "held_legs": 3,
+          "notional_weighted_ev_pct": 0.04489,
+          "signal_episodes": 11
+        },
+        "calibration_second_half": {
+          "completed_legs": 15,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.056097,
+          "signal_episodes": 8
+        },
+        "full": {
+          "completed_legs": 38,
+          "held_legs": 4,
+          "notional_weighted_ev_pct": 0.04407,
+          "signal_episodes": 23
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": -0.874157,
+          "completed_legs": 5,
+          "held_leg_rate_per_filled_leg": 0.166667,
+          "held_legs": 1,
+          "notional_weighted_ev_pct": 0.017936,
+          "realized_net_profit_krw_per_episode": 15.9,
+          "signal_episodes": 4,
+          "worst_filled_max_adverse_excursion_pct": -1.573034
+        }
+      },
+      "session": "afternoon",
+      "symbol": "028050"
+    },
+    "candidate_028050_late_morning": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "new_symbol",
+      "name": "삼성E&A",
+      "profile_id": "candidate_028050_late_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 20,
+        "rolling_high_drawdown_pct": 1.5,
+        "rolling_low_proximity_pct": 0.2,
+        "scan_end": "10:14",
+        "scan_start": "10:05",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 19,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.077503,
+          "signal_episodes": 10
+        },
+        "calibration_first_half": {
+          "completed_legs": 9,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.081024,
+          "signal_episodes": 5
+        },
+        "calibration_second_half": {
+          "completed_legs": 10,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.073785,
+          "signal_episodes": 5
+        },
+        "full": {
+          "completed_legs": 24,
+          "held_legs": 1,
+          "notional_weighted_ev_pct": 0.064348,
+          "signal_episodes": 13
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": -0.870391,
+          "completed_legs": 5,
+          "held_leg_rate_per_filled_leg": 0.166667,
+          "held_legs": 1,
+          "notional_weighted_ev_pct": 0.020086,
+          "realized_net_profit_krw_per_episode": 17.93,
+          "signal_episodes": 3,
+          "worst_filled_max_adverse_excursion_pct": -2.346369
+        }
+      },
+      "session": "late_morning",
+      "symbol": "028050"
+    },
+    "candidate_028050_morning": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "new_symbol",
+      "name": "삼성E&A",
+      "profile_id": "candidate_028050_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 1.25,
+        "rolling_low_proximity_pct": 0.5,
+        "scan_end": "09:59",
+        "scan_start": "09:45",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 28,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.069483,
+          "signal_episodes": 15
+        },
+        "calibration_first_half": {
+          "completed_legs": 16,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.071132,
+          "signal_episodes": 9
+        },
+        "calibration_second_half": {
+          "completed_legs": 12,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.066692,
+          "signal_episodes": 6
+        },
+        "full": {
+          "completed_legs": 42,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.052324,
+          "signal_episodes": 22
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": null,
+          "completed_legs": 14,
+          "held_leg_rate_per_filled_leg": 0.0,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.01507,
+          "realized_net_profit_krw_per_episode": 14.01,
+          "signal_episodes": 7,
+          "worst_filled_max_adverse_excursion_pct": -2.914573
+        }
+      },
+      "session": "morning",
+      "symbol": "028050"
+    },
+    "existing_010140_morning": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "existing_symbol_time_extension",
+      "name": "삼성중공업",
+      "profile_id": "existing_010140_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 20,
+        "rolling_high_drawdown_pct": 0.5,
+        "rolling_low_proximity_pct": 0.5,
+        "scan_end": "09:29",
+        "scan_start": "09:20",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 38,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.206522,
+          "signal_episodes": 20
+        },
+        "calibration_first_half": {
+          "completed_legs": 16,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.181953,
+          "signal_episodes": 8
+        },
+        "calibration_second_half": {
+          "completed_legs": 22,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.22566,
+          "signal_episodes": 12
+        },
+        "full": {
+          "completed_legs": 55,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.212452,
+          "signal_episodes": 30
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": null,
+          "completed_legs": 17,
+          "held_leg_rate_per_filled_leg": 0.0,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.225639,
+          "realized_net_profit_krw_per_episode": 97.07,
+          "signal_episodes": 10,
+          "worst_filled_max_adverse_excursion_pct": -1.886792
+        }
+      },
+      "session": "morning",
+      "symbol": "010140"
+    },
+    "existing_034020_late_morning": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "existing_symbol_time_extension",
+      "name": "두산에너빌리티",
+      "profile_id": "existing_034020_late_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 30,
+        "rolling_high_drawdown_pct": 1.75,
+        "rolling_low_proximity_pct": 0.05,
+        "scan_end": "10:59",
+        "scan_start": "10:15",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 21,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.039152,
+          "signal_episodes": 13
+        },
+        "calibration_first_half": {
+          "completed_legs": 7,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.027231,
+          "signal_episodes": 4
+        },
+        "calibration_second_half": {
+          "completed_legs": 14,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.045183,
+          "signal_episodes": 9
+        },
+        "full": {
+          "completed_legs": 32,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.049209,
+          "signal_episodes": 19
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": null,
+          "completed_legs": 11,
+          "held_leg_rate_per_filled_leg": 0.0,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.073356,
+          "realized_net_profit_krw_per_episode": 105.63,
+          "signal_episodes": 6,
+          "worst_filled_max_adverse_excursion_pct": -1.978892
+        }
+      },
+      "session": "late_morning",
+      "symbol": "034020"
+    },
+    "existing_035720_midday": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "existing_symbol_time_extension",
+      "name": "카카오",
+      "profile_id": "existing_035720_midday",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 30,
+        "rolling_high_drawdown_pct": 0.5,
+        "rolling_low_proximity_pct": 0.35,
+        "scan_end": "13:39",
+        "scan_start": "13:20",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 39,
+          "held_legs": 2,
+          "notional_weighted_ev_pct": 0.063442,
+          "signal_episodes": 24
+        },
+        "calibration_first_half": {
+          "completed_legs": 20,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.062466,
+          "signal_episodes": 11
+        },
+        "calibration_second_half": {
+          "completed_legs": 19,
+          "held_legs": 2,
+          "notional_weighted_ev_pct": 0.06433,
+          "signal_episodes": 13
+        },
+        "full": {
+          "completed_legs": 54,
+          "held_legs": 3,
+          "notional_weighted_ev_pct": 0.059869,
+          "signal_episodes": 34
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": -0.738358,
+          "completed_legs": 15,
+          "held_leg_rate_per_filled_leg": 0.0625,
+          "held_legs": 1,
+          "notional_weighted_ev_pct": 0.051619,
+          "realized_net_profit_krw_per_episode": 38.58,
+          "signal_episodes": 10,
+          "worst_filled_max_adverse_excursion_pct": -0.942127
+        }
+      },
+      "session": "midday",
+      "symbol": "035720"
+    },
+    "logic_doosan_enerbility_morning": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "name": "두산에너빌리티",
+      "profile_id": "logic_doosan_enerbility_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 1.75,
+        "rolling_low_proximity_pct": 0.2,
+        "scan_end": "09:49",
+        "scan_start": "09:20",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 33,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.259937,
+          "signal_episodes": 17
+        },
+        "calibration_first_half": {
+          "completed_legs": 16,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.239983,
+          "signal_episodes": 8
+        },
+        "calibration_second_half": {
+          "completed_legs": 17,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.279926,
+          "signal_episodes": 9
+        },
+        "full": {
+          "completed_legs": 43,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.282258,
+          "signal_episodes": 22
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": null,
+          "completed_legs": 10,
+          "held_leg_rate_per_filled_leg": 0.0,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.375622,
+          "realized_net_profit_krw_per_episode": 522.04,
+          "signal_episodes": 5,
+          "worst_filled_max_adverse_excursion_pct": -1.704545
+        }
+      },
+      "session": "morning",
+      "symbol": "034020"
+    },
+    "logic_kakao_late_morning": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "name": "카카오",
+      "profile_id": "logic_kakao_late_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 20,
+        "rolling_high_drawdown_pct": 0.5,
+        "rolling_low_proximity_pct": 0.05,
+        "scan_end": "10:24",
+        "scan_start": "10:05",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 28,
+          "held_legs": 2,
+          "notional_weighted_ev_pct": 0.321644,
+          "signal_episodes": 15
+        },
+        "calibration_first_half": {
+          "completed_legs": 14,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.319336,
+          "signal_episodes": 7
+        },
+        "calibration_second_half": {
+          "completed_legs": 14,
+          "held_legs": 2,
+          "notional_weighted_ev_pct": 0.323861,
+          "signal_episodes": 8
+        },
+        "full": {
+          "completed_legs": 42,
+          "held_legs": 5,
+          "notional_weighted_ev_pct": 0.281995,
+          "signal_episodes": 25
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": -1.57931,
+          "completed_legs": 14,
+          "held_leg_rate_per_filled_leg": 0.176471,
+          "held_legs": 3,
+          "notional_weighted_ev_pct": 0.225195,
+          "realized_net_profit_krw_per_episode": 173.04,
+          "signal_episodes": 10,
+          "worst_filled_max_adverse_excursion_pct": -2.83871
+        }
+      },
+      "session": "late_morning",
+      "symbol": "035720"
+    },
+    "logic_kakao_morning": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "name": "카카오",
+      "profile_id": "logic_kakao_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 0.75,
+        "rolling_low_proximity_pct": 0.35,
+        "scan_end": "09:39",
+        "scan_start": "09:20",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 47,
+          "held_legs": 3,
+          "notional_weighted_ev_pct": 0.297009,
+          "signal_episodes": 28
+        },
+        "calibration_first_half": {
+          "completed_legs": 21,
+          "held_legs": 3,
+          "notional_weighted_ev_pct": 0.290311,
+          "signal_episodes": 12
+        },
+        "calibration_second_half": {
+          "completed_legs": 26,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.302433,
+          "signal_episodes": 16
+        },
+        "full": {
+          "completed_legs": 69,
+          "held_legs": 7,
+          "notional_weighted_ev_pct": 0.29129,
+          "signal_episodes": 41
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": -2.004369,
+          "completed_legs": 22,
+          "held_leg_rate_per_filled_leg": 0.153846,
+          "held_legs": 4,
+          "notional_weighted_ev_pct": 0.279526,
+          "realized_net_profit_krw_per_episode": 211.46,
+          "signal_episodes": 13,
+          "worst_filled_max_adverse_excursion_pct": -2.948403
+        }
+      },
+      "session": "morning",
+      "symbol": "035720"
+    },
+    "logic_mirae_asset_midday": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "name": "미래에셋증권",
+      "profile_id": "logic_mirae_asset_midday",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 45,
+        "rolling_high_drawdown_pct": 1.0,
+        "rolling_low_proximity_pct": 0.2,
+        "scan_end": "13:24",
+        "scan_start": "13:15",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 22,
+          "held_legs": 1,
+          "notional_weighted_ev_pct": 0.295715,
+          "signal_episodes": 13
+        },
+        "calibration_first_half": {
+          "completed_legs": 9,
+          "held_legs": 1,
+          "notional_weighted_ev_pct": 0.312072,
+          "signal_episodes": 6
+        },
+        "calibration_second_half": {
+          "completed_legs": 13,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.279185,
+          "signal_episodes": 7
+        },
+        "full": {
+          "completed_legs": 28,
+          "held_legs": 1,
+          "notional_weighted_ev_pct": 0.31439,
+          "signal_episodes": 16
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": null,
+          "completed_legs": 6,
+          "held_leg_rate_per_filled_leg": 0.0,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.423539,
+          "realized_net_profit_krw_per_episode": 271.7,
+          "signal_episodes": 3,
+          "worst_filled_max_adverse_excursion_pct": -0.455927
+        }
+      },
+      "session": "midday",
+      "symbol": "006800"
+    },
+    "logic_mirae_asset_morning": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "name": "미래에셋증권",
+      "profile_id": "logic_mirae_asset_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 30,
+        "rolling_high_drawdown_pct": 1.75,
+        "rolling_low_proximity_pct": 0.75,
+        "scan_end": "09:44",
+        "scan_start": "09:35",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 35,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.344616,
+          "signal_episodes": 18
+        },
+        "calibration_first_half": {
+          "completed_legs": 15,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.39574,
+          "signal_episodes": 8
+        },
+        "calibration_second_half": {
+          "completed_legs": 20,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.294743,
+          "signal_episodes": 10
+        },
+        "full": {
+          "completed_legs": 50,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.34899,
+          "signal_episodes": 26
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": null,
+          "completed_legs": 15,
+          "held_leg_rate_per_filled_leg": 0.0,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.361792,
+          "realized_net_profit_krw_per_episode": 246.79,
+          "signal_episodes": 8,
+          "worst_filled_max_adverse_excursion_pct": -1.960784
+        }
+      },
+      "session": "morning",
+      "symbol": "006800"
+    },
+    "logic_sk_eternix_midday": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "name": "SK이터닉스",
+      "profile_id": "logic_sk_eternix_midday",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 60,
+        "rolling_high_drawdown_pct": 0.75,
+        "rolling_low_proximity_pct": 0.35,
+        "scan_end": "13:39",
+        "scan_start": "13:30",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 25,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.353929,
+          "signal_episodes": 13
+        },
+        "calibration_first_half": {
+          "completed_legs": 15,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.333477,
+          "signal_episodes": 8
+        },
+        "calibration_second_half": {
+          "completed_legs": 10,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.383516,
+          "signal_episodes": 5
+        },
+        "full": {
+          "completed_legs": 34,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.368966,
+          "signal_episodes": 18
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": null,
+          "completed_legs": 9,
+          "held_leg_rate_per_filled_leg": 0.0,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.403415,
+          "realized_net_profit_krw_per_episode": 413.5,
+          "signal_episodes": 5,
+          "worst_filled_max_adverse_excursion_pct": -0.53286
+        }
+      },
+      "session": "midday",
+      "symbol": "475150"
+    },
+    "logic_sk_eternix_morning": {
+      "decision": "holdout_pass_source_only_early_candidate",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "name": "SK이터닉스",
+      "profile_id": "logic_sk_eternix_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 2.5,
+        "rolling_low_proximity_pct": 0.75,
+        "scan_end": "09:59",
+        "scan_start": "09:50",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "completed_legs": 15,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.40552,
+          "signal_episodes": 8
+        },
+        "calibration_first_half": {
+          "completed_legs": 6,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.477621,
+          "signal_episodes": 3
+        },
+        "calibration_second_half": {
+          "completed_legs": 9,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.361041,
+          "signal_episodes": 5
+        },
+        "full": {
+          "completed_legs": 27,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.411226,
+          "signal_episodes": 14
+        },
+        "holdout": {
+          "active_unrealized_notional_weighted_pct": null,
+          "completed_legs": 12,
+          "held_leg_rate_per_filled_leg": 0.0,
+          "held_legs": 0,
+          "notional_weighted_ev_pct": 0.418047,
+          "realized_net_profit_krw_per_episode": 450.93,
+          "signal_episodes": 6,
+          "worst_filled_max_adverse_excursion_pct": -2.568807
+        }
+      },
+      "session": "morning",
+      "symbol": "475150"
+    }
+  },
+  "recommendations": [
+    {
+      "baseline_notional_weighted_ev_pct": 0.108024,
+      "baseline_policy_hash": "b5a495485cc335c22d5298baf943b5613525c877dc2f4562d7e3e602ce46b250",
+      "baseline_policy_source": "target_date_applied_policy",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "ev_uplift_pct_point": 0.315515,
+      "holdout_active_unrealized_notional_weighted_pct": null,
+      "holdout_completed_legs": 6,
+      "holdout_held_leg_rate_per_filled_leg": 0.0,
+      "holdout_held_legs": 0,
+      "holdout_realized_net_profit_krw_per_episode": 271.7,
+      "holdout_signal_episodes": 3,
+      "holdout_worst_filled_max_adverse_excursion_pct": -0.455927,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 36200,
+      "name": "미래에셋증권",
+      "notional_weighted_ev_pct": 0.423539,
+      "price_band": "under_50000_krw",
+      "profile_id": "logic_mirae_asset_midday",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 45,
+        "rolling_high_drawdown_pct": 1.0,
+        "rolling_low_proximity_pct": 0.2,
+        "scan_end": "13:24",
+        "scan_start": "13:15",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "session": "midday",
+      "symbol": "006800"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.128373,
+      "baseline_policy_hash": "b5a495485cc335c22d5298baf943b5613525c877dc2f4562d7e3e602ce46b250",
+      "baseline_policy_source": "target_date_applied_policy",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "ev_uplift_pct_point": 0.289674,
+      "holdout_active_unrealized_notional_weighted_pct": null,
+      "holdout_completed_legs": 12,
+      "holdout_held_leg_rate_per_filled_leg": 0.0,
+      "holdout_held_legs": 0,
+      "holdout_realized_net_profit_krw_per_episode": 450.93,
+      "holdout_signal_episodes": 6,
+      "holdout_worst_filled_max_adverse_excursion_pct": -2.568807,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 58350,
+      "name": "SK이터닉스",
+      "notional_weighted_ev_pct": 0.418047,
+      "price_band": "50000_to_100000_krw",
+      "profile_id": "logic_sk_eternix_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 2.5,
+        "rolling_low_proximity_pct": 0.75,
+        "scan_end": "09:59",
+        "scan_start": "09:50",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "session": "morning",
+      "symbol": "475150"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.097242,
+      "baseline_policy_hash": "b5a495485cc335c22d5298baf943b5613525c877dc2f4562d7e3e602ce46b250",
+      "baseline_policy_source": "target_date_applied_policy",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "ev_uplift_pct_point": 0.306173,
+      "holdout_active_unrealized_notional_weighted_pct": null,
+      "holdout_completed_legs": 9,
+      "holdout_held_leg_rate_per_filled_leg": 0.0,
+      "holdout_held_legs": 0,
+      "holdout_realized_net_profit_krw_per_episode": 413.5,
+      "holdout_signal_episodes": 5,
+      "holdout_worst_filled_max_adverse_excursion_pct": -0.53286,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 58350,
+      "name": "SK이터닉스",
+      "notional_weighted_ev_pct": 0.403415,
+      "price_band": "50000_to_100000_krw",
+      "profile_id": "logic_sk_eternix_midday",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 60,
+        "rolling_high_drawdown_pct": 0.75,
+        "rolling_low_proximity_pct": 0.35,
+        "scan_end": "13:39",
+        "scan_start": "13:30",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "session": "midday",
+      "symbol": "475150"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.375457,
+      "baseline_policy_hash": "b5a495485cc335c22d5298baf943b5613525c877dc2f4562d7e3e602ce46b250",
+      "baseline_policy_source": "target_date_applied_policy",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "ev_uplift_pct_point": 0.000165,
+      "holdout_active_unrealized_notional_weighted_pct": null,
+      "holdout_completed_legs": 10,
+      "holdout_held_leg_rate_per_filled_leg": 0.0,
+      "holdout_held_legs": 0,
+      "holdout_realized_net_profit_krw_per_episode": 522.04,
+      "holdout_signal_episodes": 5,
+      "holdout_worst_filled_max_adverse_excursion_pct": -1.704545,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 78000,
+      "name": "두산에너빌리티",
+      "notional_weighted_ev_pct": 0.375622,
+      "price_band": "50000_to_100000_krw",
+      "profile_id": "logic_doosan_enerbility_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 1.75,
+        "rolling_low_proximity_pct": 0.2,
+        "scan_end": "09:49",
+        "scan_start": "09:20",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "session": "morning",
+      "symbol": "034020"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.266869,
+      "baseline_policy_hash": "b5a495485cc335c22d5298baf943b5613525c877dc2f4562d7e3e602ce46b250",
+      "baseline_policy_source": "target_date_applied_policy",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "ev_uplift_pct_point": 0.094923,
+      "holdout_active_unrealized_notional_weighted_pct": null,
+      "holdout_completed_legs": 15,
+      "holdout_held_leg_rate_per_filled_leg": 0.0,
+      "holdout_held_legs": 0,
+      "holdout_realized_net_profit_krw_per_episode": 246.79,
+      "holdout_signal_episodes": 8,
+      "holdout_worst_filled_max_adverse_excursion_pct": -1.960784,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 36200,
+      "name": "미래에셋증권",
+      "notional_weighted_ev_pct": 0.361792,
+      "price_band": "under_50000_krw",
+      "profile_id": "logic_mirae_asset_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 30,
+        "rolling_high_drawdown_pct": 1.75,
+        "rolling_low_proximity_pct": 0.75,
+        "scan_end": "09:44",
+        "scan_start": "09:35",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "session": "morning",
+      "symbol": "006800"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.182602,
+      "baseline_policy_hash": "b5a495485cc335c22d5298baf943b5613525c877dc2f4562d7e3e602ce46b250",
+      "baseline_policy_source": "target_date_applied_policy",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "ev_uplift_pct_point": 0.096924,
+      "holdout_active_unrealized_notional_weighted_pct": -2.004369,
+      "holdout_completed_legs": 22,
+      "holdout_held_leg_rate_per_filled_leg": 0.153846,
+      "holdout_held_legs": 4,
+      "holdout_realized_net_profit_krw_per_episode": 211.46,
+      "holdout_signal_episodes": 13,
+      "holdout_worst_filled_max_adverse_excursion_pct": -2.948403,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 38150,
+      "name": "카카오",
+      "notional_weighted_ev_pct": 0.279526,
+      "price_band": "under_50000_krw",
+      "profile_id": "logic_kakao_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 0.75,
+        "rolling_low_proximity_pct": 0.35,
+        "scan_end": "09:39",
+        "scan_start": "09:20",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "session": "morning",
+      "symbol": "035720"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.223344,
+      "baseline_policy_hash": null,
+      "baseline_policy_source": null,
+      "discovery_lane": "existing_symbol_time_extension",
+      "ev_uplift_pct_point": 0.002295,
+      "holdout_active_unrealized_notional_weighted_pct": null,
+      "holdout_completed_legs": 17,
+      "holdout_held_leg_rate_per_filled_leg": 0.0,
+      "holdout_held_legs": 0,
+      "holdout_realized_net_profit_krw_per_episode": 97.07,
+      "holdout_signal_episodes": 10,
+      "holdout_worst_filled_max_adverse_excursion_pct": -1.886792,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 21150,
+      "name": "삼성중공업",
+      "notional_weighted_ev_pct": 0.225639,
+      "price_band": "under_50000_krw",
+      "profile_id": "existing_010140_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 20,
+        "rolling_high_drawdown_pct": 0.5,
+        "rolling_low_proximity_pct": 0.5,
+        "scan_end": "09:29",
+        "scan_start": "09:20",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "session": "morning",
+      "symbol": "010140"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.051991,
+      "baseline_policy_hash": "b5a495485cc335c22d5298baf943b5613525c877dc2f4562d7e3e602ce46b250",
+      "baseline_policy_source": "target_date_applied_policy",
+      "discovery_lane": "existing_symbol_logic_improvement",
+      "ev_uplift_pct_point": 0.173204,
+      "holdout_active_unrealized_notional_weighted_pct": -1.57931,
+      "holdout_completed_legs": 14,
+      "holdout_held_leg_rate_per_filled_leg": 0.176471,
+      "holdout_held_legs": 3,
+      "holdout_realized_net_profit_krw_per_episode": 173.04,
+      "holdout_signal_episodes": 10,
+      "holdout_worst_filled_max_adverse_excursion_pct": -2.83871,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 38150,
+      "name": "카카오",
+      "notional_weighted_ev_pct": 0.225195,
+      "price_band": "under_50000_krw",
+      "profile_id": "logic_kakao_late_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 20,
+        "rolling_high_drawdown_pct": 0.5,
+        "rolling_low_proximity_pct": 0.05,
+        "scan_end": "10:24",
+        "scan_start": "10:05",
+        "target_ticks": 4
+      },
+      "runtime_effect": false,
+      "session": "late_morning",
+      "symbol": "035720"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.065498,
+      "baseline_policy_hash": null,
+      "baseline_policy_source": null,
+      "discovery_lane": "existing_symbol_time_extension",
+      "ev_uplift_pct_point": 0.007858,
+      "holdout_active_unrealized_notional_weighted_pct": null,
+      "holdout_completed_legs": 11,
+      "holdout_held_leg_rate_per_filled_leg": 0.0,
+      "holdout_held_legs": 0,
+      "holdout_realized_net_profit_krw_per_episode": 105.63,
+      "holdout_signal_episodes": 6,
+      "holdout_worst_filled_max_adverse_excursion_pct": -1.978892,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 78000,
+      "name": "두산에너빌리티",
+      "notional_weighted_ev_pct": 0.073356,
+      "price_band": "50000_to_100000_krw",
+      "profile_id": "existing_034020_late_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 30,
+        "rolling_high_drawdown_pct": 1.75,
+        "rolling_low_proximity_pct": 0.05,
+        "scan_end": "10:59",
+        "scan_start": "10:15",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "session": "late_morning",
+      "symbol": "034020"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": null,
+      "baseline_policy_hash": null,
+      "baseline_policy_source": null,
+      "discovery_lane": "existing_symbol_time_extension",
+      "ev_uplift_pct_point": null,
+      "holdout_active_unrealized_notional_weighted_pct": -0.738358,
+      "holdout_completed_legs": 15,
+      "holdout_held_leg_rate_per_filled_leg": 0.0625,
+      "holdout_held_legs": 1,
+      "holdout_realized_net_profit_krw_per_episode": 38.58,
+      "holdout_signal_episodes": 10,
+      "holdout_worst_filled_max_adverse_excursion_pct": -0.942127,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 38150,
+      "name": "카카오",
+      "notional_weighted_ev_pct": 0.051619,
+      "price_band": "under_50000_krw",
+      "profile_id": "existing_035720_midday",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 30,
+        "rolling_high_drawdown_pct": 0.5,
+        "rolling_low_proximity_pct": 0.35,
+        "scan_end": "13:39",
+        "scan_start": "13:20",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "session": "midday",
+      "symbol": "035720"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.013653,
+      "baseline_policy_hash": null,
+      "baseline_policy_source": null,
+      "discovery_lane": "new_symbol",
+      "ev_uplift_pct_point": 0.013982,
+      "holdout_active_unrealized_notional_weighted_pct": null,
+      "holdout_completed_legs": 5,
+      "holdout_held_leg_rate_per_filled_leg": 0.0,
+      "holdout_held_legs": 0,
+      "holdout_realized_net_profit_krw_per_episode": 47.8,
+      "holdout_signal_episodes": 3,
+      "holdout_worst_filled_max_adverse_excursion_pct": -0.37037,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 99700,
+      "name": "SK텔레콤",
+      "notional_weighted_ev_pct": 0.027635,
+      "price_band": "50000_to_100000_krw",
+      "profile_id": "candidate_017670_afternoon",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 0.75,
+        "rolling_low_proximity_pct": 0.2,
+        "scan_end": "14:34",
+        "scan_start": "14:25",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "session": "afternoon",
+      "symbol": "017670"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.013754,
+      "baseline_policy_hash": null,
+      "baseline_policy_source": null,
+      "discovery_lane": "new_symbol",
+      "ev_uplift_pct_point": 0.006332,
+      "holdout_active_unrealized_notional_weighted_pct": -0.870391,
+      "holdout_completed_legs": 5,
+      "holdout_held_leg_rate_per_filled_leg": 0.166667,
+      "holdout_held_legs": 1,
+      "holdout_realized_net_profit_krw_per_episode": 17.93,
+      "holdout_signal_episodes": 3,
+      "holdout_worst_filled_max_adverse_excursion_pct": -2.346369,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 47800,
+      "name": "삼성E&A",
+      "notional_weighted_ev_pct": 0.020086,
+      "price_band": "under_50000_krw",
+      "profile_id": "candidate_028050_late_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 20,
+        "rolling_high_drawdown_pct": 1.5,
+        "rolling_low_proximity_pct": 0.2,
+        "scan_end": "10:14",
+        "scan_start": "10:05",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "session": "late_morning",
+      "symbol": "028050"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.014114,
+      "baseline_policy_hash": null,
+      "baseline_policy_source": null,
+      "discovery_lane": "new_symbol",
+      "ev_uplift_pct_point": 0.003822,
+      "holdout_active_unrealized_notional_weighted_pct": -0.874157,
+      "holdout_completed_legs": 5,
+      "holdout_held_leg_rate_per_filled_leg": 0.166667,
+      "holdout_held_legs": 1,
+      "holdout_realized_net_profit_krw_per_episode": 15.9,
+      "holdout_signal_episodes": 4,
+      "holdout_worst_filled_max_adverse_excursion_pct": -1.573034,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 47800,
+      "name": "삼성E&A",
+      "notional_weighted_ev_pct": 0.017936,
+      "price_band": "under_50000_krw",
+      "profile_id": "candidate_028050_afternoon",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 60,
+        "rolling_high_drawdown_pct": 1.25,
+        "rolling_low_proximity_pct": 0.75,
+        "scan_end": "14:34",
+        "scan_start": "14:05",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "session": "afternoon",
+      "symbol": "028050"
+    },
+    {
+      "baseline_notional_weighted_ev_pct": 0.013452,
+      "baseline_policy_hash": null,
+      "baseline_policy_source": null,
+      "discovery_lane": "new_symbol",
+      "ev_uplift_pct_point": 0.001618,
+      "holdout_active_unrealized_notional_weighted_pct": null,
+      "holdout_completed_legs": 14,
+      "holdout_held_leg_rate_per_filled_leg": 0.0,
+      "holdout_held_legs": 0,
+      "holdout_realized_net_profit_krw_per_episode": 14.01,
+      "holdout_signal_episodes": 7,
+      "holdout_worst_filled_max_adverse_excursion_pct": -2.914573,
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "latest_close_price": 47800,
+      "name": "삼성E&A",
+      "notional_weighted_ev_pct": 0.01507,
+      "price_band": "under_50000_krw",
+      "profile_id": "candidate_028050_morning",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 1.25,
+        "rolling_low_proximity_pct": 0.5,
+        "scan_end": "09:59",
+        "scan_start": "09:45",
+        "target_ticks": 2
+      },
+      "runtime_effect": false,
+      "session": "morning",
+      "symbol": "028050"
+    }
+  ],
+  "runtime_effect": false,
+  "schema": "low_price_two_leg_user_approved_profile_evidence_v2",
+  "source_meta": {
+    "006800": {
+      "duplicate_row_count": 0,
+      "invalid_row_count": 0,
+      "latest_source_date": "2026-08-18",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "source_quality_status": "PASS",
+      "trading_date_count": 51
+    },
+    "010140": {
+      "duplicate_row_count": 0,
+      "invalid_row_count": 0,
+      "latest_source_date": "2026-08-18",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "source_quality_status": "PASS",
+      "trading_date_count": 51
+    },
+    "017670": {
+      "duplicate_row_count": 0,
+      "invalid_row_count": 0,
+      "latest_source_date": "2026-08-18",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "source_quality_status": "PASS",
+      "trading_date_count": 51
+    },
+    "028050": {
+      "duplicate_row_count": 0,
+      "invalid_row_count": 0,
+      "latest_source_date": "2026-08-18",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "source_quality_status": "PASS",
+      "trading_date_count": 51
+    },
+    "034020": {
+      "duplicate_row_count": 0,
+      "invalid_row_count": 0,
+      "latest_source_date": "2026-08-18",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "source_quality_status": "PASS",
+      "trading_date_count": 51
+    },
+    "035720": {
+      "duplicate_row_count": 0,
+      "invalid_row_count": 0,
+      "latest_source_date": "2026-08-18",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "source_quality_status": "PASS",
+      "trading_date_count": 51
+    },
+    "475150": {
+      "duplicate_row_count": 0,
+      "invalid_row_count": 0,
+      "latest_source_date": "2026-08-18",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "source_quality_status": "PASS",
+      "trading_date_count": 51
+    }
+  },
+  "source_report": {
+    "canonical_sha256": "cabcb039571d138d16dc3dafad93fb1b564e993856a6966dd858aaed7d214d41",
+    "path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-08-18.json",
+    "raw_file_sha256": "42fcb8d7ad84a5f3f76b460b4ecb19bb7b4bf45a1df42233a9df6489d4ce0afd",
+    "schema": "low_price_two_leg_expanded_candidate_research_v5"
+  },
+  "start_date": "2026-06-05",
+  "trading_date_count": 51
+}

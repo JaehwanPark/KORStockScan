@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import replace
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Callable
 
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
-from src.trading.low_price_two_leg.profiles import MachineProfile
+from src.trading.low_price_two_leg.profiles import MachineProfile, get_profile
 from src.trading.order.regular_two_leg_machine import KST as KST
 from src.trading.order.regular_two_leg_machine import SamsungRegularTwoLegMachine
 from src.utils.constants import DATA_DIR
@@ -131,7 +132,71 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
             prior_blocked_reason=prior_reason,
         )
 
+    def _loaded_state_policy(self, now: datetime):
+        """Keep prior-date owned orders on the policy that created them."""
+
+        if (
+            not self._state.get("legs")
+            or self._state.get("trade_date") == now.date().isoformat()
+        ):
+            return self.profile.policy
+        try:
+            source_date = date.fromisoformat(str(self._state.get("trade_date") or ""))
+            prior = get_profile(self.profile.profile_id, target_date=source_date).policy
+            features = self._state.get("signal_features") or {}
+            if not isinstance(features, dict):
+                return None
+            return replace(
+                prior,
+                scan_start=time.fromisoformat(
+                    str(features.get("scan_start") or prior.scan_start.isoformat())
+                ),
+                scan_last_bar=time.fromisoformat(
+                    str(
+                        features.get("scan_last_bar") or prior.scan_last_bar.isoformat()
+                    )
+                ),
+                lookback_bars=int(features.get("lookback_bars", prior.lookback_bars)),
+                rolling_high_drawdown_pct=float(
+                    features.get(
+                        "required_drawdown_pct",
+                        prior.rolling_high_drawdown_pct,
+                    )
+                ),
+                rolling_low_proximity_pct=float(
+                    features.get("max_near_low_pct", prior.rolling_low_proximity_pct)
+                ),
+                entry_valid_completed_bars=int(
+                    features.get(
+                        "entry_valid_completed_bars",
+                        prior.entry_valid_completed_bars,
+                    )
+                ),
+                target_ticks=int(features.get("target_ticks", prior.target_ticks)),
+                runtime_policy_source=str(
+                    features.get("runtime_policy_source")
+                    or "prior_state_custody_compatibility"
+                ),
+                runtime_policy_hash=str(features.get("runtime_policy_hash") or ""),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def _bind_policy(self, policy) -> None:
+        self.policy = policy
+        self.leg_ids = tuple(policy.entry_leg_ids)
+
     def run_once(self, now: datetime | None = None) -> dict:
         now = (now or datetime.now(tz=KST)).astimezone(KST)
-        self._roll_prior_terminal_state_before_current_policy_validation(now)
-        return super().run_once(now)
+        current_policy = self.profile.policy
+        custody_policy = self._loaded_state_policy(now)
+        if custody_policy is None:
+            return self._block(now, "prior_state_policy_snapshot_invalid")
+        self._bind_policy(custody_policy)
+        try:
+            self._roll_prior_terminal_state_before_current_policy_validation(now)
+            if self._state.get("trade_date") == now.date().isoformat():
+                self._bind_policy(current_policy)
+            return super().run_once(now)
+        finally:
+            self._bind_policy(current_policy)
