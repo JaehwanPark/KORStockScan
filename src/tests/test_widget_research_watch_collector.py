@@ -106,6 +106,38 @@ def test_config_rejects_symbol_not_present_in_source_report(tmp_path):
         watch.load_config(observed_date=date(2026, 8, 13), config_path=config_path)
 
 
+def test_config_accepts_all_nine_bounded_research_watch_symbols(tmp_path):
+    symbols = [(f"{index:06d}", f"테스트{index}") for index in range(1, 10)]
+    report_path = tmp_path / "report.json"
+    config_path = tmp_path / "config.json"
+    source_sha = _write_source_report(report_path, symbols)
+    _write_config(
+        config_path,
+        source_report=report_path,
+        source_sha=source_sha,
+        symbols=symbols,
+    )
+
+    config = watch.load_config(observed_date=date(2026, 8, 13), config_path=config_path)
+
+    assert len(config["symbols"]) == 9
+
+
+def test_budget_paced_cycle_scales_without_widening_request_budget():
+    assert (
+        watch._effective_cycle_interval_sec(configured_interval_sec=60, symbol_count=5)
+        == 60
+    )
+    assert (
+        watch._effective_cycle_interval_sec(configured_interval_sec=60, symbol_count=9)
+        == 108
+    )
+    assert (
+        watch._effective_cycle_interval_sec(configured_interval_sec=60, symbol_count=10)
+        == 120
+    )
+
+
 class _FakeClient:
     def __init__(self, *, fail_code: str | None = None) -> None:
         self.calls: list[tuple[str, str, dict[str, str]]] = []

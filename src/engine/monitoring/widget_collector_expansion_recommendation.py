@@ -44,7 +44,11 @@ DEFAULT_OUTPUT_DIR = Path("data/report/widget_collector_expansion_recommendation
 DEFAULT_STATE_FILE = (
     PROJECT_ROOT / "tmp" / "widget_collector_expansion_telegram_state.json"
 )
-MAX_RECOMMENDATIONS = 5
+# Keep the persisted recommendation set aligned with the bounded shared
+# research-watch collector.  Telegram may still be a compact operator summary,
+# but the artifact must retain every symbol that can be enrolled without
+# creating a per-symbol service.
+MAX_RECOMMENDATIONS = 10
 ROUND_TRIP_COST_PCT = 0.20
 IMPLEMENTATION_REVIEW_MIN_SAMPLES = 5
 IMPLEMENTATION_REVIEW_MIN_TRADING_DATES = 3

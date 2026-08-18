@@ -120,6 +120,53 @@ def test_recommendation_ranks_positive_liquid_non_active_symbol(tmp_path):
     assert report["allowed_runtime_apply"] is False
 
 
+def test_recommendation_artifact_retains_all_nine_bounded_watch_candidates(
+    monkeypatch,
+):
+    codes = [f"{index:06d}" for index in range(1, 10)]
+    replay = {
+        code: {
+            "sample_count": 2,
+            "target_first_count": 2,
+            "adverse_first_count": 0,
+            "end_returns": [0.5, 0.5],
+            "trading_dates": {"2026-08-18"},
+            "mechanical_signal_count": 0,
+            "pre_spread_candidate_count": 0,
+            "source_qualified_joined_count": 2,
+        }
+        for code in codes
+    }
+    features = {
+        code: [
+            {
+                "entry_liquidity_score": 70.0,
+                "intraday_range_pct": 3.0,
+                "spread_bp": 10.0,
+                "quote_fresh": True,
+            }
+        ]
+        for code in codes
+    }
+    monkeypatch.setattr(
+        rec,
+        "_load_replay_history",
+        lambda *args, **kwargs: (replay, []),
+    )
+    monkeypatch.setattr(
+        rec,
+        "_load_feature_history",
+        lambda *args, **kwargs: (features, []),
+    )
+    monkeypatch.setattr(rec, "_load_names", lambda paths: {})
+
+    report = rec.build_recommendation_report(target_date=date(2026, 8, 18))
+
+    assert report["qualified_candidate_count"] == 9
+    assert report["reported_candidate_count"] == 9
+    assert len(report["recommendations"]) == 9
+
+
 def test_recommendation_does_not_filter_manual_operator_symbol(tmp_path):
     replay_dir = tmp_path / "replay"
     payload_dir = tmp_path / "payload"
@@ -513,6 +560,14 @@ def test_systemd_service_waits_for_postclose_label_contract():
     service = Path(
         "deploy/systemd/korstockscan-widget-expansion-recommendation.service"
     ).read_text(encoding="utf-8")
+    wrapper = Path("deploy/run_machine_microstructure_final_refresh.sh").read_text(
+        encoding="utf-8"
+    )
 
-    assert "--source-wait-sec 900 --source-poll-sec 30" in service
+    assert (
+        "ExecStart=/home/ubuntu/KORStockScan/deploy/run_machine_microstructure_final_refresh.sh"
+        in service
+    )
+    assert "--source-wait-sec 900" in wrapper
+    assert "--source-poll-sec 30" in wrapper
     assert "TimeoutStartSec=1200" in service

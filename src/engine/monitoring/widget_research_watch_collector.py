@@ -39,12 +39,17 @@ DEFAULT_SNAPSHOT_DIR = PROJECT_ROOT / "data/runtime/widget_research_watch"
 COLLECTION_START = clock_time(9, 0)
 COLLECTION_END = clock_time(15, 31)
 DEFAULT_INTERVAL_SEC = 60.0
-MAX_SYMBOLS = 5
+MAX_SYMBOLS = 10
+REQUESTS_PER_SYMBOL_CYCLE = 3
+REQUEST_BUDGET_PER_MINUTE = 18
+REQUEST_BUDGET_HEADROOM = 3
 
 METRIC_CONTRACT = {
     "metric_role": "widget_research_watch_market_observation",
     "decision_authority": AUTHORITY,
-    "window_policy": "krx_regular_completed_one_minute_once_per_symbol_minute",
+    "window_policy": (
+        "krx_regular_latest_completed_one_minute_at_budget_paced_symbol_cycle"
+    ),
     "sample_floor": "one_fresh_quote_bbo_and_completed_bar_row",
     "primary_decision_metric": "future_symbol_specific_cost_adjusted_ev_pct",
     "source_quality_gate": "fresh_krx_quote_bbo_and_completed_one_minute_bar",
@@ -185,7 +190,9 @@ class WidgetResearchWatchCollector:
         self.config = config
         self.output_dir = output_dir
         self.snapshot_dir = snapshot_dir
-        self.request_budget = ReadOnlyRequestBudget(max_requests_per_minute=18)
+        self.request_budget = ReadOnlyRequestBudget(
+            max_requests_per_minute=REQUEST_BUDGET_PER_MINUTE
+        )
         self._client_override = client
         self._last_record_key: dict[str, str] = {}
 
@@ -366,20 +373,40 @@ class WidgetResearchWatchCollector:
                 "broker_order_forbidden": True,
             }
 
-    def collect_once(self, observed_at: datetime | None = None) -> list[dict[str, Any]]:
+    def collect_once(
+        self,
+        observed_at: datetime | None = None,
+        *,
+        pace_requests: bool = False,
+    ) -> list[dict[str, Any]]:
         current = (observed_at or datetime.now(KST)).astimezone(KST)
         if not (COLLECTION_START <= current.time() < COLLECTION_END):
             return []
         client = self._client()
         results: list[dict[str, Any]] = []
-        for symbol in self.config["symbols"]:
+        symbols = self.config["symbols"]
+        pause_sec = (
+            _effective_cycle_interval_sec(
+                configured_interval_sec=DEFAULT_INTERVAL_SEC,
+                symbol_count=len(symbols),
+            )
+            / len(symbols)
+            if pace_requests
+            else 0.0
+        )
+        for index, symbol in enumerate(symbols):
+            symbol_observed_at = datetime.now(KST) if pace_requests else current
+            if symbol_observed_at.time() >= COLLECTION_END:
+                break
             payload = self._collect_symbol_safely(
                 symbol=symbol,
-                observed_at=current,
+                observed_at=symbol_observed_at,
                 client=client,
             )
             self._record(payload)
             results.append(payload)
+            if pause_sec > 0 and index + 1 < len(symbols):
+                time.sleep(pause_sec)
         return results
 
 
@@ -390,6 +417,26 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--check-config", action="store_true")
     return parser
+
+
+def _effective_cycle_interval_sec(
+    *, configured_interval_sec: float, symbol_count: int
+) -> float:
+    """Pace the shared collector without widening its Kiwoom REST budget.
+
+    Each symbol uses quote, BBO, and minute-bar requests.  Preserve three
+    requests per minute as headroom for timing jitter and shared-token
+    contention instead of raising the existing collector-local budget when the
+    operator enrolls more symbols.
+    """
+
+    symbols = max(1, int(symbol_count))
+    usable_per_minute = max(
+        REQUESTS_PER_SYMBOL_CYCLE,
+        REQUEST_BUDGET_PER_MINUTE - REQUEST_BUDGET_HEADROOM,
+    )
+    budget_paced = symbols * REQUESTS_PER_SYMBOL_CYCLE / usable_per_minute * 60.0
+    return max(30.0, float(configured_interval_sec), budget_paced)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -405,10 +452,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     collector = WidgetResearchWatchCollector(config=config)
     if args.once:
-        collector.collect_once(observed_at)
+        collector.collect_once(observed_at, pace_requests=True)
         return 0
-    interval_sec = max(30.0, float(args.interval_sec))
     symbols = max(1, len(config["symbols"]))
+    interval_sec = _effective_cycle_interval_sec(
+        configured_interval_sec=float(args.interval_sec),
+        symbol_count=symbols,
+    )
     per_symbol_pause = interval_sec / symbols
     while True:
         now = datetime.now(KST)
