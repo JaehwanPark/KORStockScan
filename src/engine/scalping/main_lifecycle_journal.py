@@ -33,15 +33,9 @@ KST = ZoneInfo("Asia/Seoul")
 MAX_TRANSITION_BYTES = 16 * 1024
 MAX_DATA_STRING_LENGTH = 2_048
 PIPELINE_IDENTITY_SCHEMA = "main_scalping_lifecycle_pipeline_identity_v1"
-BROKER_EXECUTION_PROVENANCE_SCHEMA = (
-    "kiwoom_ws_order_execution_provenance_v1"
-)
-BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA = (
-    "kiwoom_websocket_order_execution_00_values_v1"
-)
-KIWOOM_OFFICIAL_REFERENCE_SHA = (
-    "69642586f7d84ba9fd8a6faf1f1537c7fda6568b"
-)
+BROKER_EXECUTION_PROVENANCE_SCHEMA = "kiwoom_ws_order_execution_provenance_v1"
+BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA = "kiwoom_websocket_order_execution_00_values_v1"
+KIWOOM_OFFICIAL_REFERENCE_SHA = "69642586f7d84ba9fd8a6faf1f1537c7fda6568b"
 BROKER_EXECUTION_SOURCE_TYPE = "00"
 
 # Official WebSocket type ``00`` is the reviewed per-event order/execution
@@ -452,12 +446,8 @@ def build_broker_execution_provenance(
 
     fields = source_fields if isinstance(source_fields, Mapping) else {}
     result: dict[str, Any] = {
-        "broker_execution_provenance_schema": (
-            BROKER_EXECUTION_PROVENANCE_SCHEMA
-        ),
-        "broker_execution_official_reference_sha": (
-            KIWOOM_OFFICIAL_REFERENCE_SHA
-        ),
+        "broker_execution_provenance_schema": (BROKER_EXECUTION_PROVENANCE_SCHEMA),
+        "broker_execution_official_reference_sha": (KIWOOM_OFFICIAL_REFERENCE_SHA),
     }
     raw_key_present = any(
         key in fields and _raw_value_supplied(fields.get(key))
@@ -487,21 +477,11 @@ def build_broker_execution_provenance(
             _required_raw_text,
         )
         order_no, _ = _resolve_raw_alias(fields, "order_no", _raw_order_no)
-        stock_code, _ = _resolve_raw_alias(
-            fields, "stock_code", _raw_stock_code
-        )
-        order_status, _ = _resolve_raw_alias(
-            fields, "order_status", _raw_order_status
-        )
-        side_text, _ = _resolve_raw_alias(
-            fields, "order_side_text", _raw_side_text
-        )
-        side_code, _ = _resolve_raw_alias(
-            fields, "order_side_code", _raw_side_code
-        )
-        execution_no, _ = _resolve_raw_alias(
-            fields, "execution_no", _raw_execution_no
-        )
+        stock_code, _ = _resolve_raw_alias(fields, "stock_code", _raw_stock_code)
+        order_status, _ = _resolve_raw_alias(fields, "order_status", _raw_order_status)
+        side_text, _ = _resolve_raw_alias(fields, "order_side_text", _raw_side_text)
+        side_code, _ = _resolve_raw_alias(fields, "order_side_code", _raw_side_code)
+        execution_no, _ = _resolve_raw_alias(fields, "execution_no", _raw_execution_no)
         order_qty, _ = _resolve_raw_alias(
             fields,
             "order_qty",
@@ -546,9 +526,7 @@ def build_broker_execution_provenance(
         execution_venue_text, _ = _resolve_raw_alias(
             fields, "execution_venue_text", _raw_venue_text
         )
-        sor_yn, _ = _resolve_raw_alias(
-            fields, "sor_yn", _raw_sor_yn
-        )
+        sor_yn, _ = _resolve_raw_alias(fields, "sor_yn", _raw_sor_yn)
     except (TypeError, ValueError) as exc:
         result.update(
             {
@@ -585,8 +563,7 @@ def build_broker_execution_provenance(
             {
                 "broker_execution_provenance_state": "incomplete",
                 "broker_execution_provenance_error": (
-                    "official_broker_execution_fields_incomplete:"
-                    + ",".join(missing)
+                    "official_broker_execution_fields_incomplete:" + ",".join(missing)
                 )[:256],
             }
         )
@@ -648,12 +625,15 @@ def build_broker_execution_provenance(
             raise ValueError("broker_execution_venue_ambiguous_or_mismatch")
         derived_fill_state = "full" if remaining_qty == 0 else "partial"
         normalized_expected_state = str(expected_fill_state or "").strip().lower()
+        if normalized_expected_state and normalized_expected_state not in {
+            "partial",
+            "full",
+        }:
+            raise ValueError("broker_execution_expected_fill_state_invalid")
         if (
             normalized_expected_state
-            and normalized_expected_state not in {"partial", "full"}
+            and normalized_expected_state != derived_fill_state
         ):
-            raise ValueError("broker_execution_expected_fill_state_invalid")
-        if normalized_expected_state and normalized_expected_state != derived_fill_state:
             raise ValueError("broker_execution_fill_state_mismatch")
     except (TypeError, ValueError) as exc:
         result.update(
@@ -701,9 +681,7 @@ def build_broker_execution_provenance(
             "broker_execution_side": side_code,
             "broker_execution_order_qty": order_qty,
             "broker_execution_cumulative_fill_qty": cumulative_fill_qty,
-            "broker_execution_cumulative_fill_amount_krw": (
-                cumulative_fill_amount
-            ),
+            "broker_execution_cumulative_fill_amount_krw": (cumulative_fill_amount),
             "broker_execution_remaining_qty": remaining_qty,
             "broker_execution_price": unit_execution_price,
             "broker_execution_reported_price": execution_price,
@@ -738,9 +716,7 @@ def validate_broker_execution_provenance(
     side = str(data.get("broker_execution_side") or "").strip().upper()
     venue = str(data.get("broker_execution_venue") or "").strip().upper()
     native_projection = {
-        "broker_raw_envelope_schema": data.get(
-            "broker_execution_raw_envelope_schema"
-        ),
+        "broker_raw_envelope_schema": data.get("broker_execution_raw_envelope_schema"),
         "broker_raw_source_type": data.get("broker_execution_source_type"),
         "9203": data.get("broker_execution_order_no"),
         "9001": data.get("broker_execution_stock_code"),
@@ -987,14 +963,16 @@ def _pipeline_market_coverage_fields(
             )
         )
     if not depth_observed:
-        orderbook_state = str(
-            source_fields.get("market_data_orderbook_state") or ""
-        ).strip().lower()
-        depth_observed = _pipeline_truthy(
-            source_fields.get("holding_ai_orderbook_usable")
-        ) or _pipeline_nonnegative_number_present(
-            source_fields.get("top3_depth_ratio")
-        ) or orderbook_state in {"ws", "rest_enriched", "fresh", "usable"}
+        orderbook_state = (
+            str(source_fields.get("market_data_orderbook_state") or "").strip().lower()
+        )
+        depth_observed = (
+            _pipeline_truthy(source_fields.get("holding_ai_orderbook_usable"))
+            or _pipeline_nonnegative_number_present(
+                source_fields.get("top3_depth_ratio")
+            )
+            or orderbook_state in {"ws", "rest_enriched", "fresh", "usable"}
+        )
     if not bbo_observed and _pipeline_nonnegative_number_present(
         source_fields.get("spread_bps")
     ):
@@ -1017,8 +995,7 @@ def _pipeline_market_coverage_fields(
         # therefore usable lifecycle exposure heartbeats.  Scanner/entry rows
         # still require an explicit heartbeat and cannot inflate exposure by
         # merely repeating.
-        "main_lifecycle_heartbeat": lifecycle_stage
-        in {"holding", "scale_in", "exit"}
+        "main_lifecycle_heartbeat": lifecycle_stage in {"holding", "scale_in", "exit"}
         or _pipeline_truthy(
             source_fields.get("main_lifecycle_heartbeat")
             or source_fields.get("lifecycle_heartbeat")
@@ -1056,7 +1033,33 @@ def pipeline_lifecycle_fields_safe(
         fields = source_fields if isinstance(source_fields, Mapping) else {}
         record_id = stock.get("id")
         normalized_stock_code = str(stock_code or "").strip()
-        attempt_id = str(stock.get("scanner_generation_id") or "").strip()
+        # ``scanner_promotion_id`` is the stable identity already propagated
+        # by both the legacy direct scanner and the deadline scheduler. The
+        # scheduler generation can be absent on the direct path and can also
+        # appear only after the first precheck, so preferring it would split a
+        # single lifecycle across two IDs. Use it only when no promotion
+        # identity exists at all.
+        stock_promotion_id = str(stock.get("scanner_promotion_id") or "").strip()
+        field_promotion_id = str(fields.get("scanner_promotion_id") or "").strip()
+        stock_generation_id = str(stock.get("scanner_generation_id") or "").strip()
+        field_generation_id = str(fields.get("scanner_generation_id") or "").strip()
+        if (
+            stock_promotion_id
+            and field_promotion_id
+            and stock_promotion_id != field_promotion_id
+        ) or (
+            not (stock_promotion_id or field_promotion_id)
+            and stock_generation_id
+            and field_generation_id
+            and stock_generation_id != field_generation_id
+        ):
+            return {}
+        attempt_id = (
+            stock_promotion_id
+            or field_promotion_id
+            or stock_generation_id
+            or field_generation_id
+        )
         # A mapped legacy/non-scanner row without exact lineage is expected to
         # remain observable as a postclose instrumentation gap.  Do not turn
         # that ordinary absence into a hot-path error-log storm.
@@ -1090,9 +1093,7 @@ def pipeline_lifecycle_fields_safe(
             "main_lifecycle_source_pipeline": normalized_pipeline,
             "main_lifecycle_source_stage": normalized_source_stage,
             "main_lifecycle_stage": lifecycle_stage,
-            "main_lifecycle_decision_authority": (
-                "source_only_lifecycle_observation"
-            ),
+            "main_lifecycle_decision_authority": ("source_only_lifecycle_observation"),
             "main_lifecycle_runtime_effect": False,
             "main_lifecycle_order_authority": False,
             "main_lifecycle_provider_authority": False,
@@ -1300,9 +1301,11 @@ def build_transition(
         execution_price = event_data.get("exit_price")
 
     if execution_qty is not None:
-        state = str(
-            event_data.get("broker_execution_provenance_state") or ""
-        ).strip().lower()
+        state = (
+            str(event_data.get("broker_execution_provenance_state") or "")
+            .strip()
+            .lower()
+        )
         if not state:
             event_data.update(
                 {
@@ -1330,9 +1333,7 @@ def build_transition(
         if state not in {"complete", "missing", "incomplete", "invalid"}:
             raise ValueError("broker_execution_provenance_state_invalid")
         if state == "complete":
-            if str(
-                event_data.get("broker_execution_provenance_error") or ""
-            ).strip():
+            if str(event_data.get("broker_execution_provenance_error") or "").strip():
                 raise ValueError("broker_execution_complete_with_error")
             provenance_error = validate_broker_execution_provenance(
                 event_data,

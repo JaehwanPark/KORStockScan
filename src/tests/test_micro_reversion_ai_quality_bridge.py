@@ -421,7 +421,7 @@ def _entry_pipeline_allocator_row(
         "schema_version": 1,
         "event_type": "pipeline_event",
         "pipeline": "ENTRY_PIPELINE",
-        "stage": "ai_confirmed",
+        "stage": "order_bundle_submitted",
         "stock_code": "000001",
         "record_id": 101,
         "emitted_at": "2026-08-14T09:00:11.100+09:00",
@@ -434,6 +434,8 @@ def _entry_pipeline_allocator_row(
             "effective_venue": "KRX",
             "market_session_bucket": "krx_regular",
             "market_data_route": "krx_only",
+            "actual_order_submitted": True,
+            "broker_order_no": "0000101",
         },
     }
 
@@ -824,9 +826,7 @@ def test_verified_cost_catalog_resolves_symbol_and_venue_specific_profile(
     assert nxt["cost_profile_verified"] is True
     assert nxt["selected_cost_profile_id"] == "profile-nxt"
     assert nxt["buy_fee_bps"] == pytest.approx(0.7)
-    assert krx["cost_profile_artifact_sha256"] == nxt[
-        "cost_profile_artifact_sha256"
-    ]
+    assert krx["cost_profile_artifact_sha256"] == nxt["cost_profile_artifact_sha256"]
 
 
 def test_verified_symbol_metadata_is_hash_bound_and_trace_guessing_is_forbidden() -> (
@@ -893,6 +893,35 @@ def test_verified_symbol_metadata_mismatch_fails_closed(mutation, reason) -> Non
             config=_verified_config(),
             verified_symbol_metadata=metadata,
         )
+
+
+def test_missing_snapshot_date_is_row_local_observation_only_with_symbol_master() -> (
+    None
+):
+    evidence = build_tactical_evidence(
+        trace=_trace(captured_at=""),
+        payload=_payload(captured_at=""),
+        market_rows=[],
+        depth_rows=[],
+        event_references=[],
+        config=_verified_config(),
+        verified_symbol_metadata=_verified_symbol_metadata(),
+    )
+
+    assert evidence["state"] == "source_unavailable"
+    assert evidence["economics"]["symbol_metadata_status"] == "missing"
+    assert (
+        "verified_symbol_metadata_snapshot_date_unavailable"
+        in (evidence["source_quality"]["blockers"])
+    )
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=[],
+        depth_rows=[],
+        entry_pipeline_rows=[],
+        config=_verified_config(),
+    )
+    assert outcome["economic_promotion_evidence_eligible"] is False
 
 
 def test_invalid_latest_market_and_depth_do_not_fallback_to_older_valid_rows() -> None:
@@ -1317,7 +1346,7 @@ def test_entry_outcome_joins_deduplicated_allocator_and_caps_at_5pct_depth() -> 
     assert outcome["action_neutral_first_hit"] != "unavailable"
 
 
-def test_entry_outcome_allocator_conflict_fails_closed() -> None:
+def test_entry_outcome_allocator_conflict_isolated_as_observation_only() -> None:
     evidence = build_tactical_evidence(
         trace=_trace(),
         payload=_payload(),
@@ -1327,18 +1356,117 @@ def test_entry_outcome_allocator_conflict_fails_closed() -> None:
         config=_verified_config(),
     )
 
-    with pytest.raises(
-        ValueError, match="entry_pipeline_allocator_provenance_conflict"
-    ):
-        build_future_outcome(
-            evidence=evidence,
-            market_rows=[],
-            entry_pipeline_rows=[
-                _entry_pipeline_allocator_row(quantity=5),
-                _entry_pipeline_allocator_row(quantity=6),
-            ],
-            config=_verified_config(),
-        )
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=[],
+        entry_pipeline_rows=[
+            _entry_pipeline_allocator_row(quantity=5),
+            _entry_pipeline_allocator_row(quantity=6),
+        ],
+        config=_verified_config(),
+    )
+
+    assert outcome["counterfactual_quantity"] == 1
+    assert outcome["counterfactual_quantity_basis"] == (
+        "standardized_one_share_observation_only"
+    )
+    assert outcome["quantity_authority"] == ("standardized_one_share_observation_only")
+    assert outcome["allocator_event_sha256"] is None
+    assert outcome["effective_qty"] is None
+    assert outcome["allocator_semantic_count"] == 2
+    assert outcome["allocator_submitted_semantic_count"] == 2
+    assert outcome["notional_net_profit_eligible"] is False
+    assert outcome["economic_promotion_evidence_eligible"] is False
+
+
+def test_entry_outcome_conflict_uses_unique_broker_submitted_quantity() -> None:
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+        verified_symbol_metadata=_verified_symbol_metadata(),
+    )
+    initial = _entry_pipeline_allocator_row(quantity=50)
+    initial["stage"] = "ai_confirmed"
+    initial["fields"]["actual_order_submitted"] = False
+    submitted = _entry_pipeline_allocator_row(quantity=40)
+    submitted["stage"] = "order_bundle_submitted"
+    submitted["emitted_at"] = "2026-08-14T09:00:12.100+09:00"
+    submitted["fields"]["actual_order_submitted"] = True
+
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=[],
+        entry_pipeline_rows=[initial, submitted],
+        config=_verified_config(),
+    )
+
+    assert outcome["effective_qty"] == 40
+    assert outcome["quantity_authority"] == (
+        "position_sizing_dynamic_formula_outcome_only"
+    )
+    assert outcome["allocator_semantic_count"] == 2
+    assert outcome["allocator_submitted_semantic_count"] == 1
+    assert outcome["notional_net_profit_eligible"] is True
+
+
+def test_entry_outcome_intended_but_not_submitted_qty_is_observation_only() -> None:
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+    )
+    intended = _entry_pipeline_allocator_row(quantity=50)
+    intended["stage"] = "ai_confirmed"
+    intended["fields"]["actual_order_submitted"] = False
+    intended["fields"].pop("broker_order_no")
+
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=[],
+        entry_pipeline_rows=[intended],
+        config=_verified_config(),
+    )
+
+    assert outcome["allocator_provenance_status"] == (
+        "allocator_provenance_not_submitted_observation_only"
+    )
+    assert outcome["counterfactual_quantity"] == 1
+    assert outcome["effective_qty"] is None
+    assert outcome["economic_promotion_evidence_eligible"] is False
+
+
+def test_submitted_krx_allocator_can_bind_exact_venue_when_route_is_omitted() -> None:
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+        verified_symbol_metadata=_verified_symbol_metadata(),
+    )
+    submitted = _entry_pipeline_allocator_row(quantity=40)
+    submitted["fields"].pop("market_data_route")
+
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=[],
+        entry_pipeline_rows=[submitted],
+        config=_verified_config(),
+    )
+
+    assert outcome["allocator_provenance_status"] == (
+        "central_allocator_provenance_joined"
+    )
+    assert outcome["effective_qty"] == 40
+    assert outcome["notional_net_profit_eligible"] is True
 
 
 def test_allocator_join_ignores_other_trace_and_symbol() -> None:
@@ -1400,13 +1528,20 @@ def test_allocator_join_fails_closed_on_causal_scope_mismatch(mutation, reason) 
     allocator = _entry_pipeline_allocator_row(quantity=1)
     mutation(allocator)
 
-    with pytest.raises(ValueError, match=reason):
-        build_future_outcome(
-            evidence=evidence,
-            market_rows=[],
-            entry_pipeline_rows=[allocator],
-            config=_verified_config(),
-        )
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=[],
+        entry_pipeline_rows=[allocator],
+        config=_verified_config(),
+    )
+
+    assert outcome["allocator_provenance_status"] == (
+        "allocator_provenance_invalid_observation_only"
+    )
+    assert outcome["allocator_provenance_error"] == reason
+    assert outcome["counterfactual_quantity"] == 1
+    assert outcome["notional_net_profit_eligible"] is False
+    assert outcome["economic_promotion_evidence_eligible"] is False
 
 
 def test_scale_in_outcome_delegates_quantity_owner() -> None:
@@ -2352,6 +2487,10 @@ def test_bridge_report_records_outcome_only_pipeline_source_census() -> None:
     assert source["allocator_contract_row_count"] == 3
     assert source["trace_symbol_linked_row_count"] == 2
     assert report["summary"]["entry_pipeline_allocator_outcome_joined_count"] == 1
+    assert report["summary"]["entry_pipeline_allocator_status_counts"] == {
+        "central_allocator_provenance_joined": 1
+    }
+    assert report["summary"]["entry_pipeline_allocator_error_counts"] == {}
     assert report["report_row_count"] == len(report["rows"])
     assert report["report_content_sha256"] == _producer_hash(
         {key: value for key, value in report.items() if key != "report_content_sha256"}

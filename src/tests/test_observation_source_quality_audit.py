@@ -8051,3 +8051,101 @@ def test_observation_source_quality_does_not_review_used_unknown_route_partition
     assert report["unknown_token_findings"][0]["fields"][0]["field"] == (
         "holding_context_selected_route_partition"
     )
+
+
+def test_observation_source_quality_reviews_aug18_unknown_provenance_variants(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    events = [
+        _event(
+            "ai_holding_review",
+            {
+                "holding_context_selected_route_partition": {
+                    "used": False,
+                    "reason": "candle_route_snapshot_missing",
+                    "selected_key": "KRX|unknown",
+                },
+                "holding_context_source_quality_status": "blocked",
+                "holding_context_blockers": ["ai_preflight:tape_missing"],
+                "ai_result_source": "input_preflight_blocked",
+            },
+            record_id=1,
+        ),
+        _event(
+            "scalp_fast_exit_venue_blocked",
+            {
+                "fast_exit_ws_0d_route": "unknown",
+                "fast_exit_route_guard_reason": (
+                    "outside_supported_sell_execution_session"
+                ),
+                "fast_exit_execution_session_blocked": True,
+                "fast_exit_broker_route_blocked": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            record_id=2,
+        ),
+        _event(
+            "real_weak_ai_micro_entry_block",
+            {
+                "entry_order_flow_status": "unknown",
+                "entry_context_quality": "stale",
+                "entry_context_missing_features": (
+                    "quote_freshness,order_flow_pressure"
+                ),
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            record_id=3,
+        ),
+    ]
+    for record_id, stage in enumerate(
+        ("holding_started", "position_rebased_after_fill", "sell_completed"),
+        start=4,
+    ):
+        events.append(
+            _event(
+                stage,
+                {
+                    "broker_actual_execution_venue": "UNKNOWN",
+                    "broker_actual_execution_venue_source": (
+                        "official_exchange_fields_ambiguous_or_missing"
+                    ),
+                    "broker_actual_exchange_code": "0",
+                    "broker_actual_exchange_name": "SOR",
+                    "broker_sor_flag": "Y",
+                    "broker_execution_provenance_complete": False,
+                },
+                record_id=record_id,
+            )
+        )
+    _write_events(tmp_path, "2026-08-18", events)
+
+    report = audit.build_observation_source_quality_audit("2026-08-18")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["ai_holding_review"] == {
+        "holding_context_selected_route_partition": (
+            "reviewed_holding_input_preflight_blocked_provenance"
+        )
+    }
+    assert reviewed["scalp_fast_exit_venue_blocked"] == {
+        "fast_exit_ws_0d_route": "reviewed_legacy_fast_exit_route_provenance"
+    }
+    assert reviewed["real_weak_ai_micro_entry_block"] == {
+        "entry_order_flow_status": "reviewed_entry_order_flow_not_available"
+    }
+    for stage in ("holding_started", "position_rebased_after_fill", "sell_completed"):
+        assert reviewed[stage] == {
+            "broker_actual_execution_venue": (
+                "reviewed_broker_actual_venue_not_available"
+            )
+        }

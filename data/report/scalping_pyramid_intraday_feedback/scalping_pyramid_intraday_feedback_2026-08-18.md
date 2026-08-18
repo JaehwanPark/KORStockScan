@@ -1,6 +1,6 @@
 # 2026-08-18 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-08-18T10:50:01+09:00
+- generated_at: 2026-08-18T20:19:32+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -8,12 +8,12 @@
 
 ## Summary
 
-- pyramid_feedback_row_count: 6
+- pyramid_feedback_row_count: 10
 - closed_pyramid_row_count: 2
 - pyramid_would_have_helped_count: 0
 - pyramid_correctly_blocked_count: 0
 - pyramid_overheat_or_reversal_risk_count: 2
-- pyramid_open_unresolved_count: 4
+- pyramid_open_unresolved_count: 8
 - one_share_event_count: 2
 - one_share_closed_count: 2
 - one_share_pyramid_opportunity_count: 0
@@ -49,18 +49,24 @@
 
 ## Blocker Metrics
 
-- blocker=profit_not_enough sample=4 recovered_rate=0.00 reversal_rate=0.25 blocked_then_recovered_rate=0.00
+- blocker=micro_vwap_overheated sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
+- blocker=profit_not_enough sample=6 recovered_rate=0.00 reversal_rate=0.17 blocked_then_recovered_rate=0.00
 - blocker=pyramid_hard_blocked:buy_pressure_severe_below_min,micro_vwap_severe_overheated,large_sell_detected sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
 - blocker=rising_missed_scout_pyramid_bridge_blocked:profit_not_enough,micro_vwap_severe_overheated sample=1 recovered_rate=0.00 reversal_rate=1.00 blocked_then_recovered_rate=0.00
+- blocker=trend_not_strong sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
 
 ## Rows
 
 - record_id= code=092870 name=엑시콘 label=pyramid_open_unresolved blocker=pyramid_hard_blocked:buy_pressure_severe_below_min,micro_vwap_severe_overheated,large_sell_detected profit=1.76 final=None ai=51.0 tick=1.0 micro_vwap=143.32
 - record_id= code=067310 name=하나마이크론 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.24 final=None ai=43.0 tick=0.5 micro_vwap=0.71
 - record_id=32661 code=322000 name=HD현대에너지솔루션 label=pyramid_overheat_or_reversal_risk blocker=profit_not_enough profit=0.32 final=0.32 ai=48.0 tick=1.0 micro_vwap=44.0
-- record_id= code=377450 name=리파인 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.01 final=None ai=48.0 tick=1.667 micro_vwap=-35.01
+- record_id= code=377450 name=리파인 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.01 final=None ai=50.0 tick=0.5 micro_vwap=-17.57
 - record_id=32701 code=419050 name=삼기에너지솔루션즈 label=pyramid_overheat_or_reversal_risk blocker=rising_missed_scout_pyramid_bridge_blocked:profit_not_enough,micro_vwap_severe_overheated profit=0.1 final=-0.22 ai=48.0 tick=1.3 micro_vwap=-21.93
 - record_id= code=222800 name=심텍 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.92 final=None ai=63.0 tick=0.0 micro_vwap=53.34
+- record_id= code=006110 name=삼아알미늄 label=pyramid_open_unresolved blocker=micro_vwap_overheated profit=1.24 final=None ai=39.0 tick=1.667 micro_vwap=-101.99
+- record_id= code=025980 name=아난티 label=pyramid_open_unresolved blocker=trend_not_strong profit=1.51 final=None ai=52.0 tick=0.0 micro_vwap=18.25
+- record_id= code=475560 name=더본코리아 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.75 final=None ai=50.0 tick=0.0 micro_vwap=55.92
+- record_id= code=007660 name=이수페타시스 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.06 final=None ai=50.0 tick=3.857 micro_vwap=-9.15
 
 ## Real Scale-In Performance Rows
 

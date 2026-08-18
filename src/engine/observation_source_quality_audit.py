@@ -2792,6 +2792,7 @@ def _reviewed_unknown_reason_for_stage_field(
             "order_bundle_submitted",
             "pre_submit_micro_unavailable_block",
             "pre_submit_entry_ai_authority_guard_block",
+            "real_weak_ai_micro_entry_block",
             "rising_missed_async_commit_phase",
             "rising_missed_entry_ai_async_result_applied",
             "rising_missed_entry_ai_async_result_unusable",
@@ -3391,7 +3392,13 @@ def _reviewed_unknown_reason_for_stage_field(
                 route_partition_reason = route_partition_text
             if not (
                 route_partition_not_used
-                and "route_snapshots_unavailable" in route_partition_reason
+                and any(
+                    reason in route_partition_reason
+                    for reason in {
+                        "route_snapshots_unavailable",
+                        "candle_route_snapshot_missing",
+                    }
+                )
             ):
                 return False
         result_blocked = (
@@ -3521,6 +3528,12 @@ def _reviewed_unknown_reason_for_stage_field(
                         "nxt_rest_route_proven",
                     }
                     or (
+                        _field_text("fast_exit_route_guard_reason")
+                        == "outside_supported_sell_execution_session"
+                        and _is_trueish("fast_exit_execution_session_blocked")
+                        and _is_trueish("fast_exit_broker_route_blocked")
+                    )
+                    or (
                         _field_text("rest_check_state") == "timeout"
                         and _field_text("fast_exit_route_guard_reason")
                         == "nxt_executable_quote_route_unproven"
@@ -3546,6 +3559,27 @@ def _reviewed_unknown_reason_for_stage_field(
                 and _is_trueish("broker_order_forbidden")
             )
         return False
+
+    def _is_reviewed_broker_actual_venue_not_available() -> bool:
+        if stage not in {
+            "holding_started",
+            "position_rebased_after_fill",
+            "sell_completed",
+        }:
+            return False
+        if (
+            str(key or "") != "broker_actual_execution_venue"
+            or str(value or "").strip().upper() != "UNKNOWN"
+        ):
+            return False
+        return (
+            _field_text("broker_actual_execution_venue_source")
+            == "official_exchange_fields_ambiguous_or_missing"
+            and _field_text("broker_actual_exchange_code") in {"", "-", "0"}
+            and _field_text("broker_actual_exchange_name") in {"", "-", "SOR"}
+            and _field_text("broker_sor_flag") in {"", "-", "Y"}
+            and _is_falseish("broker_execution_provenance_complete")
+        )
 
     def _is_reviewed_shallow_stale_not_available() -> bool:
         if stage not in {
@@ -3763,6 +3797,8 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_reversal_state_not_initialized"
     if _is_reviewed_fast_exit_route_provenance():
         return "reviewed_legacy_fast_exit_route_provenance"
+    if _is_reviewed_broker_actual_venue_not_available():
+        return "reviewed_broker_actual_venue_not_available"
     if _is_reviewed_shallow_stale_not_available():
         return "reviewed_shallow_stale_flag_not_available"
     if _is_reviewed_first_touch_quote_stale_not_available():

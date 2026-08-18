@@ -1631,7 +1631,7 @@ def test_historical_execution_rejects_self_rehashed_provider_and_join_receipts(
     elif mutation == "provider_attempt_hash":
         report["results"][0]["replay_result"]["candidate_attempts"][0][
             "provider_provenance"
-        ]["provider_budget_attempt_identity_sha256"] = ("x" * 64)
+        ]["provider_budget_attempt_identity_sha256"] = "x" * 64
         _reseal_execution_result_ids(report)
     elif mutation == "provider_cost_underreported":
         report["provider_budget"]["committed_cost_usd"] = "0.01"
@@ -2343,6 +2343,43 @@ def test_cycle_does_not_claim_or_roll_same_date_stale_execution_when_step_skips(
     assert report["provider_call_performed"] is False
     assert report["rolling_status"] == "no_joined_lifecycle_rows"
     assert report["status"] == "source_only_blocked_or_deferred"
+
+
+def test_empty_materialized_receipt_is_valid_terminal_no_provider_work() -> None:
+    target_date = "2026-08-18"
+    report = {
+        "schema": quality.MICRO_REVERSION_MATERIALIZED_REQUEST_SCHEMA,
+        "target_date": target_date,
+        "status": "no_micro_reversion_eligible_requests",
+        "materialization_count": 0,
+        "request_count": 0,
+        "request_ids": [],
+        "materializations": [],
+        "requests": [],
+        "provider_call_performed": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    report["report_content_sha256"] = cycle._content_hash(
+        report, "report_content_sha256"
+    )
+
+    assert (
+        cycle._validate_materialized_step_artifact(report, target_date=target_date) == 0
+    )
+
+    tampered = dict(report)
+    tampered["request_count"] = 1
+    tampered["report_content_sha256"] = cycle._content_hash(
+        tampered, "report_content_sha256"
+    )
+    with pytest.raises(ValueError, match="materialized_step_census_mismatch"):
+        cycle._validate_materialized_step_artifact(
+            tampered,
+            target_date=target_date,
+        )
 
 
 def test_current_run_excludes_stale_same_date_lifecycle_after_producer_failure():

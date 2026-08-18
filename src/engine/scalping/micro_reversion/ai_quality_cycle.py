@@ -162,6 +162,51 @@ def _content_hash(value: Mapping[str, Any], hash_field: str) -> str:
     return _sha256({key: item for key, item in value.items() if key != hash_field})
 
 
+def _validate_materialized_step_artifact(
+    report: Mapping[str, Any], *, target_date: str
+) -> int:
+    """Validate both populated and truthful empty materialization receipts."""
+
+    if (
+        not isinstance(report, Mapping)
+        or report.get("schema") != quality.MICRO_REVERSION_MATERIALIZED_REQUEST_SCHEMA
+    ):
+        raise ValueError("materialized_step_schema_invalid")
+    if report.get("target_date") != target_date:
+        raise ValueError("materialized_step_target_date_mismatch")
+    if str(report.get("report_content_sha256") or "") != _content_hash(
+        report, "report_content_sha256"
+    ):
+        raise ValueError("materialized_step_content_hash_mismatch")
+    for field, expected in (
+        ("provider_call_performed", False),
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+    ):
+        if report.get(field) is not expected:
+            raise ValueError(f"materialized_step_authority_invalid:{field}")
+    requests = report.get("requests")
+    materializations = report.get("materializations")
+    if not isinstance(requests, list) or not isinstance(materializations, list):
+        raise ValueError("materialized_step_rows_invalid")
+    if report.get("request_count") != len(requests) or report.get(
+        "materialization_count"
+    ) != len(materializations):
+        raise ValueError("materialized_step_census_mismatch")
+    if not requests:
+        if (
+            report.get("status") != "no_micro_reversion_eligible_requests"
+            or materializations
+            or report.get("request_ids") != []
+        ):
+            raise ValueError("materialized_step_empty_contract_invalid")
+        return 0
+    quality._validate_micro_reversion_materialized_report(dict(report))
+    return len(requests)
+
+
 def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, raw_path = tempfile.mkstemp(
@@ -1468,9 +1513,7 @@ def _validate_current_execution_artifact(
         "blocking_execution_exclusions"
     ) != expected_blocking_exclusions or report.get(
         "blocking_execution_exclusion_count"
-    ) != len(
-        expected_blocking_exclusions
-    ):
+    ) != len(expected_blocking_exclusions):
         raise ValueError("current_execution_blocking_exclusion_census_mismatch")
     report_status = report.get("status")
     if (
@@ -3375,11 +3418,29 @@ def run_cycle(
         )
         if steps[-1]["returncode"] != 0:
             blockers.append("materialize_command_failed")
+        else:
+            try:
+                materialized = _load_json_auto(selected_paths["materialized"])
+                materialized_request_count = _validate_materialized_step_artifact(
+                    materialized,
+                    target_date=target_date,
+                )
+                if materialized_request_count <= 0:
+                    blockers.append("no_micro_reversion_eligible_requests")
+            except (
+                FileNotFoundError,
+                OSError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as exc:
+                blockers.append(
+                    f"materialized_artifact_invalid:{type(exc).__name__}:{exc}"
+                )
 
     if not blockers:
         try:
             bridge = _load_json_auto(selected_paths["bridge_report"])
-            materialized = _load_json_auto(selected_paths["materialized"])
             labels = quality.build_micro_reversion_action_neutral_outcome_labels(
                 bridge_report=bridge,
                 materialized_report=materialized,

@@ -353,6 +353,7 @@ _SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS = (
 _ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS = (ENTRY_CANDIDATE_LIFECYCLE_CONTEXT_KEY,)
 _MAIN_LIFECYCLE_SNAPSHOT_KEYS = (
     "id",
+    "scanner_promotion_id",
     "scanner_generation_id",
     "effective_venue",
     "rising_missed_effective_venue",

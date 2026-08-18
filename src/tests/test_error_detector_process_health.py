@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -93,6 +93,103 @@ class TestProcessHealthDetector:
         assert result.details["stopped_threads"] == ["sniper_engine"]
         assert result.details["thread_status"] == "stale"
         assert "sniper_engine" in result.summary
+
+    def test_detector_passes_for_sniper_normal_market_close(self, monkeypatch):
+        now = datetime.now().astimezone().replace(
+            hour=20, minute=0, second=3, microsecond=0
+        )
+        monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
+        write_heartbeat("main_loop")
+        write_heartbeat(
+            "sniper_engine",
+            alive=False,
+            terminal_reason="market_close",
+        )
+        # The finalizer writes alive=False once more without knowing the
+        # branch reason. The explicit normal terminal marker must survive.
+        write_heartbeat("sniper_engine", alive=False)
+        state = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        state["main_loop"]["last_beat"] = now.isoformat(timespec="seconds")
+        state["threads"]["sniper_engine"]["last_beat"] = now.isoformat(
+            timespec="seconds"
+        )
+        HEARTBEAT_PATH.write_text(json.dumps(state), encoding="utf-8")
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["thread_status"] == "expected_terminal"
+        assert result.details["expected_stopped_threads"] == ["sniper_engine"]
+        assert result.details["thread_terminal_reason"]["sniper_engine"] == (
+            "market_close"
+        )
+        assert "sniper_engine" in result.summary
+
+    def test_detector_rejects_market_close_reason_before_cutoff(self, monkeypatch):
+        now = datetime.now().astimezone().replace(
+            hour=19, minute=59, second=59, microsecond=0
+        )
+        monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
+        write_heartbeat("main_loop")
+        write_heartbeat(
+            "sniper_engine",
+            alive=False,
+            terminal_reason="market_close",
+        )
+        state = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        state["main_loop"]["last_beat"] = now.isoformat(timespec="seconds")
+        state["threads"]["sniper_engine"]["last_beat"] = now.isoformat(
+            timespec="seconds"
+        )
+        HEARTBEAT_PATH.write_text(json.dumps(state), encoding="utf-8")
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "fail"
+        assert result.details["stopped_threads"] == ["sniper_engine"]
+
+    def test_detector_rejects_prior_date_market_close_terminal(self, monkeypatch):
+        now = datetime.now().astimezone().replace(
+            hour=20, minute=1, second=0, microsecond=0
+        )
+        prior = now - timedelta(days=1)
+        monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
+        HEARTBEAT_PATH.write_text(
+            json.dumps(
+                {
+                    "main_loop": {
+                        "last_beat": now.isoformat(timespec="seconds"),
+                        "pid": os.getpid(),
+                    },
+                    "threads": {
+                        "sniper_engine": {
+                            "last_beat": prior.isoformat(timespec="seconds"),
+                            "alive": False,
+                            "terminal_reason": "market_close",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "fail"
+        assert result.details["stopped_threads"] == ["sniper_engine"]
+
+    def test_live_heartbeat_clears_prior_terminal_reason(self):
+        write_heartbeat(
+            "sniper_engine",
+            alive=False,
+            terminal_reason="market_close",
+        )
+        write_heartbeat("sniper_engine")
+
+        data = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+
+        assert data["threads"]["sniper_engine"]["alive"] is True
+        assert "terminal_reason" not in data["threads"]["sniper_engine"]
 
     def test_detector_fail_when_no_heartbeat(self, monkeypatch):
         if HEARTBEAT_PATH.exists():

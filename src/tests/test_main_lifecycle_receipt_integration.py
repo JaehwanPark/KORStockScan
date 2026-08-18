@@ -58,6 +58,7 @@ def test_broker_receipt_pipeline_preserves_exact_lifecycle_identity(
         "id": 701,
         "code": "005930",
         "name": "SAMSUNG",
+        "scanner_promotion_id": "SCANPROM-005930-1787000000000",
         "scanner_generation_id": "scanner-generation-701",
         "effective_venue": "KRX",
         "market_session_bucket": "regular",
@@ -89,9 +90,9 @@ def test_broker_receipt_pipeline_preserves_exact_lifecycle_identity(
     assert transition["main_lifecycle_id"] == mint_main_lifecycle_id(
         record_id=stock["id"],
         stock_code=stock["code"],
-        attempt_id=stock["scanner_generation_id"],
+        attempt_id=stock["scanner_promotion_id"],
     )
-    assert transition["attempt_id"] == stock["scanner_generation_id"]
+    assert transition["attempt_id"] == stock["scanner_promotion_id"]
     assert transition["stage"] == "fill"
     assert transition["data"]["fill_state"] == "full"
     assert transition["data"]["broker_execution_provenance_state"] == "missing"
@@ -108,6 +109,7 @@ def test_broker_receipt_pipeline_preserves_exact_lifecycle_identity(
 
     required_snapshot_keys = {
         "id",
+        "scanner_promotion_id",
         "scanner_generation_id",
         "effective_venue",
         "market_session_bucket",
@@ -401,6 +403,16 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
     events: list[dict[str, Any]] = []
     kst = timezone(timedelta(hours=9))
     started_at = datetime(2026, 8, 15, 9, 0, tzinfo=kst)
+
+    original_broker_execution_context = execution_receipts._broker_execution_context
+    monkeypatch.setattr(
+        execution_receipts,
+        "_broker_execution_context",
+        lambda exec_data, *, received_at: original_broker_execution_context(
+            exec_data,
+            received_at=started_at + timedelta(seconds=10),
+        ),
+    )
     stock = {
         "id": 901,
         "code": "005930",

@@ -82,6 +82,12 @@
 
 ## 장후 체크리스트 (20:05~21:55)
 
+- [x] `[SniperMarketCloseHeartbeatContract0818] 20:00 스나이퍼 정상 종료 process-health 오탐 해소` (`Due: 2026-08-18`, `Slot: POSTCLOSE`, `TimeWindow: 20:00~20:10`, `Track: RuntimeStability`)
+  - Source: [process_health.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/process_health.py), [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py), [run_error_detection.log](/home/ubuntu/KORStockScan/logs/run_error_detection.log)
+  - 판정: 스나이퍼는 `20:00:01` 정상 장 종료 분기에서 멈췄으나 bot expected window가 `20:10`까지라서 일반 `alive=false`가 장애로 오인됐다. owner가 동일 거래일 20:00 이후 `terminal_reason=market_close`를 명시한 경우만 `expected_terminal` PASS로 분리하고, reason 누락·조기 종료·과거 날짜·다른 thread는 기존 FAIL을 유지한다.
+  - 권한 경계: detector 분류와 heartbeat provenance만 보완하며 bot 재기동, 실주문, threshold, provider, 주문가·수량, broker/account/order/cooldown 및 hard safety를 변경하지 않는다.
+  - 검증/적용: error-detector·scheduler 회귀 `166 passed`, Ruff/compile/`git diff --check`, checklist parser를 통과했고 health-only dry-run은 `summary_severity=pass`, process-health=`expected_terminal`로 재판정했다. 기존 PID는 이미 로드한 detector 코드로 20:10 종료 전까지 과거 분류를 반복할 수 있으나, 장후 작업 직전 불필요한 재기동은 수행하지 않는다. 다음 프로세스부터 owner marker가 자동 기록된다.
+
 - [ ] `[PostcloseSourceQualityGateReview0818] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-08-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
   - Source: [observation_source_quality_audit_2026-08-18.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-08-18.json), [threshold_cycle_ev_2026-08-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-08-18.json), [code_improvement_workorder_2026-08-18.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-08-18.json), [threshold_cycle_postclose_verification_2026-08-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-08-18.json)
   - 판정 기준: postclose EV/report 소비 전후 `observation_source_quality_audit`의 hard block, row exclusion, clean baseline, unknown-token review warning을 확인한다. `hard_blocking_contract_gap_count>0`이면 결손 row/window 제외 또는 `source_quality_blocked` 산출 여부를 확인하고, `unknown_token_stage_count>0`이면 source-quality producer-fix workorder가 생성됐는지 확인한다.

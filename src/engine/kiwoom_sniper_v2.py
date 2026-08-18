@@ -11547,7 +11547,11 @@ def run_sniper(is_test_mode=False):
                 cooldowns.clear()
                 LAST_AI_CALL_TIMES.clear()
                 ACTIVE_TARGETS.clear()
-                _sn_whb("sniper_engine", alive=False)
+                _sn_whb(
+                    "sniper_engine",
+                    alive=False,
+                    terminal_reason="market_close",
+                )
                 break
 
             # =====================================================

@@ -188,6 +188,7 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "pre_cap_qty",
     "ratio",
     "raw_flow_action",
+    "reference_buy_price",
     "reference_time",
     "reference_price",
     "reason",

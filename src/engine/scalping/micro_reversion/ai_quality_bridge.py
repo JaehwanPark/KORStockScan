@@ -469,8 +469,7 @@ class BridgeConfig:
                     )
                     or artifact_payload_json != catalog_payload_json
                     or artifact_payload.get("schema") != COST_CATALOG_SCHEMA
-                    or artifact_payload.get("content_sha256")
-                    != catalog_content_hash
+                    or artifact_payload.get("content_sha256") != catalog_content_hash
                 ):
                     raise ValueError("verified cost catalog contract invalid")
                 _validate_cost_catalog_payload(
@@ -674,8 +673,10 @@ def _validate_cost_catalog_payload(
             "instrument_tax_classes",
         ):
             scope = profile.get(scope_field)
-            if not isinstance(scope, list) or not scope or not all(
-                isinstance(value, str) and value.strip() for value in scope
+            if (
+                not isinstance(scope, list)
+                or not scope
+                or not all(isinstance(value, str) and value.strip() for value in scope)
             ):
                 raise ValueError(
                     f"verified_cost_catalog_profile_scope_invalid:{scope_field}"
@@ -1650,7 +1651,9 @@ def _liquidity_projection(
         immediate_exit_capacity = (
             None
             if immediate_exit_floor is None
-            else max(1, immediate_exit_floor) if bid_capacity > 0 else 0
+            else max(1, immediate_exit_floor)
+            if bid_capacity > 0
+            else 0
         )
         passive_ask_fill_support_qty = (
             None
@@ -1923,7 +1926,9 @@ def _economics(
             None if resolved_profile is None else resolved_profile.get("effective_from")
         ),
         "cost_profile_venues": (
-            [] if resolved_profile is None else list(resolved_profile.get("venues") or [])
+            []
+            if resolved_profile is None
+            else list(resolved_profile.get("venues") or [])
         ),
         "cost_catalog_content_sha256": (
             config.cost_profile_catalog_content_sha256 or None
@@ -1940,9 +1945,7 @@ def _economics(
         "buy_fee_bps": resolved_buy_fee_bps if cost_ready else None,
         "sell_fee_bps": resolved_sell_fee_bps if cost_ready else None,
         "statutory_sell_tax_bps": resolved_tax_bps,
-        "uncertainty_buffer_bps": (
-            resolved_uncertainty_bps if cost_ready else None
-        ),
+        "uncertainty_buffer_bps": (resolved_uncertainty_bps if cost_ready else None),
         "counterfactual_roundtrip_execution_bps": execution_bps,
         "spread_double_counted": False,
         "all_in_cost_bps": None if all_in is None else round(all_in, 6),
@@ -2459,6 +2462,20 @@ def _entry_pipeline_allocator_provenance(
 
     expected_route_venue = route_venue(trace_route)
     semantic_events: dict[tuple[str, int, str], dict[str, Any]] = {}
+    # Only broker-bound submission stages can resolve an earlier sizing
+    # revalidation. Repeated budget/latency observations legitimately carry
+    # different quantities as price and available cash move; choosing the
+    # latest such row would manufacture quantity authority. A submitted leg
+    # or bundle, by contrast, is the exact quantity that crossed the broker
+    # boundary and may safely own the outcome-only notional evaluation.
+    submission_stages = frozenset(
+        {
+            "order_bundle_submitted",
+            "order_leg_sent",
+            "probe_submitted",
+        }
+    )
+    submitted_semantic_keys: set[tuple[str, int, str]] = set()
     matching_row_count = 0
     for row in entry_pipeline_rows:
         if not isinstance(row, Mapping) or row.get("pipeline") != "ENTRY_PIPELINE":
@@ -2509,11 +2526,28 @@ def _entry_pipeline_allocator_provenance(
             raise ValueError("entry_pipeline_allocator_venue_mismatch")
         if row_session != session_identity(trace_session):
             raise ValueError("entry_pipeline_allocator_session_mismatch")
+        observed_route_venue = route_venue(row_route)
+        route_binding_source = "explicit_market_data_route"
+        if (
+            observed_route_venue == "UNKNOWN"
+            and expected_route_venue in {"KRX", "NXT"}
+            and row_venue == expected_route_venue
+        ):
+            # Some broker-submission rows retain the exact effective venue but
+            # omit the earlier market-data route field. A non-integrated KRX
+            # or NXT trace can bind to that same explicit venue; SOR can never
+            # use this fallback because it requires integrated-route proof.
+            observed_route_venue = row_venue
+            route_binding_source = "explicit_event_venue_fallback"
         if (
             expected_route_venue == "UNKNOWN"
-            or route_venue(row_route) != expected_route_venue
+            or observed_route_venue != expected_route_venue
         ):
-            raise ValueError("entry_pipeline_allocator_route_mismatch")
+            raise ValueError(
+                "entry_pipeline_allocator_route_mismatch:"
+                f"trace={trace_id}:expected={expected_route_venue}:"
+                f"observed={observed_route_venue}"
+            )
         owner_raw = str(
             fields.get("quantity_owner") or fields.get("qty_source") or ""
         ).strip()
@@ -2544,6 +2578,7 @@ def _entry_pipeline_allocator_provenance(
             "effective_venue": row_venue,
             "session_bucket": row_session,
             "route_venue": expected_route_venue,
+            "route_binding_source": route_binding_source,
             "formula_version": formula_version,
             "effective_qty": effective_qty,
             "quantity_owner": owner,
@@ -2558,6 +2593,20 @@ def _entry_pipeline_allocator_provenance(
         )
         joined["source_event_sha256s"].add(_sha256(event_identity))
         joined["event_timestamps_ms"].append(emitted_ms)
+        broker_order_no = str(
+            fields.get("broker_order_no")
+            or fields.get("order_no")
+            or fields.get("ord_no")
+            or ""
+        ).strip()
+        if (
+            stage in submission_stages
+            and str(fields.get("actual_order_submitted") or "").strip().lower()
+            in {"1", "true", "yes", "on"}
+            and broker_order_no
+            and broker_order_no not in {"-", "None", "none", "null"}
+        ):
+            submitted_semantic_keys.add(key)
     if not semantic_events:
         return {
             "status": "allocator_provenance_missing",
@@ -2571,9 +2620,41 @@ def _entry_pipeline_allocator_provenance(
             "matching_row_count": 0,
             "deduplicated_event_count": 0,
         }
-    if len(semantic_events) != 1:
-        raise ValueError("entry_pipeline_allocator_provenance_conflict")
-    joined = next(iter(semantic_events.values()))
+    selected_key: tuple[str, int, str] | None = None
+    if len(submitted_semantic_keys) == 1:
+        selected_key = next(iter(submitted_semantic_keys))
+    if selected_key is None:
+        all_source_hashes = sorted(
+            {
+                source_hash
+                for event in semantic_events.values()
+                for source_hash in event["source_event_sha256s"]
+            }
+        )
+        all_event_times = sorted(
+            timestamp
+            for event in semantic_events.values()
+            for timestamp in event["event_timestamps_ms"]
+        )
+        return {
+            "status": (
+                "allocator_provenance_not_submitted_observation_only"
+                if len(semantic_events) == 1
+                else "allocator_provenance_conflict_observation_only"
+            ),
+            "quantity_authority": "standardized_one_share_observation_only",
+            "allocator_event_sha256": None,
+            "allocator_source_event_sha256s": all_source_hashes,
+            "allocator_first_event_timestamp_ms": all_event_times[0],
+            "allocator_last_event_timestamp_ms": all_event_times[-1],
+            "formula_version": None,
+            "effective_qty": None,
+            "matching_row_count": matching_row_count,
+            "deduplicated_event_count": len(semantic_events),
+            "allocator_semantic_count": len(semantic_events),
+            "allocator_submitted_semantic_count": len(submitted_semantic_keys),
+        }
+    joined = semantic_events[selected_key]
     semantic = joined["semantic"]
     source_event_sha256s = sorted(joined["source_event_sha256s"])
     event_timestamps_ms = sorted(joined["event_timestamps_ms"])
@@ -2592,6 +2673,8 @@ def _entry_pipeline_allocator_provenance(
         "effective_qty": semantic["effective_qty"],
         "matching_row_count": matching_row_count,
         "deduplicated_event_count": 1,
+        "allocator_semantic_count": len(semantic_events),
+        "allocator_submitted_semantic_count": len(submitted_semantic_keys),
     }
 
 
@@ -2627,8 +2710,15 @@ def build_tactical_evidence(
     watermark_ms = int((watermark or {}).get("captured_at_ms") or 0)
     watermark_us = int((watermark or {}).get("captured_at_us") or 0)
     snapshot_date = str((watermark or {}).get("captured_at") or "")[:10]
+    try:
+        date.fromisoformat(snapshot_date)
+        snapshot_date_valid = True
+    except (TypeError, ValueError):
+        snapshot_date_valid = False
+    if verified_symbol_metadata is not None and not snapshot_date_valid:
+        blocker_list.append("verified_symbol_metadata_snapshot_date_unavailable")
     symbol_metadata = _verified_symbol_metadata_context(
-        supplied=verified_symbol_metadata,
+        supplied=(verified_symbol_metadata if snapshot_date_valid else None),
         symbol=symbol,
         snapshot_date=snapshot_date,
     )
@@ -3304,13 +3394,40 @@ def build_future_outcome(
         "effective_qty": None,
         "matching_row_count": 0,
         "deduplicated_event_count": 0,
+        "allocator_semantic_count": 0,
+        "allocator_submitted_semantic_count": 0,
+        "allocator_provenance_error": None,
     }
     if stage in entry_like_stages:
         evaluation_basis = "new_or_incremental_entry_ask_sweep_to_future_bid_sweep"
-        allocator_provenance = _entry_pipeline_allocator_provenance(
-            evidence=evidence,
-            entry_pipeline_rows=entry_pipeline_rows,
-        )
+        try:
+            allocator_provenance = _entry_pipeline_allocator_provenance(
+                evidence=evidence,
+                entry_pipeline_rows=entry_pipeline_rows,
+            )
+        except ValueError as exc:
+            error_code = str(exc).split(":", 1)[0]
+            if not error_code.startswith("entry_pipeline_allocator_"):
+                raise
+            # The entry-pipeline artifact has already passed the report-level
+            # raw hash/schema/census gate. A causal or scope defect in one
+            # trace-symbol join is therefore an exact-row exclusion, not
+            # authority to discard unrelated traces for the day.
+            allocator_provenance = {
+                "status": "allocator_provenance_invalid_observation_only",
+                "quantity_authority": "standardized_one_share_observation_only",
+                "allocator_event_sha256": None,
+                "allocator_source_event_sha256s": [],
+                "allocator_first_event_timestamp_ms": None,
+                "allocator_last_event_timestamp_ms": None,
+                "formula_version": None,
+                "effective_qty": None,
+                "matching_row_count": 0,
+                "deduplicated_event_count": 0,
+                "allocator_semantic_count": 0,
+                "allocator_submitted_semantic_count": 0,
+                "allocator_provenance_error": error_code,
+            }
         depth_capacity = _nonnegative_int(
             conservative.get("strict_depth_participation_capacity_qty")
         )
@@ -3919,6 +4036,7 @@ def build_future_outcome(
         "counterfactual_quantity": quantity,
         "counterfactual_quantity_basis": quantity_basis,
         "quantity_authority": allocator_provenance.get("quantity_authority"),
+        "allocator_provenance_status": allocator_provenance.get("status"),
         "allocator_event_sha256": allocator_provenance.get("allocator_event_sha256"),
         "allocator_source_event_sha256s": allocator_provenance.get(
             "allocator_source_event_sha256s"
@@ -3937,6 +4055,15 @@ def build_future_outcome(
         "allocator_matching_row_count": allocator_provenance.get("matching_row_count"),
         "allocator_deduplicated_event_count": allocator_provenance.get(
             "deduplicated_event_count"
+        ),
+        "allocator_semantic_count": allocator_provenance.get(
+            "allocator_semantic_count", 0
+        ),
+        "allocator_submitted_semantic_count": allocator_provenance.get(
+            "allocator_submitted_semantic_count", 0
+        ),
+        "allocator_provenance_error": allocator_provenance.get(
+            "allocator_provenance_error"
         ),
         "notional_net_profit_eligible": notional_net_profit_eligible,
         "economic_promotion_evidence_eligible": (economic_promotion_evidence_eligible),
@@ -4605,10 +4732,10 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
     if not isinstance(integrated_sor_route_proven, bool):
         raise ValueError("micro_context_route_provenance_invalid")
     if not trace_market_data_route:
-        if not source_unavailable or not {
-            "snapshot_market_data_route_mismatch",
-            "payload_trace_market_data_route_mismatch",
-        }.intersection(source_blockers):
+        # A row already blocked as source-unavailable may retain an empty
+        # route as diagnostic evidence. It cannot become replay/economic
+        # eligible, while a usable row still requires exact route provenance.
+        if not source_unavailable:
             raise ValueError("micro_context_route_provenance_invalid")
     elif "integrated" in trace_market_data_route or "sor" in trace_market_data_route:
         if micro_venue != "SOR":
@@ -6090,22 +6217,20 @@ def build_bridge_report(
             rows[index]["primary_parent_wave_stage_row"] = index == primary_index
             rows[index]["same_parent_wave_repeat"] = index != primary_index
         metric_predicates = {
-            "primary_replay_parent_wave_stage_row": lambda row: row[
-                "three_arm_manifest"
-            ].get("replay_context_eligible")
-            is True,
-            "primary_control_parent_wave_stage_row": lambda row: row[
-                "three_arm_manifest"
-            ].get("control_decision_eligible")
-            is True,
-            "primary_paired_parent_wave_stage_row": lambda row: row[
-                "three_arm_manifest"
-            ].get("paired_decision_quality_eligible")
-            is True,
-            "primary_economic_parent_wave_stage_row": lambda row: row[
-                "three_arm_manifest"
-            ].get("net_economic_evaluation_eligible")
-            is True,
+            "primary_replay_parent_wave_stage_row": lambda row: (
+                row["three_arm_manifest"].get("replay_context_eligible") is True
+            ),
+            "primary_control_parent_wave_stage_row": lambda row: (
+                row["three_arm_manifest"].get("control_decision_eligible") is True
+            ),
+            "primary_paired_parent_wave_stage_row": lambda row: (
+                row["three_arm_manifest"].get("paired_decision_quality_eligible")
+                is True
+            ),
+            "primary_economic_parent_wave_stage_row": lambda row: (
+                row["three_arm_manifest"].get("net_economic_evaluation_eligible")
+                is True
+            ),
             "primary_mature_outcome_parent_wave_stage_row": lambda row: any(
                 horizon.get("mature") is True
                 for horizon in (row.get("future_outcome") or {}).get("horizons") or []
@@ -6169,6 +6294,18 @@ def build_bridge_report(
     allocator_outcome_joined = sum(
         (row.get("future_outcome") or {}).get("allocator_event_sha256") is not None
         for row in rows
+    )
+    allocator_status_counts = Counter(
+        str(
+            (row.get("future_outcome") or {}).get("allocator_provenance_status")
+            or "unknown"
+        )
+        for row in rows
+    )
+    allocator_error_counts = Counter(
+        str((row.get("future_outcome") or {}).get("allocator_provenance_error"))
+        for row in rows
+        if (row.get("future_outcome") or {}).get("allocator_provenance_error")
     )
     pipeline_missing_observation_only = bool(
         pipeline_source_status == "missing_observation_only"
@@ -6236,6 +6373,8 @@ def build_bridge_report(
             "net_economic_eligible_primary_episode_count": economic_eligible,
             "mature_outcome_eligible_primary_episode_count": (mature_outcome_eligible),
             "entry_pipeline_allocator_outcome_joined_count": (allocator_outcome_joined),
+            "entry_pipeline_allocator_status_counts": dict(allocator_status_counts),
+            "entry_pipeline_allocator_error_counts": dict(allocator_error_counts),
             "entry_pipeline_source_status": pipeline_source_status,
             "primary_metric_denominator": (
                 "eligible_exact_trace_parent_wave_stage_rows"

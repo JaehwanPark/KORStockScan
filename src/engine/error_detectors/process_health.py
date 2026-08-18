@@ -17,6 +17,7 @@ from src.engine.error_detectors.base import (
 HEARTBEAT_PATH = PROJECT_ROOT / "tmp" / "error_detector_heartbeat.json"
 POSTCLOSE_BOT_ISOLATION_PATH = PROJECT_ROOT / "tmp" / "postclose_bot_isolation.json"
 _HEARTBEAT_LOCK = threading.Lock()
+_SNIPER_NORMAL_MARKET_CLOSE_MINUTE = 20 * 60
 
 
 def reset_heartbeat():
@@ -28,7 +29,12 @@ def reset_heartbeat():
         os.replace(tmp_path, HEARTBEAT_PATH)
 
 
-def write_heartbeat(component: str, alive: bool = True):
+def write_heartbeat(
+    component: str,
+    alive: bool = True,
+    *,
+    terminal_reason: str | None = None,
+):
     HEARTBEAT_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = HEARTBEAT_PATH.with_suffix(HEARTBEAT_PATH.suffix + ".tmp")
     with _HEARTBEAT_LOCK:
@@ -43,7 +49,16 @@ def write_heartbeat(component: str, alive: bool = True):
             state["main_loop"] = {"last_beat": now_iso, "pid": os.getpid()}
         else:
             threads = state.setdefault("threads", {})
-            threads[component] = {"last_beat": now_iso, "alive": alive}
+            previous = threads.get(component, {})
+            heartbeat = {"last_beat": now_iso, "alive": alive}
+            if not alive:
+                if terminal_reason:
+                    heartbeat["terminal_reason"] = str(terminal_reason)
+                elif previous.get("terminal_reason"):
+                    # The sniper's finally block repeats alive=False. Preserve an
+                    # explicit normal-stop reason written by the owning branch.
+                    heartbeat["terminal_reason"] = previous["terminal_reason"]
+            threads[component] = heartbeat
         tmp_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp_path, HEARTBEAT_PATH)
 
@@ -360,7 +375,19 @@ class ProcessHealthDetector(BaseDetector):
             talive = tdata.get("alive", True)
             details.setdefault("thread_age_sec", {})[tname] = round(tage, 1)
             details.setdefault("thread_alive", {})[tname] = talive
+            terminal_reason = str(tdata.get("terminal_reason") or "").strip()
+            if terminal_reason:
+                details.setdefault("thread_terminal_reason", {})[tname] = (
+                    terminal_reason
+                )
             if not talive:
+                if _is_expected_thread_terminal(
+                    tname,
+                    tdata,
+                    now_ts=now_ts,
+                ):
+                    details.setdefault("expected_stopped_threads", []).append(tname)
+                    continue
                 details.setdefault("stopped_threads", []).append(tname)
                 thread_issues.append(tname)
             elif tage > thread_timeout:
@@ -378,12 +405,18 @@ class ProcessHealthDetector(BaseDetector):
                 recommended_action="Investigate thread health. Restart bot_main.py if needed.",
             )
 
-        details["thread_status"] = "ok"
+        expected_stopped = details.get("expected_stopped_threads", [])
+        details["thread_status"] = "expected_terminal" if expected_stopped else "ok"
         return DetectionResult(
             detector_id=self.id,
             category=self.category,
             severity="pass",
-            summary="All processes and threads healthy.",
+            summary=(
+                "All required processes healthy; expected terminal threads: "
+                + ", ".join(expected_stopped)
+                if expected_stopped
+                else "All processes and threads healthy."
+            ),
             details=details,
         )
 
@@ -413,6 +446,34 @@ def _parse_iso(iso_str: str) -> float | None:
         return dt.timestamp()
     except (ValueError, TypeError):
         return None
+
+
+def _is_expected_thread_terminal(
+    component: str,
+    thread_state: dict,
+    *,
+    now_ts: float,
+) -> bool:
+    """Recognize only owner-declared, time-valid normal thread completion."""
+    if component != "sniper_engine":
+        return False
+    if str(thread_state.get("terminal_reason") or "") != "market_close":
+        return False
+
+    terminal_ts = _parse_iso(str(thread_state.get("last_beat") or ""))
+    if terminal_ts is None:
+        return False
+    now_dt = datetime.fromtimestamp(now_ts).astimezone()
+    terminal_dt = datetime.fromtimestamp(terminal_ts).astimezone()
+    if terminal_dt.date() != now_dt.date():
+        return False
+
+    now_minutes = now_dt.hour * 60 + now_dt.minute
+    terminal_minutes = terminal_dt.hour * 60 + terminal_dt.minute
+    return (
+        now_minutes >= _SNIPER_NORMAL_MARKET_CLOSE_MINUTE
+        and terminal_minutes >= _SNIPER_NORMAL_MARKET_CLOSE_MINUTE
+    )
 
 
 def _load_postclose_bot_isolation(now_ts: float, max_age_sec: int) -> dict | None:

@@ -184,8 +184,7 @@ def _complete_lifecycle(
     namespace = (
         broker_namespace
         if broker_namespace is not None
-        else int(hashlib.sha256(attempt_id.encode()).hexdigest()[:12], 16)
-        % 1_000_000
+        else int(hashlib.sha256(attempt_id.encode()).hexdigest()[:12], 16) % 1_000_000
     )
     assert 0 <= namespace < 1_000_000
     entry_order_no = f"1{namespace:06d}"
@@ -244,9 +243,7 @@ def _complete_lifecycle(
             fill_data.update(
                 _broker_execution_proof(
                     order_no=entry_execution_order_no or entry_order_no,
-                    execution_no=(
-                        f"2{(namespace + execution_offset) % 1_000_000:06d}"
-                    ),
+                    execution_no=(f"2{(namespace + execution_offset) % 1_000_000:06d}"),
                     order_qty=entry_order_qty,
                     cumulative_qty=cumulative_fill_qty,
                     cumulative_amount=cumulative_fill_amount,
@@ -523,34 +520,25 @@ def test_broker_order_and_execution_identity_are_unique_across_lifecycles(
     report = build_daily_report(TARGET_DATE, source_path=source, write=False)
 
     assert report["broker_order_no_cross_lifecycle_conflict_count"] == 2
-    assert (
-        report[
-            "broker_execution_cross_lifecycle_identity_conflict_count"
-        ]
-        == 2
-    )
+    assert report["broker_execution_cross_lifecycle_identity_conflict_count"] == 2
     assert report["promotion_evidence_eligible_count"] == 0
     assert report["promotion_ready"] is False
-    assert "broker_order_no_cross_lifecycle_conflict" in report[
-        "global_source_quality_gate_blockers"
-    ]
-    assert "broker_execution_identity_cross_lifecycle_conflict" in report[
-        "global_source_quality_gate_blockers"
-    ]
+    assert (
+        "broker_order_no_cross_lifecycle_conflict"
+        in report["global_source_quality_gate_blockers"]
+    )
+    assert (
+        "broker_execution_identity_cross_lifecycle_conflict"
+        in report["global_source_quality_gate_blockers"]
+    )
     for row in report["rows"]:
         assert row["broker_order_no_cross_lifecycle_conflict_count"] == 2
+        assert row["broker_execution_cross_lifecycle_identity_conflict_count"] == 2
+        assert "broker_order_no_cross_lifecycle_conflict" in row["promotion_blockers"]
         assert (
-            row[
-                "broker_execution_cross_lifecycle_identity_conflict_count"
-            ]
-            == 2
+            "broker_execution_identity_cross_lifecycle_conflict"
+            in row["promotion_blockers"]
         )
-        assert "broker_order_no_cross_lifecycle_conflict" in row[
-            "promotion_blockers"
-        ]
-        assert "broker_execution_identity_cross_lifecycle_conflict" in row[
-            "promotion_blockers"
-        ]
 
 
 def test_transition_identity_content_conflict_is_source_gap(tmp_path: Path) -> None:
@@ -588,9 +576,7 @@ def test_execution_order_must_match_the_explicit_submitted_order(
 
     assert row["broker_execution_submission_link_conflict_count"] == 1
     assert row["entry_fill_qty"] == 0.0
-    assert "broker_execution_submission_link_conflict" in row[
-        "promotion_blockers"
-    ]
+    assert "broker_execution_submission_link_conflict" in row["promotion_blockers"]
     assert report["promotion_ready"] is False
     assert report["promotion_ready_lifecycle_ids"] == []
 
@@ -612,9 +598,7 @@ def test_sell_execution_must_match_the_explicit_submitted_order(
 
     assert row["broker_execution_submission_link_conflict_count"] == 1
     assert row["exit_qty"] == 0.0
-    assert "broker_execution_submission_link_conflict" in row[
-        "promotion_blockers"
-    ]
+    assert "broker_execution_submission_link_conflict" in row["promotion_blockers"]
     assert report["promotion_ready"] is False
 
 
@@ -634,9 +618,7 @@ def test_execution_order_quantity_must_match_submitted_quantity(
     row = report["rows"][0]
 
     assert row["broker_submitted_order_qty_mismatch_phases"] == ["entry"]
-    assert "broker_execution_submitted_qty_mismatch:entry" in row[
-        "promotion_blockers"
-    ]
+    assert "broker_execution_submitted_qty_mismatch:entry" in row["promotion_blockers"]
     assert report["promotion_ready"] is False
 
 
@@ -657,9 +639,7 @@ def test_execution_time_must_not_predate_submit_beyond_bounded_clock_skew(
 
     assert row["broker_execution_submission_link_conflict_count"] == 1
     assert row["entry_fill_qty"] == 0.0
-    assert "broker_execution_submission_link_conflict" in row[
-        "promotion_blockers"
-    ]
+    assert "broker_execution_submission_link_conflict" in row["promotion_blockers"]
     assert report["promotion_ready"] is False
 
 
@@ -818,7 +798,7 @@ def test_entry_phase_cannot_regress_after_holding(tmp_path: Path) -> None:
             data={
                 "requested_qty": 5,
                 "actual_broker_order_submitted": True,
-                    "broker_order_no": "1000099",
+                "broker_order_no": "1000099",
             },
         ),
         _event(identity, "scanner", 4.5),
@@ -882,9 +862,10 @@ def test_pipeline_and_journal_rows_never_complete_each_other(
     assert report["source_kind"] == "mixed_pipeline_and_transition_journal"
     assert report["mixed_source_row_count"] == len(journal_tail)
     assert report["rows"][0]["stage_counts"] == {"scanner": 1}
-    assert "mixed_transition_source_kinds_forbidden" in report[
-        "global_source_quality_gate_blockers"
-    ]
+    assert (
+        "mixed_transition_source_kinds_forbidden"
+        in report["global_source_quality_gate_blockers"]
+    )
     assert report["promotion_ready"] is False
 
 
@@ -941,28 +922,18 @@ def test_isolatable_broker_provenance_gap_excludes_only_exact_lifecycle(
     assert report["candidate_row_gate_failure_count"] == 1
     assert report["promotion_evidence_eligible_count"] == 1
     assert report["promotion_ready"] is True
-    assert report["promotion_ready_lifecycle_ids"] == [
-        clean["main_lifecycle_id"]
-    ]
+    assert report["promotion_ready_lifecycle_ids"] == [clean["main_lifecycle_id"]]
     assert clean["promotion_evidence_eligible"] is True
     assert clean["promotion_disposition"] == "eligible_source_only"
     assert broker_gap["promotion_evidence_eligible"] is False
-    assert broker_gap["promotion_disposition"] == (
-        "excluded_exact_lifecycle_window"
-    )
-    assert "broker_execution_raw_provenance_gap" in broker_gap[
-        "promotion_blockers"
-    ]
-    assert "daily_source_quality_gate_failed" not in clean[
-        "promotion_blockers"
-    ]
+    assert broker_gap["promotion_disposition"] == ("excluded_exact_lifecycle_window")
+    assert "broker_execution_raw_provenance_gap" in broker_gap["promotion_blockers"]
+    assert "daily_source_quality_gate_failed" not in clean["promotion_blockers"]
     assert manifest["schema"] == (
         "main_scalping_lifecycle_window_exclusion_manifest_v1"
     )
     assert manifest["metric_role"] == "source_quality_gate"
-    assert manifest["decision_authority"] == (
-        "exact_lifecycle_window_exclusion_only"
-    )
+    assert manifest["decision_authority"] == ("exact_lifecycle_window_exclusion_only")
     assert manifest["excluded_lifecycle_count"] == 1
     assert manifest["eligible_lifecycle_count"] == 1
     assert manifest["taxonomy_counts"] == {
@@ -972,12 +943,8 @@ def test_isolatable_broker_provenance_gap_excludes_only_exact_lifecycle(
         {
             "main_lifecycle_id": broker_gap["main_lifecycle_id"],
             "exclusion_scope": "exact_main_lifecycle_window",
-            "taxonomies": [
-                "broker_execution_provenance_or_custody_gap"
-            ],
-            "reason_codes_sha256": paired._sha256(
-                broker_gap["promotion_blockers"]
-            ),
+            "taxonomies": ["broker_execution_provenance_or_custody_gap"],
+            "reason_codes_sha256": paired._sha256(broker_gap["promotion_blockers"]),
         }
     ]
     assert report["runtime_effect"] is False
@@ -1111,9 +1078,7 @@ def test_slippage_basis_must_cover_every_executed_exit_share(
     report = build_daily_report(TARGET_DATE, source_path=source, write=False)
     row = report["rows"][0]
 
-    assert "slippage_basis_exit_qty_coverage_incomplete" in row[
-        "promotion_blockers"
-    ]
+    assert "slippage_basis_exit_qty_coverage_incomplete" in row["promotion_blockers"]
     assert report["promotion_ready"] is False
 
 
@@ -1199,10 +1164,7 @@ def test_unique_lifecycle_cardinality_is_bounded_and_fails_closed(
     source = tmp_path / "journal.jsonl"
     _write_jsonl(
         source,
-        [
-            _event(_identity(f"bounded-{index}"), "scanner", index)
-            for index in range(3)
-        ],
+        [_event(_identity(f"bounded-{index}"), "scanner", index) for index in range(3)],
     )
 
     report = build_daily_report(TARGET_DATE, source_path=source, write=False)
@@ -1210,9 +1172,10 @@ def test_unique_lifecycle_cardinality_is_bounded_and_fails_closed(
     assert report["lifecycle_count"] == 2
     assert report["lifecycle_accumulator_overflow_row_count"] == 1
     assert report["streaming_memory_contract"]["accumulator_limit"] == 2
-    assert "lifecycle_accumulator_limit_exceeded" in report[
-        "global_source_quality_gate_blockers"
-    ]
+    assert (
+        "lifecycle_accumulator_limit_exceeded"
+        in report["global_source_quality_gate_blockers"]
+    )
     assert report["promotion_ready"] is False
 
 
@@ -1233,15 +1196,18 @@ def test_transition_identity_cardinality_is_globally_bounded(
 
     assert row["transition_count"] == 2
     assert report["transition_event_identity_overflow_row_count"] == 1
-    assert report["streaming_memory_contract"][
-        "retained_transition_event_identity_count"
-    ] == 2
-    assert "global_transition_event_identity_limit_exceeded" in row[
-        "invalid_transition_reasons"
-    ]
-    assert "global_transition_event_identity_limit_exceeded" in report[
-        "global_source_quality_gate_blockers"
-    ]
+    assert (
+        report["streaming_memory_contract"]["retained_transition_event_identity_count"]
+        == 2
+    )
+    assert (
+        "global_transition_event_identity_limit_exceeded"
+        in row["invalid_transition_reasons"]
+    )
+    assert (
+        "global_transition_event_identity_limit_exceeded"
+        in report["global_source_quality_gate_blockers"]
+    )
     assert report["promotion_ready"] is False
 
 
@@ -1436,9 +1402,9 @@ def test_cross_lifecycle_reference_hash_conflict_blocks_daily_promotion(
         "daily_source_quality_gate_failed" in row["promotion_blockers"]
         for row in report["rows"]
     )
-    assert report["lifecycle_window_exclusion_manifest"][
-        "excluded_lifecycle_count"
-    ] == 0
+    assert (
+        report["lifecycle_window_exclusion_manifest"]["excluded_lifecycle_count"] == 0
+    )
     assert all(
         row["promotion_disposition"] == "global_source_contract_blocked"
         for row in report["rows"]
@@ -1477,11 +1443,11 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
             pipeline="ENTRY_PIPELINE",
             source_stage="order_bundle_submitted",
             second=2,
-                fields={
-                    "actual_order_submitted": True,
-                    "broker_order_no": "0000701",
-                    "broker_order_no_list": "0000701",
-                    "requested_qty": 5,
+            fields={
+                "actual_order_submitted": True,
+                "broker_order_no": "0000701",
+                "broker_order_no_list": "0000701",
+                "requested_qty": 5,
                 "bbo_observed": True,
                 "depth_observed": True,
             },
@@ -1529,23 +1495,23 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
                 "depth_observed": True,
             },
         ),
-            _pipeline_event(
-                stock=stock,
-                pipeline="HOLDING_PIPELINE",
-                source_stage="sell_order_sent",
-                second=62,
-                fields={
-                    "actual_order_submitted": True,
-                    "ord_no": "0002701",
-                    "qty": 5,
-                    "bbo_observed": True,
-                    "depth_observed": True,
-                },
-            ),
-            _pipeline_event(
-                stock=stock,
-                pipeline="HOLDING_PIPELINE",
-                source_stage="sell_completed",
+        _pipeline_event(
+            stock=stock,
+            pipeline="HOLDING_PIPELINE",
+            source_stage="sell_order_sent",
+            second=62,
+            fields={
+                "actual_order_submitted": True,
+                "ord_no": "0002701",
+                "qty": 5,
+                "bbo_observed": True,
+                "depth_observed": True,
+            },
+        ),
+        _pipeline_event(
+            stock=stock,
+            pipeline="HOLDING_PIPELINE",
+            source_stage="sell_completed",
             second=63,
             fields={
                 "sell_qty": 5,
@@ -1558,10 +1524,10 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
                     cumulative_amount=50_050,
                     remaining_qty=0,
                     execution_price=10_010,
-                        unit_qty=5,
-                        second=63,
-                        side="SELL",
-                    ),
+                    unit_qty=5,
+                    second=63,
+                    side="SELL",
+                ),
                 "bbo_observed": True,
                 "depth_observed": True,
             },
@@ -2050,12 +2016,13 @@ def test_conflicting_execution_identity_is_blocked_without_double_count(
     assert row["broker_execution_unique_count"] == 1
     assert row["broker_execution_conflict_count"] == 1
     assert row["broker_execution_order_progress_conflict_count"] == 1
-    assert "broker_execution_identity_content_conflict" in row[
-        "invalid_transition_reasons"
-    ]
-    assert "broker_execution_order_progress_conflict" in row[
-        "invalid_transition_reasons"
-    ]
+    assert (
+        "broker_execution_identity_content_conflict"
+        in row["invalid_transition_reasons"]
+    )
+    assert (
+        "broker_execution_order_progress_conflict" in row["invalid_transition_reasons"]
+    )
     assert report["promotion_ready"] is False
     assert report["promotion_ready_lifecycle_ids"] == []
 
@@ -2085,9 +2052,10 @@ def test_mapped_pipeline_row_without_id_is_gap_and_never_joined(
     assert report["rows"] == []
     assert report["pipeline_lifecycle_missing_identity_count"] == 1
     assert report["pipeline_lifecycle_instrumentation_gap_count"] == 1
-    assert "pipeline_lifecycle_instrumentation_gap" in report[
-        "global_source_quality_gate_blockers"
-    ]
+    assert (
+        "pipeline_lifecycle_instrumentation_gap"
+        in report["global_source_quality_gate_blockers"]
+    )
     assert report["promotion_ready"] is False
 
 
@@ -2120,9 +2088,7 @@ def test_pipeline_never_falls_back_to_legacy_timestamp_or_stage_claim(
     report = build_daily_report(TARGET_DATE, source_path=source, write=False)
 
     assert report["rows"] == []
-    reasons = {
-        example["reason"] for example in report["instrumentation_gap_examples"]
-    }
+    reasons = {example["reason"] for example in report["instrumentation_gap_examples"]}
     assert "pipeline_lifecycle_explicit_timestamp_invalid" in reasons
     assert "pipeline_lifecycle_stage_mapping_mismatch" in reasons
     assert report["promotion_ready"] is False
@@ -2179,9 +2145,7 @@ def test_execution_exit_requires_exact_qty_price_and_basis_source(
     assert report["pipeline_lifecycle_mapped_row_count"] == 3
     assert report["pipeline_lifecycle_accepted_row_count"] == 0
     assert report["pipeline_lifecycle_instrumentation_gap_count"] == 3
-    reasons = {
-        example["reason"] for example in report["instrumentation_gap_examples"]
-    }
+    reasons = {example["reason"] for example in report["instrumentation_gap_examples"]}
     assert reasons == {
         "pipeline_execution_exit_exact_price_or_qty_missing",
         "pipeline_execution_exit_exact_price_or_qty_invalid",
@@ -2348,9 +2312,7 @@ def test_pipeline_heartbeat_is_generated_only_for_exposure_stages() -> None:
 
 
 def test_default_pipeline_source_path_is_daily_and_not_sync_journal() -> None:
-    assert pipeline_event_path(TARGET_DATE).name == (
-        "pipeline_events_2026-08-14.jsonl"
-    )
+    assert pipeline_event_path(TARGET_DATE).name == ("pipeline_events_2026-08-14.jsonl")
 
 
 def test_missing_scanner_generation_fails_open_without_hot_path_error_log(
@@ -2369,3 +2331,61 @@ def test_missing_scanner_generation_fails_open_without_hot_path_error_log(
 
     assert fields == {}
     assert errors == []
+
+
+def test_pipeline_identity_uses_stable_promotion_before_late_generation() -> None:
+    stock = {
+        "id": 705,
+        "code": "005930",
+        "scanner_promotion_id": "SCANPROM-005930-1787000000000",
+    }
+    scanner = pipeline_lifecycle_fields_safe(
+        stock,
+        "005930",
+        pipeline="ENTRY_PIPELINE",
+        source_stage="scalping_scanner_fast_precheck",
+        observed_at=BASE,
+    )
+    stock["scanner_generation_id"] = "005930:SCANPROM-005930-1787000000000:r1"
+    entry = pipeline_lifecycle_fields_safe(
+        stock,
+        "005930",
+        pipeline="ENTRY_PIPELINE",
+        source_stage="ai_confirmed",
+        observed_at=BASE,
+    )
+    holding = pipeline_lifecycle_fields_safe(
+        stock,
+        "005930",
+        pipeline="HOLDING_PIPELINE",
+        source_stage="ai_holding_review",
+        observed_at=BASE,
+    )
+
+    expected = mint_main_lifecycle_id(
+        record_id=stock["id"],
+        stock_code=stock["code"],
+        attempt_id=stock["scanner_promotion_id"],
+    )
+    assert scanner["main_lifecycle_id"] == expected
+    assert entry["main_lifecycle_id"] == expected
+    assert holding["main_lifecycle_id"] == expected
+    assert scanner["attempt_id"] == stock["scanner_promotion_id"]
+    assert entry["attempt_id"] == stock["scanner_promotion_id"]
+
+
+def test_pipeline_identity_conflicting_promotion_ids_fail_open_as_gap() -> None:
+    fields = pipeline_lifecycle_fields_safe(
+        {
+            "id": 706,
+            "code": "005930",
+            "scanner_promotion_id": "SCANPROM-005930-parent",
+        },
+        "005930",
+        pipeline="ENTRY_PIPELINE",
+        source_stage="ai_confirmed",
+        source_fields={"scanner_promotion_id": "SCANPROM-005930-other"},
+        observed_at=BASE,
+    )
+
+    assert fields == {}
