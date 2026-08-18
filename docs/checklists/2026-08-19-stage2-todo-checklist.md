@@ -104,6 +104,14 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 전일 R0→R3 후속 보완
+
+- [ ] `[MainAIQualityPastMarketCoverage0819] Exact AI 평가 종목의 causal 0B/0D 과거시장 관측 커버리지 복구` (`Due: 2026-08-19`, `Slot: INTRADAY`, `TimeWindow: 09:00~15:20`, `Track: ScalpingLogic`)
+  - Source: [micro-reversion bridge](/home/ubuntu/KORStockScan/data/report/micro_reversion_ai_quality_bridge/micro_reversion_ai_quality_bridge_2026-08-18.json), [collection target](/home/ubuntu/KORStockScan/data/runtime/scalp_micro_reversion_collection_targets/scalp_micro_reversion_collection_targets_2026-08-18.json), [forward observations](/home/ubuntu/KORStockScan/data/observations/scalp_micro_reversion_forward), [Kiwoom WebSocket](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py)
+  - 현재 근거: 2026-08-18 bridge의 exact trace/payload join `1110`건이 모두 `past_market_row_missing`으로 source-unavailable이며 materialized A/B/C request와 provider call은 `0`건이다. 관측 파일과 일부 종목 row는 존재하므로 저장소 손상이나 stale 허용시간 문제가 아니라 AI 평가 종목·venue·session의 평가 전 causal 구독 커버리지 결손으로 분류한다.
+  - 판정 기준: 동일 symbol·venue·session의 decision watermark 이전 `active_wave_max_age_sec + context_lookback_sec=210초` 안에 valid 0B market row와 same-epoch 0D depth row가 존재하고, exact trace/payload 및 lifecycle identity가 결속된 eligible parent가 1건 이상 생성되는지 확인한다. stale lookback 확대나 다른 route/session 대체로 통과시키지 않는다.
+  - 다음 액션: 기존 bounded source-only observation target/스캐너 prewarm·retention 경로에서 AI 평가 전 커버리지를 복구하고 WS item budget·디스크 projection guard를 유지한 뒤 장후 R0→R3를 재실행한다. runtime/order/provider/threshold/bot/cap 권한은 계속 false이며 provider replay는 eligible parent가 생긴 경우에만 일일 50% 예산 한도에서 실행한다.
+
 
 
 
