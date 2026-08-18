@@ -2418,6 +2418,81 @@ def test_disk_backed_source_store_matches_in_memory_report(tmp_path) -> None:
     }
 
 
+def test_market_v3_accepts_canonical_journal_identity_without_registration_item() -> (
+    None
+):
+    market_rows = _past_market_rows()
+    for row in market_rows:
+        row.pop("item")
+
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=market_rows,
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+    )
+
+    assert "past_market_row_missing" not in evidence["source_quality"]["blockers"]
+    assert evidence["source_quality"]["rejected_market_reason_counts"] == {}
+
+
+def test_market_v3_still_rejects_conflicting_registration_item_when_present() -> None:
+    market_rows = _past_market_rows()
+    market_rows[-1] = {**market_rows[-1], "item": "999999_AL"}
+
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=market_rows,
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+    )
+
+    assert evidence["source_quality"]["rejected_market_reason_counts"] == {
+        "market_item_scope_conflict": 1
+    }
+
+
+def test_legacy_market_schema_does_not_inherit_v3_item_omission_contract() -> None:
+    market_rows = _past_market_rows()
+    market_rows[-1] = {
+        **market_rows[-1],
+        "schema": "scalp_micro_reversion_market_stream_point_v2",
+        "metric_contract_id": "scalp_micro_reversion_market_stream_contract_v2",
+    }
+    market_rows[-1].pop("item")
+
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=market_rows,
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+    )
+
+    assert evidence["source_quality"]["rejected_market_reason_counts"] == {
+        "market_item_scope_conflict": 1
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("symbol", " 000001"), ("venue", "SMART"), ("venue", "krx")),
+)
+def test_market_v3_requires_canonical_stored_scope(field: str, value: str) -> None:
+    market_row = {**_past_market_rows()[-1], field: value}
+    market_row.pop("item")
+
+    assert bridge_module._valid_market_row(market_row) == (
+        False,
+        "market_item_scope_conflict",
+    )
+
+
 def test_envelope_join_supports_trace_without_request_id_in_report_and_prefilter() -> (
     None
 ):

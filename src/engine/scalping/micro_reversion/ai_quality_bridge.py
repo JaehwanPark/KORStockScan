@@ -1341,16 +1341,37 @@ def exact_snapshot_watermark(
 
 
 def _valid_market_row(row: Mapping[str, Any]) -> tuple[bool, str | None]:
-    expected_contract = MARKET_CONTRACT_BY_SCHEMA.get(str(row.get("schema") or ""))
+    schema = str(row.get("schema") or "")
+    expected_contract = MARKET_CONTRACT_BY_SCHEMA.get(schema)
     if expected_contract is None or row.get("metric_contract_id") != expected_contract:
         return False, "market_schema_invalid"
-    item_symbol, item_venue = registration_item_identity(row.get("item"))
+    stored_symbol = row.get("symbol")
+    stored_venue = row.get("venue")
+    raw_symbol = str(stored_symbol or "").strip().upper()
+    raw_venue = str(stored_venue or "").strip().upper()
+    normalized_venue = normalize_venue(raw_venue)
     if (
-        not item_symbol
-        or item_symbol != normalize_symbol(row.get("symbol"))
-        or item_venue != normalize_venue(row.get("venue"))
+        not isinstance(stored_symbol, str)
+        or stored_symbol != raw_symbol
+        or len(raw_symbol) != 6
+        or not raw_symbol.isdigit()
+        or not isinstance(stored_venue, str)
+        or stored_venue != raw_venue
+        or raw_venue not in {"KRX", "NXT", "SOR"}
     ):
         return False, "market_item_scope_conflict"
+    registration_item = row.get("item")
+    if registration_item is None:
+        # The canonical v3 path producer validates the Kiwoom registration
+        # item before constructing ``PathJournalPoint`` and deliberately
+        # persists only its normalized symbol/venue identity.  Older schemas
+        # do not carry that producer-side omission contract.
+        if schema != "scalp_micro_reversion_market_stream_point_v3":
+            return False, "market_item_scope_conflict"
+    else:
+        item_symbol, item_venue = registration_item_identity(registration_item)
+        if item_symbol != raw_symbol or item_venue != normalized_venue:
+            return False, "market_item_scope_conflict"
     if (
         row.get("actual_order_submitted") is not False
         or row.get("broker_order_forbidden") is not True
