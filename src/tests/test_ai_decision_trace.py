@@ -931,6 +931,31 @@ def test_capture_ai_request_redacts_embedded_credentials_without_redacting_sessi
     assert payload_row["raw_secret_storage"] is False
 
 
+def test_prompt_sanitizer_preserves_nonsecret_json_enum_token(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    prompt = (
+        "The action value must be exactly one JSON enum token: BUY, WAIT, or DROP. "
+        "Never expose token=actual-secret or JSON enum token: hidden-secret."
+    )
+
+    fields = trace.capture_ai_request(
+        prompt=prompt,
+        user_input={"stock_code": "005930"},
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="request-enum-token",
+        model="gpt-test",
+        schema_name="entry_v1",
+        require_json=True,
+    )
+
+    prompt_row = _rows(trace._prompt_path(trace._date_text()))[0]
+    assert "JSON enum token: BUY, WAIT, or DROP" in prompt_row["sanitized_prompt"]
+    assert "actual-secret" not in prompt_row["sanitized_prompt"]
+    assert "hidden-secret" not in prompt_row["sanitized_prompt"]
+    assert fields["ai_prompt_replay_exact"] is False
+
+
 def test_payload_sanitizer_preserves_nonsecret_token_metrics_and_redacts_opaque_keys(
     monkeypatch, tmp_path
 ):
@@ -1340,8 +1365,7 @@ def test_holding_trace_preserves_model_decision_before_source_quality_override(
             "score": 50,
             "confidence": 0,
             "reason": (
-                "holding_context_source_quality_unusable_"
-                "defer_to_deterministic_guards"
+                "holding_context_source_quality_unusable_defer_to_deterministic_guards"
             ),
             "holding_score_model_action": "EXIT",
             "holding_score_model_score": 23,
@@ -1351,8 +1375,7 @@ def test_holding_trace_preserves_model_decision_before_source_quality_override(
             "holding_score_effective_action": "HOLD",
             "holding_score_source_quality_override_applied": True,
             "holding_score_source_quality_override_reason": (
-                "holding_context_source_quality_unusable_"
-                "defer_to_deterministic_guards"
+                "holding_context_source_quality_unusable_defer_to_deterministic_guards"
             ),
             "holding_score_source_quality_override_blockers": [
                 "microstructure_missing_or_stale"

@@ -349,6 +349,14 @@ def _sanitize_text(value: str) -> tuple[str, bool]:
         redacted = redacted or count > 0
 
     def _redact_assignment(match: re.Match[str]) -> str:
+        prefix = match.string[max(0, match.start() - 10) : match.start()].lower()
+        raw_value = match.group(3).strip("\"'").upper()
+        if (
+            match.group(1).lower() == "token"
+            and prefix.endswith("json enum ")
+            and raw_value in {"BUY", "WAIT", "DROP"}
+        ):
+            return match.group(0)
         return f"{match.group(1)}{match.group(2)}[REDACTED]"
 
     cleaned, count = _EMBEDDED_SECRET_ASSIGNMENT.subn(

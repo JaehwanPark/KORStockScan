@@ -5558,9 +5558,11 @@ def _micro_reversion_materialization_fixture():
 
 def test_materializes_micro_reversion_requests_from_actual_prepared_output():
     prepared, source_bundle = _micro_reversion_materialization_fixture()
+    persisted_prepared = json.loads(json.dumps(prepared))
+    persisted_prepared[0].pop("exact_payload")
 
     report = quality.materialize_micro_reversion_offline_requests(
-        prepared_requests=prepared,
+        prepared_requests=persisted_prepared,
         bridge_source_bundle=source_bundle,
     )
 
@@ -5597,6 +5599,116 @@ def test_materializes_micro_reversion_requests_from_actual_prepared_output():
             ]["contract_sha256"],
         }
     ]
+
+
+def test_micro_reversion_source_contract_reconstructs_omitted_exact_payload():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    persisted_request = json.loads(json.dumps(prepared[0]))
+    persisted_request.pop("exact_payload")
+    source_row = source_bundle["rows"][0]
+
+    quality._assert_micro_reversion_source_contract(
+        request=persisted_request,
+        source_trace=source_row["source_trace"],
+        source_payload=source_row["source_payload"],
+    )
+
+    tampered_payload = json.loads(json.dumps(source_row["source_payload"]))
+    tampered_payload["sanitized_replay_context"]["exact_payload"]["requested_qty"] = (
+        99_999
+    )
+    with pytest.raises(
+        ValueError, match="micro_reversion_source_exact_payload_sha256_mismatch"
+    ):
+        quality._assert_micro_reversion_source_contract(
+            request=persisted_request,
+            source_trace=source_row["source_trace"],
+            source_payload=tampered_payload,
+        )
+
+
+def test_micro_reversion_rehydrates_omitted_holding_candidate_input():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    persisted_request = json.loads(json.dumps(prepared[0]))
+    persisted_request.pop("exact_payload")
+    persisted_request["stage"] = "holding"
+    source_payload = source_bundle["rows"][0]["source_payload"]
+    exact_payload = quality._replay_exact_payload(
+        quality.replay_source_input(source_payload)
+    )
+    candidate_input = {
+        "exact_payload": exact_payload,
+        "holding_exact_contract_facts_v1": quality._holding_contract_facts(
+            exact_payload
+        ),
+    }
+    persisted_request["candidate_input_sha256"] = quality._sha256(candidate_input)
+
+    hydrated = quality._rehydrate_micro_reversion_prepared_request(
+        request=persisted_request,
+        source_payload=source_payload,
+    )
+
+    assert hydrated["exact_payload"] == exact_payload
+    assert hydrated["candidate_input"] == candidate_input
+    persisted_request["candidate_input_sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="candidate_input_sha256_mismatch"):
+        quality._rehydrate_micro_reversion_prepared_request(
+            request=persisted_request,
+            source_payload=source_payload,
+        )
+
+
+def test_micro_reversion_control_semantic_analysis_is_derived_outside_provider_input():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    request = json.loads(json.dumps(prepared[0]))
+    request.pop("exact_payload")
+    request["candidate"]["prompt_version"] = (
+        f"{quality.DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry"
+    )
+    request["candidate"]["semantic_validator_version"] = (
+        quality.BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+    )
+
+    hydrated = quality._rehydrate_micro_reversion_prepared_request(
+        request=request,
+        source_payload=source_bundle["rows"][0]["source_payload"],
+    )
+    hydrated["micro_reversion_replay_arm"] = "replay_control_exact_no_micro"
+    errors = quality.validate_replay_candidate_response(
+        hydrated, _valid_micro_reversion_entry_response()
+    )
+
+    assert "anticipatory_analysis_missing" not in errors
+    assert hydrated["anticipatory_reversal_analysis"]["schema"] == (
+        quality.ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA
+    )
+    assert "recovery_confirmation_probe" in hydrated["anticipatory_reversal_analysis"]
+    assert "anticipatory_reversal_analysis_v1" not in hydrated.get(
+        "candidate_input", {}
+    )
+
+
+def test_micro_reversion_recovers_known_nonsecret_prompt_redaction_by_hash():
+    exact = "The action value must be exactly one JSON enum token: BUY, WAIT, or DROP."
+    stored = exact.replace("token: BUY", "token: [REDACTED]")
+    row = {
+        "sanitized_prompt": stored,
+        "replay_exact": False,
+        "redacted": True,
+    }
+
+    assert quality._verified_stored_prompt_body(
+        row,
+        expected_prompt_sha256=quality._stored_prompt_sha256(exact),
+    ) == (exact, "hash_exact_known_non_secret_enum_token_reconstruction")
+    assert (
+        quality._verified_stored_prompt_body(
+            row,
+            expected_prompt_sha256="f" * 64,
+        )
+        is None
+    )
 
 
 def test_micro_reversion_materialization_fails_closed_without_full_control_prompt():
@@ -5919,6 +6031,60 @@ def test_micro_reversion_bridge_outcome_adapts_action_neutral_seconds_label():
     assert label["quantity_authority"] == ("standardized_one_share_observation_only")
     assert label["notional_net_profit_eligible"] is False
     assert label["outcome_embedded_in_provider_input"] is False
+
+
+def test_micro_reversion_bridge_outcome_binds_integrated_micro_session_to_trace():
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
+    evidence_key = "tactical_micro_reversion_evidence_v1"
+    bridge_row = bridge_report["rows"][0]
+    evidence = bridge_row[evidence_key]
+    evidence.update(
+        {
+            "micro_venue": "SOR",
+            "micro_session_bucket": "SOR_REGULAR",
+            "trace_market_data_route": "krx_nxt_integrated",
+            "integrated_sor_route_proven": True,
+        }
+    )
+    evidence["evidence_sha256"] = quality._sha256(
+        {key: value for key, value in evidence.items() if key != "evidence_sha256"}
+    )
+    outcome = bridge_row["future_outcome"]
+    outcome["evidence_sha256"] = evidence["evidence_sha256"]
+    outcome["outcome_sha256"] = quality._sha256(
+        {key: value for key, value in outcome.items() if key != "outcome_sha256"}
+    )
+    bridge_report["report_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in bridge_report.items()
+            if key != "report_content_sha256"
+        }
+    )
+    for request in materialized["requests"]:
+        candidate_input = request["candidate_input"]
+        if evidence_key not in candidate_input:
+            continue
+        candidate_input[evidence_key] = deepcopy(evidence)
+        request["candidate_input_sha256"] = quality._sha256(candidate_input)
+        request["tactical_micro_reversion_evidence_sha256"] = evidence[
+            "evidence_sha256"
+        ]
+    materialized["report_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in materialized.items()
+            if key != "report_content_sha256"
+        }
+    )
+
+    artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        bridge_report=bridge_report,
+        materialized_report=materialized,
+    )
+
+    assert artifact["eligible_label_count"] == 1
+    assert artifact["labels"][0]["session_bucket"] == "KRX_REGULAR"
 
 
 def test_micro_reversion_bridge_outcome_rejects_unsupported_stage_per_row():
@@ -6399,6 +6565,35 @@ def test_micro_reversion_execution_defaults_to_no_provider_calls():
     assert all("requests" not in row for row in materialized["materializations"])
 
 
+def test_micro_reversion_execution_does_not_call_parent_without_outcome_label():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    calls = []
+    unrelated_label = {
+        **_micro_reversion_execution_label(prepared),
+        "label_id": "unrelated-label",
+    }
+
+    report = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[unrelated_label],
+        execute_candidate=True,
+        candidate_runner=lambda request: calls.append(request),
+        max_new_requests=3,
+    )
+
+    assert calls == []
+    assert report["result_count"] == 0
+    assert report["deferred_request_count"] == 3
+    assert report["blocking_execution_exclusion_count"] == 0
+    assert {row["reason"] for row in report["execution_exclusions"]} == {
+        "action_neutral_outcome_label_missing_or_ambiguous"
+    }
+
+
 def test_micro_reversion_bedrock_holding_flow_is_explicitly_unsupported():
     request = {
         "stage": "holding",
@@ -6617,6 +6812,119 @@ def test_micro_reversion_execution_commits_one_bounded_parent_per_batch():
     assert second_batch["result_count"] == 6
     assert second_batch["deferred_request_count"] == 0
     assert second_batch["three_arm_evaluation"]["complete_parent_count"] == 2
+
+
+def test_micro_reversion_execution_isolates_failed_parent_from_clean_batch():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    failed_parent_id = materialized["requests"][0]["paired_replay_parent_id"]
+    clean_requests = deepcopy(materialized["requests"])
+    clean_parent_id = "micro-parent-clean-after-failure"
+    clean_label_id = "trace-clean-after-failure:v1"
+    for request in clean_requests:
+        request["paired_replay_parent_id"] = clean_parent_id
+        request["paired_replay_id"] = (
+            f"{clean_parent_id}:{request['micro_reversion_replay_arm']}"
+        )
+        request["decision_trace_id"] = "trace-clean-after-failure"
+        request["outcome_join_key"] = clean_label_id
+    materialized["requests"].extend(clean_requests)
+    materialized["request_ids"] = [
+        request["paired_replay_id"] for request in materialized["requests"]
+    ]
+    materialized["request_count"] = len(materialized["requests"])
+    materialized["report_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in materialized.items()
+            if key != "report_content_sha256"
+        }
+    )
+    first_label = _micro_reversion_execution_label(prepared)
+    clean_label = {
+        **deepcopy(first_label),
+        "label_id": clean_label_id,
+        "decision_trace_id": "trace-clean-after-failure",
+    }
+
+    def runner(request):
+        failed_parent = request["paired_replay_parent_id"] == failed_parent_id
+        return {
+            "candidate_response": (
+                {"action": "INVALID"}
+                if failed_parent
+                else _valid_micro_reversion_entry_response()
+            ),
+            "provider_provenance": {
+                "provider": "openai",
+                "model": "gpt-test",
+                "transport": "openai_responses_http_offline",
+                "source_transport_contract": request["candidate"]["transport"],
+                "response_id": f"response-{request['paired_replay_id']}",
+                "response_sha256": quality._sha256(request["paired_replay_id"]),
+                "provider_none": False,
+                "provider_call_attempted": True,
+                "provider_call_succeeded": True,
+            },
+        }
+
+    batch = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[first_label, clean_label],
+        execute_candidate=True,
+        candidate_runner=runner,
+        max_new_requests=6,
+    )
+
+    assert batch["status"] == "offline_three_arm_execution_batch_complete"
+    assert batch["result_count"] == 3
+    assert batch["committed_parent_count"] == 1
+    assert batch["deferred_request_count"] == 3
+    assert batch["uncommitted_result_count"] == 0
+    assert batch["provisional_failed_result_count"] == 3
+    assert batch["three_arm_evaluation"]["complete_parent_count"] == 1
+    assert {row["paired_replay_parent_id"] for row in batch["results"]} == {
+        clean_parent_id
+    }
+    assert {exclusion["reason"] for exclusion in batch["execution_exclusions"]} == {
+        "candidate_execution_schema_rejected"
+    }
+    assert batch["blocking_execution_exclusion_count"] == 0
+    assert (
+        quality._micro_reversion_execution_exit_code(
+            report=batch,
+            execute_candidate=True,
+        )
+        == 0
+    )
+
+    prior_label_hashes = {
+        result["outcome_label_content_sha256"] for result in batch["results"]
+    }
+    rebound_clean_label = deepcopy(clean_label)
+    rebound_clean_label["horizon_metrics"]["10m"]["end_return_pct"] = 0.75
+    resumed = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[first_label, rebound_clean_label],
+        execute_candidate=True,
+        candidate_runner=runner,
+        existing_result_artifact=batch,
+        max_new_requests=3,
+    )
+
+    assert resumed["status"] == "offline_three_arm_execution_batch_complete"
+    assert resumed["result_count"] == 3
+    assert resumed["checkpoint_resume_result_count"] == 3
+    assert resumed["reused_result_count"] == 3
+    assert resumed["new_result_count"] == 0
+    assert resumed["provisional_failed_result_count"] == 3
+    assert resumed["candidate_model_call_attempted"] is True
+    assert {
+        result["outcome_label_rebound_from_sha256"] for result in resumed["results"]
+    } == prior_label_hashes
 
 
 def test_micro_reversion_batch_allows_unselected_intentional_exclusion():

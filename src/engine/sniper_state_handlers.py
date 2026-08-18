@@ -12714,6 +12714,15 @@ def _log_entry_pipeline(stock, code, stage, **fields):
                 "[RISKY_MICRO_BBO_OBSERVER] registration failed open without "
                 f"runtime effect code={code or '-'}: {exc}"
             )
+    merged_fields["pipeline_lifecycle_population_scope"] = (
+        "sim_observation_only"
+        if _is_any_simulated_position(stock, stock.get("strategy"))
+        else (
+            "real_record_bound"
+            if stock.get("id") not in (None, "")
+            else "unclassified_missing_record"
+        )
+    )
     lifecycle_stage_mapped = pipeline_lifecycle_stage_mapped(
         pipeline="ENTRY_PIPELINE",
         source_stage=stage,
@@ -19434,6 +19443,15 @@ def _log_holding_pipeline(stock, code, stage, **fields):
             stock,
             stage=stage,
             actual_order_submitted=fields.get("actual_order_submitted"),
+        )
+    )
+    fields["pipeline_lifecycle_population_scope"] = (
+        "sim_observation_only"
+        if _is_any_simulated_position(stock, stock.get("strategy"))
+        else (
+            "real_record_bound"
+            if stock.get("id") not in (None, "")
+            else "unclassified_missing_record"
         )
     )
     lifecycle_stage_mapped = pipeline_lifecycle_stage_mapped(

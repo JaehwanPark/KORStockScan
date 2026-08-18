@@ -42,6 +42,9 @@ REPORT_SCHEMA = "main_scalping_lifecycle_paired_daily_v1"
 LIFECYCLE_WINDOW_EXCLUSION_MANIFEST_SCHEMA = (
     "main_scalping_lifecycle_window_exclusion_manifest_v1"
 )
+PIPELINE_OWNER_EXCLUSION_MANIFEST_SCHEMA = (
+    "main_scalping_pipeline_owner_exclusion_manifest_v1"
+)
 REPORT_DIR = DATA_DIR / "report" / "main_scalping_lifecycle_paired"
 PIPELINE_EVENT_DIR = DATA_DIR / "pipeline_events"
 
@@ -50,6 +53,7 @@ _GAP_EXAMPLE_LIMIT = 20
 _EVENT_ID_LIMIT_PER_LIFECYCLE = 4_096
 MAX_LIFECYCLE_ACCUMULATORS = 50_000
 MAX_TRANSITION_EVENT_IDENTITIES = 500_000
+PIPELINE_OWNER_SCOPED_GAP_HARD_BLOCK_MIN_ROWS = 1_000
 _QUANTITY_EPSILON = 1e-8
 _BROKER_SUBMIT_CLOCK_SKEW_SEC = 2
 KST = ZoneInfo("Asia/Seoul")
@@ -88,6 +92,29 @@ REPORT_AUTHORITY_CONTRACT: dict[str, Any] = {
         "cross_attempt_symbol_or_timestamp_join",
         "label_horizon_as_actual_holding_duration",
         "raw_fallback_without_explicit_main_lifecycle_id_for_promotion",
+    ],
+}
+
+PIPELINE_OWNER_EXCLUSION_AUTHORITY_CONTRACT: dict[str, Any] = {
+    "metric_role": "source_quality_gate",
+    "decision_authority": "pipeline_owner_window_exclusion_only",
+    "window_policy": "exact_trade_date_record_id_and_stock_code",
+    "sample_floor": "not_applicable_source_quality_manifest",
+    "primary_decision_metric": "excluded_pipeline_owner_count",
+    "source_quality_gate": "missing_explicit_lifecycle_identity_owner_quarantine",
+    "exclusion_scope": "exact_pipeline_owner_window",
+    "runtime_effect": False,
+    "runtime_authority": False,
+    "order_authority": False,
+    "provider_authority": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "forbidden_uses": [
+        "infer_or_reconstruct_main_lifecycle_id",
+        "join_by_symbol_or_timestamp_proximity",
+        "exclude_other_clean_pipeline_owner_windows",
+        "direct_runtime_or_order_apply",
     ],
 }
 
@@ -348,9 +375,7 @@ def _pipeline_broker_order_numbers(
 ) -> tuple[list[str] | None, str | None]:
     list_text = _pipeline_text(fields.get("broker_order_no_list"))
     primary = _pipeline_text(
-        fields.get("broker_order_no")
-        or fields.get("order_no")
-        or fields.get("ord_no")
+        fields.get("broker_order_no") or fields.get("order_no") or fields.get("ord_no")
     )
     raw_values = list_text.split(",") if list_text else ([primary] if primary else [])
     order_numbers: list[str] = []
@@ -402,9 +427,7 @@ def _pipeline_transition_data(
     lifecycle_venue: str,
 ) -> tuple[dict[str, Any] | None, str | None]:
     data: dict[str, Any] = {}
-    decision_trace_id = _pipeline_text(
-        fields.get("main_lifecycle_decision_trace_id")
-    )
+    decision_trace_id = _pipeline_text(fields.get("main_lifecycle_decision_trace_id"))
     if decision_trace_id:
         data["decision_trace_id"] = decision_trace_id
     for source_key, destination_key in (
@@ -513,9 +536,7 @@ def _pipeline_transition_data(
         if broker_order_numbers is None:
             return None, order_error or "pipeline_sell_order_no_missing"
         requested_qty = _finite_number(
-            fields.get("qty")
-            if "qty" in fields
-            else fields.get("requested_qty"),
+            fields.get("qty") if "qty" in fields else fields.get("requested_qty"),
             positive=True,
         )
         if requested_qty is None:
@@ -540,9 +561,7 @@ def _pipeline_transition_data(
             or "main_lifecycle_exit_price" not in fields
         ):
             return None, "pipeline_execution_exit_exact_price_or_qty_missing"
-        exit_qty = _finite_number(
-            fields.get("main_lifecycle_exit_qty"), positive=True
-        )
+        exit_qty = _finite_number(fields.get("main_lifecycle_exit_qty"), positive=True)
         exit_price = _finite_number(
             fields.get("main_lifecycle_exit_price"), positive=True
         )
@@ -566,14 +585,13 @@ def _pipeline_transition_data(
             data["slippage_basis_price"] = slippage_basis_price
             data["slippage_basis_source"] = slippage_basis_source
 
-    terminal_no_fill = _pipeline_bool(
-        fields.get("main_lifecycle_terminal_no_fill")
-    )
+    terminal_no_fill = _pipeline_bool(fields.get("main_lifecycle_terminal_no_fill"))
     if terminal_no_fill is True:
         data["terminal_no_fill"] = True
-        data["terminal_reason"] = _pipeline_text(
-            fields.get("main_lifecycle_terminal_reason")
-        ) or "explicit_pipeline_terminal_no_fill"
+        data["terminal_reason"] = (
+            _pipeline_text(fields.get("main_lifecycle_terminal_reason"))
+            or "explicit_pipeline_terminal_no_fill"
+        )
 
     reconciled_final_exit = _pipeline_bool(
         fields.get("main_lifecycle_reconciled_final_exit")
@@ -628,8 +646,7 @@ def _pipeline_transition_data(
         data.update(broker_provenance)
         if (
             lifecycle_stage == "fill"
-            and broker_provenance.get("broker_execution_provenance_state")
-            == "complete"
+            and broker_provenance.get("broker_execution_provenance_state") == "complete"
         ):
             data["fill_state"] = broker_provenance["broker_execution_fill_state"]
     return data, None
@@ -655,6 +672,23 @@ def _validated_pipeline_transition(
     fields = raw_row.get("fields")
     if not isinstance(fields, dict):
         return None, "pipeline_lifecycle_fields_invalid", True
+    if fields.get(
+        "pipeline_lifecycle_population_scope"
+    ) == "sim_observation_only" and raw_row.get("record_id") in {None, ""}:
+        return None, None, False
+    # Statistical action snapshots also serve a separate simulator lane.  A
+    # source-declared sim-only snapshot has no real RecommendationHistory
+    # record and is not a main-bot lifecycle transition.  Keep it out of the
+    # strict denominator instead of turning expected sim telemetry into an
+    # unbound global instrumentation failure.
+    if (
+        source_stage == "stat_action_decision_snapshot"
+        and raw_row.get("record_id") in {None, ""}
+        and str(fields.get("decision_authority") or "").strip()
+        == "sim_observation_only"
+        and _pipeline_bool(fields.get("snapshot_observe_only")) is True
+    ):
+        return None, None, False
     if fields.get("main_lifecycle_identity_schema") != PIPELINE_IDENTITY_SCHEMA:
         return None, "pipeline_lifecycle_identity_missing", True
     if fields.get("main_lifecycle_source_pipeline") != pipeline:
@@ -716,8 +750,7 @@ def _validated_pipeline_transition(
             observed_at=observed_at,
             venue=_pipeline_text(fields.get("main_lifecycle_venue")) or "UNKNOWN",
             session_bucket=(
-                _pipeline_text(fields.get("main_lifecycle_session_bucket"))
-                or "unknown"
+                _pipeline_text(fields.get("main_lifecycle_session_bucket")) or "unknown"
             ),
             data=data,
         )
@@ -828,9 +861,7 @@ class _LifecycleAccumulator:
     observed_actual_broker_order_submitted: bool = False
     event_content_by_id: dict[str, str] = field(default_factory=dict)
     transition_replay_duplicate_count: int = 0
-    broker_execution_content_by_identity: dict[str, str] = field(
-        default_factory=dict
-    )
+    broker_execution_content_by_identity: dict[str, str] = field(default_factory=dict)
     broker_execution_unique_count: int = 0
     broker_execution_replay_duplicate_count: int = 0
     broker_execution_conflict_count: int = 0
@@ -843,26 +874,16 @@ class _LifecycleAccumulator:
         default_factory=dict
     )
     submitted_order_phase_by_no: dict[str, str] = field(default_factory=dict)
-    submitted_order_observed_seconds_by_no: dict[str, int] = field(
-        default_factory=dict
-    )
-    submitted_requested_qty_by_order_no: dict[str, int] = field(
-        default_factory=dict
-    )
+    submitted_order_observed_seconds_by_no: dict[str, int] = field(default_factory=dict)
+    submitted_requested_qty_by_order_no: dict[str, int] = field(default_factory=dict)
     submitted_order_group_keys: set[tuple[str, tuple[str, ...], int]] = field(
         default_factory=set
     )
-    submitted_requested_qty_by_phase: dict[str, int] = field(
-        default_factory=dict
-    )
-    executed_order_qty_by_phase: dict[str, dict[str, int]] = field(
-        default_factory=dict
-    )
+    submitted_requested_qty_by_phase: dict[str, int] = field(default_factory=dict)
+    executed_order_qty_by_phase: dict[str, dict[str, int]] = field(default_factory=dict)
     broker_submission_replay_duplicate_count: int = 0
     broker_execution_provenance_gap_count: int = 0
-    broker_execution_provenance_gap_reasons: list[str] = field(
-        default_factory=list
-    )
+    broker_execution_provenance_gap_reasons: list[str] = field(default_factory=list)
     broker_execution_entry_covered_qty: float = 0.0
     broker_execution_exit_covered_qty: float = 0.0
     broker_execution_partial_count: int = 0
@@ -1027,9 +1048,7 @@ class _LifecycleAccumulator:
         )
         observed_kst = observed_at.astimezone(KST)
         observed_seconds = (
-            observed_kst.hour * 3600
-            + observed_kst.minute * 60
-            + observed_kst.second
+            observed_kst.hour * 3600 + observed_kst.minute * 60 + observed_kst.second
         )
         for order_no in order_numbers:
             self.submitted_order_phase_by_no[order_no] = phase
@@ -1046,9 +1065,7 @@ class _LifecycleAccumulator:
         return stage == "exit" and "exit_qty" in data
 
     @staticmethod
-    def _broker_execution_semantic_sha256(
-        stage: str, data: Mapping[str, Any]
-    ) -> str:
+    def _broker_execution_semantic_sha256(stage: str, data: Mapping[str, Any]) -> str:
         keys = (
             "broker_execution_content_sha256",
             "fill_state",
@@ -1097,9 +1114,11 @@ class _LifecycleAccumulator:
 
         if not self._execution_bearing_data(stage, data):
             return "not_applicable"
-        state = str(
-            data.get("broker_execution_provenance_state") or "missing"
-        ).strip().lower()
+        state = (
+            str(data.get("broker_execution_provenance_state") or "missing")
+            .strip()
+            .lower()
+        )
         if state not in {"complete", "missing", "incomplete", "invalid"}:
             state = "invalid"
         if state != "complete":
@@ -1119,9 +1138,7 @@ class _LifecycleAccumulator:
             return "gap"
 
         identity = str(data.get("broker_execution_identity") or "").strip()
-        content_hash = str(
-            data.get("broker_execution_content_sha256") or ""
-        ).strip()
+        content_hash = str(data.get("broker_execution_content_sha256") or "").strip()
         if not identity or not SHA256_RE.fullmatch(content_hash):
             self.broker_execution_provenance_state_counts["invalid"] = (
                 self.broker_execution_provenance_state_counts.get("invalid", 0) + 1
@@ -1145,9 +1162,7 @@ class _LifecycleAccumulator:
         if self.submitted_order_phase_by_no.get(order_no) != execution_phase:
             self.broker_execution_submission_link_conflict_count += 1
             return "submission_conflict"
-        submitted_seconds = self.submitted_order_observed_seconds_by_no.get(
-            order_no
-        )
+        submitted_seconds = self.submitted_order_observed_seconds_by_no.get(order_no)
         submitted_order_qty = self.submitted_requested_qty_by_order_no.get(order_no)
         if submitted_seconds is None or submitted_order_qty is None:
             self.broker_execution_submission_link_conflict_count += 1
@@ -1162,9 +1177,7 @@ class _LifecycleAccumulator:
         try:
             order_qty = int(data["broker_execution_order_qty"])
             cumulative_qty = int(data["broker_execution_cumulative_fill_qty"])
-            cumulative_amount = int(
-                data["broker_execution_cumulative_fill_amount_krw"]
-            )
+            cumulative_amount = int(data["broker_execution_cumulative_fill_amount_krw"])
             remaining_qty = int(data["broker_execution_remaining_qty"])
             execution_price = int(data["broker_execution_price"])
             unit_qty = int(data["broker_execution_unit_fill_qty"])
@@ -1189,14 +1202,9 @@ class _LifecycleAccumulator:
         previous_progress = self.broker_order_progress_by_no.get(order_no)
         observed_kst = observed_at.astimezone(KST)
         observed_time_seconds = (
-            observed_kst.hour * 3600
-            + observed_kst.minute * 60
-            + observed_kst.second
+            observed_kst.hour * 3600 + observed_kst.minute * 60 + observed_kst.second
         )
-        if (
-            execution_time_seconds + _BROKER_SUBMIT_CLOCK_SKEW_SEC
-            < submitted_seconds
-        ):
+        if execution_time_seconds + _BROKER_SUBMIT_CLOCK_SKEW_SEC < submitted_seconds:
             self.broker_execution_submission_link_conflict_count += 1
             return "submission_conflict"
         if previous_progress is None:
@@ -1236,11 +1244,12 @@ class _LifecycleAccumulator:
             remaining_qty,
             execution_time_seconds,
         )
-        phase_orders = self.executed_order_qty_by_phase.setdefault(
-            execution_phase, {}
-        )
+        phase_orders = self.executed_order_qty_by_phase.setdefault(execution_phase, {})
         previous_phase_order_qty = phase_orders.get(order_no)
-        if previous_phase_order_qty is not None and previous_phase_order_qty != order_qty:
+        if (
+            previous_phase_order_qty is not None
+            and previous_phase_order_qty != order_qty
+        ):
             self.broker_execution_submission_link_conflict_count += 1
             return "submission_conflict"
         phase_orders[order_no] = order_qty
@@ -1419,9 +1428,7 @@ class _LifecycleAccumulator:
         stage = str(row["stage"])
         data = row["data"]
         assert isinstance(data, dict)
-        existing_broker_execution = self._existing_broker_execution_state(
-            stage, data
-        )
+        existing_broker_execution = self._existing_broker_execution_state(stage, data)
         if existing_broker_execution == "replay":
             self.broker_execution_replay_duplicate_count += 1
             return
@@ -1850,12 +1857,8 @@ class _LifecycleAccumulator:
             "partial_fill_event_count": self.partial_fill_event_count,
             "full_fill_event_count": self.full_fill_event_count,
             "fill_completion_class": self._fill_completion_class(),
-            "broker_execution_official_reference_sha": (
-                KIWOOM_OFFICIAL_REFERENCE_SHA
-            ),
-            "broker_execution_provenance_schema": (
-                BROKER_EXECUTION_PROVENANCE_SCHEMA
-            ),
+            "broker_execution_official_reference_sha": (KIWOOM_OFFICIAL_REFERENCE_SHA),
+            "broker_execution_provenance_schema": (BROKER_EXECUTION_PROVENANCE_SCHEMA),
             "broker_execution_raw_envelope_schema": (
                 BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA
             ),
@@ -1863,9 +1866,7 @@ class _LifecycleAccumulator:
             "broker_execution_replay_duplicate_count": (
                 self.broker_execution_replay_duplicate_count
             ),
-            "broker_execution_conflict_count": (
-                self.broker_execution_conflict_count
-            ),
+            "broker_execution_conflict_count": (self.broker_execution_conflict_count),
             "broker_execution_order_progress_conflict_count": (
                 self.broker_execution_order_progress_conflict_count
             ),
@@ -1881,9 +1882,7 @@ class _LifecycleAccumulator:
             "broker_submission_replay_duplicate_count": (
                 self.broker_submission_replay_duplicate_count
             ),
-            "broker_submitted_order_count": len(
-                self.submitted_order_phase_by_no
-            ),
+            "broker_submitted_order_count": len(self.submitted_order_phase_by_no),
             "broker_submitted_requested_qty_by_phase": dict(
                 sorted(self.submitted_requested_qty_by_phase.items())
             ),
@@ -1892,9 +1891,7 @@ class _LifecycleAccumulator:
             ),
             "broker_executed_order_qty_by_phase": {
                 phase: dict(sorted(order_qty.items()))
-                for phase, order_qty in sorted(
-                    self.executed_order_qty_by_phase.items()
-                )
+                for phase, order_qty in sorted(self.executed_order_qty_by_phase.items())
             },
             "broker_submitted_order_coverage_gap_phases": (
                 submitted_order_coverage_gap_phases
@@ -1917,9 +1914,7 @@ class _LifecycleAccumulator:
             "broker_execution_exit_covered_qty": (
                 self.broker_execution_exit_covered_qty
             ),
-            "broker_execution_partial_count": (
-                self.broker_execution_partial_count
-            ),
+            "broker_execution_partial_count": (self.broker_execution_partial_count),
             "broker_execution_full_count": self.broker_execution_full_count,
             "broker_execution_unreconciled_order_count": (
                 unreconciled_broker_order_count
@@ -1975,6 +1970,34 @@ def _bounded_gap(
             "line_number": line_number,
         }
     )
+
+
+def _pipeline_owner_scoped_identity_gap(
+    raw_row: Mapping[str, Any], *, target_date: str, reason: str | None
+) -> tuple[str, str] | None:
+    """Return the exact owner window for an isolatable pre-identity row.
+
+    This deliberately does not reconstruct a lifecycle attempt.  A legacy
+    mapped row can be quarantined only when the raw pipeline event itself
+    carries an exact DB record id, six-digit stock code, and target date.  All
+    attempts for that owner are excluded; unrelated owner windows remain
+    eligible.  Every other validation failure stays a global source gap.
+    """
+
+    if reason != "pipeline_lifecycle_identity_missing":
+        return None
+    if str(raw_row.get("emitted_date") or "").strip() != target_date:
+        return None
+    record_id = str(raw_row.get("record_id") or "").strip()
+    stock_code = str(raw_row.get("stock_code") or "").strip()
+    if (
+        not record_id
+        or len(record_id) > 160
+        or any(char in record_id for char in "\r\n\x00")
+        or not re.fullmatch(r"[0-9]{6}", stock_code)
+    ):
+        return None
+    return record_id, stock_code
 
 
 def _lifecycle_window_exclusion_taxonomies(
@@ -2155,6 +2178,9 @@ def build_daily_report(
     pipeline_lifecycle_out_of_scope_row_count = 0
     pipeline_lifecycle_instrumentation_gap_count = 0
     pipeline_lifecycle_missing_identity_count = 0
+    pipeline_lifecycle_owner_scoped_gap_count = 0
+    pipeline_lifecycle_unscoped_gap_count = 0
+    pipeline_owner_scoped_gaps: dict[tuple[str, str], dict[str, int]] = {}
     mixed_source_row_count = 0
     lifecycle_accumulator_overflow_row_count = 0
     transition_event_identity_overflow_row_count = 0
@@ -2207,8 +2233,8 @@ def build_daily_report(
         if row_source_mode == "transition_journal":
             transition, reason = _validated_transition(raw_row, target_date=target)
         elif row_source_mode == "pipeline_events":
-            transition, reason, lifecycle_in_scope = (
-                _validated_pipeline_transition(raw_row, target_date=target)
+            transition, reason, lifecycle_in_scope = _validated_pipeline_transition(
+                raw_row, target_date=target
             )
             if not lifecycle_in_scope:
                 pipeline_lifecycle_out_of_scope_row_count += 1
@@ -2223,7 +2249,24 @@ def build_daily_report(
         else:
             transition, reason = _validated_transition(raw_row, target_date=target)
         if transition is None:
-            source_invalid_transition_count += 1
+            scoped_owner = (
+                _pipeline_owner_scoped_identity_gap(
+                    raw_row,
+                    target_date=target,
+                    reason=reason,
+                )
+                if row_source_mode == "pipeline_events"
+                else None
+            )
+            if scoped_owner is not None:
+                pipeline_lifecycle_owner_scoped_gap_count += 1
+                owner_reasons = pipeline_owner_scoped_gaps.setdefault(scoped_owner, {})
+                reason_key = reason or "transition_invalid"
+                owner_reasons[reason_key] = owner_reasons.get(reason_key, 0) + 1
+            else:
+                source_invalid_transition_count += 1
+                if row_source_mode == "pipeline_events":
+                    pipeline_lifecycle_unscoped_gap_count += 1
             _bounded_gap(
                 gap_examples,
                 reason=reason or "transition_invalid",
@@ -2320,6 +2363,50 @@ def build_daily_report(
     rows = [
         accumulators[lifecycle_id].finalize() for lifecycle_id in sorted(accumulators)
     ]
+    pipeline_owner_excluded_lifecycle_count = 0
+    for row in rows:
+        owner = (str(row["record_id"]), str(row["stock_code"]))
+        if owner not in pipeline_owner_scoped_gaps:
+            continue
+        pipeline_owner_excluded_lifecycle_count += 1
+        blocker = "pipeline_owner_window_missing_explicit_lifecycle_identity"
+        if blocker not in row["promotion_blockers"]:
+            row["promotion_blockers"].append(blocker)
+        row["row_source_quality_gate_pass"] = False
+        row["promotion_evidence_eligible"] = False
+
+    pipeline_owner_reason_counts: dict[str, int] = {}
+    pipeline_owner_entries: list[dict[str, Any]] = []
+    for (record_id, stock_code), reason_counts in sorted(
+        pipeline_owner_scoped_gaps.items()
+    ):
+        for reason, count in reason_counts.items():
+            pipeline_owner_reason_counts[reason] = (
+                pipeline_owner_reason_counts.get(reason, 0) + count
+            )
+        owner_payload = {
+            "target_date": target,
+            "record_id": record_id,
+            "stock_code": stock_code,
+        }
+        pipeline_owner_entries.append(
+            {
+                **owner_payload,
+                "owner_key_sha256": _sha256(owner_payload),
+                "gap_count": sum(reason_counts.values()),
+                "reason_code_counts": dict(sorted(reason_counts.items())),
+            }
+        )
+    pipeline_owner_exclusion_manifest = {
+        "schema": PIPELINE_OWNER_EXCLUSION_MANIFEST_SCHEMA,
+        **PIPELINE_OWNER_EXCLUSION_AUTHORITY_CONTRACT,
+        "target_date": target,
+        "excluded_owner_count": len(pipeline_owner_entries),
+        "excluded_lifecycle_count": pipeline_owner_excluded_lifecycle_count,
+        "gap_count": pipeline_lifecycle_owner_scoped_gap_count,
+        "reason_code_counts": dict(sorted(pipeline_owner_reason_counts.items())),
+        "entries": pipeline_owner_entries,
+    }
     lifecycle_window_exclusion_entries: list[dict[str, Any]] = []
     lifecycle_window_exclusion_reason_counts: dict[str, int] = {}
     lifecycle_window_exclusion_taxonomy_counts: dict[str, int] = {}
@@ -2444,12 +2531,10 @@ def build_daily_report(
         int(row["broker_execution_conflict_count"]) for row in rows
     )
     broker_execution_order_progress_conflict_count = sum(
-        int(row["broker_execution_order_progress_conflict_count"])
-        for row in rows
+        int(row["broker_execution_order_progress_conflict_count"]) for row in rows
     )
     broker_execution_submission_link_conflict_count = sum(
-        int(row["broker_execution_submission_link_conflict_count"])
-        for row in rows
+        int(row["broker_execution_submission_link_conflict_count"]) for row in rows
     )
     broker_execution_replay_duplicate_count = sum(
         int(row["broker_execution_replay_duplicate_count"]) for row in rows
@@ -2462,6 +2547,12 @@ def build_daily_report(
         for row in rows
         if row["terminal_state"] == "FINAL_EXIT_RECONCILED"
         and row["promotion_evidence_eligible"] is not True
+    )
+    pipeline_owner_scoped_gap_high_volume = (
+        pipeline_lifecycle_owner_scoped_gap_count
+        >= PIPELINE_OWNER_SCOPED_GAP_HARD_BLOCK_MIN_ROWS
+        and pipeline_lifecycle_owner_scoped_gap_count
+        > pipeline_lifecycle_accepted_row_count
     )
     global_gate_blockers: list[str] = []
     if not census.source_exists:
@@ -2478,11 +2569,11 @@ def build_daily_report(
     if lifecycle_accumulator_overflow_row_count:
         global_gate_blockers.append("lifecycle_accumulator_limit_exceeded")
     if transition_event_identity_overflow_row_count:
-        global_gate_blockers.append(
-            "global_transition_event_identity_limit_exceeded"
-        )
-    if pipeline_lifecycle_instrumentation_gap_count:
+        global_gate_blockers.append("global_transition_event_identity_limit_exceeded")
+    if pipeline_lifecycle_unscoped_gap_count:
         global_gate_blockers.append("pipeline_lifecycle_instrumentation_gap")
+    if pipeline_owner_scoped_gap_high_volume:
+        global_gate_blockers.append("pipeline_owner_scoped_gap_high_volume")
     # Row-local lifecycle, broker-provenance, execution-progress, and candidate
     # gate failures are already bound to an exact main_lifecycle_id in the
     # exclusion manifest above.  They must not quarantine unrelated clean
@@ -2548,15 +2639,9 @@ def build_daily_report(
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "source_transition_schema": JOURNAL_SCHEMA,
         "source_pipeline_identity_schema": PIPELINE_IDENTITY_SCHEMA,
-        "broker_execution_provenance_schema": (
-            BROKER_EXECUTION_PROVENANCE_SCHEMA
-        ),
-        "broker_execution_raw_envelope_schema": (
-            BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA
-        ),
-        "broker_execution_official_reference_sha": (
-            KIWOOM_OFFICIAL_REFERENCE_SHA
-        ),
+        "broker_execution_provenance_schema": (BROKER_EXECUTION_PROVENANCE_SCHEMA),
+        "broker_execution_raw_envelope_schema": (BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA),
+        "broker_execution_official_reference_sha": (KIWOOM_OFFICIAL_REFERENCE_SHA),
         "source_kind": source_kind,
         "source_path": census.source_path,
         "source_raw_sha256": census.source_raw_sha256,
@@ -2585,6 +2670,7 @@ def build_daily_report(
             + broker_execution_cross_lifecycle_identity_conflict_count
             + lifecycle_accumulator_overflow_row_count
             + transition_event_identity_overflow_row_count
+            + pipeline_lifecycle_owner_scoped_gap_count
             + int(not census.source_exists)
             + int(not rows)
         ),
@@ -2592,9 +2678,7 @@ def build_daily_report(
         "source_invalid_transition_count": source_invalid_transition_count,
         "journal_transition_source_row_count": journal_transition_source_row_count,
         "pipeline_event_source_row_count": pipeline_event_source_row_count,
-        "pipeline_lifecycle_mapped_row_count": (
-            pipeline_lifecycle_mapped_row_count
-        ),
+        "pipeline_lifecycle_mapped_row_count": (pipeline_lifecycle_mapped_row_count),
         "pipeline_lifecycle_accepted_row_count": (
             pipeline_lifecycle_accepted_row_count
         ),
@@ -2606,6 +2690,19 @@ def build_daily_report(
         ),
         "pipeline_lifecycle_missing_identity_count": (
             pipeline_lifecycle_missing_identity_count
+        ),
+        "pipeline_lifecycle_owner_scoped_gap_count": (
+            pipeline_lifecycle_owner_scoped_gap_count
+        ),
+        "pipeline_lifecycle_unscoped_gap_count": (
+            pipeline_lifecycle_unscoped_gap_count
+        ),
+        "pipeline_owner_exclusion_manifest": pipeline_owner_exclusion_manifest,
+        "pipeline_owner_scoped_gap_high_volume_min_rows": (
+            PIPELINE_OWNER_SCOPED_GAP_HARD_BLOCK_MIN_ROWS
+        ),
+        "pipeline_owner_scoped_gap_high_volume_blocked": (
+            pipeline_owner_scoped_gap_high_volume
         ),
         "mixed_source_row_count": mixed_source_row_count,
         "lifecycle_accumulator_overflow_row_count": (
@@ -2636,9 +2733,7 @@ def build_daily_report(
         ),
         "broker_execution_unique_count": broker_execution_unique_count,
         "candidate_row_gate_failure_count": candidate_row_gate_failure_count,
-        "lifecycle_window_exclusion_manifest": (
-            lifecycle_window_exclusion_manifest
-        ),
+        "lifecycle_window_exclusion_manifest": (lifecycle_window_exclusion_manifest),
         "lifecycle_count": len(rows),
         "terminal_state_counts": dict(sorted(terminal_state_counts.items())),
         "fill_completion_class_counts": dict(sorted(fill_completion_counts.items())),
@@ -2662,9 +2757,7 @@ def build_daily_report(
             "retained_transition_event_identity_count": (
                 retained_transition_event_identity_count
             ),
-            "global_transition_event_identity_limit": (
-                MAX_TRANSITION_EVENT_IDENTITIES
-            ),
+            "global_transition_event_identity_limit": (MAX_TRANSITION_EVENT_IDENTITIES),
             "decision_trace_ids_per_lifecycle_limit": _TRACE_ID_LIMIT,
             "event_ids_per_lifecycle_limit": _EVENT_ID_LIMIT_PER_LIFECYCLE,
             "instrumentation_gap_example_limit": _GAP_EXAMPLE_LIMIT,
@@ -2738,6 +2831,8 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "PIPELINE_OWNER_EXCLUSION_AUTHORITY_CONTRACT",
+    "PIPELINE_OWNER_EXCLUSION_MANIFEST_SCHEMA",
     "REPORT_AUTHORITY_CONTRACT",
     "REPORT_SCHEMA",
     "build_daily_report",

@@ -533,6 +533,16 @@ def _lifecycle_report(
             ]
         ),
     }
+    pipeline_owner_exclusion_manifest = {
+        "schema": cycle.PIPELINE_OWNER_EXCLUSION_MANIFEST_SCHEMA,
+        **cycle.PIPELINE_OWNER_EXCLUSION_AUTHORITY_CONTRACT,
+        "target_date": target_date,
+        "excluded_owner_count": 0,
+        "excluded_lifecycle_count": 0,
+        "gap_count": 0,
+        "reason_code_counts": {},
+        "entries": [],
+    }
     report = {
         "schema": cycle.LIFECYCLE_REPORT_SCHEMA,
         "target_date": target_date,
@@ -562,6 +572,14 @@ def _lifecycle_report(
         "lifecycle_accumulator_overflow_row_count": 0,
         "transition_event_identity_overflow_row_count": 0,
         "pipeline_lifecycle_instrumentation_gap_count": 0,
+        "pipeline_lifecycle_missing_identity_count": 0,
+        "pipeline_lifecycle_accepted_row_count": 7,
+        "pipeline_lifecycle_owner_scoped_gap_count": 0,
+        "pipeline_lifecycle_unscoped_gap_count": 0,
+        "pipeline_owner_scoped_gap_high_volume_min_rows": (
+            cycle.PIPELINE_OWNER_SCOPED_GAP_HARD_BLOCK_MIN_ROWS
+        ),
+        "pipeline_owner_scoped_gap_high_volume_blocked": False,
         "lifecycle_invalid_transition_count": 0,
         "broker_execution_provenance_gap_count": 0,
         "broker_execution_conflict_count": 0,
@@ -574,6 +592,7 @@ def _lifecycle_report(
         "candidate_row_gate_failure_count": 0 if eligible else 1,
         "instrumentation_gap_count": 0 if eligible else 1,
         "lifecycle_window_exclusion_manifest": exclusion_manifest,
+        "pipeline_owner_exclusion_manifest": pipeline_owner_exclusion_manifest,
         "lifecycle_count": 1,
         "promotion_evidence_eligible_count": int(eligible),
         "promotion_ready": eligible,
@@ -1186,6 +1205,20 @@ def test_lifecycle_index_rejects_self_rehashed_exclusion_manifest_census_tamper(
     assert index == {}
     assert any("lifecycle_window_excluded_census_mismatch" in row for row in findings)
     assert any("lifecycle_window_taxonomy_census_mismatch" in row for row in findings)
+
+
+def test_lifecycle_index_rejects_self_rehashed_pipeline_owner_manifest_tamper():
+    target_date = "2026-08-14"
+    report = _lifecycle_report(target_date, trace_id="trace-1")
+    report["pipeline_owner_exclusion_manifest"]["excluded_owner_count"] = 1
+    _seal_lifecycle_report(report)
+
+    index, findings = cycle._lifecycle_index([report])
+
+    assert index == {}
+    assert any(
+        "pipeline_owner_exclusion_owner_census_mismatch" in row for row in findings
+    )
 
 
 def test_lifecycle_index_rejects_self_rehashed_legacy_row_without_raw_fids():
@@ -1923,6 +1956,13 @@ def _bind_current_execution_validation_fixture(
     *, report: dict, requests: list[dict], outcome_artifact: dict
 ) -> tuple[dict, str]:
     pricing_hash = "e" * 64
+    if "labels" not in outcome_artifact:
+        labels = []
+        for index, request in enumerate(requests):
+            label_id = f"test-label-{index}"
+            request.setdefault("outcome_join_key", label_id)
+            labels.append({"label_id": label_id})
+        outcome_artifact["labels"] = labels
     materialized = {
         "schema": quality.MICRO_REVERSION_MATERIALIZED_REQUEST_SCHEMA,
         "target_date": report["target_date"],
@@ -2343,6 +2383,48 @@ def test_cycle_does_not_claim_or_roll_same_date_stale_execution_when_step_skips(
     assert report["provider_call_performed"] is False
     assert report["rolling_status"] == "no_joined_lifecycle_rows"
     assert report["status"] == "source_only_blocked_or_deferred"
+
+
+def test_existing_economic_reference_reuse_binds_exact_source_manifest(
+    tmp_path,
+    monkeypatch,
+):
+    target_date = "2026-08-18"
+    manifest_path = tmp_path / "economic-reference-sources.json"
+    manifest_path.write_text('{"schema":"test_manifest_v1"}\n', encoding="utf-8")
+    raw = manifest_path.read_bytes()
+    report = {
+        "target_date": target_date,
+        "status": "pass",
+        "tuning_input_allowed": True,
+        "source_manifest": {
+            "resolved_path": str(manifest_path.resolve()),
+            "sha256": cycle._sha256(raw),
+            "size_bytes": len(raw),
+        },
+    }
+    monkeypatch.setattr(
+        cycle,
+        "_economic_outputs",
+        lambda _report: ({"verified": True}, {"verified": True}),
+    )
+
+    cycle._validate_existing_economic_reference(
+        report,
+        target_date=target_date,
+        manifest_path=manifest_path,
+    )
+
+    manifest_path.write_text('{"schema":"tampered_manifest_v1"}\n', encoding="utf-8")
+    with pytest.raises(
+        ValueError,
+        match="existing_economic_reference_source_manifest_mismatch",
+    ):
+        cycle._validate_existing_economic_reference(
+            report,
+            target_date=target_date,
+            manifest_path=manifest_path,
+        )
 
 
 def test_empty_materialized_receipt_is_valid_terminal_no_provider_work() -> None:

@@ -1547,6 +1547,24 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
             "main_lifecycle_realized_net_pnl_krw": "25",
         }
     )
+    # A legacy owned position can still emit mapped holding telemetry without
+    # the scanner-attempt identity introduced after that position was opened.
+    # It is quarantined by exact (date, record, stock) owner scope and must not
+    # globally block this unrelated clean lifecycle.
+    events.append(
+        {
+            "schema_version": 1,
+            "event_type": "pipeline_event",
+            "pipeline": "HOLDING_PIPELINE",
+            "stage": "ai_holding_review",
+            "stock_name": "LEGACY",
+            "stock_code": "000001",
+            "record_id": 999,
+            "fields": {"ai_score": "50"},
+            "emitted_at": BASE.isoformat(),
+            "emitted_date": TARGET_DATE,
+        }
+    )
     source = tmp_path / "pipeline_events.jsonl"
     _write_jsonl(source, events)
 
@@ -1561,9 +1579,14 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
     )
 
     assert report["source_kind"] == "pipeline_events_explicit_id_only"
-    assert report["pipeline_lifecycle_mapped_row_count"] == 8
+    assert report["pipeline_lifecycle_mapped_row_count"] == 9
     assert report["pipeline_lifecycle_accepted_row_count"] == 8
-    assert report["pipeline_lifecycle_instrumentation_gap_count"] == 0
+    assert report["pipeline_lifecycle_instrumentation_gap_count"] == 1
+    assert report["pipeline_lifecycle_owner_scoped_gap_count"] == 1
+    assert report["pipeline_lifecycle_unscoped_gap_count"] == 0
+    assert report["pipeline_owner_exclusion_manifest"]["excluded_owner_count"] == 1
+    assert report["pipeline_owner_exclusion_manifest"]["excluded_lifecycle_count"] == 0
+    assert report["global_source_quality_gate_blockers"] == []
     assert report["promotion_ready"] is True
     assert report["rows"][0]["attempt_id"] == stock["scanner_generation_id"]
     assert report["rows"][0]["actual_holding_duration_sec"] == pytest.approx(60)
@@ -1571,6 +1594,16 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
     assert report["rows"][0]["market_observation_expected_count"] == 5
     assert report["rows"][0]["bbo_coverage_pct"] == pytest.approx(100)
     assert report["rows"][0]["depth_coverage_pct"] == pytest.approx(100)
+
+    from src.engine.scalping.micro_reversion import ai_quality_cycle
+
+    assert (
+        ai_quality_cycle._lifecycle_report_contract_findings(
+            report,
+            rows=report["rows"],
+        )
+        == []
+    )
 
 
 def test_official_broker_execution_native_contract_is_strict_and_source_only() -> None:
@@ -2052,9 +2085,177 @@ def test_mapped_pipeline_row_without_id_is_gap_and_never_joined(
     assert report["rows"] == []
     assert report["pipeline_lifecycle_missing_identity_count"] == 1
     assert report["pipeline_lifecycle_instrumentation_gap_count"] == 1
+    assert report["pipeline_lifecycle_owner_scoped_gap_count"] == 1
+    assert report["pipeline_lifecycle_unscoped_gap_count"] == 0
+    assert report["pipeline_owner_exclusion_manifest"]["excluded_owner_count"] == 1
     assert (
         "pipeline_lifecycle_instrumentation_gap"
-        in report["global_source_quality_gate_blockers"]
+        not in (report["global_source_quality_gate_blockers"])
+    )
+    assert "no_explicit_lifecycle_rows" in report["global_source_quality_gate_blockers"]
+    assert report["promotion_ready"] is False
+
+
+def test_explicit_sim_only_pipeline_row_without_real_record_is_out_of_scope(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "pipeline_events.jsonl"
+    _write_jsonl(
+        source,
+        [
+            {
+                "event_type": "pipeline_event",
+                "pipeline": "HOLDING_PIPELINE",
+                "stage": "ai_holding_review",
+                "stock_code": "005930",
+                "record_id": None,
+                "fields": {
+                    "pipeline_lifecycle_population_scope": "sim_observation_only",
+                    "decision_authority": "sim_observation_only",
+                },
+                "emitted_at": BASE.isoformat(),
+                "emitted_date": TARGET_DATE,
+            }
+        ],
+    )
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+
+    assert report["pipeline_lifecycle_mapped_row_count"] == 0
+    assert report["pipeline_lifecycle_out_of_scope_row_count"] == 1
+    assert report["pipeline_lifecycle_instrumentation_gap_count"] == 0
+    assert report["source_invalid_transition_count"] == 0
+
+
+def test_sim_scope_claim_cannot_hide_real_record_identity_gap(tmp_path: Path) -> None:
+    source = tmp_path / "pipeline_events.jsonl"
+    _write_jsonl(
+        source,
+        [
+            {
+                "event_type": "pipeline_event",
+                "pipeline": "HOLDING_PIPELINE",
+                "stage": "ai_holding_review",
+                "stock_code": "005930",
+                "record_id": 705,
+                "fields": {
+                    "pipeline_lifecycle_population_scope": "sim_observation_only",
+                    "decision_authority": "sim_observation_only",
+                },
+                "emitted_at": BASE.isoformat(),
+                "emitted_date": TARGET_DATE,
+            }
+        ],
+    )
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+
+    assert report["pipeline_lifecycle_mapped_row_count"] == 1
+    assert report["pipeline_lifecycle_owner_scoped_gap_count"] == 1
+    assert report["pipeline_lifecycle_out_of_scope_row_count"] == 0
+
+
+def test_owner_scoped_identity_gap_quarantines_same_owner_attempt(
+    tmp_path: Path,
+) -> None:
+    stock = {
+        "id": 704,
+        "code": "005930",
+        "scanner_promotion_id": "SCANPROM-005930-1787000000000",
+        "effective_venue": "KRX",
+        "market_session_bucket": "regular",
+    }
+    accepted = _pipeline_event(
+        stock=stock,
+        pipeline="ENTRY_PIPELINE",
+        source_stage="scalping_scanner_fast_precheck",
+        second=0,
+        fields={"bbo_observed": True, "depth_observed": True},
+    )
+    legacy_gap = {
+        "schema_version": 1,
+        "event_type": "pipeline_event",
+        "pipeline": "HOLDING_PIPELINE",
+        "stage": "ai_holding_review",
+        "stock_name": "TEST",
+        "stock_code": stock["code"],
+        "record_id": stock["id"],
+        "fields": {"ai_score": "50"},
+        "emitted_at": BASE.isoformat(),
+        "emitted_date": TARGET_DATE,
+    }
+    source = tmp_path / "pipeline_events.jsonl"
+    _write_jsonl(source, [accepted, legacy_gap])
+
+    report = build_daily_report(
+        TARGET_DATE,
+        source_path=source,
+        reviewed_cost_profile_sha256=COST_HASH,
+        reviewed_cost_profile_verified=True,
+        symbol_master_artifact_sha256=SYMBOL_HASH,
+        symbol_master_artifact_verified=True,
+        write=False,
+    )
+
+    assert report["global_source_quality_gate_blockers"] == []
+    assert report["pipeline_owner_exclusion_manifest"]["excluded_owner_count"] == 1
+    assert report["pipeline_owner_exclusion_manifest"]["excluded_lifecycle_count"] == 1
+    assert report["rows"][0]["promotion_evidence_eligible"] is False
+    assert (
+        "pipeline_owner_window_missing_explicit_lifecycle_identity"
+        in (report["rows"][0]["promotion_blockers"])
+    )
+
+
+def test_high_volume_owner_scoped_identity_gap_remains_global_fail_closed(
+    tmp_path: Path,
+) -> None:
+    stock = {
+        "id": 706,
+        "code": "005930",
+        "scanner_promotion_id": "SCANPROM-005930-clean",
+    }
+    clean = _pipeline_event(
+        stock=stock,
+        pipeline="ENTRY_PIPELINE",
+        source_stage="scalping_scanner_fast_precheck",
+        second=0,
+    )
+    legacy = {
+        "event_type": "pipeline_event",
+        "pipeline": "HOLDING_PIPELINE",
+        "stage": "ai_holding_review",
+        "stock_code": "000001",
+        "record_id": 999,
+        "fields": {"ai_score": "50"},
+        "emitted_at": BASE.isoformat(),
+        "emitted_date": TARGET_DATE,
+    }
+    source = tmp_path / "pipeline_events.jsonl"
+    _write_jsonl(
+        source,
+        [
+            clean,
+            *[
+                dict(legacy)
+                for _ in range(paired.PIPELINE_OWNER_SCOPED_GAP_HARD_BLOCK_MIN_ROWS)
+            ],
+        ],
+    )
+
+    report = build_daily_report(
+        TARGET_DATE,
+        source_path=source,
+        reviewed_cost_profile_sha256=COST_HASH,
+        reviewed_cost_profile_verified=True,
+        symbol_master_artifact_sha256=SYMBOL_HASH,
+        symbol_master_artifact_verified=True,
+        write=False,
+    )
+
+    assert (
+        "pipeline_owner_scoped_gap_high_volume"
+        in (report["global_source_quality_gate_blockers"])
     )
     assert report["promotion_ready"] is False
 
@@ -2208,8 +2409,20 @@ def test_live_entry_and_holding_loggers_inject_exact_id_without_journal_write(
         "stat_action_decision_snapshot",
         chosen_action="hold_wait",
     )
+    sim_stock = {
+        "name": "SIM",
+        "code": "000001",
+        "strategy": "SCALPING",
+        "simulation_book": state_handlers.SCALP_SIMULATION_BOOK,
+    }
+    state_handlers._log_entry_pipeline(
+        sim_stock,
+        "000001",
+        "ai_confirmed",
+        action="WAIT",
+    )
 
-    assert len(emitted) == 2
+    assert len(emitted) == 3
     entry_fields = emitted[0][1]["fields"]
     holding_fields = emitted[1][1]["fields"]
     expected_id = mint_main_lifecycle_id(
@@ -2226,6 +2439,13 @@ def test_live_entry_and_holding_loggers_inject_exact_id_without_journal_write(
     assert entry_fields["main_lifecycle_runtime_effect"] is False
     assert holding_fields["main_lifecycle_order_authority"] is False
     assert holding_fields["main_lifecycle_heartbeat"] is True
+    assert entry_fields["pipeline_lifecycle_population_scope"] == "real_record_bound"
+    assert holding_fields["pipeline_lifecycle_population_scope"] == (
+        "real_record_bound"
+    )
+    sim_fields = emitted[2][1]["fields"]
+    assert sim_fields["pipeline_lifecycle_population_scope"] == "sim_observation_only"
+    assert "main_lifecycle_id" not in sim_fields
     assert "_main_lifecycle" not in " ".join(stock)
 
 

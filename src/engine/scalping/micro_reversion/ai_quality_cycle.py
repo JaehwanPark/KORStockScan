@@ -23,7 +23,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -57,6 +57,9 @@ R3_SCHEMA = "main_ai_quality_source_only_candidate_manifest_v1"
 LIFECYCLE_REPORT_SCHEMA = "main_scalping_lifecycle_paired_daily_v1"
 LIFECYCLE_WINDOW_EXCLUSION_MANIFEST_SCHEMA = (
     "main_scalping_lifecycle_window_exclusion_manifest_v1"
+)
+PIPELINE_OWNER_EXCLUSION_MANIFEST_SCHEMA = (
+    "main_scalping_pipeline_owner_exclusion_manifest_v1"
 )
 
 LIFECYCLE_REPORT_AUTHORITY_CONTRACT: dict[str, Any] = {
@@ -108,6 +111,29 @@ LIFECYCLE_EXCLUSION_AUTHORITY_CONTRACT: dict[str, Any] = {
     ],
 }
 
+PIPELINE_OWNER_EXCLUSION_AUTHORITY_CONTRACT: dict[str, Any] = {
+    "metric_role": "source_quality_gate",
+    "decision_authority": "pipeline_owner_window_exclusion_only",
+    "window_policy": "exact_trade_date_record_id_and_stock_code",
+    "sample_floor": "not_applicable_source_quality_manifest",
+    "primary_decision_metric": "excluded_pipeline_owner_count",
+    "source_quality_gate": "missing_explicit_lifecycle_identity_owner_quarantine",
+    "exclusion_scope": "exact_pipeline_owner_window",
+    "runtime_effect": False,
+    "runtime_authority": False,
+    "order_authority": False,
+    "provider_authority": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "forbidden_uses": [
+        "infer_or_reconstruct_main_lifecycle_id",
+        "join_by_symbol_or_timestamp_proximity",
+        "exclude_other_clean_pipeline_owner_windows",
+        "direct_runtime_or_order_apply",
+    ],
+}
+
 OFFLINE_AUTHORITY: dict[str, Any] = {
     "decision_authority": "postclose_source_only_ai_quality_research",
     "runtime_effect": False,
@@ -129,6 +155,7 @@ MIN_BBO_COVERAGE_PCT = 95.0
 MIN_DEPTH_COVERAGE_PCT = 90.0
 MIN_RELATIVE_UPLIFT_PCT = 1.0
 MAX_LIFECYCLE_FINDINGS = 200
+PIPELINE_OWNER_SCOPED_GAP_HARD_BLOCK_MIN_ROWS = 1_000
 
 REPORT_ROOT = DATA_DIR / "report" / "main_ai_quality_r0_r3"
 ECONOMIC_REPORT_ROOT = DATA_DIR / "report" / "micro_reversion_economic_reference"
@@ -675,6 +702,12 @@ def _validate_execution_exact_census(
             or _authority_findings(result)
         ):
             _execution_census_error("result_identity_content_or_hash_invalid")
+        rebound_label_hash = result.get("outcome_label_rebound_from_sha256")
+        if rebound_label_hash is not None and (
+            not _valid_sha256(rebound_label_hash)
+            or rebound_label_hash == result.get("outcome_label_content_sha256")
+        ):
+            _execution_census_error("result_outcome_label_rebind_invalid")
         result_ids.append(result_id)
         provider_actual_costs_by_result_id[result_id] = [
             Decimal(
@@ -786,6 +819,9 @@ def _validate_execution_exact_census(
     provisional_checkpoint_count = _native_nonnegative_int(
         report.get("provisional_checkpoint_result_count")
     )
+    provisional_failed_result_count = _native_nonnegative_int(
+        report.get("provisional_failed_result_count", 0)
+    )
     reused_result_count = _native_nonnegative_int(report.get("reused_result_count"))
     newly_committed_parent_count = _native_nonnegative_int(
         report.get("newly_committed_parent_count")
@@ -808,10 +844,12 @@ def _validate_execution_exact_census(
         or provisional_checkpoint_count != expected_provisional_count
         or reused_result_count != expected_reused_count
         or newly_committed_parent_count != len(new_parent_ids)
+        or provisional_failed_result_count is None
         or max_new_requests is None
         or max_new_requests <= 0
         or new_result_count > max_new_requests
-        or report.get("candidate_model_call_attempted") is not bool(new_results)
+        or report.get("candidate_model_call_attempted")
+        is not bool(new_results or provisional_failed_result_count)
     ):
         _execution_census_error("checkpoint_selected_or_reused_census_mismatch")
 
@@ -819,6 +857,7 @@ def _validate_execution_exact_census(
     if not isinstance(exclusions, list):
         _execution_census_error("execution_exclusions_invalid")
     seen_excluded_request_ids: set[str] = set()
+    candidate_execution_exclusion_count = 0
     deferred_id_set = set(deferred_ids)
     for exclusion in exclusions:
         if not isinstance(exclusion, Mapping):
@@ -836,7 +875,18 @@ def _validate_execution_exact_census(
             or not str(exclusion.get("reason") or "").strip()
         ):
             _execution_census_error("execution_exclusion_binding_invalid")
+        exclusion_reason = str(exclusion.get("reason") or "")
+        if exclusion_reason.startswith("candidate_execution_"):
+            if exclusion_reason not in {
+                "candidate_execution_provider_failed",
+                "candidate_execution_provider_provenance_rejected",
+                "candidate_execution_schema_rejected",
+            }:
+                _execution_census_error("execution_exclusion_reason_invalid")
+            candidate_execution_exclusion_count += 1
         seen_excluded_request_ids.add(request_id)
+    if candidate_execution_exclusion_count != provisional_failed_result_count:
+        _execution_census_error("provisional_failed_result_census_mismatch")
 
     outcome_joins = report.get("outcome_joins")
     if not isinstance(outcome_joins, list):
@@ -1070,9 +1120,12 @@ def _validate_execution_exact_census(
     sample_floor = evaluation.get("sample_floor")
     arm_metrics = evaluation.get("arm_metrics")
     partitions = evaluation.get("stage_venue_partitions")
+    sample_floor_valid = sample_floor == quality.OFFLINE_CONTRACT["sample_floor"] or (
+        isinstance(sample_floor, Mapping)
+        and sample_floor.get("observed_rows") == len(evaluation_rows)
+    )
     if (
-        not isinstance(sample_floor, Mapping)
-        or sample_floor.get("observed_rows") != len(evaluation_rows)
+        not sample_floor_valid
         or not isinstance(arm_metrics, Mapping)
         or set(arm_metrics) != set(EXPECTED_ARMS)
         or any(
@@ -1163,6 +1216,9 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
     uncommitted_result_count = _native_nonnegative_int(
         report.get("uncommitted_result_count")
     )
+    provisional_failed_result_count = _native_nonnegative_int(
+        report.get("provisional_failed_result_count", 0)
+    )
     newly_committed_parent_count = report.get("newly_committed_parent_count")
     new_result_count = report.get("new_result_count")
     execution_exclusions = report.get("execution_exclusions")
@@ -1188,6 +1244,7 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
         != len(blocking_execution_exclusions)
         or bool(blocking_execution_exclusions)
         or uncommitted_result_count != 0
+        or provisional_failed_result_count is None
         or _native_nonnegative_int(report.get("provider_provenance_pass_count"))
         != result_count
         or report.get("provider_budget_contract_findings") != []
@@ -1220,7 +1277,8 @@ def _validated_execution_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]
             and (
                 new_result_count != 0
                 or report.get("selected_request_ids") != []
-                or report.get("candidate_model_call_attempted") is not False
+                or report.get("candidate_model_call_attempted")
+                is not bool(provisional_failed_result_count)
             )
         )
         or (
@@ -1433,6 +1491,11 @@ def _validate_current_execution_artifact(
     request_by_id = {
         str(request.get("paired_replay_id") or ""): request for request in requests
     }
+    quality._validate_micro_reversion_outcome_label_artifact(outcome_label_artifact)
+    labels_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for label in outcome_label_artifact.get("labels") or []:
+        if isinstance(label, dict) and label.get("label_id"):
+            labels_by_id[str(label["label_id"])].append(label)
     expected_execution_exclusions = [
         {
             "paired_replay_parent_id": request.get("paired_replay_parent_id"),
@@ -1446,13 +1509,53 @@ def _validate_current_execution_artifact(
         for request in requests
         if quality._micro_reversion_executor_exclusion(request) is not None
     ]
-    if report.get("execution_exclusions") != expected_execution_exclusions:
+    expected_execution_exclusions.extend(
+        {
+            "paired_replay_parent_id": request.get("paired_replay_parent_id"),
+            "paired_replay_id": request.get("paired_replay_id"),
+            "micro_reversion_replay_arm": request.get("micro_reversion_replay_arm"),
+            "stage": request.get("stage"),
+            "provider": (request.get("candidate") or {}).get("provider"),
+            "model": (request.get("candidate") or {}).get("model"),
+            "reason": "action_neutral_outcome_label_missing_or_ambiguous",
+        }
+        for request in requests
+        if len(labels_by_id.get(str(request.get("outcome_join_key") or ""), [])) != 1
+    )
+    actual_execution_exclusions = report.get("execution_exclusions")
+    if (
+        not isinstance(actual_execution_exclusions, list)
+        or actual_execution_exclusions[: len(expected_execution_exclusions)]
+        != expected_execution_exclusions
+    ):
         raise ValueError("current_execution_exclusion_census_mismatch")
-    quality._validate_micro_reversion_outcome_label_artifact(outcome_label_artifact)
-    labels_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for label in outcome_label_artifact.get("labels") or []:
-        if isinstance(label, dict) and label.get("label_id"):
-            labels_by_id[str(label["label_id"])].append(label)
+    dynamically_excluded_request_ids: set[str] = set()
+    for exclusion in actual_execution_exclusions[len(expected_execution_exclusions) :]:
+        if not isinstance(exclusion, Mapping):
+            raise ValueError("current_execution_exclusion_census_mismatch")
+        request_id = str(exclusion.get("paired_replay_id") or "")
+        request = request_by_id.get(request_id)
+        if (
+            request is None
+            or request_id in dynamically_excluded_request_ids
+            or exclusion.get("paired_replay_parent_id")
+            != request.get("paired_replay_parent_id")
+            or exclusion.get("micro_reversion_replay_arm")
+            != request.get("micro_reversion_replay_arm")
+            or exclusion.get("stage") != request.get("stage")
+            or exclusion.get("provider")
+            != (request.get("candidate") or {}).get("provider")
+            or exclusion.get("model") != (request.get("candidate") or {}).get("model")
+            or exclusion.get("reason")
+            not in {
+                "candidate_execution_provider_failed",
+                "candidate_execution_provider_provenance_rejected",
+                "candidate_execution_schema_rejected",
+            }
+        ):
+            raise ValueError("current_execution_exclusion_census_mismatch")
+        dynamically_excluded_request_ids.add(request_id)
+    expected_execution_exclusions = list(actual_execution_exclusions)
     bound_results = quality._micro_reversion_reusable_results(
         existing_artifact=report,
         materialized_report=materialized_report,
@@ -1731,10 +1834,165 @@ def _lifecycle_exclusion_manifest_findings(
     return findings
 
 
+def _pipeline_owner_exclusion_manifest_findings(
+    report: Mapping[str, Any], *, rows: Sequence[Any]
+) -> list[str]:
+    """Validate conservative owner-window quarantine without inferring attempts."""
+
+    findings: list[str] = []
+    manifest = report.get("pipeline_owner_exclusion_manifest")
+    if not isinstance(manifest, Mapping):
+        return ["pipeline_owner_exclusion_manifest_missing"]
+    if manifest.get("schema") != PIPELINE_OWNER_EXCLUSION_MANIFEST_SCHEMA:
+        findings.append("pipeline_owner_exclusion_manifest_schema_invalid")
+    for field, expected in PIPELINE_OWNER_EXCLUSION_AUTHORITY_CONTRACT.items():
+        if manifest.get(field) != expected:
+            findings.append(f"pipeline_owner_exclusion_authority_invalid:{field}")
+    if manifest.get("target_date") != report.get("target_date"):
+        findings.append("pipeline_owner_exclusion_target_date_mismatch")
+
+    entries = manifest.get("entries")
+    if not isinstance(entries, list):
+        return [*findings, "pipeline_owner_exclusion_entries_invalid"]
+    expected_reason_counts: Counter[str] = Counter()
+    owner_keys: set[str] = set()
+    owner_pairs: set[tuple[str, str]] = set()
+    total_gap_count = 0
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            findings.append("pipeline_owner_exclusion_entry_invalid")
+            continue
+        record_id = str(entry.get("record_id") or "").strip()
+        stock_code = str(entry.get("stock_code") or "").strip()
+        owner_payload = {
+            "target_date": report.get("target_date"),
+            "record_id": record_id,
+            "stock_code": stock_code,
+        }
+        owner_key = str(entry.get("owner_key_sha256") or "")
+        gap_count = _native_nonnegative_int(entry.get("gap_count"))
+        reason_counts = entry.get("reason_code_counts")
+        if (
+            not record_id
+            or not re.fullmatch(r"[0-9]{6}", stock_code)
+            or owner_key != _sha256(owner_payload)
+            or owner_key in owner_keys
+            or gap_count is None
+            or gap_count <= 0
+            or not isinstance(reason_counts, Mapping)
+        ):
+            findings.append("pipeline_owner_exclusion_entry_invalid")
+            continue
+        normalized_reason_counts: dict[str, int] = {}
+        for raw_reason, raw_count in reason_counts.items():
+            reason = str(raw_reason or "").strip()
+            count = _native_nonnegative_int(raw_count)
+            if (
+                reason != "pipeline_lifecycle_identity_missing"
+                or count is None
+                or count <= 0
+            ):
+                findings.append("pipeline_owner_exclusion_reason_invalid")
+                normalized_reason_counts = {}
+                break
+            normalized_reason_counts[reason] = count
+        if (
+            not normalized_reason_counts
+            or sum(normalized_reason_counts.values()) != gap_count
+        ):
+            findings.append("pipeline_owner_exclusion_gap_census_invalid")
+            continue
+        owner_keys.add(owner_key)
+        owner_pairs.add((record_id, stock_code))
+        total_gap_count += gap_count
+        expected_reason_counts.update(normalized_reason_counts)
+
+    excluded_owner_count = _native_nonnegative_int(manifest.get("excluded_owner_count"))
+    if excluded_owner_count is None or excluded_owner_count != len(entries):
+        findings.append("pipeline_owner_exclusion_owner_census_mismatch")
+    if manifest.get("gap_count") != total_gap_count:
+        findings.append("pipeline_owner_exclusion_gap_census_mismatch")
+    if manifest.get("reason_code_counts") != dict(
+        sorted(expected_reason_counts.items())
+    ):
+        findings.append("pipeline_owner_exclusion_reason_census_mismatch")
+    if report.get("pipeline_lifecycle_owner_scoped_gap_count") != total_gap_count:
+        findings.append("pipeline_owner_exclusion_report_gap_census_mismatch")
+
+    excluded_row_count = 0
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        if (str(row.get("record_id")), str(row.get("stock_code"))) not in owner_pairs:
+            continue
+        excluded_row_count += 1
+        if (
+            "pipeline_owner_window_missing_explicit_lifecycle_identity"
+            not in (row.get("promotion_blockers") or [])
+            or row.get("promotion_evidence_eligible") is not False
+        ):
+            findings.append("pipeline_owner_exclusion_row_not_quarantined")
+    if manifest.get("excluded_lifecycle_count") != excluded_row_count:
+        findings.append("pipeline_owner_exclusion_lifecycle_census_mismatch")
+
+    scoped = _native_nonnegative_int(
+        report.get("pipeline_lifecycle_owner_scoped_gap_count")
+    )
+    unscoped = _native_nonnegative_int(
+        report.get("pipeline_lifecycle_unscoped_gap_count")
+    )
+    total = _native_nonnegative_int(
+        report.get("pipeline_lifecycle_instrumentation_gap_count")
+    )
+    if (
+        scoped is None
+        or unscoped is None
+        or total is None
+        or scoped + unscoped != total
+    ):
+        findings.append("pipeline_owner_exclusion_total_gap_census_mismatch")
+    missing_identity_count = _native_nonnegative_int(
+        report.get("pipeline_lifecycle_missing_identity_count")
+    )
+    if (
+        missing_identity_count is None
+        or scoped is None
+        or total is None
+        or not scoped <= missing_identity_count <= total
+    ):
+        findings.append("pipeline_owner_exclusion_missing_identity_census_mismatch")
+    accepted_row_count = _native_nonnegative_int(
+        report.get("pipeline_lifecycle_accepted_row_count")
+    )
+    if accepted_row_count is None:
+        findings.append("pipeline_owner_exclusion_accepted_census_invalid")
+    else:
+        expected_high_volume_block = bool(
+            scoped is not None
+            and scoped >= PIPELINE_OWNER_SCOPED_GAP_HARD_BLOCK_MIN_ROWS
+            and scoped > accepted_row_count
+        )
+        if report.get("pipeline_owner_scoped_gap_high_volume_min_rows") != (
+            PIPELINE_OWNER_SCOPED_GAP_HARD_BLOCK_MIN_ROWS
+        ):
+            findings.append("pipeline_owner_exclusion_high_volume_floor_mismatch")
+        if report.get("pipeline_owner_scoped_gap_high_volume_blocked") is not (
+            expected_high_volume_block
+        ):
+            findings.append("pipeline_owner_exclusion_high_volume_status_mismatch")
+        if expected_high_volume_block and (
+            "pipeline_owner_scoped_gap_high_volume"
+            not in (report.get("global_source_quality_gate_blockers") or [])
+        ):
+            findings.append("pipeline_owner_exclusion_high_volume_gate_missing")
+    return findings
+
+
 def _lifecycle_report_contract_findings(
     report: Mapping[str, Any], *, rows: Sequence[Any]
 ) -> list[str]:
     findings: list[str] = []
+    findings.extend(_pipeline_owner_exclusion_manifest_findings(report, rows=rows))
     for field, expected in LIFECYCLE_REPORT_AUTHORITY_CONTRACT.items():
         if report.get(field) != expected:
             findings.append(f"top_level_authority_invalid:{field}")
@@ -1810,7 +2068,7 @@ def _lifecycle_report_contract_findings(
         "mixed_source_row_count",
         "lifecycle_accumulator_overflow_row_count",
         "transition_event_identity_overflow_row_count",
-        "pipeline_lifecycle_instrumentation_gap_count",
+        "pipeline_lifecycle_unscoped_gap_count",
         "broker_order_no_cross_lifecycle_conflict_count",
         "broker_execution_cross_lifecycle_identity_conflict_count",
     ):
@@ -1900,6 +2158,7 @@ def _lifecycle_report_contract_findings(
 
     instrumentation_fields = (
         "source_invalid_transition_count",
+        "pipeline_lifecycle_owner_scoped_gap_count",
         "broker_execution_provenance_gap_count",
         "broker_execution_conflict_count",
         "broker_execution_order_progress_conflict_count",
@@ -3024,6 +3283,33 @@ def _validate_economic_owner_report(
         raise ValueError("economic_owner_report_budget_basis_invalid")
 
 
+def _validate_existing_economic_reference(
+    report: Mapping[str, Any],
+    *,
+    target_date: str,
+    manifest_path: Path,
+) -> None:
+    if report.get("target_date") != target_date or report.get("status") not in {
+        "pass",
+        "partial",
+    }:
+        raise ValueError("existing_economic_reference_target_or_status_invalid")
+    if report.get("tuning_input_allowed") is not True:
+        raise ValueError("existing_economic_reference_tuning_input_blocked")
+    _economic_outputs(report)
+    source_manifest = report.get("source_manifest")
+    if not isinstance(source_manifest, Mapping):
+        raise ValueError("existing_economic_reference_source_manifest_missing")
+    raw = manifest_path.read_bytes()
+    if (
+        Path(str(source_manifest.get("resolved_path") or "")).resolve()
+        != manifest_path.resolve()
+        or source_manifest.get("sha256") != _sha256(raw)
+        or source_manifest.get("size_bytes") != len(raw)
+    ):
+        raise ValueError("existing_economic_reference_source_manifest_mismatch")
+
+
 def _collect_rolling_inputs(
     *, target_date: str, lookback_calendar_days: int = 60
 ) -> tuple[
@@ -3244,8 +3530,45 @@ def run_cycle(
         "--output-root",
         str(selected_paths["economic_source_manifest"].parent),
     ]
+    reuse_existing_economic_chain = False
+    if write and not blockers:
+        try:
+            existing_owner_report = _load_json_auto(
+                selected_paths["economic_owner_report"]
+            )
+            _validate_economic_owner_report(
+                existing_owner_report,
+                target_date=target_date,
+                policy_path=selected_paths["economic_policy"],
+                manifest_path=selected_paths["economic_source_manifest"],
+                pricing_path=selected_paths["provider_pricing"],
+            )
+            existing_economic = _load_json_auto(selected_paths["economic_reference"])
+            _validate_existing_economic_reference(
+                existing_economic,
+                target_date=target_date,
+                manifest_path=selected_paths["economic_source_manifest"],
+            )
+            reuse_existing_economic_chain = True
+        except (
+            FileNotFoundError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            reuse_existing_economic_chain = False
     if not write:
         blockers.append("write_required_for_composed_r0_r3_artifact_chain")
+    elif not blockers and reuse_existing_economic_chain:
+        steps.append(
+            {
+                "name": "economic_reference_owner",
+                "status": "pass",
+                "returncode": 0,
+                "artifact_reused": True,
+            }
+        )
     elif not blockers:
         steps.append(
             _command_step(
@@ -3287,7 +3610,16 @@ def run_cycle(
         "--output",
         str(selected_paths["economic_reference"]),
     ]
-    if write and not blockers:
+    if write and not blockers and reuse_existing_economic_chain:
+        steps.append(
+            {
+                "name": "economic_reference",
+                "status": "pass",
+                "returncode": 0,
+                "artifact_reused": True,
+            }
+        )
+    elif write and not blockers:
         steps.append(
             _command_step(
                 name="economic_reference",
@@ -3493,11 +3825,20 @@ def run_cycle(
                 runner=command_runner,
             )
         )
-        if steps[-1]["returncode"] != 0:
+        if steps[-1]["returncode"] not in {0, 2}:
             blockers.append("bounded_provider_replay_failed_or_deferred")
         else:
             try:
                 current_execution_report = _load_json_auto(selected_paths["execution"])
+                partial_terminal_status = (
+                    "offline_three_arm_execution_complete_with_failures_or_exclusions"
+                )
+                if (steps[-1]["returncode"] == 2) != (
+                    current_execution_report.get("status") == partial_terminal_status
+                ):
+                    raise ValueError(
+                        "bounded_provider_replay_exit_status_contract_mismatch"
+                    )
                 current_pricing = _load_json_auto(selected_paths["provider_pricing"])
                 _validate_current_execution_artifact(
                     report=current_execution_report,
@@ -3512,6 +3853,8 @@ def run_cycle(
                     ),
                 )
                 current_provider_replay_complete = True
+                if steps[-1]["returncode"] == 2:
+                    steps[-1]["status"] = "pass_with_bounded_failures_or_exclusions"
             except (
                 FileNotFoundError,
                 OSError,
