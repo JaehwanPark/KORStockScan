@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import date, datetime, timedelta, time as dt_time
+from datetime import date, datetime, timedelta, time as dt_time, timezone
 from concurrent.futures import ThreadPoolExecutor
 import importlib
 import json
@@ -17481,6 +17481,39 @@ def test_resolve_holding_elapsed_sec_prefers_holding_started_at_epoch():
     )
 
     assert held_sec == 120
+
+
+def test_resolve_holding_elapsed_sec_accepts_aware_broker_datetime_with_naive_now():
+    holding_started_at = datetime(2026, 8, 18, 9, 51, 4, tzinfo=timezone.utc)
+    current_dt = datetime(2026, 8, 18, 9, 51, 10)
+
+    held_sec = scale_in.resolve_holding_elapsed_sec(
+        {"holding_started_at": holding_started_at},
+        now_dt=current_dt,
+        now_ts=holding_started_at.timestamp() + 6,
+    )
+
+    assert held_sec == 6
+
+
+def test_resolve_holding_elapsed_sec_aligns_naive_iso_to_aware_current_timezone():
+    current_dt = datetime(2026, 8, 18, 9, 51, 10, tzinfo=timezone.utc)
+
+    held_sec = scale_in.resolve_holding_elapsed_sec(
+        {"holding_started_at": "2026-08-18T09:51:04"},
+        now_dt=current_dt,
+        now_ts=current_dt.timestamp(),
+    )
+
+    assert held_sec == 6
+
+
+def test_calc_held_minutes_accepts_aware_execution_receipt_buy_time():
+    buy_time = datetime.now(timezone.utc) - timedelta(minutes=7)
+
+    held_min = scale_in._calc_held_minutes({"buy_time": buy_time})
+
+    assert 6.9 <= held_min <= 7.1
 
 
 def test_state_handler_resolve_holding_elapsed_sec_uses_shared_parser():

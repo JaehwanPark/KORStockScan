@@ -92,6 +92,7 @@ SAMSUNG_DAILY_EQUAL_SHARE_POLICY = {
 }
 MAX_TAKE_PROFIT_FAILURES = 3
 OBSERVABILITY_PERSIST_INTERVAL_SEC = 60
+POLICY_CATALOG_REFRESH_INTERVAL_SEC = 30
 
 ORDER_ROLE_ENTRY_BUY = "ENTRY_BUY"
 ORDER_ROLE_SCALE_IN_BUY = "SCALE_IN_BUY"
@@ -391,6 +392,7 @@ class WidgetSignalAutoTrader:
         )
         self._refresh_dynamic_specs()
         self._configured_execution_policies = self._policy_manifest()
+        self._last_policy_catalog_refresh_at: datetime | None = None
         self._validate_policy_quantities()
         self._state = self._load_state()
 
@@ -476,24 +478,106 @@ class WidgetSignalAutoTrader:
         stored_policies = stored_policies if isinstance(stored_policies, dict) else {}
         if stored_policies != self._configured_execution_policies:
             same_trade_date = state.get("active_date") == _now_kst().date().isoformat()
+            additive_policy_catalog = all(
+                self._configured_execution_policies.get(symbol) == sessions
+                for symbol, sessions in stored_policies.items()
+            )
             symbols = state.get("symbols")
             symbols = symbols if isinstance(symbols, dict) else {}
-            has_live_intent_or_qty = any(
-                self._open_qty(symbol_state) > 0
-                or any(
-                    order.get("status") in ACTIVE_ORDER_STATUSES
-                    for order in symbol_state.get("orders") or []
-                )
-                for symbol_state in symbols.values()
+            live_intent_symbols = {
+                symbol
+                for symbol, symbol_state in symbols.items()
                 if isinstance(symbol_state, dict)
+                and (
+                    self._open_qty(symbol_state) > 0
+                    or any(
+                        order.get("status") in ACTIVE_ORDER_STATUSES
+                        for order in symbol_state.get("orders") or []
+                    )
+                )
+            }
+            added_policy_symbols = (
+                set(self._configured_execution_policies) - set(stored_policies)
             )
-            if same_trade_date and has_live_intent_or_qty:
+            additive_policy_catalog = bool(
+                additive_policy_catalog
+                and not (added_policy_symbols & live_intent_symbols)
+            )
+            if same_trade_date and live_intent_symbols and not additive_policy_catalog:
                 raise ValueError(
                     "widget_execution_policy_state_mismatch_with_active_orders"
                 )
-            if same_trade_date:
+            if same_trade_date and not additive_policy_catalog:
                 return {}
         return state
+
+    def _refresh_same_day_policy_catalog(self, observed_at: datetime) -> None:
+        """Admit only additive exact-date policies published after process start.
+
+        The postclose policy producer normally finishes before this service
+        starts.  Persistent-timer catch-up can legitimately publish the same
+        exact-date artifact later in preopen, though.  Re-read the catalog at a
+        bounded cadence so a long-running process does not miss that symbol.
+
+        Existing symbol/session policies are immutable for the trade date.
+        A replacement, removal, or quantity mismatch is ignored here and thus
+        cannot mutate an active episode or widen broker authority silently.
+        """
+
+        if observed_at.date() != self._policy_date:
+            return
+        last_refresh = self._last_policy_catalog_refresh_at
+        if last_refresh is not None:
+            elapsed = (observed_at - last_refresh).total_seconds()
+            if 0 <= elapsed < POLICY_CATALOG_REFRESH_INTERVAL_SEC:
+                return
+        self._last_policy_catalog_refresh_at = observed_at
+
+        candidate = self.policy_loader.resolve_all(observed_date=self._policy_date)
+        if not isinstance(candidate, dict) or not candidate:
+            return
+
+        catalog_codes = {spec.code for spec in self._dynamic_spec_catalog}
+        spec_codes = {spec.code for spec in self._static_specs} | catalog_codes
+        additions: dict[str, dict[str, Any]] = {}
+        for symbol, sessions in candidate.items():
+            if symbol not in spec_codes or not isinstance(sessions, dict):
+                continue
+            current_sessions = self._dated_execution_policies.get(symbol, {})
+            for session, policy in sessions.items():
+                if session in current_sessions or not isinstance(policy, dict):
+                    continue
+                if _positive_int(policy.get("leg_quantity_each")) != self.entry_qty:
+                    continue
+                additions.setdefault(symbol, {})[session] = policy
+        if not additions:
+            return
+
+        merged = {
+            symbol: dict(sessions)
+            for symbol, sessions in self._dated_execution_policies.items()
+        }
+        for symbol, sessions in additions.items():
+            merged.setdefault(symbol, {}).update(sessions)
+        self._dated_execution_policies = merged
+        self._refresh_dynamic_specs()
+        self._validate_policy_quantities()
+        self._configured_execution_policies = self._policy_manifest()
+
+        symbols = self._state.get("symbols")
+        if not isinstance(symbols, dict):
+            symbols = {}
+            self._state["symbols"] = symbols
+        specs_by_code = {spec.code: spec for spec in self.specs}
+        for symbol in additions:
+            spec = specs_by_code.get(symbol)
+            if spec is not None and symbol not in symbols:
+                symbols[symbol] = self._empty_symbol_state(spec)
+        self._state["last_policy_catalog_refresh_at"] = observed_at.isoformat()
+        self._state["last_policy_catalog_additions"] = {
+            symbol: sorted(sessions) for symbol, sessions in sorted(additions.items())
+        }
+        self._save()
 
     @staticmethod
     def _empty_symbol_state(spec: WidgetSpec) -> dict[str, Any]:
@@ -2141,6 +2225,7 @@ class WidgetSignalAutoTrader:
     def run_once(self, observed_at: datetime | None = None) -> dict[str, Any]:
         now = (observed_at or _now_kst()).astimezone(KST)
         self._activate_date(now)
+        self._refresh_same_day_policy_catalog(now)
         if not self.enabled:
             return deepcopy(self._state)
         for spec in self.specs:

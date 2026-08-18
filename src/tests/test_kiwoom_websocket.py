@@ -820,6 +820,33 @@ def test_post_login_bootstrap_skips_condition_list_by_default(monkeypatch):
 
     sent = [json.loads(payload) for payload in fake_ws.sent]
     assert not any(payload.get("trnm") == "CNSRLST" for payload in sent)
+    assert manager._session_ready.is_set()
+
+
+def test_post_login_bootstrap_restores_symbols_after_readiness_boundary(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", raising=False)
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager.is_reconnected = True
+    manager.subscribed_codes.add("005930")
+    manager._registered_items_by_code["005930"] = ("005930",)
+
+    asyncio.run(manager._send_post_login_bootstrap())
+
+    sent = [json.loads(payload) for payload in fake_ws.sent]
+    symbol_regs = [
+        payload
+        for payload in sent
+        if payload.get("trnm") == "REG"
+        and any(
+            any(str(item).startswith("005930") for item in row.get("item", []))
+            for row in payload.get("data", [])
+        )
+    ]
+    assert manager._session_ready.is_set()
+    assert len(symbol_regs) == 1
+    assert symbol_regs[0]["refresh"] == "1"
 
 
 def test_condition_list_ignored_by_default(monkeypatch):

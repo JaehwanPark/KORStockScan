@@ -2622,6 +2622,12 @@ class KiwoomWSManager:
         await self.websocket.send(json.dumps(session_reg_packet))
         print("📝 [WS] 장운영구분(0s) 감시망 등록 완료!")
 
+        # LOGIN acknowledgement plus the two session-critical registrations are
+        # the readiness boundary. Reconnect restoration below intentionally uses
+        # _send_reg(), whose normal safety gate waits for this event. Publish
+        # readiness before restoring the prior symbol inventory.
+        self._session_ready.set()
+
         if self.subscribed_codes:
             with self.lock:
                 observation_only_codes = set(
@@ -2688,7 +2694,6 @@ class KiwoomWSManager:
                     await self._await_login_ack(ws)
                     self._commit_ws_token_handoff()
                     await self._send_post_login_bootstrap()
-                    self._session_ready.set()
 
                     while True:
                         message = await ws.recv()

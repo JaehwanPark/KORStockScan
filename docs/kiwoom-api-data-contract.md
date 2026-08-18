@@ -68,6 +68,26 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-08-18 WebSocket Reconnect Resubscription Readiness Gate
+
+- Re-verified at `2026-08-18T09:12:13+09:00` against current upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/실시간시세.md`, `kiwoom/core/ws_client.py`, and
+  `kiwoom/realtime/packets.py` for LOGIN acknowledgement, REG/REMOVE packet
+  shape, `grp_no`, `refresh=1`, item/type registration, connection-close
+  handling, and the requirement to send subscriptions only on an established
+  WebSocket session.
+- Local `_session_ready` now becomes true after the LOGIN acknowledgement and
+  the account/order (`00`) and market-session (`0s`) bootstrap registrations,
+  before the reconnect path restores the existing symbol inventory. This
+  closes the prior circular wait in which reconnect restoration called the
+  normal REG sender while the same bootstrap still owned the unset readiness
+  event and therefore timed out after ten seconds.
+- The repair changes connection lifecycle ordering only. It does not change
+  realtime types, venue suffixes/routes, item limits, scanner selection,
+  provider, threshold, order price/quantity, broker/account/order/cooldown, or
+  hard/protect/emergency safety authority.
+
 ### 2026-08-13 Samsung Morning Exact-Date Manual Add-on Order Gate
 
 - Re-verified at `2026-08-13T07:20:00+09:00` against current upstream commit

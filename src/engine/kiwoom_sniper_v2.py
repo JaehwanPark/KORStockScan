@@ -178,6 +178,7 @@ from src.engine.sniper_dynamic_thresholds import (
     get_dynamic_swing_gap_threshold,
 )
 from src.engine.sniper_state_handlers import bind_state_dependencies
+from src.engine.sniper_scale_in import resolve_elapsed_sec, resolve_holding_elapsed_sec
 import src.engine.sniper_execution_receipts as sniper_execution_receipts
 from src.engine.sniper_execution_receipts import bind_execution_dependencies
 import src.engine.sniper_overnight_gatekeeper as sniper_overnight_gatekeeper
@@ -10801,8 +10802,7 @@ def evaluate_scalping_exit(
     stock["weak_vpw_count"] = weak_vpw_count
 
     # 시간 가치(Time Decay)
-    hold_start = _parse_holding_started_at(stock)
-    held_seconds = (datetime.now() - hold_start).total_seconds() if hold_start else 0
+    held_seconds = resolve_holding_elapsed_sec(stock)
     is_critical_zone = (
         abs(profit_rate - safe_profit_pct) <= 0.20
         or profit_rate >= safe_profit_pct
@@ -10832,7 +10832,8 @@ def evaluate_scalping_exit(
         if profit_rate < 0.2 and peak_profit < 0.4 and avg_vpw < 105:
             return "시간가치 소진(90s+ 미미수익 & v_pw 둔화)"
     if held_seconds >= 180:
-        no_peak = (datetime.now() - last_peak_update).total_seconds() >= 60
+        peak_age_sec = resolve_elapsed_sec(last_peak_update)
+        no_peak = peak_age_sec is not None and peak_age_sec >= 60
         if abs(profit_rate) < 0.2 and peak_profit < 0.5 and (avg_vpw < 105 or no_peak):
             return "시간가치 소진(180s+ 정체 & 고점갱신 부재)"
 

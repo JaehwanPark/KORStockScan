@@ -387,7 +387,7 @@ def _ticks_down(price, ticks=1):
 
 
 def _combine_time_with_current_session_date(raw_time, now_dt):
-    combined = datetime.combine(now_dt.date(), raw_time)
+    combined = datetime.combine(now_dt.date(), raw_time, tzinfo=now_dt.tzinfo)
     if combined > now_dt:
         combined -= timedelta(days=1)
     return combined
@@ -399,13 +399,16 @@ def _resolve_buy_time_as_datetime(raw_buy_time, now_dt):
     if isinstance(raw_buy_time, dt_time):
         return _combine_time_with_current_session_date(raw_buy_time, now_dt)
     if isinstance(raw_buy_time, (int, float)):
-        return datetime.fromtimestamp(float(raw_buy_time))
+        return datetime.fromtimestamp(float(raw_buy_time), tz=now_dt.tzinfo)
     if isinstance(raw_buy_time, str):
         bt_str = raw_buy_time.strip()
         if not bt_str:
             return None
         try:
-            return datetime.fromisoformat(bt_str)
+            parsed = datetime.fromisoformat(bt_str)
+            if parsed.tzinfo is None and now_dt.tzinfo is not None:
+                parsed = parsed.replace(tzinfo=now_dt.tzinfo)
+            return parsed
         except ValueError:
             try:
                 return _combine_time_with_current_session_date(
@@ -421,6 +424,21 @@ def resolve_buy_time_as_datetime(raw_buy_time, now_dt):
     return _resolve_buy_time_as_datetime(raw_buy_time, now_dt)
 
 
+def resolve_elapsed_sec(raw_time, *, now_dt=None, now_ts=None):
+    """Return elapsed seconds without mixing offset-naive and aware datetimes."""
+    current_dt = now_dt or datetime.now()
+    current_ts = float(now_ts if now_ts is not None else current_dt.timestamp())
+    event_dt = resolve_buy_time_as_datetime(raw_time, current_dt)
+    if event_dt is None:
+        return None
+
+    if event_dt.tzinfo is None and current_dt.tzinfo is None:
+        return max(0.0, (current_dt - event_dt).total_seconds())
+    if event_dt.tzinfo is None:
+        event_dt = event_dt.replace(tzinfo=current_dt.tzinfo)
+    return max(0.0, current_ts - event_dt.timestamp())
+
+
 def _calc_held_minutes(stock):
     now_dt = datetime.now()
     raw_order_time = stock.get("order_time")
@@ -432,9 +450,9 @@ def _calc_held_minutes(stock):
 
     raw_buy_time = stock.get("buy_time")
     if raw_buy_time:
-        buy_dt = _resolve_buy_time_as_datetime(raw_buy_time, now_dt)
-        if buy_dt is not None:
-            return max(0.0, (now_dt - buy_dt).total_seconds() / 60.0)
+        elapsed_sec = resolve_elapsed_sec(raw_buy_time, now_dt=now_dt)
+        if elapsed_sec is not None:
+            return elapsed_sec / 60.0
     return 0.0
 
 
@@ -448,24 +466,36 @@ def resolve_holding_elapsed_sec(stock, *, now_dt=None, now_ts=None):
         try:
             return max(0, int(current_ts - float(raw_holding_started_at)))
         except (TypeError, ValueError):
-            holding_dt = resolve_buy_time_as_datetime(
-                raw_holding_started_at, current_dt
+            elapsed_sec = resolve_elapsed_sec(
+                raw_holding_started_at,
+                now_dt=current_dt,
+                now_ts=current_ts,
             )
-            if holding_dt is not None:
-                return max(0, int((current_dt - holding_dt).total_seconds()))
+            if elapsed_sec is not None:
+                return int(elapsed_sec)
 
     raw_probe_filled_at = stock.get("entry_split_probe_filled_at")
     if raw_probe_filled_at not in (None, "", 0, "0"):
         try:
             return max(0, int(current_ts - float(raw_probe_filled_at)))
         except (TypeError, ValueError):
-            pass
+            elapsed_sec = resolve_elapsed_sec(
+                raw_probe_filled_at,
+                now_dt=current_dt,
+                now_ts=current_ts,
+            )
+            if elapsed_sec is not None:
+                return int(elapsed_sec)
 
     raw_buy_time = stock.get("buy_time")
     if raw_buy_time:
-        buy_dt = resolve_buy_time_as_datetime(raw_buy_time, current_dt)
-        if buy_dt is not None:
-            return max(0, int((current_dt - buy_dt).total_seconds()))
+        elapsed_sec = resolve_elapsed_sec(
+            raw_buy_time,
+            now_dt=current_dt,
+            now_ts=current_ts,
+        )
+        if elapsed_sec is not None:
+            return int(elapsed_sec)
 
     # ``order_time`` is an entry-order lifecycle timestamp and is refreshed by
     # residual submit/reprice paths.  It is only a compatibility fallback when

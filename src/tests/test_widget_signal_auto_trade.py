@@ -2041,6 +2041,131 @@ def test_long_running_trader_refreshes_dynamic_specs_at_trade_date_boundary(tmp_
     assert [spec.code for spec in trader.specs] == ["999999"]
 
 
+def test_long_running_trader_admits_late_same_day_additive_policy(tmp_path, monkeypatch):
+    now = datetime(2026, 8, 18, 8, 0, tzinfo=KST)
+    monkeypatch.setattr(engine, "_now_kst", lambda: now)
+    dynamic_spec = WidgetSpec(
+        code="888888",
+        name="dynamic",
+        snapshot_path=Path("unused-dynamic.json"),
+        contract=FakeContract,
+        event_based=True,
+        dated_policy_required=True,
+    )
+    base_spec = WidgetSpec(
+        code="999999",
+        name="base",
+        snapshot_path=Path("unused-base.json"),
+        contract=FakeContract,
+        event_based=True,
+    )
+    loader = FakeDatedPolicyLoader({})
+    trader = WidgetSignalAutoTrader(
+        gateway=FakeGateway(),
+        specs=(base_spec,),
+        dynamic_spec_catalog=(dynamic_spec,),
+        state_path=tmp_path / "state.json",
+        event_recorder=FakeRecorder([]),
+        snapshot_loader=lambda path: {},
+        policy_loader=loader,
+        entry_qty=1,
+        enabled=True,
+    )
+
+    trader.run_once(now)
+    assert [spec.code for spec in trader.specs] == ["999999"]
+
+    policy = _dated_policy()
+    policy.update(symbol="888888", policy_id="dynamic-same-day")
+    loader.policies = {"888888": {"KRX_REGULAR": policy}}
+    state = trader.run_once(now.replace(minute=1))
+
+    assert [spec.code for spec in trader.specs] == ["999999", "888888"]
+    assert state["execution_policies"] == {
+        "888888": {"KRX_REGULAR": "dynamic-same-day"}
+    }
+    assert state["execution_eligible_symbols"] == ["888888"]
+    assert state["last_policy_catalog_additions"] == {
+        "888888": ["KRX_REGULAR"]
+    }
+    assert state["symbols"]["999999"]["orders"] == []
+    assert state["symbols"]["888888"]["orders"] == []
+
+
+def test_same_day_additive_policy_restart_preserves_unrelated_open_position(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 18, 8, 30, tzinfo=KST)
+    monkeypatch.setattr(engine, "_now_kst", lambda: now)
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": engine.STATE_SCHEMA_VERSION,
+                "execution_authority": engine.EXECUTION_AUTHORITY,
+                "active_date": now.date().isoformat(),
+                "execution_policies": {
+                    "999999": {"KRX_REGULAR": "base-policy"}
+                },
+                "symbols": {
+                    "999999": {
+                        "entry_episode_open": True,
+                        "orders": [
+                            {
+                                "side": "BUY",
+                                "broker_accepted": True,
+                                "filled_qty": 1,
+                                "status": "FILLED",
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    base_spec = WidgetSpec(
+        code="999999",
+        name="base",
+        snapshot_path=Path("unused-base.json"),
+        contract=FakeContract,
+        event_based=True,
+        dated_policy_required=True,
+    )
+    dynamic_spec = WidgetSpec(
+        code="888888",
+        name="dynamic",
+        snapshot_path=Path("unused-dynamic.json"),
+        contract=FakeContract,
+        event_based=True,
+        dated_policy_required=True,
+    )
+    base_policy = _dated_policy()
+    base_policy.update(policy_id="base-policy")
+    dynamic_policy = _dated_policy()
+    dynamic_policy.update(symbol="888888", policy_id="dynamic-policy")
+
+    trader = WidgetSignalAutoTrader(
+        gateway=FakeGateway(),
+        specs=(base_spec, dynamic_spec),
+        dynamic_spec_catalog=(dynamic_spec,),
+        state_path=state_path,
+        event_recorder=FakeRecorder([]),
+        snapshot_loader=lambda path: {},
+        policy_loader=FakeDatedPolicyLoader(
+            {
+                "999999": {"KRX_REGULAR": base_policy},
+                "888888": {"KRX_REGULAR": dynamic_policy},
+            }
+        ),
+        entry_qty=1,
+        enabled=True,
+    )
+
+    assert trader._state["symbols"]["999999"]["entry_episode_open"] is True
+    assert trader._open_qty(trader._state["symbols"]["999999"]) == 1
+
+
 def test_service_explicit_samsung_execution_policy_is_attached(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", "005930")
     monkeypatch.setenv(
