@@ -588,9 +588,7 @@ def test_historical_held_row_is_removed_from_decision_ev() -> None:
     assert normalized["source_quality"] == "pass"
     assert normalized["eligible_for_cumulative_tuning"] is False
     assert normalized["outcome_complete_for_ev"] is False
-    assert normalized["outcome_exclusion_reasons"] == [
-        "held_or_unresolved_inventory"
-    ]
+    assert normalized["outcome_exclusion_reasons"] == ["held_or_unresolved_inventory"]
 
 
 def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path):
@@ -626,9 +624,7 @@ def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path)
     assert held_row["source_quality"] == "pass"
     assert held_row["eligible_for_cumulative_tuning"] is False
     assert held_row["outcome_complete_for_ev"] is False
-    assert held_row["outcome_exclusion_reasons"] == [
-        "held_or_unresolved_inventory"
-    ]
+    assert held_row["outcome_exclusion_reasons"] == ["held_or_unresolved_inventory"]
     assert second["schema"] == REPORT_SCHEMA
     assert set(second["windows"]) == {
         CLEAN_WINDOW_NAME,

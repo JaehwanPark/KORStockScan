@@ -424,9 +424,9 @@ def _apply_broker_realized_economics(
             }
             summary["fallback"] += 1
             continue
-        groups.setdefault(
-            (realization_date, str(row.get("symbol") or "")), []
-        ).append((row, date_source))
+        groups.setdefault((realization_date, str(row.get("symbol") or "")), []).append(
+            (row, date_source)
+        )
 
     for (realization_date, symbol), candidates in groups.items():
         if len(candidates) != 1:
@@ -715,9 +715,11 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     profit_price_source = (
         "broker_manual_sell_receipt"
         if completed and target_fill_price > 0 and manual_exit_verified
-        else "broker_target_fill_price"
-        if completed and target_fill_price > 0
-        else "configured_target_price_proxy" if completed else "not_completed"
+        else (
+            "broker_target_fill_price"
+            if completed and target_fill_price > 0
+            else "configured_target_price_proxy" if completed else "not_completed"
+        )
     )
     net_profit_pct = (
         (profit_exit_price / fill_price - 1.0) * 100.0 - cost_pct if completed else None

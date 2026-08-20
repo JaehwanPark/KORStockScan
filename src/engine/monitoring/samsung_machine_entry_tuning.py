@@ -265,9 +265,11 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     profit_price_source = (
         "broker_manual_sell_receipt"
         if completed and target_fill_price > 0 and manual_exit_verified
-        else "broker_target_fill_price"
-        if completed and target_fill_price > 0
-        else "configured_target_price_proxy" if completed else "not_completed"
+        else (
+            "broker_target_fill_price"
+            if completed and target_fill_price > 0
+            else "configured_target_price_proxy" if completed else "not_completed"
+        )
     )
     if completed and fill_price > 0 and profit_exit_price > 0:
         profit_pct = round((profit_exit_price / fill_price - 1.0) * 100.0 - cost_pct, 6)
@@ -346,8 +348,7 @@ def _leg_outcome_contract_valid(leg: dict[str, Any]) -> bool:
         or (
             target_fill_price > 0
             and target_fill_price < _as_int(leg.get("target_price"))
-            and leg.get("exit_fill_source")
-            != "broker_verified_manual_sell_receipt"
+            and leg.get("exit_fill_source") != "broker_verified_manual_sell_receipt"
         )
     ):
         return False
@@ -403,9 +404,10 @@ def _normalize_historical_machine_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized["outcome_exclusion_reasons"] = (
         [] if outcome_complete_for_ev else ["held_or_unresolved_inventory"]
     )
-    normalized["eligible_for_cumulative_tuning"] = bool(
-        normalized.get("eligible_for_cumulative_tuning")
-    ) and outcome_complete_for_ev
+    normalized["eligible_for_cumulative_tuning"] = (
+        bool(normalized.get("eligible_for_cumulative_tuning"))
+        and outcome_complete_for_ev
+    )
     return normalized
 
 

@@ -1145,9 +1145,7 @@ def _widget_actual_execution_inventory(
                     order.get("order_role") == "TAKE_PROFIT_SELL"
                     for order in sell_orders
                 )
-                else "final_exit_fill"
-                if realized
-                else "right_censored"
+                else "final_exit_fill" if realized else "right_censored"
             ),
             "holding_duration_ms": (
                 round((exit_at - first_fill_at).total_seconds() * 1000.0)
@@ -1157,11 +1155,11 @@ def _widget_actual_execution_inventory(
             "signal_to_entry_submit_record_ms": round(
                 (first_entry_submit_at - signal_at).total_seconds() * 1000.0
             ),
-            "entry_submit_record_to_first_fill_confirmation_ms": round(
-                (first_fill_at - first_entry_submit_at).total_seconds() * 1000.0
-            )
-            if first_fill_at is not None
-            else None,
+            "entry_submit_record_to_first_fill_confirmation_ms": (
+                round((first_fill_at - first_entry_submit_at).total_seconds() * 1000.0)
+                if first_fill_at is not None
+                else None
+            ),
             "first_fill_confirmation_to_first_exit_submit_record_ms": (
                 round((first_exit_submit_at - first_fill_at).total_seconds() * 1000.0)
                 if first_exit_submit_at is not None and first_fill_at is not None
@@ -1432,9 +1430,9 @@ def _widget_actual_execution_inventory(
             )
     source.update(
         {
-            "status": "loaded_with_instrumentation_gaps"
-            if instrumentation_gaps
-            else "loaded",
+            "status": (
+                "loaded_with_instrumentation_gaps" if instrumentation_gaps else "loaded"
+            ),
             "optional_when_absent": False,
             "grouped_lifecycle_count": len(lifecycle_orders),
             "actual_lifecycle_count": len(
@@ -1908,9 +1906,9 @@ def _widget_inventory(
             scope_id = f"expansion:{symbol}:SOR_REGULAR"
             if scope_id not in row["owner_scope_ids"]:
                 row["owner_scope_ids"].append(scope_id)
-            row["owner_scope_kinds"][scope_id] = (
-                "prospective_widget_collector_expansion"
-            )
+            row["owner_scope_kinds"][
+                scope_id
+            ] = "prospective_widget_collector_expansion"
             row["owner_scope_expected_venues"][scope_id] = ["SOR"]
 
     actual_anchors, actual_source = _widget_actual_execution_inventory(
@@ -2907,9 +2905,7 @@ def _depth_item_matches_scope(payload: dict[str, Any]) -> bool:
         else (
             f"{symbol}_NX"
             if venue == "NXT"
-            else f"{symbol}_AL"
-            if venue == "SOR"
-            else ""
+            else f"{symbol}_AL" if venue == "SOR" else ""
         )
     )
     return bool(symbol and expected_item and payload.get("item") == expected_item)

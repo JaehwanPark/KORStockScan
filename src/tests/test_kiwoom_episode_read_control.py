@@ -221,9 +221,7 @@ def test_kt00007_retries_1700_and_collapses_two_leg_same_query(
     }
     session = FakeSession(
         [
-            FakeResponse(
-                {"return_code": 1700, "return_msg": "[1700] request limit"}
-            ),
+            FakeResponse({"return_code": 1700, "return_msg": "[1700] request limit"}),
             FakeResponse(body),
         ]
     )
