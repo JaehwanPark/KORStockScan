@@ -1102,7 +1102,22 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
     assert take_profit["order_role"] == engine.ORDER_ROLE_TAKE_PROFIT
     assert take_profit["parent_entry_signal_id"] == "ENTRY-1"
     assert take_profit["limit_price"] == 236_500
+    assert recorder.events[-1]["schema"] == engine.EVENT_SCHEMA
     assert recorder.events[-1]["order_role"] == engine.ORDER_ROLE_TAKE_PROFIT
+    assert recorder.events[-1]["parent_entry_signal_id"] == "ENTRY-1"
+    reconciled = next(
+        event
+        for event in recorder.events
+        if event["event_type"] == "order_execution_reconciled"
+        and event["order_no"] == "B1"
+    )
+    assert reconciled["schema"] == engine.EVENT_SCHEMA
+    assert reconciled["side"] == "BUY"
+    assert reconciled["signal_id"] == "ENTRY-1"
+    assert reconciled["fill_price"] == 234_000
+    assert reconciled["market_venue"] == "KRX"
+    assert reconciled["broker_route"] == "SOR"
+    assert reconciled["submitted_at"] == now.isoformat()
 
     restarted = WidgetSignalAutoTrader(
         gateway=gateway,

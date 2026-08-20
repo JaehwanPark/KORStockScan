@@ -28,6 +28,7 @@ CLEAN_BASELINE_DATE = date(2026, 6, 5)
 TIMEOUT_AXIS_VALUES_SEC = (60, 120, 180)
 DECISION_ROLES = {
     "counterfactual_calibration_entry",
+    "actual_widget_entry_signal",
     "episode_signal_bar",
     "prospective_widget_research_entry",
     "prospective_episode_research_signal",
@@ -472,6 +473,13 @@ def _lifecycle_units(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "episode_buy_fill_confirmed",
                     "prospective_episode_research_buy_fill",
                 }
+            ]
+        elif decision_anchor.get("anchor_role") == "actual_widget_entry_signal":
+            execution_anchors = [
+                anchor
+                for anchor in anchors
+                if anchor.get("anchor_role") == "actual_widget_entry_fill_reconciled"
+                and anchor.get("execution_order_role") == "ENTRY_BUY"
             ]
         else:
             execution_anchors = [decision_anchor]
@@ -1240,6 +1248,12 @@ def build_rolling_paired_policy_research(
         current_report, expected_day=target_day
     )
     current_source_contract_ready = not current_source_contract_errors
+    rolling_source_contract = current_report.get("rolling_policy_source_contract")
+    source_contract_recovery = (
+        dict(rolling_source_contract.get("recovery") or {})
+        if isinstance(rolling_source_contract, Mapping)
+        else {}
+    )
     reports, exclusions = _load_reports(
         current_report=current_report,
         report_dir=report_dir,
@@ -1369,6 +1383,7 @@ def build_rolling_paired_policy_research(
         "current_source_contract": {
             "ready": current_source_contract_ready,
             "errors": current_source_contract_errors,
+            "recovery": source_contract_recovery,
         },
         "candidate_axes": {
             "single_axis": "target_timeout_sec",

@@ -476,6 +476,10 @@ def test_unready_current_source_contract_blocks_ready_historical_candidate(
     current["rolling_policy_source_contract"] = {
         "ready": False,
         "gap": "micro_canary_target_date_evidence_stale",
+        "recovery": {
+            "disposition": "repairable_source_contract_gap",
+            "rerun_same_source_date_allowed": True,
+        },
     }
 
     research = build_rolling_paired_policy_research(
@@ -487,6 +491,10 @@ def test_unready_current_source_contract_blocks_ready_historical_candidate(
     assert research["current_source_contract"]["errors"] == [
         "rolling_policy_source_contract_not_ready"
     ]
+    assert research["current_source_contract"]["recovery"] == {
+        "disposition": "repairable_source_contract_gap",
+        "rerun_same_source_date_allowed": True,
+    }
     assert research["policy_promotion_candidates"] == []
     assert research["remaining_gap_codes"] == [
         "current_attribution_source_contract_invalid"

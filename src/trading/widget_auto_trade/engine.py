@@ -40,6 +40,7 @@ from src.utils.constants import PROJECT_ROOT
 
 EXECUTION_AUTHORITY = "operator_directed_widget_auto_trade_v1"
 STATE_SCHEMA_VERSION = 1
+EVENT_SCHEMA = "widget_signal_auto_trade_event_v1"
 DEFAULT_STATE_PATH = PROJECT_ROOT / "data/runtime/widget_signal_auto_trade_state.json"
 DEFAULT_EVENT_DIR = PROJECT_ROOT / "data/report/widget_signal_auto_trade_events"
 ACTIONABLE_ENTRY_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
@@ -731,6 +732,7 @@ class WidgetSignalAutoTrader:
         )
         explicit_policy_id = fields.get("execution_policy_id")
         payload = {
+            "schema": EVENT_SCHEMA,
             "event_type": event_type,
             "observed_at": now.isoformat(),
             "trade_date": now.date().isoformat(),
@@ -1175,6 +1177,8 @@ class WidgetSignalAutoTrader:
             actual_order_submitted=result.accepted,
             order_role=order_role,
             limit_price=limit_price,
+            parent_entry_signal_id=parent_entry_signal_id,
+            scale_in_leg_index=scale_in_leg_index,
         )
         return order
 
@@ -1260,6 +1264,12 @@ class WidgetSignalAutoTrader:
                     order_role=order.get("order_role"),
                     limit_price=order.get("limit_price"),
                     parent_entry_signal_id=order.get("parent_entry_signal_id"),
+                    signal_id=order.get("signal_id"),
+                    fill_price=order.get("fill_price"),
+                    market_venue=order.get("market_venue"),
+                    broker_route=order.get("broker_route"),
+                    submitted_at=order.get("submitted_at"),
+                    scale_in_leg_index=order.get("scale_in_leg_index"),
                     actual_order_submitted=True,
                 )
         if changed:
@@ -1872,6 +1882,7 @@ class WidgetSignalAutoTrader:
             signal_id=str(symbol_state.get("exit_signal_id") or ""),
             now=now,
             order_role=ORDER_ROLE_FINAL_EXIT,
+            parent_entry_signal_id=str(symbol_state.get("entry_signal_id") or ""),
         )
 
     def _maybe_request_policy_force_exit(
