@@ -2,7 +2,7 @@
 
 ## Scope
 
-Twenty-three independent regular-session profiles implement the user-selected active
+Twenty-seven independent regular-session profiles implement the user-selected active
 scope. Every profile owns its process, lock, durable state,
 authority artifact, and exact broker-order ledger.
 
@@ -31,6 +31,10 @@ authority artifact, and exact broker-order ledger.
 | `sk_telecom_late_morning` | SK텔레콤 `017670` | SOR regular | 10:45 through 10:59 |
 | `hanse_morning` | 한세실업 `105630` | SOR regular | 09:15 through 09:44 |
 | `hanse_afternoon` | 한세실업 `105630` | SOR regular | 14:20 through 14:29 |
+| `cj_cgv_midday` | CJ CGV `079160` | SOR regular | 13:20 through 13:49 |
+| `cj_cgv_afternoon` | CJ CGV `079160` | SOR regular | 14:15 through 14:24 |
+| `tym_midday` | TYM `002900` | SOR regular | 13:15 through 13:44 |
+| `tym_afternoon` | TYM `002900` | SOR regular | 14:30 through 14:39 |
 
 The original 30-day calibration and 16-day untouched holdout selected independent entry
 contracts: Samsung Heavy midday uses 30 bars, drawdown at least 0.75%, and
@@ -142,8 +146,10 @@ stop, timeout, forced sale, or unrealized PnL to completed EV.
 The tracked `data/config/low_price_two_leg_expanded_profile_evidence_2026-08-19.json`
 projection binds the complete 52-trading-day report, 36-day calibration, 16-day
 holdout, all 11 passing recommendations, and the source report canonical hash.
-The new generation is effective only for target dates on or after 2026-08-21;
-2026-08-20 services and prior-date owned orders keep their original generation.
+This reviewed generation is retained as the staged base for the combined
+2026-08-21 generation. The later 2026-08-20 recommendation delta replaces only
+its overlapping rows; 2026-08-20 services and prior-date owned orders keep their
+original generation.
 
 Eight existing profiles adopt these approved policies:
 
@@ -170,6 +176,42 @@ The fixed Theborn Korea observation remains source-only. No recommendation
 changes quantity, stop/hold behavior, SOR routing, broker guards, or another
 owner's ledger.
 
+## 2026-08-20 recommendation implementation
+
+The tracked `data/config/low_price_two_leg_expanded_profile_evidence_2026-08-20.json`
+projection binds the complete 53-trading-day report, 37-day calibration,
+16-day holdout, the final nine recommendation rows, and the source report
+canonical hash. It is a delta over the reviewed 2026-08-19 staged generation,
+not a replacement for its non-overlapping profiles. The single exact-date
+transition therefore moves the active 20-profile 2026-08-20 inventory to the
+combined 27-profile generation on 2026-08-21.
+
+Five existing rows are rebound to the latest evidence; Samsung E&A morning and
+SK Telecom afternoon change values, while the other three retain the same
+selected policy with fresher provenance:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---:|---|---:|---:|
+| `doosan_enerbility_late_morning` | 10:15~10:34 | 45 | 1.50% | 0.05% | close/-1 tick | 5 | +4 ticks |
+| `samsung_heavy_morning` | 09:20~09:29 | 20 | 1.75% | 0.75% | -1/-2 ticks | 5 | +4 ticks |
+| `samsung_ea_morning` | 09:45~09:59 | 15 | 2.00% | 0.50% | close/-1 tick | 5 | +4 ticks |
+| `kakao_late_morning` | 10:05~10:24 | 15 | 0.50% | 0.05% | close/-1 tick | 5 | +4 ticks |
+| `sk_telecom_afternoon` | 14:25~14:34 | 15 | 0.75% | 0.50% | close/-1 tick | 5 | +4 ticks |
+
+Four new independent profiles are added:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---:|---|---:|---:|
+| `cj_cgv_midday` | 13:20~13:49 | 60 | 0.75% | 0.75% | close/-1 tick | 5 | +2 ticks |
+| `cj_cgv_afternoon` | 14:15~14:24 | 20 | 0.50% | 0.35% | close/-1 tick | 5 | +2 ticks |
+| `tym_midday` | 13:15~13:44 | 15 | 0.50% | 0.75% | close/-1 tick | 5 | +2 ticks |
+| `tym_afternoon` | 14:30~14:39 | 20 | 0.50% | 0.50% | close/-1 tick | 5 | +2 ticks |
+
+The fixed Theborn Korea observation remains source-only. The four new timer
+pairs and manual-owner exclusions are implemented but are not installed or
+started by this source change. Existing open orders and held positions retain
+their signal-date policy snapshot and custody owner.
+
 The Doosan Enerbility and Hanwha Ocean episode profiles are parallel to their
 widget auto-trading owners. Neither owner reads the other's state, position
 quantity, or order numbers, and neither may cancel or sell the other's orders
@@ -191,10 +233,10 @@ exact profile and date:
   leg is exactly 10 shares. Legacy owned one-share orders remain valid custody
   state and are never resized retroactively.
 
-Activation uses protected `manual_operator` markers for all eleven symbols in
+Activation uses protected `manual_operator` markers for all thirteen symbols in
 `data/config/manual_control_excluded_codes.txt`. The reviewed installer adds
-the new SK Telecom, Samsung E&A, and Hanse markers, as well as the existing Kakao and
-KEPCO safeguards, immediately before enabling the new timers, so
+the new CJ CGV and TYM markers together with the previously reviewed markers
+immediately before enabling the new timers, so
 source implementation alone does not partially transfer their runtime owner.
 This excludes the symbols from
 the primary bot while leaving the Doosan/Hanwha widget owners and episode
@@ -278,7 +320,7 @@ profile may propose one tightening axis for the next PREOPEN:
 - drawdown from the profile baseline to at most `baseline + 0.25%p`, or
 - near-low proximity from the profile baseline to at most `baseline - 0.10%p`.
 
-Across all twenty-three profiles and the existing Samsung regular machines, at most one
+Across all twenty-seven profiles and the existing Samsung regular machines, at most one
 profile/machine and one entry axis may change per day.  The Samsung candidate is
 produced first; if it owns a valid mutation, or its same-date candidate is
 invalid, the lower-price family carries all policies forward. Quantity is fixed
@@ -298,9 +340,18 @@ For the 2026-08-13 PREOPEN transition only, its exact seven-profile v2 policy is
 validated first and the six newly approved profiles are added at their frozen
 baselines. The candidate and applied-policy inventory contained all thirteen
 profiles through 2026-08-18. From the 2026-08-19 revision it must contain all
-twenty. Target dates from 2026-08-21 must contain all twenty-three, with the
-eight approved revisions and three new profiles recorded in the exact-date
-`profile_revision_transition`; a partial or stale inventory fails closed.
+twenty. The reviewed 2026-08-19 stage contained twenty-three profiles, but it
+never becomes a separate active date generation. Target dates from 2026-08-21
+must contain the combined twenty-seven profiles: the prior 11 recommendations
+are carried forward unless replaced by one of the latest nine rows, and four
+new profiles are added. Both evidence generations are recorded in the
+exact-date `profile_revision_transition`; a partial or stale inventory fails
+closed. A valid 2026-08-20 bounded tuning mutation is still checked against its
+20-profile source lineage, but it is not applied concurrently with this
+same-stage user-approved revision; the 27-profile baseline owns the transition.
+The artifact enumerates the 15 profiles affected by the combined approvals, so
+an unrelated ignored mutation is labeled separately rather than attributed to
+user approval.
 
 ## Daily implementation-candidate recommendation
 

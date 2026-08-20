@@ -1,0 +1,11 @@
+[Unit]
+Description=Start CJ CGV Afternoon Two-Leg Machine
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 14:14:00 Asia/Seoul
+Persistent=false
+AccuracySec=1s
+Unit=korstockscan-low-price-two-leg@cj_cgv_afternoon.service
+
+[Install]
+WantedBy=timers.target

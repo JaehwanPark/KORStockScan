@@ -81,18 +81,49 @@ PROFILE_REVISION_20260819_TRANSITION = {
 }
 PROFILE_REVISION_20260821_TRANSITION = {
     "effective_target_date": PROFILE_REVISION_20260821_EFFECTIVE_DATE.isoformat(),
-    "source_date": "2026-08-19",
+    "source_date": "2026-08-20",
     "before_profile_count": 20,
-    "after_profile_count": 23,
-    "recommendation_count": 11,
-    "new_profile_count": 3,
-    "logic_revision_count": 8,
+    "staged_prior_profile_count": 23,
+    "after_profile_count": 27,
+    "recommendation_count": 9,
+    "new_profile_count": 4,
+    "logic_revision_count": 5,
+    "approved_profile_ids": [
+        "cj_cgv_afternoon",
+        "cj_cgv_midday",
+        "doosan_enerbility_late_morning",
+        "hanse_afternoon",
+        "hanse_morning",
+        "kakao_late_morning",
+        "kakao_midday",
+        "samsung_ea_afternoon",
+        "samsung_ea_morning",
+        "samsung_heavy_morning",
+        "sk_eternix_afternoon",
+        "sk_telecom_afternoon",
+        "sk_telecom_late_morning",
+        "tym_afternoon",
+        "tym_midday",
+    ],
     "evidence_path": (
-        "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-19.json"
+        "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-20.json"
     ),
     "evidence_canonical_sha256": (
-        "3acf5125074eaf7e48eca0e73c22f037b5e6b1ec354bd5b203cf32f14dea2381"
+        "36010903a2536f0bd860165e3257eacf967548b68f407522b5fefa54670e86c1"
     ),
+    "prior_generation": {
+        "source_date": "2026-08-19",
+        "recommendation_count": 11,
+        "new_profile_count": 3,
+        "logic_revision_count": 8,
+        "evidence_path": (
+            "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-19.json"
+        ),
+        "evidence_canonical_sha256": (
+            "3acf5125074eaf7e48eca0e73c22f037b5e6b1ec354bd5b203cf32f14dea2381"
+        ),
+        "disposition": "carry_forward_unless_replaced_by_latest_generation",
+    },
     "decision_authority": "explicit_user_directed_profile_revision_2026_08_20",
     "existing_order_effect": "none_preserve_prior_policy_custody",
 }

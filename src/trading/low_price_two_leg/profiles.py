@@ -34,6 +34,10 @@ SK_TELECOM_LATE_MORNING_WINDOW = (time(10, 45), time(10, 59))
 SK_ETERNIX_AFTERNOON_REVISED_WINDOW = (time(14, 15), time(14, 40))
 HANSE_MORNING_WINDOW = (time(9, 15), time(9, 44))
 HANSE_AFTERNOON_WINDOW = (time(14, 20), time(14, 29))
+CJ_CGV_MIDDAY_WINDOW = (time(13, 20), time(13, 49))
+CJ_CGV_AFTERNOON_WINDOW = (time(14, 15), time(14, 24))
+TYM_MIDDAY_WINDOW = (time(13, 15), time(13, 44))
+TYM_AFTERNOON_WINDOW = (time(14, 30), time(14, 39))
 PROFILE_REVISION_20260819_EFFECTIVE_DATE = date(2026, 8, 19)
 PROFILE_REVISION_20260821_EFFECTIVE_DATE = date(2026, 8, 21)
 # Compatibility alias for consumers that own the first recommendation transition.
@@ -41,6 +45,7 @@ PROFILE_REVISION_EFFECTIVE_DATE = PROFILE_REVISION_20260819_EFFECTIVE_DATE
 ALLOWED_SYMBOLS = frozenset(
     {
         "006800",
+        "002900",
         "010140",
         "015760",
         "017670",
@@ -48,6 +53,7 @@ ALLOWED_SYMBOLS = frozenset(
         "034020",
         "035720",
         "042660",
+        "079160",
         "080220",
         "105630",
         "475150",
@@ -81,6 +87,10 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         SK_ETERNIX_AFTERNOON_REVISED_WINDOW,
         HANSE_MORNING_WINDOW,
         HANSE_AFTERNOON_WINDOW,
+        CJ_CGV_MIDDAY_WINDOW,
+        CJ_CGV_AFTERNOON_WINDOW,
+        TYM_MIDDAY_WINDOW,
+        TYM_AFTERNOON_WINDOW,
     }
 )
 
@@ -733,6 +743,148 @@ PROFILES.update(
                 near_low_pct=0.75,
                 target_ticks=2,
                 runtime_policy_source=_REVISION_20260821_SOURCE,
+            ),
+        )
+    }
+)
+
+# The reviewed 2026-08-19 generation remains the staged base for profiles not
+# replaced by the 2026-08-20 recommendation delta. The combined generation
+# below owns 2026-08-21 PREOPEN.
+PROFILES_20260821_0819 = dict(PROFILES)
+_REVISION_20260821_LATEST_SOURCE = (
+    "clean_baseline_37d_calibration_16d_holdout_user_approved_v3"
+)
+
+
+def _revise_20260821_latest(
+    profile_id: str,
+    *,
+    window: tuple[time, time] | None = None,
+    lookback_bars: int,
+    drawdown_pct: float,
+    near_low_pct: float,
+    entry_offsets_ticks: tuple[int, int] | None = None,
+    target_ticks: int,
+) -> MachineProfile:
+    prior = PROFILES_20260821_0819[profile_id]
+    return replace(
+        prior,
+        policy=replace(
+            prior.policy,
+            scan_start=(
+                window or (prior.policy.scan_start, prior.policy.scan_last_bar)
+            )[0],
+            scan_last_bar=(
+                window or (prior.policy.scan_start, prior.policy.scan_last_bar)
+            )[1],
+            lookback_bars=lookback_bars,
+            rolling_high_drawdown_pct=drawdown_pct,
+            rolling_low_proximity_pct=near_low_pct,
+            entry_offsets_ticks=(
+                entry_offsets_ticks or prior.policy.entry_offsets_ticks
+            ),
+            target_ticks=target_ticks,
+            runtime_policy_source=_REVISION_20260821_LATEST_SOURCE,
+            runtime_policy_hash="",
+        ),
+    )
+
+
+PROFILES = dict(PROFILES_20260821_0819)
+PROFILES.update(
+    {
+        "doosan_enerbility_late_morning": _revise_20260821_latest(
+            "doosan_enerbility_late_morning",
+            window=DOOSAN_ENERBILITY_LATE_MORNING_REVISED_WINDOW,
+            lookback_bars=45,
+            drawdown_pct=1.50,
+            near_low_pct=0.05,
+            target_ticks=4,
+        ),
+        "samsung_heavy_morning": _revise_20260821_latest(
+            "samsung_heavy_morning",
+            lookback_bars=20,
+            drawdown_pct=1.75,
+            near_low_pct=0.75,
+            entry_offsets_ticks=(-1, -2),
+            target_ticks=4,
+        ),
+        "samsung_ea_morning": _revise_20260821_latest(
+            "samsung_ea_morning",
+            lookback_bars=15,
+            drawdown_pct=2.00,
+            near_low_pct=0.50,
+            target_ticks=4,
+        ),
+        "kakao_late_morning": _revise_20260821_latest(
+            "kakao_late_morning",
+            window=KAKAO_LATE_MORNING_WINDOW,
+            lookback_bars=15,
+            drawdown_pct=0.50,
+            near_low_pct=0.05,
+            target_ticks=4,
+        ),
+        "sk_telecom_afternoon": _revise_20260821_latest(
+            "sk_telecom_afternoon",
+            lookback_bars=15,
+            drawdown_pct=0.75,
+            near_low_pct=0.50,
+            target_ticks=4,
+        ),
+    }
+)
+PROFILES.update(
+    {
+        profile.profile_id: profile
+        for profile in (
+            _profile(
+                "cj_cgv_midday",
+                "079160",
+                "CJ CGV",
+                "midday",
+                window=CJ_CGV_MIDDAY_WINDOW,
+                lookback_bars=60,
+                drawdown_pct=0.75,
+                near_low_pct=0.75,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260821_LATEST_SOURCE,
+            ),
+            _profile(
+                "cj_cgv_afternoon",
+                "079160",
+                "CJ CGV",
+                "afternoon",
+                window=CJ_CGV_AFTERNOON_WINDOW,
+                lookback_bars=20,
+                drawdown_pct=0.50,
+                near_low_pct=0.35,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260821_LATEST_SOURCE,
+            ),
+            _profile(
+                "tym_midday",
+                "002900",
+                "TYM",
+                "midday",
+                window=TYM_MIDDAY_WINDOW,
+                lookback_bars=15,
+                drawdown_pct=0.50,
+                near_low_pct=0.75,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260821_LATEST_SOURCE,
+            ),
+            _profile(
+                "tym_afternoon",
+                "002900",
+                "TYM",
+                "afternoon",
+                window=TYM_AFTERNOON_WINDOW,
+                lookback_bars=20,
+                drawdown_pct=0.50,
+                near_low_pct=0.50,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260821_LATEST_SOURCE,
             ),
         )
     }

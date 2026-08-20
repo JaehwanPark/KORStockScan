@@ -133,9 +133,15 @@
 
 - [x] `[LowPriceRecommendationImplementation0819] 2026-08-19 장후 추천 11프로필 구현 및 리뷰` (`Due: 2026-08-20`, `Slot: INTRADAY`, `TimeWindow: 13:15~15:20`, `Track: ScalpingLogic`)
   - Source: [low_price_two_leg_expanded_candidate_research_2026-08-19.json](/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-08-19.json), [low_price_two_leg_expanded_profile_evidence_2026-08-19.json](/home/ubuntu/KORStockScan/data/config/low_price_two_leg_expanded_profile_evidence_2026-08-19.json), [profiles.py](/home/ubuntu/KORStockScan/src/trading/low_price_two_leg/profiles.py)
-  - 판정: 기존 8프로필 로직개선과 신규 3프로필을 2026-08-21 exact-date 세대로 결속하고, 2026-08-20 세대와 prior-date custody를 유지했다. 더본코리아는 source-only에서 승격하지 않았다.
-  - 리뷰: 첫 pass에서 8월 20일 장후 tuning producer가 latest 23-profile inventory를 조기 소비할 수 있는 결함을 발견해 target-date profile/baseline/bounds로 보완했다. 오늘 report/candidate는 20개, 8월 21일부터 23개로 검증된다.
+  - 판정: 기존 8프로필 로직개선과 신규 3프로필을 2026-08-21 staged 세대로 결속하고, 2026-08-20 세대와 prior-date custody를 유지했다. 이후 같은 날 승인된 2026-08-20 추천 delta가 겹치는 row를 대체하며 이 세대의 비중첩 row는 결합 27-profile 세대로 이월된다. 더본코리아는 source-only에서 승격하지 않았다.
+  - 리뷰: 첫 pass에서 8월 20일 장후 tuning producer가 staged 23-profile inventory를 조기 소비할 수 있는 결함을 발견해 target-date profile/baseline/bounds로 보완했다. 오늘 report/candidate는 20개이며, staged 23개는 단독 active 세대가 아니라 다음 결합 세대의 provenance로 보존된다.
   - 권한 경계: service 설치·enable/start와 실주문은 수행하지 않았다. 본 후속 리뷰에서 관련 파일만 별도 브랜치에 커밋·푸시한다.
+
+- [x] `[LowPriceRecommendationImplementation0820] 2026-08-20 장후 추천 9프로필 결합 구현 및 리뷰` (`Due: 2026-08-20`, `Slot: POSTCLOSE`, `TimeWindow: 21:20~23:10`, `Track: ScalpingLogic`)
+  - Source: [low_price_two_leg_expanded_candidate_research_2026-08-20.json](/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-08-20.json), [low_price_two_leg_expanded_profile_evidence_2026-08-20.json](/home/ubuntu/KORStockScan/data/config/low_price_two_leg_expanded_profile_evidence_2026-08-20.json), [profiles.py](/home/ubuntu/KORStockScan/src/trading/low_price_two_leg/profiles.py)
+  - 판정: clean baseline 53일(보정 37일+OOS 16일)의 최종 추천 9개를 정확히 결속했다. 2026-08-19 승인 11개는 같은 8월 21일 staged base로 보존하고 최신 기존 5개를 재결속하며 CJ CGV midday/afternoon·TYM midday/afternoon 4개를 추가해 active 20개에서 결합 27-profile exact-date 세대로 전환한다. 더본코리아는 source-only를 유지한다.
+  - 리뷰/검증: 1차 리뷰에서 8월 20일 bounded tuning mutation과 8월 21일 승인 세대 전환의 lineage를 서로 다른 inventory로 비교해 PREOPEN을 차단할 수 있는 결함을 찾아, 20-profile source lineage는 검증하되 같은-stage 전환에서는 mutation을 미적용하도록 분리했다. 재리뷰에서는 승인 목록 밖의 미적용 mutation까지 `user_approved_profile_revision_baseline`으로 오표기할 수 있는 attribution 결함을 찾아 결합 승인 15개 profile ID와 `profile_revision_same_stage_mutation_not_applied`를 분리했다. 최신 9-row evidence/profile exact match, 이전 승인 세대의 비중첩 carry-forward, 20→27 exact-date 전환, profile별 preflight/evidence hash, 54개 timer inventory, installer/uninstaller·manual owner exclusion, target-date tuning inventory를 회귀 검증했으며 review gate 최종 미해결 finding은 0이다.
+  - 권한 경계: 신규 profile은 각각 10주×2 leg, SOR, 무손절·미청산 보유를 유지한다. source 구현과 timer 파일만 추가했으며 installer 실행, enable/start, bot 재기동, 실주문, prior-date 주문 취소·교체는 수행하지 않았다.
 
 - [x] `[PostProbeWinnerRecoveryEvidencePromotion0820] Multi-leg post-probe 승자 확대 관측·승격 계약 보완 및 리뷰` (`Due: 2026-08-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:45~19:40`, `Track: ScalpingLogic`)
   - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py), [scalping_pyramid_intraday_feedback.py](/home/ubuntu/KORStockScan/src/engine/monitoring/scalping_pyramid_intraday_feedback.py), [scalping_pyramid_quality_calibration.py](/home/ubuntu/KORStockScan/src/engine/monitoring/scalping_pyramid_quality_calibration.py)
@@ -149,9 +155,9 @@
   - 금지: 자연행 부재·당일 미종결·counterfactual 10건만으로 수량 확대, full residual 제출, env 자동 ON, cross-venue 승격, threshold/provider/bot/broker/hard-safety 변경을 하지 않는다.
   - 다음 액션: `natural_receipt_complete_keep_one_share`, `natural_rows_absent_recheck`, `source_quality_row_excluded`, `one_share_real_ev_non_positive_hold`, `first_planned_residual_leg_operator_review_candidate` 중 하나로 닫는다.
 
-- [ ] `[LowPriceRecommendationActivation0821] 신규 3프로필 timer 설치 및 23-profile PREOPEN 적용 검증` (`Due: 2026-08-21`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:05`, `Track: RuntimeStability`)
+- [ ] `[LowPriceRecommendationActivation0821] 신규 4프로필 timer 설치 및 27-profile PREOPEN 적용 검증` (`Due: 2026-08-21`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:05`, `Track: RuntimeStability`)
   - Source: [install_low_price_two_leg_systemd.sh](/home/ubuntu/KORStockScan/deploy/install_low_price_two_leg_systemd.sh), [low_price_two_leg_policy_apply.py](/home/ubuntu/KORStockScan/src/engine/automation/low_price_two_leg_policy_apply.py), [low-price-two-leg-machines.md](/home/ubuntu/KORStockScan/docs/low-price-two-leg-machines.md)
-  - 판정 기준: 별도 사용자 지시 후 reviewed installer를 실행하고, exact-date applied artifact가 23프로필·추천 11개 transition hash를 가지며 신규 timer 6개가 enable 상태인지 확인한다.
+  - 판정 기준: 별도 사용자 지시 후 reviewed installer를 실행하고, exact-date applied artifact가 결합 27프로필·최신 추천 9개와 이전 staged 11개 provenance를 가지며 신규 timer 8개가 enable 상태인지 확인한다.
   - 금지: 오늘 장중 timer 재설치, 기존 profile service 재기동, prior-date 주문 취소·교체, 수량/stop/provider/bot/broker guard 변경을 하지 않는다.
   - 다음 액션: `installed_and_preopen_verified`, `implementation_only_not_installed`, `exact_date_policy_blocked`, `timer_or_owner_marker_missing` 중 하나로 닫는다.
 

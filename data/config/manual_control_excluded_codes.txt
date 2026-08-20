@@ -12,3 +12,5 @@
 017670 # manual_operator sk_telecom_low_price_two_leg_owner
 028050 # manual_operator samsung_ea_low_price_two_leg_owner
 105630 # manual_operator hanse_low_price_two_leg_owner
+079160 # manual_operator cj_cgv_low_price_two_leg_owner
+002900 # manual_operator tym_low_price_two_leg_owner

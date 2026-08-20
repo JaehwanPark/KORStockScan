@@ -55,6 +55,14 @@ UNITS=(
   korstockscan-low-price-two-leg-hanse-morning.timer
   korstockscan-low-price-two-leg-hanse-afternoon-preflight.timer
   korstockscan-low-price-two-leg-hanse-afternoon.timer
+  korstockscan-low-price-two-leg-cj-cgv-midday-preflight.timer
+  korstockscan-low-price-two-leg-cj-cgv-midday.timer
+  korstockscan-low-price-two-leg-cj-cgv-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-cj-cgv-afternoon.timer
+  korstockscan-low-price-two-leg-tym-midday-preflight.timer
+  korstockscan-low-price-two-leg-tym-midday.timer
+  korstockscan-low-price-two-leg-tym-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-tym-afternoon.timer
 )
 TIMERS=(
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
@@ -103,6 +111,14 @@ TIMERS=(
   korstockscan-low-price-two-leg-hanse-morning.timer
   korstockscan-low-price-two-leg-hanse-afternoon-preflight.timer
   korstockscan-low-price-two-leg-hanse-afternoon.timer
+  korstockscan-low-price-two-leg-cj-cgv-midday-preflight.timer
+  korstockscan-low-price-two-leg-cj-cgv-midday.timer
+  korstockscan-low-price-two-leg-cj-cgv-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-cj-cgv-afternoon.timer
+  korstockscan-low-price-two-leg-tym-midday-preflight.timer
+  korstockscan-low-price-two-leg-tym-midday.timer
+  korstockscan-low-price-two-leg-tym-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-tym-afternoon.timer
 )
 RETIRED_DAEWOO_UNITS=(
   korstockscan-low-price-two-leg-daewoo-ec-midday-preflight.timer
@@ -146,6 +162,8 @@ owners = {
     "017670": "sk_telecom_low_price_two_leg_owner",
     "028050": "samsung_ea_low_price_two_leg_owner",
     "105630": "hanse_low_price_two_leg_owner",
+    "079160": "cj_cgv_low_price_two_leg_owner",
+    "002900": "tym_low_price_two_leg_owner",
 }
 for code, owner in owners.items():
     add_manual_control_exclusion_code(code, comment=f"manual_operator {owner}")
@@ -155,4 +173,4 @@ PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed twenty-three lower-price profile timers; retired Daewoo units were removed"
+echo "installed twenty-seven lower-price profile timers; retired Daewoo units were removed"

@@ -93,6 +93,10 @@ PROFILE_FIRST_OPERATIONAL_DATES = {
     "sk_telecom_late_morning": date(2026, 8, 21),
     "hanse_morning": date(2026, 8, 21),
     "hanse_afternoon": date(2026, 8, 21),
+    "cj_cgv_midday": date(2026, 8, 21),
+    "cj_cgv_afternoon": date(2026, 8, 21),
+    "tym_midday": date(2026, 8, 21),
+    "tym_afternoon": date(2026, 8, 21),
 }
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {

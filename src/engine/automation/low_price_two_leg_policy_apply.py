@@ -61,10 +61,17 @@ def _applied_profile_selection_status(
     policy: dict[str, Any],
     candidate: dict[str, Any],
     profile_revision_applied: bool,
+    profile_revision: dict[str, Any] | None,
 ) -> str:
     candidate_item = (candidate.get("profiles") or {}).get(profile_id) or {}
-    if profile_revision_applied and candidate_item.get("policy") != policy:
-        return "user_approved_profile_revision_baseline"
+    if profile_revision_applied:
+        approved_profile_ids = (profile_revision or {}).get("approved_profile_ids")
+        if approved_profile_ids is None and candidate_item.get("policy") != policy:
+            return "user_approved_profile_revision_baseline"
+        if profile_id in set(approved_profile_ids or []):
+            return "user_approved_profile_revision_baseline"
+        if candidate_item.get("policy") != policy:
+            return "profile_revision_same_stage_mutation_not_applied"
     return str(
         candidate_item.get("selection_status")
         or "baseline_added_during_profile_universe_expansion"
@@ -101,9 +108,18 @@ def build_applied_policy(
         raise ValueError(reason)
     if candidate.get("source_date") != candidate_date.isoformat():
         raise ValueError("candidate_filename_payload_date_mismatch")
+    candidate_source_policies = _candidate_policies(
+        candidate, target_date=candidate_date
+    )
     candidate_policies = _candidate_policies(candidate, target_date=target_date)
     previous_path = _latest_prior_candidate(candidate_dir, candidate_date)
-    previous_policies = {
+    previous_source_policies = {
+        profile_id: dict(policy)
+        for profile_id, policy in baseline_policies_for_target_date(
+            candidate_date
+        ).items()
+    }
+    previous_target_policies = {
         profile_id: dict(policy)
         for profile_id, policy in baseline_policies_for_target_date(target_date).items()
     }
@@ -117,10 +133,20 @@ def build_applied_policy(
         valid, reason = validate_candidate(previous)
         if not valid:
             raise ValueError(f"previous_candidate_{reason}")
-        previous_policies = _candidate_policies(previous, target_date=target_date)
-    expected_mutations = policy_mutations_between(previous_policies, candidate_policies)
-    if candidate.get("policy_mutations") != expected_mutations:
+        previous_source_policies = _candidate_policies(
+            previous, target_date=candidate_date
+        )
+        previous_target_policies = _candidate_policies(
+            previous, target_date=target_date
+        )
+    source_expected_mutations = policy_mutations_between(
+        previous_source_policies, candidate_source_policies
+    )
+    if candidate.get("policy_mutations") != source_expected_mutations:
         raise ValueError("candidate_policy_mutation_lineage_mismatch")
+    applied_mutations = policy_mutations_between(
+        previous_target_policies, candidate_policies
+    )
     policies = apply_operator_policy_transitions(
         candidate_policies, target_date=target_date
     )
@@ -143,7 +169,7 @@ def build_applied_policy(
         "source_candidate_hash": str(candidate["policy_hash"]),
         "selection_status": selection_status,
         "policy_hash": policy_hash(policies),
-        "policy_mutations": expected_mutations,
+        "policy_mutations": applied_mutations,
         "profiles": {
             profile_id: {
                 "selection_status": _applied_profile_selection_status(
@@ -151,6 +177,7 @@ def build_applied_policy(
                     policy=policy,
                     candidate=candidate,
                     profile_revision_applied=profile_revision_applied,
+                    profile_revision=revision,
                 ),
                 "selected_axis": (candidate.get("profiles") or {})
                 .get(profile_id, {})
