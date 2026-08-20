@@ -52,12 +52,13 @@ from src.utils import kiwoom_utils
 from src.utils.market_day import is_krx_trading_day
 
 REPORT_TYPE = "low_price_two_leg_tuning"
-REPORT_SCHEMA = "low_price_two_leg_tuning_report_v4"
+REPORT_SCHEMA = "low_price_two_leg_tuning_report_v5"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
     {
         "low_price_two_leg_tuning_report_v1",
         "low_price_two_leg_tuning_report_v2",
         "low_price_two_leg_tuning_report_v3",
+        "low_price_two_leg_tuning_report_v4",
         REPORT_SCHEMA,
     }
 )
@@ -353,8 +354,43 @@ def _completed_broker_legs(row: dict[str, Any]) -> list[dict[str, Any]]:
         leg
         for leg in row.get("legs", [])
         if leg.get("completed")
-        and leg.get("profit_price_source") == "broker_target_fill_price"
+        and leg.get("profit_price_source")
+        in {"broker_target_fill_price", "broker_manual_sell_receipt"}
     ]
+
+
+def _broker_realization_date(
+    row: dict[str, Any], completed: list[dict[str, Any]]
+) -> tuple[str | None, str]:
+    """Resolve the account PnL date without guessing across different exits."""
+
+    observed_dates: set[str] = set()
+    missing_timestamp = False
+    for leg in completed:
+        explicit_date = str(leg.get("realization_date") or "")
+        if explicit_date:
+            try:
+                observed_dates.add(date.fromisoformat(explicit_date).isoformat())
+            except ValueError:
+                missing_timestamp = True
+            continue
+        observed = _aware_timestamp(leg.get("target_filled_at"))
+        if observed is None:
+            missing_timestamp = True
+            continue
+        observed_dates.add(observed.astimezone(KST).date().isoformat())
+    if len(observed_dates) > 1:
+        return None, "completed_legs_have_multiple_realization_dates"
+    if observed_dates and missing_timestamp:
+        return None, "completed_leg_realization_date_partially_missing"
+    if observed_dates:
+        return next(iter(observed_dates)), "target_fill_reconciliation_date"
+    target_date = str(row.get("target_date") or "")
+    try:
+        date.fromisoformat(target_date)
+    except ValueError:
+        return None, "legacy_target_date_invalid"
+    return target_date, "legacy_target_date_without_fill_timestamp"
 
 
 def _apply_broker_realized_economics(
@@ -362,7 +398,8 @@ def _apply_broker_realized_economics(
 ) -> dict[str, int]:
     """Attach exact costs only when a symbol-day aggregate has one safe owner."""
 
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, str], list[tuple[dict[str, Any], str]]] = {}
+    summary = {"matched": 0, "fallback": 0, "api_requests": 0}
     for row in rows:
         row["broker_realized_economics"] = {
             "status": "not_applicable",
@@ -371,22 +408,6 @@ def _apply_broker_realized_economics(
         completed = _completed_broker_legs(row)
         if not completed:
             continue
-        groups.setdefault(
-            (str(row.get("target_date") or ""), str(row.get("symbol") or "")), []
-        ).append(row)
-
-    summary = {"matched": 0, "fallback": 0, "api_requests": 0}
-    for (trade_date, symbol), candidates in groups.items():
-        if len(candidates) != 1:
-            for row in candidates:
-                row["broker_realized_economics"] = {
-                    "status": "fixed_cost_fallback",
-                    "reason": "multiple_episode_profiles_share_symbol_day",
-                    "selection_effect": True,
-                }
-                summary["fallback"] += 1
-            continue
-        row = candidates[0]
         if not row.get("eligible_for_tuning"):
             row["broker_realized_economics"] = {
                 "status": "not_applicable",
@@ -394,21 +415,51 @@ def _apply_broker_realized_economics(
                 "selection_effect": False,
             }
             continue
+        realization_date, date_source = _broker_realization_date(row, completed)
+        if realization_date is None:
+            row["broker_realized_economics"] = {
+                "status": "fixed_cost_fallback",
+                "reason": date_source,
+                "selection_effect": True,
+            }
+            summary["fallback"] += 1
+            continue
+        groups.setdefault(
+            (realization_date, str(row.get("symbol") or "")), []
+        ).append((row, date_source))
+
+    for (realization_date, symbol), candidates in groups.items():
+        if len(candidates) != 1:
+            for row, date_source in candidates:
+                row["broker_realized_economics"] = {
+                    "status": "fixed_cost_fallback",
+                    "reason": "multiple_episode_profiles_share_symbol_realization_day",
+                    "realization_date": realization_date,
+                    "realization_date_source": date_source,
+                    "selection_effect": True,
+                }
+                summary["fallback"] += 1
+            continue
+        row, date_source = candidates[0]
         if loader is None:
             row["broker_realized_economics"] = {
                 "status": "fixed_cost_fallback",
                 "reason": "ka10073_loader_not_configured",
+                "realization_date": realization_date,
+                "realization_date_source": date_source,
                 "selection_effect": True,
             }
             summary["fallback"] += 1
             continue
         try:
             summary["api_requests"] += 1
-            broker_rows = loader(trade_date, symbol)
+            broker_rows = loader(realization_date, symbol)
         except Exception as exc:
             row["broker_realized_economics"] = {
                 "status": "fixed_cost_fallback",
                 "reason": f"ka10073_query_failed:{type(exc).__name__}",
+                "realization_date": realization_date,
+                "realization_date_source": date_source,
                 "selection_effect": True,
             }
             summary["fallback"] += 1
@@ -419,6 +470,8 @@ def _apply_broker_realized_economics(
                 "status": "fixed_cost_fallback",
                 "reason": "ka10073_unique_symbol_day_row_missing",
                 "matched_row_count": len(broker_rows),
+                "realization_date": realization_date,
+                "realization_date_source": date_source,
                 "selection_effect": True,
             }
             summary["fallback"] += 1
@@ -476,6 +529,8 @@ def _apply_broker_realized_economics(
                     "gross_profit_krw": gross_profit,
                 },
                 "observed": broker,
+                "realization_date": realization_date,
+                "realization_date_source": date_source,
                 "selection_effect": True,
             }
             summary["fallback"] += 1
@@ -484,7 +539,9 @@ def _apply_broker_realized_economics(
         row["broker_realized_economics"] = {
             "status": "matched_exact",
             "source_api": "ka10073",
-            "trade_date": trade_date,
+            "entry_trade_date": str(row.get("target_date") or ""),
+            "realization_date": realization_date,
+            "realization_date_source": date_source,
             "symbol": symbol,
             "filled_qty": expected_qty,
             "buy_notional_krw": buy_notional,
@@ -497,8 +554,8 @@ def _apply_broker_realized_economics(
             "broker_profit_rate_pct": broker.get("broker_profit_rate_pct"),
             "selection_effect": True,
             "attribution_contract": (
-                "unique_episode_profile_and_exact_symbol_day_quantity_average_price_"
-                "gross_cost_reconciliation"
+                "unique_episode_profile_and_exact_symbol_realization_day_quantity_"
+                "average_price_gross_cost_reconciliation"
             ),
         }
         summary["matched"] += 1
@@ -550,6 +607,31 @@ def _historical_profile_row(
             normalized_legs.append(normalized)
         row["legs"] = normalized_legs
         reasons = list(row.get("source_quality_reasons") or [])
+        if "held_or_unresolved_inventory" in reasons:
+            reasons = [
+                reason for reason in reasons if reason != "held_or_unresolved_inventory"
+            ]
+            row["source_quality_reasons"] = reasons
+            if not reasons:
+                row["source_quality"] = "pass"
+        attempted = bool(row.get("attempted"))
+        outcome_complete_for_ev = bool(
+            not attempted
+            or (
+                len(normalized_legs) == 2
+                and all(
+                    str(leg.get("status") or "") in TERMINAL_LEG_STATUSES
+                    for leg in normalized_legs
+                )
+            )
+        )
+        row["outcome_complete_for_ev"] = outcome_complete_for_ev
+        row["outcome_exclusion_reasons"] = (
+            [] if outcome_complete_for_ev else ["held_or_unresolved_inventory"]
+        )
+        row["eligible_for_tuning"] = bool(row.get("eligible_for_tuning")) and (
+            outcome_complete_for_ev
+        )
         if (
             not _profile_was_operational(profile_id, report_date)
             and row.get("source_quality") == "gap"
@@ -578,6 +660,22 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     )
     buy_filled_at = _aware_timestamp(raw.get("buy_filled_at"))
     target_filled_at = _aware_timestamp(raw.get("target_filled_at"))
+    exit_fill_source = str(raw.get("exit_fill_source") or "")
+    manual_exit_verified = exit_fill_source == "broker_verified_manual_sell_receipt"
+    manual_receipt = (
+        raw.get("manual_exit_receipt")
+        if isinstance(raw.get("manual_exit_receipt"), dict)
+        else {}
+    )
+    realization_date = str(
+        manual_receipt.get("order_date")
+        if manual_exit_verified
+        else raw.get("target_order_date") or ""
+    )
+    try:
+        realization_date = date.fromisoformat(realization_date).isoformat()
+    except ValueError:
+        realization_date = ""
     completed = (
         status == "COMPLETE"
         and target_filled_qty > 0
@@ -602,7 +700,11 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         and (status not in positive_position_statuses or position_qty > 0)
         and (target_filled_qty == 0 or status in {"TARGET_OPEN", "HELD", "COMPLETE"})
         and (target_fill_price == 0 or target_filled_qty > 0)
-        and (target_fill_price == 0 or target_fill_price >= target_price)
+        and (
+            target_fill_price == 0
+            or target_fill_price >= target_price
+            or manual_exit_verified
+        )
         and (status != "COMPLETE" or completed)
         and (
             status != "NO_FILL"
@@ -611,7 +713,9 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     )
     profit_exit_price = target_fill_price or target_price
     profit_price_source = (
-        "broker_target_fill_price"
+        "broker_manual_sell_receipt"
+        if completed and target_fill_price > 0 and manual_exit_verified
+        else "broker_target_fill_price"
         if completed and target_fill_price > 0
         else "configured_target_price_proxy" if completed else "not_completed"
     )
@@ -644,6 +748,8 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "target_filled_at": (
             target_filled_at.isoformat() if target_filled_at else None
         ),
+        "exit_fill_source": exit_fill_source or None,
+        "realization_date": realization_date or None,
         "holding_duration_sec": (
             round(holding_duration_sec, 3) if holding_duration_sec is not None else None
         ),
@@ -773,8 +879,6 @@ def extract_profile_row(
             reasons.append("leg_target_price_profile_contract_invalid")
         if any(not leg["contract_valid"] for leg in legs):
             reasons.append("leg_execution_contract_invalid")
-        if any(not leg["terminal"] for leg in legs):
-            reasons.append("held_or_unresolved_inventory")
         if any(leg["status"] == "COMPLETE" and not leg["completed"] for leg in legs):
             reasons.append("complete_leg_receipt_contract_invalid")
         if all(leg["terminal"] for leg in legs):
@@ -787,6 +891,12 @@ def extract_profile_row(
                 reasons.append("aggregate_terminal_status_mismatch")
         elif state_status in {"COMPLETE", "NO_TRADE"}:
             reasons.append("aggregate_nonterminal_status_mismatch")
+    outcome_complete_for_ev = bool(
+        not attempted or (len(legs) == 2 and all(leg["terminal"] for leg in legs))
+    )
+    outcome_exclusion_reasons = (
+        [] if outcome_complete_for_ev else ["held_or_unresolved_inventory"]
+    )
     return {
         "profile_id": profile_id,
         "symbol": profile.symbol,
@@ -794,7 +904,9 @@ def extract_profile_row(
         "target_date": target_date,
         "source_quality": "pass" if not reasons else "gap",
         "source_quality_reasons": reasons,
-        "eligible_for_tuning": not reasons,
+        "eligible_for_tuning": not reasons and outcome_complete_for_ev,
+        "outcome_complete_for_ev": outcome_complete_for_ev,
+        "outcome_exclusion_reasons": outcome_exclusion_reasons,
         "attempted": attempted,
         "no_signal": not attempted and state_status == "NO_TRADE",
         "state_status": state_status,
@@ -814,7 +926,8 @@ def _aggregate(rows: list[dict]) -> dict:
     broker_priced_completed = [
         leg
         for leg in completed
-        if leg.get("profit_price_source") == "broker_target_fill_price"
+        if leg.get("profit_price_source")
+        in {"broker_target_fill_price", "broker_manual_sell_receipt"}
     ]
     target_proxy_completed = [
         leg

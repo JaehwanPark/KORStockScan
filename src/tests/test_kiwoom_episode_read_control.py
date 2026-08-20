@@ -9,6 +9,7 @@ import pytest
 from src.trading.low_price_two_leg.gateway import KiwoomLowPriceTwoLegGateway
 from src.trading.order.kiwoom_episode_read_control import (
     KiwoomEpisodeReadPacer,
+    ShortTtlSnapshotCache,
     post_kiwoom_episode_read,
 )
 from src.trading.samsung_afternoon_one_share.gateway import (
@@ -24,6 +25,7 @@ class FakeResponse:
     def __init__(self, body: object, *, status_code: int = 200) -> None:
         self._body = body
         self.status_code = status_code
+        self.headers: dict[str, str] = {}
 
     def json(self) -> object:
         return self._body
@@ -80,7 +82,7 @@ def test_cross_process_pacer_reserves_minimum_interval(tmp_path: Path) -> None:
 
     pacer.wait("ka10080")
     clock.value += 0.1
-    pacer.wait("ka10080")
+    pacer.wait("kt00007")
 
     assert clock.sleeps == pytest.approx([0.3])
     assert float((tmp_path / "ka10080.pacer").read_text()) == pytest.approx(100.4)
@@ -137,11 +139,108 @@ def test_episode_read_retry_rejects_order_api() -> None:
         called = True
         return FakeResponse({"return_code": 1700}), {"return_code": 1700}
 
-    with pytest.raises(ValueError, match="requires_ka10080"):
+    with pytest.raises(ValueError, match="requires_supported_read_api"):
         post_kiwoom_episode_read(
             api_id="kt10000", post_once=post_once, pacing_enabled=False
         )
     assert called is False
+
+
+def test_short_ttl_cache_reuses_only_fresh_success() -> None:
+    clock = MutableClock(10.0)
+    cache = ShortTtlSnapshotCache(ttl_sec=1.0, clock=clock)
+    first = object()
+    cache.put(("kt00007", "20260820"), first)
+
+    assert cache.get(("kt00007", "20260820")) is first
+    clock.value += 1.1
+    assert cache.get(("kt00007", "20260820")) is None
+
+
+@pytest.mark.parametrize(
+    ("gateway_factory", "symbol"),
+    [
+        (
+            lambda session, sleeps: KiwoomLowPriceTwoLegGateway(
+                symbol="475150",
+                request_session=session,
+                token_loader=lambda: "TOKEN",
+                read_retry_sleep=sleeps.append,
+            ),
+            "475150",
+        ),
+        (
+            lambda session, sleeps: KiwoomOneShareGateway(
+                request_session=session,
+                token_loader=lambda: "TOKEN",
+                read_retry_sleep=sleeps.append,
+            ),
+            "005930",
+        ),
+        (
+            lambda session, sleeps: KiwoomMiddayOneShareGateway(
+                request_session=session,
+                token_loader=lambda: "TOKEN",
+                read_retry_sleep=sleeps.append,
+            ),
+            "005930",
+        ),
+        (
+            lambda session, sleeps: KiwoomAfternoonOneShareGateway(
+                request_session=session,
+                token_loader=lambda: "TOKEN",
+                read_retry_sleep=sleeps.append,
+            ),
+            "005930",
+        ),
+    ],
+)
+def test_kt00007_retries_1700_and_collapses_two_leg_same_query(
+    gateway_factory, symbol: str
+) -> None:
+    body = {
+        "return_code": 0,
+        "acnt_ord_cntr_prps_dtl": [
+            {
+                "stk_cd": symbol,
+                "ord_no": "0001",
+                "ord_qty": "10",
+                "cntr_qty": "10",
+                "ord_remnq": "0",
+                "cntr_uv": "50000",
+            },
+            {
+                "stk_cd": symbol,
+                "ord_no": "0002",
+                "ord_qty": "10",
+                "cntr_qty": "10",
+                "ord_remnq": "0",
+                "cntr_uv": "50100",
+            },
+        ],
+    }
+    session = FakeSession(
+        [
+            FakeResponse(
+                {"return_code": 1700, "return_msg": "[1700] request limit"}
+            ),
+            FakeResponse(body),
+        ]
+    )
+    sleeps: list[float] = []
+    gateway = gateway_factory(session, sleeps)
+
+    first = gateway.execution_snapshot(
+        order_no="0001", order_date="2026-08-20", expected_order_qty=10
+    )
+    second = gateway.execution_snapshot(
+        order_no="0002", order_date="2026-08-20", expected_order_qty=10
+    )
+
+    assert first.found is True and first.fill_price == 50_000
+    assert second.found is True and second.fill_price == 50_100
+    assert len(session.calls) == 2
+    assert sleeps == [0.8]
 
 
 @pytest.mark.parametrize(

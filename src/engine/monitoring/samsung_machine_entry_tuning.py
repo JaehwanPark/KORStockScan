@@ -36,12 +36,13 @@ from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 REPORT_TYPE = "samsung_machine_entry_tuning"
-REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v5"
+REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v6"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
     {
         "samsung_machine_entry_tuning_report_v2",
         "samsung_machine_entry_tuning_report_v3",
         "samsung_machine_entry_tuning_report_v4",
+        "samsung_machine_entry_tuning_report_v5",
         REPORT_SCHEMA,
     }
 )
@@ -246,6 +247,8 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     position_qty = _as_int(leg.get("position_qty"))
     target_filled_qty = _as_int(leg.get("target_filled_qty"))
     target_fill_price = _as_int(leg.get("target_fill_price"))
+    exit_fill_source = str(leg.get("exit_fill_source") or "")
+    manual_exit_verified = exit_fill_source == "broker_verified_manual_sell_receipt"
     buy_filled_qty = _as_int(
         leg.get("buy_filled_qty", position_qty + target_filled_qty)
     )
@@ -260,7 +263,9 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     profit_pct = None
     profit_exit_price = target_fill_price or target_price
     profit_price_source = (
-        "broker_target_fill_price"
+        "broker_manual_sell_receipt"
+        if completed and target_fill_price > 0 and manual_exit_verified
+        else "broker_target_fill_price"
         if completed and target_fill_price > 0
         else "configured_target_price_proxy" if completed else "not_completed"
     )
@@ -282,6 +287,7 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "buy_filled_qty": buy_filled_qty,
         "target_filled_qty": target_filled_qty,
         "target_fill_price": target_fill_price,
+        "exit_fill_source": exit_fill_source or None,
         "profit_exit_price": profit_exit_price if completed else 0,
         "profit_price_source": profit_price_source,
         "completed": completed,
@@ -340,6 +346,8 @@ def _leg_outcome_contract_valid(leg: dict[str, Any]) -> bool:
         or (
             target_fill_price > 0
             and target_fill_price < _as_int(leg.get("target_price"))
+            and leg.get("exit_fill_source")
+            != "broker_verified_manual_sell_receipt"
         )
     ):
         return False
@@ -380,6 +388,24 @@ def _normalize_historical_machine_row(row: dict[str, Any]) -> dict[str, Any]:
         for leg in row.get("legs", [])
         if isinstance(leg, dict)
     ]
+    attempted = bool(normalized.get("attempted"))
+    outcome_complete_for_ev = bool(
+        not attempted
+        or (
+            len(normalized["legs"]) == 2
+            and all(
+                str(leg.get("status") or "") in TERMINAL_LEG_STATUSES
+                for leg in normalized["legs"]
+            )
+        )
+    )
+    normalized["outcome_complete_for_ev"] = outcome_complete_for_ev
+    normalized["outcome_exclusion_reasons"] = (
+        [] if outcome_complete_for_ev else ["held_or_unresolved_inventory"]
+    )
+    normalized["eligible_for_cumulative_tuning"] = bool(
+        normalized.get("eligible_for_cumulative_tuning")
+    ) and outcome_complete_for_ev
     return normalized
 
 
@@ -791,11 +817,23 @@ def extract_machine_row(
     }
     if attempted and feature_leg_identity != runtime_leg_identity:
         reasons.append("signal_feature_and_runtime_leg_price_mismatch")
+    summary = _summarize_legs(attempted, legs)
+    outcome_complete_for_ev = bool(
+        not attempted
+        or (
+            len(legs) == 2
+            and all(str(leg.get("status")) in TERMINAL_LEG_STATUSES for leg in legs)
+        )
+    )
     return {
         "machine": machine,
         "target_date": target_date,
         "cohort": "two_leg_runtime",
-        "eligible_for_cumulative_tuning": not reasons,
+        "eligible_for_cumulative_tuning": not reasons and outcome_complete_for_ev,
+        "outcome_complete_for_ev": outcome_complete_for_ev,
+        "outcome_exclusion_reasons": (
+            [] if outcome_complete_for_ev else ["held_or_unresolved_inventory"]
+        ),
         "source_quality": "pass" if not reasons else "gap",
         "source_quality_reasons": reasons,
         "observed_schema": schema,
@@ -804,14 +842,16 @@ def extract_machine_row(
         "no_signal": not attempted and state_status == "NO_TRADE",
         "signal_features": signal_features,
         "legs": legs,
-        "summary": _summarize_legs(attempted, legs),
+        "summary": summary,
     }
 
 
 def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     eligible = [row for row in rows if row.get("eligible_for_cumulative_tuning")]
     attempted = [row for row in eligible if row.get("attempted")]
+    all_attempted = [row for row in rows if row.get("attempted")]
     summaries = [row.get("summary", {}) for row in attempted]
+    all_summaries = [row.get("summary", {}) for row in all_attempted]
     completed_returns = [
         float(leg["equal_weight_profit_pct"])
         for row in attempted
@@ -823,7 +863,8 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for row in attempted
         for leg in row.get("legs", [])
         if leg.get("equal_weight_profit_pct") is not None
-        and leg.get("profit_price_source") == "broker_target_fill_price"
+        and leg.get("profit_price_source")
+        in {"broker_target_fill_price", "broker_manual_sell_receipt"}
     ]
     target_proxy_completed = [
         leg
@@ -854,8 +895,10 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     attempted_legs = sum(_as_int(item.get("attempted_legs")) for item in summaries)
     submitted_legs = sum(_as_int(item.get("submitted_legs")) for item in summaries)
     completed_legs = sum(_as_int(item.get("completed_legs")) for item in summaries)
-    held_legs = sum(_as_int(item.get("held_legs")) for item in summaries)
-    unresolved_legs = sum(_as_int(item.get("unresolved_legs")) for item in summaries)
+    held_legs = sum(_as_int(item.get("held_legs")) for item in all_summaries)
+    unresolved_legs = sum(
+        _as_int(item.get("unresolved_legs")) for item in all_summaries
+    )
     complete_episodes = sum(
         bool(item.get("completed_signal_episode")) for item in summaries
     )
@@ -888,6 +931,7 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             row.get("cohort") == "legacy_one_leg_archive_only" for row in rows
         ),
         "signal_attempts": len(attempted),
+        "observed_signal_attempts": len(all_attempted),
         "no_signal_days": sum(bool(row.get("no_signal")) for row in eligible),
         "completed_signal_episodes": complete_episodes,
         "attempted_legs": attempted_legs,

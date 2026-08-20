@@ -134,6 +134,25 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   operator for manual sale. The normal 1-share-by-2-leg episode remains
   unchanged.
 
+### 2026-08-20 Episode Held-Inventory Read And Manual-Exit Gate
+
+- Re-verified at `2026-08-20T15:34:48+09:00` against upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`; inspected `계좌.md`, API spec,
+  `kiwoom/specs.py`, `kiwoom/core`, and Postman for `kt00007`, `ord_dt`,
+  `ord_no`, `ord_qty`, `cntr_qty`, `ord_remnq`, `cntr_uv`, `cont-yn`, and
+  `next-key`.
+- Episode `ka10080` and `kt00007` reads share the 0.4-second cross-process
+  pacer and bounded `1700`/HTTP 429 backoff. Successful identical `kt00007`
+  pages may be reused inside one process for at most one second. `kt10000`,
+  `kt10001`, and `kt10003` writes remain outside retry/cache paths.
+- Manual-exit state reconciliation requires one unique completed `kt00007`
+  SELL receipt matching the explicit episode owner symbol, order date, order
+  number, exact whole held quantity, and zero remainder. It refuses an active
+  target, partial prior exit, cross-owner aggregate allocation, or account
+  balance inference and has no broker-write authority. A global receipt
+  registry reserves the exact order identity before the owner state write, so
+  one manual sell cannot be allocated to multiple profile ledgers.
+
 ### 2026-08-13 General Scalping Margin One-Share Orderability Gate
 
 - Re-verified at `2026-08-13T11:41:09+09:00` against current upstream commit

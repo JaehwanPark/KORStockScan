@@ -2001,6 +2001,7 @@ def _episode_inventory(
     tuning_schemas = (
         "low_price_two_leg_tuning_report_v3",
         "low_price_two_leg_tuning_report_v4",
+        "low_price_two_leg_tuning_report_v5",
     )
     expansion_schemas = ("low_price_two_leg_expanded_candidate_research_v5",)
     tuning = _read_target_json(
