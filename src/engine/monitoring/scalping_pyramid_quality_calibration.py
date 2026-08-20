@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -84,6 +85,9 @@ RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
 ROW_ISOLATABLE_SOURCE_QUALITY_STATUSES = {
     "pass",
     "pass_with_row_exclusions",
+    # Legacy schema-v4 reports emitted this status before the producer moved
+    # the same complete per-row receipt rejection to pass_with_row_exclusions.
+    "real_scale_in_receipt_source_quality_incomplete",
     "micro_vwap_provenance_missing",
     "micro_vwap_provenance_unusable",
     "pressure_provenance_missing",
@@ -254,9 +258,36 @@ def _closed_one_share_pyramid_rows(
     return rows, section_present
 
 
+def _count_real_scale_in_row_exclusions(
+    reports: list[dict[str, Any]],
+    exclusion_counts: Counter[str],
+) -> None:
+    """Account for isolated closed receipt defects without blocking the day."""
+
+    for report in reports:
+        source_rows = report.get("real_scale_in_performance_rows")
+        if not isinstance(source_rows, list):
+            continue
+        for row in source_rows:
+            if not isinstance(row, dict) or not _boolish(row.get("closed")):
+                continue
+            if _boolish(row.get("source_quality_valid")):
+                continue
+            exclusion_counts["real_scale_in_receipt_source_quality_incomplete"] += 1
+
+
 def _normal_winner_expansion_observation(
     reports: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    def _candidate_notional(row: dict[str, Any]) -> int:
+        value = _safe_float(
+            row.get("normal_winner_expansion_candidate_notional_krw"),
+            0.0,
+        )
+        if not math.isfinite(value) or value <= 0.0:
+            return 0
+        return int(value)
+
     rows: list[dict[str, Any]] = []
     section_present = False
     provenance_rejected_count = 0
@@ -293,17 +324,18 @@ def _normal_winner_expansion_observation(
                 row.get("normal_winner_expansion_incremental_final_profit_pct"),
                 0.0,
             ),
-            int(row.get("normal_winner_expansion_candidate_notional_krw") or 0),
+            _candidate_notional(row),
         )
         for row in rows
-        if int(row.get("normal_winner_expansion_candidate_notional_krw") or 0) > 0
+        if _candidate_notional(row) > 0
     ]
     winner_count = sum(
         1
         for row in rows
         if row.get("normal_winner_expansion_label") == "realized_incremental_winner"
     )
-    sample_floor_met = len(rows) >= 20
+    ev_eligible_sample_count = len(weighted)
+    sample_floor_met = ev_eligible_sample_count >= 20
     notional_weighted_ev_pct = (
         round(
             sum(value * notional for value, notional in weighted)
@@ -339,18 +371,18 @@ def _normal_winner_expansion_observation(
                         row.get("normal_winner_expansion_incremental_final_profit_pct"),
                         0.0,
                     ),
-                    int(row.get("normal_winner_expansion_candidate_notional_krw") or 0),
+                    _candidate_notional(row),
                 )
                 for row in bucket_rows
-                if int(row.get("normal_winner_expansion_candidate_notional_krw") or 0)
-                > 0
+                if _candidate_notional(row) > 0
             ]
             result.append(
                 {
                     dimension: value,
                     "sample_count": len(bucket_rows),
+                    "ev_eligible_sample_count": len(bucket_weighted),
                     "sample_floor": 20,
-                    "sample_floor_met": len(bucket_rows) >= 20,
+                    "sample_floor_met": len(bucket_weighted) >= 20,
                     "notional_weighted_ev_pct": (
                         round(
                             sum(
@@ -389,11 +421,10 @@ def _normal_winner_expansion_observation(
                     row.get("normal_winner_expansion_incremental_final_profit_pct"),
                     0.0,
                 ),
-                int(row.get("normal_winner_expansion_candidate_notional_krw") or 0),
+                _candidate_notional(row),
             )
             for row in venue_rows
-            if int(row.get("normal_winner_expansion_candidate_notional_krw") or 0)
-            > 0
+            if _candidate_notional(row) > 0
         ]
         venue_ev = (
             round(
@@ -405,7 +436,7 @@ def _normal_winner_expansion_observation(
             else 0.0
         )
         venue_floor_met = (
-            len(venue_rows) >= WINNER_RECOVERY_COUNTERFACTUAL_SAMPLE_FLOOR
+            len(venue_weighted) >= WINNER_RECOVERY_COUNTERFACTUAL_SAMPLE_FLOOR
         )
         venue_state = (
             "hold_sample"
@@ -421,6 +452,7 @@ def _normal_winner_expansion_observation(
                 "effective_venue": venue,
                 "state": venue_state,
                 "sample_count": len(venue_rows),
+                "ev_eligible_sample_count": len(venue_weighted),
                 "sample_floor": WINNER_RECOVERY_COUNTERFACTUAL_SAMPLE_FLOOR,
                 "sample_floor_met": venue_floor_met,
                 "realized_incremental_winner_count": sum(
@@ -498,6 +530,7 @@ def _normal_winner_expansion_observation(
         "state": state,
         "section_present": section_present,
         "sample_count": len(rows),
+        "ev_eligible_sample_count": ev_eligible_sample_count,
         "sample_floor": 20,
         "sample_floor_met": sample_floor_met,
         "provenance_rejected_count": provenance_rejected_count,
@@ -1248,6 +1281,7 @@ def _calibration_candidate(
 ) -> dict[str, Any]:
     source_quality_excluded_dates = source_quality_excluded_dates or []
     row_exclusion_counts: Counter[str] = Counter()
+    _count_real_scale_in_row_exclusions(reports, row_exclusion_counts)
     one_share_rows, one_share_source_present = _closed_one_share_pyramid_rows(
         reports, row_exclusion_counts
     )
@@ -1360,7 +1394,26 @@ def _calibration_candidate(
                     grid_decision["selected_min_profit_pct"]
                 )
                 reason = str(grid_decision.get("reason") or reason)
+        normal_winner_loosen_veto_applied = bool(
+            state == "adjust_down"
+            and normal_winner_expansion.get("sample_floor_met")
+            and _safe_float(
+                normal_winner_expansion.get("notional_weighted_ev_pct"), 0.0
+            )
+            <= 0.0
+        )
+        if normal_winner_loosen_veto_applied:
+            prior_reason = reason
+            state = "hold"
+            recommended = dict(current)
+            reason = (
+                "normal_winner_expansion_non_positive_ev_hold:"
+                f"{prior_reason}"
+            )
         allowed = state in {"adjust_up", "adjust_down"}
+
+    if blockers:
+        normal_winner_loosen_veto_applied = False
 
     quality_update_id = (
         f"{FAMILY}:cumulative:{CLEAN_BASELINE_DATE}:{target_date}:"
@@ -1425,6 +1478,9 @@ def _calibration_candidate(
             "recommended_action": state,
             "recommended_action_reason": reason,
             "normal_winner_expansion_observation": normal_winner_expansion,
+            "normal_winner_expansion_loosen_veto_applied": (
+                normal_winner_loosen_veto_applied
+            ),
             "winner_recovery_bounded_canary_observation": (
                 winner_recovery_bounded_canary
             ),
@@ -1593,6 +1649,11 @@ def write_outputs(
         if isinstance(report.get("winner_recovery_real_execution_observation"), dict)
         else {}
     )
+    normal_winner_expansion = (
+        report.get("normal_winner_expansion_observation")
+        if isinstance(report.get("normal_winner_expansion_observation"), dict)
+        else {}
+    )
     source_quality = (
         report.get("source_quality")
         if isinstance(report.get("source_quality"), dict)
@@ -1634,7 +1695,18 @@ def write_outputs(
         "- profit_threshold_grid_selected_avg_incremental_exit_profit_pct: "
         f"{_safe_float(selected_grid_row.get('avg_incremental_exit_profit_pct')):.2f}",
         f"- source_quality_pass: {metrics.get('source_quality_pass')}",
+        "- source_quality_excluded_row_count: "
+        f"{metrics.get('source_quality_excluded_row_count')}",
         f"- provenance_present: {metrics.get('provenance_present')}",
+        f"- normal_winner_expansion_state: {normal_winner_expansion.get('state')}",
+        "- normal_winner_expansion_sample_count: "
+        f"{normal_winner_expansion.get('sample_count')}",
+        "- normal_winner_expansion_ev_eligible_sample_count: "
+        f"{normal_winner_expansion.get('ev_eligible_sample_count')}",
+        "- normal_winner_expansion_notional_weighted_ev_pct: "
+        f"{_safe_float(normal_winner_expansion.get('notional_weighted_ev_pct')):.4f}",
+        "- normal_winner_expansion_loosen_veto_applied: "
+        f"{metrics.get('normal_winner_expansion_loosen_veto_applied')}",
         f"- post_probe_real_outcome_state: {post_probe_observation.get('state')}",
         "- post_probe_real_outcome_closed_count: "
         f"{post_probe_observation.get('closed_real_outcome_count')}",

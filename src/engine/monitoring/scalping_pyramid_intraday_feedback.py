@@ -3845,7 +3845,11 @@ def build_report(
     if micro_vwap_provenance_unusable_count:
         source_quality_status = "micro_vwap_provenance_unusable"
     if real_scale_in_source_quality_blocked_closed_count:
-        source_quality_status = "real_scale_in_receipt_source_quality_incomplete"
+        # A closed scale-in row already carries its own source_quality_valid
+        # flag and blockers.  Keep that row out of leg EV without poisoning
+        # unrelated one-share and normal-winner calibration rows from the same
+        # day.
+        source_quality_status = "pass_with_row_exclusions"
     if winner_recovery_qty_cap_invalid_count:
         source_quality_status = "winner_recovery_qty_cap_invalid"
     return {
@@ -4001,6 +4005,18 @@ def build_report(
             ),
             "real_scale_in_source_quality_blocked_closed_count": (
                 real_scale_in_source_quality_blocked_closed_count
+            ),
+            "source_quality_excluded_row_count": (
+                real_scale_in_source_quality_blocked_closed_count
+            ),
+            "source_quality_exclusion_reasons": (
+                {
+                    "real_scale_in_receipt_source_quality_incomplete": (
+                        real_scale_in_source_quality_blocked_closed_count
+                    )
+                }
+                if real_scale_in_source_quality_blocked_closed_count
+                else {}
             ),
         },
         "summary": {

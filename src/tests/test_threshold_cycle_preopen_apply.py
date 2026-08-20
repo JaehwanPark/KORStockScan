@@ -8223,6 +8223,92 @@ def test_hold_carry_forward_previously_enabled_no_blockers(tmp_path, monkeypatch
     ] == ["soft_stop_whipsaw_confirmation"]
 
 
+def test_pyramid_ev_hold_preserves_explicit_operator_lock(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    lock_dir.mkdir(parents=True)
+    (lock_dir / "scalping_pyramid_min_profit.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "scalping_pyramid_min_profit_explicit_lock",
+                "enabled": True,
+                "family": "scalping_pyramid_quality_gate",
+                "stage": "scale_in",
+                "active_from_date": "2026-08-20",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1.1",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "threshold_cycle_2026-08-20.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-08-20",
+                "calibration_candidates": [
+                    {
+                        "family": "scalping_pyramid_quality_gate",
+                        "stage": "scale_in",
+                        "priority": 39,
+                        "allowed_runtime_apply": False,
+                        "safety_revert_required": False,
+                        "calibration_state": "hold",
+                        "calibration_reason": (
+                            "normal_winner_expansion_non_positive_ev_hold"
+                        ),
+                        "source_quality_gate": "pass_with_row_exclusions",
+                        "source_quality_blocked": None,
+                        "target_env_keys": [],
+                        "recommended_values": {"min_profit_pct": 1.5},
+                        "current_values": {"min_profit_pct": 1.5},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-08-21",
+        source_date="2026-08-20",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+    decision = next(
+        item
+        for item in manifest["auto_apply_decisions"]
+        if item["family"] == "scalping_pyramid_quality_gate"
+    )
+
+    assert decision["selected"] is True
+    assert decision["selection_change_class"] == "operator_lock_preserved"
+    assert decision["decision_reason"].startswith(
+        "operator_runtime_env_lock_preserved:"
+    )
+    assert decision["env_overrides"] == {
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1.1"
+    }
+    assert manifest["runtime_env_overrides"][
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT"
+    ] == "1.1"
+
+
 def test_previous_runtime_env_uses_latest_manifest_across_calendar_gap(
     tmp_path, monkeypatch
 ):

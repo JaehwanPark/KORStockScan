@@ -322,6 +322,68 @@ def test_pyramid_quality_calibration_keeps_valid_rows_from_mixed_quality_report(
     )
 
 
+def test_negative_normal_winner_ev_vetoes_loosening_and_isolates_bad_receipt(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    one_share_rows = [_row(i, "pyramid_would_have_helped") for i in range(20)]
+    normal_rows = [
+        {
+            "record_id": f"normal-{index}",
+            "normal_winner_expansion_label": "correctly_not_expanded_or_reversal",
+            "normal_winner_expansion_source_quality_valid": True,
+            "normal_winner_expansion_incremental_final_profit_pct": -0.3,
+            "normal_winner_expansion_candidate_notional_krw": 100_000,
+            "effective_venue": "KRX",
+            "venue_source_quality_valid": True,
+            "market_session_bucket": "krx_regular",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": (
+                "source_only_one_share_pyramid_opportunity_backtest_no_runtime_mutation"
+            ),
+            "forbidden_uses": ["intraday_runtime_apply"],
+        }
+        for index in range(20)
+    ]
+    invalid_receipt_row = {
+        "record_id": "invalid-receipt",
+        "scale_in_outcome_cohort": "normal_pyramid",
+        "closed": True,
+        "source_quality_valid": False,
+    }
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-08-20.json",
+        [],
+        source_quality="real_scale_in_receipt_source_quality_incomplete",
+        one_share_rows=one_share_rows,
+        normal_winner_expansion_rows=normal_rows,
+        real_scale_in_performance_rows=[invalid_receipt_row],
+    )
+
+    report = mod.build_report("2026-08-20", input_paths=[path], generated_at="fixed")
+    candidate = report["calibration_candidates"][0]
+
+    assert report["source_quality"]["status"] == "pass_with_row_exclusions"
+    assert candidate["calibration_state"] == "hold"
+    assert candidate["calibration_reason"].startswith(
+        "normal_winner_expansion_non_positive_ev_hold:"
+    )
+    assert candidate["recommended_values"] == candidate["current_values"]
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["target_env_keys"] == []
+    assert candidate["source_metrics"][
+        "normal_winner_expansion_loosen_veto_applied"
+    ] is True
+    assert candidate["source_metrics"]["source_quality_excluded_row_count"] == 1
+    assert candidate["source_metrics"]["source_quality_exclusion_reasons"] == {
+        "real_scale_in_receipt_source_quality_incomplete": 1
+    }
+
+
 def test_pyramid_quality_calibration_uses_all_one_share_rows_for_thresholds(
     tmp_path, monkeypatch
 ):
@@ -427,9 +489,11 @@ def test_pyramid_quality_calibration_consumes_normal_winner_expansion_as_source_
 
     assert observation["state"] == "positive_ev_profile_candidate"
     assert observation["sample_count"] == 20
+    assert observation["ev_eligible_sample_count"] == 20
     assert observation["notional_weighted_ev_pct"] == 0.4
     assert observation["provenance_rejected_count"] == 0
     assert observation["by_effective_venue"][0]["effective_venue"] == "KRX"
+    assert observation["by_effective_venue"][0]["ev_eligible_sample_count"] == 20
     assert observation["by_effective_venue"][0]["sample_floor_met"] is True
     assert observation["allowed_runtime_apply"] is False
     assert observation["runtime_effect"] is False
@@ -437,6 +501,56 @@ def test_pyramid_quality_calibration_consumes_normal_winner_expansion_as_source_
         observation["decision_authority"]
         == "rolling_source_only_normal_winner_expansion_observation"
     )
+
+
+def test_normal_winner_ev_floor_requires_positive_parseable_notional(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    normal_rows = [
+        {
+            "record_id": str(index),
+            "normal_winner_expansion_label": "realized_incremental_winner",
+            "normal_winner_expansion_source_quality_valid": True,
+            "normal_winner_expansion_incremental_final_profit_pct": 0.4,
+            "normal_winner_expansion_candidate_notional_krw": (
+                "nan" if index == 0 else "malformed" if index == 1 else 100_000
+            ),
+            "effective_venue": "KRX",
+            "venue_source_quality_valid": True,
+            "market_session_bucket": "krx_regular",
+            "normal_winner_expansion_blocker_reason": (
+                mod.WINNER_RECOVERY_EXACT_BLOCKER if index < 10 else "other_blocker"
+            ),
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": (
+                "source_only_one_share_pyramid_opportunity_backtest_no_runtime_mutation"
+            ),
+            "forbidden_uses": ["intraday_runtime_apply"],
+        }
+        for index in range(21)
+    ]
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-08-20.json",
+        [],
+        normal_winner_expansion_rows=normal_rows,
+    )
+
+    report = mod.build_report("2026-08-20", input_paths=[path], generated_at="fixed")
+    observation = report["normal_winner_expansion_observation"]
+    exact = report["winner_recovery_bounded_canary_observation"]
+
+    assert observation["sample_count"] == 21
+    assert observation["ev_eligible_sample_count"] == 19
+    assert observation["sample_floor_met"] is False
+    assert observation["state"] == "hold_sample"
+    assert exact["by_effective_venue"][0]["sample_count"] == 10
+    assert exact["by_effective_venue"][0]["ev_eligible_sample_count"] == 8
+    assert exact["by_effective_venue"][0]["sample_floor_met"] is False
 
 
 def test_pyramid_quality_calibration_rejects_normal_winner_authority_leak(
@@ -537,6 +651,7 @@ def test_winner_recovery_counterfactual_isolates_exact_blocker_by_venue(
             "effective_venue": "KRX",
             "state": "bounded_one_share_canary_evidence_ready",
             "sample_count": 10,
+            "ev_eligible_sample_count": 10,
             "sample_floor": 10,
             "sample_floor_met": True,
             "realized_incremental_winner_count": 10,
