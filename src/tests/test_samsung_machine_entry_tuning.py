@@ -11,6 +11,7 @@ from src.engine.monitoring.samsung_machine_entry_tuning import (
     REPORT_SCHEMA,
     REPORT_TYPE,
     _aggregate_rows,
+    _normalize_historical_machine_row,
     build_policy_candidate,
     build_report,
     extract_machine_row,
@@ -571,6 +572,27 @@ def test_missing_signal_features_is_source_gap(tmp_path: Path):
     )
 
 
+def test_historical_held_row_is_removed_from_decision_ev() -> None:
+    old_row = {
+        "attempted": True,
+        "eligible_for_cumulative_tuning": True,
+        "source_quality": "pass",
+        "legs": [
+            {"status": "COMPLETE", "completed": True, "target_fill_price": 70_200},
+            {"status": "HELD", "completed": False, "held": True},
+        ],
+    }
+
+    normalized = _normalize_historical_machine_row(old_row)
+
+    assert normalized["source_quality"] == "pass"
+    assert normalized["eligible_for_cumulative_tuning"] is False
+    assert normalized["outcome_complete_for_ev"] is False
+    assert normalized["outcome_exclusion_reasons"] == [
+        "held_or_unresolved_inventory"
+    ]
+
+
 def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path):
     state_dir = tmp_path / "runtime"
     output_dir = tmp_path / "reports"
@@ -600,6 +622,13 @@ def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path)
     )
 
     midday = second["windows"][CLEAN_WINDOW_NAME]["midday"]
+    held_row = second["daily"]["machines"]["midday"]
+    assert held_row["source_quality"] == "pass"
+    assert held_row["eligible_for_cumulative_tuning"] is False
+    assert held_row["outcome_complete_for_ev"] is False
+    assert held_row["outcome_exclusion_reasons"] == [
+        "held_or_unresolved_inventory"
+    ]
     assert second["schema"] == REPORT_SCHEMA
     assert set(second["windows"]) == {
         CLEAN_WINDOW_NAME,
@@ -618,6 +647,8 @@ def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path)
     assert coverage["missing_dates_imputed_as_outcomes"] is False
     assert coverage["historical_market_replay_included"] is False
     assert midday["summary"]["report_days"] == 2
+    assert midday["summary"]["signal_attempts"] == 1
+    assert midday["summary"]["observed_signal_attempts"] == 2
     assert midday["summary"]["held_legs"] == 1
     assert midday["summary"]["target_price_proxy_completed_legs"] == 1
     assert midday["summary"]["candidate_status"] == "inventory_or_order_unresolved"

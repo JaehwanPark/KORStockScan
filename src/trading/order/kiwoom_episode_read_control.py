@@ -1,9 +1,10 @@
-"""Bounded Kiwoom market-data request control for episode machines.
+"""Bounded Kiwoom read request control for episode machines.
 
 The official Kiwoom contract identifies ``1700`` as a request-count error but
 does not publish a pacing interval.  This module therefore owns a conservative
-local guard for episode-machine ``ka10080`` reads only.  Broker writes must not
-use this retry path because replaying an ambiguous order can duplicate it.
+local guard shared by episode-machine ``ka10080`` market-data reads and
+``kt00007`` order/execution reconciliation reads.  Broker writes must not use
+this retry path because replaying an ambiguous order can duplicate it.
 """
 
 from __future__ import annotations
@@ -12,11 +13,13 @@ import fcntl
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar, cast
 
 from src.utils.constants import DATA_DIR
 
 KA10080_API_ID = "ka10080"
+KT00007_API_ID = "kt00007"
+EPISODE_READ_API_IDS = frozenset({KA10080_API_ID, KT00007_API_ID})
 DEFAULT_MIN_INTERVAL_SEC = 0.4
 DEFAULT_PACER_PATH = DATA_DIR / "runtime" / "kiwoom_episode_ka10080.lock"
 MAX_RATE_LIMIT_RETRIES = 2
@@ -43,7 +46,7 @@ def is_kiwoom_request_limit(response: object, body: dict[str, Any] | object) -> 
 
 
 class KiwoomEpisodeReadPacer:
-    """Serialize episode ``ka10080`` reads across independent processes."""
+    """Serialize supported episode reads across independent processes."""
 
     def __init__(
         self,
@@ -59,7 +62,7 @@ class KiwoomEpisodeReadPacer:
         self.sleep = sleep
 
     def wait(self, api_id: str) -> None:
-        if str(api_id) != KA10080_API_ID or self.min_interval_sec <= 0:
+        if str(api_id) not in EPISODE_READ_API_IDS or self.min_interval_sec <= 0:
             return
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         with self.state_path.open("a+", encoding="ascii") as handle:
@@ -99,6 +102,38 @@ class SameMinuteSnapshotCache:
         self._snapshot = snapshot
 
 
+class ShortTtlSnapshotCache:
+    """Process-local cache used to collapse duplicate account reads per cycle."""
+
+    def __init__(
+        self,
+        *,
+        ttl_sec: float = 1.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.ttl_sec = max(0.0, float(ttl_sec))
+        self.clock = clock
+        self._key: object | None = None
+        self._snapshot: object | None = None
+        self._stored_at = 0.0
+
+    def get(self, key: object) -> object | None:
+        now = float(self.clock())
+        if (
+            self._key == key
+            and self._snapshot is not None
+            and now >= self._stored_at
+            and now - self._stored_at <= self.ttl_sec
+        ):
+            return self._snapshot
+        return None
+
+    def put(self, key: object, snapshot: object) -> None:
+        self._key = key
+        self._snapshot = snapshot
+        self._stored_at = float(self.clock())
+
+
 def snapshot_contains_latest_completed_minute(
     *, latest_timestamp: datetime, minute_floor: datetime
 ) -> bool:
@@ -117,19 +152,33 @@ def post_kiwoom_episode_read(
     pacing_enabled: bool,
     pacer: KiwoomEpisodeReadPacer | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    cache: ShortTtlSnapshotCache | None = None,
+    cache_key: object | None = None,
 ) -> PostResult[ResponseT]:
     """POST one read with bounded 1700 recovery; reject non-read retry use."""
 
-    if str(api_id) != KA10080_API_ID:
-        raise ValueError("episode_read_retry_requires_ka10080")
+    if str(api_id) not in EPISODE_READ_API_IDS:
+        raise ValueError("episode_read_retry_requires_supported_read_api")
+    if cache is not None and cache_key is not None:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cast(PostResult[ResponseT], cached)
     active_pacer = pacer or _DEFAULT_PACER
     for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
         if pacing_enabled:
             active_pacer.wait(api_id)
         response, body = post_once()
         if not is_kiwoom_request_limit(response, body):
+            code = str(body.get("return_code", body.get("rt_cd", "")))
+            if (
+                cache is not None
+                and cache_key is not None
+                and int(getattr(response, "status_code", 0) or 0) == 200
+                and code == "0"
+            ):
+                cache.put(cache_key, (response, body))
             return response, body
         if attempt >= MAX_RATE_LIMIT_RETRIES:
             return response, body
         sleep(_RATE_LIMIT_BACKOFF_SEC[attempt])
-    raise AssertionError("unreachable_ka10080_retry_loop")
+    raise AssertionError("unreachable_episode_read_retry_loop")

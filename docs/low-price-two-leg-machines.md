@@ -251,17 +251,27 @@ generation. New target reconciliations persist broker `kt00007.cntr_uv`;
 only broker-priced completed legs contribute to decision EV and its 20-leg floor.
 Older configured-target proxy results remain separately labeled diagnostics.
 The postclose producer also reads the official account realized-PnL endpoint
-`ka10073` for symbol-days that contain a completed episode. Its exact net PnL,
+`ka10073` for realization-days that contain a completed episode. The
+realization day comes from the broker target-order date or verified manual-sell
+receipt date, with `target_filled_at` used only for older rows that lack that
+receipt provenance; a carried
+episode remains attributed to its original entry date while its exact costs are
+queried on the actual exit-reconciliation date. Its exact net PnL,
 commission, and tax replace the fixed-cost estimate only when one episode
-profile owns that symbol-day and the account aggregate matches the episode's
+profile owns that symbol-realization-day and the account aggregate matches the episode's
 filled quantity, weighted buy price, weighted sell price, and
 `gross profit - commission - tax`. A query failure, mismatch, or same-symbol
-multi-profile day is never apportioned heuristically; it remains on the
+multi-profile realization day is never apportioned heuristically; completed
+legs with different or partly missing realization dates also remain on the
 reviewed `0.23%` round-trip fallback. Historical report rows are recalculated
 from their persisted broker fill prices under the current fallback instead of
 being discarded when an older report used a different fixed cost.
 
-After at least 20 completed legs in that clean-baseline actual-observation window,
+An attempted episode with any held or unresolved leg remains visible as
+inventory risk but the entire episode, including an already completed sibling
+leg, stays outside decision EV until both legs are terminal. Samsung and
+lower-price tuners use this same complete-episode rule. After at least 20
+completed legs in that clean-baseline actual-observation window,
 positive current and candidate EV, and no held/unresolved inventory, one
 profile may propose one tightening axis for the next PREOPEN:
 
@@ -351,13 +361,17 @@ target EV. Those prospective checks require a separate reviewed
 execution-quality contract. Thin OOS evidence and diagnostic win rate cannot
 become live authority.
 
-## Episode market-data request control
+## Episode read request control
 
-All live lower-price profiles share the episode-only `ka10080` read controller.
+All live lower-price profiles share the episode-only read controller for
+`ka10080` market data and `kt00007` order/execution reconciliation.
 A process reuses one successful completed-bar snapshot within the same KST
 minute, and independent episode processes serialize a remaining `ka10080`
-request at a conservative local interval of 0.4 seconds. An explicit Kiwoom
-`1700` or HTTP 429 read failure is retried at most twice with bounded backoff.
+or `kt00007` request at a conservative local interval of 0.4 seconds. Two legs
+with the same symbol, order date, payload, and continuation key reuse a
+successful `kt00007` response for at most one second, collapsing the duplicate
+account read within one reconciliation cycle. An explicit Kiwoom `1700` or
+HTTP 429 read failure is retried at most twice with bounded backoff.
 The official reference identifies error 1700 but does not publish the local
 0.4-second value; that interval is an operational burst guard based on observed
 traffic. Failed/invalid snapshots are not cached. Order and cancel API IDs never
@@ -367,11 +381,26 @@ already contains the immediately preceding completed candle. A boundary response
 that still ends two or more minutes behind is returned once but not cached, so the
 next bounded poll can observe the newly published candle.
 
+## Manual exit reconciliation
+
+An operator who manually sells a held episode can close only that exact owner
+ledger through `python -m src.trading.order.manual_episode_exit_reconciliation`.
+The command is dry-run by default and prints a state-derived confirmation
+string. `--apply --confirm ...` is accepted only after the service lock is free,
+every held-inventory target is already terminal `HELD`, no partial target exit exists,
+and one official `kt00007` sell receipt matches the owner symbol, exact whole
+held quantity, zero remainder, order date, and order number. A cross-profile
+aggregate sale, partial fill, live target, receipt ambiguity, or balance-based
+inference fails closed. A shared receipt registry also prevents the same sell
+order from being assigned to a second owner. It never submits or cancels an
+order and never edits another owner ledger. The verified manual sell price and
+broker receipt order date remain broker-priced outcome evidence for postclose tuning.
+
 ## Official Kiwoom reference evidence
 
 - Repository: `Kiwoom-Securities/Kiwoom-REST-API`
 - Commit: `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`
-- Retrieved: `2026-08-13T10:07:49+09:00`
+- Retrieved: `2026-08-20T15:34:48+09:00`
 - Inspected: `kiwoom_docs/차트.md`, `kiwoom_docs/주문.md`,
   `kiwoom_docs/계좌.md`, `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`,
   `kiwoom/core`, the Postman collection, and

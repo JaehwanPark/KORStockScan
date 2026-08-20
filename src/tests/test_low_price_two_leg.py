@@ -19,6 +19,7 @@ from src.engine.monitoring.low_price_two_leg_tuning import (
     REPORT_SCHEMA,
     _aggregate,
     _apply_broker_realized_economics,
+    _historical_profile_row,
     build_candidate,
     build_report,
     extract_profile_row,
@@ -1585,6 +1586,7 @@ def _skt_partial_fill_economics_row() -> dict:
                 "target_price": 96_800,
                 "target_fill_price": 96_800,
                 "target_filled_qty": 4,
+                "target_filled_at": "2026-08-20T14:31:00+09:00",
                 "buy_filled_qty": 4,
                 "completed": True,
                 "terminal": True,
@@ -1638,6 +1640,8 @@ def test_skt_partial_fill_uses_exact_negative_broker_pnl_when_uniquely_matched()
 
     assert reconciliation == {"matched": 1, "fallback": 0, "api_requests": 1}
     assert row["broker_realized_economics"]["status"] == "matched_exact"
+    assert row["broker_realized_economics"]["entry_trade_date"] == "2026-08-20"
+    assert row["broker_realized_economics"]["realization_date"] == "2026-08-20"
     assert row["broker_realized_economics"]["realized_net_profit_krw"] == -73
     assert summary["broker_realized_net_profit_krw"] == -73
     assert summary["exact_broker_cost_completed_legs"] == 1
@@ -1654,6 +1658,8 @@ def test_skt_partial_fill_fixed_cost_fallback_is_also_negative():
     assert row["broker_realized_economics"] == {
         "status": "fixed_cost_fallback",
         "reason": "ka10073_loader_not_configured",
+        "realization_date": "2026-08-20",
+        "realization_date_source": "target_fill_reconciliation_date",
         "selection_effect": True,
     }
     assert summary["broker_realized_net_profit_krw"] < 0
@@ -1673,8 +1679,56 @@ def test_exact_broker_pnl_is_not_allocated_across_same_symbol_day_profiles():
 
     assert reconciliation == {"matched": 0, "fallback": 2, "api_requests": 0}
     assert {row["broker_realized_economics"]["reason"] for row in (first, second)} == {
-        "multiple_episode_profiles_share_symbol_day"
+        "multiple_episode_profiles_share_symbol_realization_day"
     }
+
+
+def test_carried_episode_queries_exact_pnl_on_realization_date() -> None:
+    row = _skt_partial_fill_economics_row()
+    row["target_date"] = "2026-08-19"
+    row["legs"][0]["target_filled_at"] = "2026-08-20T09:11:00+09:00"
+    calls: list[tuple[str, str]] = []
+
+    def loader(trade_date: str, symbol: str) -> list[dict]:
+        calls.append((trade_date, symbol))
+        return [
+            {
+                "trade_date": trade_date,
+                "symbol": symbol,
+                "filled_qty": 4,
+                "buy_average_price": 96_600,
+                "sell_average_price": 96_800,
+                "realized_net_profit_krw": -73,
+                "broker_profit_rate_pct": -0.02,
+                "commission_krw": 100,
+                "tax_krw": 773,
+                "source_api": "ka10073",
+            }
+        ]
+
+    result = _apply_broker_realized_economics([row], loader)
+
+    assert result == {"matched": 1, "fallback": 0, "api_requests": 1}
+    assert calls == [("2026-08-20", "017670")]
+    assert row["broker_realized_economics"]["entry_trade_date"] == "2026-08-19"
+    assert row["broker_realized_economics"]["realization_date"] == "2026-08-20"
+
+
+def test_multiple_realization_dates_use_fixed_cost_without_query() -> None:
+    row = _skt_partial_fill_economics_row()
+    second = json.loads(json.dumps(row["legs"][0]))
+    second["leg_id"] = "signal_close_minus_1tick"
+    second["target_filled_at"] = "2026-08-21T09:11:00+09:00"
+    row["legs"] = [row["legs"][0], second]
+
+    result = _apply_broker_realized_economics(
+        [row], lambda *_args: (_ for _ in ()).throw(AssertionError("must not query"))
+    )
+
+    assert result == {"matched": 0, "fallback": 1, "api_requests": 0}
+    assert row["broker_realized_economics"]["reason"] == (
+        "completed_legs_have_multiple_realization_dates"
+    )
 
 
 def test_ka10073_loader_uses_official_path_headers_fields_and_normalizes(monkeypatch):
@@ -2484,11 +2538,39 @@ def test_prior_held_episode_blocks_only_its_own_profile_tuning(tmp_path):
     )
 
     summary = report["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
+    row = report["prior_state_reconciliations"][profile_id]["row"]
+    assert row["source_quality"] == "pass"
+    assert row["eligible_for_tuning"] is False
+    assert row["outcome_complete_for_ev"] is False
+    assert row["outcome_exclusion_reasons"] == ["held_or_unresolved_inventory"]
     assert summary["completed_legs"] == 0
     assert summary["held_or_unresolved_legs"] == 2
     for other_profile in set(report["windows"][CLEAN_WINDOW_NAME]) - {profile_id}:
         other = report["windows"][CLEAN_WINDOW_NAME][other_profile]["summary"]
         assert other["held_or_unresolved_legs"] == 0
+
+
+def test_historical_held_reason_is_outcome_exclusion_not_source_gap() -> None:
+    profile_id = "sk_eternix_midday"
+    row = {
+        "attempted": True,
+        "eligible_for_tuning": False,
+        "source_quality": "gap",
+        "source_quality_reasons": ["held_or_unresolved_inventory"],
+        "legs": [
+            {"status": "COMPLETE", "completed": True, "net_profit_pct": 0.1},
+            {"status": "HELD", "completed": False, "terminal": False},
+        ],
+    }
+
+    normalized = _historical_profile_row(
+        profile_id, date(2026, 8, 13), {profile_id: row}, 0.23
+    )
+
+    assert normalized["source_quality"] == "pass"
+    assert normalized["source_quality_reasons"] == []
+    assert normalized["eligible_for_tuning"] is False
+    assert normalized["outcome_complete_for_ev"] is False
 
 
 def test_contradictory_complete_receipt_is_quarantined(tmp_path):

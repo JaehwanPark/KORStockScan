@@ -17,8 +17,11 @@ from src.trading.order.episode_quantity import (
     validate_position_quantity,
 )
 from src.trading.order.kiwoom_episode_read_control import (
+    EPISODE_READ_API_IDS,
+    KT00007_API_ID,
     KiwoomEpisodeReadPacer,
     SameMinuteSnapshotCache,
+    ShortTtlSnapshotCache,
     post_kiwoom_episode_read,
     snapshot_contains_latest_completed_minute,
 )
@@ -30,7 +33,7 @@ KST = ZoneInfo("Asia/Seoul")
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-13T10:07:49+09:00",
+    "retrieved_at_kst": "2026-08-20T15:34:48+09:00",
     "inspected_paths": [
         "kiwoom_docs/차트.md",
         "kiwoom_docs/주문.md",
@@ -136,6 +139,7 @@ class KiwoomAfternoonOneShareGateway:
         self.read_pacer = read_pacer
         self.read_retry_sleep = read_retry_sleep
         self._minute_bars_cache = SameMinuteSnapshotCache()
+        self._account_read_cache = ShortTtlSnapshotCache(ttl_sec=1.0)
 
     def _token(self) -> str:
         token = str(self.token_loader() or "").replace("Bearer ", "").strip()
@@ -171,11 +175,23 @@ class KiwoomAfternoonOneShareGateway:
                 body = {}
             return response, body if isinstance(body, dict) else {}
 
-        if api_id != "ka10080":
+        if api_id not in EPISODE_READ_API_IDS:
             return post_once()
         kwargs: dict[str, Any] = {}
         if self.read_retry_sleep is not None:
             kwargs["sleep"] = self.read_retry_sleep
+        if api_id == KT00007_API_ID:
+            kwargs.update(
+                {
+                    "cache": self._account_read_cache,
+                    "cache_key": (
+                        api_id,
+                        tuple(sorted(payload.items())),
+                        cont_yn,
+                        next_key,
+                    ),
+                }
+            )
         return post_kiwoom_episode_read(
             api_id=api_id,
             post_once=post_once,
