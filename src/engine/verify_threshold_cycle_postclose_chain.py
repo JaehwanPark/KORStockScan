@@ -150,15 +150,29 @@ def _low_price_two_leg_postclose_contract_status(
     )
     from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
     from src.trading.low_price_two_leg.policy_runtime import validate_candidate
-    from src.trading.low_price_two_leg.profiles import PROFILES
+    from src.trading.low_price_two_leg.profiles import (
+        PROFILES,
+        profiles_for_target_date,
+    )
 
     issues: list[str] = []
     if tuning.get("schema") != REPORT_SCHEMA:
         issues.append("tuning_schema_invalid")
     if tuning.get("target_date") != target_date:
         issues.append("tuning_target_date_mismatch")
-    daily_profiles = (tuning.get("daily") or {}).get("profiles") or {}
-    if set(daily_profiles) != set(PROFILES):
+    try:
+        target_date_profiles = profiles_for_target_date(date.fromisoformat(target_date))
+    except (TypeError, ValueError):
+        target_date_profiles = {}
+        issues.append("tuning_target_date_invalid")
+    daily = tuning.get("daily")
+    raw_daily_profiles = daily.get("profiles") if isinstance(daily, dict) else None
+    if not isinstance(raw_daily_profiles, dict):
+        daily_profiles: dict[str, Any] = {}
+        issues.append("tuning_daily_profiles_invalid")
+    else:
+        daily_profiles = raw_daily_profiles
+    if set(daily_profiles) != set(target_date_profiles):
         issues.append("tuning_profile_inventory_mismatch")
     if any(
         tuning.get(key) is not expected
@@ -201,7 +215,8 @@ def _low_price_two_leg_postclose_contract_status(
     return {
         "status": "fail" if issues else "pass",
         "issues": issues,
-        "live_profile_count": len(PROFILES),
+        "live_profile_count": len(target_date_profiles),
+        "live_catalog_profile_count": len(PROFILES),
         "research_profile_count": len(
             expanded.get("research_profile_inventory") or RESEARCH_PROFILES
         ),

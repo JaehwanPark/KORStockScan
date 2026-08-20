@@ -1,0 +1,59 @@
+# Microstructure Reaction Context - 2026-08-20
+
+- runtime_effect: `False`
+- decision_authority: `entry_confidence_modifier_source_only`
+- forbidden_uses: `['standalone_buy', 'broker_guard_bypass', 'threshold_mutation', 'provider_route_change', 'bot_restart', 'cap_release']`
+
+## Summary
+- available: `True`
+- row_count: `24530`
+- ok/missing_or_unusable: `1195` / `23335`
+- real_submitted_count: `28`
+- status_counts: `{'missing': 20837, 'not_evaluated': 1371, 'ok': 1195, 'source_quality_partial': 65, 'stale': 1062}`
+- entry_reaction_quality_counts: `{'-': 20837, 'favorable_reaction': 41, 'mixed_reaction': 340, 'neutral_unusable': 2498, 'risk_context_only': 498, 'weak_reaction': 316}`
+- source_quality_counts: `{'-': 20837, 'ai_confirmed_terminal_no_budget_source_quality_missing': 46, 'ai_score_50_buy_hold_override_no_tick_audit': 113, 'blocked_ai_score_no_tick_audit': 38, 'fresh_short_window': 1195, 'pre_ai_liquidity_gate': 188, 'pre_ai_overbought_gate': 368, 'snapshot_pre_contract_backfill': 601, 'stale_tick_or_quote': 1062, 'tick_aggressor_pressure_unusable': 65, 'watching_ai_cooldown_active': 17}`
+- stage_counts: `{'ai_confirmed': 373, 'ai_confirmed_terminal_no_budget': 268, 'ai_cooldown_blocked': 17, 'ai_holding_review': 633, 'blocked_ai_score': 360, 'blocked_liquidity': 188, 'blocked_overbought': 368, 'krx_direct_canary_live_ai_wait_submit_block': 7, 'latency_block': 448, 'latency_pass': 85, 'order_bundle_submitted': 14, 'pre_submit_entry_ai_authority_guard_block': 56, 'pre_submit_liquidity_guard_block': 1, 'pre_submit_micro_unavailable_block': 6, 'real_weak_ai_micro_entry_block': 8, 'real_weak_pullback_entry_block': 2, 'rising_missed_one_share_entry': 734, 'rising_missed_one_share_entry_blocked': 19, 'rising_missed_scout_quality_guard_blocked': 13, 'rising_missed_tick_absolute_throughput_relief_applied': 6, 'rising_missed_tick_speed_entry_block': 71, 'rising_missed_tp1_candidate_blocked': 1021, 'rising_missed_tp1_candidate_deferred': 1163, 'rising_missed_tp1_counterfactual_submit_safety': 2184, 'risky_micro_episode_executable_bbo_observed': 1477, 'scalp_entry_action_decision_snapshot': 1315, 'scalping_scanner_fast_precheck': 13693}`
+- opportunity_funnel raw/entry/unique_unsubmitted: `41` / `36` / `13`
+- opportunity_first_blocker_counts: `{'ai_confirmed': 4, 'pre_submit_entry_ai_authority_guard_block': 2, 'rising_missed_tick_speed_entry_block': 2, 'scalp_entry_action_decision_snapshot': 5}`
+- opportunity_outcome_join_status_counts: `{'no_matching_watch_cycle': 1, 'reference_time_mismatch': 8, 'time_exact': 4}`
+- opportunity_outcome_source_status: `loaded`
+- opportunity_source_quality_pass/sample_floor: `4` / `rolling_source_quality_pass_unique_opportunities_ge_20`
+- cumulative available/included dates: `56` / `22`
+- cumulative unique/pass/EV: `31` / `4` / `-1.5775`
+- cumulative_runtime_reflection_status: `source_quality_incomplete`
+- v_pw_source_counts: `{'missing': 453, 'not_applicable': 21705, 'ws_0b_latest_strength': 2372}`
+- v_pw_rest_fallback_rate_pct: `0.0`
+- v_pw_runtime_support_unusable_count: `24530`
+- ka10046_rest_fallback_quote_freshness_counts: `{}`
+- ka10046_strength_runtime_effect_true_count: `0`
+- ka10046_strength_missing_received_ts_count: `0`
+- ka10046_0b_strength_diff: avg=`0.0` max=`0.0` divergence20=`0` / `0` (`0.0`%)
+- market_data_signed_tape_state_counts: `{'buy_dominated': 1900, 'insufficient': 2361, 'missing': 10406, 'mixed': 1054, 'sell_dominated': 1625, 'stale': 7184}`
+- market_data_signed_tape_sample_count_total: `24371`
+- market_data_rest_signed_tape_pressure_usable_true_count: `0`
+- rest_signed_trade_ticks_row_count: `0`
+- rest_signed_trade_ticks_source_counts: `{}`
+- latency_true_ofi_direct_canary_signed_tape: sample_total=`6205` net_buy_volume_sum=`207188` sell_dominated=`271` latest_single_sell_dominated=`495`
+- latency_true_ofi_direct_canary_signed_tape_latest_side_counts: `{'BUY': 768, 'SELL': 495, 'missing': 23267}`
+- latency_true_ofi_direct_canary_tape_block_reason_counts: `{'missing': 23267, 'signed_tape_sell_dominated': 271, 'tape_support_ok_missing_pressure': 992}`
+- tick_aggressor_source_counts: `{'kiwoom_0b_signed_trade_volume': 4613, 'missing_aggressor_side': 438, 'price_change_heuristic': 172}`
+- tick_trade_value_source_counts: `{'1313': 4613}`
+- tick_trade_value_1313_missing_rate_pct: `0.0`
+- trade_volume_source_counts: `{'15_abs': 4613}`
+- trade_volume_1030_1031_vs_15_mismatch: `4613` / `4613` (`100.0`%)
+- kiwoom_0b_latest_stock_count: `486`
+- kiwoom_0b_trade_value_source_counts: `{'1313': 5518}`
+- kiwoom_0b_1313_missing_rate_pct: `0.0`
+- kiwoom_0b_trade_volume_source_counts: `{'15_abs': 5518}`
+- kiwoom_0b_1030_1031_vs_15_mismatch: `5518` / `5518` (`100.0`%)
+- ka10003_buy_dominance_observation_source_counts: `{}`
+- ka10003_buy_dominance_observation_trade_value_source_counts: `{}`
+- ka10003_buy_dominance_observation_inside_spread_count: `0`
+- ka10003_buy_dominance_observation_split_vs_15_mismatch: `0` / `0` (`0.0`%)
+- avg_ask_sweep_score: `49.603`
+- avg_post_sweep_hold_score: `50.096`
+- avg_bid_replenishment_score: `54.181`
+- max_vi_proximity_risk: `56`
+- warnings: `[]`
+- code_improvement_order_count: `0`
+- top_code_improvement_orders: `[]`

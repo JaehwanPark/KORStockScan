@@ -8037,6 +8037,109 @@ def test_observation_source_quality_reviews_probe_and_holding_not_available_prov
         }
 
 
+def test_observation_source_quality_reviews_hard_negative_probe_terminal_gap(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    terminal_fields = {
+        "prior_probe_residual_direction_state": "HARD_NEGATIVE",
+        "prior_probe_residual_direction_reason": "-",
+        "prior_probe_residual_continuation_action": "HARD_NEGATIVE",
+        "prior_probe_residual_abort_reason": "probe_fill_slippage_above_cap",
+        "prior_probe_residual_orderbook_state": "unknown",
+        "prior_probe_residual_signed_pressure_source": "unavailable",
+        "prior_probe_residual_route_source_allowed": False,
+        "prior_probe_residual_decision_authority": "causal_attribution_only",
+        "prior_probe_residual_source_quality_gate": (
+            "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+        ),
+        "prior_probe_residual_scale_in_recheck_authority": (
+            "evaluation_only_full_scale_in_guards_required"
+        ),
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    _write_events(
+        tmp_path,
+        "2026-08-20",
+        [
+            _event("residual_blocked", terminal_fields, record_id=1),
+            _event("stat_action_decision_snapshot", terminal_fields, record_id=2),
+            _event(
+                "post_probe_terminal_abort_recovery_observed",
+                terminal_fields,
+                record_id=3,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-08-20")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    for stage in (
+        "residual_blocked",
+        "stat_action_decision_snapshot",
+        "post_probe_terminal_abort_recovery_observed",
+    ):
+        assert reviewed[stage] == {
+            "prior_probe_residual_orderbook_state": (
+                "reviewed_prior_probe_residual_source_gap"
+            )
+        }
+
+
+def test_observation_source_quality_does_not_review_hard_negative_probe_gap_on_unowned_stage(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-08-20",
+        [
+            _event(
+                "unowned_probe_diagnostic",
+                {
+                    "prior_probe_residual_direction_state": "HARD_NEGATIVE",
+                    "prior_probe_residual_direction_reason": "-",
+                    "prior_probe_residual_continuation_action": "HARD_NEGATIVE",
+                    "prior_probe_residual_abort_reason": (
+                        "probe_fill_slippage_above_cap"
+                    ),
+                    "prior_probe_residual_orderbook_state": "unknown",
+                    "prior_probe_residual_signed_pressure_source": "unavailable",
+                    "prior_probe_residual_route_source_allowed": False,
+                    "prior_probe_residual_decision_authority": (
+                        "causal_attribution_only"
+                    ),
+                    "prior_probe_residual_source_quality_gate": (
+                        "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+                    ),
+                    "prior_probe_residual_scale_in_recheck_authority": (
+                        "evaluation_only_full_scale_in_guards_required"
+                    ),
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-08-20")
+
+    assert report["reviewed_unknown_token_findings"] == []
+    assert report["unknown_token_findings"][0]["stage"] == ("unowned_probe_diagnostic")
+    assert report["unknown_token_findings"][0]["fields"][0]["field"] == (
+        "prior_probe_residual_orderbook_state"
+    )
+
+
 def test_observation_source_quality_does_not_review_used_unknown_route_partition(
     monkeypatch,
     tmp_path,
@@ -8122,7 +8225,12 @@ def test_observation_source_quality_reviews_aug18_unknown_provenance_variants(
         ),
     ]
     for record_id, stage in enumerate(
-        ("holding_started", "position_rebased_after_fill", "sell_completed"),
+        (
+            "holding_started",
+            "position_rebased_after_fill",
+            "scale_in_executed",
+            "sell_completed",
+        ),
         start=4,
     ):
         events.append(
@@ -8163,7 +8271,12 @@ def test_observation_source_quality_reviews_aug18_unknown_provenance_variants(
     assert reviewed["real_weak_ai_micro_entry_block"] == {
         "entry_order_flow_status": "reviewed_entry_order_flow_not_available"
     }
-    for stage in ("holding_started", "position_rebased_after_fill", "sell_completed"):
+    for stage in (
+        "holding_started",
+        "position_rebased_after_fill",
+        "scale_in_executed",
+        "sell_completed",
+    ):
         assert reviewed[stage] == {
             "broker_actual_execution_venue": (
                 "reviewed_broker_actual_venue_not_available"

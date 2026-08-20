@@ -1,7 +1,7 @@
 # 데이터 품질 보고서
 
-생성일: 2026-08-19 21:09:40
-분석 기간: 2026-06-05 ~ 2026-08-19
+생성일: 2026-08-20 21:08:52
+분석 기간: 2026-06-05 ~ 2026-08-20
 
 ---
 
@@ -9,18 +9,18 @@
 
 | 항목 | 값 |
 |---|---|
-| 총 거래수 | 282 |
-| COMPLETED | 247 |
-| valid_profit_rate | 247 |
+| 총 거래수 | 294 |
+| COMPLETED | 259 |
+| valid_profit_rate | 259 |
 | 제외 건수 | 35 |
 
 **서버별:**
 
-- `local`: 282건
+- `local`: 294건
 
 **코호트별:**
 
-- `full_fill`: 247건
+- `full_fill`: 259건
 - `split-entry`: 35건
 
 
@@ -28,10 +28,10 @@
 
 ## 2. funnel_fact
 
-- 날짜 수: 37
+- 날짜 수: 38
 - 서버: ['local']
-- 기간 합계 latency_block_events: 6519
-- 기간 합계 submitted_events: 383
+- 기간 합계 latency_block_events: 6914
+- 기간 합계 submitted_events: 397
 
 ---
 
@@ -39,12 +39,12 @@
 
 | 플래그 | 건수 |
 |---|---|
-| 총 record 수 | 3522 |
+| 총 record 수 | 3544 |
 | multi_rebase (split-entry) | 64 |
 | partial_then_expand | 59 |
 | rebase_integrity 이상 | 16 |
 | same_ts_multi_rebase | 24 |
-| same_symbol_repeat_soft_stop | 1291 |
+| same_symbol_repeat_soft_stop | 1294 |
 
 **정합성 플래그 분포:**
 

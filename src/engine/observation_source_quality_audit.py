@@ -2879,13 +2879,33 @@ def _reviewed_unknown_reason_for_stage_field(
             and reason in {"", "-"}
             and _field_text("prior_probe_residual_abort_reason") not in {"", "-"}
         )
+        hard_negative_guard_terminal = (
+            stage
+            in {
+                "residual_blocked",
+                "post_probe_terminal_abort_recovery_observed",
+                "stat_action_decision_snapshot",
+            }
+            and continuation_action == "HARD_NEGATIVE"
+            and reason in {"", "-"}
+            and _field_text("prior_probe_residual_direction_state") == "HARD_NEGATIVE"
+            and _field_text("prior_probe_residual_abort_reason") not in {"", "-"}
+            and _field_text("prior_probe_residual_signed_pressure_source")
+            in {"", "-", "unavailable"}
+            and _is_falseish("prior_probe_residual_route_source_allowed")
+        )
         receipt_attribution = (
             continuation_action == ""
             and stage == "scale_in_executed"
             and _field_text("decision_authority") == "broker_receipt_observation_only"
             and _field_text("prior_probe_residual_abort_reason") not in {"", "-"}
         )
-        if not (deferred_reason or explicit_not_evaluated or receipt_attribution):
+        if not (
+            deferred_reason
+            or explicit_not_evaluated
+            or hard_negative_guard_terminal
+            or receipt_attribution
+        ):
             return False
         # This is completed probe-residual attribution. A later independent
         # scale-in submit/fill does not turn the earlier unavailable direction
@@ -3564,6 +3584,7 @@ def _reviewed_unknown_reason_for_stage_field(
         if stage not in {
             "holding_started",
             "position_rebased_after_fill",
+            "scale_in_executed",
             "sell_completed",
         }:
             return False
