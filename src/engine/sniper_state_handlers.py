@@ -24312,6 +24312,7 @@ def _observe_post_probe_hard_abort_recovery(
     current_ai_score: float,
     held_sec: int,
     now_ts: float,
+    runtime_config: dict[str, Any] | None = None,
 ) -> dict | None:
     """Observe a later recovery after a terminal hard or soft probe abort.
 
@@ -24324,6 +24325,10 @@ def _observe_post_probe_hard_abort_recovery(
 
     if not _is_scalp_strategy(strategy):
         return None
+    runtime_config = runtime_config or _post_probe_winner_recovery_runtime_config(
+        stock,
+        now_ts=now_ts,
+    )
     terminal_outcome = str(
         stock.get("entry_split_probe_terminal_outcome") or ""
     ).strip()
@@ -24543,6 +24548,26 @@ def _observe_post_probe_hard_abort_recovery(
         0,
         _safe_int(stock.get("_post_probe_hard_abort_recovery_confirmation_count"), 0),
     )
+    runtime_active = bool(runtime_config.get("active"))
+    runtime_previously_active = bool(
+        stock.get("_post_probe_hard_abort_recovery_runtime_active")
+    )
+    runtime_activation_confirmation_reset = bool(
+        runtime_active and not runtime_previously_active
+    )
+    if runtime_activation_confirmation_reset:
+        # Source-only confirmations gathered while the order canary was OFF
+        # are valid monitoring evidence, but never real-order authority.  The
+        # first active observation starts a fresh two-snapshot runtime sequence.
+        previous_state = ""
+        previous_accepted_signature = ""
+        previous_reason = ""
+        previous_accepted_at = 0.0
+        previous_accepted_feature_at = 0.0
+        confirmation_count = 0
+        stock.pop("_post_probe_hard_abort_recovery_accepted_signature", None)
+        stock.pop("_post_probe_hard_abort_recovery_accepted_at", None)
+        stock.pop("_post_probe_hard_abort_recovery_accepted_feature_at", None)
     accepted = False
     if eligible:
         if confirmation_count <= 0 or not previous_accepted_signature:
@@ -24571,11 +24596,17 @@ def _observe_post_probe_hard_abort_recovery(
         if reset_confirmation:
             confirmation_count = 0
 
-    should_emit = bool(accepted or state != previous_state or reason != previous_reason)
+    should_emit = bool(
+        accepted
+        or state != previous_state
+        or reason != previous_reason
+        or runtime_active != runtime_previously_active
+    )
     stock["_post_probe_hard_abort_recovery_state"] = state
     stock["_post_probe_hard_abort_recovery_signature"] = evidence_signature
     stock["_post_probe_hard_abort_recovery_reason"] = reason
     stock["_post_probe_hard_abort_recovery_confirmation_count"] = confirmation_count
+    stock["_post_probe_hard_abort_recovery_runtime_active"] = runtime_active
     stock["_post_probe_hard_abort_recovery_ai_thesis_state"] = ai_thesis["state"]
     stock["_post_probe_hard_abort_recovery_ai_parent_action"] = ai_thesis[
         "parent_action"
@@ -24641,6 +24672,9 @@ def _observe_post_probe_hard_abort_recovery(
         recovery_confirmation_min_spacing_ms=250,
         recovery_confirmation_ready=confirmation_count >= 2,
         recovery_confirmation_preserved=bool(not eligible and confirmation_count > 0),
+        recovery_runtime_activation_confirmation_reset=(
+            runtime_activation_confirmation_reset
+        ),
         recovery_evidence_signature=evidence_signature,
         recovery_positive_groups=",".join(positive_groups) or "-",
         recovery_negative_groups=",".join(negative_groups) or "-",
@@ -24709,6 +24743,34 @@ def _observe_post_probe_hard_abort_recovery(
         recovery_feature_version_distinct=(
             previous_accepted_feature_at <= 0
             or feature_extracted_at > previous_accepted_feature_at
+        ),
+        post_probe_winner_recovery_runtime_configured=bool(
+            runtime_config.get("configured")
+        ),
+        post_probe_winner_recovery_runtime_active=bool(runtime_config.get("active")),
+        post_probe_winner_recovery_runtime_reason=(
+            runtime_config.get("reason") or "unknown"
+        ),
+        post_probe_winner_recovery_runtime_active_date=(
+            runtime_config.get("active_date") or "-"
+        ),
+        post_probe_winner_recovery_runtime_current_date=(
+            runtime_config.get("current_date") or "-"
+        ),
+        post_probe_winner_recovery_runtime_effective_venue=(
+            runtime_config.get("effective_venue") or "UNKNOWN"
+        ),
+        post_probe_winner_recovery_runtime_cohort_enabled=bool(
+            runtime_config.get("cohort_enabled")
+        ),
+        post_probe_winner_recovery_runtime_cohort_key=(
+            runtime_config.get("cohort_key") or "-"
+        ),
+        post_probe_winner_recovery_runtime_configuration_source=(
+            runtime_config.get("configuration_source") or "unknown"
+        ),
+        post_probe_winner_recovery_runtime_rollback_key=(
+            runtime_config.get("independent_rollback_key") or "-"
         ),
         active_exit_conflict_fields=",".join(conflicts) or "-",
         metric_role="bounded_tunable_scale_in_counterfactual",
@@ -85599,12 +85661,11 @@ def _evaluate_scale_in_signal(
                         current_ai_score,
                     )
 
-        if bool(
-            winner_recovery_config.get("active")
-            and stock.get("entry_split_probe_soft_abort")
-            and stock.get("entry_split_probe_scale_in_recheck_allowed")
-            and not stock.get("entry_split_probe_scale_in_forbidden")
-        ):
+        terminal_recovery_observation_scope = bool(
+            str(stock.get("entry_split_probe_terminal_outcome") or "")
+            == "residual_not_submitted"
+        )
+        if terminal_recovery_observation_scope:
             recovery_observed_at = max(float(now_ts), time.time())
             recovery_curr_price = _safe_int(
                 ws_data.get("curr") if isinstance(ws_data, dict) else None,
@@ -85637,7 +85698,20 @@ def _evaluate_scale_in_signal(
                 current_ai_score=current_ai_score,
                 held_sec=held_sec,
                 now_ts=recovery_observed_at,
+                runtime_config=winner_recovery_config,
             )
+
+        # Source-only recovery observation is intentionally independent from
+        # the dated real-order canary.  Hard terminal aborts and an inactive
+        # canary still need evidence for the next bounded decision, but only an
+        # active soft-abort cohort may enter the order-authority evaluator.
+        if bool(
+            terminal_recovery_observation_scope
+            and winner_recovery_config.get("active")
+            and stock.get("entry_split_probe_soft_abort")
+            and stock.get("entry_split_probe_scale_in_recheck_allowed")
+            and not stock.get("entry_split_probe_scale_in_forbidden")
+        ):
             winner_recovery_pyramid = evaluate_scalping_pyramid(
                 stock,
                 recovery_profit_rate,

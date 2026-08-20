@@ -6418,6 +6418,7 @@ def _handle_add_buy_execution(
             add_receipt.get("unit_fill_consistent", True)
         ),
         receipt_unit_qty_matches_delta=add_receipt.get("unit_qty_matches_delta"),
+        **_probe_venue_provenance_fields(target_stock),
         **_broker_execution_provenance_fields(target_stock),
         **split_leg_fields,
         scale_in_receipt_reconciled_before_ordno_bind=bool(

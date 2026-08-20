@@ -22,6 +22,20 @@ OUTPUT_REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
 CLEAN_BASELINE_DATE = "2026-06-05"
 CUMULATIVE_LEARNING_SAMPLE_FLOOR = 1
 POST_PROBE_RUNTIME_PROMOTION_SAMPLE_FLOOR = 20
+WINNER_RECOVERY_COUNTERFACTUAL_SAMPLE_FLOOR = 10
+WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR = 20
+WINNER_RECOVERY_EXACT_BLOCKER = (
+    "rising_missed_scout_pyramid_bridge_blocked:profit_not_enough"
+)
+WINNER_RECOVERY_RUNTIME_ENV_KEYS = {
+    "enabled": "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED",
+    "active_date": "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE",
+    "KRX": "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED",
+    "NXT": "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED",
+    "PREMARKET_KRX_LIKE": (
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED"
+    ),
+}
 CLOSED_LABELS = {
     "pyramid_would_have_helped",
     "pyramid_correctly_blocked",
@@ -355,6 +369,131 @@ def _normal_winner_expansion_observation(
             )
         return result
 
+    exact_blocker_rows = [
+        row
+        for row in rows
+        if str(row.get("normal_winner_expansion_blocker_reason") or "")
+        == WINNER_RECOVERY_EXACT_BLOCKER
+        and _boolish(row.get("venue_source_quality_valid"))
+        and str(row.get("effective_venue") or "")
+        in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+    ]
+    exact_by_venue: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in exact_blocker_rows:
+        exact_by_venue[str(row.get("effective_venue"))].append(row)
+    bounded_canary_by_venue = []
+    for venue, venue_rows in sorted(exact_by_venue.items()):
+        venue_weighted = [
+            (
+                _safe_float(
+                    row.get("normal_winner_expansion_incremental_final_profit_pct"),
+                    0.0,
+                ),
+                int(row.get("normal_winner_expansion_candidate_notional_krw") or 0),
+            )
+            for row in venue_rows
+            if int(row.get("normal_winner_expansion_candidate_notional_krw") or 0)
+            > 0
+        ]
+        venue_ev = (
+            round(
+                sum(outcome * notional for outcome, notional in venue_weighted)
+                / sum(notional for _, notional in venue_weighted),
+                4,
+            )
+            if venue_weighted
+            else 0.0
+        )
+        venue_floor_met = (
+            len(venue_rows) >= WINNER_RECOVERY_COUNTERFACTUAL_SAMPLE_FLOOR
+        )
+        venue_state = (
+            "hold_sample"
+            if not venue_floor_met
+            else (
+                "bounded_one_share_canary_evidence_ready"
+                if venue_ev > 0
+                else "non_positive_ev_hold"
+            )
+        )
+        bounded_canary_by_venue.append(
+            {
+                "effective_venue": venue,
+                "state": venue_state,
+                "sample_count": len(venue_rows),
+                "sample_floor": WINNER_RECOVERY_COUNTERFACTUAL_SAMPLE_FLOOR,
+                "sample_floor_met": venue_floor_met,
+                "realized_incremental_winner_count": sum(
+                    1
+                    for row in venue_rows
+                    if row.get("normal_winner_expansion_label")
+                    == "realized_incremental_winner"
+                ),
+                "notional_weighted_ev_pct": venue_ev,
+                "initial_real_qty_cap": 1,
+                "runtime_env_key": WINNER_RECOVERY_RUNTIME_ENV_KEYS[venue],
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            }
+        )
+    positive_ready = [
+        item
+        for item in bounded_canary_by_venue
+        if item["state"] == "bounded_one_share_canary_evidence_ready"
+    ]
+    non_positive_ready = [
+        item
+        for item in bounded_canary_by_venue
+        if item["state"] == "non_positive_ev_hold"
+    ]
+    bounded_canary_state = (
+        "bounded_one_share_canary_evidence_ready"
+        if positive_ready and not non_positive_ready
+        else (
+            "venue_conflict_requires_independent_decision"
+            if positive_ready and non_positive_ready
+            else "non_positive_ev_hold"
+            if non_positive_ready
+            else "hold_sample"
+        )
+    )
+    bounded_canary = {
+        "state": bounded_canary_state,
+        "exact_blocker_reason": WINNER_RECOVERY_EXACT_BLOCKER,
+        "sample_count": len(exact_blocker_rows),
+        "sample_floor": WINNER_RECOVERY_COUNTERFACTUAL_SAMPLE_FLOOR,
+        "ready_venue_count": len(positive_ready),
+        "operator_action_required": bool(positive_ready),
+        "standalone_real_order_conversion_allowed": False,
+        "remaining_real_authority_requirements": [
+            "explicit_operator_approval_or_existing_authorized_canary_provenance",
+            "dated_venue_cohort_runtime_selection",
+            "post_apply_real_execution_attribution",
+        ],
+        "by_effective_venue": bounded_canary_by_venue,
+        "runtime_env_contract": WINNER_RECOVERY_RUNTIME_ENV_KEYS,
+        "initial_real_qty_cap": 1,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "metric_role": "bounded_tunable_scale_in_counterfactual",
+        "decision_authority": (
+            "rolling_source_only_exact_blocker_one_share_canary_candidate"
+        ),
+        "window_policy": (
+            "rolling_clean_baseline_closed_exact_blocker_rows_by_effective_venue"
+        ),
+        "sample_floor_policy": (
+            "source_quality_valid_exact_blocker_rows_ge_10_per_venue"
+        ),
+        "primary_decision_metric": "notional_weighted_ev_pct",
+        "source_quality_gate": (
+            "source_only_provenance_exact_blocker_positive_cost_adjusted_ev_and_"
+            "explicit_conflict_free_venue"
+        ),
+        "forbidden_uses": FORBIDDEN_USES
+        + ["full_residual_submit", "cross_venue_promotion"],
+    }
+
     return {
         "state": state,
         "section_present": section_present,
@@ -367,6 +506,10 @@ def _normal_winner_expansion_observation(
         "notional_weighted_ev_pct": notional_weighted_ev_pct,
         "by_effective_venue": _dimension_rollup("effective_venue"),
         "by_market_session_bucket": _dimension_rollup("market_session_bucket"),
+        "by_blocker_reason": _dimension_rollup(
+            "normal_winner_expansion_blocker_reason"
+        ),
+        "winner_recovery_bounded_canary_observation": bounded_canary,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "metric_role": "bounded_tunable_scale_in_counterfactual",
@@ -379,6 +522,181 @@ def _normal_winner_expansion_observation(
             "source_quality_valid_positive_pyramid_candidate_with_post_candidate_sell"
         ),
         "forbidden_uses": FORBIDDEN_USES,
+    }
+
+
+def _winner_recovery_real_execution_observation(
+    reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    section_present = False
+    execution_count = 0
+    closed_count = 0
+    provenance_rejected_count = 0
+    source_quality_rejected_count = 0
+    rows: list[dict[str, Any]] = []
+    for report in reports:
+        if not isinstance(report.get("real_scale_in_performance_metric_contract"), dict):
+            continue
+        source_rows = report.get("real_scale_in_performance_rows")
+        if not isinstance(source_rows, list):
+            continue
+        section_present = True
+        for row in source_rows:
+            if not isinstance(row, dict) or row.get("scale_in_outcome_cohort") != (
+                "winner_recovery"
+            ):
+                continue
+            execution_count += 1
+            if not _boolish(row.get("closed")):
+                continue
+            closed_count += 1
+            provenance_valid = bool(
+                _boolish(row.get("actual_order_submitted"))
+                and not _boolish(row.get("broker_order_forbidden"))
+                and row.get("runtime_effect") is False
+                and row.get("allowed_runtime_apply") is False
+                and row.get("decision_authority")
+                == "real_scale_in_execution_outcome_observation_only"
+                and isinstance(row.get("forbidden_uses"), list)
+                and int(row.get("fill_qty") or 0) == 1
+            )
+            if not provenance_valid:
+                provenance_rejected_count += 1
+                continue
+            if not _boolish(row.get("source_quality_valid")):
+                source_quality_rejected_count += 1
+                continue
+            if (
+                _safe_float(row.get("fill_notional_krw"), 0.0) <= 0
+                or row.get("scale_in_leg_net_pnl_proxy_krw") is None
+            ):
+                source_quality_rejected_count += 1
+                continue
+            rows.append(row)
+
+    valid_notional = sum(
+        _safe_float(row.get("fill_notional_krw"), 0.0) for row in rows
+    )
+    valid_net_pnl = sum(
+        _safe_float(row.get("scale_in_leg_net_pnl_proxy_krw"), 0.0) for row in rows
+    )
+    source_quality_adjusted_ev_pct = (
+        round(valid_net_pnl / valid_notional * 100.0, 4)
+        if valid_notional > 0
+        else None
+    )
+    sample_floor_met = len(rows) >= WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR
+    positive_ev = bool(
+        source_quality_adjusted_ev_pct is not None
+        and source_quality_adjusted_ev_pct > 0
+        and valid_net_pnl > 0
+    )
+    state = (
+        "not_available"
+        if not section_present
+        else "observe_one_share_canary"
+        if not sample_floor_met
+        else "first_planned_residual_leg_candidate_ready"
+        if positive_ev
+        else "non_positive_ev_hold"
+    )
+
+    def _dimension_rollup(dimension: str) -> list[dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            grouped[str(row.get(dimension) or "UNKNOWN")].append(row)
+        result = []
+        for value, bucket_rows in sorted(grouped.items()):
+            bucket_notional = sum(
+                _safe_float(row.get("fill_notional_krw"), 0.0)
+                for row in bucket_rows
+            )
+            bucket_net_pnl = sum(
+                _safe_float(row.get("scale_in_leg_net_pnl_proxy_krw"), 0.0)
+                for row in bucket_rows
+            )
+            result.append(
+                {
+                    dimension: value,
+                    "source_quality_valid_closed_count": len(bucket_rows),
+                    "scale_in_leg_net_pnl_proxy_krw_sum": round(bucket_net_pnl, 4),
+                    "source_quality_adjusted_ev_pct": (
+                        round(bucket_net_pnl / bucket_notional * 100.0, 4)
+                        if bucket_notional > 0
+                        else None
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            )
+        return result
+
+    return {
+        "state": state,
+        "section_present": section_present,
+        "execution_count": execution_count,
+        "closed_count": closed_count,
+        "source_quality_valid_closed_count": len(rows),
+        "source_quality_rejected_count": source_quality_rejected_count,
+        "provenance_rejected_count": provenance_rejected_count,
+        "sample_floor": WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR,
+        "sample_floor_met": sample_floor_met,
+        "scale_in_leg_net_pnl_proxy_krw_sum": (
+            round(valid_net_pnl, 4) if rows else None
+        ),
+        "source_quality_adjusted_ev_pct": source_quality_adjusted_ev_pct,
+        "diagnostic_win_rate": (
+            round(
+                sum(
+                    1
+                    for row in rows
+                    if _safe_float(
+                        row.get("scale_in_leg_net_pnl_proxy_krw"), 0.0
+                    )
+                    > 0
+                )
+                / len(rows),
+                4,
+            )
+            if rows
+            else None
+        ),
+        "recommended_next_qty_stage": (
+            "first_planned_residual_leg_from_current_position_sizing_owner"
+            if state == "first_planned_residual_leg_candidate_ready"
+            else "retain_one_share_winner_recovery_canary"
+        ),
+        "operator_action_required": state
+        == "first_planned_residual_leg_candidate_ready",
+        "standalone_quantity_increase_allowed": False,
+        "remaining_real_authority_requirements": [
+            "explicit_operator_approval",
+            "current_position_sizing_owner_leg_resolution",
+            "dated_venue_cohort_runtime_selection",
+            "post_apply_attribution_and_rollback",
+        ],
+        "by_entry_effective_venue": _dimension_rollup("entry_effective_venue"),
+        "by_market_session_bucket": _dimension_rollup("market_session_bucket"),
+        "runtime_env_contract": WINNER_RECOVERY_RUNTIME_ENV_KEYS,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "metric_role": "real_scale_in_execution_outcome_attribution",
+        "decision_authority": (
+            "rolling_source_only_winner_recovery_real_execution_promotion_candidate"
+        ),
+        "window_policy": (
+            "rolling_clean_baseline_winner_recovery_scale_in_to_terminal_sell"
+        ),
+        "sample_floor_policy": (
+            "source_quality_valid_closed_one_share_winner_recovery_rows_ge_20"
+        ),
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": (
+            "complete_add_and_sell_receipt_economics_quantity_broker_provenance_"
+            "with_explicit_entry_venue_session_and_one_share_cap"
+        ),
+        "forbidden_uses": FORBIDDEN_USES
+        + ["automatic_quantity_increase", "full_residual_submit"],
     }
 
 
@@ -934,6 +1252,12 @@ def _calibration_candidate(
         reports, row_exclusion_counts
     )
     normal_winner_expansion = _normal_winner_expansion_observation(reports)
+    winner_recovery_bounded_canary = normal_winner_expansion[
+        "winner_recovery_bounded_canary_observation"
+    ]
+    winner_recovery_real_execution = (
+        _winner_recovery_real_execution_observation(reports)
+    )
     post_probe_real_outcome = _post_probe_real_outcome_observation(reports)
     post_probe_reprice = _post_probe_reprice_observation(reports)
     rows = (
@@ -957,6 +1281,20 @@ def _calibration_candidate(
         if status not in ROW_ISOLATABLE_SOURCE_QUALITY_STATUSES
     )
     source_quality_pass = bool(reports) and not unisolatable_source_quality_statuses
+    if not source_quality_pass:
+        for observation in (
+            winner_recovery_bounded_canary,
+            winner_recovery_real_execution,
+        ):
+            if observation.get("operator_action_required"):
+                observation["evidence_state_before_source_quality_gate"] = (
+                    observation.get("state")
+                )
+                observation["state"] = "source_quality_blocked"
+                observation["operator_action_required"] = False
+                observation["source_quality_blocked_reason"] = (
+                    "input_report_source_quality_not_row_isolatable"
+                )
     provenance_present = _provenance_present(rows)
     source_contract_pass = bool(source_quality_pass and provenance_present)
     sample_floor_met = int(rates["sample_count"]) >= 20
@@ -1087,6 +1425,12 @@ def _calibration_candidate(
             "recommended_action": state,
             "recommended_action_reason": reason,
             "normal_winner_expansion_observation": normal_winner_expansion,
+            "winner_recovery_bounded_canary_observation": (
+                winner_recovery_bounded_canary
+            ),
+            "winner_recovery_real_execution_observation": (
+                winner_recovery_real_execution
+            ),
             "post_probe_real_outcome_observation": post_probe_real_outcome,
             "post_probe_reprice_observation": post_probe_reprice,
         },
@@ -1161,6 +1505,16 @@ def build_report(
         "normal_winner_expansion_observation": (
             candidate["source_metrics"]["normal_winner_expansion_observation"]
         ),
+        "winner_recovery_bounded_canary_observation": (
+            candidate["source_metrics"][
+                "winner_recovery_bounded_canary_observation"
+            ]
+        ),
+        "winner_recovery_real_execution_observation": (
+            candidate["source_metrics"][
+                "winner_recovery_real_execution_observation"
+            ]
+        ),
         "post_probe_real_outcome_observation": (
             candidate["source_metrics"]["post_probe_real_outcome_observation"]
         ),
@@ -1229,6 +1583,16 @@ def write_outputs(
         if isinstance(report.get("post_probe_real_outcome_observation"), dict)
         else {}
     )
+    winner_recovery_bounded_canary = (
+        report.get("winner_recovery_bounded_canary_observation")
+        if isinstance(report.get("winner_recovery_bounded_canary_observation"), dict)
+        else {}
+    )
+    winner_recovery_real_execution = (
+        report.get("winner_recovery_real_execution_observation")
+        if isinstance(report.get("winner_recovery_real_execution_observation"), dict)
+        else {}
+    )
     source_quality = (
         report.get("source_quality")
         if isinstance(report.get("source_quality"), dict)
@@ -1282,6 +1646,18 @@ def write_outputs(
         f"{post_probe_observation.get('confirmation_ready_loss_or_flat_count')}",
         "- post_probe_confirmation_ready_notional_weighted_ev_pct: "
         f"{_safe_float(post_probe_observation.get('notional_weighted_ev_pct')):.4f}",
+        "- winner_recovery_bounded_canary_state: "
+        f"{winner_recovery_bounded_canary.get('state')}",
+        "- winner_recovery_bounded_canary_exact_blocker_sample_count: "
+        f"{winner_recovery_bounded_canary.get('sample_count')}",
+        "- winner_recovery_real_execution_state: "
+        f"{winner_recovery_real_execution.get('state')}",
+        "- winner_recovery_real_source_quality_valid_closed_count: "
+        f"{winner_recovery_real_execution.get('source_quality_valid_closed_count')}",
+        "- winner_recovery_real_source_quality_adjusted_ev_pct: "
+        f"{_safe_float(winner_recovery_real_execution.get('source_quality_adjusted_ev_pct')):.4f}",
+        "- winner_recovery_recommended_next_qty_stage: "
+        f"{winner_recovery_real_execution.get('recommended_next_qty_stage')}",
     ]
     output_md.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 

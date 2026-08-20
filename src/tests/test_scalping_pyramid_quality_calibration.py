@@ -43,6 +43,7 @@ def _feedback(
     source_quality="pass",
     one_share_rows=None,
     normal_winner_expansion_rows=None,
+    real_scale_in_performance_rows=None,
     post_probe_real_outcome_contract=False,
 ):
     payload = {
@@ -55,6 +56,11 @@ def _feedback(
         payload["one_share_pyramid_opportunity_rows"] = one_share_rows
     if normal_winner_expansion_rows is not None:
         payload["normal_winner_expansion_rows"] = normal_winner_expansion_rows
+    if real_scale_in_performance_rows is not None:
+        payload["real_scale_in_performance_rows"] = real_scale_in_performance_rows
+        payload["real_scale_in_performance_metric_contract"] = {
+            "metric_role": "real_scale_in_execution_outcome_attribution"
+        }
     if post_probe_real_outcome_contract:
         payload["post_probe_real_outcome_metric_contract"] = {
             "metric_role": "multi_leg_post_probe_real_outcome_attribution"
@@ -463,6 +469,213 @@ def test_pyramid_quality_calibration_rejects_normal_winner_authority_leak(
     assert observation["state"] == "hold_sample"
     assert observation["sample_count"] == 0
     assert observation["provenance_rejected_count"] == 1
+    assert observation["allowed_runtime_apply"] is False
+
+
+def test_winner_recovery_counterfactual_isolates_exact_blocker_by_venue(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    normal_rows = []
+    for index in range(10):
+        normal_rows.append(
+            {
+                "record_id": str(index),
+                "normal_winner_expansion_label": "realized_incremental_winner",
+                "normal_winner_expansion_source_quality_valid": True,
+                "normal_winner_expansion_incremental_final_profit_pct": 0.5,
+                "normal_winner_expansion_candidate_notional_krw": 100_000,
+                "normal_winner_expansion_blocker_reason": (
+                    mod.WINNER_RECOVERY_EXACT_BLOCKER
+                ),
+                "effective_venue": "KRX",
+                "venue_source_quality_valid": True,
+                "market_session_bucket": "krx_regular",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "decision_authority": (
+                    "source_only_one_share_pyramid_opportunity_backtest_"
+                    "no_runtime_mutation"
+                ),
+                "forbidden_uses": ["intraday_runtime_apply"],
+            }
+        )
+    normal_rows.append(
+        {
+            **normal_rows[0],
+            "record_id": "mixed-negative",
+            "normal_winner_expansion_blocker_reason": (
+                "rising_missed_scout_pyramid_bridge_blocked:"
+                "buy_pressure_severe_below_min"
+            ),
+            "normal_winner_expansion_label": (
+                "correctly_not_expanded_or_reversal"
+            ),
+            "normal_winner_expansion_incremental_final_profit_pct": -5.0,
+        }
+    )
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-08-20.json",
+        [],
+        normal_winner_expansion_rows=normal_rows,
+    )
+
+    report = mod.build_report("2026-08-20", input_paths=[path], generated_at="fixed")
+    observation = report["winner_recovery_bounded_canary_observation"]
+
+    assert observation["state"] == "bounded_one_share_canary_evidence_ready"
+    assert observation["sample_count"] == 10
+    assert observation["ready_venue_count"] == 1
+    assert observation["operator_action_required"] is True
+    assert observation["allowed_runtime_apply"] is False
+    assert observation["initial_real_qty_cap"] == 1
+    assert observation["by_effective_venue"] == [
+        {
+            "effective_venue": "KRX",
+            "state": "bounded_one_share_canary_evidence_ready",
+            "sample_count": 10,
+            "sample_floor": 10,
+            "sample_floor_met": True,
+            "realized_incremental_winner_count": 10,
+            "notional_weighted_ev_pct": 0.5,
+            "initial_real_qty_cap": 1,
+            "runtime_env_key": (
+                "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED"
+            ),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    ]
+    assert len(report["normal_winner_expansion_observation"]["by_blocker_reason"]) == 2
+
+
+def test_winner_recovery_candidate_is_blocked_by_unisolatable_report_quality(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    row = {
+        "normal_winner_expansion_label": "realized_incremental_winner",
+        "normal_winner_expansion_source_quality_valid": True,
+        "normal_winner_expansion_incremental_final_profit_pct": 0.5,
+        "normal_winner_expansion_candidate_notional_krw": 100_000,
+        "normal_winner_expansion_blocker_reason": mod.WINNER_RECOVERY_EXACT_BLOCKER,
+        "effective_venue": "KRX",
+        "venue_source_quality_valid": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "source_only_valid",
+        "forbidden_uses": ["runtime_apply"],
+    }
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-08-20.json",
+        [],
+        source_quality="unisolatable_contract_failure",
+        normal_winner_expansion_rows=[{**row, "record_id": str(i)} for i in range(10)],
+    )
+
+    report = mod.build_report("2026-08-20", input_paths=[path], generated_at="fixed")
+    observation = report["winner_recovery_bounded_canary_observation"]
+
+    assert observation["state"] == "source_quality_blocked"
+    assert observation["evidence_state_before_source_quality_gate"] == (
+        "bounded_one_share_canary_evidence_ready"
+    )
+    assert observation["operator_action_required"] is False
+    assert observation["allowed_runtime_apply"] is False
+
+
+def test_winner_recovery_real_execution_requires_positive_fee_aware_ev_and_floor(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    rows = [
+        {
+            "record_id": str(index),
+            "scale_in_outcome_cohort": "winner_recovery",
+            "closed": True,
+            "fill_qty": 1,
+            "fill_notional_krw": 100_000,
+            "scale_in_leg_net_pnl_proxy_krw": 400,
+            "source_quality_valid": True,
+            "entry_effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+            "actual_order_submitted": True,
+            "broker_order_forbidden": False,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": (
+                "real_scale_in_execution_outcome_observation_only"
+            ),
+            "forbidden_uses": ["runtime_threshold_apply"],
+        }
+        for index in range(20)
+    ]
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-08-20.json",
+        [],
+        real_scale_in_performance_rows=rows,
+    )
+
+    report = mod.build_report("2026-08-20", input_paths=[path], generated_at="fixed")
+    observation = report["winner_recovery_real_execution_observation"]
+
+    assert observation["state"] == "first_planned_residual_leg_candidate_ready"
+    assert observation["source_quality_valid_closed_count"] == 20
+    assert observation["source_quality_adjusted_ev_pct"] == 0.4
+    assert observation["scale_in_leg_net_pnl_proxy_krw_sum"] == 8000
+    assert observation["diagnostic_win_rate"] == 1.0
+    assert observation["recommended_next_qty_stage"] == (
+        "first_planned_residual_leg_from_current_position_sizing_owner"
+    )
+    assert observation["operator_action_required"] is True
+    assert observation["allowed_runtime_apply"] is False
+
+
+def test_winner_recovery_real_execution_holds_below_floor_and_rejects_bad_source(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    valid = {
+        "scale_in_outcome_cohort": "winner_recovery",
+        "closed": True,
+        "fill_qty": 1,
+        "fill_notional_krw": 100_000,
+        "scale_in_leg_net_pnl_proxy_krw": 300,
+        "source_quality_valid": True,
+        "entry_effective_venue": "NXT",
+        "market_session_bucket": "nxt_regular",
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "real_scale_in_execution_outcome_observation_only",
+        "forbidden_uses": ["runtime_threshold_apply"],
+    }
+    rows = [{**valid, "record_id": str(index)} for index in range(19)]
+    rows.append({**valid, "record_id": "bad-source", "source_quality_valid": False})
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-08-20.json",
+        [],
+        real_scale_in_performance_rows=rows,
+    )
+
+    report = mod.build_report("2026-08-20", input_paths=[path], generated_at="fixed")
+    observation = report["winner_recovery_real_execution_observation"]
+
+    assert observation["state"] == "observe_one_share_canary"
+    assert observation["execution_count"] == 20
+    assert observation["closed_count"] == 20
+    assert observation["source_quality_valid_closed_count"] == 19
+    assert observation["source_quality_rejected_count"] == 1
+    assert observation["operator_action_required"] is False
     assert observation["allowed_runtime_apply"] is False
 
 

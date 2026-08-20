@@ -2461,6 +2461,10 @@ def test_real_scale_in_performance_calculates_fee_aware_ev_from_complete_receipt
                 "receipt_quantity_contract_complete": True,
                 "receipt_unit_fill_consistent": True,
                 "broker_execution_provenance_complete": True,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+                "broker_actual_execution_venue": "KRX",
+                "broker_actual_execution_venue_source": "official_fid_919",
             },
             emitted_at="2026-08-04T10:02:00+09:00",
         ),
@@ -2481,6 +2485,8 @@ def test_real_scale_in_performance_calculates_fee_aware_ev_from_complete_receipt
                 "sell_execution_receipt_quantity_contract_complete": True,
                 "sell_execution_receipt_unit_fill_consistent": True,
                 "broker_execution_provenance_complete": True,
+                "broker_actual_execution_venue": "NXT",
+                "broker_actual_execution_venue_source": "official_fid_919",
             },
             emitted_at="2026-08-04T10:05:00+09:00",
         ),
@@ -2501,6 +2507,10 @@ def test_real_scale_in_performance_calculates_fee_aware_ev_from_complete_receipt
     assert row["source_quality_blockers"] == []
     assert row["scale_in_leg_net_pnl_proxy_krw"] == expected_net_pnl
     assert row["scale_in_leg_net_return_proxy_pct"] == expected_ev
+    assert row["entry_effective_venue"] == "KRX"
+    assert row["market_session_bucket"] == "krx_regular"
+    assert row["scale_in_broker_actual_execution_venue"] == "KRX"
+    assert row["sell_broker_actual_execution_venue"] == "NXT"
     assert row["scale_in_incremental_realized_delta_pct"] == 0.05
     assert summary["source_quality_adjusted_ev_available"] is True
     assert summary["source_quality_valid_closed_count"] == 1

@@ -3070,6 +3070,26 @@ def _real_scale_in_execution_record(
         "fill_price": round(fill_price, 4),
         "fill_qty": fill_qty,
         "fill_notional_krw": round(fill_price * fill_qty, 4),
+        "entry_effective_venue": str(
+            fields.get("effective_venue")
+            or fields.get("rising_missed_effective_venue")
+            or "UNKNOWN"
+        )
+        .strip()
+        .upper(),
+        "market_session_bucket": str(
+            fields.get("market_session_bucket")
+            or fields.get("rising_missed_market_session_bucket")
+            or "UNKNOWN"
+        ).strip(),
+        "scale_in_broker_actual_execution_venue": str(
+            fields.get("broker_actual_execution_venue") or "UNKNOWN"
+        )
+        .strip()
+        .upper(),
+        "scale_in_broker_actual_execution_venue_source": str(
+            fields.get("broker_actual_execution_venue_source") or "unknown"
+        ).strip(),
         "scale_in_receipt_economics_complete": _boolish(
             fields.get("receipt_economics_complete")
         ),
@@ -3165,6 +3185,14 @@ def _update_real_scale_in_outcome(item: dict[str, Any], row: dict[str, Any]) -> 
     item["sell_broker_execution_provenance_complete"] = _boolish(
         fields.get("broker_execution_provenance_complete")
     )
+    item["sell_broker_actual_execution_venue"] = (
+        str(fields.get("broker_actual_execution_venue") or "UNKNOWN")
+        .strip()
+        .upper()
+    )
+    item["sell_broker_actual_execution_venue_source"] = str(
+        fields.get("broker_actual_execution_venue_source") or "unknown"
+    ).strip()
     fill_price = _safe_float(item.get("fill_price"), 0.0) or 0.0
     if sell_price is not None and fill_price > 0:
         item["scale_in_leg_gross_return_proxy_pct"] = round(
@@ -3197,6 +3225,19 @@ def _finalize_real_scale_in_source_quality(item: dict[str, Any]) -> None:
         blockers.append("sell_broker_provenance_incomplete")
     if not item.get("winner_recovery_qty_cap_valid", True):
         blockers.append("winner_recovery_qty_cap_invalid")
+    if item.get("scale_in_outcome_cohort") == "winner_recovery":
+        if str(item.get("entry_effective_venue") or "").upper() not in {
+            "KRX",
+            "NXT",
+            "PREMARKET_KRX_LIKE",
+        }:
+            blockers.append("winner_recovery_entry_venue_unproven")
+        if str(item.get("market_session_bucket") or "").upper() in {
+            "",
+            "-",
+            "UNKNOWN",
+        }:
+            blockers.append("winner_recovery_session_unproven")
 
     fill_price = _safe_float(item.get("fill_price"), 0.0) or 0.0
     fill_qty = int(_safe_float(item.get("fill_qty"), 0) or 0)
@@ -3924,6 +3965,8 @@ def build_report(
             "source_quality_gate": (
                 "record_and_order_joined_real_scale_in_fill_then_terminal_sell; "
                 "complete quantity/economics/broker provenance on both receipts; "
+                "winner recovery additionally requires explicit entry venue and "
+                "session cohort provenance; "
                 "active positions remain unrealized and leg net return is a fee-aware "
                 "pro-rata attribution proxy"
             ),
