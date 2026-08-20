@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -2462,6 +2463,301 @@ def test_empty_materialized_receipt_is_valid_terminal_no_provider_work() -> None
             tampered,
             target_date=target_date,
         )
+
+
+def test_observer_canary_loads_exact_date_early_stop_and_preserves_cause(
+    tmp_path,
+) -> None:
+    latest = tmp_path / "latest.json"
+    latest.write_text(
+        json.dumps(
+            {
+                "schema": "scalp_micro_reversion_canary_monitor_v1",
+                "generated_at": "2026-08-19T09:03:55+09:00",
+                "canary_guard": {
+                    "status": "stop_required",
+                    "stop_required": True,
+                    "stop_reasons": [
+                        "nonzero_stop_metric:observation_queue_full_count=82"
+                    ],
+                    "raw_row_exclusion_required": False,
+                    "source_quality_row_exclusions": [],
+                },
+                "collector_snapshot": {
+                    "collector_lifecycle": "closed",
+                    "selection_authority": False,
+                    "trading_runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "observation_queue_full_count": 82,
+                    "observation_dropped_envelope_count": 82,
+                    "depth_queue_full_count": 0,
+                    "depth_dropped_envelope_count": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    diagnostic = cycle._observer_canary_diagnostic(
+        target_date="2026-08-19",
+        latest_path=latest,
+        daily_path=tmp_path / "missing-daily.json",
+    )
+
+    assert diagnostic["status"] == "stop_required"
+    assert diagnostic["stop_required"] is True
+    assert diagnostic["queue_loss_census"] == {
+        "observation_queue_full_count": 82,
+        "observation_dropped_envelope_count": 82,
+        "depth_queue_full_count": 0,
+        "depth_dropped_envelope_count": 0,
+    }
+    assert diagnostic["runtime_effect"] is False
+    assert diagnostic["actual_order_submitted"] is False
+    assert cycle._observer_provider_gate_blocker(diagnostic) == (
+        "micro_observer_canary_stop_required"
+    )
+
+
+def test_observer_provider_gate_blocks_unscoped_loss_but_not_clean_canary():
+    assert (
+        cycle._observer_provider_gate_blocker(
+            {"source_path": None, "status": "missing_exact_date_canary"}
+        )
+        == "micro_observer_canary_missing_exact_date_canary"
+    )
+    assert (
+        cycle._observer_provider_gate_blocker(
+            {"source_path": "/tmp/canary.json", "status": "row_exclusion_required"}
+        )
+        == "micro_observer_canary_row_exclusion_required"
+    )
+    assert (
+        cycle._observer_provider_gate_blocker(
+            {"source_path": "/tmp/canary.json", "status": "pass"}
+        )
+        is None
+    )
+    assert (
+        cycle._observer_provider_gate_blocker(
+            {"source_path": "/tmp/canary.json", "status": "warming_up"}
+        )
+        == "micro_observer_canary_warming_up"
+    )
+
+
+def test_observer_canary_requires_running_or_reconciled_closed_lifecycle(
+    tmp_path,
+) -> None:
+    latest = tmp_path / "latest.json"
+    payload = {
+        "schema": "scalp_micro_reversion_canary_monitor_v1",
+        "generated_at": "2026-08-19T15:31:00+09:00",
+        "canary_guard": {
+            "status": "stopped_clean",
+            "stop_required": False,
+            "stop_reasons": [],
+            "raw_row_exclusion_required": False,
+            "source_quality_row_exclusions": [],
+        },
+        "collector_snapshot": {
+            "collector_lifecycle": "closed",
+            "reference_reconciliation_completed": False,
+            "selection_authority": False,
+            "trading_runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    }
+    latest.write_text(json.dumps(payload), encoding="utf-8")
+
+    invalid = cycle._observer_canary_diagnostic(
+        target_date="2026-08-19",
+        latest_path=latest,
+        daily_path=tmp_path / "missing-daily.json",
+    )
+    assert invalid["status"] == "invalid_exact_date_canary_contract"
+    assert cycle._observer_provider_gate_blocker(invalid) == (
+        "micro_observer_canary_invalid_exact_date_canary_contract"
+    )
+
+    payload["collector_snapshot"]["reference_reconciliation_completed"] = True
+    latest.write_text(json.dumps(payload), encoding="utf-8")
+    valid = cycle._observer_canary_diagnostic(
+        target_date="2026-08-19",
+        latest_path=latest,
+        daily_path=tmp_path / "missing-daily.json",
+    )
+    assert valid["status"] == "pass"
+
+
+def test_observer_canary_parses_and_hashes_one_raw_snapshot(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    latest = tmp_path / "latest.json"
+    raw = json.dumps(
+        {
+            "schema": "scalp_micro_reversion_canary_monitor_v1",
+            "generated_at": "2026-08-19T15:31:00+09:00",
+            "canary_guard": {
+                "status": "healthy_observer_canary",
+                "stop_required": False,
+                "stop_reasons": [],
+                "raw_row_exclusion_required": False,
+                "source_quality_row_exclusions": [],
+            },
+            "collector_snapshot": {
+                "collector_lifecycle": "running",
+                "selection_authority": False,
+                "trading_runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+    ).encode()
+    latest.write_bytes(raw)
+    original_read_bytes = Path.read_bytes
+    read_count = 0
+
+    def counted_read_bytes(path: Path) -> bytes:
+        nonlocal read_count
+        if path == latest:
+            read_count += 1
+            if read_count > 1:
+                raise AssertionError("canary source was read more than once")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
+    diagnostic = cycle._observer_canary_diagnostic(
+        target_date="2026-08-19",
+        latest_path=latest,
+        daily_path=tmp_path / "missing-daily.json",
+    )
+
+    assert diagnostic["status"] == "pass"
+    assert diagnostic["source_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert read_count == 1
+
+
+def test_source_gap_diagnostics_names_bridge_and_lifecycle_root_causes() -> None:
+    target_date = "2026-08-19"
+    bridge_report = {
+        "target_date": target_date,
+        "summary": {
+            "micro_context_eligible_primary_episode_count": 0,
+            "exclusion_counts": {
+                "past_market_row_missing": 870,
+                "integrated_route_proof_missing": 17,
+            },
+        },
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    bridge_report["report_content_sha256"] = cycle._content_hash(
+        bridge_report, "report_content_sha256"
+    )
+    lifecycle_report = {
+        "target_date": target_date,
+        "promotion_evidence_eligible_count": 0,
+        "broker_execution_provenance_gap_count": 7,
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    lifecycle_report["artifact_content_sha256"] = cycle._content_hash(
+        lifecycle_report, "artifact_content_sha256"
+    )
+    diagnostics = cycle._source_only_gap_diagnostics(
+        target_date=target_date,
+        observer_canary={
+            "status": "stop_required",
+            "stop_required": True,
+        },
+        bridge_report=bridge_report,
+        lifecycle_report=lifecycle_report,
+    )
+
+    assert diagnostics["blocker_codes"] == [
+        "micro_observer_canary_stop_required",
+        "micro_integrated_route_proof_missing:17",
+        "main_lifecycle_broker_execution_provenance_gap:7",
+    ]
+    assert [row["owner"] for row in diagnostics["workorders"]] == [
+        "MicroReversionForwardCollectorContinuity",
+        "MicroReversionIntegratedRouteProof",
+        "RuntimeExecutionReceiptCustodyRepair",
+    ]
+    assert all(row["runtime_effect"] is False for row in diagnostics["workorders"])
+    assert all(
+        row["actual_order_submitted"] is False for row in diagnostics["workorders"]
+    )
+
+
+def test_source_gap_diagnostics_hold_replay_until_queue_loss_has_scoped_receipt():
+    bridge_report = {
+        "target_date": "2026-08-20",
+        "summary": {
+            "micro_context_eligible_primary_episode_count": 3,
+            "exclusion_counts": {
+                "past_market_row_missing": 2,
+                "integrated_route_proof_missing": 0,
+            },
+        },
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    bridge_report["report_content_sha256"] = cycle._content_hash(
+        bridge_report, "report_content_sha256"
+    )
+    lifecycle_report = {
+        "target_date": "2026-08-20",
+        "promotion_evidence_eligible_count": 1,
+        "broker_execution_provenance_gap_count": 2,
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    lifecycle_report["artifact_content_sha256"] = cycle._content_hash(
+        lifecycle_report, "artifact_content_sha256"
+    )
+    diagnostics = cycle._source_only_gap_diagnostics(
+        target_date="2026-08-20",
+        observer_canary={
+            "status": "row_exclusion_required",
+            "raw_row_exclusion_required": True,
+        },
+        bridge_report=bridge_report,
+        lifecycle_report=lifecycle_report,
+    )
+
+    assert diagnostics["blocker_codes"] == [
+        "micro_observer_canary_row_exclusion_required"
+    ]
+    assert [row["owner"] for row in diagnostics["workorders"]] == [
+        "MicroReversionForwardCollectorContinuity"
+    ]
+
+
+def test_source_gap_diagnostics_reject_self_inconsistent_artifact_census():
+    bridge_report = {
+        "target_date": "2026-08-20",
+        "summary": {
+            "micro_context_eligible_primary_episode_count": "3",
+            "exclusion_counts": {},
+        },
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    bridge_report["report_content_sha256"] = cycle._content_hash(
+        bridge_report, "report_content_sha256"
+    )
+
+    diagnostics = cycle._source_only_gap_diagnostics(
+        target_date="2026-08-20",
+        observer_canary={"status": "pass"},
+        bridge_report=bridge_report,
+        lifecycle_report=None,
+    )
+
+    assert diagnostics["blocker_codes"] == ["source_gap_diagnostics_contract_invalid"]
+    assert diagnostics["contract_findings"] == [
+        "diagnostic_census_invalid:micro_context_eligible_primary_episode_count"
+    ]
 
 
 def test_current_run_excludes_stale_same_date_lifecycle_after_producer_failure():

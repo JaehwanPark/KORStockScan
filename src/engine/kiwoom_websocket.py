@@ -55,7 +55,7 @@ def _load_system_config():
 
 
 WS_CONDITION_SEARCH_ENABLED_ENV = "KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED"
-# Official Kiwoom reference gate (re-verified 2026-08-14T15:32:56+09:00):
+# Official Kiwoom reference gate (re-verified 2026-08-20T13:36:00+09:00):
 # upstream SHA 69642586f7d84ba9fd8a6faf1f1537c7fda6568b; inspected
 # kiwoom_docs/실시간시세.md, kiwoom/realtime/packets.py,
 # kiwoom/realtime/{events,decoders,schemas,stream}.py, kiwoom/core/ws_client.py,
@@ -64,6 +64,26 @@ WS_CONDITION_SEARCH_ENABLED_ENV = "KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED"
 # only the documented 0B trade and 0D depth types. 0B FID 10 owns current price;
 # KRX/NXT/SOR items use 005930/005930_NX/005930_AL.
 KST = ZoneInfo("Asia/Seoul")
+_ORDER_EXECUTION_RAW_ENVELOPE_SCHEMA = "kiwoom_websocket_order_execution_00_values_v1"
+_ORDER_EXECUTION_RAW_FIDS = (
+    "9203",
+    "9001",
+    "913",
+    "900",
+    "902",
+    "903",
+    "905",
+    "907",
+    "908",
+    "909",
+    "910",
+    "911",
+    "914",
+    "915",
+    "2134",
+    "2135",
+    "2136",
+)
 COMMAND_MICRO_REVERSION_OBSERVATION_SET = "COMMAND_MICRO_REVERSION_OBSERVATION_SET"
 WS_PINNED_OBSERVATION_ITEMS_ENV = "KORSTOCKSCAN_WS_PINNED_OBSERVATION_ITEMS"
 WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC_ENV = (
@@ -838,7 +858,22 @@ class KiwoomWSManager:
             counts[route] = counts.get(route, 0) + 1
         return dict(sorted(counts.items()))
 
-    def _parse_order_execution_notice(self, values):
+    def _parse_order_execution_notice(self, values, *, source_type=None):
+        raw_provenance = {
+            fid: values.get(fid) for fid in _ORDER_EXECUTION_RAW_FIDS if fid in values
+        }
+        # Only an explicit official realtime type ``00`` may claim the raw
+        # envelope markers.  The legacy name-based dispatch fallback remains
+        # operational, but cannot manufacture R0-R3 promotion evidence.
+        if isinstance(source_type, str) and source_type == "00":
+            raw_provenance.update(
+                {
+                    "main_lifecycle_broker_raw_envelope_schema": (
+                        _ORDER_EXECUTION_RAW_ENVELOPE_SCHEMA
+                    ),
+                    "main_lifecycle_broker_raw_source_type": source_type,
+                }
+            )
         status = str(values.get("913", "")).strip()
         code = str(values.get("9001", "")).replace("A", "").strip()
         order_no = str(values.get("9203", "")).strip()
@@ -901,6 +936,7 @@ class KiwoomWSManager:
             "actual_execution_venue": actual_execution_venue,
             "sor_flag": str(values.get("2136", "") or "").strip().upper(),
             "exec_type": exec_type,
+            "broker_execution_raw_fields": raw_provenance,
         }
 
     def _normalize_subscribe_codes(self, codes):
@@ -2917,7 +2953,10 @@ class KiwoomWSManager:
                     # [트랙 A] 🚨 주문/체결 통보 가로채기 (ORDER_EXECUTED)
                     # ===================================================
                     if real_type == "00" or d.get("name") == "주문체결":
-                        notice = self._parse_order_execution_notice(values)
+                        notice = self._parse_order_execution_notice(
+                            values,
+                            source_type=real_type,
+                        )
                         status = notice["status"]
                         code = notice["code"]
                         order_no = notice["order_no"]
@@ -3032,6 +3071,7 @@ class KiwoomWSManager:
                                             "actual_execution_venue"
                                         ],
                                         "sor_flag": notice["sor_flag"],
+                                        **notice["broker_execution_raw_fields"],
                                         "execution_economics_reconstructable": bool(
                                             exec_price > 0
                                             or (

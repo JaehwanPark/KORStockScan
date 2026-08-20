@@ -82,6 +82,27 @@ _finalize_fast_state_callback = None
 RECEIPT_LOCK = threading.RLock()
 _STATE_LOCK = None
 _KST = ZoneInfo("Asia/Seoul")
+_BROKER_EXECUTION_RAW_FIELD_KEYS = (
+    "main_lifecycle_broker_raw_envelope_schema",
+    "main_lifecycle_broker_raw_source_type",
+    "9203",
+    "9001",
+    "913",
+    "900",
+    "902",
+    "903",
+    "905",
+    "907",
+    "908",
+    "909",
+    "910",
+    "911",
+    "914",
+    "915",
+    "2134",
+    "2135",
+    "2136",
+)
 SELL_RECEIPT_RECOVERY_DIR = Path(
     os.getenv(
         "KORSTOCKSCAN_SELL_RECEIPT_RECOVERY_DIR",
@@ -206,6 +227,11 @@ def _broker_execution_context(
         "broker_execution_provenance_complete": bool(
             time_source == "official_fid_908" and actual_venue
         ),
+        # Overwrite every raw slot on each receipt.  This prevents a partial
+        # later packet from inheriting native FIDs from a prior execution and
+        # creating a hybrid promotion proof.  These values are telemetry only;
+        # custody continues to use the normalized fields above.
+        **{key: exec_data.get(key) for key in _BROKER_EXECUTION_RAW_FIELD_KEYS},
     }
     return observed_at, fields
 
@@ -375,6 +401,7 @@ _BROKER_EXECUTION_PROVENANCE_KEYS = (
     "broker_actual_exchange_name",
     "broker_sor_flag",
     "broker_execution_provenance_complete",
+    *_BROKER_EXECUTION_RAW_FIELD_KEYS,
 )
 _GENERAL_ENTRY_MARGIN_POSITION_KEYS = (
     "general_entry_margin_authority_reason",

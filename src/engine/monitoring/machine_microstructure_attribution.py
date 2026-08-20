@@ -342,7 +342,18 @@ def archive_exact_date_canary_snapshot(
             and valid_until_epoch >= archived_at.timestamp()
         )
     )
-    if not target_day_complete or not generation_causal or not freshness_valid:
+    diagnostic_stop = bool(
+        isinstance(guard, dict)
+        and guard.get("status") == "stop_required"
+        and guard.get("stop_required") is True
+    )
+    diagnostic_source_exclusion = bool(
+        isinstance(guard, dict) and guard.get("raw_row_exclusion_required") is True
+    )
+    diagnostic_only = diagnostic_stop or diagnostic_source_exclusion
+    if not generation_causal or not (
+        (target_day_complete and freshness_valid) or diagnostic_only
+    ):
         return None
     payload = {
         **payload,
@@ -350,10 +361,14 @@ def archive_exact_date_canary_snapshot(
             "schema": "scalp_micro_reversion_canary_archive_validation_v1",
             "target_date": target_date.isoformat(),
             "archived_at_kst": archived_at.isoformat(),
-            "target_day_complete": True,
-            "source_fresh_at_archive": True,
+            "target_day_complete": target_day_complete,
+            "source_fresh_at_archive": freshness_valid,
             "source_generated_not_after_archive": True,
             "source_valid_until_epoch": valid_until_epoch,
+            "diagnostic_only": diagnostic_only,
+            "promotion_evidence_eligible": bool(
+                target_day_complete and freshness_valid and not diagnostic_only
+            ),
         },
     }
     destination = daily_canary_snapshot_path(target_date, root=daily_root)
@@ -943,9 +958,9 @@ def _widget_inventory(
             scope_id = f"expansion:{symbol}:SOR_REGULAR"
             if scope_id not in row["owner_scope_ids"]:
                 row["owner_scope_ids"].append(scope_id)
-            row["owner_scope_kinds"][
-                scope_id
-            ] = "prospective_widget_collector_expansion"
+            row["owner_scope_kinds"][scope_id] = (
+                "prospective_widget_collector_expansion"
+            )
             row["owner_scope_expected_venues"][scope_id] = ["SOR"]
 
     for row in symbols.values():
@@ -1928,7 +1943,9 @@ def _depth_item_matches_scope(payload: dict[str, Any]) -> bool:
         else (
             f"{symbol}_NX"
             if venue == "NXT"
-            else f"{symbol}_AL" if venue == "SOR" else ""
+            else f"{symbol}_AL"
+            if venue == "SOR"
+            else ""
         )
     )
     return bool(symbol and expected_item and payload.get("item") == expected_item)

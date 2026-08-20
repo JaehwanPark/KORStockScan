@@ -8,8 +8,10 @@ from src.engine.scalping.micro_reversion.canary_monitor import (
     CANARY_GUARD_SCHEMA,
     CANARY_MONITOR_SCHEMA,
     CanaryGuard,
+    _DEPTH_ROW_EXCLUSION_COUNTERS,
     _DEPTH_ZERO_STOP_COUNTERS,
     _FORBIDDEN_TRUE_FIELDS,
+    _ROW_EXCLUSION_COUNTERS,
     _ZERO_STOP_COUNTERS,
     evaluate_canary_snapshot,
     load_canary_guard,
@@ -31,6 +33,7 @@ def _guard() -> CanaryGuard:
 
 def _healthy_snapshot(**overrides):
     snapshot = {field: 0 for field in _ZERO_STOP_COUNTERS}
+    snapshot.update({field: 0 for field in _ROW_EXCLUSION_COUNTERS})
     snapshot.update({field: False for field in _FORBIDDEN_TRUE_FIELDS})
     snapshot.update(
         {
@@ -86,7 +89,7 @@ def test_guard_loader_and_healthy_snapshot_contract(tmp_path) -> None:
     assert evaluation["latency_guard_armed"] is True
 
 
-def test_guard_stops_on_drop_leak_authority_and_latency() -> None:
+def test_guard_excludes_queue_loss_but_stops_on_authority_and_latency() -> None:
     evaluation = evaluate_canary_snapshot(
         _healthy_snapshot(
             observation_dropped_envelope_count=1,
@@ -100,10 +103,31 @@ def test_guard_stops_on_drop_leak_authority_and_latency() -> None:
     assert evaluation["status"] == "stop_required"
     assert evaluation["stop_required"] is True
     reasons = "\n".join(evaluation["stop_reasons"])
-    assert "observation_dropped_envelope_count=1" in reasons
+    assert "observation_dropped_envelope_count=1" not in reasons
+    assert (
+        "raw_row_exclusion_required:observation_dropped_envelope_count=1"
+        in evaluation["source_quality_row_exclusions"]
+    )
     assert "forbidden_authority_field:actual_order_submitted" in reasons
     assert "producer_callback_latency_p95_exceeded" in reasons
     assert "producer_callback_latency_p99_exceeded" in reasons
+
+
+def test_guard_keeps_collector_running_for_bounded_ingress_queue_loss() -> None:
+    evaluation = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            observation_queue_full_count=82,
+            observation_dropped_envelope_count=82,
+        ),
+        _guard(),
+    )
+
+    assert evaluation["status"] == (
+        "healthy_observer_canary_with_source_row_exclusions"
+    )
+    assert evaluation["stop_required"] is False
+    assert evaluation["raw_row_exclusion_required"] is True
+    assert evaluation["stop_reasons"] == ()
 
 
 def test_guard_quarantines_timestamp_regression_without_stopping_collector() -> None:
@@ -184,6 +208,7 @@ def test_manifest_failure_is_an_immediate_stop() -> None:
 
 def test_depth_capture_request_requires_live_worker_and_zero_stop_metrics() -> None:
     depth_metrics = {field: 0 for field in _DEPTH_ZERO_STOP_COUNTERS}
+    depth_metrics.update({field: 0 for field in _DEPTH_ROW_EXCLUSION_COUNTERS})
     healthy = evaluate_canary_snapshot(
         _healthy_snapshot(
             depth_capture_requested=True,
@@ -212,6 +237,7 @@ def test_depth_capture_request_requires_live_worker_and_zero_stop_metrics() -> N
 
 def test_depth_writer_liveness_mismatch_is_an_immediate_stop() -> None:
     depth_metrics = {field: 0 for field in _DEPTH_ZERO_STOP_COUNTERS}
+    depth_metrics.update({field: 0 for field in _DEPTH_ROW_EXCLUSION_COUNTERS})
     evaluation = evaluate_canary_snapshot(
         _healthy_snapshot(
             depth_capture_requested=True,
@@ -232,6 +258,7 @@ def test_depth_writer_liveness_mismatch_is_an_immediate_stop() -> None:
 
 def test_closed_depth_snapshot_allows_stopped_worker_and_writer() -> None:
     depth_metrics = {field: 0 for field in _DEPTH_ZERO_STOP_COUNTERS}
+    depth_metrics.update({field: 0 for field in _DEPTH_ROW_EXCLUSION_COUNTERS})
     evaluation = evaluate_canary_snapshot(
         _healthy_snapshot(
             collector_lifecycle="closed",

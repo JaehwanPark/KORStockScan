@@ -166,6 +166,12 @@ MICRO_REPORT_ROOT = (
 )
 SOURCE_POLICY_ROOT = DATA_DIR / "policy" / "micro_reversion"
 ECONOMIC_POLICY_PATH = DATA_DIR / "config" / "micro_reversion_economic_policy.json"
+OBSERVER_CANARY_LATEST_PATH = (
+    DATA_DIR / "runtime" / "scalp_micro_reversion_forward_collector" / "latest.json"
+)
+OBSERVER_CANARY_DAILY_ROOT = (
+    DATA_DIR / "source_quality" / "scalp_micro_reversion_canary_daily"
+)
 DEFAULT_DAILY_ATTEMPT_CAP = 390
 DEFAULT_PARENT_CAP = 130
 
@@ -3131,6 +3137,383 @@ def _default_paths(target_date: str) -> dict[str, Path]:
         "execution": quality.micro_reversion_execution_result_path(target_date),
         "lifecycle": LIFECYCLE_REPORT_ROOT
         / f"main_scalping_lifecycle_paired_{target_date}.json",
+        "observer_canary_latest": OBSERVER_CANARY_LATEST_PATH,
+        "observer_canary_daily": OBSERVER_CANARY_DAILY_ROOT
+        / f"scalp_micro_reversion_canary_snapshot_{target_date}.json",
+    }
+
+
+def _aware_artifact_datetime(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(KST)
+
+
+def _observer_canary_diagnostic(
+    *, target_date: str, latest_path: Path, daily_path: Path
+) -> dict[str, Any]:
+    """Load exact-date observer health without granting tuning authority."""
+
+    selected_path: Path | None = None
+    payload: dict[str, Any] | None = None
+    source_sha256: str | None = None
+    for candidate in (latest_path, daily_path):
+        try:
+            resolved = existing_or_gzip_path(candidate)
+            raw = resolved.read_bytes()
+            decoded = gzip.decompress(raw) if resolved.suffix == ".gz" else raw
+            candidate_payload = json.loads(decoded.decode("utf-8"))
+            if not isinstance(candidate_payload, dict):
+                raise ValueError(f"json_artifact_not_object:{resolved}")
+        except (
+            FileNotFoundError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            continue
+        generated_at = _aware_artifact_datetime(candidate_payload.get("generated_at"))
+        if generated_at is None or generated_at.date().isoformat() != target_date:
+            continue
+        selected_path = resolved
+        payload = candidate_payload
+        source_sha256 = hashlib.sha256(raw).hexdigest()
+        break
+    base = {
+        "schema": "main_ai_quality_observer_canary_diagnostic_v1",
+        "target_date": target_date,
+        "status": "missing_exact_date_canary",
+        "source_path": None,
+        "source_sha256": None,
+        "guard_status": None,
+        "stop_required": None,
+        "stop_reasons": [],
+        "raw_row_exclusion_required": None,
+        "source_quality_row_exclusions": [],
+        "queue_loss_census": {},
+        **OFFLINE_AUTHORITY,
+    }
+    if selected_path is None or payload is None:
+        return base
+    guard = payload.get("canary_guard")
+    collector = payload.get("collector_snapshot")
+    if (
+        payload.get("schema") != "scalp_micro_reversion_canary_monitor_v1"
+        or not isinstance(guard, Mapping)
+        or not isinstance(collector, Mapping)
+    ):
+        return {
+            **base,
+            "status": "invalid_exact_date_canary_contract",
+            "source_path": str(selected_path),
+            "source_sha256": source_sha256,
+        }
+    stop_reasons = guard.get("stop_reasons")
+    row_exclusions = guard.get("source_quality_row_exclusions")
+    guard_status = str(guard.get("status") or "")
+    collector_lifecycle = str(collector.get("collector_lifecycle") or "")
+    lifecycle_contract_valid = bool(
+        (
+            guard_status
+            in {
+                "healthy_observer_canary",
+                "healthy_observer_canary_with_source_row_exclusions",
+                "warming_up",
+            }
+            and collector_lifecycle == "running"
+        )
+        or (
+            guard_status == "stopped_clean"
+            and collector_lifecycle == "closed"
+            and collector.get("reference_reconciliation_completed") is True
+        )
+        or guard_status == "stop_required"
+    )
+    guard_contract_valid = bool(
+        guard.get("status")
+        in {
+            "warming_up",
+            "healthy_observer_canary",
+            "healthy_observer_canary_with_source_row_exclusions",
+            "stop_required",
+            "stopped_clean",
+        }
+        and isinstance(guard.get("stop_required"), bool)
+        and isinstance(guard.get("raw_row_exclusion_required"), bool)
+        and isinstance(stop_reasons, (list, tuple))
+        and not isinstance(stop_reasons, (str, bytes))
+        and all(isinstance(item, str) and item for item in stop_reasons)
+        and isinstance(row_exclusions, (list, tuple))
+        and not isinstance(row_exclusions, (str, bytes))
+        and all(isinstance(item, str) and item for item in row_exclusions)
+        and lifecycle_contract_valid
+    )
+    authority_valid = all(
+        (
+            collector.get("selection_authority") is False,
+            collector.get("trading_runtime_effect") is False,
+            collector.get("actual_order_submitted") is False,
+            collector.get("broker_order_forbidden") is True,
+        )
+    )
+    stop_required = guard.get("stop_required") is True
+    row_exclusion_required = guard.get("raw_row_exclusion_required") is True
+    status = (
+        "invalid_exact_date_canary_contract"
+        if not guard_contract_valid
+        else (
+            "invalid_exact_date_canary_authority"
+            if not authority_valid
+            else (
+                "stop_required"
+                if stop_required
+                else (
+                    "row_exclusion_required"
+                    if row_exclusion_required
+                    else ("warming_up" if guard_status == "warming_up" else "pass")
+                )
+            )
+        )
+    )
+    queue_fields = (
+        "observation_queue_full_count",
+        "observation_dropped_envelope_count",
+        "depth_queue_full_count",
+        "depth_dropped_envelope_count",
+    )
+    queue_loss_census: dict[str, int] = {}
+    for field in queue_fields:
+        value = collector.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            queue_loss_census[field] = value
+    return {
+        **base,
+        "status": status,
+        "source_path": str(selected_path),
+        "source_sha256": source_sha256,
+        "generated_at": payload.get("generated_at"),
+        "guard_status": guard_status,
+        "stop_required": stop_required,
+        "stop_reasons": list(stop_reasons or []),
+        "raw_row_exclusion_required": row_exclusion_required,
+        "source_quality_row_exclusions": list(row_exclusions or []),
+        "queue_loss_census": queue_loss_census,
+        "collector_lifecycle": collector_lifecycle,
+    }
+
+
+def _observer_provider_gate_blocker(
+    observer_canary: Mapping[str, Any],
+) -> str | None:
+    status = str(observer_canary.get("status") or "")
+    if status == "missing_exact_date_canary":
+        return "micro_observer_canary_missing_exact_date_canary"
+    if not observer_canary.get("source_path"):
+        return None
+    if status in {
+        "invalid_exact_date_canary_contract",
+        "invalid_exact_date_canary_authority",
+        "warming_up",
+        "stop_required",
+        "row_exclusion_required",
+    }:
+        return f"micro_observer_canary_{status}"
+    return None
+
+
+def _source_only_gap_diagnostics(
+    *,
+    target_date: str,
+    observer_canary: Mapping[str, Any],
+    bridge_report: Mapping[str, Any] | None,
+    lifecycle_report: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Make producer gaps durable and actionable without runtime authority."""
+
+    contract_findings: list[str] = []
+
+    def artifact_valid(value: Mapping[str, Any] | None, label: str) -> bool:
+        if not isinstance(value, Mapping) or value.get("target_date") != target_date:
+            return False
+        artifact_hash = str(value.get("artifact_content_sha256") or "")
+        report_hash = str(value.get("report_content_sha256") or "")
+        hash_valid = bool(
+            (
+                artifact_hash
+                and artifact_hash == _content_hash(value, "artifact_content_sha256")
+            )
+            or (
+                not artifact_hash
+                and report_hash
+                and report_hash == _content_hash(value, "report_content_sha256")
+            )
+        )
+        authority_valid = all(
+            (
+                value.get("runtime_effect") is False,
+                value.get("allowed_runtime_apply") is False,
+                value.get("actual_order_submitted") is False,
+                value.get("broker_order_forbidden") is True,
+            )
+        )
+        if not hash_valid:
+            contract_findings.append(f"{label}_content_hash_invalid")
+        if not authority_valid:
+            contract_findings.append(f"{label}_authority_invalid")
+        return hash_valid and authority_valid
+
+    def nonnegative_int(
+        value: Any, field: str, *, missing_is_zero: bool = False
+    ) -> int:
+        if value is None and missing_is_zero:
+            return 0
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            contract_findings.append(f"diagnostic_census_invalid:{field}")
+            return 0
+        return value
+
+    bridge_summary = (
+        bridge_report.get("summary")
+        if isinstance(bridge_report, Mapping)
+        and isinstance(bridge_report.get("summary"), Mapping)
+        else {}
+    )
+    bridge_available = artifact_valid(bridge_report, "bridge")
+    exclusion_counts = (
+        bridge_summary.get("exclusion_counts")
+        if isinstance(bridge_summary.get("exclusion_counts"), Mapping)
+        else {}
+    )
+    micro_eligible = (
+        nonnegative_int(
+            bridge_summary.get("micro_context_eligible_primary_episode_count"),
+            "micro_context_eligible_primary_episode_count",
+        )
+        if bridge_available
+        else 0
+    )
+    past_market_missing = (
+        nonnegative_int(
+            exclusion_counts.get("past_market_row_missing"),
+            "past_market_row_missing",
+            missing_is_zero=True,
+        )
+        if bridge_available
+        else 0
+    )
+    route_proof_missing = (
+        nonnegative_int(
+            exclusion_counts.get("integrated_route_proof_missing"),
+            "integrated_route_proof_missing",
+            missing_is_zero=True,
+        )
+        if bridge_available
+        else 0
+    )
+    lifecycle_available = artifact_valid(lifecycle_report, "lifecycle")
+    lifecycle_gap = (
+        nonnegative_int(
+            (lifecycle_report or {}).get("broker_execution_provenance_gap_count"),
+            "broker_execution_provenance_gap_count",
+        )
+        if lifecycle_available
+        else 0
+    )
+    lifecycle_eligible = (
+        nonnegative_int(
+            (lifecycle_report or {}).get("promotion_evidence_eligible_count"),
+            "promotion_evidence_eligible_count",
+        )
+        if lifecycle_available
+        else 0
+    )
+    workorders: list[dict[str, Any]] = []
+    blocker_codes: list[str] = []
+
+    def add_workorder(
+        owner: str, reason_codes: list[str], acceptance_test: str
+    ) -> None:
+        content = {
+            "target_date": target_date,
+            "owner": owner,
+            "reason_codes": reason_codes,
+            "acceptance_test": acceptance_test,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        workorders.append(
+            {
+                "schema": "main_ai_quality_source_only_gap_workorder_v1",
+                "workorder_id": f"main-ai-gap-{_sha256(content)[:24]}",
+                "status": "open_source_producer_repair",
+                **content,
+            }
+        )
+
+    observer_status = str(observer_canary.get("status") or "")
+    if bridge_available and observer_status in {
+        "missing_exact_date_canary",
+        "invalid_exact_date_canary_contract",
+        "invalid_exact_date_canary_authority",
+        "warming_up",
+        "stop_required",
+        "row_exclusion_required",
+    }:
+        blocker_codes.append(f"micro_observer_canary_{observer_status}")
+        add_workorder(
+            "MicroReversionForwardCollectorContinuity",
+            [observer_status, f"past_market_row_missing={past_market_missing}"],
+            (
+                "exact-date canary remains pass or row-exclusion-only through close; "
+                "later clean windows continue collecting; provider replay remains held until "
+                "queue-loss scope has an exact exclusion receipt or the next clean date"
+            ),
+        )
+    if bridge_available and micro_eligible <= 0 and route_proof_missing > 0:
+        blocker_codes.append(
+            f"micro_integrated_route_proof_missing:{route_proof_missing}"
+        )
+        add_workorder(
+            "MicroReversionIntegratedRouteProof",
+            [f"integrated_route_proof_missing={route_proof_missing}"],
+            (
+                "same-request exact snapshot carries verified integrated-route proof; "
+                "ambiguous SOR rows remain excluded without inferred venue"
+            ),
+        )
+    if lifecycle_available and lifecycle_eligible <= 0 and lifecycle_gap > 0:
+        blocker_codes.append(
+            f"main_lifecycle_broker_execution_provenance_gap:{lifecycle_gap}"
+        )
+        add_workorder(
+            "RuntimeExecutionReceiptCustodyRepair",
+            [f"broker_execution_provenance_gap_count={lifecycle_gap}"],
+            (
+                "official raw execution envelope/order/execution identity is complete for "
+                "at least one reconciled lifecycle while custody and order authority remain unchanged"
+            ),
+        )
+    if contract_findings:
+        blocker_codes.append("source_gap_diagnostics_contract_invalid")
+    return {
+        "schema": "main_ai_quality_source_only_gap_diagnostics_v1",
+        "target_date": target_date,
+        "bridge_micro_eligible_count": micro_eligible,
+        "past_market_row_missing_count": past_market_missing,
+        "integrated_route_proof_missing_count": route_proof_missing,
+        "lifecycle_promotion_eligible_count": lifecycle_eligible,
+        "broker_execution_provenance_gap_count": lifecycle_gap,
+        "contract_findings": sorted(set(contract_findings)),
+        "blocker_codes": blocker_codes,
+        "workorders": workorders,
+        **OFFLINE_AUTHORITY,
     }
 
 
@@ -3495,6 +3878,11 @@ def run_cycle(
             )
         if "provider_pricing" not in overrides:
             selected_paths["provider_pricing"] = owner_root / "provider_pricing.json"
+    observer_canary = _observer_canary_diagnostic(
+        target_date=target_date,
+        latest_path=selected_paths["observer_canary_latest"],
+        daily_path=selected_paths["observer_canary_daily"],
+    )
     steps: list[dict[str, Any]] = []
     blockers: list[str] = []
     materialized: dict[str, Any] = {}
@@ -3770,6 +4158,10 @@ def run_cycle(
                     f"materialized_artifact_invalid:{type(exc).__name__}:{exc}"
                 )
 
+    observer_blocker = _observer_provider_gate_blocker(observer_canary)
+    if observer_blocker and observer_blocker not in blockers:
+        blockers.append(observer_blocker)
+
     if not blockers:
         try:
             bridge = _load_json_auto(selected_paths["bridge_report"])
@@ -3940,6 +4332,30 @@ def run_cycle(
         r3_manifest = {}
         blockers.append(f"rolling_r2_r3_failed:{type(exc).__name__}:{exc}")
 
+    bridge_diagnostic_report: dict[str, Any] | None = None
+    lifecycle_diagnostic_report: dict[str, Any] | None = None
+    try:
+        candidate_bridge = _load_json_auto(selected_paths["bridge_report"])
+        if candidate_bridge.get("target_date") == target_date:
+            bridge_diagnostic_report = candidate_bridge
+    except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    try:
+        candidate_lifecycle = _load_json_auto(selected_paths["lifecycle"])
+        if candidate_lifecycle.get("target_date") == target_date:
+            lifecycle_diagnostic_report = candidate_lifecycle
+    except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    source_gap_diagnostics = _source_only_gap_diagnostics(
+        target_date=target_date,
+        observer_canary=observer_canary,
+        bridge_report=bridge_diagnostic_report,
+        lifecycle_report=lifecycle_diagnostic_report,
+    )
+    for blocker in source_gap_diagnostics["blocker_codes"]:
+        if blocker not in blockers:
+            blockers.append(blocker)
+
     provider_call_performed = bool(
         current_provider_replay_complete
         and int(current_execution_report.get("new_result_count") or 0) > 0
@@ -3963,6 +4379,9 @@ def run_cycle(
         "steps": steps,
         "blockers": blockers,
         "source_quality_audit": audit_source,
+        "observer_canary": observer_canary,
+        "source_gap_diagnostics": source_gap_diagnostics,
+        "source_only_gap_workorders": source_gap_diagnostics["workorders"],
         "economic_reference_path": str(selected_paths["economic_reference"]),
         "economic_policy_path": str(selected_paths["economic_policy"]),
         "economic_owner_report_path": str(selected_paths["economic_owner_report"]),

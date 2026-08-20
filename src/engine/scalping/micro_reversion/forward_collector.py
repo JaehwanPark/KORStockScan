@@ -158,9 +158,9 @@ class ProducerCanaryResult(StrEnum):
 @dataclass(frozen=True, slots=True)
 class ForwardCollectorConfig:
     output_root: Path = DEFAULT_OUTPUT_ROOT
-    observation_queue_size: int = 10_000
+    observation_queue_size: int = 50_000
     path_queue_size: int = 10_000
-    depth_queue_size: int = 10_000
+    depth_queue_size: int = 50_000
     path_batch_size: int = 256
     writer_flush_interval_sec: float = 0.25
     worker_poll_interval_sec: float = 0.1
@@ -1662,13 +1662,13 @@ def build_forward_collector_from_env(
     config = ForwardCollectorConfig(
         output_root=output_root,
         observation_queue_size=_bounded_env_int(
-            "SCALP_MICRO_REVERSION_OBSERVATION_QUEUE_SIZE", 10_000, 1, 200_000
+            "SCALP_MICRO_REVERSION_OBSERVATION_QUEUE_SIZE", 50_000, 1, 200_000
         ),
         path_queue_size=_bounded_env_int(
             "SCALP_MICRO_REVERSION_PATH_QUEUE_SIZE", 10_000, 1, 200_000
         ),
         depth_queue_size=_bounded_env_int(
-            "SCALP_MICRO_REVERSION_DEPTH_QUEUE_SIZE", 10_000, 1, 200_000
+            "SCALP_MICRO_REVERSION_DEPTH_QUEUE_SIZE", 50_000, 1, 200_000
         ),
         path_batch_size=_bounded_env_int(
             "SCALP_MICRO_REVERSION_PATH_BATCH_SIZE", 256, 1, 10_000

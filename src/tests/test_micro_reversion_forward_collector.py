@@ -150,6 +150,8 @@ def test_factory_resolves_default_output_from_repository_not_process_cwd(
     assert collector.config.output_root == (
         Path(__file__).parents[2] / "data/observations/scalp_micro_reversion_forward"
     )
+    assert collector.config.observation_queue_size == 50_000
+    assert collector.config.depth_queue_size == 50_000
 
 
 def test_integrated_al_item_is_captured_as_sor_without_exchange_guess(
