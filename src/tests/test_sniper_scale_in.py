@@ -18177,6 +18177,222 @@ def test_post_probe_soft_abort_recovery_is_observed_without_order_authority(
     assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
 
 
+def test_post_probe_recovery_uses_trusted_ai_thesis_when_tape_is_unavailable(
+    monkeypatch,
+):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    base_ts = time.time()
+    stock = {
+        "status": "HOLDING",
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "broker_holding_qty": 1,
+        "broker_snapshot_at": base_ts,
+        "open_buy_qty": 0,
+        "open_sell_qty": 0,
+        "entry_split_probe_bundle_id": "123456-ai-continuity",
+        "entry_split_probe_terminal_at": base_ts - 1.0,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "rising_missed_scout_parent_ai_action": "WAIT",
+        "rising_missed_scout_parent_ai_result_source": "live",
+        "rising_missed_scout_parent_ai_contract_status": "pass",
+        "rising_missed_scout_parent_ai_decision_trace_id": "trace-ai-continuity",
+        "rising_missed_scout_parent_ai_snapshot_id": "snapshot-ai-continuity",
+        "rising_missed_scout_parent_ai_prompt_version": "decision_quality_v2_14",
+        "rising_missed_scout_parent_ai_probe_intent": True,
+        "rising_missed_scout_parent_ai_probe_intent_status": "eligible_wait_probe",
+        "holding_score_action": "HOLD",
+        **_fresh_holding_score_fields(68, now_ts=base_ts),
+        "last_reversal_features": {
+            "buy_pressure_10t": 50.0,
+            "tick_aggressor_trusted_count": 0,
+            "tick_aggressor_pressure_usable": False,
+            "tick_acceleration_ratio": 1.2,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "large_sell_print_detected": False,
+            "tick_context_quality": "fresh",
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "feature_extracted_at": base_ts,
+        },
+    }
+
+    result = state_handlers._observe_post_probe_hard_abort_recovery(
+        stock,
+        "123456",
+        strategy="SCALPING",
+        curr_price=10100,
+        profit_rate=1.0,
+        peak_profit=1.0,
+        current_ai_score=68,
+        held_sec=10,
+        now_ts=base_ts,
+    )
+
+    assert result["eligible"] is True
+    assert result["confirmation_count"] == 1
+    assert stock["_post_probe_hard_abort_recovery_ai_thesis_state"] == "supportive"
+    assert logs[-1][1]["recovery_ai_tape_substitution_applied"] is True
+
+
+def test_post_probe_ai_thesis_does_not_mix_partial_frozen_and_latest_provenance():
+    base_ts = time.time()
+    stock = {
+        "rising_missed_scout_parent_ai_action": "WAIT",
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_attempt_contract_status": "pass",
+        "last_watching_ai_decision_trace_id": "latest-trace",
+        "last_watching_ai_snapshot_id": "latest-snapshot",
+        "last_watching_ai_probe_intent_prompt_version": "decision_quality_v2_14",
+        "last_watching_ai_probe_intent": True,
+        "last_watching_ai_probe_intent_status": "eligible_wait_probe",
+        "holding_score_action": "HOLD",
+        "broker_holding_qty": 1,
+        "broker_snapshot_at": base_ts,
+        "open_buy_qty": 0,
+        "open_sell_qty": 0,
+        **_fresh_holding_score_fields(68, now_ts=base_ts),
+    }
+
+    context = state_handlers._post_probe_ai_thesis_context(
+        stock,
+        current_ai_score=68,
+        now_ts=base_ts,
+        market_path_confirmed=True,
+    )
+
+    assert context["parent_provenance_source"] == "frozen_scout_parent"
+    assert context["parent_trusted"] is False
+    assert context["supportive"] is False
+
+
+def test_post_probe_ai_thesis_latest_drop_requires_fresh_trusted_attempt():
+    base_ts = time.time()
+    stock = {
+        "last_watching_ai_action": "DROP",
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_attempt_contract_status": "pass",
+        "last_watching_ai_decision_trace_id": "latest-drop-trace",
+        "last_watching_ai_attempt_decision_trace_id": "latest-drop-trace",
+        "last_watching_ai_attempt_trusted": True,
+        "last_watching_ai_snapshot_id": "latest-drop-snapshot",
+        "last_watching_ai_probe_intent_prompt_version": "entry-v9",
+        "last_watching_ai_confirmed_at": base_ts - 10.0,
+    }
+
+    fresh = state_handlers._post_probe_ai_thesis_context(
+        stock,
+        current_ai_score=68,
+        now_ts=base_ts,
+        market_path_confirmed=True,
+    )
+    stale = state_handlers._post_probe_ai_thesis_context(
+        stock,
+        current_ai_score=68,
+        now_ts=base_ts + 400.0,
+        market_path_confirmed=True,
+    )
+
+    assert fresh["negative"] is True
+    assert fresh["latest_entry_fresh"] is True
+    assert fresh["latest_entry_attempt_trusted"] is True
+    assert stale["negative"] is False
+    assert stale["latest_entry_fresh"] is False
+
+
+def test_post_probe_recovery_preserves_confirmation_across_transient_source_gap(
+    monkeypatch,
+):
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *a, **k: None)
+    base_ts = time.time()
+    stock = {
+        "status": "HOLDING",
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "entry_split_probe_bundle_id": "123456-source-gap",
+        "entry_split_probe_terminal_at": base_ts - 1.0,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "last_reversal_features": {
+            "buy_pressure_10t": 72.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "tick_acceleration_ratio": 1.2,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "large_sell_print_detected": False,
+            "tick_context_quality": "fresh",
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "feature_extracted_at": base_ts,
+        },
+    }
+    first = state_handlers._observe_post_probe_hard_abort_recovery(
+        stock,
+        "123456",
+        strategy="SCALPING",
+        curr_price=10100,
+        profit_rate=1.0,
+        peak_profit=1.0,
+        current_ai_score=68,
+        held_sec=10,
+        now_ts=base_ts,
+    )
+    stock["last_reversal_features"].update(
+        {
+            "tick_context_stale": True,
+            "quote_stale": True,
+        }
+    )
+    gap = state_handlers._observe_post_probe_hard_abort_recovery(
+        stock,
+        "123456",
+        strategy="SCALPING",
+        curr_price=10100,
+        profit_rate=1.0,
+        peak_profit=1.0,
+        current_ai_score=68,
+        held_sec=11,
+        now_ts=base_ts + 0.3,
+    )
+    stock["last_reversal_features"].update(
+        {
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "feature_extracted_at": base_ts + 0.6,
+        }
+    )
+    recovered = state_handlers._observe_post_probe_hard_abort_recovery(
+        stock,
+        "123456",
+        strategy="SCALPING",
+        curr_price=10110,
+        profit_rate=1.1,
+        peak_profit=1.1,
+        current_ai_score=68,
+        held_sec=12,
+        now_ts=base_ts + 0.6,
+    )
+
+    assert first["confirmation_count"] == 1
+    assert gap["state"] == "SOURCE_BLOCKED"
+    assert gap["confirmation_count"] == 1
+    assert recovered["state"] == "STRONG"
+    assert recovered["confirmation_count"] == 2
+
+
 def test_post_probe_recovery_does_not_double_count_tick_and_candle_group(
     monkeypatch,
 ):
@@ -18243,6 +18459,7 @@ def test_post_probe_winner_recovery_selects_one_share_first_leg(monkeypatch):
     stock = {
         "status": "HOLDING",
         "effective_venue": "KRX",
+        "rising_missed_one_share_scout": True,
         "buy_qty": 1,
         "avg_down_count": 0,
         "pyramid_count": 0,
@@ -18252,6 +18469,17 @@ def test_post_probe_winner_recovery_selects_one_share_first_leg(monkeypatch):
         "entry_split_probe_terminal_outcome": "residual_not_submitted",
         "_post_probe_hard_abort_recovery_state": "STRONG",
         "_post_probe_hard_abort_recovery_confirmation_count": 2,
+        "_post_probe_hard_abort_recovery_ai_thesis_state": "supportive",
+        "_post_probe_hard_abort_recovery_ai_parent_action": "WAIT",
+        "_post_probe_hard_abort_recovery_ai_parent_prompt_version": "entry-v9",
+        "_post_probe_hard_abort_recovery_ai_parent_trace_id": "entry-trace-v9",
+        "_post_probe_hard_abort_recovery_ai_parent_snapshot_id": "entry-snapshot-v9",
+        "_post_probe_hard_abort_recovery_holding_ai_action": "HOLD",
+        "_post_probe_hard_abort_recovery_holding_ai_data_quality": "fresh",
+        "_post_probe_hard_abort_recovery_holding_ai_input_schema": (
+            "holding_decision_context_v1"
+        ),
+        "_post_probe_hard_abort_recovery_ai_tape_substitution_applied": True,
     }
     pyramid_probe = {
         "should_add": False,
@@ -18275,9 +18503,62 @@ def test_post_probe_winner_recovery_selects_one_share_first_leg(monkeypatch):
     assert result["action"]["reason"] == "post_probe_winner_recovery_first_leg"
     assert result["action"]["add_type"] == "PYRAMID"
     assert result["action"]["post_probe_winner_recovery_qty_cap"] == 1
+    assert result["action"]["post_probe_winner_recovery_ai_thesis_state"] == (
+        "supportive"
+    )
+    assert result["action"]["post_probe_winner_recovery_ai_parent_prompt_version"] == (
+        "entry-v9"
+    )
+    assert result["action"]["post_probe_winner_recovery_holding_ai_action"] == "HOLD"
+    assert result["action"]["post_probe_winner_recovery_ai_parent_trace_id"] == (
+        "entry-trace-v9"
+    )
+    assert result["action"]["post_probe_winner_recovery_holding_ai_input_schema"] == (
+        "holding_decision_context_v1"
+    )
+    assert result["action"][
+        "post_probe_winner_recovery_ai_tape_substitution_applied"
+    ] is True
     assert result["action"]["runtime_effect"] is True
+    assert result["action"]["primary_decision_metric"] == "notional_weighted_ev_pct"
     assert logs[-1][0] == "post_probe_winner_recovery_selected"
     assert logs[-1][1]["actual_order_submitted"] is False
+    assert logs[-1][1]["primary_decision_metric"] == "notional_weighted_ev_pct"
+
+
+def test_winner_recovery_ai_receipt_fields_freeze_pending_decision_provenance():
+    stock = {
+        "pending_add_reason": "post_probe_winner_recovery_first_leg",
+        "pending_add_winner_recovery_ai_thesis_state": "supportive",
+        "pending_add_winner_recovery_ai_parent_action": "WAIT",
+        "pending_add_winner_recovery_ai_parent_prompt_version": "entry-v9",
+        "pending_add_winner_recovery_ai_parent_trace_id": "entry-trace-v9",
+        "pending_add_winner_recovery_ai_parent_snapshot_id": "entry-snapshot-v9",
+        "pending_add_winner_recovery_holding_ai_action": "HOLD",
+        "pending_add_winner_recovery_holding_ai_data_quality": "fresh",
+        "pending_add_winner_recovery_holding_ai_input_schema": (
+            "holding_decision_context_v1"
+        ),
+        "pending_add_winner_recovery_ai_tape_substitution_applied": True,
+    }
+
+    fields = receipts._winner_recovery_ai_receipt_fields(stock)
+
+    assert fields == {
+        "post_probe_winner_recovery_ai_thesis_state": "supportive",
+        "post_probe_winner_recovery_ai_parent_action": "WAIT",
+        "post_probe_winner_recovery_ai_parent_prompt_version": "entry-v9",
+        "post_probe_winner_recovery_ai_parent_trace_id": "entry-trace-v9",
+        "post_probe_winner_recovery_ai_parent_snapshot_id": "entry-snapshot-v9",
+        "post_probe_winner_recovery_holding_ai_action": "HOLD",
+        "post_probe_winner_recovery_holding_ai_data_quality": "fresh",
+        "post_probe_winner_recovery_holding_ai_input_schema": (
+            "holding_decision_context_v1"
+        ),
+        "post_probe_winner_recovery_ai_tape_substitution_applied": True,
+    }
+    receipts._clear_pending_add_meta(stock)
+    assert not any(key.startswith("pending_add_") for key in stock)
 
 
 @pytest.mark.parametrize(
@@ -18301,6 +18582,9 @@ def test_post_probe_winner_recovery_blocks_avg_down_or_unconfirmed_lane(
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
     )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED", "true"
+    )
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -18309,6 +18593,7 @@ def test_post_probe_winner_recovery_blocks_avg_down_or_unconfirmed_lane(
     )
     stock = {
         "effective_venue": "KRX",
+        "rising_missed_one_share_scout": True,
         "avg_down_count": 0,
         "pyramid_count": 0,
         "entry_split_probe_soft_abort": True,
@@ -18347,13 +18632,16 @@ def test_post_probe_winner_recovery_dated_cohort_fails_closed(monkeypatch):
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", "1999-01-01"
     )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED", "true"
+    )
 
     config = state_handlers._post_probe_winner_recovery_runtime_config(
-        {"effective_venue": "KRX"},
+        {"effective_venue": "KRX", "rising_missed_one_share_scout": True},
         now_ts=base_ts,
     )
     unknown = state_handlers._post_probe_winner_recovery_runtime_config(
-        {"effective_venue": "SOR"},
+        {"effective_venue": "SOR", "rising_missed_one_share_scout": True},
         now_ts=base_ts,
     )
 
@@ -18363,10 +18651,168 @@ def test_post_probe_winner_recovery_dated_cohort_fails_closed(monkeypatch):
     assert unknown["effective_venue"] == "UNKNOWN"
 
 
+def test_post_probe_winner_recovery_requires_explicit_family_and_rolls_back(
+    monkeypatch,
+):
+    base_ts = time.time()
+    active_date = (
+        datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", raising=False
+    )
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", raising=False
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", active_date)
+
+    not_inherited = state_handlers._post_probe_winner_recovery_runtime_config(
+        {
+            "effective_venue": "KRX",
+            "rising_missed_one_share_scout": True,
+        },
+        now_ts=base_ts,
+    )
+    assert not_inherited["active"] is False
+    assert not_inherited["reason"] == "disabled"
+    assert not_inherited["configuration_source"] == "disabled_explicit_env_missing"
+
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED", "true"
+    )
+    explicit = state_handlers._post_probe_winner_recovery_runtime_config(
+        {
+            "effective_venue": "KRX",
+            "rising_missed_one_share_scout": True,
+        },
+        now_ts=base_ts,
+    )
+    assert explicit["active"] is True
+    assert explicit["rising_missed_scope"] is True
+    assert explicit["configuration_source"] == "explicit_post_probe_env"
+    assert (
+        explicit["independent_rollback_key"]
+        == "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED"
+    )
+
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "false"
+    )
+    rolled_back = state_handlers._post_probe_winner_recovery_runtime_config(
+        {
+            "effective_venue": "KRX",
+            "rising_missed_one_share_scout": True,
+        },
+        now_ts=base_ts,
+    )
+    assert rolled_back["active"] is False
+    assert rolled_back["reason"] == "disabled"
+
+
+def test_post_probe_winner_recovery_does_not_inherit_for_non_scout_split(
+    monkeypatch,
+):
+    base_ts = time.time()
+    active_date = (
+        datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", raising=False
+    )
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", raising=False
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", active_date)
+
+    config = state_handlers._post_probe_winner_recovery_runtime_config(
+        {"effective_venue": "KRX"}, now_ts=base_ts
+    )
+
+    assert config["active"] is False
+    assert config["rising_missed_scope"] is False
+    assert config["configuration_source"] == "disabled_explicit_env_missing"
+
+
+def test_post_probe_winner_recovery_requires_explicit_venue_cohort(
+    monkeypatch,
+):
+    base_ts = time.time()
+    active_date = (
+        datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
+    )
+
+    config = state_handlers._post_probe_winner_recovery_runtime_config(
+        {
+            "effective_venue": "NXT",
+            "rising_missed_one_share_scout": True,
+        },
+        now_ts=base_ts,
+    )
+
+    assert config["active"] is False
+    assert config["cohort_enabled"] is False
+    assert config["reason"] == "cohort_disabled"
+
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED", "true"
+    )
+    enabled = state_handlers._post_probe_winner_recovery_runtime_config(
+        {
+            "effective_venue": "NXT",
+            "rising_missed_one_share_scout": True,
+        },
+        now_ts=base_ts,
+    )
+    assert enabled["active"] is True
+    assert enabled["cohort_enabled"] is True
+
+
+def test_post_probe_winner_recovery_explicit_family_requires_exact_date(
+    monkeypatch,
+):
+    base_ts = time.time()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true"
+    )
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", raising=False
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED", "true"
+    )
+
+    config = state_handlers._post_probe_winner_recovery_runtime_config(
+        {
+            "effective_venue": "KRX",
+            "rising_missed_one_share_scout": True,
+        },
+        now_ts=base_ts,
+    )
+
+    assert config["active"] is False
+    assert config["active_date"] == "-"
+    assert config["reason"] == "active_date_missing_or_mismatch"
+
+
 def test_post_probe_winner_recovery_lock_bypass_is_once_per_evidence_version():
     stock = {
         "entry_split_probe_soft_abort": True,
         "entry_split_probe_scale_in_recheck_allowed": True,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
         "_post_probe_hard_abort_recovery_state": "STRONG",
         "_post_probe_hard_abort_recovery_confirmation_count": 2,
         "_post_probe_hard_abort_recovery_accepted_signature": "evidence-v2",
@@ -18389,6 +18835,360 @@ def test_post_probe_winner_recovery_lock_bypass_is_once_per_evidence_version():
     )
 
 
+def test_post_probe_winner_recovery_first_confirmation_requests_recheck():
+    stock = {
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "_post_probe_hard_abort_recovery_state": "STRONG",
+        "_post_probe_hard_abort_recovery_confirmation_count": 1,
+        "_post_probe_hard_abort_recovery_accepted_signature": "evidence-v1",
+    }
+
+    assert state_handlers._post_probe_winner_recovery_gate_recheck_due(
+        stock, {"active": True}
+    )
+
+
+def test_post_probe_winner_recovery_cycle_signatures_clear_with_probe_runtime():
+    stock = {
+        "_post_probe_winner_recovery_gate_bypass_signature": "old-bypass",
+        "_post_probe_winner_recovery_event_signature": "old-event",
+    }
+
+    state_handlers._clear_pending_entry_meta(stock)
+
+    assert "_post_probe_winner_recovery_gate_bypass_signature" not in stock
+    assert "_post_probe_winner_recovery_event_signature" not in stock
+
+
+def test_post_probe_first_confirmation_refreshes_and_selects_recovery_leg(
+    monkeypatch,
+):
+    base_ts = time.time()
+    active_date = (
+        datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED", "true"
+    )
+    refresh_calls = []
+
+    def refresh(**kwargs):
+        refresh_calls.append(kwargs["force_refresh"])
+        kwargs["stock"]["last_reversal_features"]["feature_extracted_at"] = time.time()
+        kwargs["stock"]["last_reversal_features"]["curr_vs_micro_vwap_bp"] = 13.0
+        return kwargs["ws_data"], {
+            "scale_in_feature_refresh_reason": "feature_context_refreshed",
+            "scale_in_feature_refresh_attempted": True,
+            "scale_in_feature_refresh_applied": True,
+        }
+
+    monkeypatch.setattr(
+        state_handlers, "_refresh_scale_in_reversal_features_if_needed", refresh
+    )
+    monkeypatch.setattr(
+        state_handlers, "_scalping_micro_estimator_log_fields", lambda **kwargs: {}
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_real_stop_line_avg_down_ai_score_submit_authority",
+        lambda **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_pyramid",
+        lambda *args, **kwargs: {
+            "should_add": False,
+            "reason": "rising_missed_scout_pyramid_bridge_blocked:profit_not_enough",
+            "rising_missed_scout_pyramid_bridge_blockers": "profit_not_enough",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pyramid_runtime_prior_context",
+        lambda *args, **kwargs: {"pyramid_runtime_prior_context": {}},
+    )
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *a, **k: None)
+    stock = {
+        "name": "RECOVERY-RECHECK",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "effective_venue": "KRX",
+        "rising_missed_one_share_scout": True,
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "avg_down_count": 0,
+        "pyramid_count": 0,
+        "entry_split_probe_bundle_id": "123456-recheck",
+        "entry_split_probe_terminal_at": base_ts - 2.0,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "entry_split_probe_scale_in_forbidden": False,
+        "_post_probe_hard_abort_recovery_bundle_id": "123456-recheck",
+        "_post_probe_hard_abort_recovery_state": "STRONG",
+        "_post_probe_hard_abort_recovery_confirmation_count": 1,
+        "_post_probe_hard_abort_recovery_accepted_signature": "evidence-v1",
+        "_post_probe_hard_abort_recovery_accepted_at": base_ts - 1.0,
+        "_post_probe_hard_abort_recovery_accepted_feature_at": base_ts - 1.0,
+        "last_reversal_features": {
+            "buy_pressure_10t": 72.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "tick_acceleration_ratio": 1.2,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "large_sell_print_detected": False,
+            "tick_context_quality": "fresh",
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "feature_extracted_at": base_ts - 1.0,
+        },
+        **_fresh_holding_score_fields(68, now_ts=base_ts),
+    }
+
+    action = state_handlers._evaluate_scale_in_signal(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        profit_rate=0.25,
+        peak_profit=0.30,
+        curr_price=10025,
+        ws_data={"curr": 10025},
+        current_ai_score=68,
+        held_sec=15,
+        ai_engine=object(),
+        now_ts=base_ts,
+    )
+
+    assert refresh_calls == [True]
+    assert stock["_post_probe_hard_abort_recovery_confirmation_count"] == 2
+    assert action["reason"] == "post_probe_winner_recovery_first_leg"
+    assert action["post_probe_winner_recovery_qty_cap"] == 1
+    assert (
+        stock["_post_probe_winner_recovery_gate_bypass_signature"] == "evidence-v1"
+    )
+
+
+def test_post_probe_forced_refresh_spacing_does_not_spend_holding_ai_budget(
+    monkeypatch,
+):
+    base_ts = time.time()
+    active_date = (
+        datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED", "true"
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_refresh_scale_in_reversal_features_if_needed",
+        lambda **kwargs: (
+            kwargs["ws_data"],
+            {
+                "scale_in_feature_refresh_attempted": True,
+                "scale_in_feature_refresh_reason": (
+                    "forced_feature_refresh_spacing_pending"
+                ),
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_scalping_micro_estimator_log_fields", lambda **kwargs: {}
+    )
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *a, **k: None)
+    monkeypatch.setattr(
+        state_handlers,
+        "_real_stop_line_avg_down_ai_score_submit_authority",
+        lambda **kwargs: pytest.fail("holding AI authority must not run"),
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "effective_venue": "KRX",
+        "rising_missed_one_share_scout": True,
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "_post_probe_hard_abort_recovery_state": "STRONG",
+        "_post_probe_hard_abort_recovery_confirmation_count": 1,
+        "_post_probe_hard_abort_recovery_accepted_signature": "evidence-v1",
+    }
+
+    result = state_handlers._evaluate_scale_in_signal(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        profit_rate=0.2,
+        peak_profit=0.3,
+        curr_price=10020,
+        ws_data={"curr": 10020},
+        current_ai_score=68,
+        held_sec=10,
+        ai_engine=object(),
+        now_ts=base_ts,
+    )
+
+    assert result is None
+    assert "_post_probe_winner_recovery_gate_bypass_signature" not in stock
+
+
+def test_post_probe_recovery_reanchors_price_after_feature_refresh(monkeypatch):
+    base_ts = time.time()
+    active_date = (
+        datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED", "true"
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_refresh_scale_in_reversal_features_if_needed",
+        lambda **kwargs: (
+            {**kwargs["ws_data"], "curr": 9900},
+            {
+                "scale_in_feature_refresh_attempted": True,
+                "scale_in_feature_refresh_reason": "post_probe_confirmation_refresh",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_scalping_micro_estimator_log_fields", lambda **kwargs: {}
+    )
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *a, **k: None)
+    monkeypatch.setattr(
+        state_handlers,
+        "_real_stop_line_avg_down_ai_score_submit_authority",
+        lambda **kwargs: {"allowed": True},
+    )
+    observed = {}
+
+    def observe(stock, code, **kwargs):
+        observed.update(kwargs)
+        return {"eligible": False, "confirmation_count": 0}
+
+    monkeypatch.setattr(
+        state_handlers, "_observe_post_probe_hard_abort_recovery", observe
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_pyramid",
+        lambda *args, **kwargs: {"should_add": False, "reason": "profit_not_enough"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pyramid_runtime_prior_context",
+        lambda *args, **kwargs: {"pyramid_runtime_prior_context": {}},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_post_probe_winner_recovery_scale_in",
+        lambda *args, **kwargs: {"handled": True, "action": None},
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "effective_venue": "KRX",
+        "rising_missed_one_share_scout": True,
+        "buy_price": 10000,
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "_post_probe_hard_abort_recovery_state": "STRONG",
+        "_post_probe_hard_abort_recovery_confirmation_count": 1,
+        "_post_probe_hard_abort_recovery_accepted_signature": "evidence-v1",
+    }
+
+    state_handlers._evaluate_scale_in_signal(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        profit_rate=1.0,
+        peak_profit=1.1,
+        curr_price=10100,
+        ws_data={"curr": 10100},
+        current_ai_score=68,
+        held_sec=10,
+        ai_engine=object(),
+        now_ts=base_ts,
+    )
+
+    assert observed["curr_price"] == 9900
+    assert observed["profit_rate"] < 0
+
+
+def test_post_probe_ai_drop_resets_prior_confirmation(monkeypatch):
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *a, **k: None)
+    base_ts = time.time()
+    stock = {
+        "status": "HOLDING",
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "entry_split_probe_bundle_id": "123456-ai-drop",
+        "entry_split_probe_terminal_at": base_ts - 1.0,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "_post_probe_hard_abort_recovery_bundle_id": "123456-ai-drop",
+        "_post_probe_hard_abort_recovery_state": "STRONG",
+        "_post_probe_hard_abort_recovery_confirmation_count": 1,
+        "_post_probe_hard_abort_recovery_accepted_signature": "prior-strong",
+        "_post_probe_hard_abort_recovery_accepted_at": base_ts - 0.5,
+        "_post_probe_hard_abort_recovery_accepted_feature_at": base_ts - 0.5,
+        "rising_missed_scout_parent_ai_action": "DROP",
+        "rising_missed_scout_parent_ai_result_source": "live",
+        "rising_missed_scout_parent_ai_contract_status": "pass",
+        "rising_missed_scout_parent_ai_decision_trace_id": "trace-drop",
+        "rising_missed_scout_parent_ai_snapshot_id": "snapshot-drop",
+        "rising_missed_scout_parent_ai_prompt_version": "decision_quality_v2_14",
+        "last_reversal_features": {
+            "buy_pressure_10t": 72.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "tick_acceleration_ratio": 1.2,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "large_sell_print_detected": False,
+            "tick_context_quality": "fresh",
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "feature_extracted_at": base_ts,
+        },
+    }
+
+    result = state_handlers._observe_post_probe_hard_abort_recovery(
+        stock,
+        "123456",
+        strategy="SCALPING",
+        curr_price=10100,
+        profit_rate=1.0,
+        peak_profit=1.0,
+        current_ai_score=68,
+        held_sec=10,
+        now_ts=base_ts,
+    )
+
+    assert result["state"] == "WEAK"
+    assert result["confirmation_count"] == 0
+    assert stock["_post_probe_hard_abort_recovery_ai_thesis_state"] == "hard_negative"
+
+
 def test_active_winner_recovery_lane_preserves_separately_guarded_avg_down(
     monkeypatch,
 ):
@@ -18399,6 +19199,9 @@ def test_active_winner_recovery_lane_preserves_separately_guarded_avg_down(
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED", "true"
     )
     monkeypatch.setattr(
         state_handlers,
@@ -18451,6 +19254,7 @@ def test_active_winner_recovery_lane_preserves_separately_guarded_avg_down(
     stock = {
         "status": "HOLDING",
         "effective_venue": "KRX",
+        "rising_missed_one_share_scout": True,
         "buy_price": 10000,
         "buy_qty": 1,
         "avg_down_count": 0,
@@ -18554,6 +19358,7 @@ def test_winner_recovery_leg_is_marked_only_after_real_submit_state(monkeypatch)
 
     def submitted_execute(**kwargs):
         kwargs["stock"]["pending_add_reason"] = action["reason"]
+        kwargs["stock"]["pending_add_requested_at"] = time.time()
         return {"ord_no": "P1"}
 
     monkeypatch.setattr(state_handlers, "execute_scale_in_order", submitted_execute)
@@ -18569,7 +19374,12 @@ def test_winner_recovery_leg_is_marked_only_after_real_submit_state(monkeypatch)
     assert submitted_stock["post_probe_winner_recovery_leg_submitted"] is True
     assert submitted_stock["post_probe_winner_recovery_leg_qty"] == 1
 
-    blocked_stock = {}
+    blocked_stock = {
+        "pending_add_reason": "post_probe_winner_recovery_first_leg",
+        "pending_add_requested_at": time.time() - 60.0,
+        "last_add_reason": "post_probe_winner_recovery_first_leg",
+        "last_add_time": time.time() - 60.0,
+    }
     monkeypatch.setattr(
         state_handlers,
         "execute_scale_in_order",

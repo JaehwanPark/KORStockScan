@@ -912,6 +912,23 @@ def _post_probe_hard_abort_recovery_candidate_record(
         "minute_candle_window_fresh": _optional_boolish(
             fields.get("minute_candle_window_fresh")
         ),
+        "recovery_ai_thesis_state": str(
+            fields.get("recovery_ai_thesis_state") or "unreported"
+        )
+        .strip()
+        .lower(),
+        "recovery_ai_tape_substitution_applied": _boolish(
+            fields.get("recovery_ai_tape_substitution_applied")
+        ),
+        "recovery_ai_parent_prompt_version": str(
+            fields.get("recovery_ai_parent_prompt_version") or "unreported"
+        ).strip(),
+        "recovery_holding_ai_action": str(
+            fields.get("recovery_holding_ai_action") or "unreported"
+        ).strip(),
+        "recovery_holding_ai_data_quality": str(
+            fields.get("recovery_holding_ai_data_quality") or "unreported"
+        ).strip(),
     }
 
 
@@ -1280,20 +1297,21 @@ def _update_probe_residual_observation(
             if token.strip() and token.strip() != "-"
         }
         decision_authority = str(fields.get("decision_authority") or "").strip()
-        contract_blockers = set(source_blockers)
+        contract_integrity_blockers: set[str] = set()
         if decision_authority not in _POST_PROBE_RECOVERY_AUTHORITIES:
-            contract_blockers.add("decision_authority_invalid")
+            contract_integrity_blockers.add("decision_authority_invalid")
         if _boolish(fields.get("runtime_effect")):
-            contract_blockers.add("runtime_effect_not_false")
+            contract_integrity_blockers.add("runtime_effect_not_false")
         if _boolish(fields.get("actual_order_submitted")):
-            contract_blockers.add("actual_order_submitted_not_false")
+            contract_integrity_blockers.add("actual_order_submitted_not_false")
         if not _boolish(fields.get("broker_order_forbidden")):
-            contract_blockers.add("broker_order_forbidden_not_true")
+            contract_integrity_blockers.add("broker_order_forbidden_not_true")
         evidence_signature = str(
             fields.get("recovery_evidence_signature") or ""
         ).strip()
         if not evidence_signature:
-            contract_blockers.add("evidence_signature_missing")
+            contract_integrity_blockers.add("evidence_signature_missing")
+        contract_blockers = source_blockers | contract_integrity_blockers
         observed_epoch = _event_epoch(row.get("emitted_at"))
         item.setdefault("post_probe_hard_abort_recovery_observations", []).append(
             {
@@ -1304,6 +1322,18 @@ def _update_probe_residual_observation(
                 ),
                 "evidence_signature": evidence_signature,
                 "source_quality_blockers": sorted(contract_blockers),
+                "confirmation_preserved": bool(
+                    _boolish(fields.get("recovery_confirmation_preserved"))
+                    and not contract_integrity_blockers
+                ),
+                "ai_thesis_state": str(
+                    fields.get("recovery_ai_thesis_state") or "unreported"
+                )
+                .strip()
+                .lower(),
+                "ai_tape_substitution_applied": _boolish(
+                    fields.get("recovery_ai_tape_substitution_applied")
+                ),
             }
         )
         item["post_probe_hard_abort_recovery_latest_state"] = str(
@@ -1615,6 +1645,9 @@ def _finalize_post_probe_hard_abort_recovery(item: dict[str, Any]) -> None:
     excluded_count = 0
     valid_window_evaluation_count = 0
     source_quality_blockers: set[str] = set()
+    preserved_gap_count = 0
+    ai_thesis_state_counts: Counter[str] = Counter()
+    ai_tape_substitution_count = 0
     for observation in observations:
         observed_epoch = float(observation["observed_epoch"])
         if (terminal_epoch is not None and observed_epoch < terminal_epoch) or (
@@ -1623,12 +1656,24 @@ def _finalize_post_probe_hard_abort_recovery(item: dict[str, Any]) -> None:
             excluded_count += 1
             continue
         valid_window_evaluation_count += 1
+        ai_thesis_state = str(
+            observation.get("ai_thesis_state") or "unreported"
+        ).strip()
+        ai_thesis_state_counts[ai_thesis_state or "unreported"] += 1
+        if bool(
+            observation.get("ai_tape_substitution_applied")
+            and ai_thesis_state == "supportive"
+        ):
+            ai_tape_substitution_count += 1
         source_quality_blockers.update(
             str(blocker)
             for blocker in observation.get("source_quality_blockers") or []
             if str(blocker)
         )
         if not bool(observation.get("eligible")):
+            if bool(observation.get("confirmation_preserved")) and confirmation_count:
+                preserved_gap_count += 1
+                continue
             confirmation_count = 0
             last_accepted_epoch = None
             last_signature = ""
@@ -1661,6 +1706,15 @@ def _finalize_post_probe_hard_abort_recovery(item: dict[str, Any]) -> None:
     )
     item["post_probe_hard_abort_recovery_source_quality_blockers"] = sorted(
         source_quality_blockers
+    )
+    item["post_probe_hard_abort_recovery_confirmation_preserved_gap_count"] = (
+        preserved_gap_count
+    )
+    item["post_probe_hard_abort_recovery_ai_thesis_state_counts"] = dict(
+        sorted(ai_thesis_state_counts.items())
+    )
+    item["post_probe_hard_abort_recovery_ai_tape_substitution_count"] = (
+        ai_tape_substitution_count
     )
     item.pop("post_probe_hard_abort_recovery_observations", None)
 
@@ -1979,9 +2033,17 @@ def _update_normal_winner_expansion_candidate(
             reasons.append(reason)
         item["normal_winner_expansion_source_quality_reasons"] = reasons
         return False
+    ai_tape_substitution_applied = bool(
+        blocked.get("recovery_ai_tape_substitution_applied")
+        and str(blocked.get("recovery_ai_thesis_state") or "").strip().lower()
+        == "supportive"
+    )
     source_quality_valid = bool(
         not _pressure_provenance_missing(blocked)
-        and not _pressure_provenance_unusable(blocked)
+        and (
+            not _pressure_provenance_unusable(blocked)
+            or ai_tape_substitution_applied
+        )
         and not _micro_vwap_provenance_missing(blocked)
         and not _micro_vwap_provenance_unusable(blocked)
     )
@@ -1995,6 +2057,17 @@ def _update_normal_winner_expansion_candidate(
         "buy_pressure_10t": blocked.get("buy_pressure_10t"),
         "tick_acceleration_ratio": blocked.get("tick_acceleration_ratio"),
         "curr_vs_micro_vwap_bp": blocked.get("curr_vs_micro_vwap_bp"),
+        "recovery_ai_thesis_state": blocked.get("recovery_ai_thesis_state"),
+        "recovery_ai_tape_substitution_applied": blocked.get(
+            "recovery_ai_tape_substitution_applied"
+        ),
+        "recovery_ai_parent_prompt_version": blocked.get(
+            "recovery_ai_parent_prompt_version"
+        ),
+        "recovery_holding_ai_action": blocked.get("recovery_holding_ai_action"),
+        "recovery_holding_ai_data_quality": blocked.get(
+            "recovery_holding_ai_data_quality"
+        ),
         "source_quality_valid": source_quality_valid,
     }
     item.setdefault("normal_winner_expansion_candidates", []).append(candidate)
@@ -2022,6 +2095,21 @@ def _update_normal_winner_expansion_candidate(
     )
     item["normal_winner_expansion_curr_vs_micro_vwap_bp"] = blocked.get(
         "curr_vs_micro_vwap_bp"
+    )
+    item["normal_winner_expansion_recovery_ai_thesis_state"] = blocked.get(
+        "recovery_ai_thesis_state"
+    )
+    item["normal_winner_expansion_recovery_ai_tape_substitution_applied"] = bool(
+        blocked.get("recovery_ai_tape_substitution_applied")
+    )
+    item["normal_winner_expansion_recovery_ai_parent_prompt_version"] = blocked.get(
+        "recovery_ai_parent_prompt_version"
+    )
+    item["normal_winner_expansion_recovery_holding_ai_action"] = blocked.get(
+        "recovery_holding_ai_action"
+    )
+    item["normal_winner_expansion_recovery_holding_ai_data_quality"] = blocked.get(
+        "recovery_holding_ai_data_quality"
     )
     item["normal_winner_expansion_source_quality_valid"] = source_quality_valid
     item["normal_winner_expansion_post_candidate_max_profit_pct"] = profit_rate
@@ -2478,6 +2566,34 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for item in post_probe_closed
             if item.get("post_probe_hard_abort_recovery_confirmation_ready")
         ),
+        "post_terminal_abort_recovery_confirmation_preserved_gap_count": sum(
+            int(
+                item.get(
+                    "post_probe_hard_abort_recovery_confirmation_preserved_gap_count"
+                )
+                or 0
+            )
+            for item in post_probe_closed
+        ),
+        "post_terminal_abort_recovery_ai_supportive_evaluation_count": sum(
+            int(
+                (
+                    item.get("post_probe_hard_abort_recovery_ai_thesis_state_counts")
+                    or {}
+                ).get("supportive")
+                or 0
+            )
+            for item in post_probe_closed
+        ),
+        "post_terminal_abort_recovery_ai_tape_substitution_count": sum(
+            int(
+                item.get(
+                    "post_probe_hard_abort_recovery_ai_tape_substitution_count"
+                )
+                or 0
+            )
+            for item in post_probe_closed
+        ),
         "post_terminal_abort_recovery_hard_count": sum(
             1
             for item in post_probe_closed
@@ -2717,6 +2833,29 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
                 else "non_negative"
             )
         ),
+        "recovery_ai_thesis_state": lambda item: str(
+            item.get("normal_winner_expansion_recovery_ai_thesis_state")
+            or "unreported"
+        ),
+        "recovery_ai_tape_substitution": lambda item: (
+            "applied"
+            if item.get(
+                "normal_winner_expansion_recovery_ai_tape_substitution_applied"
+            )
+            else "not_applied"
+        ),
+        "recovery_ai_parent_prompt_version": lambda item: str(
+            item.get("normal_winner_expansion_recovery_ai_parent_prompt_version")
+            or "unreported"
+        ),
+        "recovery_holding_ai_action": lambda item: str(
+            item.get("normal_winner_expansion_recovery_holding_ai_action")
+            or "unreported"
+        ),
+        "recovery_holding_ai_data_quality": lambda item: str(
+            item.get("normal_winner_expansion_recovery_holding_ai_data_quality")
+            or "unreported"
+        ),
         "blocker_reason": lambda item: str(
             item.get("normal_winner_expansion_blocker_reason") or "unknown"
         ),
@@ -2931,8 +3070,50 @@ def _real_scale_in_execution_record(
         "fill_price": round(fill_price, 4),
         "fill_qty": fill_qty,
         "fill_notional_krw": round(fill_price * fill_qty, 4),
+        "scale_in_receipt_economics_complete": _boolish(
+            fields.get("receipt_economics_complete")
+        ),
+        "scale_in_receipt_quantity_contract_complete": _boolish(
+            fields.get("receipt_quantity_contract_complete")
+        ),
+        "scale_in_receipt_unit_fill_consistent": _boolish(
+            fields.get("receipt_unit_fill_consistent")
+        ),
+        "scale_in_broker_execution_provenance_complete": _boolish(
+            fields.get("broker_execution_provenance_complete")
+        ),
         "post_add_avg_price": _safe_float(fields.get("new_avg_price"), None),
         "post_add_position_qty": int(_safe_float(fields.get("new_buy_qty"), 0) or 0),
+        "recovery_ai_thesis_state": str(
+            fields.get("post_probe_winner_recovery_ai_thesis_state") or "unreported"
+        ),
+        "recovery_ai_parent_action": str(
+            fields.get("post_probe_winner_recovery_ai_parent_action")
+            or "NOT_EVALUATED"
+        ),
+        "recovery_ai_parent_prompt_version": str(
+            fields.get("post_probe_winner_recovery_ai_parent_prompt_version") or "-"
+        ),
+        "recovery_ai_parent_trace_id": str(
+            fields.get("post_probe_winner_recovery_ai_parent_trace_id") or "-"
+        ),
+        "recovery_ai_parent_snapshot_id": str(
+            fields.get("post_probe_winner_recovery_ai_parent_snapshot_id") or "-"
+        ),
+        "recovery_holding_ai_action": str(
+            fields.get("post_probe_winner_recovery_holding_ai_action")
+            or "NOT_EVALUATED"
+        ),
+        "recovery_holding_ai_data_quality": str(
+            fields.get("post_probe_winner_recovery_holding_ai_data_quality")
+            or "insufficient"
+        ),
+        "recovery_holding_ai_input_schema": str(
+            fields.get("post_probe_winner_recovery_holding_ai_input_schema") or "-"
+        ),
+        "recovery_ai_tape_substitution_applied": _boolish(
+            fields.get("post_probe_winner_recovery_ai_tape_substitution_applied")
+        ),
         "closed": False,
         "actual_order_submitted": True,
         "broker_order_forbidden": False,
@@ -2965,12 +3146,80 @@ def _update_real_scale_in_outcome(item: dict[str, Any], row: dict[str, Any]) -> 
     item["sell_completed_at"] = row.get("emitted_at")
     item["final_position_profit_pct"] = profit_rate
     item["sell_price"] = sell_price
+    item["realized_pnl_krw"] = _safe_float(fields.get("realized_pnl_krw"), None)
+    item["no_scale_in_counterfactual_profit_pct"] = _safe_float(
+        fields.get("no_scale_in_counterfactual_profit_pct"), None
+    )
+    item["scale_in_incremental_realized_delta_pct"] = _safe_float(
+        fields.get("scale_in_incremental_realized_delta_pct"), None
+    )
+    item["sell_receipt_economics_complete"] = _boolish(
+        fields.get("sell_execution_receipt_economics_complete")
+    )
+    item["sell_receipt_quantity_contract_complete"] = _boolish(
+        fields.get("sell_execution_receipt_quantity_contract_complete")
+    )
+    item["sell_receipt_unit_fill_consistent"] = _boolish(
+        fields.get("sell_execution_receipt_unit_fill_consistent")
+    )
+    item["sell_broker_execution_provenance_complete"] = _boolish(
+        fields.get("broker_execution_provenance_complete")
+    )
     fill_price = _safe_float(item.get("fill_price"), 0.0) or 0.0
     if sell_price is not None and fill_price > 0:
         item["scale_in_leg_gross_return_proxy_pct"] = round(
             ((sell_price - fill_price) / fill_price) * 100.0,
             4,
         )
+
+
+def _finalize_real_scale_in_source_quality(item: dict[str, Any]) -> None:
+    """Calculate fee-aware leg EV only from complete broker receipt contracts."""
+
+    blockers: list[str] = []
+    if not item.get("closed"):
+        blockers.append("position_not_closed")
+    if not item.get("scale_in_receipt_economics_complete"):
+        blockers.append("scale_in_receipt_economics_incomplete")
+    if not item.get("scale_in_receipt_quantity_contract_complete"):
+        blockers.append("scale_in_receipt_quantity_incomplete")
+    if not item.get("scale_in_receipt_unit_fill_consistent"):
+        blockers.append("scale_in_receipt_unit_fill_inconsistent")
+    if not item.get("scale_in_broker_execution_provenance_complete"):
+        blockers.append("scale_in_broker_provenance_incomplete")
+    if not item.get("sell_receipt_economics_complete"):
+        blockers.append("sell_receipt_economics_incomplete")
+    if not item.get("sell_receipt_quantity_contract_complete"):
+        blockers.append("sell_receipt_quantity_incomplete")
+    if not item.get("sell_receipt_unit_fill_consistent"):
+        blockers.append("sell_receipt_unit_fill_inconsistent")
+    if not item.get("sell_broker_execution_provenance_complete"):
+        blockers.append("sell_broker_provenance_incomplete")
+    if not item.get("winner_recovery_qty_cap_valid", True):
+        blockers.append("winner_recovery_qty_cap_invalid")
+
+    fill_price = _safe_float(item.get("fill_price"), 0.0) or 0.0
+    fill_qty = int(_safe_float(item.get("fill_qty"), 0) or 0)
+    sell_price = _safe_float(item.get("sell_price"), 0.0) or 0.0
+    fill_notional = _safe_float(item.get("fill_notional_krw"), 0.0) or 0.0
+    if fill_price <= 0 or fill_qty <= 0 or fill_notional <= 0:
+        blockers.append("scale_in_fill_economics_invalid")
+    if sell_price <= 0:
+        blockers.append("terminal_sell_price_invalid")
+
+    item["source_quality_valid"] = not blockers
+    item["source_quality_blockers"] = blockers
+    if blockers:
+        item["scale_in_leg_net_pnl_proxy_krw"] = None
+        item["scale_in_leg_net_return_proxy_pct"] = None
+        return
+
+    leg_net_pnl = calculate_net_realized_pnl(fill_price, sell_price, fill_qty)
+    item["scale_in_leg_net_pnl_proxy_krw"] = leg_net_pnl
+    item["scale_in_leg_net_return_proxy_pct"] = round(
+        (leg_net_pnl / fill_notional) * 100.0,
+        4,
+    )
 
 
 def _real_scale_in_performance_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2986,6 +3235,21 @@ def _real_scale_in_performance_summary(rows: list[dict[str, Any]]) -> dict[str, 
             _safe_float(item.get("final_position_profit_pct"), 0.0) or 0.0
             for item in cohort_closed
         ]
+        source_quality_valid = [
+            item for item in cohort_closed if item.get("source_quality_valid")
+        ]
+        valid_notional = sum(
+            _safe_float(item.get("fill_notional_krw"), 0.0) or 0.0
+            for item in source_quality_valid
+        )
+        valid_net_pnl = sum(
+            _safe_float(item.get("scale_in_leg_net_pnl_proxy_krw"), 0.0) or 0.0
+            for item in source_quality_valid
+        )
+        valid_net_returns = [
+            _safe_float(item.get("scale_in_leg_net_return_proxy_pct"), 0.0) or 0.0
+            for item in source_quality_valid
+        ]
         return {
             "execution_count": len(cohort_rows),
             "closed_count": len(cohort_closed),
@@ -2995,6 +3259,31 @@ def _real_scale_in_performance_summary(rows: list[dict[str, Any]]) -> dict[str, 
             "equal_weight_avg_final_position_profit_pct": (
                 round(sum(values) / len(values), 4) if values else None
             ),
+            "source_quality_valid_closed_count": len(source_quality_valid),
+            "source_quality_blocked_closed_count": len(cohort_closed)
+            - len(source_quality_valid),
+            "scale_in_leg_net_pnl_proxy_krw_sum": (
+                round(valid_net_pnl, 4) if source_quality_valid else None
+            ),
+            "equal_weight_avg_scale_in_leg_net_return_pct": (
+                round(sum(valid_net_returns) / len(valid_net_returns), 4)
+                if valid_net_returns
+                else None
+            ),
+            "source_quality_adjusted_ev_pct": (
+                round((valid_net_pnl / valid_notional) * 100.0, 4)
+                if valid_notional > 0
+                else None
+            ),
+            "scale_in_leg_diagnostic_win_rate": (
+                round(
+                    sum(1 for value in valid_net_returns if value > 0)
+                    / len(valid_net_returns),
+                    4,
+                )
+                if valid_net_returns
+                else None
+            ),
             "runtime_apply_authority": False,
         }
 
@@ -3002,6 +3291,77 @@ def _real_scale_in_performance_summary(rows: list[dict[str, Any]]) -> dict[str, 
         cohort: dimension_items(cohort)
         for cohort in ("winner_recovery", "normal_pyramid", "avg_down", "unknown")
     }
+    winner_recovery_rows = [
+        item
+        for item in rows
+        if item.get("scale_in_outcome_cohort") == "winner_recovery"
+    ]
+    source_quality_valid_closed = [
+        item for item in closed if item.get("source_quality_valid")
+    ]
+    valid_notional = sum(
+        _safe_float(item.get("fill_notional_krw"), 0.0) or 0.0
+        for item in source_quality_valid_closed
+    )
+    valid_net_pnl = sum(
+        _safe_float(item.get("scale_in_leg_net_pnl_proxy_krw"), 0.0) or 0.0
+        for item in source_quality_valid_closed
+    )
+    valid_net_returns = [
+        _safe_float(item.get("scale_in_leg_net_return_proxy_pct"), 0.0) or 0.0
+        for item in source_quality_valid_closed
+    ]
+
+    def ai_dimension_items(dimension: str) -> list[dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in winner_recovery_rows:
+            value = str(item.get(dimension) or "UNKNOWN").strip() or "UNKNOWN"
+            grouped[value].append(item)
+        result = []
+        for value, bucket_rows in sorted(grouped.items()):
+            bucket_closed = [item for item in bucket_rows if item.get("closed")]
+            profit_values = [
+                float(_safe_float(item.get("final_position_profit_pct"), 0.0) or 0.0)
+                for item in bucket_closed
+            ]
+            source_quality_valid = [
+                item
+                for item in bucket_closed
+                if item.get("source_quality_valid")
+            ]
+            valid_notional = sum(
+                _safe_float(item.get("fill_notional_krw"), 0.0) or 0.0
+                for item in source_quality_valid
+            )
+            valid_net_pnl = sum(
+                _safe_float(item.get("scale_in_leg_net_pnl_proxy_krw"), 0.0)
+                or 0.0
+                for item in source_quality_valid
+            )
+            result.append(
+                {
+                    dimension: value,
+                    "execution_count": len(bucket_rows),
+                    "closed_count": len(bucket_closed),
+                    "closed_winner_count": sum(
+                        1 for value in profit_values if value > 0
+                    ),
+                    "equal_weight_avg_final_position_profit_pct": (
+                        round(sum(profit_values) / len(profit_values), 4)
+                        if profit_values
+                        else None
+                    ),
+                    "source_quality_valid_closed_count": len(source_quality_valid),
+                    "source_quality_adjusted_ev_pct": (
+                        round((valid_net_pnl / valid_notional) * 100.0, 4)
+                        if valid_notional > 0
+                        else None
+                    ),
+                    "runtime_apply_authority": False,
+                }
+            )
+        return result
+
     return {
         "execution_count": len(rows),
         "closed_count": len(closed),
@@ -3025,12 +3385,53 @@ def _real_scale_in_performance_summary(rows: list[dict[str, Any]]) -> dict[str, 
             and by_cohort["avg_down"]["execution_count"] > 0
         ),
         "by_outcome_cohort": by_cohort,
+        "winner_recovery_by_ai_thesis_state": ai_dimension_items(
+            "recovery_ai_thesis_state"
+        ),
+        "winner_recovery_by_ai_parent_prompt_version": ai_dimension_items(
+            "recovery_ai_parent_prompt_version"
+        ),
+        "winner_recovery_by_holding_ai_action": ai_dimension_items(
+            "recovery_holding_ai_action"
+        ),
+        "winner_recovery_by_holding_ai_data_quality": ai_dimension_items(
+            "recovery_holding_ai_data_quality"
+        ),
         "completed_outcome_available": bool(closed),
-        "source_quality_adjusted_ev_available": False,
+        "source_quality_valid_closed_count": len(source_quality_valid_closed),
+        "source_quality_blocked_closed_count": len(closed)
+        - len(source_quality_valid_closed),
+        "scale_in_leg_net_pnl_proxy_krw_sum": (
+            round(valid_net_pnl, 4) if source_quality_valid_closed else None
+        ),
+        "equal_weight_avg_scale_in_leg_net_return_pct": (
+            round(sum(valid_net_returns) / len(valid_net_returns), 4)
+            if valid_net_returns
+            else None
+        ),
+        "source_quality_adjusted_ev_pct": (
+            round((valid_net_pnl / valid_notional) * 100.0, 4)
+            if valid_notional > 0
+            else None
+        ),
+        "scale_in_leg_diagnostic_win_rate": (
+            round(
+                sum(1 for value in valid_net_returns if value > 0)
+                / len(valid_net_returns),
+                4,
+            )
+            if valid_net_returns
+            else None
+        ),
+        "source_quality_adjusted_ev_available": bool(source_quality_valid_closed),
         "source_quality_adjusted_ev_unavailable_reason": (
-            "realized_pnl_krw_and_cost_adjusted_incremental_leg_outcome_missing"
-            if closed
-            else "no_closed_scale_in_position"
+            "-"
+            if source_quality_valid_closed
+            else (
+                "all_closed_scale_in_rows_failed_receipt_source_quality"
+                if closed
+                else "no_closed_scale_in_position"
+            )
         ),
     }
 
@@ -3087,6 +3488,38 @@ def build_report(
                         "post_add_avg_price": real_scale_in.get("post_add_avg_price"),
                         "post_add_position_qty": real_scale_in.get(
                             "post_add_position_qty"
+                        ),
+                        "scale_in_receipt_economics_complete": bool(
+                            existing_execution.get(
+                                "scale_in_receipt_economics_complete"
+                            )
+                            and real_scale_in.get(
+                                "scale_in_receipt_economics_complete"
+                            )
+                        ),
+                        "scale_in_receipt_quantity_contract_complete": bool(
+                            existing_execution.get(
+                                "scale_in_receipt_quantity_contract_complete"
+                            )
+                            and real_scale_in.get(
+                                "scale_in_receipt_quantity_contract_complete"
+                            )
+                        ),
+                        "scale_in_receipt_unit_fill_consistent": bool(
+                            existing_execution.get(
+                                "scale_in_receipt_unit_fill_consistent"
+                            )
+                            and real_scale_in.get(
+                                "scale_in_receipt_unit_fill_consistent"
+                            )
+                        ),
+                        "scale_in_broker_execution_provenance_complete": bool(
+                            existing_execution.get(
+                                "scale_in_broker_execution_provenance_complete"
+                            )
+                            and real_scale_in.get(
+                                "scale_in_broker_execution_provenance_complete"
+                            )
                         ),
                     }
                 )
@@ -3314,6 +3747,7 @@ def build_report(
         item["winner_recovery_qty_cap_valid"] = bool(
             not winner_recovery or int(_safe_float(item.get("fill_qty"), 0) or 0) <= 1
         )
+        _finalize_real_scale_in_source_quality(item)
 
     label_counts = Counter(
         str(item.get("pyramid_feedback_label") or "unknown") for item in rows
@@ -3326,6 +3760,12 @@ def build_report(
     )
     real_scale_in_performance_summary = _real_scale_in_performance_summary(
         real_scale_in_rows
+    )
+    real_scale_in_source_quality_blocked_closed_count = int(
+        real_scale_in_performance_summary.get(
+            "source_quality_blocked_closed_count", 0
+        )
+        or 0
     )
     winner_recovery_qty_cap_invalid_count = int(
         real_scale_in_performance_summary.get(
@@ -3363,6 +3803,8 @@ def build_report(
         source_quality_status = "micro_vwap_provenance_missing"
     if micro_vwap_provenance_unusable_count:
         source_quality_status = "micro_vwap_provenance_unusable"
+    if real_scale_in_source_quality_blocked_closed_count:
+        source_quality_status = "real_scale_in_receipt_source_quality_incomplete"
     if winner_recovery_qty_cap_invalid_count:
         source_quality_status = "winner_recovery_qty_cap_invalid"
     return {
@@ -3428,7 +3870,8 @@ def build_report(
             ),
             "primary_decision_metric": "notional_weighted_ev_pct",
             "source_quality_gate": (
-                "fresh_quote_tick_tape_micro_and_same_probe_terminal_cycle"
+                "fresh_quote_tick_micro_and_two_independent_market_tape_or_"
+                "trusted_ai_groups_same_probe_terminal_cycle"
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
@@ -3447,6 +3890,7 @@ def build_report(
                 "one_share_record_join_positive_pyramid_evaluation_with_optional_"
                 "pressure_and_micro_vwap_feature_provenance_then_post_candidate_"
                 "holding_and_sell; candidate_at_must_not_be_after_final_ts; "
+                "trusted_ai_tape_substitution_requires_supportive_thesis; "
                 "explicit_conflict_free_venue_required_for_venue_split"
             ),
             "forbidden_uses": FORBIDDEN_USES,
@@ -3479,7 +3923,9 @@ def build_report(
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
             "source_quality_gate": (
                 "record_and_order_joined_real_scale_in_fill_then_terminal_sell; "
-                "active positions remain unrealized and leg return is gross proxy only"
+                "complete quantity/economics/broker provenance on both receipts; "
+                "active positions remain unrealized and leg net return is a fee-aware "
+                "pro-rata attribution proxy"
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
@@ -3509,6 +3955,9 @@ def build_report(
             "temporal_inversion_candidate_count": temporal_inversion_candidate_count,
             "winner_recovery_qty_cap_invalid_count": (
                 winner_recovery_qty_cap_invalid_count
+            ),
+            "real_scale_in_source_quality_blocked_closed_count": (
+                real_scale_in_source_quality_blocked_closed_count
             ),
         },
         "summary": {
@@ -3587,6 +4036,14 @@ def build_report(
                     "post_probe_hard_abort_recovery_confirmation_max_count",
                     "post_probe_hard_abort_recovery_confirmation_ready",
                     "post_probe_hard_abort_recovery_confirmation_ready_at",
+                    "post_probe_hard_abort_recovery_confirmation_preserved_gap_count",
+                    "post_probe_hard_abort_recovery_ai_thesis_state_counts",
+                    "post_probe_hard_abort_recovery_ai_tape_substitution_count",
+                    "normal_winner_expansion_recovery_ai_thesis_state",
+                    "normal_winner_expansion_recovery_ai_tape_substitution_applied",
+                    "normal_winner_expansion_recovery_ai_parent_prompt_version",
+                    "normal_winner_expansion_recovery_holding_ai_action",
+                    "normal_winner_expansion_recovery_holding_ai_data_quality",
                     "probe_direction_evaluation_count",
                     "probe_direction_strong_evaluation_count",
                     "probe_direction_max_consecutive_strong_count",
@@ -3651,6 +4108,9 @@ def write_outputs(
         f"- probe_residual_realized_loss_or_flat_confirmation_ready_count: {summary.get('probe_residual_realized_loss_or_flat_confirmation_ready_count')}",
         f"- post_hard_abort_recovery_evaluation_seen_count: {summary.get('post_hard_abort_recovery_evaluation_seen_count')}",
         f"- post_hard_abort_recovery_confirmation_ready_count: {summary.get('post_hard_abort_recovery_confirmation_ready_count')}",
+        f"- post_terminal_abort_recovery_confirmation_preserved_gap_count: {summary.get('post_terminal_abort_recovery_confirmation_preserved_gap_count')}",
+        f"- post_terminal_abort_recovery_ai_supportive_evaluation_count: {summary.get('post_terminal_abort_recovery_ai_supportive_evaluation_count')}",
+        f"- post_terminal_abort_recovery_ai_tape_substitution_count: {summary.get('post_terminal_abort_recovery_ai_tape_substitution_count')}",
         f"- post_hard_abort_recovery_evaluation_not_run_profitable_count: {summary.get('post_hard_abort_recovery_evaluation_not_run_profitable_count')}",
         f"- canonical_expansion_missed_upside_count: {summary.get('canonical_expansion_missed_upside_count')}",
         f"- canonical_expansion_source_quality_valid_missed_upside_count: {summary.get('canonical_expansion_source_quality_valid_missed_upside_count')}",
@@ -3693,7 +4153,8 @@ def write_outputs(
             "- record_id={record_id} code={stock_code} name={stock_name} "
             "cohort={scale_in_outcome_cohort} type={add_type} reason={add_reason} "
             "fill={fill_price}x{fill_qty} closed={closed} latest={latest_position_profit_pct} "
-            "final={final_position_profit_pct} leg_gross_proxy={scale_in_leg_gross_return_proxy_pct}".format(
+            "final={final_position_profit_pct} leg_gross_proxy={scale_in_leg_gross_return_proxy_pct} "
+            "leg_net_proxy={scale_in_leg_net_return_proxy_pct} source_quality={source_quality_valid}".format(
                 **{
                     **item,
                     "closed": bool(item.get("closed")),
@@ -3703,6 +4164,12 @@ def write_outputs(
                     "final_position_profit_pct": item.get("final_position_profit_pct"),
                     "scale_in_leg_gross_return_proxy_pct": item.get(
                         "scale_in_leg_gross_return_proxy_pct"
+                    ),
+                    "scale_in_leg_net_return_proxy_pct": item.get(
+                        "scale_in_leg_net_return_proxy_pct"
+                    ),
+                    "source_quality_valid": bool(
+                        item.get("source_quality_valid")
                     ),
                 }
             )

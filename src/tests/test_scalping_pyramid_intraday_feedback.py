@@ -1652,13 +1652,18 @@ def test_hard_abort_recovery_confirmation_becomes_source_only_normal_winner_cand
         "profit_rate": 1.2,
         "peak_profit": 1.2,
         "current_ai_score": 72,
-        "buy_pressure_10t": 75,
-        "tick_aggressor_trusted_count": 5,
-        "tick_aggressor_pressure_usable": True,
+        "buy_pressure_10t": 50,
+        "tick_aggressor_trusted_count": 0,
+        "tick_aggressor_pressure_usable": False,
         "tick_acceleration_ratio": 1.3,
         "curr_vs_micro_vwap_bp": 20,
         "micro_vwap_available": True,
         "minute_candle_window_fresh": True,
+        "recovery_ai_thesis_state": "supportive",
+        "recovery_ai_tape_substitution_applied": True,
+        "recovery_ai_parent_prompt_version": "decision_quality_v2_14",
+        "recovery_holding_ai_action": "HOLD",
+        "recovery_holding_ai_data_quality": "fresh",
     }
     rows = [
         _event(
@@ -1727,6 +1732,31 @@ def test_hard_abort_recovery_confirmation_becomes_source_only_normal_winner_cand
                     "no_runtime_mutation"
                 ),
                 "recovery_abort_class": "soft",
+                "recovery_state": "SOURCE_BLOCKED",
+                "recovery_reason": "source_quality_blocked:quote_stale",
+                "recovery_eligible": False,
+                "recovery_source_quality_blockers": "quote_stale",
+                "recovery_confirmation_preserved": True,
+                "recovery_evidence_signature": "recovery-gap",
+                "recovery_confirmation_count": 1,
+                "recovery_confirmation_ready": False,
+                "recovery_ai_thesis_state": "neutral_or_unproven",
+                "recovery_ai_tape_substitution_applied": False,
+            },
+            emitted_at="2026-08-03T09:00:02.150000+09:00",
+        ),
+        _event(
+            701,
+            "123456",
+            "recovery-winner",
+            "post_probe_terminal_abort_recovery_observed",
+            {
+                **recovery_contract,
+                "decision_authority": (
+                    "source_only_post_terminal_abort_recovery_observation_"
+                    "no_runtime_mutation"
+                ),
+                "recovery_abort_class": "soft",
                 "recovery_evidence_signature": "recovery-b",
                 "recovery_confirmation_count": 2,
                 "recovery_confirmation_ready": True,
@@ -1781,6 +1811,52 @@ def test_hard_abort_recovery_confirmation_becomes_source_only_normal_winner_cand
     assert item["runtime_effect"] is False
     assert item["actual_order_submitted"] is False
     assert report["summary"]["post_hard_abort_recovery_confirmation_ready_count"] == 1
+    assert (
+        item["post_probe_hard_abort_recovery_confirmation_preserved_gap_count"] == 1
+    )
+    assert item["post_probe_hard_abort_recovery_ai_thesis_state_counts"] == {
+        "neutral_or_unproven": 1,
+        "supportive": 2,
+    }
+    assert item["post_probe_hard_abort_recovery_ai_tape_substitution_count"] == 2
+    assert (
+        report["summary"][
+            "post_terminal_abort_recovery_confirmation_preserved_gap_count"
+        ]
+        == 1
+    )
+    assert (
+        report["summary"][
+            "post_terminal_abort_recovery_ai_supportive_evaluation_count"
+        ]
+        == 2
+    )
+    assert (
+        report["summary"][
+            "post_terminal_abort_recovery_ai_tape_substitution_count"
+        ]
+        == 2
+    )
+    ai_axis = report["summary"]["normal_winner_expansion"][
+        "feature_axis_metrics"
+    ]["recovery_ai_thesis_state"]
+    assert len(ai_axis) == 1
+    assert ai_axis[0]["bucket"] == "supportive"
+    assert ai_axis[0]["sample_count"] == 1
+    assert ai_axis[0]["realized_incremental_winner_count"] == 1
+    persisted = report["normal_winner_expansion_rows"][0]
+    assert persisted["normal_winner_expansion_recovery_ai_thesis_state"] == (
+        "supportive"
+    )
+    assert (
+        persisted[
+            "normal_winner_expansion_recovery_ai_tape_substitution_applied"
+        ]
+        is True
+    )
+    assert persisted["normal_winner_expansion_recovery_ai_parent_prompt_version"] == (
+        "decision_quality_v2_14"
+    )
     assert report["summary"]["canonical_expansion_missed_upside_count"] == 1
 
 
@@ -2259,6 +2335,19 @@ def test_real_scale_in_performance_separates_winner_recovery_and_avg_down(
                 "add_reason": "post_probe_winner_recovery_first_leg",
                 "new_avg_price": 9950,
                 "new_buy_qty": 2,
+                "post_probe_winner_recovery_ai_thesis_state": "supportive",
+                "post_probe_winner_recovery_ai_parent_action": "WAIT",
+                "post_probe_winner_recovery_ai_parent_prompt_version": "entry-v9",
+                "post_probe_winner_recovery_ai_parent_trace_id": "entry-trace-v9",
+                "post_probe_winner_recovery_ai_parent_snapshot_id": (
+                    "entry-snapshot-v9"
+                ),
+                "post_probe_winner_recovery_holding_ai_action": "HOLD",
+                "post_probe_winner_recovery_holding_ai_data_quality": "fresh",
+                "post_probe_winner_recovery_holding_ai_input_schema": (
+                    "holding_decision_context_v1"
+                ),
+                "post_probe_winner_recovery_ai_tape_substitution_applied": True,
             },
             emitted_at="2026-08-04T10:02:00+09:00",
         ),
@@ -2315,9 +2404,113 @@ def test_real_scale_in_performance_separates_winner_recovery_and_avg_down(
     assert items["winner_recovery"]["fill_price"] == 10050
     assert items["winner_recovery"]["scale_in_leg_gross_return_proxy_pct"] == 0.995
     assert items["winner_recovery"]["winner_recovery_qty_cap_valid"] is False
+    assert items["winner_recovery"]["recovery_ai_thesis_state"] == "supportive"
+    assert items["winner_recovery"]["recovery_ai_parent_prompt_version"] == "entry-v9"
+    assert items["winner_recovery"]["recovery_ai_parent_trace_id"] == (
+        "entry-trace-v9"
+    )
+    assert items["winner_recovery"]["recovery_ai_parent_snapshot_id"] == (
+        "entry-snapshot-v9"
+    )
+    assert items["winner_recovery"]["recovery_holding_ai_action"] == "HOLD"
+    assert items["winner_recovery"]["recovery_ai_tape_substitution_applied"] is True
+    assert items["winner_recovery"]["recovery_holding_ai_input_schema"] == (
+        "holding_decision_context_v1"
+    )
     assert summary["winner_recovery_qty_cap_invalid_count"] == 1
+    assert summary["winner_recovery_by_ai_thesis_state"] == [
+        {
+            "recovery_ai_thesis_state": "supportive",
+            "execution_count": 1,
+            "closed_count": 1,
+            "closed_winner_count": 1,
+            "equal_weight_avg_final_position_profit_pct": 1.2,
+            "source_quality_valid_closed_count": 0,
+            "source_quality_adjusted_ev_pct": None,
+            "runtime_apply_authority": False,
+        }
+    ]
     assert summary["source_quality_adjusted_ev_available"] is False
     assert (
         report["real_scale_in_performance_metric_contract"]["metric_role"]
         == "real_scale_in_execution_outcome_attribution"
+    )
+
+
+def test_real_scale_in_performance_calculates_fee_aware_ev_from_complete_receipts(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-04.jsonl"
+    rows = [
+        _event(
+            703,
+            "333333",
+            "winner-recovery-valid",
+            "scale_in_executed",
+            {
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "order_no": "P2",
+                "fill_price": 10000,
+                "fill_qty": 1,
+                "add_type": "PYRAMID",
+                "add_reason": "post_probe_winner_recovery_first_leg",
+                "new_avg_price": 9950,
+                "new_buy_qty": 2,
+                "receipt_economics_complete": True,
+                "receipt_quantity_contract_complete": True,
+                "receipt_unit_fill_consistent": True,
+                "broker_execution_provenance_complete": True,
+            },
+            emitted_at="2026-08-04T10:02:00+09:00",
+        ),
+        _event(
+            703,
+            "333333",
+            "winner-recovery-valid",
+            "sell_completed",
+            {
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "profit_rate": "+0.70",
+                "sell_price": 10100,
+                "realized_pnl_krw": 139,
+                "no_scale_in_counterfactual_profit_pct": 0.65,
+                "scale_in_incremental_realized_delta_pct": 0.05,
+                "sell_execution_receipt_economics_complete": True,
+                "sell_execution_receipt_quantity_contract_complete": True,
+                "sell_execution_receipt_unit_fill_consistent": True,
+                "broker_execution_provenance_complete": True,
+            },
+            emitted_at="2026-08-04T10:05:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-04", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    summary = report["summary"]["real_scale_in_performance"]
+    row = report["real_scale_in_performance_rows"][0]
+    expected_net_pnl = mod.calculate_net_realized_pnl(10000, 10100, 1)
+    expected_ev = round(expected_net_pnl / 10000 * 100.0, 4)
+
+    assert row["source_quality_valid"] is True
+    assert row["source_quality_blockers"] == []
+    assert row["scale_in_leg_net_pnl_proxy_krw"] == expected_net_pnl
+    assert row["scale_in_leg_net_return_proxy_pct"] == expected_ev
+    assert row["scale_in_incremental_realized_delta_pct"] == 0.05
+    assert summary["source_quality_adjusted_ev_available"] is True
+    assert summary["source_quality_valid_closed_count"] == 1
+    assert summary["source_quality_blocked_closed_count"] == 0
+    assert summary["source_quality_adjusted_ev_pct"] == expected_ev
+    assert summary["scale_in_leg_net_pnl_proxy_krw_sum"] == expected_net_pnl
+    assert summary["scale_in_leg_diagnostic_win_rate"] == 1.0
+    assert (
+        summary["by_outcome_cohort"]["winner_recovery"][
+            "source_quality_adjusted_ev_pct"
+        ]
+        == expected_ev
     )

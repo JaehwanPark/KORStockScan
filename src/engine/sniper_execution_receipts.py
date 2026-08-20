@@ -594,6 +594,15 @@ _PENDING_ADD_META_KEYS = (
     "pending_add_initial_buy_price",
     "pending_add_initial_buy_qty",
     "pending_add_execution_notice_pending",
+    "pending_add_winner_recovery_ai_thesis_state",
+    "pending_add_winner_recovery_ai_parent_action",
+    "pending_add_winner_recovery_ai_parent_prompt_version",
+    "pending_add_winner_recovery_ai_parent_trace_id",
+    "pending_add_winner_recovery_ai_parent_snapshot_id",
+    "pending_add_winner_recovery_holding_ai_action",
+    "pending_add_winner_recovery_holding_ai_data_quality",
+    "pending_add_winner_recovery_holding_ai_input_schema",
+    "pending_add_winner_recovery_ai_tape_substitution_applied",
     "_add_receipt_requested_by_order_no",
     "_add_receipt_filled_by_order_no",
     "_add_receipt_filled_amount_by_order_no",
@@ -2205,6 +2214,56 @@ def _probe_residual_scale_in_receipt_fields(
         "prior_probe_residual_forbidden_uses": (
             "standalone_scale_in_submit|residual_guard_bypass|ai_guard_bypass|"
             "source_quality_bypass|account_order_quantity_cooldown_bypass"
+        ),
+    }
+
+
+def _winner_recovery_ai_receipt_fields(
+    target_stock: dict[str, Any],
+) -> dict[str, Any]:
+    """Freeze decision-time AI provenance before pending metadata is cleared."""
+
+    if (
+        str(target_stock.get("pending_add_reason") or "").strip()
+        != "post_probe_winner_recovery_first_leg"
+    ):
+        return {}
+    return {
+        "post_probe_winner_recovery_ai_thesis_state": (
+            target_stock.get("pending_add_winner_recovery_ai_thesis_state")
+            or "unreported"
+        ),
+        "post_probe_winner_recovery_ai_parent_action": (
+            target_stock.get("pending_add_winner_recovery_ai_parent_action")
+            or "NOT_EVALUATED"
+        ),
+        "post_probe_winner_recovery_ai_parent_prompt_version": (
+            target_stock.get("pending_add_winner_recovery_ai_parent_prompt_version")
+            or "-"
+        ),
+        "post_probe_winner_recovery_ai_parent_trace_id": (
+            target_stock.get("pending_add_winner_recovery_ai_parent_trace_id") or "-"
+        ),
+        "post_probe_winner_recovery_ai_parent_snapshot_id": (
+            target_stock.get("pending_add_winner_recovery_ai_parent_snapshot_id")
+            or "-"
+        ),
+        "post_probe_winner_recovery_holding_ai_action": (
+            target_stock.get("pending_add_winner_recovery_holding_ai_action")
+            or "NOT_EVALUATED"
+        ),
+        "post_probe_winner_recovery_holding_ai_data_quality": (
+            target_stock.get("pending_add_winner_recovery_holding_ai_data_quality")
+            or "insufficient"
+        ),
+        "post_probe_winner_recovery_holding_ai_input_schema": (
+            target_stock.get("pending_add_winner_recovery_holding_ai_input_schema")
+            or "-"
+        ),
+        "post_probe_winner_recovery_ai_tape_substitution_applied": bool(
+            target_stock.get(
+                "pending_add_winner_recovery_ai_tape_substitution_applied"
+            )
         ),
     }
 
@@ -6204,6 +6263,7 @@ def _handle_add_buy_execution(
     target_stock["post_add_qty"] = int(new_qty or 0)
     target_stock["last_add_type"] = add_type
     pending_add_reason = str(target_stock.get("pending_add_reason") or "").strip()
+    winner_recovery_ai_fields = _winner_recovery_ai_receipt_fields(target_stock)
     target_stock["last_add_reason"] = pending_add_reason
     target_stock["last_add_economic_direction"] = add_economic_direction
     target_stock["last_add_avg_price_improved"] = avg_price_improved
@@ -6388,6 +6448,7 @@ def _handle_add_buy_execution(
             target_stock,
             now_ts=fill_event_ts,
         ),
+        **winner_recovery_ai_fields,
     )
 
 

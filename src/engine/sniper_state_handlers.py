@@ -23978,12 +23978,15 @@ def _post_probe_winner_recovery_runtime_config(
 ) -> dict[str, Any]:
     """Resolve the dated, venue-bounded winner-recovery scale-in canary."""
 
-    configured = _env_bool(
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", False
+    enabled_key = "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED"
+    active_date_key = "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE"
+    explicit_enabled = os.getenv(enabled_key)
+    rising_missed_scope = bool(
+        _truthy_field(stock.get("rising_missed_one_share_entry_forced"))
+        or _truthy_field(stock.get("rising_missed_one_share_scout"))
     )
-    active_date = str(
-        os.getenv("KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE") or ""
-    ).strip()
+    configured = bool(explicit_enabled is not None and _env_bool(enabled_key, False))
+    active_date = str(os.getenv(active_date_key) or "").strip()
     current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).date().isoformat()
     raw_venue = (
         str(
@@ -24007,9 +24010,15 @@ def _post_probe_winner_recovery_runtime_config(
     else:
         venue = "UNKNOWN"
         cohort_key = ""
-    cohort_enabled = bool(cohort_key and _env_bool(cohort_key, True))
+    cohort_enabled = bool(cohort_key and _env_bool(cohort_key, False))
     date_active = bool(active_date and active_date == current_date)
-    active = bool(configured and date_active and cohort_enabled and venue != "UNKNOWN")
+    active = bool(
+        configured
+        and rising_missed_scope
+        and date_active
+        and cohort_enabled
+        and venue != "UNKNOWN"
+    )
     reason = (
         "active"
         if active
@@ -24017,7 +24026,9 @@ def _post_probe_winner_recovery_runtime_config(
             "disabled"
             if not configured
             else (
-                "active_date_missing_or_mismatch"
+                "non_rising_missed_scope"
+                if not rising_missed_scope
+                else "active_date_missing_or_mismatch"
                 if not date_active
                 else "venue_unproven"
                 if venue == "UNKNOWN"
@@ -24030,8 +24041,15 @@ def _post_probe_winner_recovery_runtime_config(
         "active": active,
         "reason": reason,
         "active_date": active_date or "-",
+        "configuration_source": (
+            "explicit_post_probe_env"
+            if explicit_enabled is not None
+            else "disabled_explicit_env_missing"
+        ),
+        "independent_rollback_key": enabled_key,
         "current_date": current_date,
         "effective_venue": venue,
+        "rising_missed_scope": rising_missed_scope,
         "cohort_enabled": cohort_enabled,
         "cohort_key": cohort_key or "-",
     }
@@ -24048,6 +24066,17 @@ def _post_probe_winner_recovery_confirmation_ready(stock: dict) -> bool:
     )
 
 
+def _post_probe_winner_recovery_confirmation_started(stock: dict) -> bool:
+    return bool(
+        str(stock.get("_post_probe_hard_abort_recovery_state") or "").upper()
+        == "STRONG"
+        and _safe_int(
+            stock.get("_post_probe_hard_abort_recovery_confirmation_count"), 0
+        )
+        >= 1
+    )
+
+
 def _post_probe_winner_recovery_gate_recheck_due(
     stock: dict,
     config: dict[str, Any],
@@ -24056,7 +24085,14 @@ def _post_probe_winner_recovery_gate_recheck_due(
         config.get("active")
         and stock.get("entry_split_probe_soft_abort")
         and stock.get("entry_split_probe_scale_in_recheck_allowed")
-        and _post_probe_winner_recovery_confirmation_ready(stock)
+        and not stock.get("entry_split_probe_scale_in_forbidden")
+        and str(stock.get("entry_split_probe_terminal_outcome") or "")
+        == "residual_not_submitted"
+        # The first accepted observation owns one bounded lock bypass so the
+        # second confirmation can use a newly extracted feature snapshot.  If
+        # we wait for confirmation_count == 2 here, the regular 20-second add
+        # lock prevents the second observation from ever being produced.
+        and _post_probe_winner_recovery_confirmation_started(stock)
     ):
         return False
     signature = str(
@@ -24067,6 +24103,202 @@ def _post_probe_winner_recovery_gate_recheck_due(
         and signature
         != str(stock.get("_post_probe_winner_recovery_gate_bypass_signature") or "")
     )
+
+
+def _post_probe_ai_thesis_context(
+    stock: dict,
+    *,
+    current_ai_score: float,
+    now_ts: float,
+    market_path_confirmed: bool,
+) -> dict[str, Any]:
+    """Resolve bounded AI thesis continuity without granting order authority."""
+
+    latest_confirmed_at = _safe_float(
+        stock.get("last_watching_ai_confirmed_at"), 0.0
+    )
+    latest_max_age_sec = max(
+        1.0,
+        _safe_float(
+            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_AI_AUTHORITY_MAX_PRIOR_AGE_SEC"),
+            _rule_float("AI_WATCHING_COOLDOWN", 300.0),
+        ),
+    )
+    latest_age_sec = (
+        max(0.0, float(now_ts) - latest_confirmed_at)
+        if latest_confirmed_at > 0
+        else None
+    )
+    latest_fresh = bool(
+        latest_age_sec is not None and latest_age_sec <= latest_max_age_sec
+    )
+    latest_trace_id = str(
+        stock.get("last_watching_ai_decision_trace_id") or ""
+    ).strip()
+    latest_attempt_trace_id = str(
+        stock.get("last_watching_ai_attempt_decision_trace_id") or ""
+    ).strip()
+    latest_attempt_trusted = bool(
+        stock.get("last_watching_ai_attempt_trusted")
+        and latest_trace_id
+        and latest_trace_id == latest_attempt_trace_id
+    )
+    frozen_prefix = "rising_missed_scout_parent_ai_"
+    frozen_parent_present = any(
+        key.startswith(frozen_prefix) and stock.get(key) is not None for key in stock
+    )
+    parent_provenance_source = (
+        "frozen_scout_parent" if frozen_parent_present else "latest_entry_fallback"
+    )
+    if frozen_parent_present:
+        parent_action = str(
+            stock.get("rising_missed_scout_parent_ai_action") or ""
+        ).strip().upper()
+        parent_source = str(
+            stock.get("rising_missed_scout_parent_ai_result_source") or ""
+        ).strip().lower()
+        parent_contract = str(
+            stock.get("rising_missed_scout_parent_ai_contract_status") or ""
+        ).strip().lower()
+        parent_trace_id = str(
+            stock.get("rising_missed_scout_parent_ai_decision_trace_id") or ""
+        ).strip()
+        parent_snapshot_id = str(
+            stock.get("rising_missed_scout_parent_ai_snapshot_id") or ""
+        ).strip()
+        parent_prompt_version = str(
+            stock.get("rising_missed_scout_parent_ai_prompt_version") or ""
+        ).strip()
+        probe_intent = _truthy_field(
+            stock.get("rising_missed_scout_parent_ai_probe_intent")
+        )
+        probe_intent_status = str(
+            stock.get("rising_missed_scout_parent_ai_probe_intent_status") or ""
+        ).strip().lower()
+    else:
+        parent_action = str(stock.get("last_watching_ai_action") or "").strip().upper()
+        parent_source = str(
+            stock.get("last_watching_ai_result_source") or ""
+        ).strip().lower()
+        parent_contract = str(
+            stock.get("last_watching_ai_attempt_contract_status") or ""
+        ).strip().lower()
+        parent_trace_id = str(
+            stock.get("last_watching_ai_decision_trace_id") or ""
+        ).strip()
+        parent_snapshot_id = str(
+            stock.get("last_watching_ai_snapshot_id") or ""
+        ).strip()
+        parent_prompt_version = str(
+            stock.get("last_watching_ai_probe_intent_prompt_version") or ""
+        ).strip()
+        probe_intent = _truthy_field(stock.get("last_watching_ai_probe_intent"))
+        probe_intent_status = str(
+            stock.get("last_watching_ai_probe_intent_status") or ""
+        ).strip().lower()
+    parent_trusted = bool(
+        parent_action in {"BUY", "WAIT", "DROP"}
+        and parent_source in {"live", "prior_valid"}
+        and parent_contract == "pass"
+        and parent_trace_id
+        and parent_snapshot_id
+        and parent_prompt_version
+        and (
+            parent_provenance_source == "frozen_scout_parent"
+            or (latest_fresh and latest_attempt_trusted)
+        )
+    )
+    parent_supportive = bool(
+        parent_trusted
+        and (
+            parent_action == "BUY"
+            or (
+                parent_action == "WAIT"
+                and probe_intent
+                and probe_intent_status == "eligible_wait_probe"
+            )
+        )
+    )
+    parent_negative = bool(parent_trusted and parent_action == "DROP")
+    latest_entry_action = str(stock.get("last_watching_ai_action") or "").strip().upper()
+    latest_entry_source = str(
+        stock.get("last_watching_ai_result_source") or ""
+    ).strip().lower()
+    latest_entry_contract = str(
+        stock.get("last_watching_ai_attempt_contract_status") or ""
+    ).strip().lower()
+    latest_entry_trace_id = latest_trace_id
+    latest_entry_snapshot_id = str(
+        stock.get("last_watching_ai_snapshot_id") or ""
+    ).strip()
+    latest_entry_negative = bool(
+        latest_entry_action == "DROP"
+        and latest_entry_source in {"live", "prior_valid"}
+        and latest_entry_contract == "pass"
+        and latest_entry_trace_id
+        and latest_entry_snapshot_id
+        and latest_fresh
+        and latest_attempt_trusted
+    )
+
+    holding_context = _holding_score_runtime_context(
+        stock,
+        current_ai_score=current_ai_score,
+        now_ts=now_ts,
+        is_critical_zone=True,
+        microstructure_confirmed=market_path_confirmed,
+    )
+    holding_action = str(stock.get("holding_score_action") or "").strip().upper()
+    holding_usable = bool(holding_context.get("usable_for_scale_in_support"))
+    holding_negative = bool(
+        holding_usable and holding_action in {"DROP", "EXIT", "SELL", "TRIM"}
+    )
+    holding_supportive = bool(
+        holding_usable and holding_action in {"BUY", "HOLD", "KEEP", "CONTINUE"}
+    )
+    supportive = bool(
+        parent_supportive
+        and holding_supportive
+        and not parent_negative
+        and not latest_entry_negative
+        and not holding_negative
+    )
+    negative = bool(parent_negative or latest_entry_negative or holding_negative)
+    return {
+        "supportive": supportive,
+        "negative": negative,
+        "state": (
+            "hard_negative"
+            if negative
+            else "supportive"
+            if supportive
+            else "neutral_or_unproven"
+        ),
+        "parent_action": parent_action or "NOT_EVALUATED",
+        "parent_source": parent_source or "-",
+        "parent_contract_status": parent_contract or "unreported",
+        "parent_trusted": parent_trusted,
+        "parent_probe_intent": probe_intent,
+        "parent_probe_intent_status": probe_intent_status or "not_reported",
+        "parent_trace_id": parent_trace_id or "-",
+        "parent_snapshot_id": parent_snapshot_id or "-",
+        "parent_prompt_version": parent_prompt_version or "-",
+        "parent_provenance_source": parent_provenance_source,
+        "latest_entry_action": latest_entry_action or "NOT_EVALUATED",
+        "latest_entry_negative": latest_entry_negative,
+        "latest_entry_fresh": latest_fresh,
+        "latest_entry_age_sec": (
+            round(latest_age_sec, 3) if latest_age_sec is not None else "-"
+        ),
+        "latest_entry_max_age_sec": latest_max_age_sec,
+        "latest_entry_attempt_trusted": latest_attempt_trusted,
+        "holding_action": holding_action or "NOT_EVALUATED",
+        "holding_usable_for_scale_in_support": holding_usable,
+        "holding_source": holding_context.get("source", "-"),
+        "holding_data_quality": holding_context.get("data_quality", "insufficient"),
+        "holding_input_schema": stock.get("holding_score_input_schema") or "-",
+        "holding_age_sec": holding_context.get("age_sec", "-"),
+    }
 
 
 def _observe_post_probe_hard_abort_recovery(
@@ -24177,8 +24409,6 @@ def _observe_post_probe_hard_abort_recovery(
     trusted_count = _safe_int(features.get("tick_aggressor_trusted_count"), 0)
     micro_available = _truthy_field(features.get("micro_vwap_available"))
     candle_fresh = _truthy_field(features.get("minute_candle_window_fresh"))
-    if not pressure_usable or trusted_count < 3:
-        source_blockers.append("signed_tape_unusable")
     if not micro_available or not candle_fresh:
         source_blockers.append("micro_vwap_unusable")
 
@@ -24218,6 +24448,56 @@ def _observe_post_probe_hard_abort_recovery(
             negative_groups.append("signed_tape")
     if large_sell:
         negative_groups.append("large_sell")
+
+    ai_thesis = _post_probe_ai_thesis_context(
+        stock,
+        current_ai_score=current_ai_score,
+        now_ts=now_ts,
+        market_path_confirmed=bool(
+            price_recovered and impulse_positive and candle_positive
+        ),
+    )
+    if ai_thesis["supportive"]:
+        positive_groups.append("ai_thesis_continuity")
+    elif ai_thesis["negative"]:
+        negative_groups.append("ai_thesis")
+
+    quality_reason_tokens = {
+        token.strip()
+        for token in str(
+            quality.get("reversal_feature_stale_reason") or ""
+        ).split(",")
+        if token.strip() and token.strip() != "-"
+    }
+    tape_only_quality_gap = bool(
+        quality_reason_tokens
+        and quality_reason_tokens
+        <= {
+            "tick_aggressor_pressure_provenance_missing",
+            "tick_aggressor_pressure_unusable",
+        }
+        and not _truthy_field(quality.get("tick_context_stale"))
+        and str(quality.get("tick_context_quality") or "").strip().lower()
+        not in {"", "-", "unknown", "missing_ticks", "missing_tick_time", "stale_tick"}
+    )
+    ai_tape_substitution_applied = bool(
+        ai_thesis["supportive"]
+        and "signed_tape" not in positive_groups
+        and "price_candle_impulse" in positive_groups
+    )
+    ai_tape_source_quality_override_applied = bool(
+        ai_tape_substitution_applied and tape_only_quality_gap
+    )
+    if ai_tape_source_quality_override_applied:
+        source_blockers = [
+            blocker
+            for blocker in source_blockers
+            if blocker
+            not in {
+                "reversal_feature_source_quality_unusable",
+                "reversal_feature_stale",
+            }
+        ]
 
     eligible = bool(
         not source_blockers
@@ -24265,7 +24545,7 @@ def _observe_post_probe_hard_abort_recovery(
     )
     accepted = False
     if eligible:
-        if previous_state != "STRONG":
+        if confirmation_count <= 0 or not previous_accepted_signature:
             confirmation_count = 1
             accepted = True
         elif confirmation_count >= 2:
@@ -24278,20 +24558,56 @@ def _observe_post_probe_hard_abort_recovery(
             confirmation_count += 1
             accepted = True
     else:
-        confirmation_count = 0
+        # Missing/stale input is absence of evidence, not contradictory
+        # evidence. Preserve a prior accepted observation across a transient
+        # source gap; explicit negative market/AI evidence or an order/position
+        # conflict still resets immediately.
+        reset_confirmation = bool(
+            negative_groups
+            or conflicts
+            or "position_qty_invalid" in source_blockers
+            or "average_price_invalid" in source_blockers
+        )
+        if reset_confirmation:
+            confirmation_count = 0
 
     should_emit = bool(accepted or state != previous_state or reason != previous_reason)
     stock["_post_probe_hard_abort_recovery_state"] = state
     stock["_post_probe_hard_abort_recovery_signature"] = evidence_signature
     stock["_post_probe_hard_abort_recovery_reason"] = reason
     stock["_post_probe_hard_abort_recovery_confirmation_count"] = confirmation_count
+    stock["_post_probe_hard_abort_recovery_ai_thesis_state"] = ai_thesis["state"]
+    stock["_post_probe_hard_abort_recovery_ai_parent_action"] = ai_thesis[
+        "parent_action"
+    ]
+    stock["_post_probe_hard_abort_recovery_ai_parent_prompt_version"] = ai_thesis[
+        "parent_prompt_version"
+    ]
+    stock["_post_probe_hard_abort_recovery_ai_parent_trace_id"] = ai_thesis[
+        "parent_trace_id"
+    ]
+    stock["_post_probe_hard_abort_recovery_ai_parent_snapshot_id"] = ai_thesis[
+        "parent_snapshot_id"
+    ]
+    stock["_post_probe_hard_abort_recovery_holding_ai_action"] = ai_thesis[
+        "holding_action"
+    ]
+    stock["_post_probe_hard_abort_recovery_holding_ai_data_quality"] = ai_thesis[
+        "holding_data_quality"
+    ]
+    stock["_post_probe_hard_abort_recovery_holding_ai_input_schema"] = ai_thesis[
+        "holding_input_schema"
+    ]
+    stock["_post_probe_hard_abort_recovery_ai_tape_substitution_applied"] = (
+        ai_tape_substitution_applied
+    )
     if accepted:
         stock["_post_probe_hard_abort_recovery_accepted_at"] = float(now_ts)
         stock["_post_probe_hard_abort_recovery_accepted_signature"] = evidence_signature
         stock["_post_probe_hard_abort_recovery_accepted_feature_at"] = (
             feature_extracted_at
         )
-    elif not eligible:
+    elif not eligible and confirmation_count <= 0:
         stock.pop("_post_probe_hard_abort_recovery_accepted_signature", None)
         stock.pop("_post_probe_hard_abort_recovery_accepted_at", None)
         stock.pop("_post_probe_hard_abort_recovery_accepted_feature_at", None)
@@ -24324,10 +24640,51 @@ def _observe_post_probe_hard_abort_recovery(
         recovery_confirmation_required_count=2,
         recovery_confirmation_min_spacing_ms=250,
         recovery_confirmation_ready=confirmation_count >= 2,
+        recovery_confirmation_preserved=bool(not eligible and confirmation_count > 0),
         recovery_evidence_signature=evidence_signature,
         recovery_positive_groups=",".join(positive_groups) or "-",
         recovery_negative_groups=",".join(negative_groups) or "-",
         recovery_source_quality_blockers=",".join(source_blockers) or "-",
+        recovery_ai_thesis_state=ai_thesis["state"],
+        recovery_ai_tape_substitution_applied=ai_tape_substitution_applied,
+        recovery_ai_tape_source_quality_override_applied=(
+            ai_tape_source_quality_override_applied
+        ),
+        recovery_ai_tape_substitution_quality_reasons=(
+            ",".join(sorted(quality_reason_tokens)) or "-"
+        ),
+        recovery_ai_parent_action=ai_thesis["parent_action"],
+        recovery_ai_parent_source=ai_thesis["parent_source"],
+        recovery_ai_parent_contract_status=ai_thesis["parent_contract_status"],
+        recovery_ai_parent_trusted=ai_thesis["parent_trusted"],
+        recovery_ai_parent_probe_intent=ai_thesis["parent_probe_intent"],
+        recovery_ai_parent_probe_intent_status=ai_thesis[
+            "parent_probe_intent_status"
+        ],
+        recovery_ai_parent_trace_id=ai_thesis["parent_trace_id"],
+        recovery_ai_parent_snapshot_id=ai_thesis["parent_snapshot_id"],
+        recovery_ai_parent_prompt_version=ai_thesis["parent_prompt_version"],
+        recovery_ai_parent_provenance_source=ai_thesis[
+            "parent_provenance_source"
+        ],
+        recovery_ai_latest_entry_action=ai_thesis["latest_entry_action"],
+        recovery_ai_latest_entry_negative=ai_thesis["latest_entry_negative"],
+        recovery_ai_latest_entry_fresh=ai_thesis["latest_entry_fresh"],
+        recovery_ai_latest_entry_age_sec=ai_thesis["latest_entry_age_sec"],
+        recovery_ai_latest_entry_max_age_sec=ai_thesis[
+            "latest_entry_max_age_sec"
+        ],
+        recovery_ai_latest_entry_attempt_trusted=ai_thesis[
+            "latest_entry_attempt_trusted"
+        ],
+        recovery_holding_ai_action=ai_thesis["holding_action"],
+        recovery_holding_ai_scale_in_support_usable=ai_thesis[
+            "holding_usable_for_scale_in_support"
+        ],
+        recovery_holding_ai_source=ai_thesis["holding_source"],
+        recovery_holding_ai_data_quality=ai_thesis["holding_data_quality"],
+        recovery_holding_ai_input_schema=ai_thesis["holding_input_schema"],
+        recovery_holding_ai_age_sec=ai_thesis["holding_age_sec"],
         profit_rate=f"{float(profit_rate):+.2f}",
         peak_profit=f"{float(peak_profit):+.2f}",
         current_ai_score=f"{float(current_ai_score):.0f}",
@@ -24362,7 +24719,7 @@ def _observe_post_probe_hard_abort_recovery(
         sample_floor="rolling_closed_source_quality_valid_recovery_candidates_ge_20",
         primary_decision_metric="notional_weighted_ev_pct",
         source_quality_gate=(
-            "fresh_quote_tick_tape_micro_and_same_probe_terminal_cycle"
+            "fresh_quote_tick_micro_and_two_independent_market_tape_or_ai_groups"
         ),
         runtime_effect=False,
         allowed_runtime_apply=False,
@@ -24458,8 +24815,10 @@ def _evaluate_post_probe_winner_recovery_scale_in(
             "decision_authority": "bounded_post_probe_winner_recovery_scale_in",
             "metric_role": "bounded_tunable_scale_in",
             "window_policy": "same_position_cycle_after_soft_residual_abort",
-            "sample_floor": "dated_single_cohort_canary_with_rolling_review",
-            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "sample_floor": (
+                "clean_baseline_krx_profit_only_closed_ge_10_bounded_one_share_canary"
+            ),
+            "primary_decision_metric": "notional_weighted_ev_pct",
             "source_quality_gate": (
                 "two_fresh_independent_recovery_confirmations_and_existing_pyramid_quality"
             ),
@@ -24479,6 +24838,36 @@ def _evaluate_post_probe_winner_recovery_scale_in(
                 stock.get("_post_probe_hard_abort_recovery_confirmation_count"), 0
             ),
             "post_probe_winner_recovery_original_pyramid_reason": reason,
+            "post_probe_winner_recovery_ai_thesis_state": stock.get(
+                "_post_probe_hard_abort_recovery_ai_thesis_state", "unreported"
+            ),
+            "post_probe_winner_recovery_ai_parent_action": stock.get(
+                "_post_probe_hard_abort_recovery_ai_parent_action", "NOT_EVALUATED"
+            ),
+            "post_probe_winner_recovery_ai_parent_prompt_version": stock.get(
+                "_post_probe_hard_abort_recovery_ai_parent_prompt_version", "-"
+            ),
+            "post_probe_winner_recovery_ai_parent_trace_id": stock.get(
+                "_post_probe_hard_abort_recovery_ai_parent_trace_id", "-"
+            ),
+            "post_probe_winner_recovery_ai_parent_snapshot_id": stock.get(
+                "_post_probe_hard_abort_recovery_ai_parent_snapshot_id", "-"
+            ),
+            "post_probe_winner_recovery_holding_ai_action": stock.get(
+                "_post_probe_hard_abort_recovery_holding_ai_action", "NOT_EVALUATED"
+            ),
+            "post_probe_winner_recovery_holding_ai_data_quality": stock.get(
+                "_post_probe_hard_abort_recovery_holding_ai_data_quality",
+                "insufficient",
+            ),
+            "post_probe_winner_recovery_holding_ai_input_schema": stock.get(
+                "_post_probe_hard_abort_recovery_holding_ai_input_schema", "-"
+            ),
+            "post_probe_winner_recovery_ai_tape_substitution_applied": bool(
+                stock.get(
+                    "_post_probe_hard_abort_recovery_ai_tape_substitution_applied"
+                )
+            ),
         }
     else:
         block_reason = f"existing_pyramid_guard:{reason or 'unknown'}"
@@ -24511,8 +24900,10 @@ def _evaluate_post_probe_winner_recovery_scale_in(
             decision_authority="bounded_post_probe_winner_recovery_scale_in",
             metric_role="bounded_tunable_scale_in",
             window_policy="same_position_cycle_after_soft_residual_abort",
-            sample_floor="dated_single_cohort_canary_with_rolling_review",
-            primary_decision_metric="source_quality_adjusted_ev_pct",
+            sample_floor=(
+                "clean_baseline_krx_profit_only_closed_ge_10_bounded_one_share_canary"
+            ),
+            primary_decision_metric="notional_weighted_ev_pct",
             source_quality_gate=(
                 "two_fresh_independent_recovery_confirmations_and_existing_pyramid_quality"
             ),
@@ -24544,8 +24935,46 @@ def _evaluate_post_probe_winner_recovery_scale_in(
             post_probe_winner_recovery_pyramid_count=pyramid_count,
             post_probe_winner_recovery_active_date=config["active_date"],
             post_probe_winner_recovery_current_date=config["current_date"],
+            post_probe_winner_recovery_configuration_source=config[
+                "configuration_source"
+            ],
+            post_probe_winner_recovery_independent_rollback_key=config[
+                "independent_rollback_key"
+            ],
             effective_venue=config["effective_venue"],
+            post_probe_winner_recovery_rising_missed_scope=config[
+                "rising_missed_scope"
+            ],
             post_probe_winner_recovery_cohort_enabled=config["cohort_enabled"],
+            post_probe_winner_recovery_ai_thesis_state=stock.get(
+                "_post_probe_hard_abort_recovery_ai_thesis_state", "-"
+            ),
+            post_probe_winner_recovery_ai_parent_action=stock.get(
+                "_post_probe_hard_abort_recovery_ai_parent_action", "-"
+            ),
+            post_probe_winner_recovery_holding_ai_action=stock.get(
+                "_post_probe_hard_abort_recovery_holding_ai_action", "-"
+            ),
+            post_probe_winner_recovery_ai_parent_prompt_version=stock.get(
+                "_post_probe_hard_abort_recovery_ai_parent_prompt_version", "-"
+            ),
+            post_probe_winner_recovery_ai_parent_trace_id=stock.get(
+                "_post_probe_hard_abort_recovery_ai_parent_trace_id", "-"
+            ),
+            post_probe_winner_recovery_ai_parent_snapshot_id=stock.get(
+                "_post_probe_hard_abort_recovery_ai_parent_snapshot_id", "-"
+            ),
+            post_probe_winner_recovery_holding_ai_data_quality=stock.get(
+                "_post_probe_hard_abort_recovery_holding_ai_data_quality", "-"
+            ),
+            post_probe_winner_recovery_holding_ai_input_schema=stock.get(
+                "_post_probe_hard_abort_recovery_holding_ai_input_schema", "-"
+            ),
+            post_probe_winner_recovery_ai_tape_substitution_applied=bool(
+                stock.get(
+                    "_post_probe_hard_abort_recovery_ai_tape_substitution_applied"
+                )
+            ),
             profit_rate=f"{float(profit_rate):+.2f}",
             peak_profit=f"{float(peak_profit):+.2f}",
             current_ai_score=f"{float(current_ai_score):.0f}",
@@ -28175,6 +28604,7 @@ def _refresh_scale_in_reversal_features_if_needed(
     strategy: str,
     ai_engine=None,
     now_ts: float | None = None,
+    force_refresh: bool = False,
 ) -> tuple[dict, dict]:
     """Rebuild stale scale-in micro features once before judging PYRAMID/REVERSAL_ADD."""
     now_ts = time.time() if now_ts is None else float(now_ts)
@@ -28222,8 +28652,14 @@ def _refresh_scale_in_reversal_features_if_needed(
         "scale_in_feature_refresh_quote_applied": False,
         "scale_in_feature_refresh_new_quality": "-",
         "scale_in_feature_refresh_new_stale_reason": "-",
+        "scale_in_feature_refresh_forced": bool(force_refresh),
+        "scale_in_feature_refresh_cooldown_bypassed": False,
     }
-    if existing and not bool(existing_quality.get("reversal_feature_stale")):
+    if (
+        existing
+        and not bool(existing_quality.get("reversal_feature_stale"))
+        and not force_refresh
+    ):
         return base_ws, fields
     cooldown_sec = max(
         0.0,
@@ -28239,13 +28675,34 @@ def _refresh_scale_in_reversal_features_if_needed(
     fields["scale_in_feature_refresh_elapsed_sec"] = (
         "-" if elapsed_sec is None else round(elapsed_sec, 3)
     )
-    if last_attempt_ts > 0 and elapsed_sec is not None and elapsed_sec < cooldown_sec:
+    min_forced_spacing_sec = 0.25
+    if (
+        last_attempt_ts > 0
+        and elapsed_sec is not None
+        and elapsed_sec < cooldown_sec
+        and (not force_refresh or elapsed_sec < min_forced_spacing_sec)
+    ):
         fields["scale_in_feature_refresh_attempted"] = True
-        fields["scale_in_feature_refresh_reason"] = "feature_refresh_cooldown"
+        fields["scale_in_feature_refresh_reason"] = (
+            "forced_feature_refresh_spacing_pending"
+            if force_refresh
+            else "feature_refresh_cooldown"
+        )
         return base_ws, fields
+    if (
+        force_refresh
+        and last_attempt_ts > 0
+        and elapsed_sec is not None
+        and elapsed_sec < cooldown_sec
+    ):
+        fields["scale_in_feature_refresh_cooldown_bypassed"] = True
     fields["scale_in_feature_refresh_attempted"] = True
     fields["scale_in_feature_refresh_reason"] = (
-        "feature_context_stale" if existing else "feature_context_missing"
+        "post_probe_confirmation_refresh"
+        if force_refresh
+        else "feature_context_stale"
+        if existing
+        else "feature_context_missing"
     )
     _mutate_stock_state(
         stock, set_fields={"last_scale_in_feature_refresh_attempt_ts": now_ts}
@@ -28327,7 +28784,11 @@ def _refresh_scale_in_reversal_features_if_needed(
         fields["scale_in_feature_refresh_reason"] = "feature_extract_error"
         fields["scale_in_feature_refresh_error"] = str(exc)[:120]
         return refreshed_ws, fields
-    payload = _reversal_feature_payload(feat, now_ts)
+    # REST/tick/candle fetches can take seconds. The extracted feature version
+    # belongs to the completed snapshot, not to the holding-loop timestamp
+    # captured before I/O began.
+    feature_extracted_at = max(float(now_ts), time.time())
+    payload = _reversal_feature_payload(feat, feature_extracted_at)
     new_quality = reversal_feature_source_quality(payload)
     fields["scale_in_feature_refresh_new_quality"] = new_quality.get(
         "reversal_feature_source_quality"
@@ -39002,6 +39463,8 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "post_probe_winner_recovery_leg_submitted",
     "post_probe_winner_recovery_leg_submitted_at",
     "post_probe_winner_recovery_leg_qty",
+    "_post_probe_winner_recovery_gate_bypass_signature",
+    "_post_probe_winner_recovery_event_signature",
 )
 
 # Residual submission can be reached by both the fill callback worker and the
@@ -83529,16 +83992,6 @@ def handle_holding_state(
             shallow_recheck_gate_recheck_due or winner_recovery_gate_recheck_due
         ),
     )
-    if winner_recovery_gate_recheck_due:
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "_post_probe_winner_recovery_gate_bypass_signature": str(
-                    stock.get("_post_probe_hard_abort_recovery_accepted_signature")
-                    or ""
-                )
-            },
-        )
     if gate.get("allowed"):
         scale_in_action = _evaluate_scale_in_signal(
             stock=stock,
@@ -84200,6 +84653,7 @@ def _clear_pending_add_meta(stock, reason=None):
         pop_fields=(
             "pending_add_order",
             "pending_add_type",
+            "pending_add_reason",
             "pending_add_qty",
             "pending_add_ord_no",
             "pending_add_requested_at",
@@ -84209,6 +84663,15 @@ def _clear_pending_add_meta(stock, reason=None):
             "pending_add_initial_buy_price",
             "pending_add_initial_buy_qty",
             "pending_add_execution_notice_pending",
+            "pending_add_winner_recovery_ai_thesis_state",
+            "pending_add_winner_recovery_ai_parent_action",
+            "pending_add_winner_recovery_ai_parent_prompt_version",
+            "pending_add_winner_recovery_ai_parent_trace_id",
+            "pending_add_winner_recovery_ai_parent_snapshot_id",
+            "pending_add_winner_recovery_holding_ai_action",
+            "pending_add_winner_recovery_holding_ai_data_quality",
+            "pending_add_winner_recovery_holding_ai_input_schema",
+            "pending_add_winner_recovery_ai_tape_substitution_applied",
             "_add_receipt_requested_by_order_no",
             "_add_receipt_filled_by_order_no",
             "_add_receipt_filled_amount_by_order_no",
@@ -84969,6 +85432,21 @@ def _evaluate_scale_in_signal(
                 f"[SCALEIN_STATE] highest_prices 비교 실패 ({code}, curr_price={curr_price}): {exc}"
             )
 
+        winner_recovery_config = _post_probe_winner_recovery_runtime_config(
+            stock,
+            now_ts=now_ts,
+        )
+        winner_recovery_confirmation_recheck = (
+            _post_probe_winner_recovery_gate_recheck_due(
+                stock,
+                winner_recovery_config,
+            )
+            and not shallow_recheck_only
+        )
+        winner_recovery_recheck_signature = str(
+            stock.get("_post_probe_hard_abort_recovery_accepted_signature") or ""
+        )
+
         if _scale_in_exit_authority_block_reason(stock):
             return None
         ws_data, feature_refresh_fields = _refresh_scale_in_reversal_features_if_needed(
@@ -84978,7 +85456,23 @@ def _evaluate_scale_in_signal(
             strategy=raw_strategy,
             ai_engine=ai_engine,
             now_ts=now_ts,
+            force_refresh=winner_recovery_confirmation_recheck,
         )
+        forced_feature_spacing_pending = str(
+            feature_refresh_fields.get("scale_in_feature_refresh_reason") or ""
+        ) == "forced_feature_refresh_spacing_pending"
+        if winner_recovery_confirmation_recheck and not forced_feature_spacing_pending:
+            # Consume this one lock bypass even if bounded refresh fails. A
+            # later regular add cycle may retry, but a bad feed must not create
+            # an unbounded REST loop.
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "_post_probe_winner_recovery_gate_bypass_signature": (
+                        winner_recovery_recheck_signature
+                    )
+                },
+            )
         scale_in_micro_estimator_fields = _scalping_micro_estimator_log_fields(
             stock=stock,
             code=code,
@@ -85011,6 +85505,11 @@ def _evaluate_scale_in_signal(
         # The exit token can be claimed while bounded feature recovery is in
         # flight. Never start holding-score retry/AI work after that claim.
         if _scale_in_exit_authority_block_reason(stock):
+            return None
+        if forced_feature_spacing_pending:
+            # This loop iteration exists only to obtain a distinct second
+            # recovery snapshot. Do not spend holding-AI budget or evaluate a
+            # same-version scale-in before the 250 ms evidence floor.
             return None
 
         if shallow_recheck_only:
@@ -85100,21 +85599,50 @@ def _evaluate_scale_in_signal(
                         current_ai_score,
                     )
 
-        winner_recovery_config = _post_probe_winner_recovery_runtime_config(
-            stock,
-            now_ts=now_ts,
-        )
         if bool(
             winner_recovery_config.get("active")
             and stock.get("entry_split_probe_soft_abort")
             and stock.get("entry_split_probe_scale_in_recheck_allowed")
             and not stock.get("entry_split_probe_scale_in_forbidden")
         ):
+            recovery_observed_at = max(float(now_ts), time.time())
+            recovery_curr_price = _safe_int(
+                ws_data.get("curr") if isinstance(ws_data, dict) else None,
+                _safe_int(curr_price, 0),
+            )
+            recovery_buy_price = _safe_float(stock.get("buy_price"), 0.0)
+            recovery_profit_rate = (
+                calculate_net_profit_rate(recovery_buy_price, recovery_curr_price)
+                if recovery_buy_price > 0 and recovery_curr_price > 0
+                else float(profit_rate)
+            )
+            recovery_peak_profit = max(float(peak_profit), recovery_profit_rate)
+            recovery_is_new_high = False
+            try:
+                highest_prices = HIGHEST_PRICES or {}
+                recovery_is_new_high = recovery_curr_price >= float(
+                    highest_prices.get(
+                        _price_tracking_key(stock, code), recovery_curr_price
+                    )
+                )
+            except Exception:
+                recovery_is_new_high = is_new_high
+            _observe_post_probe_hard_abort_recovery(
+                stock,
+                code,
+                strategy=raw_strategy,
+                curr_price=recovery_curr_price,
+                profit_rate=recovery_profit_rate,
+                peak_profit=recovery_peak_profit,
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                now_ts=recovery_observed_at,
+            )
             winner_recovery_pyramid = evaluate_scalping_pyramid(
                 stock,
-                profit_rate,
-                peak_profit,
-                is_new_high,
+                recovery_profit_rate,
+                recovery_peak_profit,
+                recovery_is_new_high,
                 current_ai_score=current_ai_score,
             )
             winner_recovery_prior = _pyramid_runtime_prior_context(
@@ -85125,18 +85653,18 @@ def _evaluate_scale_in_signal(
             ).get("pyramid_runtime_prior_context")
             winner_recovery_pyramid = evaluate_scalping_pyramid(
                 stock,
-                profit_rate,
-                peak_profit,
-                is_new_high,
+                recovery_profit_rate,
+                recovery_peak_profit,
+                recovery_is_new_high,
                 current_ai_score=current_ai_score,
                 runtime_prior_context=winner_recovery_prior,
             )
             winner_recovery = _evaluate_post_probe_winner_recovery_scale_in(
                 stock,
                 code,
-                now_ts=now_ts,
-                profit_rate=profit_rate,
-                peak_profit=peak_profit,
+                now_ts=recovery_observed_at,
+                profit_rate=recovery_profit_rate,
+                peak_profit=recovery_peak_profit,
                 current_ai_score=current_ai_score,
                 held_sec=held_sec,
                 pyramid_probe=winner_recovery_pyramid,
@@ -85146,11 +85674,17 @@ def _evaluate_scale_in_signal(
                 if winner_recovery_action:
                     winner_recovery_action.update(
                         {
-                            "profit_rate": profit_rate,
-                            "peak_profit": peak_profit,
+                            "profit_rate": recovery_profit_rate,
+                            "peak_profit": recovery_peak_profit,
                             "current_ai_score": current_ai_score,
-                            "is_new_high": is_new_high,
+                            "is_new_high": recovery_is_new_high,
                             "held_sec": held_sec,
+                            "post_probe_winner_recovery_price_reanchored": bool(
+                                recovery_curr_price != _safe_int(curr_price, 0)
+                            ),
+                            "post_probe_winner_recovery_decision_price": (
+                                recovery_curr_price
+                            ),
                             **scale_in_ai_retry_fields,
                             **scale_in_micro_estimator_fields,
                         }
@@ -85483,6 +86017,7 @@ def _process_scale_in_action(stock, code, ws_data, action, admin_id):
         stock, code, action
     ):
         return None
+    order_attempt_started_at = time.time()
     result = execute_scale_in_order(
         stock=stock,
         code=code,
@@ -85493,9 +86028,19 @@ def _process_scale_in_action(stock, code, ws_data, action, admin_id):
     winner_recovery_reason = "post_probe_winner_recovery_first_leg"
     winner_recovery_submitted = bool(
         str(action.get("reason") or "") == winner_recovery_reason
+        and result is not None
         and (
-            str(stock.get("pending_add_reason") or "") == winner_recovery_reason
-            or str(stock.get("last_add_reason") or "") == winner_recovery_reason
+            (
+                str(stock.get("pending_add_reason") or "")
+                == winner_recovery_reason
+                and _safe_float(stock.get("pending_add_requested_at"), 0.0)
+                >= order_attempt_started_at
+            )
+            or (
+                str(stock.get("last_add_reason") or "") == winner_recovery_reason
+                and _safe_float(stock.get("last_add_time"), 0.0)
+                >= order_attempt_started_at
+            )
         )
     )
     if winner_recovery_submitted:
@@ -87074,6 +87619,35 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "pending_add_initial_buy_price": float(stock.get("buy_price") or 0),
             "pending_add_initial_buy_qty": _safe_int(stock.get("buy_qty"), 0),
             "pending_add_execution_notice_pending": False,
+            "pending_add_winner_recovery_ai_thesis_state": action.get(
+                "post_probe_winner_recovery_ai_thesis_state"
+            ),
+            "pending_add_winner_recovery_ai_parent_action": action.get(
+                "post_probe_winner_recovery_ai_parent_action"
+            ),
+            "pending_add_winner_recovery_ai_parent_prompt_version": action.get(
+                "post_probe_winner_recovery_ai_parent_prompt_version"
+            ),
+            "pending_add_winner_recovery_ai_parent_trace_id": action.get(
+                "post_probe_winner_recovery_ai_parent_trace_id"
+            ),
+            "pending_add_winner_recovery_ai_parent_snapshot_id": action.get(
+                "post_probe_winner_recovery_ai_parent_snapshot_id"
+            ),
+            "pending_add_winner_recovery_holding_ai_action": action.get(
+                "post_probe_winner_recovery_holding_ai_action"
+            ),
+            "pending_add_winner_recovery_holding_ai_data_quality": action.get(
+                "post_probe_winner_recovery_holding_ai_data_quality"
+            ),
+            "pending_add_winner_recovery_holding_ai_input_schema": action.get(
+                "post_probe_winner_recovery_holding_ai_input_schema"
+            ),
+            "pending_add_winner_recovery_ai_tape_substitution_applied": bool(
+                action.get(
+                    "post_probe_winner_recovery_ai_tape_substitution_applied"
+                )
+            ),
             "_add_receipt_requested_by_order_no": {},
             "_add_receipt_filled_by_order_no": {},
             "_add_receipt_filled_amount_by_order_no": {},
@@ -87410,6 +87984,47 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             ),
             post_probe_winner_recovery_original_pyramid_reason=(
                 action.get("post_probe_winner_recovery_original_pyramid_reason") or "-"
+            ),
+            post_probe_winner_recovery_price_reanchored=bool(
+                action.get("post_probe_winner_recovery_price_reanchored")
+            ),
+            post_probe_winner_recovery_decision_price=(
+                action.get("post_probe_winner_recovery_decision_price") or "-"
+            ),
+            post_probe_winner_recovery_ai_thesis_state=(
+                action.get("post_probe_winner_recovery_ai_thesis_state")
+                or "unreported"
+            ),
+            post_probe_winner_recovery_ai_parent_action=(
+                action.get("post_probe_winner_recovery_ai_parent_action")
+                or "NOT_EVALUATED"
+            ),
+            post_probe_winner_recovery_ai_parent_prompt_version=(
+                action.get("post_probe_winner_recovery_ai_parent_prompt_version")
+                or "-"
+            ),
+            post_probe_winner_recovery_ai_parent_trace_id=(
+                action.get("post_probe_winner_recovery_ai_parent_trace_id") or "-"
+            ),
+            post_probe_winner_recovery_ai_parent_snapshot_id=(
+                action.get("post_probe_winner_recovery_ai_parent_snapshot_id") or "-"
+            ),
+            post_probe_winner_recovery_holding_ai_action=(
+                action.get("post_probe_winner_recovery_holding_ai_action")
+                or "NOT_EVALUATED"
+            ),
+            post_probe_winner_recovery_holding_ai_data_quality=(
+                action.get("post_probe_winner_recovery_holding_ai_data_quality")
+                or "insufficient"
+            ),
+            post_probe_winner_recovery_holding_ai_input_schema=(
+                action.get("post_probe_winner_recovery_holding_ai_input_schema")
+                or "-"
+            ),
+            post_probe_winner_recovery_ai_tape_substitution_applied=bool(
+                action.get(
+                    "post_probe_winner_recovery_ai_tape_substitution_applied"
+                )
             ),
             **scale_in_qty_budget_fields,
             **budget_authority_fields,
