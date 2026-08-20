@@ -4595,6 +4595,103 @@ def _persistent_operator_overrides_runtime_audit(
     }
 
 
+def _scalp_sim_auto_runtime_policy_audit(
+    effective_env: dict[str, str],
+) -> dict[str, Any]:
+    direct_enabled = _runtime_env_enabled(
+        effective_env.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED")
+    )
+    direct_policy_file = str(
+        effective_env.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE") or ""
+    ).strip()
+    lifecycle_enabled = _runtime_env_enabled(
+        effective_env.get("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED")
+    )
+    lifecycle_policy_file = str(
+        effective_env.get("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE") or ""
+    ).strip()
+    direct_contract_complete = direct_enabled and bool(direct_policy_file)
+    lifecycle_contract_complete = lifecycle_enabled and bool(lifecycle_policy_file)
+    use_lifecycle_handoff = not direct_contract_complete and lifecycle_contract_complete
+    enabled = direct_enabled or lifecycle_enabled
+    policy_file = (
+        direct_policy_file if direct_contract_complete else lifecycle_policy_file
+    )
+    policy_source = (
+        "scalp_sim_auto_policy"
+        if direct_contract_complete
+        else "lifecycle_bucket_discovery_catalog_handoff"
+    )
+    audit: dict[str, Any] = {
+        "family": "scalp_sim_auto_approval",
+        "enabled": enabled,
+        "direct_requested": direct_enabled,
+        "direct_contract_complete": direct_contract_complete,
+        "lifecycle_requested": lifecycle_enabled,
+        "lifecycle_contract_complete": lifecycle_contract_complete,
+        "lifecycle_handoff_enabled": use_lifecycle_handoff,
+        "policy_source": policy_source,
+        "policy_file": policy_file or None,
+        "status": "disabled",
+        "reason": "policy_disabled",
+        "required_env_keys": [],
+    }
+    if not enabled:
+        return audit
+    if not direct_contract_complete and not lifecycle_contract_complete:
+        required_env_keys = []
+        if direct_enabled:
+            required_env_keys.append("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE")
+        if lifecycle_enabled:
+            required_env_keys.append(
+                "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE"
+            )
+        audit.update(
+            {
+                "status": "fail",
+                "reason": "enabled_policy_file_missing",
+                "required_env_keys": required_env_keys,
+            }
+        )
+        return audit
+    path = Path(policy_file)
+    if not path.is_file():
+        audit.update({"status": "fail", "reason": "policy_file_missing"})
+        return audit
+    payload = _load_json(path)
+    expected_schema = (
+        "scalp_sim_policy_catalog_v1"
+        if direct_contract_complete
+        else "lifecycle_bucket_catalog_v1"
+    )
+    if payload.get("schema_version") != expected_schema:
+        audit.update(
+            {
+                "status": "fail",
+                "reason": "policy_schema_invalid",
+                "expected_schema_version": expected_schema,
+                "observed_schema_version": payload.get("schema_version"),
+            }
+        )
+        return audit
+    audit.update(
+        {
+            "status": "pass",
+            "reason": (
+                "direct_policy_complete"
+                if direct_contract_complete
+                else (
+                    "direct_policy_file_missing_lifecycle_handoff"
+                    if direct_enabled
+                    else "lifecycle_catalog_handoff"
+                )
+            ),
+            "policy_schema_version": expected_schema,
+        }
+    )
+    return audit
+
+
 def _split_runtime_policy_audits(
     target_date: str,
     effective_env: dict[str, str],
@@ -5131,6 +5228,7 @@ def verify_runtime_env_handoff(
             )
     runtime_policy_audits = [
         *_split_runtime_policy_audits(target_date, effective_env_overrides),
+        _scalp_sim_auto_runtime_policy_audit(effective_env_overrides),
         _holding_decision_context_runtime_audit(
             target_date,
             effective_env_overrides,

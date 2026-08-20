@@ -653,6 +653,78 @@ def test_scalp_simulator_consumes_lifecycle_bucket_catalog_handoff_when_direct_p
     assert armed["bucket_directed_sim_probe"] is True
 
 
+def test_scalp_simulator_uses_lifecycle_handoff_when_direct_file_is_missing(
+    monkeypatch, tmp_path
+):
+    source_bucket_id = "lifecycle_flow:combo_lifecycle_flow:entry_score_60_62:abc123"
+    catalog_path = tmp_path / "lifecycle_bucket_catalog_2026-06-12.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "lifecycle_bucket_catalog_v1",
+                "buckets": [
+                    {
+                        "bucket_id": "lifecycle_flow:combo_lifecycle_flow:entry_score_60_62",
+                        "source_bucket_id": source_bucket_id,
+                        "classification_state": "lifecycle_flow_sim_probe_candidate",
+                        "sim_lifecycle_handoff_allowed": True,
+                    }
+                ],
+                "active_sim_priority_seeds": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", "2026-06-15")
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_SOURCE_DATE", raising=False
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            state_handlers.TRADING_RULES,
+            SCALP_SIM_AUTO_POLICY_ENABLED=False,
+            SCALP_SIM_AUTO_POLICY_FILE="",
+            SCALP_SIM_AUTO_POLICY_VERSION="",
+            LIFECYCLE_BUCKET_DISCOVERY_ENABLED=True,
+            LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE=str(catalog_path),
+            LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION="lifecycle_bucket_discovery:2026-06-12",
+        ),
+    )
+    initial_fields = state_handlers._scalp_sim_bucket_policy_fields(
+        {"lifecycle_bucket_source_bucket_id": source_bucket_id}
+    )
+    assert initial_fields["scalp_sim_auto_policy_direct_enabled"] is False
+    assert initial_fields.get("scalp_sim_auto_policy_owner_fallback_reason") is None
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            state_handlers.TRADING_RULES,
+            SCALP_SIM_AUTO_POLICY_ENABLED=True,
+        ),
+    )
+
+    fields = state_handlers._scalp_sim_bucket_policy_fields(
+        {"lifecycle_bucket_source_bucket_id": source_bucket_id}
+    )
+
+    assert fields["lifecycle_bucket_match_status"] == "matched"
+    assert fields["scalp_sim_auto_policy_direct_enabled"] is True
+    assert fields["scalp_sim_auto_policy_direct_effective"] is False
+    assert fields["lifecycle_bucket_catalog_handoff_enabled"] is True
+    assert (
+        fields["scalp_sim_auto_policy_owner_fallback_reason"]
+        == "direct_policy_file_missing"
+    )
+    assert (
+        fields["scalp_sim_policy_source"]
+        == "lifecycle_bucket_discovery_catalog_handoff"
+    )
+    assert fields["bucket_directed_sim_probe"] is True
+
+
 def test_lifecycle_bucket_catalog_handoff_does_not_direct_source_only_rows(
     monkeypatch, tmp_path
 ):

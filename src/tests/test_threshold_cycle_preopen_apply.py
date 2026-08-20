@@ -9640,11 +9640,52 @@ def test_verify_runtime_env_handoff_requires_scalp_sim_policy_source_date(
 
     assert result["status"] == "fail"
     assert result["passed"] is False
-    assert result["findings"][0]["family"] == "scalp_sim_auto_approval"
-    assert (
-        "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE"
-        in result["findings"][0]["missing_env_keys"]
+    assert any(
+        finding.get("family") == "scalp_sim_auto_approval"
+        and "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE"
+        in finding.get("missing_env_keys", [])
+        for finding in result["findings"]
     )
+
+
+def test_scalp_sim_policy_audit_uses_lifecycle_when_direct_file_is_missing(
+    tmp_path,
+):
+    catalog_path = tmp_path / "lifecycle_bucket_catalog_2026-08-20.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "lifecycle_bucket_catalog_v1",
+                "buckets": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    audit = mod._scalp_sim_auto_runtime_policy_audit(
+        {
+            "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED": "true",
+            "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED": "true",
+            "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE": str(catalog_path),
+        }
+    )
+
+    assert audit["status"] == "pass"
+    assert audit["reason"] == "direct_policy_file_missing_lifecycle_handoff"
+    assert audit["policy_source"] == "lifecycle_bucket_discovery_catalog_handoff"
+    assert audit["lifecycle_handoff_enabled"] is True
+
+
+def test_scalp_sim_policy_audit_rejects_enabled_policy_without_any_file():
+    audit = mod._scalp_sim_auto_runtime_policy_audit(
+        {"KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED": "true"}
+    )
+
+    assert audit["status"] == "fail"
+    assert audit["reason"] == "enabled_policy_file_missing"
+    assert audit["required_env_keys"] == [
+        "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE"
+    ]
 
 
 def test_verify_runtime_env_handoff_rejects_pre_clean_baseline_embedded_plan(
@@ -10207,9 +10248,10 @@ def test_verify_runtime_env_handoff_lifecycle_bucket_missing_live_auto_apply(
     assert result["status"] == "fail"
     assert result["fail_reason"] == "runtime_env_handoff_missing"
     assert result["missing_family_count"] == 1
-    assert (
+    assert any(
         "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED"
-        in result["findings"][0]["missing_env_keys"]
+        in finding.get("missing_env_keys", [])
+        for finding in result["findings"]
     )
 
 

@@ -1609,24 +1609,39 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
     lifecycle_policy_version = _rule_str(
         "LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION", ""
     ).strip()
+    direct_contract_complete = direct_enabled and bool(direct_policy_file)
     use_lifecycle_handoff = (
-        not direct_enabled and lifecycle_enabled and bool(lifecycle_policy_file)
+        not direct_contract_complete
+        and lifecycle_enabled
+        and bool(lifecycle_policy_file)
     )
+    use_direct_policy = direct_enabled and not use_lifecycle_handoff
     enabled = direct_enabled or use_lifecycle_handoff
-    policy_file = direct_policy_file if direct_enabled else lifecycle_policy_file
+    policy_file = direct_policy_file if use_direct_policy else lifecycle_policy_file
     policy_version = (
-        direct_policy_version if direct_enabled else lifecycle_policy_version
+        direct_policy_version if use_direct_policy else lifecycle_policy_version
     )
     policy_source = (
         "scalp_sim_auto_policy"
-        if direct_enabled
+        if use_direct_policy
         else "lifecycle_bucket_discovery_catalog_handoff"
     )
+    policy_owner_fields = {
+        "direct_scalp_sim_auto_policy_enabled": direct_enabled,
+        "direct_scalp_sim_auto_policy_contract_complete": (direct_contract_complete),
+        "direct_scalp_sim_auto_policy_effective": use_direct_policy,
+        "lifecycle_bucket_catalog_handoff_enabled": use_lifecycle_handoff,
+        "policy_owner_fallback_reason": (
+            "direct_policy_file_missing"
+            if direct_enabled and use_lifecycle_handoff
+            else None
+        ),
+    }
     runtime_apply_date = _runtime_apply_date_for_policy_guard()
     policy_date = _scalp_sim_policy_date(policy_file, policy_version)
     expected_policy_source_date = (
         _scalp_sim_policy_source_date_for_guard()
-        if direct_enabled
+        if use_direct_policy
         else (_lifecycle_bucket_discovery_policy_source_date_for_guard() or policy_date)
     )
     if not enabled:
@@ -1646,8 +1661,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
                 "policy_source": policy_source,
-                "direct_scalp_sim_auto_policy_enabled": direct_enabled,
-                "lifecycle_bucket_catalog_handoff_enabled": use_lifecycle_handoff,
+                **policy_owner_fields,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
@@ -1670,8 +1684,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
                 "policy_source": policy_source,
-                "direct_scalp_sim_auto_policy_enabled": direct_enabled,
-                "lifecycle_bucket_catalog_handoff_enabled": use_lifecycle_handoff,
+                **policy_owner_fields,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
@@ -1697,8 +1710,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
                 "policy_source": policy_source,
-                "direct_scalp_sim_auto_policy_enabled": direct_enabled,
-                "lifecycle_bucket_catalog_handoff_enabled": use_lifecycle_handoff,
+                **policy_owner_fields,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
@@ -1713,6 +1725,14 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
         and _SCALP_SIM_AUTO_POLICY_CACHE.get("expected_policy_source_date")
         == (expected_policy_source_date or None)
         and _SCALP_SIM_AUTO_POLICY_CACHE.get("policy_source") == policy_source
+        and _SCALP_SIM_AUTO_POLICY_CACHE.get("direct_scalp_sim_auto_policy_enabled")
+        == direct_enabled
+        and _SCALP_SIM_AUTO_POLICY_CACHE.get(
+            "direct_scalp_sim_auto_policy_contract_complete"
+        )
+        == direct_contract_complete
+        and _SCALP_SIM_AUTO_POLICY_CACHE.get("lifecycle_bucket_catalog_handoff_enabled")
+        == use_lifecycle_handoff
     ):
         return _SCALP_SIM_AUTO_POLICY_CACHE
     try:
@@ -1735,8 +1755,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
                 "policy_source": policy_source,
-                "direct_scalp_sim_auto_policy_enabled": direct_enabled,
-                "lifecycle_bucket_catalog_handoff_enabled": use_lifecycle_handoff,
+                **policy_owner_fields,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
@@ -1882,8 +1901,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
             "runtime_apply_date": runtime_apply_date or None,
             "expected_policy_source_date": expected_policy_source_date or None,
             "policy_source": policy_source,
-            "direct_scalp_sim_auto_policy_enabled": direct_enabled,
-            "lifecycle_bucket_catalog_handoff_enabled": use_lifecycle_handoff,
+            **policy_owner_fields,
             "policy_schema_version": schema_version or None,
             "approved_rows": approved_rows,
             "rows_by_source_bucket_id": rows_by_source_bucket_id,
@@ -2121,6 +2139,13 @@ def _scalp_sim_bucket_policy_fields(source: dict | None) -> dict:
             "direct_scalp_sim_auto_policy_enabled"
         )
         or False,
+        "scalp_sim_auto_policy_direct_effective": cache.get(
+            "direct_scalp_sim_auto_policy_effective"
+        )
+        or False,
+        "scalp_sim_auto_policy_owner_fallback_reason": cache.get(
+            "policy_owner_fallback_reason"
+        ),
         "scalp_sim_policy_source": cache.get("policy_source")
         or "scalp_sim_auto_policy",
         "lifecycle_bucket_catalog_handoff_enabled": cache.get(
