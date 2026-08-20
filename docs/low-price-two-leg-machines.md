@@ -2,7 +2,7 @@
 
 ## Scope
 
-Twenty independent regular-session profiles implement the user-selected active
+Twenty-three independent regular-session profiles implement the user-selected active
 scope. Every profile owns its process, lock, durable state,
 authority artifact, and exact broker-order ledger.
 
@@ -20,14 +20,17 @@ authority artifact, and exact broker-order ledger.
 | `sk_eternix_morning` | SK이터닉스 `475150` | SOR regular | 09:50 through 09:59 |
 | `mirae_asset_midday` | 미래에셋증권 `006800` | SOR regular | 13:15 through 13:24 |
 | `kepco_afternoon` | 한국전력 `015760` | SOR regular | 14:00 through 14:29 |
-| `sk_eternix_afternoon` | SK이터닉스 `475150` | SOR regular | 14:00 through 14:40 |
+| `sk_eternix_afternoon` | SK이터닉스 `475150` | SOR regular | 14:15 through 14:40 |
 | `samsung_heavy_morning` | 삼성중공업 `010140` | SOR regular | 09:20 through 09:29 |
-| `doosan_enerbility_late_morning` | 두산에너빌리티 `034020` | SOR regular | 10:15 through 10:59 |
+| `doosan_enerbility_late_morning` | 두산에너빌리티 `034020` | SOR regular | 10:15 through 10:34 |
 | `kakao_midday` | 카카오 `035720` | SOR regular | 13:20 through 13:39 |
 | `sk_telecom_afternoon` | SK텔레콤 `017670` | SOR regular | 14:25 through 14:34 |
 | `samsung_ea_morning` | 삼성E&A `028050` | SOR regular | 09:45 through 09:59 |
 | `samsung_ea_late_morning` | 삼성E&A `028050` | SOR regular | 10:05 through 10:14 |
 | `samsung_ea_afternoon` | 삼성E&A `028050` | SOR regular | 14:05 through 14:34 |
+| `sk_telecom_late_morning` | SK텔레콤 `017670` | SOR regular | 10:45 through 10:59 |
+| `hanse_morning` | 한세실업 `105630` | SOR regular | 09:15 through 09:44 |
+| `hanse_afternoon` | 한세실업 `105630` | SOR regular | 14:20 through 14:29 |
 
 The original 30-day calibration and 16-day untouched holdout selected independent entry
 contracts: Samsung Heavy midday uses 30 bars, drawdown at least 0.75%, and
@@ -134,6 +137,39 @@ filled legs), with completed-only notional EV `+0.064355%` and held mark
 budget of at most 25% held/fill and at least `-3%` held mark. It does not add a
 stop, timeout, forced sale, or unrealized PnL to completed EV.
 
+## 2026-08-19 recommendation implementation
+
+The tracked `data/config/low_price_two_leg_expanded_profile_evidence_2026-08-19.json`
+projection binds the complete 52-trading-day report, 36-day calibration, 16-day
+holdout, all 11 passing recommendations, and the source report canonical hash.
+The new generation is effective only for target dates on or after 2026-08-21;
+2026-08-20 services and prior-date owned orders keep their original generation.
+
+Eight existing profiles adopt these approved policies:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---:|---|---:|---:|
+| `doosan_enerbility_late_morning` | 10:15~10:34 | 45 | 1.50% | 0.05% | close/-1 tick | 5 | +4 ticks |
+| `samsung_heavy_morning` | 09:20~09:29 | 20 | 1.75% | 0.75% | -1/-2 ticks | 5 | +4 ticks |
+| `kakao_midday` | 13:20~13:39 | 15 | 0.50% | 0.20% | close/-1 tick | 5 | +4 ticks |
+| `kakao_late_morning` | 10:05~10:24 | 15 | 0.50% | 0.05% | close/-1 tick | 5 | +4 ticks |
+| `sk_telecom_afternoon` | 14:25~14:34 | 20 | 0.50% | 0.75% | close/-1 tick | 5 | +4 ticks |
+| `samsung_ea_morning` | 09:45~09:59 | 15 | 1.75% | 0.50% | close/-1 tick | 5 | +4 ticks |
+| `sk_eternix_afternoon` | 14:15~14:40 | 15 | 2.00% | 0.50% | close/-1 tick | 5 | +4 ticks |
+| `samsung_ea_afternoon` | 14:05~14:34 | 20 | 0.75% | 0.35% | close/-1 tick | 5 | +4 ticks |
+
+Three new independent profiles are added:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---:|---|---:|---:|
+| `sk_telecom_late_morning` | 10:45~10:59 | 60 | 1.25% | 0.50% | close/-1 tick | 5 | +2 ticks |
+| `hanse_morning` | 09:15~09:44 | 15 | 0.75% | 0.75% | close/-1 tick | 5 | +2 ticks |
+| `hanse_afternoon` | 14:20~14:29 | 30 | 0.50% | 0.75% | close/-1 tick | 5 | +2 ticks |
+
+The fixed Theborn Korea observation remains source-only. No recommendation
+changes quantity, stop/hold behavior, SOR routing, broker guards, or another
+owner's ledger.
+
 The Doosan Enerbility and Hanwha Ocean episode profiles are parallel to their
 widget auto-trading owners. Neither owner reads the other's state, position
 quantity, or order numbers, and neither may cancel or sell the other's orders
@@ -155,9 +191,9 @@ exact profile and date:
   leg is exactly 10 shares. Legacy owned one-share orders remain valid custody
   state and are never resized retroactively.
 
-Activation uses protected `manual_operator` markers for all ten symbols in
+Activation uses protected `manual_operator` markers for all eleven symbols in
 `data/config/manual_control_excluded_codes.txt`. The reviewed installer adds
-the new SK Telecom and Samsung E&A markers, as well as the existing Kakao and
+the new SK Telecom, Samsung E&A, and Hanse markers, as well as the existing Kakao and
 KEPCO safeguards, immediately before enabling the new timers, so
 source implementation alone does not partially transfer their runtime owner.
 This excludes the symbols from
@@ -214,6 +250,16 @@ historical Kakao morning +3-tick target is not compared with a different policy
 generation. New target reconciliations persist broker `kt00007.cntr_uv`;
 only broker-priced completed legs contribute to decision EV and its 20-leg floor.
 Older configured-target proxy results remain separately labeled diagnostics.
+The postclose producer also reads the official account realized-PnL endpoint
+`ka10073` for symbol-days that contain a completed episode. Its exact net PnL,
+commission, and tax replace the fixed-cost estimate only when one episode
+profile owns that symbol-day and the account aggregate matches the episode's
+filled quantity, weighted buy price, weighted sell price, and
+`gross profit - commission - tax`. A query failure, mismatch, or same-symbol
+multi-profile day is never apportioned heuristically; it remains on the
+reviewed `0.23%` round-trip fallback. Historical report rows are recalculated
+from their persisted broker fill prices under the current fallback instead of
+being discarded when an older report used a different fixed cost.
 
 After at least 20 completed legs in that clean-baseline actual-observation window,
 positive current and candidate EV, and no held/unresolved inventory, one
@@ -222,7 +268,7 @@ profile may propose one tightening axis for the next PREOPEN:
 - drawdown from the profile baseline to at most `baseline + 0.25%p`, or
 - near-low proximity from the profile baseline to at most `baseline - 0.10%p`.
 
-Across all twenty profiles and the existing Samsung regular machines, at most one
+Across all twenty-three profiles and the existing Samsung regular machines, at most one
 profile/machine and one entry axis may change per day.  The Samsung candidate is
 produced first; if it owns a valid mutation, or its same-date candidate is
 invalid, the lower-price family carries all policies forward. Quantity is fixed
@@ -242,7 +288,9 @@ For the 2026-08-13 PREOPEN transition only, its exact seven-profile v2 policy is
 validated first and the six newly approved profiles are added at their frozen
 baselines. The candidate and applied-policy inventory contained all thirteen
 profiles through 2026-08-18. From the 2026-08-19 revision it must contain all
-twenty; a partial or stale inventory fails closed.
+twenty. Target dates from 2026-08-21 must contain all twenty-three, with the
+eight approved revisions and three new profiles recorded in the exact-date
+`profile_revision_transition`; a partial or stale inventory fails closed.
 
 ## Daily implementation-candidate recommendation
 

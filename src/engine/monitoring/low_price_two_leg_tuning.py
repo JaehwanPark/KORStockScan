@@ -1,8 +1,9 @@
 """Postclose actual-outcome tuning for each lower-price two-leg profile.
 
-This producer reads only durable profile states and its own prior reports.  It
-never queries market history and can only propose one bounded tightening axis
-for the next PREOPEN across the shared regular-entry stage.
+This producer reads durable profile states, its own prior reports, and exact
+realized-cost account rows for uniquely attributable completed episodes. It
+never queries market-price history and can only propose one bounded tightening
+axis for the next PREOPEN across the shared regular-entry stage.
 """
 
 from __future__ import annotations
@@ -13,9 +14,10 @@ import math
 import os
 import statistics
 import tempfile
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.trading.low_price_two_leg.machine import DEFAULT_STATE_DIR
 from src.engine.monitoring.machine_microstructure_attribution import (
@@ -24,18 +26,18 @@ from src.engine.monitoring.machine_microstructure_attribution import (
 )
 from src.trading.low_price_two_leg.policy_runtime import (
     APPLIED_DIR,
-    BASELINE_POLICIES,
-    POLICY_BOUNDS,
     CANDIDATE_DIR,
     CANDIDATE_SCHEMA,
     atomic_write_json,
     candidate_policies_with_current_baselines,
+    baseline_policies_for_target_date,
     load_applied_profile_policy,
     policy_hash,
+    policy_bounds_for_target_date,
     policy_mutations_between,
     validate_candidate,
 )
-from src.trading.low_price_two_leg.profiles import PROFILES
+from src.trading.low_price_two_leg.profiles import PROFILES, profiles_for_target_date
 from src.trading.order.episode_quantity import SUPPORTED_OWNED_LEG_QUANTITIES
 from src.trading.order.regular_two_leg_machine import KST
 from src.trading.order.tick_utils import move_price_by_ticks
@@ -46,17 +48,20 @@ from src.trading.order.samsung_entry_policy import (
     validate_candidate as validate_samsung_candidate,
 )
 from src.utils.constants import DATA_DIR
+from src.utils import kiwoom_utils
 from src.utils.market_day import is_krx_trading_day
 
 REPORT_TYPE = "low_price_two_leg_tuning"
-REPORT_SCHEMA = "low_price_two_leg_tuning_report_v3"
+REPORT_SCHEMA = "low_price_two_leg_tuning_report_v4"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
     {
         "low_price_two_leg_tuning_report_v1",
         "low_price_two_leg_tuning_report_v2",
+        "low_price_two_leg_tuning_report_v3",
         REPORT_SCHEMA,
     }
 )
+DEFAULT_ROUND_TRIP_COST_PCT = 0.23
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
 SAMPLE_FLOOR_COMPLETED_LEGS = 20
@@ -84,6 +89,9 @@ PROFILE_FIRST_OPERATIONAL_DATES = {
     "samsung_ea_morning": date(2026, 8, 19),
     "samsung_ea_late_morning": date(2026, 8, 19),
     "samsung_ea_afternoon": date(2026, 8, 19),
+    "sk_telecom_late_morning": date(2026, 8, 21),
+    "hanse_morning": date(2026, 8, 21),
+    "hanse_afternoon": date(2026, 8, 21),
 }
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {
@@ -109,7 +117,10 @@ METRIC_CONTRACT = {
         "clean_baseline_cumulative_completed_legs": SAMPLE_FLOOR_COMPLETED_LEGS,
     },
     "primary_decision_metric": "notional_weighted_ev_pct",
-    "profit_cost_model": "broker_target_fill_price_minus_fixed_round_trip_cost_pct",
+    "profit_cost_model": (
+        "ka10073_exact_cost_when_uniquely_attributable_else_"
+        "broker_target_fill_price_minus_fixed_round_trip_cost_pct"
+    ),
     "lifecycle_speed_diagnostics": {
         "metric_role": "diagnostic_execution_velocity_and_capital_occupancy",
         "decision_authority": "postclose_diagnostic_only",
@@ -154,6 +165,7 @@ METRIC_CONTRACT = {
         "pre_operational_profile_rows_are_not_source_gaps",
         "prebaseline_and_nontrading_reports_excluded",
         "historical_replay_not_mixed_with_actual_outcomes",
+        "ka10073_symbol_day_quantity_and_average_price_unique_match",
     ],
     "forbidden_uses": [
         "historical_market_data_requery",
@@ -167,6 +179,8 @@ METRIC_CONTRACT = {
         "provider_bot_cap_or_broker_guard_change",
     ],
 }
+
+RealizedPnlLoader = Callable[[str, str], list[dict[str, Any]]]
 
 
 def _clean_trading_dates_through(target_date: date) -> tuple[date, ...]:
@@ -271,16 +285,240 @@ def _profile_was_operational(profile_id: str, target_date: date) -> bool:
     return target_date >= PROFILE_FIRST_OPERATIONAL_DATES[profile_id]
 
 
+def _signed_number(value: Any) -> float | None:
+    text = str(value or "").replace(",", "").replace("+", "").strip()
+    if not text:
+        return None
+    try:
+        parsed = float(text)
+    except ValueError:
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def load_realized_pnl_ka10073(
+    token: str, trade_date: str, symbol: str
+) -> list[dict[str, Any]]:
+    """Read normalized symbol-day realized PnL from the official ka10073 API."""
+
+    parsed_date = date.fromisoformat(trade_date)
+    normalized_symbol = str(symbol or "").strip().removeprefix("A")
+    if len(normalized_symbol) != 6 or not normalized_symbol.isdigit():
+        raise ValueError("ka10073_symbol_must_be_six_digits")
+    api_date = parsed_date.strftime("%Y%m%d")
+    responses = kiwoom_utils.fetch_kiwoom_api_continuous(
+        url=kiwoom_utils.get_api_url("/api/dostk/acnt"),
+        token=token,
+        api_id="ka10073",
+        payload={
+            "stk_cd": normalized_symbol,
+            "strt_dt": api_date,
+            "end_dt": api_date,
+        },
+        use_continuous=True,
+    )
+    normalized: list[dict[str, Any]] = []
+    for response in responses or []:
+        if not isinstance(response, dict):
+            continue
+        response_code = str(response.get("return_code", response.get("rt_cd", "0")))
+        if response_code != "0":
+            raise RuntimeError(f"ka10073_response_rejected:{response_code}")
+        for raw in response.get("dt_stk_rlzt_pl", []) or []:
+            if not isinstance(raw, dict):
+                continue
+            raw_symbol = str(raw.get("stk_cd") or "").strip().removeprefix("A")
+            raw_date = str(raw.get("dt") or "").strip().replace("-", "")
+            if raw_symbol != normalized_symbol or raw_date != api_date:
+                continue
+            normalized.append(
+                {
+                    "trade_date": trade_date,
+                    "symbol": normalized_symbol,
+                    "filled_qty": _signed_number(raw.get("cntr_qty")),
+                    "buy_average_price": _signed_number(raw.get("buy_uv")),
+                    "sell_average_price": _signed_number(raw.get("cntr_pric")),
+                    "realized_net_profit_krw": _signed_number(raw.get("tdy_sel_pl")),
+                    "broker_profit_rate_pct": _signed_number(raw.get("pl_rt")),
+                    "commission_krw": _signed_number(raw.get("tdy_trde_cmsn")),
+                    "tax_krw": _signed_number(raw.get("tdy_trde_tax")),
+                    "source_api": "ka10073",
+                }
+            )
+    return normalized
+
+
+def _completed_broker_legs(row: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        leg
+        for leg in row.get("legs", [])
+        if leg.get("completed")
+        and leg.get("profit_price_source") == "broker_target_fill_price"
+    ]
+
+
+def _apply_broker_realized_economics(
+    rows: list[dict[str, Any]], loader: RealizedPnlLoader | None
+) -> dict[str, int]:
+    """Attach exact costs only when a symbol-day aggregate has one safe owner."""
+
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        row["broker_realized_economics"] = {
+            "status": "not_applicable",
+            "selection_effect": False,
+        }
+        completed = _completed_broker_legs(row)
+        if not completed:
+            continue
+        groups.setdefault(
+            (str(row.get("target_date") or ""), str(row.get("symbol") or "")), []
+        ).append(row)
+
+    summary = {"matched": 0, "fallback": 0, "api_requests": 0}
+    for (trade_date, symbol), candidates in groups.items():
+        if len(candidates) != 1:
+            for row in candidates:
+                row["broker_realized_economics"] = {
+                    "status": "fixed_cost_fallback",
+                    "reason": "multiple_episode_profiles_share_symbol_day",
+                    "selection_effect": True,
+                }
+                summary["fallback"] += 1
+            continue
+        row = candidates[0]
+        if not row.get("eligible_for_tuning"):
+            row["broker_realized_economics"] = {
+                "status": "not_applicable",
+                "reason": "profile_row_ineligible_for_tuning",
+                "selection_effect": False,
+            }
+            continue
+        if loader is None:
+            row["broker_realized_economics"] = {
+                "status": "fixed_cost_fallback",
+                "reason": "ka10073_loader_not_configured",
+                "selection_effect": True,
+            }
+            summary["fallback"] += 1
+            continue
+        try:
+            summary["api_requests"] += 1
+            broker_rows = loader(trade_date, symbol)
+        except Exception as exc:
+            row["broker_realized_economics"] = {
+                "status": "fixed_cost_fallback",
+                "reason": f"ka10073_query_failed:{type(exc).__name__}",
+                "selection_effect": True,
+            }
+            summary["fallback"] += 1
+            continue
+
+        if len(broker_rows) != 1:
+            row["broker_realized_economics"] = {
+                "status": "fixed_cost_fallback",
+                "reason": "ka10073_unique_symbol_day_row_missing",
+                "matched_row_count": len(broker_rows),
+                "selection_effect": True,
+            }
+            summary["fallback"] += 1
+            continue
+
+        broker = broker_rows[0]
+        legs = _completed_broker_legs(row)
+        expected_qty = sum(_as_int(leg.get("target_filled_qty")) for leg in legs)
+        buy_notional = sum(
+            _as_int(leg.get("fill_price")) * _as_int(leg.get("target_filled_qty"))
+            for leg in legs
+        )
+        sell_notional = sum(
+            _as_int(leg.get("target_fill_price"))
+            * _as_int(leg.get("target_filled_qty"))
+            for leg in legs
+        )
+        expected_buy_average = buy_notional / expected_qty if expected_qty else 0.0
+        expected_sell_average = sell_notional / expected_qty if expected_qty else 0.0
+        broker_qty = _as_float(broker.get("filled_qty"))
+        broker_buy_average = _as_float(broker.get("buy_average_price"))
+        broker_sell_average = _as_float(broker.get("sell_average_price"))
+        exact_net = _as_float(broker.get("realized_net_profit_krw"))
+        commission = _as_float(broker.get("commission_krw"))
+        tax = _as_float(broker.get("tax_krw"))
+        gross_profit = sell_notional - buy_notional
+        values_present = all(
+            value is not None
+            for value in (
+                broker_qty,
+                broker_buy_average,
+                broker_sell_average,
+                exact_net,
+                commission,
+                tax,
+            )
+        )
+        identity_matches = bool(
+            values_present
+            and expected_qty > 0
+            and abs(float(broker_qty) - expected_qty) < 1e-9
+            and abs(float(broker_buy_average) - expected_buy_average) <= 1.0
+            and abs(float(broker_sell_average) - expected_sell_average) <= 1.0
+            and abs(gross_profit - float(commission) - float(tax) - float(exact_net))
+            <= 1.0
+        )
+        if not identity_matches:
+            row["broker_realized_economics"] = {
+                "status": "fixed_cost_fallback",
+                "reason": "ka10073_episode_identity_mismatch",
+                "expected": {
+                    "filled_qty": expected_qty,
+                    "buy_average_price": round(expected_buy_average, 6),
+                    "sell_average_price": round(expected_sell_average, 6),
+                    "gross_profit_krw": gross_profit,
+                },
+                "observed": broker,
+                "selection_effect": True,
+            }
+            summary["fallback"] += 1
+            continue
+
+        row["broker_realized_economics"] = {
+            "status": "matched_exact",
+            "source_api": "ka10073",
+            "trade_date": trade_date,
+            "symbol": symbol,
+            "filled_qty": expected_qty,
+            "buy_notional_krw": buy_notional,
+            "sell_notional_krw": sell_notional,
+            "gross_profit_krw": gross_profit,
+            "commission_krw": round(float(commission), 3),
+            "tax_krw": round(float(tax), 3),
+            "realized_net_profit_krw": round(float(exact_net), 3),
+            "realized_net_return_pct": round(float(exact_net) / buy_notional * 100, 6),
+            "broker_profit_rate_pct": broker.get("broker_profit_rate_pct"),
+            "selection_effect": True,
+            "attribution_contract": (
+                "unique_episode_profile_and_exact_symbol_day_quantity_average_price_"
+                "gross_cost_reconciliation"
+            ),
+        }
+        summary["matched"] += 1
+    return summary
+
+
 def _historical_profile_row(
     profile_id: str,
     report_date: date,
     profiles: dict[str, Any],
+    cost_pct: float,
 ) -> dict:
     row = profiles.get(profile_id)
     if isinstance(row, dict):
         row = dict(row)
-        row["legs"] = [
-            {
+        normalized_legs = []
+        for leg in row.get("legs", []):
+            if not isinstance(leg, dict):
+                continue
+            normalized = {
                 **leg,
                 "profit_price_source": (
                     str(leg.get("profit_price_source"))
@@ -298,9 +536,19 @@ def _historical_profile_row(
                     )
                 ),
             }
-            for leg in row.get("legs", [])
-            if isinstance(leg, dict)
-        ]
+            if normalized.get("completed"):
+                fill_price = _as_int(normalized.get("fill_price"))
+                exit_price = _as_int(
+                    normalized.get("target_fill_price")
+                    or normalized.get("profit_exit_price")
+                    or normalized.get("target_price")
+                )
+                if fill_price > 0 and exit_price > 0:
+                    normalized["net_profit_pct"] = round(
+                        (exit_price / fill_price - 1.0) * 100.0 - cost_pct, 6
+                    )
+            normalized_legs.append(normalized)
+        row["legs"] = normalized_legs
         reasons = list(row.get("source_quality_reasons") or [])
         if (
             not _profile_was_operational(profile_id, report_date)
@@ -365,9 +613,7 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     profit_price_source = (
         "broker_target_fill_price"
         if completed and target_fill_price > 0
-        else "configured_target_price_proxy"
-        if completed
-        else "not_completed"
+        else "configured_target_price_proxy" if completed else "not_completed"
     )
     net_profit_pct = (
         (profit_exit_price / fill_price - 1.0) * 100.0 - cost_pct if completed else None
@@ -604,26 +850,58 @@ def _aggregate(rows: list[dict]) -> dict:
     attempted_notional = sum(
         _as_int(leg.get("entry_price")) * _as_int(leg.get("quantity")) for leg in legs
     )
-    broker_realized_profit = sum(
+    exact_cost_rows = [
+        row
+        for row in attempted_rows
+        if (row.get("broker_realized_economics") or {}).get("status") == "matched_exact"
+    ]
+    exact_cost_row_ids = {id(row) for row in exact_cost_rows}
+    fixed_cost_broker_profit = sum(
         _as_int(leg.get("fill_price"))
         * _as_int(leg.get("buy_filled_qty"))
         * float(leg["net_profit_pct"])
         / 100.0
-        for leg in broker_priced_completed
+        for row in attempted_rows
+        if id(row) not in exact_cost_row_ids
+        for leg in _completed_broker_legs(row)
     )
+    exact_broker_profit = sum(
+        float(row["broker_realized_economics"]["realized_net_profit_krw"])
+        for row in exact_cost_rows
+    )
+    broker_realized_profit = fixed_cost_broker_profit + exact_broker_profit
     broker_completed_capital_occupied_krw_seconds = sum(
         _as_int(leg.get("fill_price"))
         * _as_int(leg.get("buy_filled_qty"))
         * float(leg["holding_duration_sec"])
         for leg in timed_broker_completed
     )
-    timed_broker_realized_profit = sum(
-        _as_int(leg.get("fill_price"))
-        * _as_int(leg.get("buy_filled_qty"))
-        * float(leg["net_profit_pct"])
-        / 100.0
-        for leg in timed_broker_completed
-    )
+    timed_broker_realized_profit = 0.0
+    for row in attempted_rows:
+        row_broker_legs = _completed_broker_legs(row)
+        row_timed_legs = [
+            leg
+            for leg in row_broker_legs
+            if _as_float(leg.get("holding_duration_sec")) is not None
+            and float(leg["holding_duration_sec"]) >= 0.0
+        ]
+        exact_economics = row.get("broker_realized_economics") or {}
+        if (
+            exact_economics.get("status") == "matched_exact"
+            and row_broker_legs
+            and len(row_timed_legs) == len(row_broker_legs)
+        ):
+            timed_broker_realized_profit += float(
+                exact_economics["realized_net_profit_krw"]
+            )
+        else:
+            timed_broker_realized_profit += sum(
+                _as_int(leg.get("fill_price"))
+                * _as_int(leg.get("buy_filled_qty"))
+                * float(leg["net_profit_pct"])
+                / 100.0
+                for leg in row_timed_legs
+            )
     target_proxy_profit = sum(
         _as_int(leg.get("fill_price"))
         * _as_int(leg.get("buy_filled_qty"))
@@ -653,6 +931,12 @@ def _aggregate(rows: list[dict]) -> dict:
             if completed
             else None
         ),
+        "exact_broker_cost_profile_rows": len(exact_cost_rows),
+        "exact_broker_cost_completed_legs": sum(
+            len(_completed_broker_legs(row)) for row in exact_cost_rows
+        ),
+        "fixed_cost_estimate_completed_legs": len(broker_priced_completed)
+        - sum(len(_completed_broker_legs(row)) for row in exact_cost_rows),
         "no_fill_legs": sum(leg.get("status") == "NO_FILL" for leg in legs),
         "held_or_unresolved_legs": sum(
             leg.get("held") or not leg.get("terminal") for leg in all_legs
@@ -690,6 +974,9 @@ def _aggregate(rows: list[dict]) -> dict:
             round(sum(holding_durations), 3) if holding_durations else None
         ),
         "broker_realized_net_profit_krw": round(broker_realized_profit, 3),
+        "cost_adjusted_net_profit_krw": round(broker_realized_profit, 3),
+        "exact_broker_realized_net_profit_krw": round(exact_broker_profit, 3),
+        "fixed_cost_estimate_net_profit_krw": round(fixed_cost_broker_profit, 3),
         "broker_completed_capital_occupied_krw_seconds": (
             round(broker_completed_capital_occupied_krw_seconds, 3)
             if timed_broker_completed
@@ -735,6 +1022,7 @@ def _axis_outcome(
 def _load_history(
     output_dir: Path, target_date: date, cost_pct: float
 ) -> dict[str, dict[str, dict]]:
+    target_profiles = profiles_for_target_date(target_date)
     history: dict[str, dict[str, dict]] = {}
     for path in sorted(output_dir.glob(f"{REPORT_TYPE}_*.json")):
         raw_date = path.stem.removeprefix(f"{REPORT_TYPE}_")
@@ -748,10 +1036,6 @@ def _load_history(
             continue
         payload = _read_json(path)
         profiles = (payload or {}).get("daily", {}).get("profiles", {})
-        try:
-            payload_cost = float((payload or {}).get("cost_pct"))
-        except (TypeError, ValueError):
-            payload_cost = -1.0
         if (
             not payload
             or payload.get("report_type") != REPORT_TYPE
@@ -759,25 +1043,26 @@ def _load_history(
             or payload.get("target_date") != raw_date
             or payload.get("clean_tuning_baseline_date")
             != CLEAN_BASELINE_DATE.isoformat()
-            or not math.isfinite(payload_cost)
-            or abs(payload_cost - cost_pct) > 1e-9
             or not isinstance(profiles, dict)
         ):
             history[raw_date] = {
                 profile_id: _empty_row(
                     profile_id, raw_date, "prior_report_contract_invalid"
                 )
-                for profile_id in PROFILES
+                for profile_id in target_profiles
             }
             continue
         history[raw_date] = {
-            profile_id: _historical_profile_row(profile_id, report_date, profiles)
-            for profile_id in PROFILES
+            profile_id: _historical_profile_row(
+                profile_id, report_date, profiles, cost_pct
+            )
+            for profile_id in target_profiles
         }
     return history
 
 
 def _latest_prior_policies(candidate_dir: Path, target_date: str) -> dict[str, dict]:
+    parsed_target_date = date.fromisoformat(target_date)
     paths = sorted(
         candidate_dir.glob("low_price_two_leg_policy_candidate_*.json"), reverse=True
     )
@@ -788,9 +1073,14 @@ def _latest_prior_policies(candidate_dir: Path, target_date: str) -> dict[str, d
         valid, reason = validate_candidate(payload)
         if not valid:
             raise ValueError(f"latest_prior_candidate_{reason}")
-        return candidate_policies_with_current_baselines(payload)
+        return candidate_policies_with_current_baselines(
+            payload, target_date=parsed_target_date
+        )
     return {
-        profile_id: dict(policy) for profile_id, policy in BASELINE_POLICIES.items()
+        profile_id: dict(policy)
+        for profile_id, policy in baseline_policies_for_target_date(
+            parsed_target_date
+        ).items()
     }
 
 
@@ -840,10 +1130,12 @@ def build_report(
     output_dir: Path = OUTPUT_DIR,
     source_quality_dir: Path = SOURCE_QUALITY_DIR,
     applied_dir: Path = APPLIED_DIR,
-    cost_pct: float = 0.20,
+    cost_pct: float = DEFAULT_ROUND_TRIP_COST_PCT,
     machine_microstructure_report_dir: Path = MACHINE_MICROSTRUCTURE_REPORT_DIR,
+    realized_pnl_loader: RealizedPnlLoader | None = None,
 ) -> dict:
     parsed_date = date.fromisoformat(target_date)
+    target_profiles = profiles_for_target_date(parsed_date)
     expected_clean_dates = _clean_trading_dates_through(parsed_date)
     target_date_is_trading = is_krx_trading_day(parsed_date)
     if not math.isfinite(cost_pct) or not 0 <= cost_pct < 100:
@@ -893,11 +1185,15 @@ def build_report(
             "status": (
                 "loaded"
                 if source_date_matches and profile_id in feedback_profiles
-                else "owner_profile_not_present"
-                if source_date_matches and feedback["status"] == "loaded"
-                else "owner_source_date_mismatch"
-                if feedback["status"] == "loaded"
-                else feedback["status"]
+                else (
+                    "owner_profile_not_present"
+                    if source_date_matches and feedback["status"] == "loaded"
+                    else (
+                        "owner_source_date_mismatch"
+                        if feedback["status"] == "loaded"
+                        else feedback["status"]
+                    )
+                )
             ),
             "source_date": feedback.get("source_date"),
             "owner_source_date": owner_source_date,
@@ -912,7 +1208,7 @@ def build_report(
 
     daily: dict[str, dict] = {}
     prior_state_reconciliations: dict[str, dict] = {}
-    for profile_id in PROFILES:
+    for profile_id in target_profiles:
         state_path = state_dir / f"{profile_id}_state.json"
         state = _read_json(state_path)
         raw_state_date = str((state or {}).get("trade_date") or "")
@@ -987,6 +1283,12 @@ def build_report(
             profile_id,
             owner_source_date=str(micro_feedback["source_date"]),
         )
+    economics_rows = list(daily.values()) + [
+        item["row"] for item in prior_state_reconciliations.values()
+    ]
+    broker_realized_reconciliation = _apply_broker_realized_economics(
+        economics_rows, realized_pnl_loader
+    )
     history = _load_history(output_dir, parsed_date, cost_pct)
     for profile_id, reconciliation in prior_state_reconciliations.items():
         source_date = reconciliation["source_date"]
@@ -998,7 +1300,7 @@ def build_report(
                     source_date,
                     "prior_report_missing_during_state_reconciliation",
                 )
-                for item in PROFILES
+                for item in target_profiles
             },
         )
         history[source_date][profile_id] = reconciliation["row"]
@@ -1012,7 +1314,7 @@ def build_report(
         if item not in observed_date_set
     ]
     windows: dict[str, dict[str, Any]] = {CLEAN_WINDOW_NAME: {}}
-    for profile_id in PROFILES:
+    for profile_id in target_profiles:
         rows = [history[day][profile_id] for day in dates]
         windows[CLEAN_WINDOW_NAME][profile_id] = {
             "summary": _aggregate(rows),
@@ -1026,6 +1328,20 @@ def build_report(
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "target_date_is_krx_trading_day": target_date_is_trading,
         "cost_pct": cost_pct,
+        "cost_model": {
+            "primary_source": "ka10073_exact_when_uniquely_attributable",
+            "fallback_source": "fixed_round_trip_cost_pct",
+            "fixed_round_trip_cost_pct": cost_pct,
+            "broker_realized_reconciliation": broker_realized_reconciliation,
+            "exact_match_required_fields": [
+                "symbol_day",
+                "filled_qty",
+                "buy_average_price",
+                "sell_average_price",
+                "gross_profit_minus_commission_and_tax",
+            ],
+            "ambiguous_owner_policy": "fixed_cost_fallback_no_exact_pnl_allocation",
+        },
         "metric_contract": METRIC_CONTRACT,
         "source_quality_preflight": source_preflight,
         "daily": {"profiles": daily},
@@ -1062,13 +1378,16 @@ def build_candidate(
     candidate_dir: Path = CANDIDATE_DIR,
     samsung_candidate_dir: Path = SAMSUNG_CANDIDATE_DIR,
 ) -> dict:
+    source_date = date.fromisoformat(str(report["target_date"]))
+    target_profiles = profiles_for_target_date(source_date)
+    target_bounds = policy_bounds_for_target_date(source_date)
     prior = _latest_prior_policies(candidate_dir, report["target_date"])
     selected_policies = {
         profile_id: dict(policy) for profile_id, policy in prior.items()
     }
     evaluations: dict[str, dict[str, Any]] = {}
     eligible: list[tuple[float, str, str, float]] = []
-    for profile_id in PROFILES:
+    for profile_id in target_profiles:
         current = prior[profile_id]
         clean_window = report["windows"][CLEAN_WINDOW_NAME][profile_id]
         current_outcome = _axis_outcome(
@@ -1080,7 +1399,7 @@ def build_candidate(
             clean_window["summary"]["held_or_unresolved_legs"] == 0
         )
         alternatives: list[tuple[str, float, float]] = []
-        bounds = POLICY_BOUNDS[profile_id]
+        bounds = target_bounds[profile_id]
         if float(current["rolling_high_drawdown_pct"]) < bounds["drawdown_max"]:
             alternatives.append(
                 (
@@ -1154,7 +1473,7 @@ def build_candidate(
     if len(mutations) > 1:
         raise ValueError("same_stage_multiple_axis_candidate_forbidden")
     profiles = {}
-    for profile_id in PROFILES:
+    for profile_id in target_profiles:
         profiles[profile_id] = {
             "selection_status": (
                 "selected_next_preopen_bounded_tightening"
@@ -1202,11 +1521,18 @@ def _atomic_write(path: Path, content: str) -> None:
 
 
 def render_markdown(report: dict, candidate: dict) -> str:
+    cost_model = report["cost_model"]
+    reconciliation = cost_model["broker_realized_reconciliation"]
     lines = [
         f"# Low-price two-leg tuning — {report['target_date']}",
         "",
         "- Decision: profile-separated actual broker outcomes; next-PREOPEN bounded tightening only.",
         "- No market-history query, cross-profile pooling, stop loss, forced exit, quantity, target, or validity change.",
+        (
+            "- Cost model: exact ka10073 only on unique identity match "
+            f"(matched={reconciliation['matched']}, fallback={reconciliation['fallback']}); "
+            f"otherwise fixed {cost_model['fixed_round_trip_cost_pct']}%."
+        ),
         f"- Clean-baseline actual observations: {report['clean_baseline_window']['available_actual_observation_date_count']}/{report['clean_baseline_window']['expected_trading_date_count']} trading dates; missing dates are coverage only and are not imputed.",
         "",
         "| Profile | Symbol | Session | Daily status | Clean cumulative attempts | Complete legs | Held/unresolved | EV |",
@@ -1251,6 +1577,27 @@ def write_outputs(
     return json_path, md_path, candidate_path
 
 
+def _live_realized_pnl_loader() -> RealizedPnlLoader:
+    token: str | None = None
+    last_request_monotonic = 0.0
+
+    def load(trade_date: str, symbol: str) -> list[dict[str, Any]]:
+        nonlocal token, last_request_monotonic
+        if token is None:
+            token = kiwoom_utils.get_kiwoom_token()
+        if not token:
+            raise RuntimeError("kiwoom_token_unavailable")
+        elapsed = time.monotonic() - last_request_monotonic
+        if last_request_monotonic and elapsed < 0.25:
+            time.sleep(0.25 - elapsed)
+        try:
+            return load_realized_pnl_ka10073(token, trade_date, symbol)
+        finally:
+            last_request_monotonic = time.monotonic()
+
+    return load
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date", required=True)
@@ -1259,7 +1606,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidate-dir", type=Path, default=CANDIDATE_DIR)
     parser.add_argument("--source-quality-dir", type=Path, default=SOURCE_QUALITY_DIR)
     parser.add_argument("--applied-policy-dir", type=Path, default=APPLIED_DIR)
-    parser.add_argument("--cost-pct", type=float, default=0.20)
+    parser.add_argument("--cost-pct", type=float, default=DEFAULT_ROUND_TRIP_COST_PCT)
+    parser.add_argument("--skip-broker-realized-pnl", action="store_true")
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
     report = build_report(
@@ -1269,6 +1617,9 @@ def main(argv: list[str] | None = None) -> int:
         source_quality_dir=args.source_quality_dir,
         applied_dir=args.applied_policy_dir,
         cost_pct=args.cost_pct,
+        realized_pnl_loader=(
+            None if args.skip_broker_realized_pnl else _live_realized_pnl_loader()
+        ),
     )
     candidate = build_candidate(report, candidate_dir=args.candidate_dir)
     valid, reason = validate_candidate(candidate)

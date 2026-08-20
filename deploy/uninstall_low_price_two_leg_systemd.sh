@@ -47,6 +47,12 @@ TIMERS=(
   korstockscan-low-price-two-leg-samsung-ea-late-morning.timer
   korstockscan-low-price-two-leg-samsung-ea-afternoon-preflight.timer
   korstockscan-low-price-two-leg-samsung-ea-afternoon.timer
+  korstockscan-low-price-two-leg-sk-telecom-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-sk-telecom-late-morning.timer
+  korstockscan-low-price-two-leg-hanse-morning-preflight.timer
+  korstockscan-low-price-two-leg-hanse-morning.timer
+  korstockscan-low-price-two-leg-hanse-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-hanse-afternoon.timer
 )
 SERVICES=(
   korstockscan-low-price-two-leg@samsung_heavy_midday.service
@@ -93,6 +99,12 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@samsung_ea_morning.service
   korstockscan-low-price-two-leg-preflight@samsung_ea_late_morning.service
   korstockscan-low-price-two-leg-preflight@samsung_ea_afternoon.service
+  korstockscan-low-price-two-leg@sk_telecom_late_morning.service
+  korstockscan-low-price-two-leg-preflight@sk_telecom_late_morning.service
+  korstockscan-low-price-two-leg@hanse_morning.service
+  korstockscan-low-price-two-leg-preflight@hanse_morning.service
+  korstockscan-low-price-two-leg@hanse_afternoon.service
+  korstockscan-low-price-two-leg-preflight@hanse_afternoon.service
 )
 FILES=(
   korstockscan-low-price-two-leg@.service

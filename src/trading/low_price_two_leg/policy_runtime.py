@@ -14,8 +14,10 @@ from zoneinfo import ZoneInfo
 
 from src.trading.low_price_two_leg.profiles import (
     PRE_RECOMMENDATION_PROFILES,
-    PROFILE_REVISION_EFFECTIVE_DATE,
+    PROFILE_REVISION_20260819_EFFECTIVE_DATE,
+    PROFILE_REVISION_20260821_EFFECTIVE_DATE,
     PROFILES,
+    PROFILES_20260819,
 )
 from src.utils.constants import DATA_DIR
 
@@ -48,6 +50,7 @@ SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
         "low_price_two_leg_tuning_report_v1",
         "low_price_two_leg_tuning_report_v2",
         "low_price_two_leg_tuning_report_v3",
+        "low_price_two_leg_tuning_report_v4",
     }
 )
 APPLIED_SCHEMA = "low_price_two_leg_policy_applied_v1"
@@ -55,11 +58,11 @@ CANDIDATE_DIR = DATA_DIR / "threshold_cycle" / "low_price_two_leg" / "candidates
 APPLIED_DIR = DATA_DIR / "threshold_cycle" / "low_price_two_leg" / "applied"
 MAX_CANDIDATE_AGE_DAYS = 7
 CLEAN_BASELINE_DATE = "2026-06-05"
-PRE_RECOMMENDATION_LAST_TARGET_DATE = PROFILE_REVISION_EFFECTIVE_DATE - timedelta(
-    days=1
+PRE_RECOMMENDATION_LAST_TARGET_DATE = (
+    PROFILE_REVISION_20260819_EFFECTIVE_DATE - timedelta(days=1)
 )
-PROFILE_REVISION_TRANSITION = {
-    "effective_target_date": PROFILE_REVISION_EFFECTIVE_DATE.isoformat(),
+PROFILE_REVISION_20260819_TRANSITION = {
+    "effective_target_date": PROFILE_REVISION_20260819_EFFECTIVE_DATE.isoformat(),
     "source_date": "2026-08-18",
     "before_profile_count": 13,
     "after_profile_count": 20,
@@ -73,6 +76,23 @@ PROFILE_REVISION_TRANSITION = {
         "3f829f002f5ce53615460c55f9fa71211d286c87443794e1bd506f622544d795"
     ),
     "decision_authority": "explicit_user_directed_profile_revision_2026_08_18",
+    "existing_order_effect": "none_preserve_prior_policy_custody",
+}
+PROFILE_REVISION_20260821_TRANSITION = {
+    "effective_target_date": PROFILE_REVISION_20260821_EFFECTIVE_DATE.isoformat(),
+    "source_date": "2026-08-19",
+    "before_profile_count": 20,
+    "after_profile_count": 23,
+    "recommendation_count": 11,
+    "new_profile_count": 3,
+    "logic_revision_count": 8,
+    "evidence_path": (
+        "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-19.json"
+    ),
+    "evidence_canonical_sha256": (
+        "3acf5125074eaf7e48eca0e73c22f037b5e6b1ec354bd5b203cf32f14dea2381"
+    ),
+    "decision_authority": "explicit_user_directed_profile_revision_2026_08_20",
     "existing_order_effect": "none_preserve_prior_policy_custody",
 }
 KAKAO_MORNING_TARGET_TRANSITION = {
@@ -107,6 +127,10 @@ def _baseline_policy(profile_id: str, inventory: dict[str, Any]) -> dict[str, An
 BASELINE_POLICIES = {
     profile_id: _baseline_policy(profile_id, PROFILES) for profile_id in PROFILES
 }
+PROFILE_20260819_BASELINE_POLICIES = {
+    profile_id: _baseline_policy(profile_id, PROFILES_20260819)
+    for profile_id in PROFILES_20260819
+}
 PRE_RECOMMENDATION_BASELINE_POLICIES = {
     profile_id: _baseline_policy(profile_id, PRE_RECOMMENDATION_PROFILES)
     for profile_id in PRE_RECOMMENDATION_PROFILES
@@ -128,21 +152,34 @@ def _policy_bounds(policies: dict[str, dict[str, Any]]) -> dict[str, dict[str, f
 
 
 POLICY_BOUNDS = _policy_bounds(BASELINE_POLICIES)
+PROFILE_20260819_POLICY_BOUNDS = _policy_bounds(PROFILE_20260819_BASELINE_POLICIES)
 PRE_RECOMMENDATION_POLICY_BOUNDS = _policy_bounds(PRE_RECOMMENDATION_BASELINE_POLICIES)
 
 
 def baseline_policies_for_target_date(
     target_date: date,
 ) -> dict[str, dict[str, Any]]:
-    if target_date < PROFILE_REVISION_EFFECTIVE_DATE:
+    if target_date < PROFILE_REVISION_20260819_EFFECTIVE_DATE:
         return PRE_RECOMMENDATION_BASELINE_POLICIES
+    if target_date < PROFILE_REVISION_20260821_EFFECTIVE_DATE:
+        return PROFILE_20260819_BASELINE_POLICIES
     return BASELINE_POLICIES
 
 
+def policy_bounds_for_target_date(target_date: date) -> dict[str, dict[str, float]]:
+    if target_date < PROFILE_REVISION_20260819_EFFECTIVE_DATE:
+        return PRE_RECOMMENDATION_POLICY_BOUNDS
+    if target_date < PROFILE_REVISION_20260821_EFFECTIVE_DATE:
+        return PROFILE_20260819_POLICY_BOUNDS
+    return POLICY_BOUNDS
+
+
 def profile_revision_transition(target_date: date) -> dict[str, Any] | None:
-    if target_date < PROFILE_REVISION_EFFECTIVE_DATE:
+    if target_date < PROFILE_REVISION_20260819_EFFECTIVE_DATE:
         return None
-    return dict(PROFILE_REVISION_TRANSITION)
+    if target_date < PROFILE_REVISION_20260821_EFFECTIVE_DATE:
+        return dict(PROFILE_REVISION_20260819_TRANSITION)
+    return dict(PROFILE_REVISION_20260821_TRANSITION)
 
 
 def operator_policy_transitions(target_date: date) -> list[dict[str, Any]]:
@@ -257,8 +294,8 @@ def validate_profile_policy(
     )
     bounds_by_profile = (
         POLICY_BOUNDS
-        if target_date is None or target_date >= PROFILE_REVISION_EFFECTIVE_DATE
-        else PRE_RECOMMENDATION_POLICY_BOUNDS
+        if target_date is None
+        else policy_bounds_for_target_date(target_date)
     )
     if profile_id not in baselines or not isinstance(policy, dict):
         return False, "profile_or_policy_invalid"
@@ -400,10 +437,8 @@ def candidate_policies_with_current_baselines(
     source_date = date.fromisoformat(str(payload["source_date"]))
     effective_target_date = target_date or (source_date + timedelta(days=1))
     target_baselines = baseline_policies_for_target_date(effective_target_date)
-    if (
-        effective_target_date >= PROFILE_REVISION_EFFECTIVE_DATE
-        and source_date < PROFILE_REVISION_EFFECTIVE_DATE
-    ):
+    source_baselines = baseline_policies_for_target_date(source_date)
+    if source_baselines != target_baselines:
         return {
             profile_id: dict(policy) for profile_id, policy in target_baselines.items()
         }

@@ -14,11 +14,15 @@ from src.engine.risk.manual_control_exclusion import (
 )
 from src.engine.monitoring.low_price_two_leg_tuning import (
     CLEAN_WINDOW_NAME,
+    DEFAULT_ROUND_TRIP_COST_PCT,
     PROFILE_FIRST_OPERATIONAL_DATES,
     REPORT_SCHEMA,
+    _aggregate,
+    _apply_broker_realized_economics,
     build_candidate,
     build_report,
     extract_profile_row,
+    load_realized_pnl_ka10073,
 )
 from src.engine.monitoring.low_price_two_leg_entry_spot_research import candidate_grid
 from src.trading.low_price_two_leg.gateway import (
@@ -43,6 +47,7 @@ from src.trading.low_price_two_leg.policy_runtime import (
 )
 from src.trading.low_price_two_leg.preflight import (
     RECOMMENDATION_20260818_PROFILE_MAP,
+    RECOMMENDATION_20260819_PROFILE_MAP,
     build_authority_artifact,
     evaluate_preflight,
     validate_research_evidence,
@@ -50,7 +55,9 @@ from src.trading.low_price_two_leg.preflight import (
 from src.trading.low_price_two_leg.profiles import (
     AFTERNOON_WINDOW,
     DOOSAN_ENERBILITY_MORNING_WINDOW,
-    DOOSAN_ENERBILITY_LATE_MORNING_WINDOW,
+    DOOSAN_ENERBILITY_LATE_MORNING_REVISED_WINDOW,
+    HANSE_AFTERNOON_WINDOW,
+    HANSE_MORNING_WINDOW,
     HANWHA_OCEAN_LATE_MORNING_WINDOW,
     JEJU_SEMICONDUCTOR_MORNING_WINDOW,
     KAKAO_LATE_MORNING_WINDOW,
@@ -64,11 +71,14 @@ from src.trading.low_price_two_leg.profiles import (
     SAMSUNG_EA_MORNING_WINDOW,
     SAMSUNG_HEAVY_MORNING_WINDOW,
     PROFILES,
+    PROFILES_20260819,
     PRE_RECOMMENDATION_PROFILES,
     SAMSUNG_HEAVY_MIDDAY_WINDOW,
     SK_ETERNIX_MIDDAY_WINDOW,
     SK_ETERNIX_MORNING_WINDOW,
+    SK_ETERNIX_AFTERNOON_REVISED_WINDOW,
     SK_TELECOM_AFTERNOON_WINDOW,
+    SK_TELECOM_LATE_MORNING_WINDOW,
     MinuteBar,
 )
 from src.trading.low_price_two_leg.service import _profile_with_applied_policy
@@ -178,7 +188,7 @@ class FakeSession:
         return self.responses.pop(0)
 
 
-def test_profiles_are_exact_ten_symbols_and_twenty_independent_sessions():
+def test_profiles_are_exact_eleven_symbols_and_twenty_three_independent_sessions():
     assert {key: (item.symbol, item.session) for key, item in PROFILES.items()} == {
         "samsung_heavy_midday": ("010140", "midday"),
         "samsung_heavy_afternoon": ("010140", "afternoon"),
@@ -200,6 +210,9 @@ def test_profiles_are_exact_ten_symbols_and_twenty_independent_sessions():
         "samsung_ea_morning": ("028050", "morning"),
         "samsung_ea_late_morning": ("028050", "late_morning"),
         "samsung_ea_afternoon": ("028050", "afternoon"),
+        "sk_telecom_late_morning": ("017670", "late_morning"),
+        "hanse_morning": ("105630", "morning"),
+        "hanse_afternoon": ("105630", "afternoon"),
     }
     assert {
         (item.policy.scan_start, item.policy.scan_last_bar)
@@ -218,9 +231,13 @@ def test_profiles_are_exact_ten_symbols_and_twenty_independent_sessions():
         MIRAE_ASSET_MIDDAY_WINDOW,
         KEPCO_AFTERNOON_WINDOW,
         SAMSUNG_HEAVY_MORNING_WINDOW,
-        DOOSAN_ENERBILITY_LATE_MORNING_WINDOW,
+        DOOSAN_ENERBILITY_LATE_MORNING_REVISED_WINDOW,
         KAKAO_MIDDAY_WINDOW,
         SK_TELECOM_AFTERNOON_WINDOW,
+        SK_TELECOM_LATE_MORNING_WINDOW,
+        SK_ETERNIX_AFTERNOON_REVISED_WINDOW,
+        HANSE_MORNING_WINDOW,
+        HANSE_AFTERNOON_WINDOW,
         SAMSUNG_EA_MORNING_WINDOW,
         SAMSUNG_EA_LATE_MORNING_WINDOW,
         SAMSUNG_EA_AFTERNOON_WINDOW,
@@ -277,10 +294,10 @@ def test_profiles_are_exact_ten_symbols_and_twenty_independent_sessions():
     } == {
         "kakao_morning": (15, 0.75, 0.35, (0, -1), 5, 4),
         "kepco_afternoon": (60, 0.50, 0.75, (0, -1), 5, 2),
-        "kakao_late_morning": (20, 0.50, 0.05, (0, -1), 5, 4),
+        "kakao_late_morning": (15, 0.50, 0.05, (0, -1), 5, 4),
         "sk_eternix_morning": (15, 2.50, 0.75, (0, -1), 5, 4),
         "mirae_asset_midday": (45, 1.00, 0.20, (0, -1), 5, 4),
-        "sk_eternix_afternoon": (45, 2.50, 0.50, (0, -1), 5, 2),
+        "sk_eternix_afternoon": (15, 2.00, 0.50, (0, -1), 5, 4),
     }
 
 
@@ -333,6 +350,9 @@ def test_all_profiles_are_routed_by_preflight_live_and_systemd_timers():
         ("mirae_asset_midday", "13:10:00", "13:14:00"),
         ("kepco_afternoon", "13:55:00", "13:59:00"),
         ("sk_eternix_afternoon", "13:55:00", "13:59:00"),
+        ("sk_telecom_late_morning", "10:40:00", "10:44:00"),
+        ("hanse_morning", "09:10:00", "09:14:00"),
+        ("hanse_afternoon", "14:15:00", "14:19:00"),
     ],
 )
 def test_expanded_profile_timers_bind_exact_instance_and_start_time(
@@ -362,12 +382,13 @@ def test_current_profile_symbols_have_explicit_manual_ownership():
         / "deploy"
         / "install_low_price_two_leg_systemd.sh"
     ).read_text(encoding="utf-8")
-    install_time_symbols = {"015760", "035720", "017670", "028050"}
+    install_time_symbols = {"015760", "035720", "017670", "028050", "105630"}
     for symbol in install_time_symbols:
         assert f'"{symbol}":' in install_script
     for symbol in {profile.symbol for profile in PROFILES.values()} - {
         "017670",
         "028050",
+        "105630",
     }:
         assert manual_control_operator_exclusion_source(symbol) == "manual_operator"
 
@@ -403,7 +424,7 @@ def test_all_fourteen_user_approved_recommendations_bind_exact_live_profiles():
         live_profile_id,
         report_profile_id,
     ) in RECOMMENDATION_20260818_PROFILE_MAP.items():
-        profile = PROFILES[live_profile_id]
+        profile = PROFILES_20260819[live_profile_id]
         policy = profile.policy
         spot = recommendations[report_profile_id]["recommended_spot"]
         assert {
@@ -422,6 +443,40 @@ def test_all_fourteen_user_approved_recommendations_bind_exact_live_profiles():
         )
 
 
+def test_all_eleven_20260819_recommendations_bind_exact_20260821_profiles():
+    evidence_path = (
+        Path(__file__).resolve().parents[2]
+        / "data"
+        / "config"
+        / "low_price_two_leg_expanded_profile_evidence_2026-08-19.json"
+    )
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+
+    assert len(RECOMMENDATION_20260819_PROFILE_MAP) == 11
+    assert set(RECOMMENDATION_20260819_PROFILE_MAP.values()) == set(recommendations)
+    for (
+        live_profile_id,
+        report_profile_id,
+    ) in RECOMMENDATION_20260819_PROFILE_MAP.items():
+        profile = PROFILES[live_profile_id]
+        policy = profile.policy
+        assert recommendations[report_profile_id]["recommended_spot"] == {
+            "scan_start": policy.scan_start.strftime("%H:%M"),
+            "scan_end": policy.scan_last_bar.strftime("%H:%M"),
+            "lookback_bars": policy.lookback_bars,
+            "rolling_high_drawdown_pct": policy.rolling_high_drawdown_pct,
+            "rolling_low_proximity_pct": policy.rolling_low_proximity_pct,
+            "entry_offsets_ticks": list(policy.entry_offsets_ticks),
+            "entry_valid_completed_bars": policy.entry_valid_completed_bars,
+            "target_ticks": policy.target_ticks,
+        }
+        assert validate_research_evidence(profile, target_date=date(2026, 8, 21)) == (
+            True,
+            "ready",
+        )
+
+
 def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
     prior, _ = build_applied_policy(
         target_date=date(2026, 8, 18), candidate_dir=tmp_path / "none"
@@ -432,7 +487,7 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
 
     assert set(prior["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
     assert "profile_revision_transition" not in prior
-    assert set(revised["profiles"]) == set(PROFILES)
+    assert set(revised["profiles"]) == set(PROFILES_20260819)
     assert revised["profile_revision_transition"]["recommendation_count"] == 14
     assert revised["profile_revision_transition"]["evidence_canonical_sha256"] == (
         "3f829f002f5ce53615460c55f9fa71211d286c87443794e1bd506f622544d795"
@@ -445,6 +500,58 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
         True,
         "valid",
     )
+
+    today, _ = build_applied_policy(
+        target_date=date(2026, 8, 20), candidate_dir=tmp_path / "none"
+    )
+    next_generation, _ = build_applied_policy(
+        target_date=date(2026, 8, 21), candidate_dir=tmp_path / "none"
+    )
+    assert set(today["profiles"]) == set(PROFILES_20260819)
+    assert set(next_generation["profiles"]) == set(PROFILES)
+    assert next_generation["profile_revision_transition"] == {
+        "effective_target_date": "2026-08-21",
+        "source_date": "2026-08-19",
+        "before_profile_count": 20,
+        "after_profile_count": 23,
+        "recommendation_count": 11,
+        "new_profile_count": 3,
+        "logic_revision_count": 8,
+        "evidence_path": (
+            "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-19.json"
+        ),
+        "evidence_canonical_sha256": (
+            "3acf5125074eaf7e48eca0e73c22f037b5e6b1ec354bd5b203cf32f14dea2381"
+        ),
+        "decision_authority": "explicit_user_directed_profile_revision_2026_08_20",
+        "existing_order_effect": "none_preserve_prior_policy_custody",
+    }
+    assert validate_applied(next_generation, target_date=date(2026, 8, 21)) == (
+        True,
+        "valid",
+    )
+
+
+def test_20260820_postclose_tuning_keeps_twenty_profile_generation(tmp_path):
+    source_quality_dir = tmp_path / "source_quality"
+    _write_source_quality_audit(source_quality_dir, "2026-08-20")
+    report = build_report(
+        target_date="2026-08-20",
+        state_dir=tmp_path / "states",
+        output_dir=tmp_path / "reports",
+        source_quality_dir=source_quality_dir,
+        applied_dir=tmp_path / "applied",
+        machine_microstructure_report_dir=tmp_path / "micro",
+    )
+    candidate = build_candidate(
+        report,
+        candidate_dir=tmp_path / "candidates",
+        samsung_candidate_dir=tmp_path / "samsung",
+    )
+
+    assert set(report["daily"]["profiles"]) == set(PROFILES_20260819)
+    assert set(candidate["profiles"]) == set(PROFILES_20260819)
+    assert validate_candidate(candidate) == (True, "valid")
 
 
 def test_profile_revision_attribution_separates_candidate_and_user_approved_rows(
@@ -497,7 +604,38 @@ def test_profile_revision_attribution_separates_candidate_and_user_approved_rows
     assert all(
         revised["profiles"][profile_id]["selection_status"]
         == "carry_forward_profile_policy"
-        for profile_id in set(PROFILES) - revised_profile_ids
+        for profile_id in set(PROFILES_20260819) - revised_profile_ids
+    )
+
+
+def test_20260821_revision_attribution_marks_exact_eleven_approved_rows(tmp_path):
+    source_path = (
+        Path(__file__).resolve().parents[2]
+        / "data"
+        / "threshold_cycle"
+        / "low_price_two_leg"
+        / "candidates"
+        / "low_price_two_leg_policy_candidate_2026-08-19.json"
+    )
+    candidate_dir = tmp_path / "candidates"
+    candidate_dir.mkdir()
+    (candidate_dir / source_path.name).write_text(
+        source_path.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    revised, status = build_applied_policy(
+        target_date=date(2026, 8, 21), candidate_dir=candidate_dir
+    )
+
+    assert status == "candidate_validated_profile_revision_applied"
+    assert {
+        profile_id
+        for profile_id, item in revised["profiles"].items()
+        if item["selection_status"] == "user_approved_profile_revision_baseline"
+    } == set(RECOMMENDATION_20260819_PROFILE_MAP)
+    assert validate_applied(revised, target_date=date(2026, 8, 21)) == (
+        True,
+        "valid",
     )
 
 
@@ -921,9 +1059,9 @@ def test_research_evidence_gate_validates_each_selected_profile(tmp_path):
         )[0]
         for profile in legacy_profiles
     )
-    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"]["scan_start"] = (
-        "13:19"
-    )
+    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"][
+        "scan_start"
+    ] = "13:19"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert not validate_research_evidence(
         PROFILES["samsung_heavy_midday"], path, expected_sha256=digest
@@ -1406,6 +1544,170 @@ def test_tuning_accepts_ten_share_partial_fill_and_weights_actual_quantity(
     assert "leg_quantity_or_status_invalid" in mixed_row["source_quality_reasons"]
 
 
+def _skt_partial_fill_economics_row() -> dict:
+    return {
+        "profile_id": "sk_telecom_afternoon",
+        "symbol": "017670",
+        "session": "afternoon",
+        "target_date": "2026-08-20",
+        "source_quality": "pass",
+        "source_quality_reasons": [],
+        "eligible_for_tuning": True,
+        "attempted": True,
+        "state_status": "COMPLETE",
+        "legs": [
+            {
+                "leg_id": "signal_close",
+                "quantity": 10,
+                "status": "COMPLETE",
+                "entry_price": 96_600,
+                "fill_price": 96_600,
+                "target_price": 96_800,
+                "target_fill_price": 96_800,
+                "target_filled_qty": 4,
+                "buy_filled_qty": 4,
+                "completed": True,
+                "terminal": True,
+                "held": False,
+                "profit_price_source": "broker_target_fill_price",
+                "net_profit_pct": round(
+                    (96_800 / 96_600 - 1) * 100 - DEFAULT_ROUND_TRIP_COST_PCT,
+                    6,
+                ),
+            },
+            {
+                "leg_id": "signal_close_minus_1tick",
+                "quantity": 10,
+                "status": "NO_FILL",
+                "entry_price": 96_500,
+                "fill_price": 0,
+                "target_filled_qty": 0,
+                "buy_filled_qty": 0,
+                "completed": False,
+                "terminal": True,
+                "held": False,
+                "profit_price_source": "not_completed",
+                "net_profit_pct": None,
+            },
+        ],
+    }
+
+
+def test_skt_partial_fill_uses_exact_negative_broker_pnl_when_uniquely_matched():
+    row = _skt_partial_fill_economics_row()
+
+    def loader(trade_date: str, symbol: str) -> list[dict]:
+        assert (trade_date, symbol) == ("2026-08-20", "017670")
+        return [
+            {
+                "trade_date": trade_date,
+                "symbol": symbol,
+                "filled_qty": 4,
+                "buy_average_price": 96_600,
+                "sell_average_price": 96_800,
+                "realized_net_profit_krw": -73,
+                "broker_profit_rate_pct": -0.02,
+                "commission_krw": 100,
+                "tax_krw": 773,
+                "source_api": "ka10073",
+            }
+        ]
+
+    reconciliation = _apply_broker_realized_economics([row], loader)
+    summary = _aggregate([row])
+
+    assert reconciliation == {"matched": 1, "fallback": 0, "api_requests": 1}
+    assert row["broker_realized_economics"]["status"] == "matched_exact"
+    assert row["broker_realized_economics"]["realized_net_profit_krw"] == -73
+    assert summary["broker_realized_net_profit_krw"] == -73
+    assert summary["exact_broker_cost_completed_legs"] == 1
+    assert summary["fixed_cost_estimate_completed_legs"] == 0
+    assert summary["notional_weighted_ev_pct"] < 0
+
+
+def test_skt_partial_fill_fixed_cost_fallback_is_also_negative():
+    row = _skt_partial_fill_economics_row()
+    _apply_broker_realized_economics([row], None)
+
+    summary = _aggregate([row])
+
+    assert row["broker_realized_economics"] == {
+        "status": "fixed_cost_fallback",
+        "reason": "ka10073_loader_not_configured",
+        "selection_effect": True,
+    }
+    assert summary["broker_realized_net_profit_krw"] < 0
+    assert summary["exact_broker_cost_completed_legs"] == 0
+    assert summary["fixed_cost_estimate_completed_legs"] == 1
+
+
+def test_exact_broker_pnl_is_not_allocated_across_same_symbol_day_profiles():
+    first = _skt_partial_fill_economics_row()
+    second = json.loads(json.dumps(first))
+    second["profile_id"] = "sk_telecom_late_morning"
+
+    def loader(_trade_date: str, _symbol: str) -> list[dict]:
+        raise AssertionError("ambiguous symbol-day must not query or allocate")
+
+    reconciliation = _apply_broker_realized_economics([first, second], loader)
+
+    assert reconciliation == {"matched": 0, "fallback": 2, "api_requests": 0}
+    assert {row["broker_realized_economics"]["reason"] for row in (first, second)} == {
+        "multiple_episode_profiles_share_symbol_day"
+    }
+
+
+def test_ka10073_loader_uses_official_path_headers_fields_and_normalizes(monkeypatch):
+    captured = {}
+
+    def fake_fetch(**kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "return_code": 0,
+                "dt_stk_rlzt_pl": [
+                    {
+                        "dt": "20260820",
+                        "stk_cd": "017670",
+                        "cntr_qty": "4",
+                        "buy_uv": "96600",
+                        "cntr_pric": "96800",
+                        "tdy_sel_pl": "-73",
+                        "pl_rt": "-0.02",
+                        "tdy_trde_cmsn": "100",
+                        "tdy_trde_tax": "773",
+                    }
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(
+        "src.engine.monitoring.low_price_two_leg_tuning.kiwoom_utils.get_api_url",
+        lambda endpoint: f"https://api.example{endpoint}",
+    )
+    monkeypatch.setattr(
+        "src.engine.monitoring.low_price_two_leg_tuning.kiwoom_utils.fetch_kiwoom_api_continuous",
+        fake_fetch,
+    )
+
+    rows = load_realized_pnl_ka10073("TOKEN", "2026-08-20", "017670")
+
+    assert captured == {
+        "url": "https://api.example/api/dostk/acnt",
+        "token": "TOKEN",
+        "api_id": "ka10073",
+        "payload": {
+            "stk_cd": "017670",
+            "strt_dt": "20260820",
+            "end_dt": "20260820",
+        },
+        "use_continuous": True,
+    }
+    assert rows[0]["realized_net_profit_krw"] == -73
+    assert rows[0]["commission_krw"] == 100
+    assert rows[0]["tax_krw"] == 773
+
+
 def test_tuning_accepts_exact_date_kakao_three_tick_policy_and_hash(tmp_path):
     profile_id = "kakao_morning"
     target_date = date(2026, 8, 14)
@@ -1519,8 +1821,8 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
             "rows": profile_rows,
         }
     report = {
-        "target_date": "2026-08-19",
-        "generated_at_kst": "2026-08-19T20:10:00+09:00",
+        "target_date": "2026-08-21",
+        "generated_at_kst": "2026-08-21T20:10:00+09:00",
         "clean_tuning_baseline_date": "2026-06-05",
         "target_date_is_krx_trading_day": True,
         "source_quality_preflight": {"tuning_input_allowed": True},
@@ -1555,18 +1857,18 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     )
     transition_dir = tmp_path / "target_transition"
     transition_dir.mkdir()
-    (transition_dir / "low_price_two_leg_policy_candidate_2026-08-19.json").write_text(
+    (transition_dir / "low_price_two_leg_policy_candidate_2026-08-21.json").write_text(
         json.dumps(candidate), encoding="utf-8"
     )
     transitioned_applied, transitioned_status = build_applied_policy(
-        target_date=date(2026, 8, 20), candidate_dir=transition_dir
+        target_date=date(2026, 8, 22), candidate_dir=transition_dir
     )
     assert transitioned_status == "candidate_applied"
     assert transitioned_applied["policy_mutations"] == candidate["policy_mutations"]
     assert (
         transitioned_applied["profiles"]["kakao_morning"]["policy"]["target_ticks"] == 4
     )
-    assert validate_applied(transitioned_applied, target_date=date(2026, 8, 20)) == (
+    assert validate_applied(transitioned_applied, target_date=date(2026, 8, 22)) == (
         True,
         "valid",
     )
@@ -1604,9 +1906,8 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     )
     assert migrated_status == "candidate_applied"
     assert set(migrated["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
-    assert (
-        migrated["profiles"]["mirae_asset_morning"]["policy"]
-        == (PRE_RECOMMENDATION_BASELINE_POLICIES["mirae_asset_morning"])
+    assert migrated["profiles"]["mirae_asset_morning"]["policy"] == (
+        PRE_RECOMMENDATION_BASELINE_POLICIES["mirae_asset_morning"]
     )
 
     pre_expanded_v2 = json.loads(json.dumps(candidate))
@@ -1643,9 +1944,8 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     )
     assert expanded_status == "candidate_applied"
     assert set(expanded_applied["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
-    assert (
-        expanded_applied["profiles"]["kakao_morning"]["policy"]
-        == (PRE_RECOMMENDATION_BASELINE_POLICIES["kakao_morning"])
+    assert expanded_applied["profiles"]["kakao_morning"]["policy"] == (
+        PRE_RECOMMENDATION_BASELINE_POLICIES["kakao_morning"]
     )
 
     source_gap_report = json.loads(json.dumps(report))
@@ -1659,7 +1959,7 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
 
     samsung_dir = tmp_path / "samsung_blocked"
     samsung_dir.mkdir()
-    (samsung_dir / "samsung_machine_entry_policy_candidate_2026-08-19.json").write_text(
+    (samsung_dir / "samsung_machine_entry_policy_candidate_2026-08-21.json").write_text(
         "{}", encoding="utf-8"
     )
     blocked = build_candidate(
@@ -1958,7 +2258,7 @@ def test_profile_expansion_dates_do_not_create_historical_source_gaps(tmp_path):
     assert initial_profile_summary["source_gap_days"] == 2
 
 
-def test_prior_report_cost_contract_mismatch_is_excluded(tmp_path):
+def test_prior_report_cost_is_rebased_from_fill_prices_without_losing_history(tmp_path):
     profile_id = "samsung_heavy_midday"
     state_dir = tmp_path / "states"
     report_dir = tmp_path / "reports"
@@ -1986,10 +2286,19 @@ def test_prior_report_cost_contract_mismatch_is_excluded(tmp_path):
         source_quality_dir=source_quality_dir,
     )
 
-    summary = second["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
-    assert summary["source_gap_days"] == 1
-    assert summary["eligible_days"] == 1
-    assert summary["completed_legs"] == 2
+    profile_window = second["windows"][CLEAN_WINDOW_NAME][profile_id]
+    summary = profile_window["summary"]
+    assert summary["source_gap_days"] == 0
+    assert summary["eligible_days"] == 2
+    assert summary["completed_legs"] == 4
+    historical_legs = profile_window["rows"][0]["legs"]
+    expected = round(
+        (historical_legs[0]["target_price"] / historical_legs[0]["fill_price"] - 1)
+        * 100
+        - DEFAULT_ROUND_TRIP_COST_PCT,
+        6,
+    )
+    assert historical_legs[0]["net_profit_pct"] == expected
 
 
 def test_nontrading_target_is_excluded_and_cannot_open_candidate(tmp_path):
@@ -2157,7 +2466,7 @@ def test_prior_held_episode_blocks_only_its_own_profile_tuning(tmp_path):
     summary = report["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
     assert summary["completed_legs"] == 0
     assert summary["held_or_unresolved_legs"] == 2
-    for other_profile in set(PROFILES) - {profile_id}:
+    for other_profile in set(report["windows"][CLEAN_WINDOW_NAME]) - {profile_id}:
         other = report["windows"][CLEAN_WINDOW_NAME][other_profile]["summary"]
         assert other["held_or_unresolved_legs"] == 0
 

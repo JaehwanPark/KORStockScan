@@ -1038,7 +1038,10 @@ def _episode_inventory(
         / "low_price_two_leg_expanded_candidate_research"
         / f"low_price_two_leg_expanded_candidate_research_{target_date}.json"
     )
-    tuning_schemas = ("low_price_two_leg_tuning_report_v3",)
+    tuning_schemas = (
+        "low_price_two_leg_tuning_report_v3",
+        "low_price_two_leg_tuning_report_v4",
+    )
     expansion_schemas = ("low_price_two_leg_expanded_candidate_research_v5",)
     tuning = _read_target_json(
         tuning_path, target_date, expected_schemas=tuning_schemas
