@@ -39,7 +39,7 @@ DEFAULT_SNAPSHOT_DIR = PROJECT_ROOT / "data/runtime/widget_research_watch"
 COLLECTION_START = clock_time(9, 0)
 COLLECTION_END = clock_time(15, 31)
 DEFAULT_INTERVAL_SEC = 60.0
-MAX_SYMBOLS = 10
+MAX_SYMBOLS = 15
 REQUESTS_PER_SYMBOL_CYCLE = 3
 REQUEST_BUDGET_PER_MINUTE = 18
 REQUEST_BUDGET_HEADROOM = 3
@@ -141,41 +141,114 @@ def load_config(
                 "stock_code": code,
                 "stock_name": name,
                 "recommendation_tier": tier,
+                "source_target_date": str(row.get("source_target_date") or ""),
+                "source_report_sha256": str(
+                    row.get("source_report_sha256") or ""
+                ).strip(),
             }
         )
-    source_path = PROJECT_ROOT / str(config.get("source_report") or "")
-    expected_sha = str(config.get("source_report_sha256") or "").strip()
-    if not source_path.is_file() or len(expected_sha) != 64:
-        raise ValueError("widget_research_watch_source_report_missing")
-    if _sha256(source_path) != expected_sha:
-        raise ValueError("widget_research_watch_source_report_hash_mismatch")
-    report = _load_json(source_path)
+
+    source_rows = config.get("source_reports")
+    if source_rows is None:
+        source_rows = [
+            {
+                "target_date": config.get("source_target_date"),
+                "path": config.get("source_report"),
+                "sha256": config.get("source_report_sha256"),
+            }
+        ]
     if (
-        report.get("schema") != "widget_collector_expansion_recommendation_v1"
-        or report.get("target_date") != config.get("source_target_date")
-        or report.get("runtime_effect") is not False
-        or report.get("allowed_runtime_apply") is not False
-        or report.get("actual_order_submitted") is not False
-        or report.get("broker_order_forbidden") is not True
-        or report.get("collector_created") is not False
-        or report.get("service_started") is not False
+        not isinstance(source_rows, list)
+        or not source_rows
+        or len(source_rows) > MAX_SYMBOLS
     ):
-        raise ValueError("widget_research_watch_source_report_contract_mismatch")
-    recommendation_rows = report.get("recommendations")
-    allowed = (
-        {
-            str(row.get("stock_code") or "")
-            for row in recommendation_rows
-            if isinstance(row, dict)
-            and row.get("recommendation_tier") == "research_watch"
-            and row.get("implementation_review_ready") is False
-        }
-        if isinstance(recommendation_rows, list)
-        else set()
+        raise ValueError("widget_research_watch_source_reports_invalid")
+
+    allowed_by_lineage: dict[tuple[str, str], set[str]] = {}
+    resolved_sources: list[dict[str, str]] = []
+    for source_row in source_rows:
+        if not isinstance(source_row, dict):
+            raise ValueError("widget_research_watch_source_report_row_invalid")
+        target_date = str(source_row.get("target_date") or "").strip()
+        source_path = PROJECT_ROOT / str(source_row.get("path") or "")
+        expected_sha = str(source_row.get("sha256") or "").strip()
+        try:
+            date.fromisoformat(target_date)
+        except ValueError as exc:
+            raise ValueError(
+                "widget_research_watch_source_target_date_invalid"
+            ) from exc
+        if not source_path.is_file() or len(expected_sha) != 64:
+            raise ValueError("widget_research_watch_source_report_missing")
+        if _sha256(source_path) != expected_sha:
+            raise ValueError("widget_research_watch_source_report_hash_mismatch")
+        report = _load_json(source_path)
+        if (
+            report.get("schema") != "widget_collector_expansion_recommendation_v1"
+            or report.get("target_date") != target_date
+            or report.get("runtime_effect") is not False
+            or report.get("allowed_runtime_apply") is not False
+            or report.get("actual_order_submitted") is not False
+            or report.get("broker_order_forbidden") is not True
+            or report.get("collector_created") is not False
+            or report.get("service_started") is not False
+        ):
+            raise ValueError("widget_research_watch_source_report_contract_mismatch")
+        recommendation_rows = report.get("recommendations")
+        allowed = (
+            {
+                str(row.get("stock_code") or "")
+                for row in recommendation_rows
+                if isinstance(row, dict)
+                and row.get("recommendation_tier") == "research_watch"
+                and row.get("implementation_review_ready") is False
+            }
+            if isinstance(recommendation_rows, list)
+            else set()
+        )
+        lineage = (target_date, expected_sha)
+        if lineage in allowed_by_lineage:
+            raise ValueError("widget_research_watch_source_report_duplicate")
+        allowed_by_lineage[lineage] = allowed
+        resolved_sources.append(
+            {
+                "target_date": target_date,
+                "path": str(source_path),
+                "sha256": expected_sha,
+            }
+        )
+
+    default_lineage = (
+        str(config.get("source_target_date") or "").strip(),
+        str(config.get("source_report_sha256") or "").strip(),
     )
-    if not seen.issubset(allowed):
-        raise ValueError("widget_research_watch_symbol_not_in_source_report")
-    return {**config, "symbols": symbols, "source_report_resolved": str(source_path)}
+    default_source_path = str(PROJECT_ROOT / str(config.get("source_report") or ""))
+    if default_lineage not in allowed_by_lineage or not any(
+        row["target_date"] == default_lineage[0]
+        and row["sha256"] == default_lineage[1]
+        and row["path"] == default_source_path
+        for row in resolved_sources
+    ):
+        raise ValueError("widget_research_watch_default_source_report_mismatch")
+    used_lineages: set[tuple[str, str]] = set()
+    for symbol in symbols:
+        lineage = (
+            symbol["source_target_date"] or default_lineage[0],
+            symbol["source_report_sha256"] or default_lineage[1],
+        )
+        allowed = allowed_by_lineage.get(lineage)
+        if allowed is None or symbol["stock_code"] not in allowed:
+            raise ValueError("widget_research_watch_symbol_not_in_source_report")
+        symbol["source_target_date"], symbol["source_report_sha256"] = lineage
+        used_lineages.add(lineage)
+    if used_lineages != set(allowed_by_lineage):
+        raise ValueError("widget_research_watch_unused_source_report")
+    return {
+        **config,
+        "symbols": symbols,
+        "source_reports_resolved": resolved_sources,
+        "source_report_resolved": default_source_path,
+    }
 
 
 class WidgetResearchWatchCollector:
@@ -280,8 +353,8 @@ class WidgetResearchWatchCollector:
             ),
             "source_quality_issues": source_issues,
             "source_recommendation": {
-                "target_date": self.config["source_target_date"],
-                "report_sha256": self.config["source_report_sha256"],
+                "target_date": symbol["source_target_date"],
+                "report_sha256": symbol["source_report_sha256"],
                 "recommendation_tier": symbol["recommendation_tier"],
                 "operator_directed_implementation": True,
             },
@@ -355,8 +428,8 @@ class WidgetResearchWatchCollector:
                 "latest_completed_bar": None,
                 "source_quality_issues": [type(exc).__name__],
                 "source_recommendation": {
-                    "target_date": self.config["source_target_date"],
-                    "report_sha256": self.config["source_report_sha256"],
+                    "target_date": symbol["source_target_date"],
+                    "report_sha256": symbol["source_report_sha256"],
                     "recommendation_tier": symbol["recommendation_tier"],
                     "operator_directed_implementation": True,
                 },

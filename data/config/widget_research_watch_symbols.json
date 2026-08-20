@@ -3,59 +3,96 @@
   "allowed_runtime_apply": false,
   "authority": "operator_directed_widget_research_watch_observation_only",
   "broker_order_forbidden": true,
-  "created_at_kst": "2026-08-18T21:55:00+09:00",
+  "created_at_kst": "2026-08-20T13:25:00+09:00",
   "effective_from": "2026-08-19",
   "enabled": true,
   "runtime_effect": false,
   "schema": "widget_research_watch_config_v1",
-  "source_report": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-08-18.json",
-  "source_report_sha256": "63b3d0e777a8336d06a445bff60fec08b4e861f8d788e95b5d65ba90dd4dfd61",
-  "source_target_date": "2026-08-18",
+  "source_report": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-08-19.json",
+  "source_report_sha256": "5ba2bbcbfd345cf1fa59490b9bed8bbe4021976d77f100675b3e46166bff7195",
+  "source_reports": [
+    {
+      "path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-08-18.json",
+      "sha256": "63b3d0e777a8336d06a445bff60fec08b4e861f8d788e95b5d65ba90dd4dfd61",
+      "target_date": "2026-08-18"
+    },
+    {
+      "path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-08-19.json",
+      "sha256": "5ba2bbcbfd345cf1fa59490b9bed8bbe4021976d77f100675b3e46166bff7195",
+      "target_date": "2026-08-19"
+    }
+  ],
+  "source_target_date": "2026-08-19",
   "symbols": [
     {
       "recommendation_tier": "research_watch",
+      "source_report_sha256": "5ba2bbcbfd345cf1fa59490b9bed8bbe4021976d77f100675b3e46166bff7195",
+      "source_target_date": "2026-08-19",
       "stock_code": "100790",
       "stock_name": "미래에셋벤처투자"
     },
     {
       "recommendation_tier": "research_watch",
+      "source_report_sha256": "5ba2bbcbfd345cf1fa59490b9bed8bbe4021976d77f100675b3e46166bff7195",
+      "source_target_date": "2026-08-19",
       "stock_code": "138080",
       "stock_name": "오이솔루션"
     },
     {
       "recommendation_tier": "research_watch",
+      "source_report_sha256": "63b3d0e777a8336d06a445bff60fec08b4e861f8d788e95b5d65ba90dd4dfd61",
+      "source_target_date": "2026-08-18",
       "stock_code": "101730",
       "stock_name": "위메이드맥스"
     },
     {
       "recommendation_tier": "research_watch",
+      "source_report_sha256": "5ba2bbcbfd345cf1fa59490b9bed8bbe4021976d77f100675b3e46166bff7195",
+      "source_target_date": "2026-08-19",
       "stock_code": "047810",
       "stock_name": "한국항공우주"
     },
     {
       "recommendation_tier": "research_watch",
+      "source_report_sha256": "63b3d0e777a8336d06a445bff60fec08b4e861f8d788e95b5d65ba90dd4dfd61",
+      "source_target_date": "2026-08-18",
       "stock_code": "469610",
       "stock_name": "이노테크"
     },
     {
       "recommendation_tier": "research_watch",
+      "source_report_sha256": "5ba2bbcbfd345cf1fa59490b9bed8bbe4021976d77f100675b3e46166bff7195",
+      "source_target_date": "2026-08-19",
       "stock_code": "093370",
       "stock_name": "후성"
     },
     {
       "recommendation_tier": "research_watch",
+      "source_report_sha256": "5ba2bbcbfd345cf1fa59490b9bed8bbe4021976d77f100675b3e46166bff7195",
+      "source_target_date": "2026-08-19",
       "stock_code": "007810",
       "stock_name": "코리아써키트"
     },
     {
       "recommendation_tier": "research_watch",
+      "source_report_sha256": "63b3d0e777a8336d06a445bff60fec08b4e861f8d788e95b5d65ba90dd4dfd61",
+      "source_target_date": "2026-08-18",
       "stock_code": "045390",
       "stock_name": "대아티아이"
     },
     {
       "recommendation_tier": "research_watch",
+      "source_report_sha256": "5ba2bbcbfd345cf1fa59490b9bed8bbe4021976d77f100675b3e46166bff7195",
+      "source_target_date": "2026-08-19",
       "stock_code": "131290",
       "stock_name": "티에스이"
+    },
+    {
+      "recommendation_tier": "research_watch",
+      "source_report_sha256": "5ba2bbcbfd345cf1fa59490b9bed8bbe4021976d77f100675b3e46166bff7195",
+      "source_target_date": "2026-08-19",
+      "stock_code": "001550",
+      "stock_name": "조비"
     }
   ]
 }
