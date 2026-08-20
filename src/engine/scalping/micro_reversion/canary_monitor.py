@@ -46,8 +46,9 @@ CANARY_MONITOR_METRIC_CONTRACT = {
     "sample_floor": "latency_guard_after_frozen_minimum_callback_samples",
     "primary_decision_metric": "stop_required",
     "source_quality_gate": (
-        "fresh_collector_snapshot_and_valid_frozen_guard_config_and_zero_"
-        "drop_error_gap_or_storage_degradation"
+        "fresh_collector_snapshot_and_valid_frozen_guard_config;_bounded_ingress_"
+        "queue_loss_is_source_quality_exclusion_and_provider_replay_hold;_worker_"
+        "writer_storage_or_authority_failure_is_immediate_stop"
     ),
     "forbidden_uses": (
         "broker_order_submission",
@@ -70,9 +71,12 @@ class CanaryGuard:
     config_sha256: str
 
 
-_ZERO_STOP_COUNTERS = (
+_ROW_EXCLUSION_COUNTERS = (
     "observation_queue_full_count",
     "observation_dropped_envelope_count",
+)
+
+_ZERO_STOP_COUNTERS = (
     "adapter_isolated_error_count",
     "worker_error_count",
     "path_point_dropped_count",
@@ -114,9 +118,12 @@ _FORBIDDEN_TRUE_FIELDS = (
     "actual_order_submitted",
 )
 
-_DEPTH_ZERO_STOP_COUNTERS = (
+_DEPTH_ROW_EXCLUSION_COUNTERS = (
     "depth_queue_full_count",
     "depth_dropped_envelope_count",
+)
+
+_DEPTH_ZERO_STOP_COUNTERS = (
     "depth_worker_error_count",
     "depth_writer_queue_full_count",
     "depth_writer_dropped_envelope_count",
@@ -250,6 +257,23 @@ def evaluate_canary_snapshot(
             )
 
     source_quality_row_exclusions = []
+    for field in _ROW_EXCLUSION_COUNTERS:
+        value = _nonnegative_int(snapshot.get(field))
+        if value is None:
+            reasons.append(f"missing_or_invalid_metric:{field}")
+        elif value > 0:
+            source_quality_row_exclusions.append(
+                f"raw_row_exclusion_required:{field}={value}"
+            )
+    if snapshot.get("depth_capture_requested") is True:
+        for field in _DEPTH_ROW_EXCLUSION_COUNTERS:
+            value = _nonnegative_int(snapshot.get(field))
+            if value is None:
+                reasons.append(f"missing_or_invalid_metric:{field}")
+            elif value > 0:
+                source_quality_row_exclusions.append(
+                    f"raw_row_exclusion_required:{field}={value}"
+                )
     timestamp_regression_exceeded_count = _nonnegative_int(
         snapshot.get("path_exchange_timestamp_regression_exceeded_count")
     )
@@ -409,7 +433,7 @@ def run_callback_latency_preflight(
     return {
         "schema": CANARY_BASELINE_SCHEMA,
         "baseline_id": (
-            "main_server_synthetic_0b_" f"{generated_at.strftime('%Y%m%dT%H%M%S%z')}"
+            f"main_server_synthetic_0b_{generated_at.strftime('%Y%m%dT%H%M%S%z')}"
         ),
         "generated_at": generated_at.isoformat(timespec="seconds"),
         "host": {

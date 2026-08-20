@@ -95,7 +95,9 @@ def _depth_row(
         "item": (
             f"{symbol}_AL"
             if venue == "SOR"
-            else f"{symbol}_NX" if venue == "NXT" else symbol
+            else f"{symbol}_NX"
+            if venue == "NXT"
+            else symbol
         ),
         "orderbook_time_raw": "100000",
         "bid_depth": 1000,
@@ -1847,6 +1849,110 @@ def test_stopped_clean_canary_requires_closed_reconciled_collector(tmp_path):
         malformed["sources"]["micro_reversion"]["canary_source_quality"]["status"]
         == "missing_or_invalid"
     )
+
+
+def test_early_stop_canary_is_archived_as_diagnostic_only(tmp_path):
+    target_date = datetime(2026, 8, 19, tzinfo=KST).date()
+    latest = tmp_path / "latest.json"
+    daily_root = tmp_path / "daily"
+    payload = {
+        "schema": "scalp_micro_reversion_canary_monitor_v1",
+        "generated_at": "2026-08-19T09:03:55+09:00",
+        "valid_until_epoch": datetime(2026, 8, 19, 9, 4, tzinfo=KST).timestamp(),
+        "canary_guard": {
+            "status": "stop_required",
+            "stop_required": True,
+            "stop_reasons": ["nonzero_stop_metric:observation_queue_full_count=82"],
+            "raw_row_exclusion_required": False,
+        },
+        "collector_snapshot": {
+            "collector_lifecycle": "closed",
+            "reference_reconciliation_completed": True,
+            "sequence_epoch": 1,
+            "selection_authority": False,
+            "trading_runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    }
+    _write_json(latest, payload)
+
+    archived = archive_exact_date_canary_snapshot(
+        target_date=target_date,
+        source_path=latest,
+        daily_root=daily_root,
+        now=datetime(2026, 8, 19, 20, 10, tzinfo=KST),
+    )
+
+    assert archived is not None
+    archived_payload = json.loads(archived.read_text(encoding="utf-8"))
+    assert archived_payload["archive_validation"] == {
+        "schema": "scalp_micro_reversion_canary_archive_validation_v1",
+        "target_date": "2026-08-19",
+        "archived_at_kst": "2026-08-19T20:10:00+09:00",
+        "target_day_complete": False,
+        "source_fresh_at_archive": False,
+        "source_generated_not_after_archive": True,
+        "source_valid_until_epoch": payload["valid_until_epoch"],
+        "diagnostic_only": True,
+        "promotion_evidence_eligible": False,
+    }
+    payload["generated_at"] = "2026-08-20T07:00:00+09:00"
+    _write_json(latest, payload)
+    report = build_attribution_report(
+        target_date.isoformat(),
+        report_root=tmp_path / "report",
+        observation_root=tmp_path / "observations",
+        canary_snapshot_path=latest,
+        canary_snapshot_dir=daily_root,
+        now=datetime(2026, 8, 20, 7, 0, tzinfo=KST),
+    )
+    source = report["sources"]["micro_reversion"]["canary_source_quality"]
+    assert source["path"] == str(archived)
+    assert source["status"] == "target_date_evidence_incomplete"
+    assert source["stop_required"] is True
+
+
+def test_queue_loss_canary_is_archived_without_promotion_authority(tmp_path):
+    target_date = datetime(2026, 8, 20, tzinfo=KST).date()
+    latest = tmp_path / "latest.json"
+    payload = {
+        "schema": "scalp_micro_reversion_canary_monitor_v1",
+        "generated_at": "2026-08-20T20:10:00+09:00",
+        "valid_until_epoch": datetime(2026, 8, 20, 20, 11, tzinfo=KST).timestamp(),
+        "canary_guard": {
+            "status": "healthy_observer_canary_with_source_row_exclusions",
+            "stop_required": False,
+            "stop_reasons": [],
+            "raw_row_exclusion_required": True,
+            "source_quality_row_exclusions": [
+                "raw_row_exclusion_required:observation_queue_full_count=1"
+            ],
+        },
+        "collector_snapshot": {
+            "collector_lifecycle": "running",
+            "sequence_epoch": 1,
+            "selection_authority": False,
+            "trading_runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    }
+    _write_json(latest, payload)
+
+    archived = archive_exact_date_canary_snapshot(
+        target_date=target_date,
+        source_path=latest,
+        daily_root=tmp_path / "daily",
+        now=datetime(2026, 8, 20, 20, 10, tzinfo=KST),
+    )
+
+    assert archived is not None
+    archive_validation = json.loads(archived.read_text(encoding="utf-8"))[
+        "archive_validation"
+    ]
+    assert archive_validation["diagnostic_only"] is True
+    assert archive_validation["promotion_evidence_eligible"] is False
 
 
 def test_v3_stream_requires_aware_full_contract_while_v2_is_legacy_compatible():

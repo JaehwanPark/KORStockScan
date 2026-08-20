@@ -34097,25 +34097,28 @@ def test_terminal_entry_bridge_rejects_completed_position_late_duplicate():
 def test_order_execution_notice_parses_cancel_side_separately():
     manager = KiwoomWSManager.__new__(KiwoomWSManager)
 
+    raw_values = {
+        "913": "접수",
+        "9001": "A123456",
+        "9203": "C1",
+        "905": "매수취소",
+        "907": "2",
+        "900": "10",
+        "902": "8",
+        "903": "20,020",
+        "909": "E-1",
+        "910": "10,010",
+        "911": "2",
+        "914": "10,010",
+        "915": "2",
+        "908": "090102",
+        "2134": "2",
+        "2135": "NXT",
+        "2136": "Y",
+    }
     notice = manager._parse_order_execution_notice(
-        {
-            "913": "접수",
-            "9001": "A123456",
-            "9203": "C1",
-            "905": "매수취소",
-            "900": "10",
-            "902": "8",
-            "903": "20,020",
-            "909": "E-1",
-            "910": "10,010",
-            "911": "2",
-            "914": "10,010",
-            "915": "2",
-            "908": "090102",
-            "2134": "2",
-            "2135": "NXT",
-            "2136": "Y",
-        }
+        raw_values,
+        source_type="00",
     )
 
     assert notice["exec_type"] == "BUY_CANCEL"
@@ -34133,6 +34136,13 @@ def test_order_execution_notice_parses_cancel_side_separately():
     assert notice["actual_exchange_code"] == "2"
     assert notice["actual_exchange_name"] == "NXT"
     assert notice["sor_flag"] == "Y"
+    assert notice["broker_execution_raw_fields"] == {
+        **raw_values,
+        "main_lifecycle_broker_raw_envelope_schema": (
+            "kiwoom_websocket_order_execution_00_values_v1"
+        ),
+        "main_lifecycle_broker_raw_source_type": "00",
+    }
 
 
 def test_order_execution_notice_preserves_missing_optional_fill_fields():
@@ -34156,6 +34166,10 @@ def test_order_execution_notice_preserves_missing_optional_fill_fields():
     assert notice["unit_exec_qty"] is None
     assert notice["broker_execution_time_raw"] == ""
     assert notice["actual_execution_venue"] == ""
+    assert (
+        "main_lifecycle_broker_raw_envelope_schema"
+        not in notice["broker_execution_raw_fields"]
+    )
 
 
 def test_fast_sell_receipts_apply_only_cumulative_quantity_and_amount_delta(

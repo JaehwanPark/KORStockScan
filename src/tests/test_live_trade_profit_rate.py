@@ -7,6 +7,9 @@ import src.engine.sniper_execution_receipts as receipts
 import src.engine.sniper_s15_fast_track as s15
 import src.engine.sniper_sync as sniper_sync
 import src.engine.sniper_state_handlers as state_handlers
+from src.engine.scalping.main_lifecycle_journal import (
+    build_broker_execution_provenance,
+)
 from src.engine.scalping import main_lifecycle_paired as paired
 from src.engine.trade_profit import (
     calculate_net_profit_rate,
@@ -157,6 +160,73 @@ def test_broker_execution_time_requires_exact_hhmmss_and_preserves_timezone():
         "local_receive_time_fallback"
     )
     assert fallback_fields["broker_execution_provenance_complete"] is False
+
+
+def test_broker_execution_context_carries_exact_raw_proof_without_hybrid_reuse():
+    received_at = datetime(2026, 8, 20, 9, 1, tzinfo=timezone(timedelta(hours=9)))
+    raw_fields = {
+        "main_lifecycle_broker_raw_envelope_schema": (
+            "kiwoom_websocket_order_execution_00_values_v1"
+        ),
+        "main_lifecycle_broker_raw_source_type": "00",
+        "9203": "0000018",
+        "9001": "005930",
+        "913": "체결",
+        "900": "10",
+        "902": "8",
+        "903": "121400",
+        "905": "+매수",
+        "907": "2",
+        "908": "090003",
+        "909": "0000001",
+        "910": "60700",
+        "911": "2",
+        "914": "60700",
+        "915": "2",
+        "2134": "1",
+        "2135": "KRX",
+        "2136": "N",
+    }
+    _, fields = receipts._broker_execution_context(
+        {
+            **raw_fields,
+            "broker_execution_time_raw": "090003",
+            "actual_execution_venue": "KRX",
+        },
+        received_at=received_at,
+    )
+
+    target_stock = {}
+    target_stock.update(fields)
+    carried_fields = receipts._broker_execution_provenance_fields(target_stock)
+    proof = build_broker_execution_provenance(
+        carried_fields,
+        expected_qty=2,
+        expected_price=60_700,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+    assert proof["broker_execution_provenance_state"] == "complete"
+    assert carried_fields["909"] == "0000001"
+
+    _, missing_fields = receipts._broker_execution_context(
+        {
+            "broker_execution_time_raw": "090004",
+            "actual_execution_venue": "KRX",
+        },
+        received_at=received_at,
+    )
+    assert all(missing_fields[key] is None for key in raw_fields)
+    missing_proof = build_broker_execution_provenance(
+        missing_fields,
+        expected_qty=2,
+        expected_price=60_700,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+    assert missing_proof["broker_execution_provenance_state"] == "missing"
 
 
 def test_execution_cancel_or_unknown_side_never_enters_buy_sell_custody(monkeypatch):
