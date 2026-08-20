@@ -4600,6 +4600,19 @@ def _row_contract_violations(
 
 
 def _conditional_required_fields(stage: str, fields: dict[str, Any]) -> tuple[str, ...]:
+    if (
+        stage
+        in {
+            "smoothing_source_only_path_horizon",
+            "smoothing_source_only_path_closed",
+        }
+        and str(fields.get("path_quality_contract_version") or "").strip()
+        == "fresh_observation_gap_v2"
+    ):
+        return (
+            "path_max_valid_observation_gap_sec",
+            "path_max_allowed_observation_gap_sec",
+        )
     if stage == "scalp_trailing_continuation_recheck":
         if (
             str(fields.get("recheck_contract_version") or "").strip()

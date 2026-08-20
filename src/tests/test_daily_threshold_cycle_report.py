@@ -5020,6 +5020,68 @@ def test_smoothing_source_only_excludes_horizon_with_intermediate_price_gap():
     assert journal["horizons"]["10"]["exact_observed_count"] == 0
 
 
+def test_smoothing_source_only_uses_bounded_fresh_gap_for_v2_quality_contract():
+    def _events(max_valid_gap_sec):
+        lineage = {
+            "journal_arm_id": "sj-soft-gap-v2",
+            "journal_family": "soft_stop_whipsaw_confirmation",
+            "journal_position_key": "record:11",
+            "journal_trace_id": "trace-11",
+            "journal_snapshot_id": "snapshot-11",
+            "journal_alternative_action": "HOLD",
+            "journal_control_action": "EXIT",
+            "journal_started_at_epoch": 1000.0,
+            "exact_lineage_status": "source_exact",
+            "path_quality_contract_version": "fresh_observation_gap_v2",
+        }
+        return [
+            {
+                "stage": "smoothing_source_only_path_armed",
+                "record_id": 11,
+                "fields": {
+                    **lineage,
+                    "anchor_effective_profit_rate": -1.5,
+                    "anchor_effective_price_source": "ws",
+                    "anchor_effective_price_quality": "single_source",
+                },
+            },
+            {
+                "stage": "smoothing_source_only_path_horizon",
+                "record_id": 11,
+                "fields": {
+                    **lineage,
+                    "horizon_sec": 10,
+                    "horizon_status": "observed",
+                    "effective_profit_rate": -1.0,
+                    "effective_price": 9900,
+                    "effective_price_source": "ws",
+                    "effective_price_quality": "single_source",
+                    "path_mfe_profit_rate": -1.0,
+                    "path_mae_profit_rate": -1.5,
+                    "path_price_quality_valid_sample_count": 40,
+                    "path_price_quality_invalid_sample_count": 1,
+                    "path_max_valid_observation_gap_sec": max_valid_gap_sec,
+                    "path_max_allowed_observation_gap_sec": 2.0,
+                    "hard_breach": False,
+                    "emergency_breach": False,
+                },
+            },
+        ]
+
+    fresh = report_mod._build_smoothing_source_only_path_journal(
+        _events(1.0), family="soft_stop_whipsaw_confirmation"
+    )
+    gapped = report_mod._build_smoothing_source_only_path_journal(
+        _events(2.001), family="soft_stop_whipsaw_confirmation"
+    )
+
+    assert fresh["rows"][0]["status"] == "observed"
+    assert fresh["rows"][0]["opportunity_ev_delta_pct"] == 0.5
+    assert fresh["rows"][0]["path_price_quality_invalid_sample_count"] == 1
+    assert gapped["rows"][0]["status"] == "path_price_quality_gap"
+    assert gapped["rows"][0]["opportunity_ev_delta_pct"] is None
+
+
 def test_event_compaction_canonicalizes_repeated_keys_and_categorical_values():
     first = report_mod._compact_threshold_cycle_event(
         {

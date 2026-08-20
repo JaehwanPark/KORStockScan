@@ -336,6 +336,7 @@ ACTIVE_TARGETS = None
 WS_MANAGER = None
 _SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY: dict[str, dict[str, Any]] = {}
 _SMOOTHING_NON_REVIVE_POST_SELL_MAX_ACTIVE_ARMS = 8
+_SMOOTHING_NON_REVIVE_POST_SELL_OBSERVER_LOCK = threading.RLock()
 _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY: dict[str, dict[str, Any]] = {}
 _RISKY_MICRO_EXECUTABLE_BBO_MAX_ACTIVE_SYMBOLS = 16
 _RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC = 45.0
@@ -48564,29 +48565,30 @@ def _arm_smoothing_source_only_path(
 ) -> None:
     """Arm an observation-only alternative without changing holding authority."""
 
-    position_key = _scalp_trailing_continuation_position_key(stock, code)
-    next_state, event = arm_source_only_path(
-        stock.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY),
-        family=family,
-        position_key=position_key,
-        trace_id=trace_id,
-        snapshot_id=snapshot_id,
-        alternative_action=alternative_action,
-        control_action=control_action,
-        now_ts=now_ts,
-        effective_price=effective_price,
-        effective_profit_rate=effective_profit_rate,
-        reference_buy_price=_safe_int(reference_buy_price, 0),
-        effective_price_source=effective_price_source,
-        effective_price_quality=effective_price_quality,
-        runtime_family_enabled=runtime_family_enabled,
-        alternative_executed=alternative_executed,
-        source_reason=source_reason,
-    )
-    _mutate_stock_state(
-        stock,
-        set_fields={SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: next_state},
-    )
+    with ENTRY_LOCK:
+        position_key = _scalp_trailing_continuation_position_key(stock, code)
+        next_state, event = arm_source_only_path(
+            stock.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY),
+            family=family,
+            position_key=position_key,
+            trace_id=trace_id,
+            snapshot_id=snapshot_id,
+            alternative_action=alternative_action,
+            control_action=control_action,
+            now_ts=now_ts,
+            effective_price=effective_price,
+            effective_profit_rate=effective_profit_rate,
+            reference_buy_price=_safe_int(reference_buy_price, 0),
+            effective_price_source=effective_price_source,
+            effective_price_quality=effective_price_quality,
+            runtime_family_enabled=runtime_family_enabled,
+            alternative_executed=alternative_executed,
+            source_reason=source_reason,
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: next_state},
+        )
     if event is not None:
         _log_holding_pipeline(stock, code, event["stage"], **event["fields"])
 
@@ -48604,26 +48606,27 @@ def _observe_smoothing_source_only_paths(
     emergency_breach: bool,
     observation_phase: str = "holding",
 ) -> None:
-    state = stock.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY)
-    if not isinstance(state, dict) or not (state.get("arms") or {}):
-        return
-    position_key = _scalp_trailing_continuation_position_key(stock, code)
-    next_state, events = observe_source_only_paths(
-        state,
-        position_key=position_key,
-        now_ts=now_ts,
-        effective_price=effective_price,
-        effective_profit_rate=effective_profit_rate,
-        effective_price_source=effective_price_source,
-        effective_price_quality=effective_price_quality,
-        hard_breach=hard_breach,
-        emergency_breach=emergency_breach,
-        observation_phase=observation_phase,
-    )
-    _mutate_stock_state(
-        stock,
-        set_fields={SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: next_state},
-    )
+    with ENTRY_LOCK:
+        state = stock.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY)
+        if not isinstance(state, dict) or not (state.get("arms") or {}):
+            return
+        position_key = _scalp_trailing_continuation_position_key(stock, code)
+        next_state, events = observe_source_only_paths(
+            state,
+            position_key=position_key,
+            now_ts=now_ts,
+            effective_price=effective_price,
+            effective_profit_rate=effective_profit_rate,
+            effective_price_source=effective_price_source,
+            effective_price_quality=effective_price_quality,
+            hard_breach=hard_breach,
+            emergency_breach=emergency_breach,
+            observation_phase=observation_phase,
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: next_state},
+        )
     for event in events:
         _log_holding_pipeline(stock, code, event["stage"], **event["fields"])
 
@@ -48638,68 +48641,73 @@ def _observe_post_sell_smoothing_source_only_paths(
 ) -> None:
     """Continue exact source-only paths outside the normal HOLDING evaluator."""
 
-    state = stock.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY)
-    arms = state.get("arms") if isinstance(state, dict) else {}
-    if not isinstance(arms, dict) or not arms:
-        return
-    active_arms = [arm for arm in arms.values() if isinstance(arm, dict)]
-    position_keys = {
-        str(arm.get("position_key") or "").strip()
-        for arm in active_arms
-        if str(arm.get("position_key") or "").strip()
-    }
-    reference_prices = {
-        _safe_int(arm.get("reference_buy_price"), 0)
-        for arm in active_arms
-        if _safe_int(arm.get("reference_buy_price"), 0) > 0
-    }
-    if len(position_keys) != 1 or len(reference_prices) != 1:
-        return
-    quote_fields, _, _, executable_sell_price = _build_quote_consistency_fields(
-        ws_data or {}, side="sell", now_ts=now_ts
-    )
-    effective_price = int(
-        executable_sell_price or _safe_int((ws_data or {}).get("curr"), 0)
-    )
-    if effective_price <= 0:
-        return
-    reference_buy_price = next(iter(reference_prices))
-    effective_profit_rate = calculate_net_profit_rate(
-        reference_buy_price, effective_price
-    )
-    hard_stop_pct = min(
-        _rule_float("SCALP_STOP", -1.5),
-        _rule_float("SCALP_HARD_STOP", -2.5),
-    )
-    emergency_pct = _rule_float("SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT", -2.0)
-    effective_price_quality = str(
-        quote_fields.get("quote_consistency_state") or "unknown"
-    )
-    effective_price_usable = effective_price_quality.strip().lower() in {
-        "ok",
-        "warning",
-        "single_source",
-    }
-    next_state, events = observe_source_only_paths(
-        state,
-        position_key=next(iter(position_keys)),
-        now_ts=now_ts,
-        effective_price=effective_price,
-        effective_profit_rate=effective_profit_rate,
-        effective_price_source=_quote_consistency_price_source_from_fields(
-            quote_fields
-        ),
-        effective_price_quality=effective_price_quality,
-        hard_breach=(effective_price_usable and effective_profit_rate <= hard_stop_pct),
-        emergency_breach=(
-            effective_price_usable and effective_profit_rate <= emergency_pct
-        ),
-        observation_phase=observation_phase,
-    )
-    _mutate_stock_state(
-        stock,
-        set_fields={SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: next_state},
-    )
+    with ENTRY_LOCK:
+        state = stock.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY)
+        arms = state.get("arms") if isinstance(state, dict) else {}
+        if not isinstance(arms, dict) or not arms:
+            return
+        active_arms = [arm for arm in arms.values() if isinstance(arm, dict)]
+        position_keys = {
+            str(arm.get("position_key") or "").strip()
+            for arm in active_arms
+            if str(arm.get("position_key") or "").strip()
+        }
+        reference_prices = {
+            _safe_int(arm.get("reference_buy_price"), 0)
+            for arm in active_arms
+            if _safe_int(arm.get("reference_buy_price"), 0) > 0
+        }
+        if len(position_keys) != 1 or len(reference_prices) != 1:
+            return
+        quote_fields, _, _, executable_sell_price = _build_quote_consistency_fields(
+            ws_data or {}, side="sell", now_ts=now_ts
+        )
+        effective_price = int(
+            executable_sell_price or _safe_int((ws_data or {}).get("curr"), 0)
+        )
+        if effective_price <= 0:
+            return
+        reference_buy_price = next(iter(reference_prices))
+        effective_profit_rate = calculate_net_profit_rate(
+            reference_buy_price, effective_price
+        )
+        hard_stop_pct = min(
+            _rule_float("SCALP_STOP", -1.5),
+            _rule_float("SCALP_HARD_STOP", -2.5),
+        )
+        emergency_pct = _rule_float(
+            "SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT", -2.0
+        )
+        effective_price_quality = str(
+            quote_fields.get("quote_consistency_state") or "unknown"
+        )
+        effective_price_usable = effective_price_quality.strip().lower() in {
+            "ok",
+            "warning",
+            "single_source",
+        }
+        next_state, events = observe_source_only_paths(
+            state,
+            position_key=next(iter(position_keys)),
+            now_ts=now_ts,
+            effective_price=effective_price,
+            effective_profit_rate=effective_profit_rate,
+            effective_price_source=_quote_consistency_price_source_from_fields(
+                quote_fields
+            ),
+            effective_price_quality=effective_price_quality,
+            hard_breach=(
+                effective_price_usable and effective_profit_rate <= hard_stop_pct
+            ),
+            emergency_breach=(
+                effective_price_usable and effective_profit_rate <= emergency_pct
+            ),
+            observation_phase=observation_phase,
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: next_state},
+        )
     for event in events:
         _log_holding_pipeline(stock, code, event["stage"], **event["fields"])
 
@@ -48726,7 +48734,7 @@ def observe_pending_sell_smoothing_source_only_paths(
     )
 
 
-def register_non_revive_smoothing_post_sell_paths(
+def _register_non_revive_smoothing_post_sell_paths_locked(
     stock: dict,
     code: str,
     *,
@@ -48857,6 +48865,52 @@ def register_non_revive_smoothing_post_sell_paths(
     }
 
 
+def register_non_revive_smoothing_post_sell_paths(
+    stock: dict,
+    code: str,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Atomically hand active arms from a sold target to the detached registry."""
+
+    with ENTRY_LOCK:
+        registration = _register_non_revive_smoothing_post_sell_paths_locked(
+            stock,
+            code,
+            now_ts=now_ts,
+        )
+        if not registration.get("registered"):
+            return registration
+        registered_arm_ids = {
+            str(arm_id) for arm_id in registration.get("journal_arm_ids") or []
+        }
+        current_state = stock.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY)
+        current_arms = (
+            current_state.get("arms") if isinstance(current_state, dict) else {}
+        )
+        remaining_arms = {
+            str(arm_id): arm
+            for arm_id, arm in (
+                current_arms.items() if isinstance(current_arms, dict) else ()
+            )
+            if str(arm_id) not in registered_arm_ids
+        }
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: {
+                    "schema_version": (
+                        current_state.get("schema_version")
+                        if isinstance(current_state, dict)
+                        else None
+                    ),
+                    "arms": remaining_arms,
+                }
+            },
+        )
+        return registration
+
+
 def _advance_non_revive_smoothing_post_sell_registration(
     registration: dict[str, Any], *, observed_at: float
 ) -> tuple[str, str, dict[str, Any], list[dict[str, Any]]]:
@@ -48921,7 +48975,7 @@ def _advance_non_revive_smoothing_post_sell_registration(
     return registration_id, code, next_state, events
 
 
-def observe_non_revive_smoothing_post_sell_paths(
+def _observe_non_revive_smoothing_post_sell_paths_unlocked(
     *, now_ts: float | None = None
 ) -> dict[str, int]:
     """Advance detached paths from cached WS data without action authority."""
@@ -48990,6 +49044,77 @@ def observe_non_revive_smoothing_post_sell_paths(
         "emitted_event_count": emitted_count,
         "closed_registration_count": closed_count,
         "failed_operation_count": failed_count,
+    }
+
+
+def observe_non_revive_smoothing_post_sell_paths(
+    *, now_ts: float | None = None
+) -> dict[str, int]:
+    """Serialize detached observation across the main loop and cadence worker."""
+
+    with _SMOOTHING_NON_REVIVE_POST_SELL_OBSERVER_LOCK:
+        return _observe_non_revive_smoothing_post_sell_paths_unlocked(now_ts=now_ts)
+
+
+def observe_smoothing_source_only_paths_cycle(
+    targets: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    now_ts: float | None = None,
+) -> dict[str, int]:
+    """Advance active and detached journals without trading decision authority."""
+
+    observed_at = float(time.time() if now_ts is None else now_ts)
+    with ENTRY_LOCK:
+        active_targets = [
+            target
+            for target in targets
+            if isinstance(target, dict)
+            and str(target.get("status") or "").strip().upper()
+            in {"HOLDING", "SELL_ORDERED", "WATCHING"}
+            and isinstance(target.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY), dict)
+            and bool(
+                target.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY, {}).get("arms")
+            )
+        ]
+    active_target_attempt_count = 0
+    failed_operation_count = 0
+    for stock in active_targets:
+        code = str(stock.get("code") or stock.get("stock_code") or "").strip()[:6]
+        if not code:
+            failed_operation_count += 1
+            continue
+        try:
+            ws_data: dict[str, Any] = {}
+            if WS_MANAGER is not None and hasattr(WS_MANAGER, "get_latest_data"):
+                latest = WS_MANAGER.get_latest_data(code) or {}
+                if isinstance(latest, dict):
+                    ws_data = latest
+            status = str(stock.get("status") or "").strip().upper()
+            _observe_post_sell_smoothing_source_only_paths(
+                stock,
+                code,
+                ws_data,
+                now_ts=observed_at,
+                observation_phase=(
+                    "post_sell_watching" if status == "WATCHING" else "holding"
+                ),
+            )
+            active_target_attempt_count += 1
+        except Exception as exc:
+            failed_operation_count += 1
+            log_error(
+                "[SMOOTHING_SOURCE_ONLY] cadence target failed without runtime "
+                f"effect code={code}: {exc}"
+            )
+    detached = observe_non_revive_smoothing_post_sell_paths(now_ts=observed_at)
+    return {
+        "active_target_attempt_count": active_target_attempt_count,
+        "active_registration_count": detached["active_registration_count"],
+        "emitted_event_count": detached["emitted_event_count"],
+        "closed_registration_count": detached["closed_registration_count"],
+        "failed_operation_count": (
+            failed_operation_count + detached["failed_operation_count"]
+        ),
     }
 
 
@@ -50261,9 +50386,9 @@ def _evaluate_holding_flow_override(
         fields["ofi_debounce_reason"] = "stable_bullish_within_limit"
         return True, fields
 
-    def _arm_ofi_source_only_alternative(
+    def _arm_ofi_source_only_alternative_unchecked(
         *,
-        raw_action: str,
+        control_action: str,
         alternative_action: str,
         source_reason: str,
         flow_result_override: dict | None = None,
@@ -50302,7 +50427,7 @@ def _evaluate_holding_flow_override(
             code,
             family="holding_flow_ofi_smoothing",
             alternative_action=alternative_action,
-            control_action=raw_action,
+            control_action=control_action,
             now_ts=now_ts,
             effective_price=effective_price,
             effective_profit_rate=source_only_effective_profit_rate,
@@ -50319,6 +50444,28 @@ def _evaluate_holding_flow_override(
             trace_id=correlation.get("ai_decision_trace_id"),
             snapshot_id=correlation.get("ai_input_snapshot_id"),
         )
+
+    def _arm_ofi_source_only_alternative(
+        *,
+        control_action: str,
+        alternative_action: str,
+        source_reason: str,
+        flow_result_override: dict | None = None,
+        runtime_family_enabled: bool,
+    ) -> None:
+        try:
+            _arm_ofi_source_only_alternative_unchecked(
+                control_action=control_action,
+                alternative_action=alternative_action,
+                source_reason=source_reason,
+                flow_result_override=flow_result_override,
+                runtime_family_enabled=runtime_family_enabled,
+            )
+        except Exception as exc:
+            log_error(
+                "[HOLDING_FLOW_OFI_SOURCE_ONLY] journal arm failed without "
+                f"runtime effect code={code}: {exc}"
+            )
 
     if (
         last_review_at > 0
@@ -50409,13 +50556,21 @@ def _evaluate_holding_flow_override(
                     confirm_reason="ofi_stable_bearish_interval",
                     **holding_flow_micro_estimator_fields,
                 )
+                _arm_ofi_source_only_alternative(
+                    control_action="EXIT",
+                    alternative_action=last_review_action,
+                    source_reason=(
+                        "ofi_applied_bearish_confirm_interval_no_ofi_alternative"
+                    ),
+                    runtime_family_enabled=True,
+                )
                 return True
             if (
                 ofi_state.regime == OFI_STABLE_BEARISH
                 and worsen_from_candidate + 1e-9 < bearish_confirm_worsen_pct
             ):
                 _arm_ofi_source_only_alternative(
-                    raw_action=last_review_action,
+                    control_action=last_review_action,
                     alternative_action="EXIT",
                     source_reason="review_interval_bearish_worsen_floor_not_met",
                     runtime_family_enabled=True,
@@ -50924,7 +51079,7 @@ def _evaluate_holding_flow_override(
         )
         if flow_action == "EXIT" and observer_ofi_state.regime == OFI_STABLE_BULLISH:
             _arm_ofi_source_only_alternative(
-                raw_action="EXIT",
+                control_action="EXIT",
                 alternative_action="HOLD",
                 source_reason="ofi_runtime_disabled_bullish_exit_alternative",
                 flow_result_override=flow_result,
@@ -50935,7 +51090,7 @@ def _evaluate_holding_flow_override(
             and observer_ofi_state.regime == OFI_STABLE_BEARISH
         ):
             _arm_ofi_source_only_alternative(
-                raw_action=flow_action,
+                control_action=flow_action,
                 alternative_action="EXIT",
                 source_reason="ofi_runtime_disabled_bearish_hold_alternative",
                 flow_result_override=flow_result,
@@ -50999,7 +51154,7 @@ def _evaluate_holding_flow_override(
                     ),
                 )
                 _arm_ofi_source_only_alternative(
-                    raw_action="EXIT",
+                    control_action="EXIT",
                     alternative_action="HOLD",
                     source_reason=(
                         "ofi_bullish_debounce_not_executed:"
@@ -51135,6 +51290,13 @@ def _evaluate_holding_flow_override(
                     reason=f"holding_flow_ofi_smoothing:{flow_result.get('reason', '-')}",
                     force=True,
                 )
+                _arm_ofi_source_only_alternative(
+                    control_action="HOLD",
+                    alternative_action="EXIT",
+                    source_reason="ofi_applied_bullish_debounce_no_ofi_alternative",
+                    flow_result_override=flow_result,
+                    runtime_family_enabled=True,
+                )
                 return False
         if (
             flow_action in {"HOLD", "TRIM"}
@@ -51176,6 +51338,13 @@ def _evaluate_holding_flow_override(
                 confirm_reason="ofi_stable_bearish",
                 **holding_flow_micro_estimator_fields,
             )
+            _arm_ofi_source_only_alternative(
+                control_action="EXIT",
+                alternative_action=flow_action,
+                source_reason="ofi_applied_bearish_confirm_no_ofi_alternative",
+                flow_result_override=flow_result,
+                runtime_family_enabled=True,
+            )
             return True
         if not ofi_no_change_logged:
             _log_holding_pipeline(
@@ -51204,7 +51373,7 @@ def _evaluate_holding_flow_override(
                 and ofi_state.regime == OFI_STABLE_BEARISH
             ):
                 _arm_ofi_source_only_alternative(
-                    raw_action=flow_action,
+                    control_action=flow_action,
                     alternative_action="EXIT",
                     source_reason="ofi_bearish_exit_worsen_floor_not_met",
                     flow_result_override=flow_result,

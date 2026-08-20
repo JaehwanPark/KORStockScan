@@ -1,204 +1,166 @@
 # KORStockScan
 
-KORStockScan은 한국 주식 매매를 자동으로 관찰하고, 장중 판단과 장후 복기를 이어 붙여 다음 장전의 실행 후보를 준비하는 개인용 리서치/운영 시스템입니다.
+KORStockScan은 키움증권 REST/WebSocket과 연동하는 개인용 스캘핑 매매 엔진입니다. 넓은 시장을 탐색하는 메인 봇, 종목별 신호를 집행하는 위젯 매매기계, 정해진 종목·시간대의 반복 패턴을 거래하는 에피소드 매매기계를 서로 독립된 주문 owner로 운영합니다.
 
-짧게 말하면 세 가지를 함께 합니다. 장중에는 키움 시세와 계좌 상태를 보며 스캘핑 후보를 평가하고, 장후에는 실제 매매와 시뮬레이션 결과를 비교해 무엇이 나았는지 계산합니다. 그리고 그 결과를 다음 장전의 제한된 실행 후보로만 넘겨, 실계좌 변경이 조용히 커지지 않도록 막습니다.
+목표는 위험을 모두 피하는 것이 아닙니다. 감당 가능한 위험 안에서 더 많은 유효 기회를 탐색하고, probe·분할 진입·동적 수량·부분익절·trailing·hard/protect/emergency guard 같은 후단 보호장치로 기대값과 누적 순이익을 높이는 것입니다.
 
-이 저장소의 현재 기준 문서는 [Plan Rebase](docs/plan-korStockScanPerformanceOptimization.rebase.md)입니다. 날짜별 실행 항목은 [stage2 checklist](docs/checklists/README.md)가 소유하고, 시간대별 운영 절차는 [Time-Based Operations Runbook](docs/time-based-operations-runbook.md)을 따릅니다.
+현재 정책과 active/open 상태의 기준은 [Plan Rebase](docs/plan-korStockScanPerformanceOptimization.rebase.md), 날짜별 실행 항목은 [Stage2 Checklist](docs/checklists/README.md), 운영 순서는 [Time-Based Operations Runbook](docs/time-based-operations-runbook.md)이 소유합니다.
 
-현재 문서 기준일: `2026-07-03 KST`
+- 문서 기준일: `2026-08-20 KST`
+- 튜닝 데이터 clean baseline: `2026-06-05T00:00:00+09:00 KST`
+- baseline 이전 자료: archive/audit evidence 전용이며 현재 EV, rolling/cumulative 튜닝, runtime 승인 또는 실거래 품질 승인의 근거로 사용하지 않음
 
-튜닝 데이터 clean baseline은 `2026-06-04T14:29:09+09:00 KST`입니다. 이 시각 이전 raw/report/analytics artifact는 archive/audit evidence로만 보며, 현재 EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 쓰지 않습니다.
+## 매매 기능
 
-## 무엇을 하는가
+세 매매기계는 신호와 주문 상태를 공유하지 않습니다. 같은 종목을 다룰 때에도 owner, episode ID, 주문번호, 보유수량과 청산 귀속을 분리해 다른 기계의 수량을 매도하거나 중복 진입하지 않도록 합니다.
 
-KORStockScan은 단순한 매수/매도 봇이 아니라, 매매 판단을 계속 검증하는 자동화 체인에 가깝습니다.
+### 메인 봇 매매기계
 
-장중에는 키움 REST/WebSocket 데이터, 호가와 체결, 계좌 상태, 보유 포지션, AI 판단을 모아 후보를 평가합니다. 스캘핑은 빠른 진입과 보유/청산 품질을 중점적으로 보고, 스윙은 추천부터 진입, 보유, 추가매수, 청산까지의 흐름을 dry-run 중심으로 추적합니다.
+메인 봇은 당일 시장에서 새로 나타나는 스캘핑 기회를 넓게 찾고, 후보마다 진입부터 청산까지 전체 lifecycle의 기대값을 최적화합니다.
 
-장후에는 하루 동안의 이벤트를 다시 엮습니다. 실제 주문이 들어간 경우와 시뮬레이션으로만 남긴 경우를 분리하고, 놓친 진입이나 피한 손실도 따로 복기합니다. 여기서 중요한 기준은 단순 승률이 아니라 기대값과 순이익입니다.
+- **매매 목적:** 고정 종목에 의존하지 않고 거래대금·수급·가격 움직임이 살아나는 종목을 발견해, 유효한 상승 구간은 잡고 불필요한 하락 노출은 제한합니다.
+- **매매 목표:** 한 번의 큰 수익보다 여러 기회의 순이익 합계를 중시합니다. 상황에 따라 짧은 micro-reversion, continuation, 부분익절과 runner 보유를 구분합니다.
+- **강점:** 시장 전반을 탐색하는 scanner, AI 진입·가격·보유 판단, executable BBO 기반 재검증, 1주 probe-first와 residual multi-leg, 동적 수량, scale-in, 부분익절·trailing·보호 청산을 한 lifecycle로 연결합니다.
 
-다음 장전에는 장후 산출물 중 안전장치와 검증을 통과한 항목만 제한적으로 runtime env에 반영합니다. 장중에 임의로 한계값을 바꾸거나, 리포트 하나만 보고 실주문 범위를 넓히는 방식은 사용하지 않습니다.
+```text
+scanner/WATCHING
+  -> candidate 판정
+  -> AI 판단
+  -> submit guard
+  -> 1주 probe
+  -> residual multi-leg
+  -> holding / scale-in
+  -> partial TP / trailing / exit
+  -> broker reconciliation
+```
 
-## 주요 기능
+점수는 baseline prior이자 feature일 뿐 단독 BUY 명령이 아닙니다. 가격·호가·체결·분봉 freshness, venue provenance, 계좌·주문·수량·cooldown과 broker submit guard를 모두 통과해야 실제 주문으로 이어집니다.
 
-**스캘핑 엔진**
+### 위젯 매매기계
 
-장중 후보를 감시하고, AI 점수, 유동성, 호가 품질, 지연 상태, 과열 여부, 수급 맥락을 함께 봅니다. 점수는 중요한 특징값이지만 단독 매수 명령은 아닙니다. stale quote, 브로커 제출 가드, 계좌/수량/쿨다운 같은 안전장치는 항상 우선합니다.
+위젯 매매기계는 종목별 위젯이 만든 고맥락 신호를 독립된 소규모 실주문 episode로 집행합니다. 현재 core widget과 날짜별 calibration으로 선택된 동적 widget 사양을 사용하며, 정확한 대상은 runtime policy가 소유합니다.
 
-**스윙 dry-run과 pre-final 승인**
+- **매매 목적:** 사람이 위젯에서 확인하던 종목별 신호를 일관된 규칙으로 실행해 짧고 반복 가능한 수익 기회를 놓치지 않습니다.
+- **매매 목표:** 체결가 또는 episode 평균가를 기준으로 정책에 정의된 가까운 목표가를 추구하며, 한 episode의 위험과 주문 수량을 제한합니다.
+- **강점:** 신호 source-quality 검증, 중복 episode 차단, 체결 확인 후 목표가 생성, 정확한 주문번호 기반 취소·정정·청산, 일일 상태 초기화와 main bot owner 격리가 명확합니다.
 
-스윙은 기본적으로 dry-run self-improvement 체인입니다. 실제 주문 없이 추천, 진입, 보유, 추가매수, 청산 흐름을 추적하고 장후에 결과를 평가합니다. AI Tier2 검증과 source-quality gate를 통과한 후보는 pre-final dry-run/sim env 후보가 될 수 있지만, 실주문 권한은 complete Swing LDM parent bucket evidence와 명시적 사용자 승인 artifact가 모두 닫힌 final full-live conversion에서만 열립니다.
+위젯 매매는 일반 스캐너의 점수 완화 수단이 아닙니다. 위젯이 소유한 신호와 policy가 일치할 때만 동작하고, 전일·수동·다른 전략의 보유수량은 청산하지 않습니다. 자세한 운영 계약은 [Widget Signal Auto Trading Runbook](docs/widget-signal-auto-trading-runbook.md)을 참고합니다.
 
-**시뮬레이션과 놓친 기회 복기**
+### 에피소드 매매기계
 
-실계좌 예수금 부족, 1주 cap, 현재 selected family 여부는 시뮬레이션 후보 제외 사유가 아닙니다. 대신 provenance로 남깁니다. 실제 매매, 시뮬레이션, 합산 분석은 분리해서 보며, 실주문 품질 판단에는 real-only 데이터를 사용합니다.
+에피소드 매매기계는 특정 종목과 세션에서 반복 관측된 진입·회복 패턴을 독립 프로세스로 실행합니다. 삼성전자 시간대별 기계와 저가주 two-leg profile들이 대표적이며, 실제 활성 profile은 exact-date PREOPEN policy와 systemd schedule이 결정합니다.
 
-**장후 리포트와 자동 보완 후보**
+- **매매 목적:** 일반 scanner 경쟁이나 범용 threshold에 맡기기 어려운 종목·시간대별 반복 패턴을 재현 가능한 작은 거래 단위로 포착합니다.
+- **매매 목표:** 신규 episode는 서로 분리된 10주 두 leg, 최대 20주 범위에서 진입하고 profile별 tick/가격 목표를 추구합니다. 목표 미체결 보유분은 해당 episode owner가 계속 관리합니다.
+- **강점:** 종목·venue·시간창별 명시적 profile, 결정론적 두 leg 가격, 체결분만을 기준으로 한 목표가, 독립 lock/state/ledger, 정확한 주문 귀속과 PREOPEN calibration을 갖습니다.
 
-하루 동안 쌓인 이벤트는 threshold cycle, lifecycle matrix, sentinel과 활성화된 분석 리포트로 정리됩니다. 기본 자동화는 다음 장전 적용 후보와 sim-auto 후보를 만들고, 비용이 큰 source-only discovery는 필요한 날짜에 명시적으로 opt-in합니다. opt-in된 `producer_gap_discovery`, `stage_hook_workorder_discovery`, `stage_hook_runtime_scaffold`는 누락 관찰축과 hook 구현 필요성을 workorder provenance로 남기지만 runtime 권한은 만들지 않습니다. `implement_now`는 1차 instrumentation/report/provenance 구현, 2차 관련 리포트 재생성과 workorder lineage diff 확인으로 닫으며, 새 구현은 `runtime_effect=false` contract를 유지한 항목으로 제한합니다.
+에피소드 매매기계의 entry·target·재진입 규칙은 profile마다 다릅니다. 보편 규칙으로 임의 완화하지 않으며, legacy 1주 보유는 custody compatibility로만 관리하고 신규 수량으로 확대하지 않습니다. 자세한 내용은 [Low-price Two-leg Machines](docs/low-price-two-leg-machines.md)와 [Samsung Episode Machine](docs/samsung-morning-one-share-machine.md)을 참고합니다.
 
-**운영 감시**
+## 튜닝축
 
-System Error Detector가 프로세스, cron, 로그, artifact freshness, 리소스, stale lock을 감시합니다. 이 감시는 전략 변경 도구가 아니라 운영 상태 점검 도구입니다. 장애가 발견되면 원인 복구나 instrumentation 보강으로 라우팅합니다.
+튜닝은 매매기계를 하나 더 만드는 작업이 아니라, 관찰한 결과를 기존 single owner에게 되돌려주는 품질 갱신입니다. clean baseline 이후의 rolling/cumulative 표본, source-quality와 비용 반영 EV를 우선하며, 단일 날짜의 승률이나 단순 수익률 합계로 실거래 권한을 넓히지 않습니다.
 
-## 안전 원칙
+### Micro-reversion
 
-KORStockScan의 기본 철학은 “자동화하되, 실계좌 위험이 커지는 지점은 명확히 분리한다”입니다.
+급등 직후의 위험 신호가 있더라도 신선한 호가, 제한된 spread, 회복 가능한 tape와 짧은 목표가가 함께 성립하면 소규모로 치고 빠질 수 있는지를 평가합니다.
 
-장중 runtime threshold mutation은 금지합니다. 변경은 장후 리포트와 검증을 거쳐 다음 장전 runtime env로만 들어갑니다.
+- risky micro episode는 우선 source-only 반사실로 관찰합니다.
+- passive `bid+1`, 짧은 TTL, 제한적 ask 진입을 수수료·slippage·target/adverse first-hit과 함께 비교합니다.
+- stale quote, BBO 결손, 과도한 spread, 명백한 tick deceleration은 완화 대상이 아닙니다.
+- 충분한 거래일과 filled-terminal 표본이 쌓이기 전에는 실주문 승격 근거로 쓰지 않습니다.
 
-AI는 제안자이자 검토자입니다. AI가 단독으로 브로커 주문 안전장치, stale quote 차단, 계좌/수량/쿨다운 가드, hard/protect/emergency stop을 우회할 수 없습니다.
+### AI 판단 품질 개선
 
-sim-auto, dry-run, bounded live/pre-final 후보까지는 AI Tier2 검증과 hard gate를 통과하면 자동 판정될 수 있습니다. 하지만 최종 full-live 전환, cap 해제, provider 변경, bot restart, hard safety 완화는 사용자 승인 경계로 남깁니다.
+AI 호출 성공 여부만 보지 않고 호출, 입력, 판단 결과를 각각 검증합니다.
 
-내부 prompt와 JSON contract는 영어 label을 기준으로 합니다. 오래된 한국어 label은 명시된 compatibility map으로만 정규화하고, 정의되지 않은 새 label이 나오면 source-quality FAIL로 표면화합니다.
+- **호출 품질:** 실제 provider, timeout, failback, parse, cache와 transport provenance
+- **입력 품질:** 분봉, executable price/BBO, 체결 tape, venue, 시각, 결측 처리와 exact payload
+- **판단 품질:** `BUY/WAIT/DROP/HOLD/EXIT` 이후의 MFE·MAE, target/adverse 순서와 실제 손익
+
+정확한 입력에서도 오판이 반복되면 feature, prompt, reason-code와 판단 계약을 고치고 real payload를 replay합니다. 비정상 응답을 임의로 유효 판단처럼 해석하거나 AI가 broker·hard safety를 우회하게 하지 않습니다.
+
+### 위젯
+
+위젯 튜닝은 종목별 신호가 실제로 체결 가능한 가격에서 반복 이익을 만드는지 검증합니다.
+
+- signal source와 체결·목표 주문의 lineage를 같은 episode로 연결합니다.
+- 진입 가격, target tick, cooldown, episode 종료 조건을 종목·venue별 rolling 결과로 비교합니다.
+- main bot 또는 episode 기계와 같은 종목을 동시에 소유하지 않는지 검증합니다.
+- 적용은 exact-date policy와 rollback 값이 있는 bounded 변경으로 제한합니다.
+
+### 에피소드
+
+에피소드 튜닝은 profile별 시간창, leg 가격과 목표가가 실제 체결 및 terminal 결과에 적합했는지 갱신합니다.
+
+- 두 leg의 제출·부분체결·취소·목표가 귀속을 분리해 평가합니다.
+- 종목과 KRX/NXT/PREMARKET_KRX_LIKE 실적을 섞지 않습니다.
+- clean baseline 이후 rolling 결과와 최소 표본을 충족한 profile만 다음 PREOPEN 후보가 됩니다.
+- 수량은 튜닝축이 아니며 신규 episode의 두 개 10주 leg 계약을 유지합니다.
+
+### 공통 smoothing 원칙
+
+Smoothing은 순간적인 tick·호가·OFI/QI 흔들림 때문에 진입·보유·청산 판단이 왕복하는 것을 줄이는 공통 품질축입니다. 별도 주문 owner나 위험 완화 권한은 아닙니다.
+
+- 현재 live 경로의 대표 구현은 bounded holding-flow 내부의 `holding_flow_ofi_smoothing`입니다. OFI와 QI로 만든 raw micro score를 EWMA와 연속 관측 횟수로 안정화해 `stable_bullish`, `neutral`, `stable_bearish` regime을 만듭니다.
+- raw 값, smoothed 값, snapshot age, persistence count, policy version과 최종 action을 함께 남겨 사후 재현이 가능해야 합니다.
+- stale snapshot, observer unhealthy, 입력 부족이면 smoothed 값을 사용하지 않습니다. smoothing은 freshness, executable BBO, hard/protect/emergency, broker/account/order/quantity/cooldown guard를 숨기거나 우회할 수 없습니다.
+- soft-stop whipsaw와 대안 보유/청산 경로는 exact-path source-only 관찰로 raw action 대비 반사실 EV를 계산합니다. source-only 결과는 즉시 live action을 바꾸지 않습니다.
+- 조정값은 같은 venue·session의 성숙 outcome과 연결해 rolling/cumulative EV로 검증하고, 단일 표본은 누적 학습행 하나만 갱신합니다.
+
+## 장후 작업 흐름
+
+장후 작업은 당일 이벤트를 복기해 다음 장전의 bounded 후보를 만드는 자동화 체인입니다. 현재 소비되는 핵심 경로만 요약하면 다음과 같습니다.
+
+```text
+장중 raw event와 broker receipt 종료
+  -> source-quality audit
+  -> entry / submit / holding / scale-in / exit lifecycle 재구성
+  -> micro-reversion / AI / widget / episode calibration
+  -> rolling·cumulative EV와 반사실 비교
+  -> PREOPEN apply candidate 또는 source-only workorder
+  -> artifact 순서·consumer·provenance verifier
+  -> controller DONE
+  -> 다음 세션 post-apply attribution
+```
+
+1. **Source-quality preflight:** clean baseline, 필수 필드, venue, 시각, executable price와 provenance를 검증합니다. 계약이 깨지면 tuning input을 차단하고 보완 workorder로 넘깁니다.
+2. **Lifecycle 복기:** 실제 주문, 미진입, probe/residual, scale-in, 부분익절·trailing·최종 청산을 같은 흐름으로 재구성하되 real·sim·source-only를 분리합니다.
+3. **Calibration:** 네 튜닝축과 smoothing 경로를 raw 대안과 비교하고 비용 반영 EV, MFE/MAE, first-hit, 표본 충족 여부를 계산합니다.
+4. **적용 후보 생성:** 기존 owner의 한 축만 바꾸는 bounded PREOPEN 후보와 rollback 값을 만듭니다. 계측·리포트·provenance 결손은 `runtime_effect=false` workorder로 분리합니다.
+5. **검증과 종료:** producer/consumer 순서, AI provider, artifact freshness, runtime env와 apply plan을 검증합니다. 필수 산출물이 닫힌 뒤에만 controller가 `DONE`을 표시합니다.
+6. **다음 세션 귀속:** 실제 PID가 어떤 env와 policy를 읽었는지 확인하고, 적용 전후 outcome을 다음 rolling 갱신에 돌려줍니다.
+
+장후 리포트의 존재 자체는 효과의 증거가 아닙니다. 누가 소비했는지, sim 또는 runtime에 실제 반영됐는지, 반영 후 EV가 어떻게 변했는지까지 연결돼야 합니다. 전체 계약은 [Report Automation Traceability](docs/report-based-automation-traceability.md)를 따릅니다.
+
+## 안전과 권한 경계
+
+- stale/conflict, price freshness, hard/protect/emergency stop, broker/account/order/quantity/cooldown은 hard safety이며 튜닝이 우회하지 않습니다.
+- `position_sizing_dynamic_formula`가 메인 봇의 신규·추가매수 수량을 소유합니다. 위젯·에피소드 수량은 각 독립 owner의 계약을 따릅니다.
+- KRX, `PREMARKET_KRX_LIKE`, NXT 데이터와 성과를 분리합니다.
+- full fill과 partial fill, 실현손익과 매도 후 반사실 기회, real과 sim/source-only 결과를 합산하지 않습니다.
+- AI provider, bot 상태, cap, hard safety 또는 실주문 권한 변경은 리포트 단독으로 실행하지 않습니다.
+- System Error Detector는 프로세스, cron, 로그, artifact freshness와 리소스를 감시하지만 매매 전략을 변경하지 않습니다.
 
 ## 프로젝트 구조
 
-저장소는 “실시간 실행”, “장후 분석”, “운영 문서”가 한 프로젝트 안에 같이 들어 있는 구조입니다. 처음 볼 때는 모든 파일을 한 번에 따라가기보다, 아래 세 흐름만 잡으면 됩니다.
-
-실시간 실행 흐름은 `src/`와 `deploy/`가 중심입니다. 봇은 장전 runtime env를 읽고, 키움 시세와 계좌 상태를 받아 후보 평가, 주문 안전장치, 보유/청산 관리를 수행합니다. 장후 분석 흐름은 `data/report/`, `data/threshold_cycle/`, `analysis/`에 결과를 남깁니다. 운영 문서 흐름은 `docs/`가 맡고, 현재 원칙과 날짜별 실행 항목을 분리해서 관리합니다.
-
 ```text
 KORStockScan/
-├── src/                 # 봇, 엔진, 리포트, 웹 대시보드, 테스트
-├── analysis/            # 오프라인 패턴 분석과 pattern lab
-├── data/                # runtime event, threshold cycle, report, config
-├── deploy/              # cron, systemd, nginx, 운영 wrapper
-├── docs/                # 기준 문서, runbook, checklist, workorder
-└── logs/                # 운영 로그
+├── src/
+│   ├── bot_main.py                 # 메인 봇 진입점
+│   ├── engine/                     # lifecycle, AI, monitoring, automation
+│   └── trading/                    # 위젯·에피소드 등 독립 주문 owner
+├── data/
+│   ├── pipeline_events/            # 장중 raw event
+│   ├── threshold_cycle/            # compact event, apply plan, runtime env
+│   └── report/                     # 장중·장후 리포트
+├── deploy/                         # cron, systemd, 운영 wrapper
+├── docs/                           # 기준 문서, runbook, checklist, workorder
+└── logs/                           # 운영 로그
 ```
 
-자주 보는 위치는 다음과 같습니다.
+JSON/JSONL이 canonical data이며 Markdown은 운영자가 읽는 요약입니다. 새 producer는 역할에 맞는 package에 두고 `metric_role`, `decision_authority`, `window_policy`, `sample_floor`, `primary_decision_metric`, `source_quality_gate`, `forbidden_uses`를 선언해야 합니다.
 
-| 위치 | 내용 |
-| --- | --- |
-| `src/bot_main.py` | 운영 봇 진입점 |
-| `src/engine/` | 매매 엔진, AI, 리포트, 자동화 CLI |
-| `src/engine/swing/` | 스윙 자동화와 승인 컨트롤 |
-| `src/web/` | Flask 대시보드와 API |
-| `data/report/` | 장중/장후 리포트 |
-| `data/threshold_cycle/` | 장전 apply plan과 runtime env |
-| `docs/checklists/` | 날짜별 실행 항목 |
-| `docs/code-improvement-workorders/` | 자동 생성된 코드 보완 지시서 |
-
-조금 더 세부적으로 보면 `src/engine/`은 여러 성격의 모듈이 함께 있습니다. 스캘핑 실행 로직, AI 응답 계약, 리포트 생성기, threshold cycle, source-quality audit, bottom rebound research 같은 CLI가 여기에 모입니다. 스윙처럼 독립적인 하위 도메인은 `src/engine/swing/` 아래에 두고, 단순히 새 코드를 모두 `src/engine/`에 넣는 방식은 피합니다.
-
-`data/`는 운영 중 계속 쌓이는 작업 공간입니다. 장중 raw event는 `data/pipeline_events/`, 자동화 체인이 읽는 compact event는 `data/threshold_cycle/`, 사람이 확인하는 리포트는 `data/report/`에 모입니다. JSON/JSONL이 기준 데이터이고, Markdown은 사람이 빨리 읽기 위한 요약입니다.
-
-`docs/`는 의사결정의 기준입니다. Plan Rebase는 현재 정책과 금지선을, runbook은 시간대별 운영 절차를, checklist는 특정 날짜의 실행 항목을 소유합니다. README는 전체 안내서 역할만 하며, 세부 판정 기준은 기준 문서로 연결합니다.
-
-## LDM의 구성
-
-LDM은 Lifecycle Decision Matrix의 줄임말입니다. 이름은 조금 딱딱하지만, 하는 일은 단순합니다. 후보가 처음 발견된 순간부터 진입, 제출, 보유, 추가매수, 청산까지의 전 과정을 같은 형식의 행으로 정리하고, 어느 구간에서 어떤 선택이 더 나았는지 장후에 비교합니다.
-
-LDM은 기존의 고정 점수표를 대체하는 “단독 매수 엔진”이 아닙니다. 점수, 수급, 지연, 유동성, 과열, 가격 품질, 보유 손익, 시장 레짐 같은 값을 특징으로 모으고, 사후 수익률, 놓친 상승, 피한 손실, MFE/MAE 같은 결과와 분리해서 봅니다. 장중에 알 수 없는 사후 결과는 runtime 판단에 넣지 않습니다.
-
-구성은 크게 다섯 단계입니다.
-
-| 단계 | 보는 것 | 예시 판단 |
-| --- | --- | --- |
-| `entry` | 후보를 지금 살지, 더 기다릴지 | 방어적 진입, 재호가 대기, AI no-buy 유지 |
-| `submit` | 실제 주문 제출 전 품질 | stale quote 차단, latency 위험, 브로커/계좌 가드 |
-| `holding` | 보유를 이어갈지 줄일지 | soft stop 유지, HOLD/EXIT 보정 |
-| `scale_in` | 물타기/불타기 후보 | AVG_DOWN, PYRAMID, 가격/수량 가드 |
-| `exit` | 청산 품질 | 빠른 손절, 추세 보유, missed upside 복기 |
-
-장후에는 `entry_bucket_attribution`, `scale_in_bucket_attribution`, `overnight_bucket_attribution` 같은 bucket attribution이 만들어집니다. bucket은 “점수 60대이면서 유동성은 충분하지만 stale 위험이 있었던 후보”처럼 비슷한 상황을 묶는 단위입니다. 각 bucket은 표본 수, 기대값, source-quality, 후속 hook 준비 여부를 기준으로 분류됩니다.
-
-bucket이 이미 존재하는지, 아니면 관찰 producer 자체가 부족한지는 분리해서 봅니다. `lifecycle_bucket_discovery`는 생성된 lifecycle bucket을 분류하고, `producer_gap_discovery`는 hard/soft stop 이후 회복, 미체결 이후 재진입 품질, 스윙 label/source handoff, scale-in counterfactual처럼 별도 producer가 있어야 관찰 가능한 빈틈을 찾습니다. 둘 다 source-only 계층이며, high-priority 구현 후보를 workorder로 표면화할 수 있지만 실주문, threshold, provider, bot restart 권한은 없습니다.
-
-현재 기준으로 자동 생성되는 주요 bucket 축은 아래와 같습니다.
-
-| bucket 묶음 | 현재 축 | 주로 답하는 질문 |
-| --- | --- | --- |
-| Entry bucket | `score_band`, `source_stage`, `chosen_action`, `stale_bucket`, `liquidity_bucket`, `strength_bucket`, `overbought_bucket`, `time_bucket`, `exit_rule`, `combo_entry_spot` | 어떤 진입 조건 조합이 기대값을 만들었는가 |
-| Submit bucket | `submit_source_stage`, `revalidation_state`, `quote_age_bucket`, `price_resolution_bucket`, `would_limit_fill`, `actual_order_submitted`, `broker_order_forbidden`, `combo_submit_quality` | 주문 직전 품질 문제인지, 실제 제출/브로커 계약 문제인지 |
-| Scale-in bucket | `arm`, `blocker_namespace`, `blocker_reason`, `profit_band`, `peak_profit_band`, `held_bucket`, `ai_score_band`, `ai_score_source`, `supply_pass_bucket`, `price_guard_reason`, `qty_reason`, `time_bucket` | 물타기/불타기 중 어느 조건이 좋거나 위험했는가 |
-| Overnight bucket | `overnight_action`, `overnight_status`, `confidence_band`, `profit_band`, `peak_profit_band`, `held_bucket`, `price_source`, `source_quality_gate`, `combo_overnight_decision` | 장마감 sim 포지션을 당일 가상청산할지, 다음날 carry할지 |
-| Swing entry bucket | `origin`, `block_reason`, `position_tag`, `gap_bucket`, `score_bucket`, `vpw_bucket`, `strategy`, `entry_price_provenance`, `qty_source` | 스윙 후보가 어디서 왔고 어떤 진입 병목을 가졌는가 |
-| Swing holding/exit bucket | `mfe_bucket`, `mae_bucket`, `held_bucket`, `exit_reason`, `panic_context`, `ofi_state`, `qi_state` | 보유를 더 이어갔어야 했는지, 청산이 늦거나 빨랐는지 |
-| Swing scale-in bucket | `add_type`, `source_quality_status`, `qty_source`, `price_policy` | 스윙 추가매수 후보의 수량/가격 정책이 적절했는가 |
-| Swing discovery arm bucket | `entry_policy`, `sizing_policy`, `exit_policy`, `sector`, `theme_tags`, `legacy_ml_cohort` | 여러 가상 arm 중 어떤 조합이 살아남는가 |
-
-이 목록은 “고정 매매 규칙” 목록이 아니라 관찰과 분류의 기준입니다. 예를 들어 `liquidity_bucket=liquidity_unknown`이 나왔다고 해서 즉시 매수를 금지하는 것이 아니라, 해당 bucket의 표본 수, 기대값, source-quality, 후속 hook 준비 상태를 보고 `keep collecting`, `candidate_tighten_or_exclude`, `sim_auto_approved`, `runtime_blocked_contract_gap` 같은 상태로 닫습니다.
-
-README는 bucket taxonomy와 권한 경계만 고정합니다. 최신 bucket row 수, sim-auto 후보 수, active priority key, positive/negative EV snapshot은 target date별 `lifecycle_bucket_discovery`, `threshold_cycle_ev`, `runtime_approval_summary`, `runtime_apply_bridge`, post-apply attribution artifact가 소유합니다. 특정 날짜 스냅샷은 현재 운영 기준으로 복사하지 않습니다.
-
-`sim_auto_approved`는 모두 좋은 방향이라는 뜻이 아닙니다. 일부는 “더 열어볼 후보”이고, 일부는 “나쁜 조건이 반복되어 sim 정책에서 더 조여볼 후보”입니다. README에 숫자를 고정하지 않고, artifact의 source-quality, sample floor, primary EV, active policy handoff, runtime match 여부를 함께 확인합니다.
-
-분류 결과는 대략 네 갈래로 흘러갑니다. 계속 관찰할 것은 source-only로 남고, 시뮬레이션에 바로 적용 가능한 것은 `sim_auto_approved`가 됩니다. 실제 runtime에 연결할 준비가 된 pre-final 후보는 `live_auto_apply_ready`가 될 수 있지만, parsed AI Tier2 검증과 env mapping, runtime hook, rollback/post-apply attribution이 닫혀야 합니다. 계약이 부족한 경우는 `runtime_blocked_contract_gap` 또는 code workorder로 라우팅됩니다.
-
-중요한 금지선도 있습니다. LDM은 hard safety, 브로커 제출 가드, stale quote, 계좌/수량/쿨다운 가드를 우회하지 않습니다. 또한 점수가 높을수록 항상 좋은 매매라는 가정을 쓰지 않습니다. 점수는 feature일 뿐이고, 최종 판단은 장후 기대값과 source-quality를 함께 봅니다.
-
-## 장중후보 수집
-
-장중후보 수집은 두 경로가 합쳐져 움직입니다. 하나는 장전/장후에 준비되는 스윙 모델 추천 CSV이고, 다른 하나는 장중에 계속 도는 스캘핑 스캐너입니다. 둘 다 종목 선정 입력이지만 권한은 다릅니다. 스윙 모델은 다음날 후보군을 준비하고, 스캘핑 스캐너는 당일 수급 변화가 살아난 종목을 감시 대상으로 올립니다.
-
-| 경로 | 주기 | 입력 | 산출물 | 역할 |
-| --- | --- | --- | --- | --- |
-| Swing model retrain | 장후 cron | 일봉 패널, backtest, AI Tier2 review | `data/model_registry/swing_v2/current.json`, `data/daily_recommendations_v2.csv`, diagnostics | 다음 장전 스윙 추천 후보 생성 |
-| Final ensemble scanner | 장전/배치 | model artifact, KOSPI 유동성 pool, `daily_recommendations_v2.csv` | `recommendation_history`의 `KOSPI_ML` 추천 | 스윙/중기 후보를 DB 추천으로 적재 |
-| Scalping scanner | 장중 2~3분 | 키움 등락률, 수급 급증, 거래대금, VI | `recommendation_history`의 `SCALPING` WATCHING row, WS 등록 이벤트 | 당일 실시간 스캘핑 감시 후보 수집 |
-
-스윙 모델학습은 `auto_retrain_pipeline.sh`와 `src.model.swing_retrain_pipeline`이 담당합니다. 흐름은 `train -> backtest -> deterministic gate -> AI Tier2 review -> active artifact promotion -> recommend_daily_v2 smoke`입니다. 후보가 통과하면 active model artifact와 `current.json`이 갱신되고, `recommend_daily_v2`가 `data/daily_recommendations_v2.csv`와 diagnostics JSON을 만듭니다. AI Tier2가 차단하면 active artifact는 유지되고, 안전한 경우에만 remediation manifest가 다음 cron 재학습 입력으로 남습니다.
-
-`final_ensemble_scanner`는 `daily_recommendations_v2.csv`를 읽어 `KOSPI_ML` 전략의 추천 DB row로 적재합니다. CSV schema와 diagnostics는 active model promotion smoke에서 검증되며, CSV가 없으면 실시간 스캐닝 결과만 처리합니다. 이 경로는 추천 후보를 DB에 올리는 단계이지, 스윙 dry-run 해제나 full-live 전환 권한이 아닙니다.
-
-스캘핑 스캐너는 장중 09:05~15:00 사이에 2~3분 주기로 돕니다. `ka10028` 시가대비 상위, Supernova 수급 급증, `ka10032` 거래대금 상위, `ka10054` VI 발동 종목을 합쳐 candidate pool을 만들고, 신선도 점수와 source 우선순위로 정렬합니다. 유효 종목만 `RecommendationHistory`에 `SCALPING`/`WATCHING`으로 upsert하고, `COMMAND_WS_REG` 이벤트로 실시간 웹소켓 감시 등록을 요청합니다.
-
-두 경로 모두 실제 주문 안전장치를 우회하지 않습니다. 스윙 CSV는 추천 후보이며, 스캘핑 WATCHING row는 감시 후보입니다. 이후 AI 판단, stale quote, 브로커 제출 가드, 계좌/수량/쿨다운, hard/protect/emergency safety가 별도로 통과해야 주문 단계로 갈 수 있습니다.
-
-## 시뮬레이션 자동화
-
-시뮬레이션 자동화는 아래 흐름으로 움직입니다. 핵심은 “장중에는 넓게 관찰하고, 장후에는 숫자로 분류하고, 다음 장전에는 검증된 작은 변경만 반영한다”입니다.
-
-```text
-장중 후보 수집
-  -> sim/probe 가상 lifecycle 생성
-  -> 장후 결과 라벨링과 EV 계산
-  -> pattern lab source-only 분석
-  -> LDM bucket attribution
-  -> lifecycle bucket discovery
-  -> threshold cycle / runtime approval summary / code improvement workorder
-  -> 다음 PREOPEN sim policy 또는 제한된 runtime env 후보
-  -> 다음 장후 post-apply attribution으로 다시 검증
-```
-
-| 단계 | 쉽게 말하면 | 산출물/다음 연결 |
-| --- | --- | --- |
-| 장중 후보 수집 | 실제 주문 여부와 무관하게 “살 수도 있었던 후보”를 넓게 모읍니다. | pipeline event, threshold compact event |
-| sim/probe lifecycle | 주문하지 않은 후보도 가상으로 진입, 보유, 추가매수, 청산 흐름을 태웁니다. | sim position, probe row, swing dry-run row |
-| 장후 라벨링과 EV 계산 | 실제로 이후 가격이 어떻게 움직였는지 보고 기대값과 놓친 기회를 계산합니다. | daily EV, post-sell evaluation, swing label/report |
-| pattern lab | 스캘핑/스윙 fact table과 EV 결과를 패턴 단위로 다시 읽어 AI review payload, backlog, source-quality warning을 만듭니다. | `analysis/*_pattern_lab/outputs/`, source-only warning, candidate/workorder input |
-| LDM bucket attribution | 비슷한 조건을 bucket으로 묶어 어떤 조건 조합이 좋았는지 봅니다. | entry/submit/holding/scale-in/exit bucket |
-| bucket discovery | bucket을 계속 관찰, sim-auto, pre-final 후보, code gap으로 분류합니다. | `sim_auto_approved`, `live_auto_apply_ready`, `runtime_blocked_contract_gap` |
-| threshold cycle | 장후 리포트와 검증을 모아 다음 장전 적용 후보를 만듭니다. | apply plan, runtime env, runtime approval summary |
-| code improvement | 데이터는 좋은데 hook, source, schema, parser가 부족하면 구현 지시서로 넘깁니다. | `docs/code-improvement-workorders/` |
-| 다음 장후 재검증 | 적용되었거나 적용되지 않은 후보의 결과를 다시 비교합니다. | post-apply attribution, 다음 bucket 갱신 |
-
-시뮬레이션 자동화의 목적은 “실주문을 늘리기 전에 더 많은 후보를 가상으로 따라가 보는 것”입니다. 실제로 주문하지 않은 후보도 장중에는 가상 진입, 보유, 추가매수, 청산 흐름을 만들고, 장후에 결과를 계산합니다. 이렇게 하면 실계좌를 키우지 않고도 어떤 조건이 좋은지, 어떤 조건이 반복적으로 나쁜지 더 넓게 볼 수 있습니다.
-
-스캘핑 쪽에서는 BUY 후보를 실제 주문 여부와 무관하게 추적합니다. 예수금 부족, 1주 cap, 현재 selected family 여부 때문에 후보를 버리지 않고, `actual_order_submitted=false` provenance를 붙여 sim/probe로 남깁니다. sim position은 이후 post-sell evaluation과 daily EV에 연결되어, 놓친 상승이나 피한 손실을 따로 계산합니다.
-
-스윙 쪽에서는 safe pool 후보를 여러 arm으로 확장합니다. 기본 discovery sim은 후보마다 진입 방식, 보유 기간, 청산 정책 같은 조합을 나누고, label builder가 1일/5일/10일 및 policy exit 결과를 채웁니다. bottom rebound source 후보는 돌파 확인을 기다리는 방식이 아니라 다음날 선제 진입 시나리오를 따로 만들어 비교합니다.
-
-Pattern lab은 이 시뮬레이션 자동화의 장후 해석 계층입니다. `analysis/gemini_scalping_pattern_lab`, `analysis/claude_scalping_pattern_lab`, `analysis/deepseek_swing_pattern_lab`가 fact table과 EV 결과를 다시 묶어 손실/수익 패턴, opportunity cost, source-quality gap, AI review payload를 생성합니다. 이 산출물은 `code_improvement_order`, `auto_family_candidate`, workorder 입력으로만 쓰며, 단독으로 실주문, threshold apply, provider 변경, bot restart를 실행하지 않습니다.
-
-`producer_gap_discovery`와 후속 stage-hook producer는 기본 OFF인 source-only 분석입니다. 명시적으로 opt-in한 경우 후보 생성은 결정론으로 시작하고 AI review가 gap type, priority, 구현요건과 acceptance test를 보강합니다. AI unavailable, parse reject, audit fail은 fail-closed로 처리합니다. Hook 구현 여부는 `runtime_effect=false`, `allowed_runtime_apply=false` provenance로 남기며, 관련 workorder는 재생성 시 기존 구현·신규 구현·보류 항목으로 분리합니다.
-
-자동화는 sim 결과를 다음 세 가지로 나눠 소비합니다.
-
-| 결과 | 의미 | 다음 처리 |
-| --- | --- | --- |
-| 좋은 sim bucket | 기대값이 개선되고 source-quality가 통과한 후보 | 다음 PREOPEN sim policy 또는 pre-final 후보로 전달 |
-| 나쁜 sim bucket | 손실이나 missed upside가 반복되는 조건 | bucket tighten 후보나 code-improvement workorder로 전달 |
-| 불완전한 sim bucket | 표본 부족, source 누락, hook 미구현 | keep collecting, source-quality blocker, contract gap으로 보류 |
-
-sim-auto 승격은 사람이 매번 승인하지 않아도 됩니다. 다만 이것은 어디까지나 시뮬레이션 정책 승격입니다. 실주문, cap 해제, provider 변경, bot restart, hard safety 완화로 직접 이어지지 않습니다. bounded live/pre-final 후보도 AI Tier2 검증과 hard gate를 통과해야 하며, 최종 full-live 전환은 사용자 승인 경계로 남습니다.
-
-## 처음 실행할 때
+## 설치와 실행
 
 Python 작업은 프로젝트 `.venv`를 기본으로 사용합니다.
 
@@ -206,95 +168,37 @@ Python 작업은 프로젝트 `.venv`를 기본으로 사용합니다.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-운영 설정은 샘플을 복사한 뒤 서버 환경에 맞게 채웁니다.
-
-```bash
 cp data/config_sample.json data/config_prod.json
 ```
 
-최소한 키움 API 정보, DB 접속 정보, OpenAI API key가 필요합니다. Telegram, GitHub Project, Google Calendar 연동은 선택입니다. 민감정보는 git에 커밋하지 않습니다.
-
-스캘핑 live AI route는 OpenAI를 기준으로 둡니다.
-
-```bash
-export OPENAI_API_KEY="..."
-export KORSTOCKSCAN_SCALPING_AI_ROUTE=openai
-export KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws
-export KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true
-```
-
-기본 검증은 아래 명령으로 시작합니다.
-
-```bash
-PYTHONPATH=. .venv/bin/python -m pytest -q
-PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run
-```
-
-## 운영 흐름
-
-장전에는 전일 리포트와 검증 결과를 읽어 당일 runtime env를 만듭니다.
-
-```bash
-THRESHOLD_CYCLE_APPLY_MODE=auto_bounded_live \
-THRESHOLD_CYCLE_AUTO_APPLY=true \
-THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI=true \
-./deploy/run_threshold_cycle_preopen.sh "$(TZ=Asia/Seoul date +%F)"
-```
-
-봇은 `src/run_bot.sh`를 통해 실행합니다. wrapper는 당일 runtime env를 source하고, 필요한 경우 장전 apply 생성을 시도합니다.
+서버 환경에 키움 API, DB, AI provider 등 필요한 자격 증명을 설정하고 민감정보는 git에 커밋하지 않습니다. 메인 봇은 운영 wrapper를 통해 시작합니다.
 
 ```bash
 cd src
 bash run_bot.sh
 ```
 
-장후에는 threshold cycle, 스윙 dry-run, panic report, lifecycle matrix, workorder, EV attribution 같은 산출물이 만들어집니다. 운영 cron과 상세 시간표는 [Time-Based Operations Runbook](docs/time-based-operations-runbook.md)을 기준으로 봅니다.
-
-## 리포트 읽는 법
-
-JSON/JSONL이 canonical data입니다. 사람이 빠르게 확인해야 하는 결과만 Markdown으로 같이 생성합니다.
-
-| 경로 | 의미 |
-| --- | --- |
-| `data/pipeline_events/` | 장중 raw event stream |
-| `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | 자동화 체인이 읽는 compact stream |
-| `data/report/threshold_cycle_ev/` | daily EV와 적용/미적용 귀속 |
-| `data/report/runtime_approval_summary/` | 자동/수동 승인 경계 요약 |
-| `data/report/lifecycle_decision_matrix/` | lifecycle bucket과 후보 정책 |
-| `data/report/swing_*` | 스윙 dry-run, audit, approval 관련 리포트 |
-| `data/report/error_detection/` | 운영 감시 결과 |
-
-전체 report inventory는 [data/report/README.md](data/report/README.md)를 참고합니다.
-
-## 문서와 동기화
-
-Plan Rebase, runbook, README, prompt, AGENTS 같은 기준 문서는 사용자가 명시적으로 요청했을 때만 수정합니다. 문서 변경 후 checklist parser 검증은 AI가 실행합니다.
+장전 runtime env 생성과 상세 운영 명령은 [Time-Based Operations Runbook](docs/time-based-operations-runbook.md)을 따릅니다. 기본 진단은 다음과 같습니다.
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500
-```
-
-GitHub Project와 Google Calendar 동기화는 사용자가 아래 표준 명령으로 직접 실행합니다.
-
-```bash
-PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
+PYTHONPATH=. .venv/bin/python -m pytest -q
+PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run
 ```
 
 ## 핵심 문서
 
 | 문서 | 역할 |
 | --- | --- |
-| [Plan Rebase](docs/plan-korStockScanPerformanceOptimization.rebase.md) | 현재 튜닝 원칙, active/open 상태, 금지선 |
+| [Plan Rebase](docs/plan-korStockScanPerformanceOptimization.rebase.md) | 현재 튜닝 원칙, active/open 상태와 금지선 |
 | [Time-Based Operations Runbook](docs/time-based-operations-runbook.md) | 시간대별 운영 절차와 확인 기준 |
-| [Report Automation Traceability](docs/report-based-automation-traceability.md) | 자동화 산출물과 소비 계약 |
-| [Threshold Cycle README](data/threshold_cycle/README.md) | 장전 apply plan과 runtime env 운영 방식 |
-| [Data Report README](data/report/README.md) | 정기 report 목록 |
-| [Stage2 Checklist](docs/checklists/README.md) | 날짜별 실행 항목과 Project/Calendar source |
+| [Report Automation Traceability](docs/report-based-automation-traceability.md) | 장후 산출물, consumer와 apply 계약 |
+| [Threshold Cycle README](data/threshold_cycle/README.md) | PREOPEN apply plan과 runtime env |
+| [Widget Runbook](docs/widget-signal-auto-trading-runbook.md) | 위젯 매매 owner와 운영 계약 |
+| [Episode Machines](docs/low-price-two-leg-machines.md) | 종목별 two-leg 에피소드 계약 |
+| [Stage2 Checklist](docs/checklists/README.md) | 날짜별 실행 항목 |
 
 ## 주의
 
-이 프로젝트는 개인 자동매매와 리서치 운영 코드입니다. README와 리포트는 투자 조언이 아닙니다. 실계좌 주문, API key, 계좌 권한, 주문가능금액, 세금/수수료, 거래소/브로커 장애는 사용자가 직접 관리해야 합니다.
+이 프로젝트는 개인 자동매매와 리서치 운영 코드이며 README와 리포트는 투자 조언이 아닙니다. 실계좌 권한, API key, 주문가능금액, 세금·수수료와 거래소·브로커 장애는 운영자가 직접 관리해야 합니다.
 
-실주문 범위가 넓어지는 변경은 항상 approval boundary, runtime owner, rollback guard, source-quality gate를 확인한 뒤 다룹니다.
+실주문 범위가 넓어지는 변경은 runtime owner, source-quality gate, rolling evidence, approval boundary와 rollback guard를 먼저 확인합니다.

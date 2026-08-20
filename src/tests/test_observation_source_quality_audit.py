@@ -500,6 +500,26 @@ def test_smoothing_source_only_path_contract_rejects_nonpositive_buy_price():
     assert "reference_buy_price_positive_contract" in violations["invalid_fields"]
 
 
+def test_smoothing_v2_path_quality_contract_requires_gap_provenance():
+    contract = audit.STAGE_CONTRACTS["smoothing_source_only_path_horizon"]
+    violations = audit._row_contract_violations(
+        "smoothing_source_only_path_horizon",
+        {"fields": {"path_quality_contract_version": "fresh_observation_gap_v2"}},
+        contract,
+    )
+    legacy_violations = audit._row_contract_violations(
+        "smoothing_source_only_path_horizon",
+        {"fields": {}},
+        contract,
+    )
+
+    assert "path_max_valid_observation_gap_sec" in violations["missing_fields"]
+    assert "path_max_allowed_observation_gap_sec" in violations["missing_fields"]
+    assert (
+        "path_max_valid_observation_gap_sec" not in legacy_violations["missing_fields"]
+    )
+
+
 def test_market_halt_session_events_artifact_is_gitignored():
     path = Path(
         "data/source_quality/market_halt_windows/session_events/2026-06-08.json"

@@ -9389,14 +9389,35 @@ def _build_smoothing_source_only_path_journal(
                         if status.startswith("guarded_terminal_")
                         else "effective_price_quality_invalid"
                     )
-                elif (
-                    _safe_int(
-                        selected_fields.get("path_price_quality_invalid_sample_count"),
-                        0,
-                    )
-                    or 0
-                ) > 0:
-                    status = "path_price_quality_gap"
+                else:
+                    path_quality_contract_version = str(
+                        selected_fields.get("path_quality_contract_version") or ""
+                    ).strip()
+                    if path_quality_contract_version == "fresh_observation_gap_v2":
+                        max_valid_gap_sec = _safe_float(
+                            selected_fields.get("path_max_valid_observation_gap_sec"),
+                            None,
+                        )
+                        max_allowed_gap_sec = _safe_float(
+                            selected_fields.get("path_max_allowed_observation_gap_sec"),
+                            2.0,
+                        )
+                        if (
+                            max_valid_gap_sec is None
+                            or max_allowed_gap_sec is None
+                            or max_valid_gap_sec > max_allowed_gap_sec + 1e-9
+                        ):
+                            status = "path_price_quality_gap"
+                    elif (
+                        _safe_int(
+                            selected_fields.get(
+                                "path_price_quality_invalid_sample_count"
+                            ),
+                            0,
+                        )
+                        or 0
+                    ) > 0:
+                        status = "path_price_quality_gap"
             ev_eligible_status = status in {
                 "observed",
                 "guarded_terminal_hard_breach",
@@ -9495,6 +9516,18 @@ def _build_smoothing_source_only_path_journal(
                     "path_price_quality_invalid_sample_count": _safe_int(
                         selected_fields.get("path_price_quality_invalid_sample_count"),
                         0,
+                    ),
+                    "path_quality_contract_version": selected_fields.get(
+                        "path_quality_contract_version"
+                    )
+                    or "legacy_any_invalid_sample_v1",
+                    "path_max_valid_observation_gap_sec": _safe_float(
+                        selected_fields.get("path_max_valid_observation_gap_sec"),
+                        None,
+                    ),
+                    "path_max_allowed_observation_gap_sec": _safe_float(
+                        selected_fields.get("path_max_allowed_observation_gap_sec"),
+                        None,
                     ),
                     "opportunity_ev_delta_pct": (
                         round(opportunity_delta, 6)
