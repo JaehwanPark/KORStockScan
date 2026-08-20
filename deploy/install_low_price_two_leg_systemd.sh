@@ -49,6 +49,12 @@ UNITS=(
   korstockscan-low-price-two-leg-samsung-ea-late-morning.timer
   korstockscan-low-price-two-leg-samsung-ea-afternoon-preflight.timer
   korstockscan-low-price-two-leg-samsung-ea-afternoon.timer
+  korstockscan-low-price-two-leg-sk-telecom-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-sk-telecom-late-morning.timer
+  korstockscan-low-price-two-leg-hanse-morning-preflight.timer
+  korstockscan-low-price-two-leg-hanse-morning.timer
+  korstockscan-low-price-two-leg-hanse-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-hanse-afternoon.timer
 )
 TIMERS=(
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
@@ -91,6 +97,12 @@ TIMERS=(
   korstockscan-low-price-two-leg-samsung-ea-late-morning.timer
   korstockscan-low-price-two-leg-samsung-ea-afternoon-preflight.timer
   korstockscan-low-price-two-leg-samsung-ea-afternoon.timer
+  korstockscan-low-price-two-leg-sk-telecom-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-sk-telecom-late-morning.timer
+  korstockscan-low-price-two-leg-hanse-morning-preflight.timer
+  korstockscan-low-price-two-leg-hanse-morning.timer
+  korstockscan-low-price-two-leg-hanse-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-hanse-afternoon.timer
 )
 RETIRED_DAEWOO_UNITS=(
   korstockscan-low-price-two-leg-daewoo-ec-midday-preflight.timer
@@ -133,6 +145,7 @@ owners = {
     "015760": "kepco_low_price_two_leg_owner",
     "017670": "sk_telecom_low_price_two_leg_owner",
     "028050": "samsung_ea_low_price_two_leg_owner",
+    "105630": "hanse_low_price_two_leg_owner",
 }
 for code, owner in owners.items():
     add_manual_control_exclusion_code(code, comment=f"manual_operator {owner}")
@@ -142,4 +155,4 @@ PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed twenty lower-price profile timers; retired Daewoo units were removed"
+echo "installed twenty-three lower-price profile timers; retired Daewoo units were removed"

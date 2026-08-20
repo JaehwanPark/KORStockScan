@@ -15,7 +15,8 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 from src.trading.low_price_two_leg.profiles import (
-    PROFILE_REVISION_EFFECTIVE_DATE,
+    PROFILE_REVISION_20260819_EFFECTIVE_DATE,
+    PROFILE_REVISION_20260821_EFFECTIVE_DATE,
     PROFILES,
     MachineProfile,
     get_profile,
@@ -102,14 +103,55 @@ RECOMMENDATION_20260818_PROFILE_MAP = {
     "samsung_ea_afternoon": "candidate_028050_afternoon",
     "samsung_ea_morning": "candidate_028050_morning",
 }
+RECOMMENDATION_20260819_EVIDENCE_PATH = (
+    DATA_DIR / "config" / "low_price_two_leg_expanded_profile_evidence_2026-08-19.json"
+)
+RECOMMENDATION_20260819_EVIDENCE_SHA256 = (
+    "3acf5125074eaf7e48eca0e73c22f037b5e6b1ec354bd5b203cf32f14dea2381"
+)
+RECOMMENDATION_20260819_SOURCE_SHA256 = (
+    "cd578fd9c8f4b9cf3f648dd7fbc99f03061e69f1b9de32f78406096aecbfab49"
+)
+RECOMMENDATION_20260819_PROFILE_MAP = {
+    "doosan_enerbility_late_morning": "logic_doosan_enerbility_late_morning",
+    "samsung_heavy_morning": "logic_samsung_heavy_morning",
+    "kakao_midday": "logic_kakao_midday",
+    "kakao_late_morning": "logic_kakao_late_morning",
+    "sk_telecom_afternoon": "logic_sk_telecom_afternoon",
+    "samsung_ea_morning": "logic_samsung_ea_morning",
+    "sk_eternix_afternoon": "logic_sk_eternix_afternoon",
+    "samsung_ea_afternoon": "logic_samsung_ea_afternoon",
+    "sk_telecom_late_morning": "existing_017670_late_morning",
+    "hanse_afternoon": "candidate_105630_afternoon",
+    "hanse_morning": "candidate_105630_morning",
+}
 
 
 def _research_evidence_contract(
     profile: MachineProfile, *, target_date: date | None = None
 ) -> dict:
+    recommendation_20260819_profile_id = (
+        RECOMMENDATION_20260819_PROFILE_MAP.get(profile.profile_id)
+        if target_date is None
+        or target_date >= PROFILE_REVISION_20260821_EFFECTIVE_DATE
+        else None
+    )
+    if recommendation_20260819_profile_id:
+        return {
+            "path": RECOMMENDATION_20260819_EVIDENCE_PATH,
+            "sha256": RECOMMENDATION_20260819_EVIDENCE_SHA256,
+            "schema": "low_price_two_leg_user_approved_profile_evidence_v3",
+            "start_date": "2026-06-05",
+            "end_date": "2026-08-19",
+            "trading_date_count": 52,
+            "window": "2026-06-05_through_2026-08-19_52_trading_days",
+            "report_profile_id": recommendation_20260819_profile_id,
+            "source_report_sha256": RECOMMENDATION_20260819_SOURCE_SHA256,
+        }
     recommendation_profile_id = (
         RECOMMENDATION_20260818_PROFILE_MAP.get(profile.profile_id)
-        if target_date is None or target_date >= PROFILE_REVISION_EFFECTIVE_DATE
+        if target_date is None
+        or target_date >= PROFILE_REVISION_20260819_EFFECTIVE_DATE
         else None
     )
     if recommendation_profile_id:
@@ -229,6 +271,7 @@ def validate_research_evidence(
         "low_price_two_leg_episode_policy_research_v1",
         "low_price_two_leg_user_approved_profile_evidence_v1",
         "low_price_two_leg_user_approved_profile_evidence_v2",
+        "low_price_two_leg_user_approved_profile_evidence_v3",
     }:
         return False, "research_report_schema_invalid"
     source = (payload.get("source_meta") or {}).get(evidence_profile.symbol)
@@ -367,6 +410,7 @@ def validate_research_evidence(
             not in {
                 "low_price_two_leg_user_approved_profile_evidence_v1",
                 "low_price_two_leg_user_approved_profile_evidence_v2",
+                "low_price_two_leg_user_approved_profile_evidence_v3",
             }
             and int(holdout.get("held_legs", 0) or 0) != 0
         )
