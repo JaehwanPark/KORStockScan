@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.engine.ai_response_contracts import build_openai_response_text_format
+from src.engine.scalping.entry_split_order_plan import (
+    runtime_apply_authority_contract_status,
+)
 from src.engine.scalping.position_sizing_allocator import (
     FORMULA_VERSION as SCALPING_SIZING_FORMULA_VERSION,
     ROLLBACK_FORMULA_VERSION as SCALPING_SIZING_ROLLBACK_VERSION,
@@ -351,6 +354,8 @@ CALIBRATION_FAMILY_METADATA = {
             "post_sell_soft_stop_total",
         ],
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "primary_decision_metric_scope": "ev_validated_variant_only",
+        "exploration_seed_decision_metric": "qty_preserving_execution_shape_guard",
         "allowed_runtime_apply": True,
     },
     "market_regime_continuous_thresholds": {
@@ -7638,12 +7643,56 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
     policy_version = str(recommended_policy.get("policy_version") or "")
     report_loaded = bool(payload)
     source_quality_blocked = source_quality.get("tuning_input_allowed") is False
+    authority_fields_present = bool(
+        {
+            "exploration_seed_allowed",
+            "ev_validated_runtime_apply_allowed",
+            "runtime_apply_compatibility_semantics",
+        }.intersection(recommended_policy)
+    )
+    runtime_apply_compatibility_allowed = (
+        recommended_policy.get("runtime_apply_allowed") is True
+    )
+    declared_exploration_seed_allowed = (
+        recommended_policy.get("exploration_seed_allowed") is True
+    )
+    declared_ev_validated_runtime_apply_allowed = (
+        recommended_policy.get("ev_validated_runtime_apply_allowed") is True
+    )
+    (
+        runtime_apply_authority_contract_valid,
+        runtime_apply_authority_contract_reason,
+    ) = runtime_apply_authority_contract_status(recommended_policy)
+    exploration_seed_allowed = bool(
+        declared_exploration_seed_allowed and runtime_apply_authority_contract_valid
+    )
+    ev_validated_runtime_apply_allowed = bool(
+        declared_ev_validated_runtime_apply_allowed
+        and runtime_apply_authority_contract_valid
+    )
     current = {
         "enabled": False,
         "policy_file": "",
         "policy_version": "",
     }
-    runtime_apply_allowed = recommended_policy.get("runtime_apply_allowed") is True
+    runtime_apply_allowed = bool(
+        runtime_apply_compatibility_allowed and runtime_apply_authority_contract_valid
+    )
+    runtime_apply_authority = "invalid_explicit_contract"
+    if runtime_apply_authority_contract_valid:
+        runtime_apply_authority = (
+            "ev_validated_variant"
+            if ev_validated_runtime_apply_allowed
+            else (
+                "bounded_exploration_seed"
+                if exploration_seed_allowed
+                else (
+                    "legacy_compatibility"
+                    if runtime_apply_allowed and not authority_fields_present
+                    else "none"
+                )
+            )
+        )
     recommended = {
         "enabled": bool(candidates)
         and bool(policy_file)
@@ -7651,6 +7700,9 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         and runtime_apply_allowed,
         "policy_file": policy_file,
         "policy_version": policy_version,
+        "runtime_apply_authority": runtime_apply_authority,
+        "exploration_seed_allowed": exploration_seed_allowed,
+        "ev_validated_runtime_apply_allowed": ev_validated_runtime_apply_allowed,
     }
     return {
         "family": "entry_split_order_plan",
@@ -7689,6 +7741,45 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "policy_file": policy_file or None,
             "policy_version": policy_version or None,
             "runtime_apply_allowed": runtime_apply_allowed,
+            "runtime_apply_compatibility_allowed": (
+                runtime_apply_compatibility_allowed
+            ),
+            "runtime_apply_authority": runtime_apply_authority,
+            "runtime_apply_authority_contract_present": authority_fields_present,
+            "runtime_apply_authority_contract_valid": (
+                runtime_apply_authority_contract_valid
+            ),
+            "runtime_apply_authority_contract_reason": (
+                runtime_apply_authority_contract_reason
+            ),
+            "exploration_seed_allowed": exploration_seed_allowed,
+            "ev_validated_runtime_apply_allowed": (ev_validated_runtime_apply_allowed),
+            "declared_exploration_seed_allowed": (declared_exploration_seed_allowed),
+            "declared_ev_validated_runtime_apply_allowed": (
+                declared_ev_validated_runtime_apply_allowed
+            ),
+            "runtime_apply_authority_classes": recommended_policy.get(
+                "runtime_apply_authority_classes"
+            )
+            or [],
+            "primary_decision_metric": (
+                "source_quality_adjusted_ev_pct"
+                if ev_validated_runtime_apply_allowed
+                else (
+                    "qty_preserving_execution_shape_guard"
+                    if exploration_seed_allowed
+                    else "none"
+                )
+            ),
+            "primary_decision_metric_scope": (
+                "ev_validated_variant_only"
+                if ev_validated_runtime_apply_allowed
+                else (
+                    "bounded_exploration_seed_only"
+                    if exploration_seed_allowed
+                    else "none"
+                )
+            ),
             "runtime_apply_scope": recommended_policy.get("runtime_apply_scope") or [],
             "post_apply_attribution": recommended_policy.get("post_apply_attribution")
             or {},
@@ -7715,13 +7806,18 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         "candidate_grid": candidate_grid,
         "apply_ready": bool(recommended["enabled"]),
         "apply_mode": (
-            "calibrated_apply_candidate"
+            (
+                "bounded_exploration_seed_candidate"
+                if runtime_apply_authority == "bounded_exploration_seed"
+                else "calibrated_apply_candidate"
+            )
             if recommended["enabled"]
             else "report_only_calibration"
         ),
         "notes": [
             "entry_split_order_plan only decomposes planned_orders and never increases requested_qty.",
             "runtime apply is next PREOPEN env/policy-file only; intraday mutation is forbidden.",
+            "bounded exploration seed authority is structural and does not assert positive split-variant EV.",
             "sim/probe rows are kept separate from real execution quality approval.",
         ],
     }
@@ -12086,7 +12182,7 @@ def _calibration_state_for_family(
         if source_metrics.get("runtime_apply_allowed") is not True:
             return (
                 "hold",
-                "entry_split_order_plan recommended policy is not runtime-apply allowed; keep it out of PREOPEN env handoff.",
+                "entry_split_order_plan recommended policy is not runtime-apply allowed or its explicit authority contract is invalid; keep it out of PREOPEN env handoff.",
             )
         if real_count < 20:
             return (
@@ -12109,14 +12205,27 @@ def _calibration_state_for_family(
             _safe_int(source_metrics.get("real_primary_ev_policy_candidate_count"), 0)
             or 0
         )
+        exploration_seed_allowed = (
+            source_metrics.get("exploration_seed_allowed") is True
+        )
+        ev_validated_runtime_apply_allowed = (
+            source_metrics.get("ev_validated_runtime_apply_allowed") is True
+        )
         if (
             policy_count > 0
             and (baseline_policy_count > 0 or tick_band_policy_count > 0)
             and real_primary_policy_count <= 0
         ):
+            if not exploration_seed_allowed and source_metrics.get(
+                "runtime_apply_authority_contract_present"
+            ):
+                return (
+                    "hold",
+                    "entry split structural seed exists but exploration_seed_allowed is false; explicit authority contract blocks PREOPEN handoff.",
+                )
             return (
                 "adjust_up",
-                "entry split real submit sample floor와 execution-shape guard가 통과해 qty-preserving split seed policy를 다음 PREOPEN env 후보로 연다.",
+                "entry split real submit sample floor와 execution-shape guard가 통과해 qty-preserving structural exploration seed를 다음 PREOPEN env 후보로 연다. 이는 split-variant 양의 EV 판정이 아니다.",
             )
         if real_outcome_count <= 0 and sim_count >= 10:
             return (
@@ -12132,6 +12241,13 @@ def _calibration_state_for_family(
             return (
                 "hold_no_edge",
                 "entry split candidate grid was generated but no positive EV policy passed the downside/source-quality guards.",
+            )
+        if source_metrics.get("runtime_apply_authority_contract_present") and not (
+            ev_validated_runtime_apply_allowed
+        ):
+            return (
+                "hold_no_edge",
+                "entry split variant candidate exists but ev_validated_runtime_apply_allowed is false; do not describe or hand off it as EV-validated runtime calibration.",
             )
         return (
             "adjust_up",
@@ -12733,6 +12849,35 @@ def _build_calibration_candidates(
                 "policy_version": family_sample.get("policy_version"),
                 "runtime_apply_allowed": family_sample.get("runtime_apply_allowed")
                 is True,
+                "runtime_apply_compatibility_allowed": family_sample.get(
+                    "runtime_apply_compatibility_allowed"
+                )
+                is True,
+                "runtime_apply_authority": family_sample.get("runtime_apply_authority"),
+                "runtime_apply_authority_contract_present": family_sample.get(
+                    "runtime_apply_authority_contract_present"
+                )
+                is True,
+                "runtime_apply_authority_contract_valid": family_sample.get(
+                    "runtime_apply_authority_contract_valid"
+                )
+                is True,
+                "exploration_seed_allowed": family_sample.get(
+                    "exploration_seed_allowed"
+                )
+                is True,
+                "ev_validated_runtime_apply_allowed": family_sample.get(
+                    "ev_validated_runtime_apply_allowed"
+                )
+                is True,
+                "runtime_apply_authority_classes": family_sample.get(
+                    "runtime_apply_authority_classes"
+                )
+                or [],
+                "primary_decision_metric": family_sample.get("primary_decision_metric"),
+                "primary_decision_metric_scope": family_sample.get(
+                    "primary_decision_metric_scope"
+                ),
                 "runtime_apply_scope": family_sample.get("runtime_apply_scope") or [],
                 "post_apply_attribution": family_sample.get("post_apply_attribution")
                 or {},
@@ -13171,22 +13316,30 @@ def _build_calibration_candidates(
             "safety_revert_required": False,
             "safety_guard": list(CALIBRATION_SAFETY_GUARDS),
             "apply_mode": (
-                "efficient_tradeoff_canary_candidate"
+                "bounded_exploration_seed_candidate"
                 if runtime_apply_candidate
-                and (
-                    family.get("apply_mode") == "efficient_tradeoff_canary_candidate"
-                    or output_family
-                    in {
-                        "score65_74_recovery_probe",
-                        "bad_entry_refined_canary",
-                        "holding_exit_decision_matrix_advisory",
-                        "lifecycle_decision_matrix_runtime",
-                    }
-                )
+                and output_family == "entry_split_order_plan"
+                and source_metrics.get("runtime_apply_authority")
+                == "bounded_exploration_seed"
                 else (
-                    "calibrated_apply_candidate"
+                    "efficient_tradeoff_canary_candidate"
                     if runtime_apply_candidate
-                    else "report_only_calibration"
+                    and (
+                        family.get("apply_mode")
+                        == "efficient_tradeoff_canary_candidate"
+                        or output_family
+                        in {
+                            "score65_74_recovery_probe",
+                            "bad_entry_refined_canary",
+                            "holding_exit_decision_matrix_advisory",
+                            "lifecycle_decision_matrix_runtime",
+                        }
+                    )
+                    else (
+                        "calibrated_apply_candidate"
+                        if runtime_apply_candidate
+                        else "report_only_calibration"
+                    )
                 )
             ),
             "allowed_runtime_apply": bool(metadata.get("allowed_runtime_apply"))

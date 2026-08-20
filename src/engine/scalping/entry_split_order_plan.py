@@ -37,6 +37,9 @@ POST_SUBMIT_LOW_WINDOW_MINUTES = 10
 POLICY_MODE_REAL_PRIMARY_EV = "real_primary_ev_optimized"
 POLICY_MODE_BOUNDED_EQUAL_BASELINE = "bounded_equal_split_baseline"
 POLICY_MODE_POST_SUBMIT_TICK_BAND = "post_submit_tick_band_seed"
+RUNTIME_APPLY_COMPATIBILITY_SEMANTICS = (
+    "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed"
+)
 BASELINE_SPLIT_VARIANT_ID = "equal_50_50_offset_0pct_0_3pct"
 PCT_BAND_3LEG_VARIANT_ID = "equal_3leg_offset_0pct_0_3pct_0_8pct"
 RUNTIME_FALLBACK_POLICY_MODE = "runtime_default_passive_center_40_60_0_3pct"
@@ -1118,6 +1121,82 @@ def _safe_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def runtime_apply_authority_contract_status(
+    payload: dict[str, Any],
+) -> tuple[bool, str]:
+    """Validate the explicit exploration-vs-EV authority split when present."""
+
+    authority_fields = {
+        "exploration_seed_allowed",
+        "ev_validated_runtime_apply_allowed",
+        "runtime_apply_compatibility_semantics",
+    }
+    if not authority_fields.intersection(payload):
+        return True, "legacy_policy_without_explicit_authority_split"
+    if (
+        payload.get("runtime_apply_compatibility_semantics")
+        != RUNTIME_APPLY_COMPATIBILITY_SEMANTICS
+    ):
+        return False, "runtime_apply_compatibility_semantics_invalid"
+    for field in (
+        "runtime_apply_allowed",
+        "exploration_seed_allowed",
+        "ev_validated_runtime_apply_allowed",
+    ):
+        if not isinstance(payload.get(field), bool):
+            return False, f"{field}_not_boolean"
+    if "baseline_runtime_defaults_enabled" in payload and not isinstance(
+        payload.get("baseline_runtime_defaults_enabled"), bool
+    ):
+        return False, "baseline_runtime_defaults_enabled_not_boolean"
+    for field in ("exploration_seed_count", "ev_validated_bucket_count"):
+        if field not in payload:
+            continue
+        value = payload.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return False, f"{field}_not_nonnegative_integer"
+    exploration_allowed = payload["exploration_seed_allowed"]
+    ev_validated_allowed = payload["ev_validated_runtime_apply_allowed"]
+    compatibility_allowed = payload["runtime_apply_allowed"]
+    if compatibility_allowed != (exploration_allowed or ev_validated_allowed):
+        return False, "runtime_apply_authority_union_mismatch"
+    if (
+        _safe_bool(payload.get("baseline_runtime_defaults_enabled"))
+        and not exploration_allowed
+    ):
+        return False, "baseline_runtime_without_exploration_seed_authority"
+    if (
+        _safe_int(payload.get("exploration_seed_count"), 0) > 0
+        and not exploration_allowed
+    ):
+        return False, "exploration_seed_count_without_authority"
+    if (
+        _safe_int(payload.get("ev_validated_bucket_count"), 0) > 0
+        and not ev_validated_allowed
+    ):
+        return False, "ev_validated_bucket_count_without_authority"
+    expected_classes = {
+        authority_class
+        for authority_class, allowed in (
+            ("bounded_exploration_seed", exploration_allowed),
+            ("ev_validated_variant", ev_validated_allowed),
+        )
+        if allowed
+    }
+    if "runtime_apply_authority_classes" in payload:
+        raw_classes = payload.get("runtime_apply_authority_classes")
+        if not isinstance(raw_classes, list) or not all(
+            isinstance(value, str) and value.strip() for value in raw_classes
+        ):
+            return False, "runtime_apply_authority_classes_not_string_list"
+        actual_classes = {
+            str(value).strip() for value in raw_classes if str(value).strip()
+        }
+        if actual_classes != expected_classes:
+            return False, "runtime_apply_authority_classes_mismatch"
+    return True, "explicit_runtime_apply_authority_split_valid"
 
 
 def _event_fields(event: dict[str, Any]) -> dict[str, Any]:
@@ -2350,6 +2429,11 @@ def _build_candidate_grid(
         runtime_apply_scope = (
             "ev_optimized_variant" if ev_passed else "baseline_split_structure"
         )
+        runtime_apply_authority_class = (
+            "ev_validated_variant"
+            if ev_passed
+            else ("bounded_exploration_seed" if execution_shape_seed_passed else "none")
+        )
         grid.append(
             {
                 "context_bucket": bucket,
@@ -2430,8 +2514,11 @@ def _build_candidate_grid(
                 "policy_mode": policy_mode,
                 "policy_generation_reason": policy_generation_reason,
                 "candidate_passed": passed,
+                "exploration_seed_allowed": execution_shape_seed_passed,
+                "ev_validated_runtime_apply_allowed": ev_passed,
                 "runtime_apply_allowed": passed,
                 "runtime_apply_scope": runtime_apply_scope if passed else "none",
+                "runtime_apply_authority_class": runtime_apply_authority_class,
                 "runtime_apply_reason": (
                     "positive_split_variant_ev_passed"
                     if ev_passed
@@ -2455,6 +2542,14 @@ def _policy_payload(
         for item in passed
         if item.get("runtime_apply_scope") == "ev_optimized_variant"
         or item.get("policy_mode") == POLICY_MODE_POST_SUBMIT_TICK_BAND
+    ]
+    exploration_seed_candidates = [
+        item for item in passed if item.get("exploration_seed_allowed") is True
+    ]
+    ev_validated_candidates = [
+        item
+        for item in passed
+        if item.get("ev_validated_runtime_apply_allowed") is True
     ]
     version_seed = json.dumps(passed, sort_keys=True, ensure_ascii=False)
     digest = hashlib.sha1(version_seed.encode("utf-8")).hexdigest()[:10]
@@ -2493,6 +2588,18 @@ def _policy_payload(
         "source_date": target_date,
         "source_report": str(report_json),
         "runtime_apply_allowed": bool(passed),
+        "runtime_apply_compatibility_semantics": RUNTIME_APPLY_COMPATIBILITY_SEMANTICS,
+        "exploration_seed_allowed": bool(exploration_seed_candidates),
+        "exploration_seed_count": len(exploration_seed_candidates),
+        "ev_validated_runtime_apply_allowed": bool(ev_validated_candidates),
+        "ev_validated_bucket_count": len(ev_validated_candidates),
+        "runtime_apply_authority_classes": sorted(
+            {
+                str(item.get("runtime_apply_authority_class") or "")
+                for item in passed
+                if str(item.get("runtime_apply_authority_class") or "")
+            }
+        ),
         "baseline_runtime_defaults_enabled": any(
             item.get("runtime_apply_scope") == "baseline_split_structure"
             for item in passed
@@ -2538,6 +2645,13 @@ def _policy_payload(
                 "optimization_basis": item.get("optimization_basis"),
                 "runtime_apply_scope": item.get("runtime_apply_scope"),
                 "runtime_apply_reason": item.get("runtime_apply_reason"),
+                "runtime_apply_authority_class": item.get(
+                    "runtime_apply_authority_class"
+                ),
+                "exploration_seed_allowed": item.get("exploration_seed_allowed"),
+                "ev_validated_runtime_apply_allowed": item.get(
+                    "ev_validated_runtime_apply_allowed"
+                ),
                 "post_submit_low_tick_band": item.get("post_submit_low_tick_band"),
                 "source_quality_adjusted_ev_pct": item[
                     "source_quality_adjusted_ev_pct"
@@ -2709,7 +2823,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "calibration_window": "clean_baseline_cumulative_through_target_date",
         },
         "metric_contract": {
-            "metric_role": "primary_ev",
+            "metric_role": "authority_split_primary_ev_and_execution_shape_seed",
             "decision_authority": "next_preopen_bounded_entry_split_policy",
             "window_policy": "clean_baseline_cumulative_with_daily_diagnostic",
             "sample_floor": {
@@ -2729,6 +2843,17 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 "split-policy execution quality."
             ),
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "primary_decision_metric_scope": "ev_validated_variant_only",
+            "exploration_seed_metric_contract": {
+                "metric_role": "execution_shape_seed",
+                "primary_decision_metric": "qty_preserving_execution_shape_guard",
+                "decision_authority": "bounded_exploration_seed_only",
+                "forbidden_uses": [
+                    "claim_positive_split_variant_ev",
+                    "increase_requested_qty",
+                    "bypass_submit_or_hard_safety",
+                ],
+            },
             "source_quality_gate": "observation_source_quality_audit_hard_block_rows_excluded",
             "policy_modes": {
                 POLICY_MODE_REAL_PRIMARY_EV: "real split-variant outcome EV-positive optimized split",
@@ -2757,7 +2882,8 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             ),
             "baseline_apply_contract": (
                 "A qty-preserving execution-shape seed may open at next PREOPEN after real-submit sample and "
-                "execution guards pass. This is structural activation, not an EV-positive variant claim."
+                "execution guards pass. This is structural activation under exploration_seed_allowed, not an "
+                "EV-positive variant claim. Only ev_validated_runtime_apply_allowed asserts split-variant EV."
             ),
             "forbidden_uses": [
                 "requested_qty_increase",
@@ -2827,6 +2953,24 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         "candidate_grid": candidate_grid,
         "recommended_policy": {
             "runtime_apply_allowed": runtime_apply_allowed,
+            "runtime_apply_compatibility_semantics": policy.get(
+                "runtime_apply_compatibility_semantics"
+            ),
+            "exploration_seed_allowed": policy.get("exploration_seed_allowed") is True,
+            "exploration_seed_count": _safe_int(
+                policy.get("exploration_seed_count"), 0
+            ),
+            "ev_validated_runtime_apply_allowed": policy.get(
+                "ev_validated_runtime_apply_allowed"
+            )
+            is True,
+            "ev_validated_bucket_count": _safe_int(
+                policy.get("ev_validated_bucket_count"), 0
+            ),
+            "runtime_apply_authority_classes": policy.get(
+                "runtime_apply_authority_classes"
+            )
+            or [],
             "runtime_apply_scope": policy.get("runtime_apply_scope") or [],
             "post_apply_attribution": policy.get("post_apply_attribution") or {},
             "rollback_guard": policy.get("rollback_guard") or {},
@@ -2864,6 +3008,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- runtime_effect: `{report.get('runtime_effect')}`",
         f"- recommended_policy_candidates: `{rec.get('candidate_count')}`",
         f"- runtime_apply_allowed: `{rec.get('runtime_apply_allowed')}`",
+        f"- exploration_seed_allowed: `{rec.get('exploration_seed_allowed')}` / count: `{rec.get('exploration_seed_count')}`",
+        f"- ev_validated_runtime_apply_allowed: `{rec.get('ev_validated_runtime_apply_allowed')}` / count: `{rec.get('ev_validated_bucket_count')}`",
+        f"- runtime_apply_authority_classes: `{rec.get('runtime_apply_authority_classes') or []}`",
         f"- baseline_runtime_defaults_enabled: `{rec.get('baseline_runtime_defaults_enabled')}`",
         f"- explicit_bucket_count: `{rec.get('explicit_bucket_count')}`",
         f"- policy_file: `{rec.get('policy_file') or '-'}`",
@@ -2882,6 +3029,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
             f"bucket_ev=`{item.get('real_bucket_outcome_ev_pct')}` "
             f"observed_split_outcomes=`{item.get('observed_real_split_outcome_count')}` "
             f"apply_scope=`{item.get('runtime_apply_scope')}` "
+            f"apply_authority=`{item.get('runtime_apply_authority_class')}` "
             f"p75_down_ticks=`{((item.get('post_submit_low_tick_band') or {}).get('p75_down_ticks'))}` "
             f"cancel=`{item.get('cancel_rate')}` "
             f"pass=`{item.get('candidate_passed')}`"
@@ -2943,6 +3091,10 @@ def _load_policy_from_env(
         return {}, "invalid_policy_schema"
     if not isinstance(payload.get("buckets"), dict):
         return {}, "invalid_policy_buckets"
+    authority_valid, authority_reason = runtime_apply_authority_contract_status(payload)
+    if not authority_valid:
+        return {}, f"invalid_policy_authority_contract:{authority_reason}"
+    payload = {**payload, "runtime_apply_authority_contract": authority_reason}
     if "runtime_apply_allowed" in payload and not _safe_bool(
         payload.get("runtime_apply_allowed")
     ):

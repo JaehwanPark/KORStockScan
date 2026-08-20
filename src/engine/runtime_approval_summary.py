@@ -2174,6 +2174,22 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> dict[str, Any]:
         "candidate_count": _as_int(summary.get("candidate_count")),
         "surfaced_candidate_count": _as_int(summary.get("surfaced_candidate_count")),
         "sim_auto_approved_count": _as_int(summary.get("sim_auto_approved_count")),
+        "direct_sim_auto_approved_count": _as_int(
+            summary.get("direct_sim_auto_approved_count")
+            if "direct_sim_auto_approved_count" in summary
+            else summary.get("sim_auto_approved_count")
+        ),
+        "entry_only_sim_auto_approved_count": _as_int(
+            summary.get("entry_only_sim_auto_approved_count")
+        ),
+        "lifecycle_flow_sim_probe_candidate_count": _as_int(
+            summary.get("lifecycle_flow_sim_probe_candidate_count")
+        ),
+        "sim_policy_approved_total_count": _as_int(
+            summary.get("sim_policy_approved_total_count")
+            if "sim_policy_approved_total_count" in summary
+            else summary.get("sim_auto_approved_count")
+        ),
         "live_auto_apply_ready_count": _as_int(
             summary.get("live_auto_apply_ready_count")
         ),
@@ -2933,6 +2949,15 @@ def build_runtime_approval_summary(
             ),
             "lifecycle_bucket_discovery_surfaced_candidate_count": lifecycle_bucket_discovery_summary.get(
                 "surfaced_candidate_count"
+            ),
+            "lifecycle_bucket_discovery_sim_policy_approved_total_count": lifecycle_bucket_discovery_summary.get(
+                "sim_policy_approved_total_count"
+            ),
+            "lifecycle_bucket_discovery_direct_sim_auto_approved_count": lifecycle_bucket_discovery_summary.get(
+                "direct_sim_auto_approved_count"
+            ),
+            "lifecycle_bucket_discovery_flow_sim_probe_candidate_count": lifecycle_bucket_discovery_summary.get(
+                "lifecycle_flow_sim_probe_candidate_count"
             ),
             "lifecycle_bucket_discovery_live_auto_apply_ready_count": lifecycle_bucket_discovery_summary.get(
                 "live_auto_apply_ready_count"

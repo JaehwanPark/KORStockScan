@@ -108,6 +108,15 @@
 
 
 
+## 사용자 지시 구현
+
+- [x] `[PostcloseProducerConsumerConsistencyRepair0821] 장후 생산자·소비자 논리 모순 우선 보완 및 재리뷰` (`Due: 2026-08-21`, `Slot: POSTCLOSE`, `TimeWindow: 00:00~01:30`, `Track: RuntimeStability`)
+  - Source: [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [entry_split_order_plan.py](/home/ubuntu/KORStockScan/src/engine/scalping/entry_split_order_plan.py), [lifecycle_bucket_discovery.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_bucket_discovery.py), [artifact_freshness.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/artifact_freshness.py), [run_logs_rotation_cleanup_cron.sh](/home/ubuntu/KORStockScan/deploy/run_logs_rotation_cleanup_cron.sh)
+  - 판정: same-date rising-missed prior가 최초 scalp sim catalog보다 늦게 생성되던 순서를 prior 직후 deterministic refresh로 닫고, lifecycle direct/entry-only/flow sim 승인과 전체 policy 승인 합계를 분리했다. entry split의 기존 `runtime_apply_allowed`는 구조 exploration seed와 EV 검증 variant의 호환 합집합으로만 유지하고, 단일 authority 계약을 daily/EV/PREOPEN/runtime loader가 함께 검증해 구조 seed를 양의 EV 승인으로 오인하지 않도록 했다.
+  - 운영 결함: 기본 OFF `codebase_performance_workorder_report`를 detector가 disabled parent로 인식하며, 숫자 로그 archive의 canonical gzip 충돌은 기존 gzip·원본을 덮어쓰거나 삭제하지 않고 source hash 기반 generation gzip을 검증·재사용한다.
+  - 리뷰/검증: producer-only 수정 뒤 daily/EV 소비자의 의미 누수와 세 군데 중복 authority 검증을 발견해 단일 owner로 통합했다. 재리뷰에서 명시 authority boolean/class 타입을 consumer별로 다르게 해석할 수 있는 결함을 추가로 fail-closed하고 declared/effective 권한을 분리했다. 관련 report/runtime/wrapper/detector/log 회귀 `834 passed`, Ruff, Black, compile, Bash syntax, checklist parser, `git diff --check` 통과 후 최종 finding 0으로 닫는다.
+  - 권한 경계: source/report/provenance·자동화 순서·보존 로직만 보완했다. 실주문, threshold, requested quantity, provider, bot, cap, broker/account/order/cooldown/stale/hard-safety guard 변경이나 재기동·비용 큰 장후 리포트 재생성은 수행하지 않았다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.

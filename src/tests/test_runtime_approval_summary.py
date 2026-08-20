@@ -23,6 +23,36 @@ def test_protect_trailing_summary_matches_existing_runtime_guard():
     )
 
 
+def test_lifecycle_bucket_summary_preserves_direct_flow_and_total_counts(
+    tmp_path, monkeypatch
+):
+    report_path = tmp_path / "lifecycle_bucket_discovery_2026-08-20.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "decision_authority": "postclose_lifecycle_bucket_discovery_classifier",
+                "summary": {
+                    "sim_auto_approved_count": 0,
+                    "direct_sim_auto_approved_count": 0,
+                    "entry_only_sim_auto_approved_count": 0,
+                    "lifecycle_flow_sim_probe_candidate_count": 3,
+                    "sim_policy_approved_total_count": 3,
+                },
+                "surfaced_candidates": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "discovery_report_path", lambda _date: report_path)
+
+    summary = mod._lifecycle_bucket_discovery_summary("2026-08-20")
+
+    assert summary["sim_auto_approved_count"] == 0
+    assert summary["direct_sim_auto_approved_count"] == 0
+    assert summary["lifecycle_flow_sim_probe_candidate_count"] == 3
+    assert summary["sim_policy_approved_total_count"] == 3
+
+
 def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypatch):
     ev_dir = tmp_path / "threshold_cycle_ev"
     env_dir = tmp_path / "runtime_env"

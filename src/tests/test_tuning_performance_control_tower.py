@@ -609,6 +609,38 @@ def test_tuning_performance_control_tower_surfaces_workorder_root_cause_closure_
     }
 
 
+def test_control_tower_counts_lifecycle_flow_probe_as_sim_policy_progress(
+    monkeypatch, tmp_path
+):
+    report_root, apply_dir, _ = _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-05-30"
+    _write_control_tower_minimal_sources(
+        report_root, apply_dir, target, lifecycle_sim=0
+    )
+    path = (
+        report_root
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target}.json"
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["summary"].update(
+        {
+            "direct_sim_auto_approved_count": 0,
+            "lifecycle_flow_sim_probe_candidate_count": 3,
+            "sim_policy_approved_total_count": 3,
+        }
+    )
+    _write_json(path, payload)
+
+    report = mod.build_tuning_performance_control_tower(target)
+
+    assert report["summary"]["primary_verdict"] == "sim_progress_no_live_bucket"
+    assert report["summary"]["lifecycle_sim_policy_approved_total_count"] == 3
+    assert report["summary"]["lifecycle_sim_auto_approved_count"] == 3
+    assert report["summary"]["lifecycle_direct_sim_auto_approved_count"] == 0
+    assert report["summary"]["lifecycle_flow_sim_probe_candidate_count"] == 3
+
+
 def test_control_tower_blocks_daily_live_ready_without_cumulative_confirmation(
     monkeypatch, tmp_path
 ):

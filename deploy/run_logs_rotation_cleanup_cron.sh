@@ -517,6 +517,7 @@ compress_file_verified() {
   local source_size source_mtime_epoch now_epoch source_quiet_age restored_size
   local source_metadata source_sha256 restored_sha256 verified_metadata verified_sha256
   local target_metadata target_verified_metadata target_sha256 target_file_sha256 target_verified_sha256
+  local collision_generation_hash=""
   compression_failure_reason="unknown"
   compression_action="failed"
   compression_output_path="$standard_gzip_path"
@@ -588,22 +589,76 @@ compress_file_verified() {
       return 1
     fi
     if [[ "$target_sha256" != "$source_sha256" ]]; then
-      compression_failure_reason="existing_gzip_content_conflict_source_authoritative"
-      return 1
+      if [[ "$_collision_generation_enabled" != "true" ]]; then
+        compression_failure_reason="existing_gzip_content_conflict_source_authoritative"
+        return 1
+      fi
+      collision_generation_hash="${source_sha256:0:16}"
+      gzip_path="${source_path}.generation_${collision_generation_hash}.gz"
+      compression_output_path="$gzip_path"
+      compression_preserved_existing_gzip_path="$standard_gzip_path"
+      if [[ -e "$gzip_path" || -L "$gzip_path" ]]; then
+        if [[ ! -f "$gzip_path" || -L "$gzip_path" ]]; then
+          compression_failure_reason="collision_generation_unsafe_type"
+          return 1
+        fi
+        if path_has_open_fd "$gzip_path"; then
+          compression_failure_reason="collision_generation_in_use"
+          return 1
+        fi
+        if ! target_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$gzip_path")" || \
+           ! target_file_sha256="$(sha256sum -- "$gzip_path" | awk '{print $1}')"; then
+          compression_failure_reason="collision_generation_stat_or_hash_failed"
+          return 1
+        fi
+        if ! gzip -t -- "$gzip_path" || \
+           ! target_sha256="$(gzip -cd -- "$gzip_path" | sha256sum | awk '{print $1}')"; then
+          compression_failure_reason="collision_generation_invalid"
+          return 1
+        fi
+        if [[ "$target_sha256" != "$source_sha256" ]]; then
+          compression_failure_reason="collision_generation_content_mismatch"
+          return 1
+        fi
+        if ! target_verified_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$gzip_path")" || \
+           ! target_verified_sha256="$(sha256sum -- "$gzip_path" | awk '{print $1}')"; then
+          compression_failure_reason="collision_generation_recheck_failed"
+          return 1
+        fi
+        if [[ "$target_verified_metadata" != "$target_metadata" || "$target_verified_sha256" != "$target_file_sha256" ]] || \
+           path_has_open_fd "$gzip_path"; then
+          compression_failure_reason="collision_generation_changed_or_open_during_verify"
+          return 1
+        fi
+        if ! verified_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$source_path")" || \
+           ! verified_sha256="$(sha256sum -- "$source_path" | awk '{print $1}')"; then
+          compression_failure_reason="source_recheck_failed"
+          return 1
+        fi
+        if [[ "$verified_metadata" != "$source_metadata" || "$verified_sha256" != "$source_sha256" ]] || \
+           path_has_open_fd "$source_path"; then
+          compression_failure_reason="source_changed_or_open_during_collision_verify"
+          return 1
+        fi
+        compression_failure_reason="none"
+        compression_action="verified_collision_generation_source_preserved"
+        return 0
+      fi
+    else
+      if ! verified_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$source_path")" || \
+         ! verified_sha256="$(sha256sum -- "$source_path" | awk '{print $1}')"; then
+        compression_failure_reason="source_recheck_failed"
+        return 1
+      fi
+      if [[ "$verified_metadata" != "$source_metadata" || "$verified_sha256" != "$source_sha256" ]] || \
+         path_has_open_fd "$source_path"; then
+        compression_failure_reason="source_changed_or_open_during_existing_verify"
+        return 1
+      fi
+      compression_failure_reason="none"
+      compression_action="verified_existing_gzip_source_preserved"
+      return 0
     fi
-    if ! verified_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$source_path")" || \
-       ! verified_sha256="$(sha256sum -- "$source_path" | awk '{print $1}')"; then
-      compression_failure_reason="source_recheck_failed"
-      return 1
-    fi
-    if [[ "$verified_metadata" != "$source_metadata" || "$verified_sha256" != "$source_sha256" ]] || \
-       path_has_open_fd "$source_path"; then
-      compression_failure_reason="source_changed_or_open_during_existing_verify"
-      return 1
-    fi
-    compression_failure_reason="none"
-    compression_action="verified_existing_gzip_source_preserved"
-    return 0
   fi
 
   if ! tmp_path="$(mktemp "${gzip_path}.tmp.XXXXXX")"; then
@@ -717,7 +772,11 @@ compress_file_verified() {
     return 1
   fi
   compression_failure_reason="none"
-  compression_action="compressed_copy_source_preserved"
+  if [[ "$gzip_path" == "$standard_gzip_path" ]]; then
+    compression_action="compressed_copy_source_preserved"
+  else
+    compression_action="compressed_collision_generation_source_preserved"
+  fi
 }
 
 # Run the high-volume closed-date storage compaction before generic log archive
@@ -800,6 +859,13 @@ if [[ "$ACTIVE_LOG_BACKUP_COUNT" -ge "$ACTIVE_LOG_COMPRESS_MIN_INDEX" ]]; then
     case "$compression_action" in
       verified_existing_gzip_source_preserved)
         archive_verified_existing_source_preserved_count=$((archive_verified_existing_source_preserved_count + 1))
+        ;;
+      verified_collision_generation_source_preserved)
+        archive_collision_reconciled_count=$((archive_collision_reconciled_count + 1))
+        ;;
+      compressed_collision_generation_source_preserved)
+        compressed_archive_count=$((compressed_archive_count + 1))
+        archive_collision_reconciled_count=$((archive_collision_reconciled_count + 1))
         ;;
       *)
         compressed_archive_count=$((compressed_archive_count + 1))

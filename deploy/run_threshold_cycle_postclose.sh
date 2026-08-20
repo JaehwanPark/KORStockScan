@@ -2377,6 +2377,17 @@ if [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "true" ] || [ "$RUN_RISING_MISSED_C
     "$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.md" \
     "rising_missed_scout_workorder_prior_refresh"
+  if [ "$RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER" = "true" ] || [ "$RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER" = "1" ]; then
+    # The cumulative prior depends on lifecycle/lineage artifacts produced after
+    # the first sim-control-tower pass. Refresh the catalog here so downstream
+    # workorders, summaries, and PREOPEN handoff consume the same-date prior.
+    wait_for_postclose_resources "scalp_sim_auto_approval_control_tower_prior_refresh"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.scalp_sim_auto_approval_control_tower --date "$TARGET_DATE"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/threshold_cycle/sim_auto_approvals/scalp_sim_auto_approval_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/threshold_cycle/scalp_sim_policies/scalp_sim_policy_catalog_${TARGET_DATE}.json" \
+      "scalp_sim_auto_approval_control_tower_prior_refresh"
+  fi
 fi
 if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
   wait_for_postclose_resources "code_improvement_workorder_post_conversion_lane"

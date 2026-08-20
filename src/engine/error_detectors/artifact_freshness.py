@@ -29,6 +29,11 @@ def _today_kst_str(now_kst: datetime | None = None) -> str:
 
 
 ARTIFACT_SCHEDULE_CONTRACTS: dict[str, dict[str, Any]] = {
+    "codebase_performance_workorder_report": {
+        "markers": ["THRESHOLD_CYCLE_POSTCLOSE"],
+        "parent_env_key": "THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT",
+        "parent_default_enabled": False,
+    },
     "codex_workorder_runner_report": {
         "markers": ["POSTCLOSE_DONE_CONTROLLER"],
         "parent_env_key": "POSTCLOSE_DONE_CONTROLLER_RUN_CODEX",

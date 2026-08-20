@@ -8223,9 +8223,7 @@ def test_hold_carry_forward_previously_enabled_no_blockers(tmp_path, monkeypatch
     ] == ["soft_stop_whipsaw_confirmation"]
 
 
-def test_pyramid_ev_hold_preserves_explicit_operator_lock(
-    tmp_path, monkeypatch
-):
+def test_pyramid_ev_hold_preserves_explicit_operator_lock(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
     runtime_dir = tmp_path / "runtime_env"
@@ -8304,9 +8302,12 @@ def test_pyramid_ev_hold_preserves_explicit_operator_lock(
     assert decision["env_overrides"] == {
         "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1.1"
     }
-    assert manifest["runtime_env_overrides"][
-        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT"
-    ] == "1.1"
+    assert (
+        manifest["runtime_env_overrides"][
+            "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT"
+        ]
+        == "1.1"
+    )
 
 
 def test_previous_runtime_env_uses_latest_manifest_across_calendar_gap(
@@ -8961,6 +8962,51 @@ def test_split_runtime_policy_audit_accepts_scale_in_policy_across_krx_holiday_w
     assert scale_audit["status"] == "pass"
     assert scale_audit["reason"] == "policy_usable"
     assert scale_audit["freshness_age_trading_days"] == 1
+
+
+def test_split_runtime_policy_audit_rejects_entry_authority_union_mismatch(
+    tmp_path,
+):
+    entry_policy = tmp_path / "entry.json"
+    entry_policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "entry-invalid-authority",
+                "source_date": "2026-07-20",
+                "runtime_apply_allowed": True,
+                "runtime_apply_compatibility_semantics": (
+                    "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed"
+                ),
+                "exploration_seed_allowed": False,
+                "ev_validated_runtime_apply_allowed": False,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = {
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE": "2026-07-20",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE": str(entry_policy),
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION": "entry-invalid-authority",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "false",
+    }
+
+    audits = mod._split_runtime_policy_audits("2026-07-20", env)
+
+    entry_audit = next(
+        item for item in audits if item["family"] == "entry_split_order_plan"
+    )
+    assert entry_audit["status"] == "fail"
+    assert entry_audit["reason"] == "runtime_apply_authority_contract_invalid"
+    assert entry_audit["runtime_apply_authority_contract"] == {
+        "runtime_apply_allowed": True,
+        "exploration_seed_allowed": False,
+        "ev_validated_runtime_apply_allowed": False,
+        "valid": False,
+        "reason": "runtime_apply_authority_union_mismatch",
+    }
 
 
 def test_split_runtime_policy_audit_rejects_scale_policy_without_refresh_evidence(

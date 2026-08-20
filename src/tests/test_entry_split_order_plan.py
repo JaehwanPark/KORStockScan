@@ -10,6 +10,55 @@ from src.engine import daily_threshold_cycle_report as daily_report
 from src.engine import threshold_cycle_preopen_apply as preopen_apply
 
 
+def test_runtime_apply_authority_contract_rejects_unknown_semantics():
+    valid, reason = split_plan.runtime_apply_authority_contract_status(
+        {
+            "runtime_apply_allowed": True,
+            "runtime_apply_compatibility_semantics": "unknown_union_contract",
+            "exploration_seed_allowed": True,
+            "ev_validated_runtime_apply_allowed": False,
+            "runtime_apply_authority_classes": ["bounded_exploration_seed"],
+        }
+    )
+
+    assert valid is False
+    assert reason == "runtime_apply_compatibility_semantics_invalid"
+
+
+def test_runtime_apply_authority_contract_rejects_string_boolean():
+    valid, reason = split_plan.runtime_apply_authority_contract_status(
+        {
+            "runtime_apply_allowed": "true",
+            "runtime_apply_compatibility_semantics": (
+                split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS
+            ),
+            "exploration_seed_allowed": True,
+            "ev_validated_runtime_apply_allowed": False,
+            "runtime_apply_authority_classes": ["bounded_exploration_seed"],
+        }
+    )
+
+    assert valid is False
+    assert reason == "runtime_apply_allowed_not_boolean"
+
+
+def test_runtime_apply_authority_contract_rejects_malformed_authority_classes():
+    valid, reason = split_plan.runtime_apply_authority_contract_status(
+        {
+            "runtime_apply_allowed": False,
+            "runtime_apply_compatibility_semantics": (
+                split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS
+            ),
+            "exploration_seed_allowed": False,
+            "ev_validated_runtime_apply_allowed": False,
+            "runtime_apply_authority_classes": "none",
+        }
+    )
+
+    assert valid is False
+    assert reason == "runtime_apply_authority_classes_not_string_list"
+
+
 def _write_jsonl(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -166,7 +215,12 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
     assert urgent["source_quality_adjusted_ev_pct"] is None
     assert urgent["policy_mode"] == "bounded_equal_split_baseline"
     assert urgent["candidate_passed"] is True
+    assert urgent["exploration_seed_allowed"] is True
+    assert urgent["ev_validated_runtime_apply_allowed"] is False
+    assert urgent["runtime_apply_authority_class"] == "bounded_exploration_seed"
     assert report["recommended_policy"]["runtime_apply_allowed"] is True
+    assert report["recommended_policy"]["exploration_seed_allowed"] is True
+    assert report["recommended_policy"]["ev_validated_runtime_apply_allowed"] is False
     assert report["recommended_policy"]["candidate_count"] == 1
     assert report["recommended_policy"]["baseline_runtime_defaults_enabled"] is True
     assert report["recommended_policy"]["explicit_bucket_count"] == 0
@@ -188,6 +242,9 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
     )
     policy = json.loads(split_plan.policy_path(target_date).read_text(encoding="utf-8"))
     assert policy["runtime_apply_allowed"] is True
+    assert policy["exploration_seed_allowed"] is True
+    assert policy["ev_validated_runtime_apply_allowed"] is False
+    assert policy["runtime_apply_authority_classes"] == ["bounded_exploration_seed"]
     assert policy["baseline_runtime_defaults_enabled"] is True
     assert policy["explicit_bucket_count"] == 0
     assert policy["buckets"] == {}
@@ -261,6 +318,8 @@ def test_build_report_suppresses_policy_candidates_when_source_quality_blocked(
     assert report["recommended_policy"]["baseline_runtime_defaults_enabled"] is False
     policy = json.loads(split_plan.policy_path(target_date).read_text(encoding="utf-8"))
     assert policy["runtime_apply_allowed"] is False
+    assert policy["exploration_seed_allowed"] is False
+    assert policy["ev_validated_runtime_apply_allowed"] is False
     assert policy["buckets"] == {}
 
 
@@ -830,6 +889,10 @@ def test_build_report_uses_split_variant_outcome_as_primary_ev(monkeypatch, tmp_
     assert balanced["source_quality_adjusted_ev_pct"] == 1.4
     assert balanced["policy_mode"] == "real_primary_ev_optimized"
     assert balanced["candidate_passed"] is True
+    assert balanced["exploration_seed_allowed"] is False
+    assert balanced["ev_validated_runtime_apply_allowed"] is True
+    assert balanced["runtime_apply_authority_class"] == "ev_validated_variant"
+    assert report["recommended_policy"]["ev_validated_runtime_apply_allowed"] is True
 
 
 def test_build_report_uses_post_submit_low_tick_band_for_price_offsets(
@@ -2709,6 +2772,43 @@ def test_allocator_requires_date_bounded_operator_fallback_for_denied_policy(
     )
 
 
+def test_allocator_rejects_contradictory_runtime_apply_authority_contract(
+    monkeypatch, tmp_path
+):
+    policy_file = tmp_path / "entry-policy-invalid-authority.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "invalid-authority",
+                "source_date": "2026-07-14",
+                "runtime_apply_allowed": True,
+                "runtime_apply_compatibility_semantics": (
+                    "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed"
+                ),
+                "exploration_seed_allowed": False,
+                "ev_validated_runtime_apply_allowed": False,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 4, "price": 1000}],
+        latency_gate={"spread_bps": 5, "latency_state": "SAFE"},
+        now=datetime(2026, 7, 14, 12, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert orders == [{"tag": "normal", "qty": 4, "price": 1000}]
+    assert fields["entry_split_order_policy_applied"] is False
+    assert fields["entry_split_order_skip_reason"] == (
+        "invalid_policy_authority_contract:runtime_apply_authority_union_mismatch"
+    )
+
+
 def test_allocator_allows_split_when_source_quote_stale_recovered_before_submit(
     monkeypatch, tmp_path
 ):
@@ -2845,6 +2945,10 @@ def test_daily_report_candidate_and_preopen_env_handoff(monkeypatch, tmp_path):
                 ],
                 "recommended_policy": {
                     "runtime_apply_allowed": True,
+                    "runtime_apply_compatibility_semantics": "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed",
+                    "exploration_seed_allowed": False,
+                    "ev_validated_runtime_apply_allowed": True,
+                    "runtime_apply_authority_classes": ["ev_validated_variant"],
                     "policy_file": str(policy_file),
                     "policy_version": "entry_split_order_plan:test",
                     "candidates": [
@@ -2866,6 +2970,14 @@ def test_daily_report_candidate_and_preopen_env_handoff(monkeypatch, tmp_path):
     )
 
     assert candidate["calibration_state"] == "adjust_up"
+    assert candidate["apply_mode"] == "calibrated_apply_candidate"
+    assert candidate["source_metrics"]["runtime_apply_authority"] == (
+        "ev_validated_variant"
+    )
+    assert (
+        candidate["source_metrics"]["primary_decision_metric"]
+        == "source_quality_adjusted_ev_pct"
+    )
     assert candidate["recommended_values"]["enabled"] is True
     assert candidate["recommended_values"]["policy_file"] == str(policy_file)
     overrides = preopen_apply._env_overrides_for_candidate(candidate)
@@ -2909,6 +3021,10 @@ def test_daily_report_handoff_accepts_bounded_equal_baseline(monkeypatch, tmp_pa
                 ],
                 "recommended_policy": {
                     "runtime_apply_allowed": True,
+                    "runtime_apply_compatibility_semantics": "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed",
+                    "exploration_seed_allowed": True,
+                    "ev_validated_runtime_apply_allowed": False,
+                    "runtime_apply_authority_classes": ["bounded_exploration_seed"],
                     "policy_file": str(policy_file),
                     "policy_version": "entry_split_order_plan:baseline",
                     "candidates": [
@@ -2931,6 +3047,15 @@ def test_daily_report_handoff_accepts_bounded_equal_baseline(monkeypatch, tmp_pa
     )
 
     assert candidate["calibration_state"] == "adjust_up"
+    assert candidate["apply_mode"] == "bounded_exploration_seed_candidate"
+    assert candidate["source_metrics"]["runtime_apply_authority"] == (
+        "bounded_exploration_seed"
+    )
+    assert (
+        candidate["source_metrics"]["primary_decision_metric"]
+        == "qty_preserving_execution_shape_guard"
+    )
+    assert "양의 EV 판정이 아니다" in candidate["calibration_reason"]
     assert (
         candidate["source_metrics"]["bounded_equal_split_baseline_candidate_count"] == 1
     )
@@ -2971,6 +3096,9 @@ def test_daily_report_handoff_blocks_runtime_disallowed_policy(monkeypatch, tmp_
                 ],
                 "recommended_policy": {
                     "runtime_apply_allowed": False,
+                    "runtime_apply_compatibility_semantics": "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed",
+                    "exploration_seed_allowed": False,
+                    "ev_validated_runtime_apply_allowed": False,
                     "policy_file": str(policy_file),
                     "policy_version": "entry_split_order_plan:runtime-blocked",
                     "candidates": [
@@ -2995,4 +3123,71 @@ def test_daily_report_handoff_blocks_runtime_disallowed_policy(monkeypatch, tmp_
     assert family["recommended"]["enabled"] is False
     assert family["sample"]["runtime_apply_allowed"] is False
     assert candidate["recommended_value"] is False
+    assert candidate["calibration_state"] == "hold"
+
+
+def test_daily_report_handoff_does_not_expose_declared_authority_when_contract_invalid(
+    monkeypatch, tmp_path
+):
+    target_date = "2026-07-07"
+    report_dir = tmp_path / "report" / "entry_split_order_plan"
+    policy_file = (
+        tmp_path
+        / "threshold_cycle"
+        / "entry_split_order_policy"
+        / f"entry_split_order_policy_{target_date}.json"
+    )
+    report_dir.mkdir(parents=True, exist_ok=True)
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(daily_report, "ENTRY_SPLIT_ORDER_PLAN_DIR", report_dir)
+    (report_dir / f"entry_split_order_plan_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_plan_v1",
+                "source_quality": {"status": "pass", "tuning_input_allowed": True},
+                "candidate_grid": [
+                    {
+                        "context_bucket": "balanced_normal",
+                        "real_sample_count": 20,
+                        "real_outcome_joined_sample": 0,
+                        "sim_sample_count": 0,
+                        "primary_sample_book": "real_submit_execution_shape",
+                        "policy_mode": "bounded_equal_split_baseline",
+                    }
+                ],
+                "recommended_policy": {
+                    "runtime_apply_allowed": True,
+                    "runtime_apply_compatibility_semantics": (
+                        split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS
+                    ),
+                    "exploration_seed_allowed": True,
+                    "ev_validated_runtime_apply_allowed": False,
+                    "runtime_apply_authority_classes": "bounded_exploration_seed",
+                    "policy_file": str(policy_file),
+                    "policy_version": "entry_split_order_plan:invalid-contract",
+                    "candidates": [
+                        {
+                            "context_bucket": "balanced_normal",
+                            "policy_mode": "bounded_equal_split_baseline",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    family = daily_report._build_entry_split_order_plan_family(target_date=target_date)
+    candidate = next(
+        item
+        for item in daily_report._build_calibration_candidates([family], {})
+        if item["family"] == "entry_split_order_plan"
+    )
+
+    assert family["sample"]["runtime_apply_authority_contract_valid"] is False
+    assert family["sample"]["runtime_apply_authority"] == "invalid_explicit_contract"
+    assert family["sample"]["declared_exploration_seed_allowed"] is True
+    assert family["sample"]["exploration_seed_allowed"] is False
+    assert family["recommended"]["enabled"] is False
     assert candidate["calibration_state"] == "hold"

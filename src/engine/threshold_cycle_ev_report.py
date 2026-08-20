@@ -38,6 +38,9 @@ from src.engine.lifecycle_decision_matrix import (
 from src.engine.scalping.microstructure_reaction_context import (
     report_paths as microstructure_reaction_report_paths,
 )
+from src.engine.scalping.entry_split_order_plan import (
+    runtime_apply_authority_contract_status,
+)
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
 from src.engine.scalp_entry_action_decision_matrix import (
     report_paths as scalp_entry_adm_report_paths,
@@ -2507,11 +2510,42 @@ def _entry_split_order_plan_summary(
     real_primary_books = [
         book for book in primary_books if book == "real" or book.startswith("real_")
     ]
+    authority_fields_present = bool(
+        {
+            "exploration_seed_allowed",
+            "ev_validated_runtime_apply_allowed",
+            "runtime_apply_compatibility_semantics",
+        }.intersection(recommended)
+    )
+    runtime_apply_compatibility_allowed = (
+        recommended.get("runtime_apply_allowed") is True
+    )
+    declared_exploration_seed_allowed = (
+        recommended.get("exploration_seed_allowed") is True
+    )
+    declared_ev_validated_runtime_apply_allowed = (
+        recommended.get("ev_validated_runtime_apply_allowed") is True
+    )
+    (
+        runtime_apply_authority_contract_valid,
+        runtime_apply_authority_contract_reason,
+    ) = runtime_apply_authority_contract_status(recommended)
+    exploration_seed_allowed = bool(
+        declared_exploration_seed_allowed and runtime_apply_authority_contract_valid
+    )
+    ev_validated_runtime_apply_allowed = bool(
+        declared_ev_validated_runtime_apply_allowed
+        and runtime_apply_authority_contract_valid
+    )
     warnings: list[str] = []
     if source_quality.get("tuning_input_allowed") is False:
         warnings.append("entry_split_order_plan_source_quality_blocked")
     if payload.get("schema_version") != "entry_split_order_plan_v1":
         warnings.append("entry_split_order_plan_schema_mismatch")
+    if not runtime_apply_authority_contract_valid:
+        warnings.append(
+            "entry_split_order_plan_runtime_apply_authority_contract_invalid"
+        )
     return (
         {
             "available": True,
@@ -2538,7 +2572,50 @@ def _entry_split_order_plan_summary(
             ),
             "policy_file": recommended.get("policy_file"),
             "policy_version": recommended.get("policy_version"),
-            "runtime_apply_allowed": recommended.get("runtime_apply_allowed"),
+            # Compatibility retains existing runtime behavior. The authority
+            # split states whether the evidence is structural-only or EV-based.
+            "runtime_apply_allowed": bool(
+                runtime_apply_compatibility_allowed
+                and runtime_apply_authority_contract_valid
+            ),
+            "runtime_apply_compatibility_allowed": (
+                runtime_apply_compatibility_allowed
+            ),
+            "runtime_apply_authority_contract_present": authority_fields_present,
+            "runtime_apply_authority_contract_valid": (
+                runtime_apply_authority_contract_valid
+            ),
+            "runtime_apply_authority_contract_reason": (
+                runtime_apply_authority_contract_reason
+            ),
+            "exploration_seed_allowed": exploration_seed_allowed,
+            "ev_validated_runtime_apply_allowed": (ev_validated_runtime_apply_allowed),
+            "declared_exploration_seed_allowed": (declared_exploration_seed_allowed),
+            "declared_ev_validated_runtime_apply_allowed": (
+                declared_ev_validated_runtime_apply_allowed
+            ),
+            "runtime_apply_authority_classes": recommended.get(
+                "runtime_apply_authority_classes"
+            )
+            or [],
+            "primary_decision_metric": (
+                "source_quality_adjusted_ev_pct"
+                if ev_validated_runtime_apply_allowed
+                else (
+                    "qty_preserving_execution_shape_guard"
+                    if exploration_seed_allowed
+                    else "none"
+                )
+            ),
+            "primary_decision_metric_scope": (
+                "ev_validated_variant_only"
+                if ev_validated_runtime_apply_allowed
+                else (
+                    "bounded_exploration_seed_only"
+                    if exploration_seed_allowed
+                    else "none"
+                )
+            ),
             "source_quality_status": source_quality.get("status"),
             "runtime_effect": False,
             "decision_authority": "next_preopen_bounded_entry_split_policy",

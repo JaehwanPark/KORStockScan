@@ -204,6 +204,64 @@ class TestArtifactFreshnessDetector:
             == "disabled_by_parent"
         )
 
+    def test_default_disabled_codebase_performance_artifact_is_not_required(
+        self, tmp_path
+    ):
+        artifact = {
+            "id": "codebase_performance_workorder_report",
+            "path_template": str(tmp_path / "missing.md"),
+            "max_staleness_sec": 600,
+            "critical": True,
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.load_installed_crontab",
+                return_value=("10 20 * * 1-5 runner # THRESHOLD_CYCLE_POSTCLOSE\n"),
+            ),
+        ):
+            result = ArtifactFreshnessDetector().check()
+
+        assert result.severity == "pass"
+        assert (
+            result.details["codebase_performance_workorder_report_status"]
+            == "disabled_by_parent"
+        )
+
+    def test_explicitly_enabled_codebase_performance_artifact_remains_required(
+        self, tmp_path
+    ):
+        artifact = {
+            "id": "codebase_performance_workorder_report",
+            "path_template": str(tmp_path / "missing.md"),
+            "max_staleness_sec": 600,
+            "critical": True,
+        }
+        crontab = (
+            "10 20 * * 1-5 "
+            "THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT=true "
+            "runner # THRESHOLD_CYCLE_POSTCLOSE\n"
+        )
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.load_installed_crontab",
+                return_value=crontab,
+            ),
+        ):
+            result = ArtifactFreshnessDetector().check()
+
+        assert result.severity == "fail"
+        assert result.details["codebase_performance_workorder_report_status"] == "fail"
+
     def test_step_scoped_skip_marker_is_terminal_success(self, monkeypatch, tmp_path):
         import src.engine.error_detectors.artifact_freshness as af
 

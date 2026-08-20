@@ -1093,6 +1093,9 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     rising_missed_prior_idx = script.index(
         "src.engine.monitoring.rising_missed_classifier_prior"
     )
+    scalp_sim_prior_refresh_idx = script.index(
+        '"scalp_sim_auto_approval_control_tower_prior_refresh"'
+    )
     post_conversion_workorder_idx = script.index(
         "code_improvement_workorder_post_conversion_lane"
     )
@@ -1147,6 +1150,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < runtime_gap_idx
         < conversion_lane_idx
         < rising_missed_prior_idx
+        < scalp_sim_prior_refresh_idx
         < post_conversion_workorder_idx
         < next_checklist_idx
         < pending_verify_idx

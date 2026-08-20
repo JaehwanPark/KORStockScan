@@ -28,6 +28,9 @@ from src.engine.scalping.scalp_sim_auto_approval_control_tower import (
     scalp_sim_auto_approval_path,
     scalp_sim_policy_catalog_path,
 )
+from src.engine.scalping.entry_split_order_plan import (
+    runtime_apply_authority_contract_status,
+)
 from src.engine.scalping.scale_in_split_order_plan import (
     MAX_POLICY_AGE_KRX_TRADING_DAYS,
 )
@@ -4692,6 +4695,37 @@ def _split_runtime_policy_audits(
             audit.update(status="fail", reason="policy_version_mismatch")
             audits.append(audit)
             continue
+        if spec["family"] == "entry_split_order_plan" and {
+            "exploration_seed_allowed",
+            "ev_validated_runtime_apply_allowed",
+            "runtime_apply_compatibility_semantics",
+        }.intersection(policy):
+            exploration_seed_allowed = _runtime_env_enabled(
+                policy.get("exploration_seed_allowed")
+            )
+            ev_validated_allowed = _runtime_env_enabled(
+                policy.get("ev_validated_runtime_apply_allowed")
+            )
+            compatibility_allowed = _runtime_env_enabled(
+                policy.get("runtime_apply_allowed")
+            )
+            authority_contract_valid, authority_contract_reason = (
+                runtime_apply_authority_contract_status(policy)
+            )
+            audit["runtime_apply_authority_contract"] = {
+                "runtime_apply_allowed": compatibility_allowed,
+                "exploration_seed_allowed": exploration_seed_allowed,
+                "ev_validated_runtime_apply_allowed": ev_validated_allowed,
+                "valid": authority_contract_valid,
+                "reason": authority_contract_reason,
+            }
+            if not authority_contract_valid:
+                audit.update(
+                    status="fail",
+                    reason="runtime_apply_authority_contract_invalid",
+                )
+                audits.append(audit)
+                continue
         runtime_apply_value_present = "runtime_apply_allowed" in policy
         runtime_apply_denied = not _runtime_env_enabled(
             policy.get("runtime_apply_allowed")

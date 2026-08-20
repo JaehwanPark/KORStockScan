@@ -1950,6 +1950,8 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(
     )
     assert report["summary"]["human_intervention_required"] is False
     assert report["summary"]["lifecycle_flow_sim_probe_candidate_count"] == 1
+    assert report["summary"]["direct_sim_auto_approved_count"] == len(sim)
+    assert report["summary"]["sim_policy_approved_total_count"] == len(sim) + 1
     assert report["ai_two_pass_review"]["sharded"] is True
     assert {item["shard_id"] for item in report["ai_two_pass_review"]["shards"]} >= {
         "live_contract_review",

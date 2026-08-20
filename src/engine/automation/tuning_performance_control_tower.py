@@ -74,6 +74,10 @@ PROGRESS_KEYS: dict[str, tuple[str, ...]] = {
         "candidate_count",
         "surfaced_candidate_count",
         "sim_auto_approved_count",
+        "direct_sim_auto_approved_count",
+        "entry_only_sim_auto_approved_count",
+        "lifecycle_flow_sim_probe_candidate_count",
+        "sim_policy_approved_total_count",
         "live_auto_apply_ready_count",
         "new_bucket_candidate_count",
         "code_patch_required_count",
@@ -1135,9 +1139,14 @@ def _primary_verdict(
         else 0
     )
     lifecycle_sim = _safe_int(
-        current_lifecycle.get("sim_auto_approved_count")
+        current_lifecycle.get("sim_policy_approved_total_count")
         if isinstance(current_lifecycle, dict)
-        else 0
+        and "sim_policy_approved_total_count" in current_lifecycle
+        else (
+            current_lifecycle.get("sim_auto_approved_count")
+            if isinstance(current_lifecycle, dict)
+            else 0
+        )
     )
     swing_sim = _safe_int(
         current_swing.get("sim_auto_approved_count")
@@ -1269,6 +1278,13 @@ def _markdown(report: dict[str, Any]) -> str:
     def inline_json(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
+    ldm_sim_policy_total = current(ldm_bucket, "sim_policy_approved_total_count")
+    if ldm_sim_policy_total is None:
+        ldm_sim_policy_total = current(ldm_bucket, "sim_auto_approved_count")
+    ldm_direct_sim = current(ldm_bucket, "direct_sim_auto_approved_count")
+    if ldm_direct_sim is None:
+        ldm_direct_sim = current(ldm_bucket, "sim_auto_approved_count")
+
     lines = [
         f"# Tuning Performance Control Tower - {report['date']}",
         "",
@@ -1315,8 +1331,9 @@ def _markdown(report: dict[str, Any]) -> str:
         f"promotion_window: `{summary.get('promotion_window') or '-'}`, "
         f"verifier_status: `{summary.get('verifier_status') or '-'}`, "
         f"lifecycle_bucket_windows_status: `{summary.get('lifecycle_bucket_windows_status') or '-'}`.",
-        f"- 근거: LDM `sim_auto_approved={summary['lifecycle_sim_auto_approved_count']}` "
-        f"(`{delta(ldm_bucket, 'sim_auto_approved_count')}`), "
+        f"- 근거: LDM `sim_policy_approved_total={summary['lifecycle_sim_policy_approved_total_count']}` "
+        f"(direct=`{summary.get('lifecycle_direct_sim_auto_approved_count')}`, "
+        f"lifecycle_flow=`{summary.get('lifecycle_flow_sim_probe_candidate_count')}`), "
         f"`live_auto_apply_ready={summary['lifecycle_live_auto_apply_ready_count']}` "
         f"(`{delta(ldm_bucket, 'live_auto_apply_ready_count')}`), "
         f"swing sim-auto `{summary['swing_sim_auto_approved_count']}` "
@@ -1350,9 +1367,10 @@ def _markdown(report: dict[str, Any]) -> str:
         f"warning `{freshness.get('warning') or '-'}`.",
         f"- Lifecycle bucket: candidates `{current(ldm_bucket, 'candidate_count')}` "
         f"(`{delta(ldm_bucket, 'candidate_count')}`), surfaced `{current(ldm_bucket, 'surfaced_candidate_count')}` "
-        f"(`{delta(ldm_bucket, 'surfaced_candidate_count')}`), sim-auto "
-        f"`{current(ldm_bucket, 'sim_auto_approved_count')}` "
-        f"(`{delta(ldm_bucket, 'sim_auto_approved_count')}`), live-ready "
+        f"(`{delta(ldm_bucket, 'surfaced_candidate_count')}`), "
+        f"sim-policy-total `{ldm_sim_policy_total}` "
+        f"(direct=`{ldm_direct_sim}`, "
+        f"flow=`{current(ldm_bucket, 'lifecycle_flow_sim_probe_candidate_count')}`), live-ready "
         f"`{current(ldm_bucket, 'live_auto_apply_ready_count')}` "
         f"(`{delta(ldm_bucket, 'live_auto_apply_ready_count')}`).",
         f"- Lifecycle matrix: rows `{current(ldm_matrix, 'total_rows')}` "
@@ -1586,8 +1604,25 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
                 if _safe_int(current_ldm_bucket.get("live_auto_apply_ready_count")) > 0
                 else None
             ),
+            "lifecycle_sim_policy_approved_total_count": _safe_int(
+                current_ldm_bucket.get("sim_policy_approved_total_count")
+                if "sim_policy_approved_total_count" in current_ldm_bucket
+                else current_ldm_bucket.get("sim_auto_approved_count")
+            ),
+            # Backward-compatible alias. New consumers should use the explicit
+            # total because this value includes direct and lifecycle-flow rows.
             "lifecycle_sim_auto_approved_count": _safe_int(
-                current_ldm_bucket.get("sim_auto_approved_count")
+                current_ldm_bucket.get("sim_policy_approved_total_count")
+                if "sim_policy_approved_total_count" in current_ldm_bucket
+                else current_ldm_bucket.get("sim_auto_approved_count")
+            ),
+            "lifecycle_direct_sim_auto_approved_count": _safe_int(
+                current_ldm_bucket.get("direct_sim_auto_approved_count")
+                if "direct_sim_auto_approved_count" in current_ldm_bucket
+                else current_ldm_bucket.get("sim_auto_approved_count")
+            ),
+            "lifecycle_flow_sim_probe_candidate_count": _safe_int(
+                current_ldm_bucket.get("lifecycle_flow_sim_probe_candidate_count")
             ),
             "lifecycle_live_auto_apply_ready_count": _safe_int(
                 current_ldm_bucket.get("live_auto_apply_ready_count")

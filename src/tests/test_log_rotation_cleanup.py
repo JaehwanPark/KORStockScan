@@ -765,10 +765,12 @@ def test_log_rotation_cleanup_defers_conflicting_gzip_and_finishes_micro_lane(
         check=False,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert archive.read_text(encoding="utf-8") == original_archive
     assert existing_gzip.read_bytes() == original_existing_gzip
-    assert not list(log_dir.glob("*.generation_*.gz"))
+    generation_gzip = next(iter(log_dir.glob("*.generation_*.gz")))
+    with gzip.open(generation_gzip, "rt", encoding="utf-8") as handle:
+        assert handle.read() == original_archive
     assert stable_peer.exists()
     with gzip.open(stable_peer.with_suffix(".2.gz"), "rt", encoding="utf-8") as handle:
         assert handle.read() == "stable-peer\n"
@@ -776,13 +778,12 @@ def test_log_rotation_cleanup_defers_conflicting_gzip_and_finishes_micro_lane(
     assert not micro_source.exists()
     assert micro_source.with_suffix(".jsonl.gz").exists()
     assert not stale_tmp.exists()
-    assert "reason=existing_gzip_content_conflict_source_authoritative" in result.stdout
     assert "micro_reversion_storage_status=pass" in result.stdout
-    assert "archive_compressed=1" in result.stdout
-    assert "archive_collision_reconciled=0" in result.stdout
-    assert "archive_compression_failures=1" in result.stdout
+    assert "archive_compressed=2" in result.stdout
+    assert "archive_collision_reconciled=1" in result.stdout
+    assert "archive_compression_failures=0" in result.stdout
     assert "archive_deleted=0" in result.stdout
-    assert "[FAIL] log_rotation_cleanup" in result.stdout
+    assert "[DONE] log_rotation_cleanup" in result.stdout
 
 
 def test_log_rotation_cleanup_verifies_matching_gzip_and_preserves_source(tmp_path):
@@ -823,7 +824,7 @@ def test_log_rotation_cleanup_verifies_matching_gzip_and_preserves_source(tmp_pa
     assert "[DONE] log_rotation_cleanup" in result.stdout
 
 
-def test_log_rotation_cleanup_does_not_reactivate_collision_generation(tmp_path):
+def test_log_rotation_cleanup_reuses_verified_collision_generation(tmp_path):
     project_root = tmp_path / "project"
     log_dir = project_root / "logs"
     archive = log_dir / "collision_retry.log.2"
@@ -855,16 +856,15 @@ def test_log_rotation_cleanup_does_not_reactivate_collision_generation(tmp_path)
         check=False,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert archive.read_bytes() == source_payload
     assert existing_gzip.read_bytes() == existing_gzip_bytes
     assert generation_gzip.read_bytes() == generation_gzip_bytes
-    assert "reason=existing_gzip_content_conflict_source_authoritative" in result.stdout
     assert "archive_compressed=0" in result.stdout
     assert "archive_compression_finalized=0" in result.stdout
-    assert "archive_collision_reconciled=0" in result.stdout
-    assert "archive_compression_failures=1" in result.stdout
-    assert "[FAIL] log_rotation_cleanup" in result.stdout
+    assert "archive_collision_reconciled=1" in result.stdout
+    assert "archive_compression_failures=0" in result.stdout
+    assert "[DONE] log_rotation_cleanup" in result.stdout
 
 
 def test_log_rotation_cleanup_defers_recent_archive_then_compresses_next_archive(

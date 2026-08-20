@@ -6404,13 +6404,22 @@ def _finalize_report(
         {
             "candidate_count": len(candidates),
             "surfaced_candidate_count": len(surfaced),
+            # Keep the legacy exact-state count for compatibility, but expose
+            # the total policy-approved population explicitly. Lifecycle-flow
+            # probe candidates share the sim_auto_approved review category and
+            # are consumed by the sim control tower even though their state
+            # name intentionally remains more specific.
             "sim_auto_approved_count": state_counts.get("sim_auto_approved", 0),
+            "direct_sim_auto_approved_count": state_counts.get("sim_auto_approved", 0),
             "entry_only_sim_auto_approved_count": state_counts.get(
                 "entry_only_sim_auto_approved", 0
             ),
             **sim_auto_positive_summary,
             "lifecycle_flow_sim_probe_candidate_count": state_counts.get(
                 LIFECYCLE_FLOW_SIM_PROBE_STATE, 0
+            ),
+            "sim_policy_approved_total_count": review_category_counts.get(
+                "sim_auto_approved", 0
             ),
             "live_auto_apply_ready_count": state_counts.get("live_auto_apply_ready", 0),
             "new_bucket_candidate_count": state_counts.get("new_bucket_candidate", 0),
@@ -6697,6 +6706,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- active_sim_priority: eligible=`{summary.get('active_sim_priority_eligible_count')}` active=`{summary.get('active_sim_priority_active_seed_count')}` source_blocked=`{summary.get('active_sim_priority_blocked_source_quality_count')}` parent_count_decoupled=`{summary.get('active_sim_priority_granularity_decoupled_count')}`",
         "- active_sim_priority_authority: sim-only exploration; parent granularity remains mandatory for live conversion",
         f"- sim_auto_approved_count: `{summary.get('sim_auto_approved_count')}`",
+        f"- sim_policy_approved_total_count: `{summary.get('sim_policy_approved_total_count')}` "
+        f"(direct=`{summary.get('direct_sim_auto_approved_count')}`, "
+        f"entry_only=`{summary.get('entry_only_sim_auto_approved_count')}`, "
+        f"lifecycle_flow=`{summary.get('lifecycle_flow_sim_probe_candidate_count')}`)",
         f"- lifecycle_flow_sim_probe_candidate_count: `{summary.get('lifecycle_flow_sim_probe_candidate_count')}`",
         f"- source_dimension_gap_count: `{summary.get('source_dimension_gap_count')}` / actionable_unknown_gap_count: `{summary.get('actionable_unknown_gap_count')}`",
         f"- quiet_gap_count: `{summary.get('quiet_gap_count')}` / sim_live_connected: `{summary.get('quiet_gap_sim_live_connected_count')}`",
@@ -7071,6 +7084,9 @@ def main(argv: list[str] | None = None) -> int:
             "candidate_count": summary.get("candidate_count"),
             "surfaced_candidate_count": summary.get("surfaced_candidate_count"),
             "sim_auto_approved_count": summary.get("sim_auto_approved_count"),
+            "sim_policy_approved_total_count": summary.get(
+                "sim_policy_approved_total_count"
+            ),
             "live_auto_apply_ready_count": summary.get("live_auto_apply_ready_count"),
             "warning_count": len(report.get("warnings") or []),
             "runtime_effect": report.get("runtime_effect"),

@@ -1573,6 +1573,79 @@ def test_entry_split_summary_treats_real_detail_book_as_real_evidence(
     assert summary["primary_sample_book"] == "real_submit_post_submit_observed_low"
 
 
+def test_entry_split_summary_separates_exploration_from_ev_authority(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "entry_split_order_plan"
+    report_dir.mkdir()
+    monkeypatch.setattr(mod, "ENTRY_SPLIT_ORDER_PLAN_DIR", report_dir)
+    (report_dir / "entry_split_order_plan_2026-07-01.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_plan_v1",
+                "source_quality": {
+                    "status": "pass",
+                    "tuning_input_allowed": True,
+                },
+                "candidate_grid": [],
+                "recommended_policy": {
+                    "runtime_apply_allowed": True,
+                    "runtime_apply_compatibility_semantics": "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed",
+                    "exploration_seed_allowed": True,
+                    "ev_validated_runtime_apply_allowed": False,
+                    "runtime_apply_authority_classes": ["bounded_exploration_seed"],
+                    "candidates": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary, _path, warnings = mod._entry_split_order_plan_summary("2026-07-01")
+
+    assert warnings == []
+    assert summary["runtime_apply_allowed"] is True
+    assert summary["runtime_apply_authority_contract_valid"] is True
+    assert summary["exploration_seed_allowed"] is True
+    assert summary["ev_validated_runtime_apply_allowed"] is False
+    assert summary["primary_decision_metric"] == "qty_preserving_execution_shape_guard"
+    assert summary["primary_decision_metric_scope"] == ("bounded_exploration_seed_only")
+
+
+def test_entry_split_summary_blocks_contradictory_authority_contract(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "entry_split_order_plan"
+    report_dir.mkdir()
+    monkeypatch.setattr(mod, "ENTRY_SPLIT_ORDER_PLAN_DIR", report_dir)
+    (report_dir / "entry_split_order_plan_2026-07-02.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_plan_v1",
+                "source_quality": {
+                    "status": "pass",
+                    "tuning_input_allowed": True,
+                },
+                "candidate_grid": [],
+                "recommended_policy": {
+                    "runtime_apply_allowed": True,
+                    "runtime_apply_compatibility_semantics": "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed",
+                    "exploration_seed_allowed": False,
+                    "ev_validated_runtime_apply_allowed": False,
+                    "candidates": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary, _path, warnings = mod._entry_split_order_plan_summary("2026-07-02")
+
+    assert summary["runtime_apply_allowed"] is False
+    assert summary["runtime_apply_authority_contract_valid"] is False
+    assert "entry_split_order_plan_runtime_apply_authority_contract_invalid" in warnings
+
+
 def test_top_level_summary_treats_real_detail_book_as_real_ready():
     summary = mod._top_level_summary(
         {
