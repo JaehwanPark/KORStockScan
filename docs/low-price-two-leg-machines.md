@@ -250,6 +250,16 @@ historical Kakao morning +3-tick target is not compared with a different policy
 generation. New target reconciliations persist broker `kt00007.cntr_uv`;
 only broker-priced completed legs contribute to decision EV and its 20-leg floor.
 Older configured-target proxy results remain separately labeled diagnostics.
+The postclose producer also reads the official account realized-PnL endpoint
+`ka10073` for symbol-days that contain a completed episode. Its exact net PnL,
+commission, and tax replace the fixed-cost estimate only when one episode
+profile owns that symbol-day and the account aggregate matches the episode's
+filled quantity, weighted buy price, weighted sell price, and
+`gross profit - commission - tax`. A query failure, mismatch, or same-symbol
+multi-profile day is never apportioned heuristically; it remains on the
+reviewed `0.23%` round-trip fallback. Historical report rows are recalculated
+from their persisted broker fill prices under the current fallback instead of
+being discarded when an older report used a different fixed cost.
 
 After at least 20 completed legs in that clean-baseline actual-observation window,
 positive current and candidate EV, and no held/unresolved inventory, one

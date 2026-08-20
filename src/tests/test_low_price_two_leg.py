@@ -14,11 +14,15 @@ from src.engine.risk.manual_control_exclusion import (
 )
 from src.engine.monitoring.low_price_two_leg_tuning import (
     CLEAN_WINDOW_NAME,
+    DEFAULT_ROUND_TRIP_COST_PCT,
     PROFILE_FIRST_OPERATIONAL_DATES,
     REPORT_SCHEMA,
+    _aggregate,
+    _apply_broker_realized_economics,
     build_candidate,
     build_report,
     extract_profile_row,
+    load_realized_pnl_ka10073,
 )
 from src.engine.monitoring.low_price_two_leg_entry_spot_research import candidate_grid
 from src.trading.low_price_two_leg.gateway import (
@@ -1560,6 +1564,170 @@ def test_tuning_accepts_ten_share_partial_fill_and_weights_actual_quantity(
     assert "leg_quantity_or_status_invalid" in mixed_row["source_quality_reasons"]
 
 
+def _skt_partial_fill_economics_row() -> dict:
+    return {
+        "profile_id": "sk_telecom_afternoon",
+        "symbol": "017670",
+        "session": "afternoon",
+        "target_date": "2026-08-20",
+        "source_quality": "pass",
+        "source_quality_reasons": [],
+        "eligible_for_tuning": True,
+        "attempted": True,
+        "state_status": "COMPLETE",
+        "legs": [
+            {
+                "leg_id": "signal_close",
+                "quantity": 10,
+                "status": "COMPLETE",
+                "entry_price": 96_600,
+                "fill_price": 96_600,
+                "target_price": 96_800,
+                "target_fill_price": 96_800,
+                "target_filled_qty": 4,
+                "buy_filled_qty": 4,
+                "completed": True,
+                "terminal": True,
+                "held": False,
+                "profit_price_source": "broker_target_fill_price",
+                "net_profit_pct": round(
+                    (96_800 / 96_600 - 1) * 100 - DEFAULT_ROUND_TRIP_COST_PCT,
+                    6,
+                ),
+            },
+            {
+                "leg_id": "signal_close_minus_1tick",
+                "quantity": 10,
+                "status": "NO_FILL",
+                "entry_price": 96_500,
+                "fill_price": 0,
+                "target_filled_qty": 0,
+                "buy_filled_qty": 0,
+                "completed": False,
+                "terminal": True,
+                "held": False,
+                "profit_price_source": "not_completed",
+                "net_profit_pct": None,
+            },
+        ],
+    }
+
+
+def test_skt_partial_fill_uses_exact_negative_broker_pnl_when_uniquely_matched():
+    row = _skt_partial_fill_economics_row()
+
+    def loader(trade_date: str, symbol: str) -> list[dict]:
+        assert (trade_date, symbol) == ("2026-08-20", "017670")
+        return [
+            {
+                "trade_date": trade_date,
+                "symbol": symbol,
+                "filled_qty": 4,
+                "buy_average_price": 96_600,
+                "sell_average_price": 96_800,
+                "realized_net_profit_krw": -73,
+                "broker_profit_rate_pct": -0.02,
+                "commission_krw": 100,
+                "tax_krw": 773,
+                "source_api": "ka10073",
+            }
+        ]
+
+    reconciliation = _apply_broker_realized_economics([row], loader)
+    summary = _aggregate([row])
+
+    assert reconciliation == {"matched": 1, "fallback": 0, "api_requests": 1}
+    assert row["broker_realized_economics"]["status"] == "matched_exact"
+    assert row["broker_realized_economics"]["realized_net_profit_krw"] == -73
+    assert summary["broker_realized_net_profit_krw"] == -73
+    assert summary["exact_broker_cost_completed_legs"] == 1
+    assert summary["fixed_cost_estimate_completed_legs"] == 0
+    assert summary["notional_weighted_ev_pct"] < 0
+
+
+def test_skt_partial_fill_fixed_cost_fallback_is_also_negative():
+    row = _skt_partial_fill_economics_row()
+    _apply_broker_realized_economics([row], None)
+
+    summary = _aggregate([row])
+
+    assert row["broker_realized_economics"] == {
+        "status": "fixed_cost_fallback",
+        "reason": "ka10073_loader_not_configured",
+        "selection_effect": True,
+    }
+    assert summary["broker_realized_net_profit_krw"] < 0
+    assert summary["exact_broker_cost_completed_legs"] == 0
+    assert summary["fixed_cost_estimate_completed_legs"] == 1
+
+
+def test_exact_broker_pnl_is_not_allocated_across_same_symbol_day_profiles():
+    first = _skt_partial_fill_economics_row()
+    second = json.loads(json.dumps(first))
+    second["profile_id"] = "sk_telecom_late_morning"
+
+    def loader(_trade_date: str, _symbol: str) -> list[dict]:
+        raise AssertionError("ambiguous symbol-day must not query or allocate")
+
+    reconciliation = _apply_broker_realized_economics([first, second], loader)
+
+    assert reconciliation == {"matched": 0, "fallback": 2, "api_requests": 0}
+    assert {row["broker_realized_economics"]["reason"] for row in (first, second)} == {
+        "multiple_episode_profiles_share_symbol_day"
+    }
+
+
+def test_ka10073_loader_uses_official_path_headers_fields_and_normalizes(monkeypatch):
+    captured = {}
+
+    def fake_fetch(**kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "return_code": 0,
+                "dt_stk_rlzt_pl": [
+                    {
+                        "dt": "20260820",
+                        "stk_cd": "017670",
+                        "cntr_qty": "4",
+                        "buy_uv": "96600",
+                        "cntr_pric": "96800",
+                        "tdy_sel_pl": "-73",
+                        "pl_rt": "-0.02",
+                        "tdy_trde_cmsn": "100",
+                        "tdy_trde_tax": "773",
+                    }
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(
+        "src.engine.monitoring.low_price_two_leg_tuning.kiwoom_utils.get_api_url",
+        lambda endpoint: f"https://api.example{endpoint}",
+    )
+    monkeypatch.setattr(
+        "src.engine.monitoring.low_price_two_leg_tuning.kiwoom_utils.fetch_kiwoom_api_continuous",
+        fake_fetch,
+    )
+
+    rows = load_realized_pnl_ka10073("TOKEN", "2026-08-20", "017670")
+
+    assert captured == {
+        "url": "https://api.example/api/dostk/acnt",
+        "token": "TOKEN",
+        "api_id": "ka10073",
+        "payload": {
+            "stk_cd": "017670",
+            "strt_dt": "20260820",
+            "end_dt": "20260820",
+        },
+        "use_continuous": True,
+    }
+    assert rows[0]["realized_net_profit_krw"] == -73
+    assert rows[0]["commission_krw"] == 100
+    assert rows[0]["tax_krw"] == 773
+
+
 def test_tuning_accepts_exact_date_kakao_three_tick_policy_and_hash(tmp_path):
     profile_id = "kakao_morning"
     target_date = date(2026, 8, 14)
@@ -2110,7 +2278,7 @@ def test_profile_expansion_dates_do_not_create_historical_source_gaps(tmp_path):
     assert initial_profile_summary["source_gap_days"] == 2
 
 
-def test_prior_report_cost_contract_mismatch_is_excluded(tmp_path):
+def test_prior_report_cost_is_rebased_from_fill_prices_without_losing_history(tmp_path):
     profile_id = "samsung_heavy_midday"
     state_dir = tmp_path / "states"
     report_dir = tmp_path / "reports"
@@ -2138,10 +2306,19 @@ def test_prior_report_cost_contract_mismatch_is_excluded(tmp_path):
         source_quality_dir=source_quality_dir,
     )
 
-    summary = second["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
-    assert summary["source_gap_days"] == 1
-    assert summary["eligible_days"] == 1
-    assert summary["completed_legs"] == 2
+    profile_window = second["windows"][CLEAN_WINDOW_NAME][profile_id]
+    summary = profile_window["summary"]
+    assert summary["source_gap_days"] == 0
+    assert summary["eligible_days"] == 2
+    assert summary["completed_legs"] == 4
+    historical_legs = profile_window["rows"][0]["legs"]
+    expected = round(
+        (historical_legs[0]["target_price"] / historical_legs[0]["fill_price"] - 1)
+        * 100
+        - DEFAULT_ROUND_TRIP_COST_PCT,
+        6,
+    )
+    assert historical_legs[0]["net_profit_pct"] == expected
 
 
 def test_nontrading_target_is_excluded_and_cannot_open_candidate(tmp_path):

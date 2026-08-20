@@ -118,6 +118,12 @@
 
 ## 사용자 지시 구현
 
+- [x] `[EpisodeExactCostReconciliation0820] SK텔레콤 episode 실현손익 비용 귀속 보완 및 코드리뷰` (`Due: 2026-08-20`, `Slot: INTRADAY`, `TimeWindow: 14:45~16:10`, `Track: ScalpingLogic`)
+  - Source: [low_price_two_leg_tuning.py](/home/ubuntu/KORStockScan/src/engine/monitoring/low_price_two_leg_tuning.py), [low-price-two-leg-machines.md](/home/ubuntu/KORStockScan/docs/low-price-two-leg-machines.md), [test_low_price_two_leg.py](/home/ubuntu/KORStockScan/src/tests/test_low_price_two_leg.py)
+  - 판정: SK텔레콤 017670의 96,600원 4주 매수·96,800원 4주 매도는 `ka10073` 기준 수수료 100원·세금 773원·실현손익 -73원이다. 장후 producer는 단일 episode owner와 symbol-day 수량·평균가격·gross-cost 정합성이 모두 일치할 때만 exact PnL을 사용하고 그 외에는 0.23% 비용 추정으로 fail-safe한다.
+  - 리뷰/검증: 1차 리뷰에서 report v4 candidate consumer 누락, 2차 리뷰에서 ineligible 동일-symbol owner 모호성 및 microstructure 후행 consumer의 v3-only 계약을 찾아 보완했다. 에피소드·microstructure·postclose verifier 회귀 `286 passed`, checklist parser 회귀 `91 passed`, Ruff, compile, `git diff --check`를 통과했으며 최종 미해결 finding은 0이다.
+  - 권한 경계: POSTCLOSE 보고서·후보 EV의 비용 인식만 보완했으며 주문, target tick, 수량, 보유/손절, provider, bot, cap, broker guard는 변경하지 않았다.
+
 - [x] `[LowPriceRecommendationImplementation0819] 2026-08-19 장후 추천 11프로필 구현 및 리뷰` (`Due: 2026-08-20`, `Slot: INTRADAY`, `TimeWindow: 13:15~15:20`, `Track: ScalpingLogic`)
   - Source: [low_price_two_leg_expanded_candidate_research_2026-08-19.json](/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-08-19.json), [low_price_two_leg_expanded_profile_evidence_2026-08-19.json](/home/ubuntu/KORStockScan/data/config/low_price_two_leg_expanded_profile_evidence_2026-08-19.json), [profiles.py](/home/ubuntu/KORStockScan/src/trading/low_price_two_leg/profiles.py)
   - 판정: 기존 8프로필 로직개선과 신규 3프로필을 2026-08-21 exact-date 세대로 결속하고, 2026-08-20 세대와 prior-date custody를 유지했다. 더본코리아는 source-only에서 승격하지 않았다.

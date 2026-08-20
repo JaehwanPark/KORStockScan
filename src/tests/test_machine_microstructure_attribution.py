@@ -253,7 +253,7 @@ def test_active_episode_signal_bar_gets_micro_path_metrics(tmp_path):
         / "low_price_two_leg_tuning"
         / f"low_price_two_leg_tuning_{target_date}.json",
         {
-            "schema": "low_price_two_leg_tuning_report_v3",
+            "schema": "low_price_two_leg_tuning_report_v4",
             "target_date": target_date,
             "daily": {
                 "profiles": {

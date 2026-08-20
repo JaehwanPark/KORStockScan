@@ -68,6 +68,24 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-08-20 Episode Realized-PnL Account Gate
+
+- Re-verified at `2026-08-20T14:59:07+09:00` against current upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/계좌.md`,
+  `examples/국내주식/계좌/get_domestic_realized_pnl_by_period_and_stock.py`, and
+  `kiwoom/specs.py` for `ka10073`. The official request is
+  `POST /api/dostk/acnt` with `api-id=ka10073` and required `stk_cd`,
+  `strt_dt`, and `end_dt`; continuation uses the standard `cont-yn` and
+  `next-key` headers. The `dt_stk_rlzt_pl` response supplies date, symbol,
+  filled quantity, buy/sell average price, realized profit, profit rate,
+  commission, and tax.
+- The endpoint is read-only and is consumed only by the episode POSTCLOSE
+  report. Exact account PnL is accepted only after unique symbol-day owner,
+  quantity, average-price, and gross-minus-cost reconciliation. Ambiguous or
+  failed reconciliation falls back to a fixed cost estimate and cannot change
+  orders, target ticks, quantity, custody, provider, bot, cap, or broker guard.
+
 ### 2026-08-18 WebSocket Reconnect Resubscription Readiness Gate
 
 - Re-verified at `2026-08-18T09:12:13+09:00` against current upstream commit
