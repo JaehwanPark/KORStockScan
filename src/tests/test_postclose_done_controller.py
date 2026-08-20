@@ -2049,6 +2049,65 @@ def test_postclose_done_controller_accepts_done_when_required_codex_runner_compl
     assert report["codex_workorder_runner_completed"] is True
 
 
+def test_postclose_done_controller_reruns_completed_runner_for_latest_generation(
+    monkeypatch, tmp_path
+):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
+        _pass_verification(),
+    )
+    _write_json(
+        report_dir
+        / "code_improvement_workorder"
+        / "code_improvement_workorder_2026-06-03.json",
+        {"generation_id": "g2"},
+    )
+    runner_path = (
+        report_dir / "codex_workorder_runner" / "codex_workorder_runner_2026-06-03.json"
+    )
+    _write_json(
+        runner_path,
+        {
+            "status": "completed",
+            "two_pass_status": "pass2_not_required",
+            "source_generation_id": "g1",
+        },
+    )
+    calls = []
+
+    def fake_runner(cmd, env=None):
+        calls.append(cmd)
+        if "codex_workorder_runner" in " ".join(cmd):
+            _write_json(
+                runner_path,
+                {
+                    "status": "completed",
+                    "two_pass_status": "pass2_not_required",
+                    "source_generation_id": "g2",
+                },
+            )
+        return 0
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=2,
+        require_codex_completed=True,
+        command_runner=fake_runner,
+    )
+
+    assert report["status"] == "done"
+    assert report["workorder_generation_id"] == "g2"
+    assert report["codex_workorder_runner_source_generation_id"] == "g2"
+    assert report["codex_workorder_runner_completed"] is True
+    assert any("codex_workorder_runner" in " ".join(cmd) for cmd in calls)
+
+
 def test_postclose_done_controller_rejects_completed_runner_without_two_pass_terminal_status(
     monkeypatch, tmp_path
 ):
