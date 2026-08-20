@@ -13,23 +13,23 @@
 
 ## 근거
 
-- as_of: `2026-08-20T12:45:03`
-- exit_signal unique: `12`
-- sell_order_sent unique: `5`
-- sell_completed unique: `5`
-- real exit/sell_sent/sell_completed: `5` / `5` / `5`
-- non-real exit/sell_sent/sell_completed: `7` / `0` / `0`
-- sell_sent/exit_signal: `41.7%`
+- as_of: `2026-08-20T15:30:02`
+- exit_signal unique: `24`
+- sell_order_sent unique: `12`
+- sell_completed unique: `12`
+- real exit/sell_sent/sell_completed: `12` / `12` / `12`
+- non-real exit/sell_sent/sell_completed: `12` / `0` / `0`
+- sell_sent/exit_signal: `50.0%`
 - real sell_sent/exit_signal: `100.0%`
 - non-real sell_sent/exit_signal: `0.0%`
 - flow defer events: `0`
 - AI holding cache MISS: `100.0%`
-- score50 origins: `{'fallback_score_50': 164, 'legacy_or_unclassified_score50': 3025, 'post_call_source_quality_neutralized': 239, 'preflight_source_quality_blocked': 110}`
-- score50 preflight/source-quality blocked: `110`
-- score50 raw-non50 neutralized: `239`
+- score50 origins: `{'fallback_score_50': 246, 'legacy_or_unclassified_score50': 4181, 'post_call_source_quality_neutralized': 323, 'preflight_source_quality_blocked': 138}`
+- score50 preflight/source-quality blocked: `138`
+- score50 raw-non50 neutralized: `323`
 - soft_stop rebound above sell 10m: `0.0%`
 - trailing missed-upside: `0.0%`
-- top reasons: `AI보유감시:cache_miss=676, soft_stop_grace=323, 청산신호:scalp_trailing_take_profit=6, sell_order_sent=5, sell_completed=5`
+- top reasons: `AI보유감시:cache_miss=1027, soft_stop_grace=364, 청산신호:scalp_trailing_take_profit=16, sell_order_sent=12, sell_completed=12`
 
 ## 금지된 자동변경
 
