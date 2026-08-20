@@ -109,6 +109,9 @@ from src.engine.scalping.entry_ai_gate import (
     get_entry_buy_score_threshold,
 )
 from src.engine.scalping.exit_safety_monitor import ScalpExitSafetyMonitor
+from src.engine.scalping.smoothing_source_only_path_journal import (
+    SmoothingSourceOnlyPathObserver,
+)
 from src.engine.sniper_entry_state import ENTRY_LOCK
 from src.engine.sniper_config import CONF
 from src.engine.sniper_time import (
@@ -11481,6 +11484,20 @@ def run_sniper(is_test_mode=False):
         error_handler=lambda message: log_error(f"[SCALP_FAST_EXIT_MONITOR] {message}"),
     )
     fast_exit_monitor.start()
+    smoothing_source_only_observer = SmoothingSourceOnlyPathObserver(
+        observer=lambda *, now_ts: (
+            sniper_state_handlers.observe_smoothing_source_only_paths_cycle(
+                targets,
+                now_ts=now_ts,
+            )
+        ),
+        interval_sec=min(0.25, fast_exit_interval_sec),
+        error_handler=lambda message: log_error(
+            "[SMOOTHING_SOURCE_ONLY_OBSERVER] "
+            f"cadence observer failed without runtime effect: {message}"
+        ),
+    )
+    smoothing_source_only_observer.start()
 
     try:
         while True:
@@ -14781,6 +14798,7 @@ def run_sniper(is_test_mode=False):
                 "[SNIPER_HEARTBEAT_FINALIZE_FAILED] "
                 f"error={heartbeat_error}"
             )
+        smoothing_source_only_observer.stop()
         fast_exit_monitor.stop()
         async_coordinator = getattr(
             run_sniper,

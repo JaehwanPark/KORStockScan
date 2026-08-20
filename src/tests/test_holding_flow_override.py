@@ -491,6 +491,15 @@ def test_flow_exit_is_debounced_by_stable_bullish_ofi(monkeypatch):
         and kwargs.get("rejected_actions") == ["exit_now:ofi_stable_bullish_debounce"]
         for stage, kwargs in logs
     )
+    armed = next(
+        fields for stage, fields in logs if stage == "smoothing_source_only_path_armed"
+    )
+    assert armed["journal_family"] == "holding_flow_ofi_smoothing"
+    assert armed["journal_control_action"] == "HOLD"
+    assert armed["journal_alternative_action"] == "EXIT"
+    assert armed["runtime_family_enabled"] is True
+    assert armed["alternative_executed"] is False
+    assert armed["source_reason"] == ("ofi_applied_bullish_debounce_no_ofi_alternative")
 
 
 def test_ofi_runtime_off_arms_exact_source_only_exit_without_changing_hold(
@@ -727,6 +736,9 @@ def test_reentry_closes_previous_post_sell_path_without_new_position_data(monkey
     assert stock[handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY]["arms"] == {}
     assert logs[0][0] == "smoothing_source_only_path_closed"
     assert logs[0][1]["close_reason"] == "position_lineage_changed"
+    assert logs[0][1]["path_quality_contract_version"] == ("fresh_observation_gap_v2")
+    assert logs[0][1]["path_max_valid_observation_gap_sec"] == 0.0
+    assert logs[0][1]["path_max_allowed_observation_gap_sec"] == 2.0
     assert not any(
         stage == "smoothing_source_only_path_horizon" for stage, _fields in logs
     )
@@ -813,11 +825,55 @@ def test_non_revive_registry_observes_exact_paths_with_bounded_ws_retention(
         if stage == "smoothing_source_only_path_horizon"
     ]
     assert registration["status"] == "registered"
+    assert stock[handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY]["arms"] == {}
     assert retained == [("005930", started_at + 92.0)]
     assert [fields["horizon_sec"] for fields in horizons] == [10, 20, 40, 60, 90]
     assert all(
         fields["observation_phase"] == "post_sell_non_revive" for fields in horizons
     )
+    assert handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY == {}
+
+
+def test_non_revive_registry_preserves_target_arms_when_ws_retention_fails(
+    monkeypatch,
+):
+    state, _armed = handlers.arm_source_only_path(
+        None,
+        family="soft_stop_whipsaw_confirmation",
+        position_key="record:retention-fail",
+        trace_id="trace-retention-fail",
+        snapshot_id="snapshot-retention-fail",
+        alternative_action="HOLD",
+        control_action="EXIT",
+        now_ts=10_000.0,
+        effective_price=10_000,
+        effective_profit_rate=-1.5,
+        reference_buy_price=10_100,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        runtime_family_enabled=False,
+        alternative_executed=False,
+        source_reason="soft_stop_runtime_disabled",
+    )
+    stock = {
+        "id": "retention-fail",
+        handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: state,
+    }
+    monkeypatch.setattr(
+        handlers,
+        "retain_ws_subscription_until",
+        lambda _code, _until_ts: False,
+    )
+    handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY.clear()
+
+    registration = handlers.register_non_revive_smoothing_post_sell_paths(
+        stock,
+        "005930",
+        now_ts=10_005.0,
+    )
+
+    assert registration["status"] == "ws_retention_rejected"
+    assert stock[handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY]["arms"]
     assert handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY == {}
 
 
@@ -927,6 +983,76 @@ def test_pending_sell_observer_keeps_exact_horizon_before_fill(monkeypatch):
     assert horizons[0]["observation_phase"] == "holding"
     assert stock[handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY]["arms"]
     assert stock["status"] == "SELL_ORDERED"
+
+
+def test_cadence_cycle_observes_active_target_with_fresh_path_gaps(monkeypatch):
+    started_at = 10_000.0
+    state, _armed = handlers.arm_source_only_path(
+        None,
+        family="soft_stop_whipsaw_confirmation",
+        position_key="record:cadence",
+        trace_id="trace-cadence",
+        snapshot_id="snapshot-cadence",
+        alternative_action="HOLD",
+        control_action="EXIT",
+        now_ts=started_at,
+        effective_price=10_000,
+        effective_profit_rate=-1.5,
+        reference_buy_price=10_100,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        runtime_family_enabled=False,
+        alternative_executed=False,
+        source_reason="soft_stop_runtime_disabled",
+    )
+    stock = {
+        "id": "cadence",
+        "code": "005930",
+        "status": "HOLDING",
+        handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: state,
+    }
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "WS_MANAGER",
+        type(
+            "Manager",
+            (),
+            {"get_latest_data": lambda _self, _code: {"curr": 10_050}},
+        )(),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *_args, **_kwargs: (
+            {"quote_consistency_state": "single_source"},
+            10_050,
+            10_060,
+            10_040,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda _stock, _code, stage, **fields: logs.append((stage, fields)),
+    )
+    handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY.clear()
+
+    for second in range(1, 11):
+        summary = handlers.observe_smoothing_source_only_paths_cycle(
+            [stock], now_ts=started_at + second
+        )
+
+    horizon = next(
+        fields
+        for stage, fields in logs
+        if stage == "smoothing_source_only_path_horizon"
+    )
+    assert summary["active_target_attempt_count"] == 1
+    assert summary["failed_operation_count"] == 0
+    assert horizon["horizon_sec"] == 10
+    assert horizon["observation_phase"] == "holding"
+    assert horizon["path_max_valid_observation_gap_sec"] == 1.0
 
 
 def test_non_revive_registry_does_not_terminally_close_on_stale_breach_price(
@@ -1431,6 +1557,15 @@ def test_flow_hold_is_confirmed_exit_by_stable_bearish_ofi_after_worsen(monkeypa
         and fields.get("confirm_reason") == "ofi_stable_bearish"
         for stage, fields in logs
     )
+    armed = next(
+        fields for stage, fields in logs if stage == "smoothing_source_only_path_armed"
+    )
+    assert armed["journal_family"] == "holding_flow_ofi_smoothing"
+    assert armed["journal_control_action"] == "EXIT"
+    assert armed["journal_alternative_action"] == "HOLD"
+    assert armed["runtime_family_enabled"] is True
+    assert armed["alternative_executed"] is False
+    assert armed["source_reason"] == ("ofi_applied_bearish_confirm_no_ofi_alternative")
 
 
 def test_low_score_flow_hold_is_not_cut_by_score_band(monkeypatch):
@@ -1621,6 +1756,81 @@ def test_holding_flow_state_change_review_is_disabled_by_default(monkeypatch):
     assert any(stage == "holding_flow_override_defer_exit" for stage, _ in logs)
     assert not any(
         stage == "holding_flow_state_change_review_triggered" for stage, _ in logs
+    )
+
+
+def test_review_interval_bearish_ofi_confirm_arms_no_ofi_hold_path(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    monkeypatch.setattr(
+        handlers,
+        "TRADING_RULES",
+        SimpleNamespace(
+            HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED=True,
+            HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT=0.30,
+            HOLDING_FLOW_STATE_CHANGE_REVIEW_ENABLED=False,
+            HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC=30,
+            HOLDING_FLOW_REVIEW_MAX_INTERVAL_SEC=90,
+            HOLDING_FLOW_REVIEW_PRICE_TRIGGER_PCT=0.35,
+            HOLDING_FLOW_OVERRIDE_WORSEN_PCT=0.80,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_holding_flow_ofi_state",
+        lambda stock, code, *, curr_price, now_ts=None: (
+            {"ready": True, "micro_state": "bearish"},
+            handlers.OfiSmoothingState(
+                regime=handlers.OFI_STABLE_BEARISH,
+                micro_score_smooth=-0.62,
+            ),
+        ),
+    )
+    ai = DummyFlowAI("HOLD")
+    stock = {
+        **_stock(),
+        "holding_flow_override_candidate_key": "scalp_soft_stop_pct:LOSS",
+        "holding_flow_override_started_at": 1000.0,
+        "holding_flow_override_candidate_profit": 0.40,
+        "holding_flow_override_last_review_at": 1000.0,
+        "holding_flow_override_last_review_profit": 0.40,
+        "holding_flow_override_last_action": "HOLD",
+        "holding_flow_override_last_flow_state": "absorption",
+        "holding_flow_override_last_score": 74,
+        "holding_flow_last_ai_decision_trace_id": "holding-trace-reuse",
+        "holding_flow_last_ai_input_snapshot_id": "holding-snapshot-reuse",
+    }
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="005930",
+        strategy="SCALPING",
+        ws_data=_ws(),
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=0.10,
+        peak_profit=0.70,
+        drawdown=0.60,
+        current_ai_score=55,
+        held_sec=80,
+        curr_price=10010,
+        buy_price=10000,
+        now_ts=1010.0,
+    )
+
+    assert proceed is True
+    assert ai.calls == []
+    armed = next(
+        fields for stage, fields in logs if stage == "smoothing_source_only_path_armed"
+    )
+    assert armed["journal_control_action"] == "EXIT"
+    assert armed["journal_alternative_action"] == "HOLD"
+    assert armed["journal_trace_id"] == "holding-trace-reuse"
+    assert armed["journal_snapshot_id"] == "holding-snapshot-reuse"
+    assert armed["source_reason"] == (
+        "ofi_applied_bearish_confirm_interval_no_ofi_alternative"
     )
 
 
