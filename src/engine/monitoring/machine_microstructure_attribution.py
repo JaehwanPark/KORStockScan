@@ -68,6 +68,16 @@ OBSERVATION_ROOT = DATA_DIR / "observations" / "scalp_micro_reversion_forward"
 DEFAULT_CANARY_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "scalp_micro_reversion_forward_collector" / "latest.json"
 )
+DEFAULT_WIDGET_AUTO_TRADE_STATE_PATH = (
+    DATA_DIR / "runtime" / "widget_signal_auto_trade_state.json"
+)
+WIDGET_AUTO_TRADE_EVENT_SCHEMA = "widget_signal_auto_trade_event_v1"
+WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY = "operator_directed_widget_auto_trade_v1"
+WIDGET_SESSION_VENUES = {
+    "NXT_PREMARKET": "NXT",
+    "KRX_REGULAR": "KRX",
+    "NXT_AFTERMARKET": "NXT",
+}
 CANARY_DAILY_SNAPSHOT_DIR = (
     DATA_DIR / "source_quality" / "scalp_micro_reversion_canary_daily"
 )
@@ -85,7 +95,7 @@ METRIC_CONTRACT = {
     "metric_role": "machine_lifecycle_microstructure_diagnostic_context",
     "decision_authority": "postclose_diagnostic_only",
     "window_policy": (
-        "target_date_signal_entry_fill_exit_and_reconciled_exit_anchor_"
+        "target_date_signal_entry_submit_fill_target_submit_and_reconciled_exit_anchor_"
         "minus_30s_through_plus_180s"
     ),
     "sample_floor": {
@@ -120,7 +130,9 @@ FAST_LIFECYCLE_OBJECTIVE_CONTRACT = {
     ),
     "metric_role": "diagnostic_execution_velocity_and_turnover_context",
     "decision_authority": "postclose_diagnostic_only",
-    "window_policy": "per_lifecycle_anchor_plus_owner_reported_entry_to_exit_span",
+    "window_policy": (
+        "per_lifecycle_signal_submit_fill_target_submit_exit_anchor_plus_owner_span"
+    ),
     "sample_floor": {
         "daily_diagnostic": 1,
         "policy_or_runtime_change": "uses_policy_change_readiness_not_daily_count",
@@ -504,8 +516,946 @@ def _source(
     }
 
 
+def _widget_entry_signal_contract(
+    value: Any, *, symbol: str, target_date: str
+) -> tuple[str, datetime] | None:
+    if not isinstance(value, str):
+        return None
+    parts = value.strip().split(":", 4)
+    if (
+        len(parts) != 5
+        or parts[0] != symbol
+        or parts[1] != target_date
+        or parts[2] != "ENTRY"
+    ):
+        return None
+    session = parts[3]
+    observed_at = _owner_ts_on_target_date(parts[4], target_date)
+    if session not in WIDGET_SESSION_VENUES or observed_at is None:
+        return None
+    return session, observed_at
+
+
+def _widget_numeric(value: Any) -> float | None:
+    return None if isinstance(value, bool) else _finite_float(value)
+
+
+def _widget_state_order_index(
+    *, target_date: str, state_path: Path
+) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, Any]]:
+    try:
+        state_bytes = state_path.read_bytes()
+        decoded = json.loads(state_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        state_bytes = None
+        decoded = None
+    payload = decoded if isinstance(decoded, dict) else None
+    source = {
+        "path": str(state_path),
+        "status": "missing",
+        "target_date": target_date,
+        "sha256": None,
+        "order_count": 0,
+        "contract_errors": [],
+    }
+    if payload is None:
+        return {}, source
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("execution_authority") != WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY
+    ):
+        source["status"] = "contract_invalid"
+        source["contract_errors"] = ["state_envelope_invalid"]
+        return {}, source
+    raw_history = payload.get("history")
+    if raw_history is not None and not isinstance(raw_history, list):
+        source["status"] = "contract_invalid"
+        source["contract_errors"] = ["state_history_invalid"]
+        return {}, source
+    symbol_rows: Any = None
+    history_matches = [
+        row
+        for row in raw_history or []
+        if isinstance(row, dict) and row.get("trade_date") == target_date
+    ]
+    if payload.get("active_date") == target_date:
+        if history_matches:
+            source["status"] = "contract_invalid"
+            source["contract_errors"] = ["duplicate_target_date_state_sources"]
+            return {}, source
+        symbol_rows = payload.get("symbols")
+    else:
+        if len(history_matches) == 1:
+            symbol_rows = history_matches[0].get("symbols")
+        elif len(history_matches) > 1:
+            source["status"] = "contract_invalid"
+            source["contract_errors"] = ["duplicate_target_date_history"]
+            return {}, source
+    if not isinstance(symbol_rows, dict):
+        source["status"] = "target_date_not_present"
+        return {}, source
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    errors: list[str] = []
+    for symbol, symbol_payload in symbol_rows.items():
+        if not isinstance(symbol_payload, dict):
+            errors.append(f"symbol_payload_invalid:{symbol}")
+            continue
+        raw_orders = symbol_payload.get("orders")
+        if raw_orders is not None and not isinstance(raw_orders, list):
+            errors.append(f"symbol_orders_invalid:{symbol}")
+            continue
+        for order in raw_orders or []:
+            if not isinstance(order, dict) or order.get("broker_accepted") is not True:
+                continue
+            order_no = str(order.get("order_no") or "").strip()
+            requested_qty = _widget_numeric(order.get("requested_qty"))
+            filled_qty = _widget_numeric(order.get("filled_qty"))
+            if (
+                not str(symbol).isdigit()
+                or len(str(symbol)) != 6
+                or not order_no
+                or order.get("order_date") != target_date
+                or requested_qty is None
+                or not requested_qty.is_integer()
+                or requested_qty <= 0
+                or filled_qty is None
+                or not filled_qty.is_integer()
+                or filled_qty < 0
+                or filled_qty > requested_qty
+            ):
+                errors.append(f"accepted_order_contract_invalid:{symbol}:{order_no}")
+                continue
+            key = (str(symbol), order_no)
+            if key in index:
+                errors.append(f"duplicate_accepted_order:{symbol}:{order_no}")
+                continue
+            index[key] = {
+                **order,
+                "symbol": str(symbol),
+                "_state_entry_signal_id": str(
+                    symbol_payload.get("entry_signal_id")
+                    or symbol_payload.get("last_completed_entry_signal_id")
+                    or ""
+                ).strip(),
+            }
+    source.update(
+        {
+            "status": "contract_invalid" if errors else "loaded",
+            "sha256": hashlib.sha256(state_bytes).hexdigest() if state_bytes else None,
+            "order_count": len(index),
+            "contract_errors": errors,
+        }
+    )
+    return index, source
+
+
+def _widget_actual_execution_inventory(
+    *,
+    target_date: str,
+    report_root: Path,
+    state_path: Path,
+    symbols: dict[str, dict[str, Any]],
+    round_trip_cost_pct: float | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    event_path = (
+        report_root
+        / "widget_signal_auto_trade_events"
+        / f"widget_signal_auto_trade_events_{target_date.replace('-', '')}.jsonl"
+    )
+    state_orders, state_source = _widget_state_order_index(
+        target_date=target_date, state_path=state_path
+    )
+    source: dict[str, Any] = {
+        "path": str(event_path),
+        "status": "not_observed",
+        "target_date": target_date,
+        "optional_when_absent": True,
+        "event_schema": WIDGET_AUTO_TRADE_EVENT_SCHEMA,
+        "sha256": None,
+        "row_count": 0,
+        "actual_event_count": 0,
+        "actual_lifecycle_count": 0,
+        "contract_errors": [],
+        "state_source": state_source,
+        "timestamp_provenance": (
+            "execution_loop_submit_record_and_broker_reconciliation_confirmation_time"
+        ),
+    }
+    if not event_path.exists():
+        if state_source.get("status") == "contract_invalid":
+            source.update(
+                {
+                    "status": "state_contract_invalid",
+                    "optional_when_absent": False,
+                    "contract_errors": list(state_source.get("contract_errors") or []),
+                }
+            )
+        elif int(state_source.get("order_count") or 0) > 0:
+            source.update(
+                {
+                    "status": "event_journal_missing_with_accepted_state_orders",
+                    "optional_when_absent": False,
+                    "contract_errors": [
+                        "accepted_state_orders_without_exact_date_event_journal"
+                    ],
+                }
+            )
+        return [], source
+    try:
+        event_bytes = event_path.read_bytes()
+        raw_lines = event_bytes.decode("utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        source["status"] = "unreadable"
+        source["optional_when_absent"] = False
+        return [], source
+    source["sha256"] = hashlib.sha256(event_bytes).hexdigest()
+    source["row_count"] = len([line for line in raw_lines if line.strip()])
+    submit_rows: dict[tuple[str, str], dict[str, Any]] = {}
+    reconcile_rows: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    contract_errors: list[str] = list(state_source.get("contract_errors") or [])
+    actual_event_count = 0
+    relevant_types = {
+        "order_submitted",
+        "order_execution_reconciled",
+        "take_profit_episode_completed",
+    }
+    for line_number, line in enumerate(raw_lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            contract_errors.append(f"event_json_invalid:{line_number}")
+            continue
+        if not isinstance(event, dict) or event.get("event_type") not in relevant_types:
+            continue
+        actual_event_count += 1
+        observed_at = _owner_ts_on_target_date(event.get("observed_at"), target_date)
+        symbol = str(event.get("symbol") or "")
+        schema = event.get("schema")
+        base_valid = bool(
+            schema in {None, WIDGET_AUTO_TRADE_EVENT_SCHEMA}
+            and event.get("trade_date") == target_date
+            and observed_at is not None
+            and len(symbol) == 6
+            and symbol.isdigit()
+            and event.get("execution_authority")
+            == WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY
+            and event.get("decision_authority") == WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY
+            and event.get("runtime_effect") is True
+            and event.get("actual_order_submitted") is True
+            and event.get("broker_order_forbidden") is False
+        )
+        if not base_valid:
+            contract_errors.append(f"event_envelope_invalid:{line_number}")
+            continue
+        if event["event_type"] == "take_profit_episode_completed":
+            continue
+        order_no = str(event.get("order_no") or "").strip()
+        role = str(event.get("order_role") or "").strip()
+        side = str(event.get("side") or "").strip().upper()
+        if (
+            not order_no
+            or role
+            not in {
+                "ENTRY_BUY",
+                "SCALE_IN_BUY",
+                "TAKE_PROFIT_SELL",
+                "FINAL_EXIT_SELL",
+            }
+            or side != ("BUY" if role in {"ENTRY_BUY", "SCALE_IN_BUY"} else "SELL")
+        ):
+            contract_errors.append(f"event_order_identity_invalid:{line_number}")
+            continue
+        key = (symbol, order_no)
+        normalized_event = {**event, "_observed_at": observed_at}
+        if event["event_type"] == "order_submitted":
+            requested_qty = _widget_numeric(event.get("requested_qty"))
+            if (
+                requested_qty is None
+                or not requested_qty.is_integer()
+                or requested_qty <= 0
+                or key in submit_rows
+            ):
+                contract_errors.append(f"submit_contract_invalid:{line_number}")
+                continue
+            submit_rows[key] = normalized_event
+        else:
+            requested_qty = _widget_numeric(event.get("requested_qty"))
+            filled_qty = _widget_numeric(event.get("filled_qty"))
+            remaining_qty = _widget_numeric(event.get("remaining_qty"))
+            if (
+                requested_qty is None
+                or not requested_qty.is_integer()
+                or requested_qty <= 0
+                or filled_qty is None
+                or not filled_qty.is_integer()
+                or filled_qty < 0
+                or filled_qty > requested_qty
+                or remaining_qty is None
+                or not remaining_qty.is_integer()
+                or remaining_qty < 0
+                or remaining_qty > requested_qty
+                or filled_qty + remaining_qty > requested_qty
+            ):
+                contract_errors.append(f"reconcile_contract_invalid:{line_number}")
+                continue
+            reconcile_rows[key].append(normalized_event)
+    for symbol, order_no in sorted(set(reconcile_rows) - set(submit_rows)):
+        contract_errors.append(f"reconcile_without_submit:{symbol}:{order_no}")
+    for symbol, order_no in sorted(set(state_orders) - set(submit_rows)):
+        contract_errors.append(
+            f"accepted_state_order_without_submit:{symbol}:{order_no}"
+        )
+    for symbol, order_no in sorted(set(submit_rows) - set(state_orders)):
+        contract_errors.append(
+            f"accepted_submit_without_exact_date_state:{symbol}:{order_no}"
+        )
+    for key, rows in reconcile_rows.items():
+        submit = submit_rows.get(key)
+        if submit is None:
+            continue
+        submit_requested = int(_widget_numeric(submit.get("requested_qty")) or 0)
+        prior_filled = -1
+        prior_remaining = submit_requested
+        for row in sorted(rows, key=lambda value: value["_observed_at"]):
+            filled = int(_widget_numeric(row.get("filled_qty")) or 0)
+            remaining = int(_widget_numeric(row.get("remaining_qty")) or 0)
+            row_requested = int(_widget_numeric(row.get("requested_qty")) or 0)
+            if (
+                row_requested != submit_requested
+                or row.get("order_role") != submit.get("order_role")
+                or row.get("side") != submit.get("side")
+                or filled < prior_filled
+                or remaining > prior_remaining
+            ):
+                contract_errors.append(
+                    f"reconciliation_sequence_invalid:{key[0]}:{key[1]}"
+                )
+                break
+            prior_filled = filled
+            prior_remaining = remaining
+    for key in sorted(set(state_orders) & set(submit_rows)):
+        state_order = state_orders[key]
+        submit = submit_rows[key]
+        state_requested = int(_widget_numeric(state_order.get("requested_qty")) or 0)
+        submit_requested = int(_widget_numeric(submit.get("requested_qty")) or 0)
+        if (
+            state_requested != submit_requested
+            or state_order.get("order_role") != submit.get("order_role")
+            or state_order.get("side") != submit.get("side")
+            or (
+                state_order.get("signal_id")
+                and state_order.get("signal_id") != submit.get("signal_id")
+            )
+            or (
+                state_order.get("market_venue")
+                and state_order.get("market_venue") != submit.get("market_venue")
+            )
+        ):
+            contract_errors.append(f"state_event_order_mismatch:{key[0]}:{key[1]}")
+    source["actual_event_count"] = actual_event_count
+    if contract_errors:
+        source.update(
+            {
+                "status": "contract_invalid",
+                "optional_when_absent": False,
+                "contract_errors": sorted(set(contract_errors)),
+            }
+        )
+        return [], source
+
+    lifecycle_orders: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    instrumentation_gaps: list[str] = []
+    for key, submit in submit_rows.items():
+        state_order = state_orders.get(key) or {}
+        rows = sorted(
+            reconcile_rows.get(key) or [], key=lambda row: row["_observed_at"]
+        )
+        positive_rows = [
+            row for row in rows if (_widget_numeric(row.get("filled_qty")) or 0.0) > 0
+        ]
+        requested_qty = int(_widget_numeric(submit.get("requested_qty")) or 0)
+        event_filled_qty = max(
+            (int(_widget_numeric(row.get("filled_qty")) or 0) for row in rows),
+            default=0,
+        )
+        state_filled_qty = int(_widget_numeric(state_order.get("filled_qty")) or 0)
+        filled_qty = max(event_filled_qty, state_filled_qty)
+        fill_price = next(
+            (
+                value
+                for row in reversed(positive_rows)
+                if (value := _widget_numeric(row.get("fill_price"))) is not None
+                and value > 0
+                and int(_widget_numeric(row.get("filled_qty")) or 0) == filled_qty
+            ),
+            None,
+        )
+        if fill_price is None and state_filled_qty == filled_qty:
+            fill_price = _widget_numeric(state_order.get("fill_price"))
+        first_fill_price = (
+            _widget_numeric(positive_rows[0].get("fill_price"))
+            if positive_rows
+            else None
+        )
+        first_fill_at = positive_rows[0]["_observed_at"] if positive_rows else None
+        latest_fill_at = next(
+            (
+                row["_observed_at"]
+                for row in reversed(positive_rows)
+                if int(_widget_numeric(row.get("filled_qty")) or 0) == filled_qty
+            ),
+            None,
+        )
+        full_fill_at = next(
+            (
+                row["_observed_at"]
+                for row in positive_rows
+                if int(_widget_numeric(row.get("filled_qty")) or 0) == requested_qty
+                and int(_widget_numeric(row.get("remaining_qty")) or 0) == 0
+            ),
+            None,
+        )
+        if first_fill_at is None and filled_qty > 0:
+            first_fill_at = _owner_ts_on_target_date(
+                state_order.get("last_reconciled_at"), target_date
+            )
+        state_reconciled_at = _owner_ts_on_target_date(
+            state_order.get("last_reconciled_at"), target_date
+        )
+        if state_filled_qty == filled_qty and state_reconciled_at is not None:
+            latest_fill_at = max(
+                (value for value in (latest_fill_at, state_reconciled_at) if value),
+                default=None,
+            )
+        if (
+            full_fill_at is None
+            and filled_qty == requested_qty
+            and state_order.get("status") == "FILLED"
+        ):
+            full_fill_at = _owner_ts_on_target_date(
+                state_order.get("last_reconciled_at"), target_date
+            )
+        fill_at = full_fill_at or latest_fill_at or first_fill_at
+        parent_signal_id = str(
+            submit.get("parent_entry_signal_id")
+            or state_order.get("parent_entry_signal_id")
+            or ""
+        ).strip()
+        signal_id = str(submit.get("signal_id") or state_order.get("signal_id") or "")
+        role = str(submit.get("order_role") or "")
+        if role == "ENTRY_BUY":
+            lifecycle_signal_id = signal_id
+        elif role == "SCALE_IN_BUY":
+            lifecycle_signal_id = parent_signal_id or str(
+                state_order.get("_state_entry_signal_id") or ""
+            )
+        elif role == "TAKE_PROFIT_SELL":
+            lifecycle_signal_id = (
+                parent_signal_id
+                or (signal_id.rsplit(":TP:", 1)[0] if ":TP:" in signal_id else "")
+                or str(state_order.get("_state_entry_signal_id") or "")
+            )
+        else:
+            lifecycle_signal_id = parent_signal_id or str(
+                state_order.get("_state_entry_signal_id") or ""
+            )
+        venue = str(
+            submit.get("market_venue") or state_order.get("market_venue") or ""
+        ).upper()
+        if (
+            not lifecycle_signal_id
+            or venue not in {"KRX", "NXT"}
+            or filled_qty > requested_qty
+            or (
+                filled_qty > 0
+                and (fill_price is None or fill_price <= 0 or fill_at is None)
+            )
+        ):
+            instrumentation_gaps.append(f"order_lifecycle_incomplete:{key[0]}:{key[1]}")
+            continue
+        fact = {
+            **submit,
+            "filled_qty": filled_qty,
+            "fill_price": fill_price,
+            "first_fill_price": first_fill_price,
+            "fill_at": fill_at,
+            "first_fill_at": first_fill_at,
+            "full_fill_at": full_fill_at,
+            "lifecycle_signal_id": lifecycle_signal_id,
+            "market_venue": venue,
+        }
+        lifecycle_orders[(key[0], lifecycle_signal_id)].append(fact)
+
+    anchors: list[dict[str, Any]] = []
+    for (symbol, signal_id), orders in sorted(lifecycle_orders.items()):
+        signal_contract = _widget_entry_signal_contract(
+            signal_id, symbol=symbol, target_date=target_date
+        )
+        initial_orders = [
+            order for order in orders if order.get("order_role") == "ENTRY_BUY"
+        ]
+        if signal_contract is None or len(initial_orders) != 1:
+            instrumentation_gaps.append(
+                f"entry_signal_contract_invalid:{symbol}:{signal_id}"
+            )
+            continue
+        session, signal_at = signal_contract
+        buy_submit_orders = [
+            order
+            for order in orders
+            if order.get("order_role") in {"ENTRY_BUY", "SCALE_IN_BUY"}
+        ]
+        buy_fill_orders = [
+            order
+            for order in buy_submit_orders
+            if order.get("order_role") in {"ENTRY_BUY", "SCALE_IN_BUY"}
+            and int(order.get("filled_qty") or 0) > 0
+        ]
+        sell_orders = [
+            order
+            for order in orders
+            if order.get("order_role") in {"TAKE_PROFIT_SELL", "FINAL_EXIT_SELL"}
+            and int(order.get("filled_qty") or 0) > 0
+        ]
+        sell_submit_orders = [
+            order
+            for order in orders
+            if order.get("order_role") in {"TAKE_PROFIT_SELL", "FINAL_EXIT_SELL"}
+        ]
+        venue = str(initial_orders[0].get("market_venue") or "")
+        scope_id = f"actual:{symbol}:{session}"
+        row = symbols.setdefault(
+            symbol,
+            {
+                "symbol": symbol,
+                "name": initial_orders[0].get("name"),
+                "scopes": [],
+                "owner_scope_ids": [],
+                "owner_scope_kinds": {},
+                "owner_scope_expected_venues": {},
+                "owner_anchor_contract_gaps": [],
+                "expected_venues": [],
+                "owner_inventory_source": "exact_date_widget_execution_event_journal",
+            },
+        )
+        for key, default in (
+            ("scopes", []),
+            ("owner_scope_ids", []),
+            ("owner_scope_kinds", {}),
+            ("owner_scope_expected_venues", {}),
+            ("owner_anchor_contract_gaps", []),
+            ("expected_venues", []),
+        ):
+            row.setdefault(key, default.copy())
+        if "active_widget_actual_execution" not in row["scopes"]:
+            row["scopes"].append("active_widget_actual_execution")
+        if scope_id not in row["owner_scope_ids"]:
+            row["owner_scope_ids"].append(scope_id)
+        row["owner_scope_kinds"][scope_id] = "active_widget_actual_execution"
+        row["owner_scope_expected_venues"][scope_id] = [venue]
+        if venue not in row["expected_venues"]:
+            row["expected_venues"].append(venue)
+        buy_qty = sum(int(order["filled_qty"]) for order in buy_fill_orders)
+        sell_qty = sum(int(order["filled_qty"]) for order in sell_orders)
+        buy_notional = sum(
+            int(order["filled_qty"]) * float(order["fill_price"])
+            for order in buy_fill_orders
+        )
+        sell_notional = sum(
+            int(order["filled_qty"]) * float(order["fill_price"])
+            for order in sell_orders
+        )
+        first_fill_at = min(
+            (order["first_fill_at"] for order in buy_fill_orders), default=None
+        )
+        exit_at = max((order["fill_at"] for order in sell_orders), default=None)
+        first_entry_submit_at = min(
+            order["_observed_at"] for order in buy_submit_orders
+        )
+        first_exit_submit_at = min(
+            (order["_observed_at"] for order in sell_submit_orders), default=None
+        )
+        order_venues = {str(order.get("market_venue") or "") for order in orders}
+        initial_submit_price = _widget_numeric(initial_orders[0].get("limit_price"))
+        initial_fill_price = _widget_numeric(initial_orders[0].get("fill_price"))
+        anchor_entry_price = initial_fill_price or initial_submit_price
+        buy_submit_prices = {
+            str(order["order_no"]): _widget_numeric(order.get("fill_price"))
+            or _widget_numeric(order.get("limit_price"))
+            for order in buy_submit_orders
+        }
+        sell_submit_prices = {
+            str(order["order_no"]): _widget_numeric(order.get("limit_price"))
+            or _widget_numeric(order.get("fill_price"))
+            for order in sell_submit_orders
+        }
+        timestamp_order_valid = bool(
+            signal_at <= first_entry_submit_at
+            and all(
+                order["_observed_at"] <= order["first_fill_at"]
+                for order in buy_fill_orders
+            )
+            and all(order["_observed_at"] <= order["fill_at"] for order in sell_orders)
+            and (first_fill_at is None or first_entry_submit_at <= first_fill_at)
+            and (
+                first_exit_submit_at is None
+                or (first_fill_at is not None and first_exit_submit_at >= first_fill_at)
+            )
+            and (
+                exit_at is None
+                or (first_fill_at is not None and exit_at >= first_fill_at)
+            )
+        )
+        if (
+            sell_qty > buy_qty
+            or not timestamp_order_valid
+            or order_venues != {venue}
+            or WIDGET_SESSION_VENUES.get(session) != venue
+            or anchor_entry_price is None
+            or anchor_entry_price <= 0
+            or any(price is None or price <= 0 for price in buy_submit_prices.values())
+            or any(price is None or price <= 0 for price in sell_submit_prices.values())
+        ):
+            row["owner_anchor_contract_gaps"].append(
+                {"scope_id": scope_id, "reason": "actual_widget_fill_order_invalid"}
+            )
+            continue
+        realized = bool(sell_qty == buy_qty and buy_qty > 0 and exit_at is not None)
+        gross_return_pct = (
+            (sell_notional / buy_notional - 1.0) * 100.0
+            if realized and buy_notional > 0
+            else None
+        )
+        target_prices = [
+            value
+            for order in sell_submit_orders
+            if order.get("order_role") == "TAKE_PROFIT_SELL"
+            and (value := _widget_numeric(order.get("limit_price"))) is not None
+            and value > 0
+        ]
+        owner_outcome = {
+            "exit_at": exit_at.isoformat() if exit_at else None,
+            "exit_price": sell_notional / sell_qty if sell_qty else None,
+            "exit_reason": (
+                "take_profit_fill"
+                if realized
+                and all(
+                    order.get("order_role") == "TAKE_PROFIT_SELL"
+                    for order in sell_orders
+                )
+                else "final_exit_fill"
+                if realized
+                else "right_censored"
+            ),
+            "holding_duration_ms": (
+                round((exit_at - first_fill_at).total_seconds() * 1000.0)
+                if realized and exit_at is not None and first_fill_at is not None
+                else None
+            ),
+            "signal_to_entry_submit_record_ms": round(
+                (first_entry_submit_at - signal_at).total_seconds() * 1000.0
+            ),
+            "entry_submit_record_to_first_fill_confirmation_ms": round(
+                (first_fill_at - first_entry_submit_at).total_seconds() * 1000.0
+            )
+            if first_fill_at is not None
+            else None,
+            "first_fill_confirmation_to_first_exit_submit_record_ms": (
+                round((first_exit_submit_at - first_fill_at).total_seconds() * 1000.0)
+                if first_exit_submit_at is not None and first_fill_at is not None
+                else None
+            ),
+            "first_exit_submit_record_to_final_exit_fill_confirmation_ms": (
+                round((exit_at - first_exit_submit_at).total_seconds() * 1000.0)
+                if exit_at is not None and first_exit_submit_at is not None
+                else None
+            ),
+            "gross_no_slippage_return_pct": (
+                round(gross_return_pct, 8) if gross_return_pct is not None else None
+            ),
+            "cost_aware_net_return_pct": (
+                round(gross_return_pct - round_trip_cost_pct, 8)
+                if gross_return_pct is not None and round_trip_cost_pct is not None
+                else None
+            ),
+            "entry_notional_krw": round(buy_notional, 3),
+            "quantity": buy_qty,
+            "quantity_basis": "actual_widget_filled_quantity",
+            "entry_fill_status": "filled" if buy_qty > 0 else "unfilled",
+            "realized": realized,
+            "leg_id": "widget_episode",
+            "timestamp_provenance": (
+                "execution_loop_submit_record_and_broker_reconciliation_confirmation_time"
+            ),
+        }
+        policy_tuning_eligible = bool(
+            buy_qty > 0
+            and buy_notional > 0
+            and len(buy_submit_orders) == 1
+            and initial_orders[0].get("full_fill_at") is not None
+            and round_trip_cost_pct is not None
+            and round_trip_cost_pct >= 0
+        )
+        owner_cost_contract = {
+            "owner_round_trip_cost_pct": round_trip_cost_pct,
+            "owner_round_trip_cost_provenance": (
+                "widget_auto_trade_policy_calibration.round_trip_cost_pct"
+            ),
+        }
+        lifecycle_id = f"widget_actual:{symbol}:{signal_id}"
+        anchors.append(
+            {
+                "anchor_id": f"{lifecycle_id}:signal",
+                "lifecycle_id": lifecycle_id,
+                "owner": "widget",
+                "scope_id": scope_id,
+                "symbol": symbol,
+                "session": session,
+                "expected_venues": [venue],
+                "expected_session_buckets": [session],
+                "anchor_at": signal_at.isoformat(),
+                "anchor_price": anchor_entry_price,
+                "anchor_price_provenance": (
+                    "actual_initial_entry_fill_price"
+                    if initial_fill_price is not None
+                    else "accepted_entry_limit_price_unfilled"
+                ),
+                "owner_target_price": target_prices[-1] if target_prices else None,
+                "lifecycle_stage": "entry",
+                "anchor_role": "actual_widget_entry_signal",
+                **owner_cost_contract,
+                "owner_outcome": owner_outcome,
+                "owner_lifecycle_contract_valid": True,
+                "owner_policy_tuning_eligible": policy_tuning_eligible,
+                "actual_order_submitted": True,
+            }
+        )
+        for order in buy_submit_orders:
+            submit_anchor_price = buy_submit_prices[str(order["order_no"])]
+            assert submit_anchor_price is not None
+            anchors.append(
+                {
+                    "anchor_id": f"{lifecycle_id}:buy_submit:{order['order_no']}",
+                    "lifecycle_id": lifecycle_id,
+                    "owner": "widget",
+                    "scope_id": scope_id,
+                    "symbol": symbol,
+                    "session": session,
+                    "expected_venues": [venue],
+                    "expected_session_buckets": [session],
+                    "anchor_at": order["_observed_at"].isoformat(),
+                    "anchor_price": submit_anchor_price,
+                    "anchor_price_provenance": (
+                        "eventual_actual_fill_price"
+                        if order.get("fill_price") is not None
+                        else "accepted_entry_limit_price_unfilled"
+                    ),
+                    "owner_target_price": target_prices[-1] if target_prices else None,
+                    "lifecycle_stage": "entry_submit",
+                    "anchor_role": "actual_widget_entry_submit_accept_recorded",
+                    "execution_order_role": order.get("order_role"),
+                    "execution_order_no": order.get("order_no"),
+                    **owner_cost_contract,
+                    "owner_outcome": owner_outcome,
+                    "owner_lifecycle_contract_valid": True,
+                    "owner_policy_tuning_eligible": policy_tuning_eligible,
+                    "actual_order_submitted": True,
+                }
+            )
+        for order in buy_fill_orders:
+            full_fill = order.get("full_fill_at") is not None
+            if (
+                full_fill
+                and order.get("first_fill_price") is not None
+                and order["first_fill_at"] < order["full_fill_at"]
+            ):
+                anchors.append(
+                    {
+                        "anchor_id": (
+                            f"{lifecycle_id}:buy_partial_fill:{order['order_no']}"
+                        ),
+                        "lifecycle_id": lifecycle_id,
+                        "owner": "widget",
+                        "scope_id": scope_id,
+                        "symbol": symbol,
+                        "session": session,
+                        "expected_venues": [venue],
+                        "expected_session_buckets": [session],
+                        "anchor_at": order["first_fill_at"].isoformat(),
+                        "anchor_price": float(order["first_fill_price"]),
+                        "anchor_price_provenance": ("first_reconciliation_fill_price"),
+                        "owner_target_price": (
+                            target_prices[-1] if target_prices else None
+                        ),
+                        "lifecycle_stage": "entry_partial_fill",
+                        "anchor_role": "actual_widget_entry_partial_fill_reconciled",
+                        "execution_order_role": order.get("order_role"),
+                        "execution_order_no": order.get("order_no"),
+                        **owner_cost_contract,
+                        "owner_outcome": owner_outcome,
+                        "owner_lifecycle_contract_valid": True,
+                        "owner_policy_tuning_eligible": policy_tuning_eligible,
+                        "actual_order_submitted": True,
+                    }
+                )
+            anchors.append(
+                {
+                    "anchor_id": f"{lifecycle_id}:buy_fill:{order['order_no']}",
+                    "lifecycle_id": lifecycle_id,
+                    "owner": "widget",
+                    "scope_id": scope_id,
+                    "symbol": symbol,
+                    "session": session,
+                    "expected_venues": [venue],
+                    "expected_session_buckets": [session],
+                    "anchor_at": order["fill_at"].isoformat(),
+                    "anchor_price": float(order["fill_price"]),
+                    "anchor_price_provenance": "latest_cumulative_fill_price",
+                    "owner_target_price": target_prices[-1] if target_prices else None,
+                    "lifecycle_stage": "entry" if full_fill else "entry_partial_fill",
+                    "anchor_role": (
+                        "actual_widget_entry_fill_reconciled"
+                        if full_fill
+                        else "actual_widget_entry_partial_fill_reconciled"
+                    ),
+                    "execution_order_role": order.get("order_role"),
+                    "execution_order_no": order.get("order_no"),
+                    **owner_cost_contract,
+                    "owner_outcome": owner_outcome,
+                    "owner_lifecycle_contract_valid": True,
+                    "owner_policy_tuning_eligible": policy_tuning_eligible,
+                    "actual_order_submitted": True,
+                }
+            )
+        for order in sell_submit_orders:
+            submit_price = sell_submit_prices[str(order["order_no"])]
+            assert submit_price is not None
+            anchors.append(
+                {
+                    "anchor_id": f"{lifecycle_id}:sell_submit:{order['order_no']}",
+                    "lifecycle_id": lifecycle_id,
+                    "owner": "widget",
+                    "scope_id": scope_id,
+                    "symbol": symbol,
+                    "session": session,
+                    "expected_venues": [venue],
+                    "expected_session_buckets": [session],
+                    "anchor_at": order["_observed_at"].isoformat(),
+                    "anchor_price": submit_price,
+                    "anchor_price_provenance": (
+                        "accepted_limit_price_or_eventual_actual_fill_price"
+                    ),
+                    "owner_target_price": None,
+                    "lifecycle_stage": "exit_submit",
+                    "anchor_role": "actual_widget_exit_submit_accept_recorded",
+                    "execution_order_role": order.get("order_role"),
+                    "execution_order_no": order.get("order_no"),
+                    **owner_cost_contract,
+                    "owner_outcome": owner_outcome,
+                    "owner_lifecycle_contract_valid": True,
+                    "owner_policy_tuning_eligible": policy_tuning_eligible,
+                    "actual_order_submitted": True,
+                }
+            )
+        if realized:
+            for order in sell_orders:
+                partial_fill_at = order.get("first_fill_at")
+                partial_fill_price = order.get("first_fill_price")
+                full_fill_at = order.get("full_fill_at")
+                if (
+                    partial_fill_at is None
+                    or partial_fill_price is None
+                    or (full_fill_at is not None and partial_fill_at >= full_fill_at)
+                ):
+                    continue
+                anchors.append(
+                    {
+                        "anchor_id": (
+                            f"{lifecycle_id}:sell_partial_fill:{order['order_no']}"
+                        ),
+                        "lifecycle_id": lifecycle_id,
+                        "owner": "widget",
+                        "scope_id": scope_id,
+                        "symbol": symbol,
+                        "session": session,
+                        "expected_venues": [venue],
+                        "expected_session_buckets": [session],
+                        "anchor_at": partial_fill_at.isoformat(),
+                        "anchor_price": float(order["first_fill_price"]),
+                        "anchor_price_provenance": ("first_reconciliation_fill_price"),
+                        "owner_target_price": None,
+                        "lifecycle_stage": "exit_partial_fill",
+                        "anchor_role": ("actual_widget_exit_partial_fill_reconciled"),
+                        "execution_order_role": order.get("order_role"),
+                        "execution_order_no": order.get("order_no"),
+                        **owner_cost_contract,
+                        "owner_outcome": owner_outcome,
+                        "owner_lifecycle_contract_valid": True,
+                        "owner_policy_tuning_eligible": policy_tuning_eligible,
+                        "actual_order_submitted": True,
+                    }
+                )
+        if sell_qty > 0 and exit_at is not None:
+            anchors.append(
+                {
+                    "anchor_id": f"{lifecycle_id}:exit",
+                    "lifecycle_id": lifecycle_id,
+                    "owner": "widget",
+                    "scope_id": scope_id,
+                    "symbol": symbol,
+                    "session": session,
+                    "expected_venues": [venue],
+                    "expected_session_buckets": [session],
+                    "anchor_at": exit_at.isoformat(),
+                    "anchor_price": sell_notional / sell_qty,
+                    "owner_target_price": None,
+                    "lifecycle_stage": "exit" if realized else "exit_partial_fill",
+                    "anchor_role": (
+                        "actual_widget_exit_fill_reconciled"
+                        if realized
+                        else "actual_widget_exit_partial_fill_reconciled"
+                    ),
+                    **owner_cost_contract,
+                    "owner_outcome": owner_outcome,
+                    "owner_lifecycle_contract_valid": True,
+                    "owner_policy_tuning_eligible": policy_tuning_eligible,
+                    "actual_order_submitted": True,
+                }
+            )
+    for gap in instrumentation_gaps:
+        parts = gap.split(":", 2)
+        if len(parts) >= 2 and parts[1] in symbols:
+            symbols[parts[1]].setdefault("owner_anchor_contract_gaps", []).append(
+                {"scope_id": f"actual:{parts[1]}:unknown", "reason": gap}
+            )
+    source.update(
+        {
+            "status": "loaded_with_instrumentation_gaps"
+            if instrumentation_gaps
+            else "loaded",
+            "optional_when_absent": False,
+            "grouped_lifecycle_count": len(lifecycle_orders),
+            "actual_lifecycle_count": len(
+                {
+                    str(anchor.get("lifecycle_id"))
+                    for anchor in anchors
+                    if anchor.get("lifecycle_id")
+                }
+            ),
+            "anchor_count": len(anchors),
+            "contract_errors": instrumentation_gaps,
+        }
+    )
+    return anchors, source
+
+
 def _widget_inventory(
-    target_date: str, report_root: Path
+    target_date: str,
+    report_root: Path,
+    *,
+    widget_state_path: Path,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     calibration_path = (
         report_root
@@ -963,6 +1913,15 @@ def _widget_inventory(
             )
             row["owner_scope_expected_venues"][scope_id] = ["SOR"]
 
+    actual_anchors, actual_source = _widget_actual_execution_inventory(
+        target_date=target_date,
+        report_root=report_root,
+        state_path=widget_state_path,
+        symbols=symbols,
+        round_trip_cost_pct=widget_round_trip_cost_pct,
+    )
+    anchors.extend(actual_anchors)
+
     for row in symbols.values():
         if not row.get("expected_venues"):
             row["expected_venues"] = ["SOR"]
@@ -992,6 +1951,7 @@ def _widget_inventory(
                 target_date=target_date,
                 expected_schemas=expansion_schemas,
             ),
+            "actual_execution_events": actual_source,
         },
     )
 
@@ -3018,6 +3978,7 @@ def _scope_micro_gap_class(
 def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     decision_roles = {
         "counterfactual_calibration_entry",
+        "actual_widget_entry_signal",
         "episode_signal_bar",
         "prospective_widget_research_entry",
         "prospective_episode_research_signal",
@@ -3041,7 +4002,20 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
         if row.get("anchor_role") in decision_roles and row.get("lifecycle_id")
     }
     matched_entry_fill_count = sum(
-        row.get("anchor_role") == "episode_buy_fill_confirmed"
+        row.get("anchor_role")
+        in {"episode_buy_fill_confirmed", "actual_widget_entry_fill_reconciled"}
+        for row in context_matched_results
+    )
+    matched_partial_entry_fill_count = sum(
+        row.get("lifecycle_stage") == "entry_partial_fill"
+        for row in context_matched_results
+    )
+    matched_entry_submit_count = sum(
+        row.get("anchor_role") == "actual_widget_entry_submit_accept_recorded"
+        for row in context_matched_results
+    )
+    matched_exit_submit_count = sum(
+        row.get("anchor_role") == "actual_widget_exit_submit_accept_recorded"
         for row in context_matched_results
     )
     matched_exit_count = sum(
@@ -3074,9 +4048,14 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
             outcome_units[(lifecycle_id, leg_id)] = {
                 "outcome": outcome,
                 "cohort": (
-                    "actual_episode_execution"
+                    "actual_widget_execution"
                     if row.get("actual_order_submitted") is True
-                    else "source_only_counterfactual"
+                    and row.get("owner") == "widget"
+                    else (
+                        "actual_episode_execution"
+                        if row.get("actual_order_submitted") is True
+                        else "source_only_counterfactual"
+                    )
                 ),
             }
     realized_units = [
@@ -3108,7 +4087,11 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
     )
 
     cohort_diagnostics: dict[str, dict[str, Any]] = {}
-    for cohort in ("actual_episode_execution", "source_only_counterfactual"):
+    for cohort in (
+        "actual_widget_execution",
+        "actual_episode_execution",
+        "source_only_counterfactual",
+    ):
         cohort_units = [unit for unit in realized_units if unit["cohort"] == cohort]
         cohort_gross = [
             value
@@ -3193,6 +4176,11 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
                 policy_eligible_matched_decision_lifecycle_ids
             ),
             "matched_entry_fill_anchor_count": matched_entry_fill_count,
+            "matched_partial_entry_fill_anchor_count": (
+                matched_partial_entry_fill_count
+            ),
+            "matched_entry_submit_anchor_count": matched_entry_submit_count,
+            "matched_exit_submit_anchor_count": matched_exit_submit_count,
             "matched_exit_anchor_count": matched_exit_count,
             "matched_partial_exit_fill_anchor_count": (matched_partial_exit_fill_count),
             "owner_outcome_unit_count": len(outcome_units),
@@ -3374,7 +4362,13 @@ def _fast_lifecycle_objective_followup(
         followup_required = True
         attention_class = "source_quality"
         current_capability = "rolling_paired_research_source_quality_blocked"
-        next_action = "repair_current_attribution_source_contract_and_rerun"
+        recovery = objective_alignment.get("current_source_contract_recovery") or {}
+        next_action = (
+            "quarantine_current_source_date_and_continue_next_exact_date_collection"
+            if isinstance(recovery, dict)
+            and recovery.get("rerun_same_source_date_allowed") is False
+            else "repair_current_attribution_source_contract_and_rerun"
+        )
     else:
         state = "EVIDENCE_ACCUMULATING"
         followup_required = True
@@ -3402,7 +4396,39 @@ def _fast_lifecycle_objective_followup(
     }
     if candidate_handoff_binding is not None:
         row["candidate_handoff_binding"] = candidate_handoff_binding
+    source_contract_recovery = objective_alignment.get(
+        "current_source_contract_recovery"
+    )
+    if isinstance(source_contract_recovery, dict) and source_contract_recovery:
+        row["source_contract_recovery"] = dict(source_contract_recovery)
     return row
+
+
+def _rolling_source_contract_recovery(gap: str | None) -> dict[str, Any]:
+    if gap is None:
+        return {
+            "disposition": "not_required",
+            "rerun_same_source_date_allowed": False,
+            "excluded_from_rolling_policy_evidence": False,
+            "next_action": "continue_rolling_readiness_review",
+        }
+    if gap == "micro_canary_target_date_evidence_incomplete":
+        return {
+            "disposition": "immutable_source_date_quarantine",
+            "rerun_same_source_date_allowed": False,
+            "excluded_from_rolling_policy_evidence": True,
+            "next_action": (
+                "quarantine_current_source_date_and_continue_next_exact_date_collection"
+            ),
+            "reason": "irreversible_intraday_observation_loss_cannot_be_reconstructed",
+        }
+    return {
+        "disposition": "repairable_source_contract_gap",
+        "rerun_same_source_date_allowed": True,
+        "excluded_from_rolling_policy_evidence": True,
+        "next_action": "repair_current_attribution_source_contract_and_rerun",
+        "reason": gap,
+    }
 
 
 def build_report(
@@ -3413,6 +4439,7 @@ def build_report(
     source_exclusion_manifest_path: Path = DEFAULT_SOURCE_EXCLUSION_MANIFEST,
     canary_snapshot_path: Path | None = DEFAULT_CANARY_SNAPSHOT_PATH,
     canary_snapshot_dir: Path = CANARY_DAILY_SNAPSHOT_DIR,
+    widget_state_path: Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     target_day = date.fromisoformat(target_date)
@@ -3426,8 +4453,13 @@ def build_report(
         daily_root=canary_snapshot_dir,
     )
     clean_baseline_allowed = target_day >= CLEAN_BASELINE_DATE
+    resolved_widget_state_path = widget_state_path or (
+        DEFAULT_WIDGET_AUTO_TRADE_STATE_PATH
+        if report_root == DATA_DIR / "report"
+        else report_root.parent / "runtime" / "widget_signal_auto_trade_state.json"
+    )
     widget_symbols, widget_anchors, widget_sources = _widget_inventory(
-        target_date, report_root
+        target_date, report_root, widget_state_path=resolved_widget_state_path
     )
     episode_profiles, episode_anchors, episode_sources = _episode_inventory(
         target_date, report_root
@@ -3688,6 +4720,10 @@ def build_report(
         }
         for key, value in widget_sources.items()
         if value["status"] != "loaded"
+        and not (
+            value.get("optional_when_absent") is True
+            and value["status"] == "not_observed"
+        )
     ] + [
         {
             "owner": "episode",
@@ -3703,6 +4739,7 @@ def build_report(
     rolling_policy_source_contract = {
         "ready": bool(clean_baseline_allowed and source_contract_gap is None),
         "gap": source_contract_gap,
+        "recovery": _rolling_source_contract_recovery(source_contract_gap),
         "required": (
             "clean_baseline_and_exact_date_partition_manifest_canary_stream_contract"
         ),
@@ -3735,6 +4772,12 @@ def build_report(
     objective_alignment["remaining_gaps"] = list(
         rolling_paired_policy_research.get("remaining_gap_codes") or []
     )
+    objective_alignment["current_source_contract_recovery"] = dict(
+        (rolling_paired_policy_research.get("current_source_contract") or {}).get(
+            "recovery"
+        )
+        or rolling_policy_source_contract["recovery"]
+    )
     research_status = str(rolling_paired_policy_research.get("status") or "")
     objective_alignment["decision"] = (
         "source_only_rolling_paired_candidate_ready"
@@ -3757,7 +4800,14 @@ def build_report(
     ]
     anchor_count_by_stage = {
         stage: sum(item.get("lifecycle_stage") == stage for item in results)
-        for stage in ("entry", "exit_partial_fill", "exit")
+        for stage in (
+            "entry",
+            "entry_submit",
+            "entry_partial_fill",
+            "exit_submit",
+            "exit_partial_fill",
+            "exit",
+        )
     }
     matched_anchor_count_by_stage = {
         stage: sum(
@@ -3765,7 +4815,14 @@ def build_report(
             and item.get("micro_context_status") == "matched"
             for item in results
         )
-        for stage in ("entry", "exit_partial_fill", "exit")
+        for stage in (
+            "entry",
+            "entry_submit",
+            "entry_partial_fill",
+            "exit_submit",
+            "exit_partial_fill",
+            "exit",
+        )
     }
     decision = (
         "diagnostic_attribution_ready"
@@ -3927,7 +4984,9 @@ def render_markdown(report: dict[str, Any]) -> str:
                 (
                     "- Matched unique decision lifecycles: "
                     f"`{lifecycle.get('matched_decision_lifecycle_count', 0)}`; "
+                    f"entry-submit anchors: `{lifecycle.get('matched_entry_submit_anchor_count', 0)}`; "
                     f"entry-fill anchors: `{lifecycle.get('matched_entry_fill_anchor_count', 0)}`; "
+                    f"exit-submit anchors: `{lifecycle.get('matched_exit_submit_anchor_count', 0)}`; "
                     f"exit anchors: `{lifecycle.get('matched_exit_anchor_count', 0)}`."
                 ),
                 (
@@ -4065,6 +5124,11 @@ def main() -> int:
         type=Path,
         default=CANARY_DAILY_SNAPSHOT_DIR,
     )
+    parser.add_argument(
+        "--widget-state",
+        type=Path,
+        default=None,
+    )
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument(
         "--collection-target-root",
@@ -4099,6 +5163,7 @@ def main() -> int:
         source_exclusion_manifest_path=args.source_exclusion_manifest,
         canary_snapshot_path=canary_snapshot,
         canary_snapshot_dir=args.canary_snapshot_dir,
+        widget_state_path=args.widget_state,
     )
     if args.write:
         write_report(report, args.output_dir)

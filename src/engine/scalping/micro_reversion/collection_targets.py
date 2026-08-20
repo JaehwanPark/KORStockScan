@@ -131,7 +131,11 @@ def _priority_round_robin(
 
 def _is_active_gap(gap: dict[str, Any]) -> bool:
     scope_kind = str(gap.get("scope_kind") or "")
-    return scope_kind in {"active_widget_owner", "active_episode_owner"}
+    return scope_kind in {
+        "active_widget_owner",
+        "active_widget_actual_execution",
+        "active_episode_owner",
+    }
 
 
 def build_collection_targets(

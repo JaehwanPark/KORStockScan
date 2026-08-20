@@ -164,6 +164,30 @@ def test_widget_policy_sample_uses_exact_scope_venues_not_aggregate_fallback():
     assert all(not row["gap_classes"] for row in payload["selected_targets"])
 
 
+def test_actual_widget_execution_gap_keeps_active_owner_collection_priority():
+    payload = build_collection_targets(
+        _report(
+            [
+                {
+                    "owner": "widget",
+                    "scope_id": "actual:005930:KRX_REGULAR",
+                    "scope_kind": "active_widget_actual_execution",
+                    "symbol": "005930",
+                    "expected_venues": ["KRX"],
+                    "gap_class": "micro_symbol_not_observed",
+                }
+            ]
+        ),
+        max_symbols=1,
+    )
+
+    target = payload["selected_targets"][0]
+    assert target["symbol"] == "005930"
+    assert target["active_owner"] is True
+    assert target["priority_class"] == "active_owner_collection"
+    assert target["expected_venue"] == "KRX"
+
+
 def test_exact_date_loader_rejects_stale_or_authority_mutation(tmp_path):
     payload = build_collection_targets(
         _report(
