@@ -104,6 +104,20 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 사용자 지시 구현
+
+- [x] `[LowPriceRecommendationImplementation0819] 2026-08-19 장후 추천 11프로필 구현 및 리뷰` (`Due: 2026-08-20`, `Slot: INTRADAY`, `TimeWindow: 13:15~15:20`, `Track: ScalpingLogic`)
+  - Source: [low_price_two_leg_expanded_candidate_research_2026-08-19.json](/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-08-19.json), [low_price_two_leg_expanded_profile_evidence_2026-08-19.json](/home/ubuntu/KORStockScan/data/config/low_price_two_leg_expanded_profile_evidence_2026-08-19.json), [profiles.py](/home/ubuntu/KORStockScan/src/trading/low_price_two_leg/profiles.py)
+  - 판정: 기존 8프로필 로직개선과 신규 3프로필을 2026-08-21 exact-date 세대로 결속하고, 2026-08-20 세대와 prior-date custody를 유지했다. 더본코리아는 source-only에서 승격하지 않았다.
+  - 리뷰: 첫 pass에서 8월 20일 장후 tuning producer가 latest 23-profile inventory를 조기 소비할 수 있는 결함을 발견해 target-date profile/baseline/bounds로 보완했다. 오늘 report/candidate는 20개, 8월 21일부터 23개로 검증된다.
+  - 권한 경계: service 설치·enable/start와 실주문은 수행하지 않았다. 본 후속 리뷰에서 관련 파일만 별도 브랜치에 커밋·푸시한다.
+
+- [ ] `[LowPriceRecommendationActivation0821] 신규 3프로필 timer 설치 및 23-profile PREOPEN 적용 검증` (`Due: 2026-08-21`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:05`, `Track: RuntimeStability`)
+  - Source: [install_low_price_two_leg_systemd.sh](/home/ubuntu/KORStockScan/deploy/install_low_price_two_leg_systemd.sh), [low_price_two_leg_policy_apply.py](/home/ubuntu/KORStockScan/src/engine/automation/low_price_two_leg_policy_apply.py), [low-price-two-leg-machines.md](/home/ubuntu/KORStockScan/docs/low-price-two-leg-machines.md)
+  - 판정 기준: 별도 사용자 지시 후 reviewed installer를 실행하고, exact-date applied artifact가 23프로필·추천 11개 transition hash를 가지며 신규 timer 6개가 enable 상태인지 확인한다.
+  - 금지: 오늘 장중 timer 재설치, 기존 profile service 재기동, prior-date 주문 취소·교체, 수량/stop/provider/bot/broker guard 변경을 하지 않는다.
+  - 다음 액션: `installed_and_preopen_verified`, `implementation_only_not_installed`, `exact_date_policy_blocked`, `timer_or_owner_marker_missing` 중 하나로 닫는다.
+
 
 
 

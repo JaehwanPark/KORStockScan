@@ -37,6 +37,7 @@ dist/
 !data/config/micro_reversion_economic_policy.json
 !data/config/low_price_two_leg_expanded_profile_evidence_2026-08-12.json
 !data/config/low_price_two_leg_expanded_profile_evidence_2026-08-18.json
+!data/config/low_price_two_leg_expanded_profile_evidence_2026-08-19.json
 !data/config/ofi_bucket_threshold_manifest.json
 !data/config/widget_research_watch_symbols.json
 !data/threshold_cycle/operator_runtime_env_locks/aggressive_entry_price_override_2026-06-13.json

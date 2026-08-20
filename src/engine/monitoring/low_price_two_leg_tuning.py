@@ -24,18 +24,18 @@ from src.engine.monitoring.machine_microstructure_attribution import (
 )
 from src.trading.low_price_two_leg.policy_runtime import (
     APPLIED_DIR,
-    BASELINE_POLICIES,
-    POLICY_BOUNDS,
     CANDIDATE_DIR,
     CANDIDATE_SCHEMA,
     atomic_write_json,
     candidate_policies_with_current_baselines,
+    baseline_policies_for_target_date,
     load_applied_profile_policy,
     policy_hash,
+    policy_bounds_for_target_date,
     policy_mutations_between,
     validate_candidate,
 )
-from src.trading.low_price_two_leg.profiles import PROFILES
+from src.trading.low_price_two_leg.profiles import PROFILES, profiles_for_target_date
 from src.trading.order.episode_quantity import SUPPORTED_OWNED_LEG_QUANTITIES
 from src.trading.order.regular_two_leg_machine import KST
 from src.trading.order.tick_utils import move_price_by_ticks
@@ -84,6 +84,9 @@ PROFILE_FIRST_OPERATIONAL_DATES = {
     "samsung_ea_morning": date(2026, 8, 19),
     "samsung_ea_late_morning": date(2026, 8, 19),
     "samsung_ea_afternoon": date(2026, 8, 19),
+    "sk_telecom_late_morning": date(2026, 8, 21),
+    "hanse_morning": date(2026, 8, 21),
+    "hanse_afternoon": date(2026, 8, 21),
 }
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {
@@ -365,9 +368,7 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     profit_price_source = (
         "broker_target_fill_price"
         if completed and target_fill_price > 0
-        else "configured_target_price_proxy"
-        if completed
-        else "not_completed"
+        else "configured_target_price_proxy" if completed else "not_completed"
     )
     net_profit_pct = (
         (profit_exit_price / fill_price - 1.0) * 100.0 - cost_pct if completed else None
@@ -735,6 +736,7 @@ def _axis_outcome(
 def _load_history(
     output_dir: Path, target_date: date, cost_pct: float
 ) -> dict[str, dict[str, dict]]:
+    target_profiles = profiles_for_target_date(target_date)
     history: dict[str, dict[str, dict]] = {}
     for path in sorted(output_dir.glob(f"{REPORT_TYPE}_*.json")):
         raw_date = path.stem.removeprefix(f"{REPORT_TYPE}_")
@@ -767,17 +769,18 @@ def _load_history(
                 profile_id: _empty_row(
                     profile_id, raw_date, "prior_report_contract_invalid"
                 )
-                for profile_id in PROFILES
+                for profile_id in target_profiles
             }
             continue
         history[raw_date] = {
             profile_id: _historical_profile_row(profile_id, report_date, profiles)
-            for profile_id in PROFILES
+            for profile_id in target_profiles
         }
     return history
 
 
 def _latest_prior_policies(candidate_dir: Path, target_date: str) -> dict[str, dict]:
+    parsed_target_date = date.fromisoformat(target_date)
     paths = sorted(
         candidate_dir.glob("low_price_two_leg_policy_candidate_*.json"), reverse=True
     )
@@ -788,9 +791,14 @@ def _latest_prior_policies(candidate_dir: Path, target_date: str) -> dict[str, d
         valid, reason = validate_candidate(payload)
         if not valid:
             raise ValueError(f"latest_prior_candidate_{reason}")
-        return candidate_policies_with_current_baselines(payload)
+        return candidate_policies_with_current_baselines(
+            payload, target_date=parsed_target_date
+        )
     return {
-        profile_id: dict(policy) for profile_id, policy in BASELINE_POLICIES.items()
+        profile_id: dict(policy)
+        for profile_id, policy in baseline_policies_for_target_date(
+            parsed_target_date
+        ).items()
     }
 
 
@@ -844,6 +852,7 @@ def build_report(
     machine_microstructure_report_dir: Path = MACHINE_MICROSTRUCTURE_REPORT_DIR,
 ) -> dict:
     parsed_date = date.fromisoformat(target_date)
+    target_profiles = profiles_for_target_date(parsed_date)
     expected_clean_dates = _clean_trading_dates_through(parsed_date)
     target_date_is_trading = is_krx_trading_day(parsed_date)
     if not math.isfinite(cost_pct) or not 0 <= cost_pct < 100:
@@ -893,11 +902,15 @@ def build_report(
             "status": (
                 "loaded"
                 if source_date_matches and profile_id in feedback_profiles
-                else "owner_profile_not_present"
-                if source_date_matches and feedback["status"] == "loaded"
-                else "owner_source_date_mismatch"
-                if feedback["status"] == "loaded"
-                else feedback["status"]
+                else (
+                    "owner_profile_not_present"
+                    if source_date_matches and feedback["status"] == "loaded"
+                    else (
+                        "owner_source_date_mismatch"
+                        if feedback["status"] == "loaded"
+                        else feedback["status"]
+                    )
+                )
             ),
             "source_date": feedback.get("source_date"),
             "owner_source_date": owner_source_date,
@@ -912,7 +925,7 @@ def build_report(
 
     daily: dict[str, dict] = {}
     prior_state_reconciliations: dict[str, dict] = {}
-    for profile_id in PROFILES:
+    for profile_id in target_profiles:
         state_path = state_dir / f"{profile_id}_state.json"
         state = _read_json(state_path)
         raw_state_date = str((state or {}).get("trade_date") or "")
@@ -998,7 +1011,7 @@ def build_report(
                     source_date,
                     "prior_report_missing_during_state_reconciliation",
                 )
-                for item in PROFILES
+                for item in target_profiles
             },
         )
         history[source_date][profile_id] = reconciliation["row"]
@@ -1012,7 +1025,7 @@ def build_report(
         if item not in observed_date_set
     ]
     windows: dict[str, dict[str, Any]] = {CLEAN_WINDOW_NAME: {}}
-    for profile_id in PROFILES:
+    for profile_id in target_profiles:
         rows = [history[day][profile_id] for day in dates]
         windows[CLEAN_WINDOW_NAME][profile_id] = {
             "summary": _aggregate(rows),
@@ -1062,13 +1075,16 @@ def build_candidate(
     candidate_dir: Path = CANDIDATE_DIR,
     samsung_candidate_dir: Path = SAMSUNG_CANDIDATE_DIR,
 ) -> dict:
+    source_date = date.fromisoformat(str(report["target_date"]))
+    target_profiles = profiles_for_target_date(source_date)
+    target_bounds = policy_bounds_for_target_date(source_date)
     prior = _latest_prior_policies(candidate_dir, report["target_date"])
     selected_policies = {
         profile_id: dict(policy) for profile_id, policy in prior.items()
     }
     evaluations: dict[str, dict[str, Any]] = {}
     eligible: list[tuple[float, str, str, float]] = []
-    for profile_id in PROFILES:
+    for profile_id in target_profiles:
         current = prior[profile_id]
         clean_window = report["windows"][CLEAN_WINDOW_NAME][profile_id]
         current_outcome = _axis_outcome(
@@ -1080,7 +1096,7 @@ def build_candidate(
             clean_window["summary"]["held_or_unresolved_legs"] == 0
         )
         alternatives: list[tuple[str, float, float]] = []
-        bounds = POLICY_BOUNDS[profile_id]
+        bounds = target_bounds[profile_id]
         if float(current["rolling_high_drawdown_pct"]) < bounds["drawdown_max"]:
             alternatives.append(
                 (
@@ -1154,7 +1170,7 @@ def build_candidate(
     if len(mutations) > 1:
         raise ValueError("same_stage_multiple_axis_candidate_forbidden")
     profiles = {}
-    for profile_id in PROFILES:
+    for profile_id in target_profiles:
         profiles[profile_id] = {
             "selection_status": (
                 "selected_next_preopen_bounded_tightening"
