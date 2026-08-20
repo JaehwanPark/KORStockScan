@@ -328,7 +328,12 @@ at 10 shares per leg (20 total) by explicit operator authority; each
 profile's frozen 50:50 entry offsets, target ticks, entry validity, route, stop/hold
 behavior, provider, bot, cap, and broker guards are immutable.  Each preflight
 first materializes or reuses the exact-date applied policy and binds its hash to
-the profile authority artifact.
+the profile authority artifact. The live template service requires the same
+profile's preflight unit again at service start, even when the earlier timer
+already completed. Authority or exact-date applied-policy rejection exits
+(`4/5`) are fail-closed terminal startup results and are not restart-looped;
+this prevents a mutable source/profile transition from producing repeated
+broker-gateway startup attempts between the timer preflight and live start.
 
 The retired Daewoo E&C profiles are absent from the runtime allowlist, wrappers,
 and install timers. The installer also removes any legacy Daewoo timer files and

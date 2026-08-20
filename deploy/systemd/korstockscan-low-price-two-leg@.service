@@ -2,6 +2,7 @@
 Description=KORStockScan Lower-Price Two-Leg Live Machine (%i)
 After=network-online.target korstockscan-low-price-two-leg-preflight@%i.service
 Wants=network-online.target
+Requires=korstockscan-low-price-two-leg-preflight@%i.service
 StartLimitIntervalSec=300
 StartLimitBurst=30
 
@@ -12,6 +13,7 @@ Group=www-data
 WorkingDirectory=/home/ubuntu/KORStockScan
 ExecStart=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh %i
 Restart=on-failure
+RestartPreventExitStatus=4 5
 RestartSec=5
 UMask=0077
 Nice=5

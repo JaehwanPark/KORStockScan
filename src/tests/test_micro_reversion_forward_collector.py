@@ -277,6 +277,42 @@ def test_0d_depth_capture_uses_separate_journal_and_sequence(tmp_path) -> None:
     assert row["broker_order_forbidden"] is True
 
 
+def test_0d_callback_latency_does_not_poison_frozen_0b_canary_metric(
+    tmp_path,
+) -> None:
+    collector = _collector(tmp_path, depth_capture_enabled=True)
+    try:
+        collector._record_producer_callback_latency("0B", 0.2)
+        collector._record_producer_callback_latency("0B", 0.4)
+        collector._record_producer_callback_latency("0D", 8.0)
+        collector._record_producer_callback_latency("0D", 12.0)
+        runtime = collector.runtime_snapshot()
+    finally:
+        collector.close()
+
+    assert runtime.producer_callback_latency_scope == ("kiwoom_0b_trade_callback_only")
+    assert runtime.producer_callback_latency_p50_ms == 0.2
+    assert runtime.producer_callback_latency_p99_ms == 0.4
+    assert runtime.producer_0d_callback_latency_p50_ms == 8.0
+    assert runtime.producer_0d_callback_latency_p99_ms == 12.0
+    payload = runtime.as_dict()
+    assert payload["schema"] == "scalp_micro_reversion_forward_collector_v9"
+    depth_contract = payload["metric_contracts"]["depth_callback_latency"]
+    assert {
+        "metric_role",
+        "decision_authority",
+        "window_policy",
+        "sample_floor",
+        "primary_decision_metric",
+        "source_quality_gate",
+        "forbidden_uses",
+    } <= set(depth_contract)
+    assert (
+        "satisfy_or_bypass_0b_callback_latency_canary"
+        in (depth_contract["forbidden_uses"])
+    )
+
+
 def test_0d_depth_capture_is_independently_default_off(tmp_path) -> None:
     collector = _collector(tmp_path, path_capture_enabled=True)
     try:

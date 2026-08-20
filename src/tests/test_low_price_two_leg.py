@@ -383,6 +383,20 @@ def test_all_profiles_are_routed_by_preflight_live_and_systemd_timers():
     assert len(timer_files) == len(PROFILES) * 2
 
 
+def test_live_systemd_unit_requires_fresh_preflight_and_does_not_restart_on_guard_block():
+    unit = (
+        Path(__file__).resolve().parents[2]
+        / "deploy/systemd/korstockscan-low-price-two-leg@.service"
+    ).read_text(encoding="utf-8")
+
+    assert "Requires=korstockscan-low-price-two-leg-preflight@%i.service" in unit
+    assert (
+        "After=network-online.target "
+        "korstockscan-low-price-two-leg-preflight@%i.service" in unit
+    )
+    assert "RestartPreventExitStatus=4 5" in unit
+
+
 @pytest.mark.parametrize(
     ("profile_id", "preflight_time", "service_time"),
     [
@@ -1293,9 +1307,9 @@ def test_research_evidence_gate_validates_each_selected_profile(tmp_path):
         )[0]
         for profile in legacy_profiles
     )
-    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"][
-        "scan_start"
-    ] = "13:19"
+    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"]["scan_start"] = (
+        "13:19"
+    )
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert not validate_research_evidence(
         PROFILES["samsung_heavy_midday"], path, expected_sha256=digest
@@ -2193,8 +2207,9 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     )
     assert migrated_status == "candidate_applied"
     assert set(migrated["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
-    assert migrated["profiles"]["mirae_asset_morning"]["policy"] == (
-        PRE_RECOMMENDATION_BASELINE_POLICIES["mirae_asset_morning"]
+    assert (
+        migrated["profiles"]["mirae_asset_morning"]["policy"]
+        == (PRE_RECOMMENDATION_BASELINE_POLICIES["mirae_asset_morning"])
     )
 
     pre_expanded_v2 = json.loads(json.dumps(candidate))
@@ -2231,8 +2246,9 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     )
     assert expanded_status == "candidate_applied"
     assert set(expanded_applied["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
-    assert expanded_applied["profiles"]["kakao_morning"]["policy"] == (
-        PRE_RECOMMENDATION_BASELINE_POLICIES["kakao_morning"]
+    assert (
+        expanded_applied["profiles"]["kakao_morning"]["policy"]
+        == (PRE_RECOMMENDATION_BASELINE_POLICIES["kakao_morning"])
     )
 
     source_gap_report = json.loads(json.dumps(report))

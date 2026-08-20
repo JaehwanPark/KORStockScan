@@ -60,8 +60,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_OUTPUT_ROOT = (
     REPOSITORY_ROOT / "data/observations/scalp_micro_reversion_forward"
 )
-FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v8"
+FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v9"
 FORWARD_COLLECTOR_AUTHORITY = "canary_observation_only_no_trading_authority"
+PRODUCER_CALLBACK_LATENCY_SCOPE = "kiwoom_0b_trade_callback_only"
 FORWARD_COLLECTOR_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_forward_collector_health",
     "decision_authority": FORWARD_COLLECTOR_AUTHORITY,
@@ -133,6 +134,23 @@ EXCHANGE_TIMESTAMP_REGRESSION_CANARY_METRIC_CONTRACT = {
     "forbidden_uses": (
         "detector_or_path_consumption_of_quarantined_row",
         "p2_policy_ranking_before_gate_b",
+        "sim_or_live_policy_selection",
+        "broker_order_submission",
+        "threshold_provider_bot_quantity_or_cap_mutation",
+    ),
+}
+DEPTH_CALLBACK_LATENCY_METRIC_CONTRACT = {
+    "metric_role": "source_quality_diagnostic",
+    "decision_authority": "observer_performance_diagnostic_only",
+    "window_policy": "current_process_rolling_last_4096_kiwoom_0d_callbacks",
+    "sample_floor": "diagnostic_only_no_frozen_stop_limit",
+    "primary_decision_metric": "producer_0d_callback_latency_p99_ms",
+    "source_quality_gate": (
+        "separate_from_frozen_0b_callback_canary_and_interpreted_with_depth_"
+        "queue_drop_worker_and_writer_health"
+    ),
+    "forbidden_uses": (
+        "satisfy_or_bypass_0b_callback_latency_canary",
         "sim_or_live_policy_selection",
         "broker_order_submission",
         "threshold_provider_bot_quantity_or_cap_mutation",
@@ -211,9 +229,13 @@ class ForwardCollectorSnapshot:
     producer_0d_callback_count: int
     enqueued_count: int
     depth_enqueued_count: int
+    producer_callback_latency_scope: str
     producer_callback_latency_p50_ms: float
     producer_callback_latency_p95_ms: float
     producer_callback_latency_p99_ms: float
+    producer_0d_callback_latency_p50_ms: float
+    producer_0d_callback_latency_p95_ms: float
+    producer_0d_callback_latency_p99_ms: float
     enqueue_latency_p50_ms: float
     enqueue_latency_p95_ms: float
     enqueue_latency_p99_ms: float
@@ -373,6 +395,7 @@ class ForwardCollectorSnapshot:
                 "exchange_timestamp_regression_canary": (
                     EXCHANGE_TIMESTAMP_REGRESSION_CANARY_METRIC_CONTRACT
                 ),
+                "depth_callback_latency": DEPTH_CALLBACK_LATENCY_METRIC_CONTRACT,
             },
         }
 
@@ -496,7 +519,8 @@ class ForwardObservationCollector:
         self._last_close_error_types: tuple[str, ...] = ()
         self._detector_clock_adjustments = 0
         self._detector_clock_adjustment_max_ms = 0
-        self._producer_callback_latency_ms: deque[float] = deque(maxlen=4_096)
+        self._producer_0b_callback_latency_ms: deque[float] = deque(maxlen=4_096)
+        self._producer_0d_callback_latency_ms: deque[float] = deque(maxlen=4_096)
 
     def start(self) -> None:
         with self._state_lock:
@@ -768,7 +792,7 @@ class ForwardObservationCollector:
             return ProducerCanaryResult.ISOLATED_ERROR
         finally:
             self._record_producer_callback_latency(
-                (time.perf_counter_ns() - callback_started_ns) / 1_000_000.0
+                "0B", (time.perf_counter_ns() - callback_started_ns) / 1_000_000.0
             )
             with self._callback_condition:
                 self._active_callbacks -= 1
@@ -911,7 +935,7 @@ class ForwardObservationCollector:
             return ProducerCanaryResult.ISOLATED_ERROR
         finally:
             self._record_producer_callback_latency(
-                (time.perf_counter_ns() - callback_started_ns) / 1_000_000.0
+                "0D", (time.perf_counter_ns() - callback_started_ns) / 1_000_000.0
             )
             with self._callback_condition:
                 self._active_callbacks -= 1
@@ -943,7 +967,8 @@ class ForwardObservationCollector:
             )
         path_quality = self._coalescer.quality_snapshot()
         with self._metrics_lock:
-            callback_latency = tuple(self._producer_callback_latency_ms)
+            callback_latency = tuple(self._producer_0b_callback_latency_ms)
+            depth_callback_latency = tuple(self._producer_0d_callback_latency_ms)
             reference_latency = tuple(self._reference_write_latency_ms)
             return ForwardCollectorSnapshot(
                 schema=FORWARD_COLLECTOR_SCHEMA,
@@ -963,9 +988,19 @@ class ForwardObservationCollector:
                 producer_0d_callback_count=self._producer_0d_callbacks,
                 enqueued_count=self._enqueued,
                 depth_enqueued_count=self._depth_enqueued,
+                producer_callback_latency_scope=PRODUCER_CALLBACK_LATENCY_SCOPE,
                 producer_callback_latency_p50_ms=(_percentile(callback_latency, 50)),
                 producer_callback_latency_p95_ms=(_percentile(callback_latency, 95)),
                 producer_callback_latency_p99_ms=(_percentile(callback_latency, 99)),
+                producer_0d_callback_latency_p50_ms=(
+                    _percentile(depth_callback_latency, 50)
+                ),
+                producer_0d_callback_latency_p95_ms=(
+                    _percentile(depth_callback_latency, 95)
+                ),
+                producer_0d_callback_latency_p99_ms=(
+                    _percentile(depth_callback_latency, 99)
+                ),
                 enqueue_latency_p50_ms=adapter.enqueue_latency_p50_ms,
                 enqueue_latency_p95_ms=adapter.enqueue_latency_p95_ms,
                 enqueue_latency_p99_ms=adapter.enqueue_latency_p99_ms,
@@ -1633,9 +1668,17 @@ class ForwardObservationCollector:
     def _increment(self, attribute: str) -> None:
         self._add(attribute, 1)
 
-    def _record_producer_callback_latency(self, value: float) -> None:
+    def _record_producer_callback_latency(
+        self, realtime_type: str, value: float
+    ) -> None:
         with self._metrics_lock:
-            self._producer_callback_latency_ms.append(max(0.0, float(value)))
+            latency = max(0.0, float(value))
+            if realtime_type == "0B":
+                self._producer_0b_callback_latency_ms.append(latency)
+            elif realtime_type == "0D":
+                self._producer_0d_callback_latency_ms.append(latency)
+            else:
+                raise ValueError("unsupported_callback_latency_realtime_type")
 
     def _add(self, attribute: str, value: int) -> None:
         with self._metrics_lock:

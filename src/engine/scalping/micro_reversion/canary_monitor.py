@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 from .forward_collector import (
     ForwardCollectorConfig,
     ForwardObservationCollector,
+    PRODUCER_CALLBACK_LATENCY_SCOPE,
 )
 from .observation_adapter import ObserverFeatureFlags
 
@@ -237,11 +238,16 @@ def evaluate_canary_snapshot(
         reasons.append(f"unexpected_collector_lifecycle:{lifecycle}")
 
     callback_count = _nonnegative_int(snapshot.get("producer_0b_callback_count"))
+    callback_latency_scope = str(
+        snapshot.get("producer_callback_latency_scope") or ""
+    ).strip()
     p95_ms = _nonnegative_float(snapshot.get("producer_callback_latency_p95_ms"))
     p99_ms = _nonnegative_float(snapshot.get("producer_callback_latency_p99_ms"))
     latency_guard_armed = bool(
         callback_count is not None and callback_count >= guard.minimum_callback_samples
     )
+    if callback_latency_scope != PRODUCER_CALLBACK_LATENCY_SCOPE:
+        reasons.append("producer_callback_latency_scope_invalid")
     if callback_count is None or p95_ms is None or p99_ms is None:
         reasons.append("missing_or_invalid_callback_latency_metric")
     elif latency_guard_armed:

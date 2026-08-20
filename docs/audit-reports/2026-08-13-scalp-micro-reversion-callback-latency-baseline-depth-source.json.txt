@@ -120,8 +120,8 @@
     "producer_callback_latency_p99_max_ms": 2.0,
     "snapshot_stale_after_sec": 30.0
   },
-  "benchmark_module_sha256": "a2747ff968fa9cf118c305896f588afdd4aca9cfbe90d280217ea5ba6f2b86b2",
-  "forward_collector_sha256": "a74ddc3a9f5012f0024126e89a6b9c7f4633fad1887a0a2043e66900a734c09a",
+  "benchmark_module_sha256": "d4f569296176a8e02ea79e34eeb51a973b867de548748ae036ea4e779d59b223",
+  "forward_collector_sha256": "41bd423e685c0893e0cbb00faa7ff865929719dedf8b21d47aaef6f1b91f65b6",
   "path_journal_sha256": "f611c6ff5727bb73d4990ed51af4f361803caea5d7278f5a6d6e019694e2a920",
   "path_capture_sha256": "f2614a55a4532e79e5142e988164ef41e80b7a269f8383f41eecdc6407419d34",
   "p2_replay_sha256": "2cc8cb78aa4c827afa9c894022bc130e10daaf596ae9f3d963a589fa89904b96",
@@ -170,6 +170,14 @@
       "previous": "80aa428602ca9f0df32487afca9e8103f71e35701d14d87716ae54c3c391d709",
       "current": "8f65cbe39eeb53d970c6d0a2eef940339c94fea6342f543c91db69652b19e6c2",
       "reason": "ruff_formatting_only_after_the_2026-08-20T13:42:09+09:00_callback_preflight_no_runtime_or_measurement_change",
+      "runtime_effect": false
+    },
+    {
+      "updated_at_kst": "2026-08-20T22:23:32+09:00",
+      "field": "benchmark_module_sha256,forward_collector_sha256",
+      "previous": "a2747ff968fa9cf118c305896f588afdd4aca9cfbe90d280217ea5ba6f2b86b2,a74ddc3a9f5012f0024126e89a6b9c7f4633fad1887a0a2043e66900a734c09a",
+      "current": "d4f569296176a8e02ea79e34eeb51a973b867de548748ae036ea4e779d59b223,41bd423e685c0893e0cbb00faa7ff865929719dedf8b21d47aaef6f1b91f65b6",
+      "reason": "separate_0b_frozen_canary_latency_from_0d_depth_diagnostic_latency;_same_5000x5_0b_callback_preflight_zero_drop_zero_worker_error_p95_0.027221ms_p99_0.034923ms_frozen_limits_unchanged",
       "runtime_effect": false
     }
   ],

@@ -18,6 +18,9 @@ from src.engine.scalping.micro_reversion.canary_monitor import (
     run_callback_latency_preflight,
     write_canary_runtime_snapshot,
 )
+from src.engine.scalping.micro_reversion.forward_collector import (
+    PRODUCER_CALLBACK_LATENCY_SCOPE,
+)
 
 
 def _guard() -> CanaryGuard:
@@ -37,7 +40,7 @@ def _healthy_snapshot(**overrides):
     snapshot.update({field: False for field in _FORBIDDEN_TRUE_FIELDS})
     snapshot.update(
         {
-            "schema": "scalp_micro_reversion_forward_collector_v6",
+            "schema": "scalp_micro_reversion_forward_collector_v9",
             "collector_lifecycle": "running",
             "observer_runtime_loaded": True,
             "producer_observation_connected": True,
@@ -47,6 +50,7 @@ def _healthy_snapshot(**overrides):
             "writer_count": 0,
             "writer_alive_count": 0,
             "producer_0b_callback_count": 1_000,
+            "producer_callback_latency_scope": PRODUCER_CALLBACK_LATENCY_SCOPE,
             "producer_callback_latency_p95_ms": 0.1,
             "producer_callback_latency_p99_ms": 0.2,
             "isolated_error_type": None,
@@ -111,6 +115,33 @@ def test_guard_excludes_queue_loss_but_stops_on_authority_and_latency() -> None:
     assert "forbidden_authority_field:actual_order_submitted" in reasons
     assert "producer_callback_latency_p95_exceeded" in reasons
     assert "producer_callback_latency_p99_exceeded" in reasons
+
+
+def test_guard_rejects_callback_latency_without_exact_0b_scope() -> None:
+    evaluation = evaluate_canary_snapshot(
+        _healthy_snapshot(producer_callback_latency_scope="combined_0b_0d"),
+        _guard(),
+    )
+
+    assert evaluation["status"] == "stop_required"
+    assert evaluation["stop_required"] is True
+    assert "producer_callback_latency_scope_invalid" in evaluation["stop_reasons"]
+
+
+def test_guard_does_not_apply_frozen_0b_limit_to_depth_callback_latency() -> None:
+    evaluation = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            producer_callback_latency_p95_ms=0.2,
+            producer_callback_latency_p99_ms=0.4,
+            producer_0d_callback_latency_p95_ms=8.0,
+            producer_0d_callback_latency_p99_ms=12.0,
+        ),
+        _guard(),
+    )
+
+    assert evaluation["status"] == "healthy_observer_canary"
+    assert evaluation["stop_required"] is False
+    assert evaluation["stop_reasons"] == ()
 
 
 def test_guard_keeps_collector_running_for_bounded_ingress_queue_loss() -> None:
