@@ -49,6 +49,8 @@ DEFAULT_STATE_FILE = (
 # but the artifact must retain every symbol that can be enrolled without
 # creating a per-symbol service.
 MAX_RECOMMENDATIONS = 10
+SHARED_COLLECTOR_REQUESTS_PER_MINUTE = 15
+SHARED_COLLECTOR_MEMORY_CAP_MB = 256
 ROUND_TRIP_COST_PCT = 0.20
 IMPLEMENTATION_REVIEW_MIN_SAMPLES = 5
 IMPLEMENTATION_REVIEW_MIN_TRADING_DATES = 3
@@ -509,8 +511,18 @@ def build_recommendation_report(
                 "implementation_review_ready": not implementation_review_blockers,
                 "implementation_review_blockers": implementation_review_blockers,
                 "suggested_session": "KRX_REGULAR",
-                "estimated_added_requests_per_minute": 13,
-                "estimated_added_memory_mb": 100,
+                "estimated_added_requests_per_minute": None,
+                "estimated_added_memory_mb": None,
+                "resource_profile": "shared_budget_paced_research_watch_collector",
+                "resource_estimate_policy": (
+                    "no_fixed_per_symbol_increment;shared_service_total_cap_only"
+                ),
+                "estimated_shared_total_requests_per_minute": (
+                    SHARED_COLLECTOR_REQUESTS_PER_MINUTE
+                ),
+                "estimated_shared_service_memory_cap_mb": (
+                    SHARED_COLLECTOR_MEMORY_CAP_MB
+                ),
                 "collector_created": False,
                 "service_started": False,
             }
@@ -621,9 +633,10 @@ def build_telegram_message(report: dict[str, Any]) -> str:
                     f"스프레드 {row.get('median_spread_bp')}bp"
                 ),
                 (
-                    "   예상부하 +"
-                    f"{row.get('estimated_added_requests_per_minute')} req/min, "
-                    f"+{row.get('estimated_added_memory_mb')}MB"
+                    "   공유수집 총예산 ≤"
+                    f"{row.get('estimated_shared_total_requests_per_minute', 15)} "
+                    "req/min, 서비스 메모리 상한 "
+                    f"{row.get('estimated_shared_service_memory_cap_mb', 256)}MB"
                 ),
             ]
         )

@@ -13,10 +13,15 @@ from src.engine.monitoring import widget_research_watch_collector as watch
 KST = ZoneInfo("Asia/Seoul")
 
 
-def _write_source_report(path: Path, symbols: list[tuple[str, str]]) -> str:
+def _write_source_report(
+    path: Path,
+    symbols: list[tuple[str, str]],
+    *,
+    target_date: str = "2026-08-12",
+) -> str:
     report = {
         "schema": "widget_collector_expansion_recommendation_v1",
-        "target_date": "2026-08-12",
+        "target_date": target_date,
         "recommendations": [
             {
                 "stock_code": code,
@@ -123,6 +128,108 @@ def test_config_accepts_all_nine_bounded_research_watch_symbols(tmp_path):
     assert len(config["symbols"]) == 9
 
 
+def test_config_accepts_cumulative_symbols_with_per_symbol_lineage(tmp_path):
+    old_report_path = tmp_path / "old_report.json"
+    new_report_path = tmp_path / "new_report.json"
+    config_path = tmp_path / "config.json"
+    old_sha = _write_source_report(
+        old_report_path,
+        [("111111", "기존")],
+        target_date="2026-08-12",
+    )
+    new_sha = _write_source_report(
+        new_report_path,
+        [("222222", "신규")],
+        target_date="2026-08-19",
+    )
+    config = {
+        "schema": watch.CONFIG_SCHEMA,
+        "enabled": True,
+        "effective_from": "2026-08-20",
+        "source_target_date": "2026-08-19",
+        "source_report": str(new_report_path),
+        "source_report_sha256": new_sha,
+        "source_reports": [
+            {
+                "target_date": "2026-08-12",
+                "path": str(old_report_path),
+                "sha256": old_sha,
+            },
+            {
+                "target_date": "2026-08-19",
+                "path": str(new_report_path),
+                "sha256": new_sha,
+            },
+        ],
+        "symbols": [
+            {
+                "stock_code": "111111",
+                "stock_name": "기존",
+                "recommendation_tier": "research_watch",
+                "source_target_date": "2026-08-12",
+                "source_report_sha256": old_sha,
+            },
+            {
+                "stock_code": "222222",
+                "stock_name": "신규",
+                "recommendation_tier": "research_watch",
+                "source_target_date": "2026-08-19",
+                "source_report_sha256": new_sha,
+            },
+        ],
+        "authority": watch.AUTHORITY,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    loaded = watch.load_config(observed_date=date(2026, 8, 20), config_path=config_path)
+
+    assert len(loaded["source_reports_resolved"]) == 2
+    assert loaded["symbols"][0]["source_target_date"] == "2026-08-12"
+    assert loaded["symbols"][0]["source_report_sha256"] == old_sha
+    assert loaded["symbols"][1]["source_target_date"] == "2026-08-19"
+    assert loaded["symbols"][1]["source_report_sha256"] == new_sha
+
+
+def test_config_rejects_symbol_bound_to_wrong_source_lineage(tmp_path):
+    old_report_path = tmp_path / "old_report.json"
+    new_report_path = tmp_path / "new_report.json"
+    config_path = tmp_path / "config.json"
+    old_sha = _write_source_report(old_report_path, [("111111", "기존")])
+    new_sha = _write_source_report(
+        new_report_path,
+        [("222222", "신규")],
+        target_date="2026-08-19",
+    )
+    _write_config(
+        config_path,
+        source_report=new_report_path,
+        source_sha=new_sha,
+        symbols=[("111111", "기존")],
+    )
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["source_target_date"] = "2026-08-19"
+    config["source_reports"] = [
+        {
+            "target_date": "2026-08-12",
+            "path": str(old_report_path),
+            "sha256": old_sha,
+        },
+        {
+            "target_date": "2026-08-19",
+            "path": str(new_report_path),
+            "sha256": new_sha,
+        },
+    ]
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="symbol_not_in_source_report"):
+        watch.load_config(observed_date=date(2026, 8, 20), config_path=config_path)
+
+
 def test_budget_paced_cycle_scales_without_widening_request_budget():
     assert (
         watch._effective_cycle_interval_sec(configured_interval_sec=60, symbol_count=5)
@@ -190,6 +297,8 @@ def _runtime_config(symbols: list[tuple[str, str]]) -> dict:
                 "stock_code": code,
                 "stock_name": name,
                 "recommendation_tier": "research_watch",
+                "source_target_date": "2026-08-12",
+                "source_report_sha256": "a" * 64,
             }
             for code, name in symbols
         ],

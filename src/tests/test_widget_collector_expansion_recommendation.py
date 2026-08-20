@@ -111,7 +111,17 @@ def test_recommendation_ranks_positive_liquid_non_active_symbol(tmp_path):
     candidate = report["recommendations"][0]
     assert candidate["collector_created"] is False
     assert candidate["service_started"] is False
-    assert candidate["estimated_added_requests_per_minute"] == 13
+    assert candidate["estimated_added_requests_per_minute"] is None
+    assert candidate["estimated_added_memory_mb"] is None
+    assert (
+        candidate["resource_profile"] == "shared_budget_paced_research_watch_collector"
+    )
+    assert (
+        candidate["resource_estimate_policy"]
+        == "no_fixed_per_symbol_increment;shared_service_total_cap_only"
+    )
+    assert candidate["estimated_shared_total_requests_per_minute"] == 15
+    assert candidate["estimated_shared_service_memory_cap_mb"] == 256
     assert candidate["source_quality_adjusted_ev_pct"] == 0.4
     assert candidate["round_trip_cost_pct"] == 0.2
     assert candidate["recommendation_tier"] == "research_watch"
@@ -165,6 +175,10 @@ def test_recommendation_artifact_retains_all_nine_bounded_watch_candidates(
     assert report["qualified_candidate_count"] == 9
     assert report["reported_candidate_count"] == 9
     assert len(report["recommendations"]) == 9
+
+    message = rec.build_telegram_message(report)
+    assert "공유수집 총예산 ≤15 req/min, 서비스 메모리 상한 256MB" in message
+    assert "예상부하 +13 req/min" not in message
 
 
 def test_recommendation_does_not_filter_manual_operator_symbol(tmp_path):
