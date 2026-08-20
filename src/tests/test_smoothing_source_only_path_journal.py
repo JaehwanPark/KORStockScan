@@ -1,5 +1,6 @@
 from src.engine.scalping.smoothing_source_only_path_journal import (
     HORIZONS_SEC,
+    SmoothingSourceOnlyPathObserver,
     arm_source_only_path,
     observe_source_only_paths,
 )
@@ -239,3 +240,97 @@ def test_source_only_journal_expires_late_horizon_instead_of_relabeling_it_exact
     assert horizon["fields"]["horizon_sec"] == 10
     assert horizon["fields"]["observation_lag_sec"] == 3.0
     assert horizon["fields"]["horizon_status"] == "expired_observation_gap"
+
+
+def test_source_only_journal_tolerates_transient_invalid_tick_with_fresh_cadence():
+    state, _armed = _arm()
+    for second in range(1, 11):
+        if second == 5:
+            state, invalid_events = observe_source_only_paths(
+                state,
+                position_key="record:7",
+                now_ts=1004.5,
+                effective_price=9_990,
+                effective_profit_rate=-1.1,
+                effective_price_source="ws",
+                effective_price_quality="stale",
+                hard_breach=False,
+                emergency_breach=False,
+            )
+            assert invalid_events == []
+        state, events = observe_source_only_paths(
+            state,
+            position_key="record:7",
+            now_ts=1000.0 + second,
+            effective_price=10_000 + second,
+            effective_profit_rate=-1.5 + second / 100.0,
+            effective_price_source="ws",
+            effective_price_quality="single_source",
+            hard_breach=False,
+            emergency_breach=False,
+        )
+
+    horizon = next(
+        event
+        for event in events
+        if event["stage"] == "smoothing_source_only_path_horizon"
+    )
+    assert horizon["fields"]["path_quality_contract_version"] == (
+        "fresh_observation_gap_v2"
+    )
+    assert horizon["fields"]["path_price_quality_invalid_sample_count"] == 1
+    assert horizon["fields"]["path_max_valid_observation_gap_sec"] == 1.0
+    assert horizon["fields"]["path_max_allowed_observation_gap_sec"] == 2.0
+
+
+def test_source_only_journal_exposes_true_valid_observation_gap():
+    state, _armed = _arm()
+    state, _events = observe_source_only_paths(
+        state,
+        position_key="record:7",
+        now_ts=1001.0,
+        effective_price=10_001,
+        effective_profit_rate=-1.49,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        hard_breach=False,
+        emergency_breach=False,
+    )
+    _state, events = observe_source_only_paths(
+        state,
+        position_key="record:7",
+        now_ts=1010.0,
+        effective_price=10_010,
+        effective_profit_rate=-1.4,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        hard_breach=False,
+        emergency_breach=False,
+    )
+
+    horizon = next(
+        event
+        for event in events
+        if event["stage"] == "smoothing_source_only_path_horizon"
+    )
+    assert horizon["fields"]["path_max_valid_observation_gap_sec"] == 9.0
+
+
+def test_source_only_cadence_observer_forwards_clock_and_fails_open():
+    observed = []
+    errors = []
+    observer = SmoothingSourceOnlyPathObserver(
+        observer=lambda *, now_ts: observed.append(now_ts) or {"observed": 1},
+        error_handler=errors.append,
+    )
+
+    assert observer.run_once(now_ts=1234.5) == {"observed": 1}
+    assert observed == [1234.5]
+    assert errors == []
+
+    failing = SmoothingSourceOnlyPathObserver(
+        observer=lambda **_kwargs: (_ for _ in ()).throw(ValueError("broken")),
+        error_handler=errors.append,
+    )
+    assert failing.run_once(now_ts=1235.0) is None
+    assert errors == ["broken"]

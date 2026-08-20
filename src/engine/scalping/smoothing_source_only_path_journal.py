@@ -6,6 +6,9 @@ submits an order, or grants runtime-apply authority.
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 from uuid import uuid4
@@ -15,6 +18,7 @@ HORIZONS_SEC = (10, 20, 40, 60, 90)
 MAX_OBSERVATION_LAG_SEC = 2.0
 MAX_ACTIVE_ARMS = 8
 STATE_KEY = "smoothing_source_only_path_journals"
+PATH_QUALITY_CONTRACT_VERSION = "fresh_observation_gap_v2"
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -66,6 +70,9 @@ def _event(stage: str, arm: dict[str, Any], **fields: Any) -> dict[str, Any]:
             "journal_alternative_action": arm["alternative_action"],
             "journal_control_action": arm["control_action"],
             "journal_started_at_epoch": arm["started_at"],
+            "path_quality_contract_version": arm.get(
+                "path_quality_contract_version", "legacy_any_invalid_sample_v1"
+            ),
             **fields,
         },
     }
@@ -167,6 +174,12 @@ def arm_source_only_path(
         ),
         "path_price_quality_valid_sample_count": int(anchor_price_usable),
         "path_price_quality_invalid_sample_count": int(not anchor_price_usable),
+        "path_quality_contract_version": PATH_QUALITY_CONTRACT_VERSION,
+        "path_last_valid_observed_at_epoch": (
+            float(now_ts) if anchor_price_usable else None
+        ),
+        "path_max_valid_observation_gap_sec": (0.0 if anchor_price_usable else None),
+        "path_max_allowed_observation_gap_sec": MAX_OBSERVATION_LAG_SEC,
     }
     arms[arm_id] = arm
     if len(arms) > MAX_ACTIVE_ARMS:
@@ -232,6 +245,20 @@ def observe_source_only_paths(
                     path_price_quality_invalid_sample_count=int(
                         arm.get("path_price_quality_invalid_sample_count") or 0
                     ),
+                    path_max_valid_observation_gap_sec=round(
+                        _safe_float(
+                            arm.get("path_max_valid_observation_gap_sec"),
+                            MAX_OBSERVATION_LAG_SEC + 1.0,
+                        ),
+                        3,
+                    ),
+                    path_max_allowed_observation_gap_sec=round(
+                        _safe_float(
+                            arm.get("path_max_allowed_observation_gap_sec"),
+                            MAX_OBSERVATION_LAG_SEC,
+                        ),
+                        3,
+                    ),
                     hard_breach=False,
                     emergency_breach=False,
                 )
@@ -240,6 +267,16 @@ def observe_source_only_paths(
         elapsed = max(0.0, float(now_ts) - _safe_float(arm.get("started_at")))
         if effective_price > 0:
             if _price_quality_usable(effective_price_quality):
+                previous_valid_at = _safe_float(
+                    arm.get("path_last_valid_observed_at_epoch"),
+                    _safe_float(arm.get("started_at")),
+                )
+                valid_observation_gap_sec = max(0.0, float(now_ts) - previous_valid_at)
+                arm["path_max_valid_observation_gap_sec"] = max(
+                    valid_observation_gap_sec,
+                    _safe_float(arm.get("path_max_valid_observation_gap_sec")),
+                )
+                arm["path_last_valid_observed_at_epoch"] = float(now_ts)
                 arm["path_mfe_profit_rate"] = max(
                     float(effective_profit_rate),
                     _safe_float(arm.get("path_mfe_profit_rate"), effective_profit_rate),
@@ -304,6 +341,20 @@ def observe_source_only_paths(
                     path_price_quality_invalid_sample_count=(
                         invalid_price_sample_count
                     ),
+                    path_max_valid_observation_gap_sec=round(
+                        _safe_float(
+                            arm.get("path_max_valid_observation_gap_sec"),
+                            MAX_OBSERVATION_LAG_SEC + 1.0,
+                        ),
+                        3,
+                    ),
+                    path_max_allowed_observation_gap_sec=round(
+                        _safe_float(
+                            arm.get("path_max_allowed_observation_gap_sec"),
+                            MAX_OBSERVATION_LAG_SEC,
+                        ),
+                        3,
+                    ),
                     hard_breach=bool(hard_breach),
                     emergency_breach=bool(emergency_breach),
                 )
@@ -352,6 +403,20 @@ def observe_source_only_paths(
                     path_price_quality_invalid_sample_count=(
                         invalid_price_sample_count
                     ),
+                    path_max_valid_observation_gap_sec=round(
+                        _safe_float(
+                            arm.get("path_max_valid_observation_gap_sec"),
+                            MAX_OBSERVATION_LAG_SEC + 1.0,
+                        ),
+                        3,
+                    ),
+                    path_max_allowed_observation_gap_sec=round(
+                        _safe_float(
+                            arm.get("path_max_allowed_observation_gap_sec"),
+                            MAX_OBSERVATION_LAG_SEC,
+                        ),
+                        3,
+                    ),
                     hard_breach=bool(hard_breach),
                     emergency_breach=bool(emergency_breach),
                 )
@@ -359,3 +424,58 @@ def observe_source_only_paths(
         else:
             remaining[str(arm_id)] = arm
     return {"schema_version": SCHEMA_VERSION, "arms": remaining}, events
+
+
+class SmoothingSourceOnlyPathObserver:
+    """Run the injected source-only journal observer on an independent cadence."""
+
+    def __init__(
+        self,
+        *,
+        observer: Callable[..., Any],
+        interval_sec: float = 0.25,
+        error_handler: Callable[[str], None] | None = None,
+    ) -> None:
+        self._observer = observer
+        self._interval_sec = max(0.05, float(interval_sec))
+        self._error_handler = error_handler
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def start(self) -> bool:
+        if self.running:
+            return False
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name="smoothing-source-only-path-observer",
+        )
+        self._thread.start()
+        return True
+
+    def stop(self, timeout: float = 2.0) -> None:
+        self._stop_event.set()
+        thread = self._thread
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=max(0.0, float(timeout)))
+
+    def run_once(self, *, now_ts: float | None = None) -> Any:
+        observed_at = float(time.time() if now_ts is None else now_ts)
+        try:
+            return self._observer(now_ts=observed_at)
+        except Exception as exc:
+            if self._error_handler is not None:
+                self._error_handler(str(exc))
+            return None
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            started = time.monotonic()
+            self.run_once()
+            elapsed = max(0.0, time.monotonic() - started)
+            self._stop_event.wait(max(0.0, self._interval_sec - elapsed))
