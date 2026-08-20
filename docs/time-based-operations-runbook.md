@@ -1,6 +1,6 @@
 # Time-Based Operations Runbook
 
-작성 기준: `2026-07-30 KST`
+작성 기준: `2026-08-20 KST`
 목적: 장전, 장중, 장후 자동화 체인의 실행 주체, 산출물, 확인 기준을 간결하게 고정한다.
 
 이 문서는 실행 절차 runbook이다. 튜닝 원칙과 active owner는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 날짜별 작업 소유권은 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 산출물 추적성은 [report-based-automation-traceability.md](./report-based-automation-traceability.md), threshold-cycle 공통 산출물 정의는 [data/threshold_cycle/README.md](../data/threshold_cycle/README.md)를 기준으로 한다.
@@ -783,8 +783,8 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 
 구현 완료 후에도 즉시 성과를 단정하지 않는다.
 
-- report/instrumentation order: 다음 `16:00` postclose report와 daily EV에서 source freshness, sample count, warning 감소를 확인한다.
-- existing family input 보강: 다음 `16:00` postclose calibration에서 해당 family의 `calibration_state` 변화를 확인한다.
+- report/instrumentation order: 다음 `20:10` postclose report와 daily EV에서 source freshness, sample count, warning 감소를 확인한다.
+- existing family input 보강: 다음 `20:10` postclose calibration에서 해당 family의 `calibration_state` 변화를 확인한다.
 - new family design: `auto_family_candidate.allowed_runtime_apply=false`를 유지하다가 registry metadata, sample floor, safety guard, tests가 닫힌 뒤에만 `allowed_runtime_apply=true` 후보로 승격한다.
 - runtime 후보: 다음 장전 `auto_bounded_live` apply plan에서 selected/blocked reason과 runtime env provenance를 확인한다.
 

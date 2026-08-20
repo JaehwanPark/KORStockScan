@@ -1,6 +1,6 @@
 # KORStockScan 문서 구조
 
-작성 기준: 2026-06-04 KST
+작성 기준: 2026-08-20 KST
 
 이 디렉터리는 Plan Rebase 이후의 운영 의사결정, 날짜별 실행 체크리스트, runbook, report traceability, 감리/리포트 증적을 관리한다. 현재 판단의 원본은 루트 기준 문서와 날짜별 checklist이고, 과거 전환 증적은 `archive/`에 보존한다.
 
@@ -8,15 +8,18 @@
 
 ## 먼저 볼 문서
 
+- `../README.md`: 키움증권 연동 스캘핑 엔진의 매매기계, 튜닝축, 장후 흐름 개요.
 - `plan-korStockScanPerformanceOptimization.rebase.md`: 현재 튜닝 원칙, active owner, live/observe/off 판정, rollback guard의 기준 문서.
-- `plan-korStockScanPerformanceOptimization.prompt.md`: 작업 시작 프롬프트와 문서 참조 순서.
-- `plan-korStockScanPerformanceOptimization.execution-delta.md`: 원 계획 대비 실행 차이와 보정 기록.
-- `plan-korStockScanPerformanceOptimization.performance-report.md`: Plan Rebase 성과 판정과 반복 성과 기준.
-- `time-based-operations-runbook.md`: 장전, 장중, 장후, 20:05 EOD 데이터 갱신 cron 확인 절차.
+- `checklists/YYYY-MM-DD-stage2-todo-checklist.md`: 당일 실행 항목의 유일한 소유 문서.
+- `time-based-operations-runbook.md`: 장전, 장중, 장후, 20:05 EOD 데이터 갱신과 20:10 POSTCLOSE controller 확인 절차.
 - `report-based-automation-traceability.md`: report 산출물, downstream consumer, runtime mutation 금지선, postclose chain contract.
+- `intraday-monitoring-task-instructions.md`: 메인 봇·위젯·에피소드 매매기계와 micro-reversion·AI 판단품질·smoothing·위젯·에피소드 튜닝축의 장중 점검 계약.
+- `widget-signal-auto-trading-runbook.md`: 위젯 매매의 독립 owner, 정책과 청산 계약.
+- `low-price-two-leg-machines.md`, `samsung-morning-one-share-machine.md`: 에피소드 매매기계의 exact-date 정책과 custody 계약.
+- `kiwoom-api-data-contract.md`: 키움 REST/WebSocket 공식 참조 게이트와 로컬 parser 계약.
 - `../data/source_quality/clean_baseline_policy.json`: 현재 튜닝 데이터 날짜 기준과 pre-baseline forbidden-use 정책.
-- `stage2-todo-checklist-template.md`: 날짜별 checklist 작성 형식.
-- `checklists/YYYY-MM-DD-stage2-todo-checklist.md`: 날짜별 checklist의 표준 위치. 실제 실행 작업항목의 소유 문서이며, legacy root checklist도 이 위치로 정리한다.
+
+`plan-korStockScanPerformanceOptimization.prompt.md`는 문서 위치나 세션 진입 경로가 불명확할 때만 확인하는 경량 포인터다. routine 작업의 current owner로 사용하지 않는다. execution delta와 performance report는 누적 증적이며 현재 active/open 판단은 Plan Rebase와 당일 checklist가 우선한다.
 
 작업 시작 시에는 `plan-korStockScanPerformanceOptimization.rebase.md` §1~§8과 당일 checklist의 `오늘 목적`, `오늘 강제 규칙`을 먼저 확인한다. 당일 checklist가 없으면 Plan Rebase §7~§8과 최신 실행표의 상단 요약을 같이 확인한다.
 
@@ -52,8 +55,8 @@ README, 런북(runbook), Plan Rebase, prompt, AGENTS 같은 기준 문서는 사
 
 - `time-based-operations-runbook.md`: 시간대별 cron, 산출물, 확인 절차, 운영 금지선. `20:10` postclose chain/controller 병렬 기동, `20:05` update_kospi 데이터 갱신 확인 절차를 포함한다.
 - `report-based-automation-traceability.md`: 산출물별 producer/consumer/owner, postclose direct predecessor contract, workorder lineage, source-quality automation input 기준.
-- `../data/report/README.md`: 정기 생성 Markdown report, 입력 JSON/JSONL, 누락 report 후보의 기준.
-- `../data/threshold_cycle/README.md`: threshold cycle 산출물, manifest/report 운영 방법, live mutation 제한 기준.
+- `../data/report/README.md`: 현재 report 저장·소비·권한 해석 기준. 개별 producer의 최신 inventory는 traceability 문서가 소유한다.
+- `../data/threshold_cycle/README.md`: 로컬 PREOPEN apply plan/runtime env와 20:10 POSTCLOSE threshold-cycle 운영 계약.
 - report 또는 threshold 산출물 변경이 작업계획에 영향을 주면 Plan Rebase와 날짜별 checklist를 함께 현행화한다.
 
 ## 루트 예외 문서
