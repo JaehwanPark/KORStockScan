@@ -41,14 +41,17 @@ DEFAULT_REPLAY_DIR = Path("data/report/widget_mechanical_entry_replay")
 DEFAULT_PAYLOAD_DIR = Path("data/ai_decision_payloads")
 DEFAULT_SENTINEL_DIR = Path("data/runtime/sentinel_event_cache")
 DEFAULT_OUTPUT_DIR = Path("data/report/widget_collector_expansion_recommendation")
+DEFAULT_RESEARCH_WATCH_CONFIG_PATH = Path(
+    "data/config/widget_research_watch_symbols.json"
+)
 DEFAULT_STATE_FILE = (
     PROJECT_ROOT / "tmp" / "widget_collector_expansion_telegram_state.json"
 )
-# Keep the persisted recommendation set aligned with the bounded shared
-# research-watch collector.  Telegram may still be a compact operator summary,
-# but the artifact must retain every symbol that can be enrolled without
-# creating a per-symbol service.
-MAX_RECOMMENDATIONS = 10
+# Retain a ranked review set larger than the bounded shared collector so
+# capacity overflow remains visible instead of silently disappearing.  The
+# collector admits only its separately declared active-symbol cap.
+MAX_RECOMMENDATIONS = 20
+MAX_ACTIVE_RESEARCH_WATCH_SYMBOLS = 15
 SHARED_COLLECTOR_REQUESTS_PER_MINUTE = 15
 SHARED_COLLECTOR_MEMORY_CAP_MB = 256
 ROUND_TRIP_COST_PCT = 0.20
@@ -371,6 +374,42 @@ def _score_candidate(
     )
 
 
+def _load_active_research_watch_inventory(
+    *, target_date: date, config_path: Path = DEFAULT_RESEARCH_WATCH_CONFIG_PATH
+) -> tuple[frozenset[str], list[str]]:
+    """Load the exact operator-enrolled catalog without granting apply authority."""
+
+    try:
+        from src.engine.monitoring.widget_research_watch_collector import load_config
+
+        config = load_config(observed_date=target_date, config_path=config_path)
+    except (OSError, ValueError) as exc:
+        return frozenset(), [type(exc).__name__ + ":" + str(exc)]
+    return (
+        frozenset(str(row["stock_code"]) for row in config["symbols"]),
+        [],
+    )
+
+
+def _collection_capacity_context(
+    *, candidates: list[dict[str, Any]], active_codes: frozenset[str]
+) -> dict[str, Any]:
+    candidate_codes = {
+        str(row.get("stock_code") or "")
+        for row in candidates
+        if row.get("recommendation_tier") == "research_watch"
+    }
+    union_codes = set(active_codes) | candidate_codes
+    return {
+        "active_research_watch_count": len(active_codes),
+        "candidate_research_watch_count": len(candidate_codes),
+        "active_candidate_union_count": len(union_codes),
+        "research_watch_overflow_candidate_count": max(
+            0, len(union_codes) - MAX_ACTIVE_RESEARCH_WATCH_SYMBOLS
+        ),
+    }
+
+
 def build_recommendation_report(
     *,
     target_date: date,
@@ -378,6 +417,8 @@ def build_recommendation_report(
     payload_dir: Path = DEFAULT_PAYLOAD_DIR,
     manual_excluded_codes: frozenset[str] | None = None,
     current_replay_report: dict[str, Any] | None = None,
+    active_research_watch_codes: frozenset[str] = frozenset(),
+    active_inventory_issues: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Build research recommendations without applying final-order exclusions.
 
@@ -537,6 +578,10 @@ def build_recommendation_report(
         reverse=True,
     )
     recommendations = candidates[:MAX_RECOMMENDATIONS]
+    capacity_context = _collection_capacity_context(
+        candidates=candidates,
+        active_codes=active_research_watch_codes,
+    )
     implementation_review_candidate_count = sum(
         row["implementation_review_ready"] is True for row in candidates
     )
@@ -551,6 +596,20 @@ def build_recommendation_report(
         "recommendations": recommendations,
         "qualified_candidate_count": len(candidates),
         "reported_candidate_count": len(recommendations),
+        "qualified_beyond_report_limit_count": max(
+            0, len(candidates) - MAX_RECOMMENDATIONS
+        ),
+        "research_watch_collection_capacity": MAX_ACTIVE_RESEARCH_WATCH_SYMBOLS,
+        "research_watch_report_limit": MAX_RECOMMENDATIONS,
+        **capacity_context,
+        "research_watch_capacity_status": (
+            "verified_active_candidate_union"
+            if not active_inventory_issues
+            else "active_inventory_unverified"
+        ),
+        "research_watch_overflow_action": (
+            "operator_review_ranked_replacement_or_defer_no_silent_enrollment"
+        ),
         "implementation_review_candidate_count": (
             implementation_review_candidate_count
         ),
@@ -569,6 +628,7 @@ def build_recommendation_report(
             "feature_paths": feature_paths,
             "active_widget_codes": sorted(IMPLEMENTED_WIDGET_CODES),
             "manual_control_exclusion_applied": False,
+            "active_research_watch_inventory_issues": list(active_inventory_issues),
         },
         "metric_contract": METRIC_CONTRACT,
         "implementation_review_contract": {
@@ -611,6 +671,20 @@ def build_telegram_message(report: dict[str, Any]) -> str:
         "연구관찰 "
         f"{report.get('research_watch_candidate_count', 0)}개"
     )
+    lines.append(
+        "추천기록 상한 "
+        f"{report.get('research_watch_report_limit', MAX_RECOMMENDATIONS)}개 · "
+        "동시수집 상한 "
+        f"{report.get('research_watch_collection_capacity', MAX_ACTIVE_RESEARCH_WATCH_SYMBOLS)}개 · "
+        "교체/대기 검토 "
+        f"{report.get('research_watch_overflow_candidate_count', 0)}개"
+    )
+    if report.get("research_watch_capacity_status") != (
+        "verified_active_candidate_union"
+    ):
+        lines.append(
+            "주의: 기존 활성 관찰목록 검증 실패로 초과 수 재확인이 필요합니다."
+        )
     for index, row in enumerate(recommendations, start=1):
         lines.extend(
             [
@@ -901,11 +975,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.write:
         mechanical_replay.write_report(replay_report, output_dir=args.replay_dir)
+    active_codes, active_inventory_issues = _load_active_research_watch_inventory(
+        target_date=target_date
+    )
     report = build_recommendation_report(
         target_date=target_date,
         replay_dir=args.replay_dir,
         payload_dir=args.payload_dir,
         current_replay_report=None if args.write else replay_report,
+        active_research_watch_codes=active_codes,
+        active_inventory_issues=tuple(active_inventory_issues),
     )
     report["telegram_status"] = "not_requested"
     output_path = args.output_dir / (

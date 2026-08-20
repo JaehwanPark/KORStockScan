@@ -7,8 +7,34 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from src.engine.monitoring import widget_collector_expansion_recommendation as rec
+from src.engine.monitoring import widget_research_watch_collector as watch
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+def test_recommendation_and_collector_capacity_contracts_match():
+    assert rec.MAX_ACTIVE_RESEARCH_WATCH_SYMBOLS == watch.MAX_SYMBOLS == 15
+    assert rec.MAX_RECOMMENDATIONS == 20
+
+
+def test_collection_overflow_uses_active_and_candidate_union():
+    candidates = [
+        {"stock_code": f"1{index:05d}", "recommendation_tier": "research_watch"}
+        for index in range(10)
+    ]
+    active_codes = frozenset(f"2{index:05d}" for index in range(10))
+
+    context = rec._collection_capacity_context(
+        candidates=candidates,
+        active_codes=active_codes,
+    )
+
+    assert context == {
+        "active_research_watch_count": 10,
+        "candidate_research_watch_count": 10,
+        "active_candidate_union_count": 20,
+        "research_watch_overflow_candidate_count": 5,
+    }
 
 
 def _replay_row(
@@ -130,10 +156,10 @@ def test_recommendation_ranks_positive_liquid_non_active_symbol(tmp_path):
     assert report["allowed_runtime_apply"] is False
 
 
-def test_recommendation_artifact_retains_all_nine_bounded_watch_candidates(
+def test_recommendation_artifact_retains_twenty_and_surfaces_collector_overflow(
     monkeypatch,
 ):
-    codes = [f"{index:06d}" for index in range(1, 10)]
+    codes = [f"{index:06d}" for index in range(1, 22)]
     replay = {
         code: {
             "sample_count": 2,
@@ -172,13 +198,19 @@ def test_recommendation_artifact_retains_all_nine_bounded_watch_candidates(
 
     report = rec.build_recommendation_report(target_date=date(2026, 8, 18))
 
-    assert report["qualified_candidate_count"] == 9
-    assert report["reported_candidate_count"] == 9
-    assert len(report["recommendations"]) == 9
+    assert report["qualified_candidate_count"] == 21
+    assert report["reported_candidate_count"] == 20
+    assert len(report["recommendations"]) == 20
+    assert report["qualified_beyond_report_limit_count"] == 1
+    assert report["research_watch_report_limit"] == 20
+    assert report["research_watch_collection_capacity"] == 15
+    assert report["research_watch_overflow_candidate_count"] == 6
 
     message = rec.build_telegram_message(report)
     assert "공유수집 총예산 ≤15 req/min, 서비스 메모리 상한 256MB" in message
     assert "예상부하 +13 req/min" not in message
+    assert "추천기록 상한 20개 · 동시수집 상한 15개 · 교체/대기 검토 6개" in message
+    assert len(message) < 4096
 
 
 def test_recommendation_does_not_filter_manual_operator_symbol(tmp_path):
