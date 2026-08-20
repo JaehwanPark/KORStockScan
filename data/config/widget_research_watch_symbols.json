@@ -3,13 +3,13 @@
   "allowed_runtime_apply": false,
   "authority": "operator_directed_widget_research_watch_observation_only",
   "broker_order_forbidden": true,
-  "created_at_kst": "2026-08-20T13:25:00+09:00",
-  "effective_from": "2026-08-19",
+  "created_at_kst": "2026-08-20T21:57:46+09:00",
+  "effective_from": "2026-08-21",
   "enabled": true,
   "runtime_effect": false,
   "schema": "widget_research_watch_config_v1",
-  "source_report": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-08-19.json",
-  "source_report_sha256": "5ba2bbcbfd345cf1fa59490b9bed8bbe4021976d77f100675b3e46166bff7195",
+  "source_report": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-08-20.json",
+  "source_report_sha256": "466665c5c580c24d797171364f6bd139f7166c1d079e2971445009c56fdab6f1",
   "source_reports": [
     {
       "path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-08-18.json",
@@ -20,9 +20,14 @@
       "path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-08-19.json",
       "sha256": "5ba2bbcbfd345cf1fa59490b9bed8bbe4021976d77f100675b3e46166bff7195",
       "target_date": "2026-08-19"
+    },
+    {
+      "path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-08-20.json",
+      "sha256": "466665c5c580c24d797171364f6bd139f7166c1d079e2971445009c56fdab6f1",
+      "target_date": "2026-08-20"
     }
   ],
-  "source_target_date": "2026-08-19",
+  "source_target_date": "2026-08-20",
   "symbols": [
     {
       "recommendation_tier": "research_watch",
@@ -93,6 +98,13 @@
       "source_target_date": "2026-08-19",
       "stock_code": "001550",
       "stock_name": "조비"
+    },
+    {
+      "recommendation_tier": "research_watch",
+      "source_report_sha256": "466665c5c580c24d797171364f6bd139f7166c1d079e2971445009c56fdab6f1",
+      "source_target_date": "2026-08-20",
+      "stock_code": "033640",
+      "stock_name": "네패스"
     }
   ]
 }

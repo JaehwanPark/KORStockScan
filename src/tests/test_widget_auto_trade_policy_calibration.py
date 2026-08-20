@@ -664,6 +664,16 @@ def test_verified_low_symbol_policy_auto_promotes_on_effective_date(tmp_path) ->
     assert verification["runtime_eligible_session_count"] == 1
     assert loaded["034020"]["KRX_REGULAR"]["new_entry_runtime_eligible"] is True
     assert loaded["034020"]["KRX_REGULAR"]["leg_quantity_each"] == 10
+    assert (
+        loaded["034020"]["KRX_REGULAR"]["source_final_exit_action"]
+        == "sell_own_filled_quantity"
+    )
+    assert calibration.SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL["005930"] == (
+        "observe_only_no_forced_sell"
+    )
+    assert calibration.SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL["042660"] == (
+        "sell_own_filled_quantity"
+    )
     assert loaded["042660"]["KRX_REGULAR"]["new_entry_runtime_eligible"] is False
 
 

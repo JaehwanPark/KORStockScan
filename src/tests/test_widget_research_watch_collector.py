@@ -111,6 +111,29 @@ def test_config_rejects_symbol_not_present_in_source_report(tmp_path):
         watch.load_config(observed_date=date(2026, 8, 13), config_path=config_path)
 
 
+def test_config_rejects_source_not_prior_to_effective_date(tmp_path):
+    symbols = [("111111", "테스트")]
+    report_path = tmp_path / "report.json"
+    config_path = tmp_path / "config.json"
+    source_sha = _write_source_report(
+        report_path,
+        symbols,
+        target_date="2026-08-13",
+    )
+    _write_config(
+        config_path,
+        source_report=report_path,
+        source_sha=source_sha,
+        symbols=symbols,
+    )
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["source_target_date"] = "2026-08-13"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="source_not_prior_to_effective_date"):
+        watch.load_config(observed_date=date(2026, 8, 13), config_path=config_path)
+
+
 def test_config_accepts_fifteen_bounded_research_watch_symbols(tmp_path):
     symbols = [(f"{index:06d}", f"테스트{index}") for index in range(1, 16)]
     report_path = tmp_path / "report.json"
@@ -227,6 +250,7 @@ def test_config_rejects_symbol_bound_to_wrong_source_lineage(tmp_path):
         symbols=[("111111", "기존")],
     )
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["effective_from"] = "2026-08-20"
     config["source_target_date"] = "2026-08-19"
     config["source_reports"] = [
         {

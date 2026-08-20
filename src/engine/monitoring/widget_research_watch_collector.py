@@ -173,11 +173,13 @@ def load_config(
         source_path = PROJECT_ROOT / str(source_row.get("path") or "")
         expected_sha = str(source_row.get("sha256") or "").strip()
         try:
-            date.fromisoformat(target_date)
+            source_target_date = date.fromisoformat(target_date)
         except ValueError as exc:
             raise ValueError(
                 "widget_research_watch_source_target_date_invalid"
             ) from exc
+        if source_target_date >= effective_from:
+            raise ValueError("widget_research_watch_source_not_prior_to_effective_date")
         if not source_path.is_file() or len(expected_sha) != 64:
             raise ValueError("widget_research_watch_source_report_missing")
         if _sha256(source_path) != expected_sha:

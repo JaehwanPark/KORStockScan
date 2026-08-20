@@ -26,6 +26,11 @@ CUMULATIVE_RESEARCH_GATE_SYMBOLS = frozenset({"034020", "042660"})
 STATIC_WIDGET_AUTO_TRADE_SYMBOLS = frozenset(
     {"005930", *CUMULATIVE_RESEARCH_GATE_SYMBOLS}
 )
+SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL = {
+    "005930": "observe_only_no_forced_sell",
+    "034020": "sell_own_filled_quantity",
+    "042660": "sell_own_filled_quantity",
+}
 CUMULATIVE_RESEARCH_START_DATE = date(2026, 8, 12)
 CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES = 40
 CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT = (
@@ -118,6 +123,7 @@ def _validated_session_policy(
     entry_cutoff = _valid_clock(payload.get("new_entry_cutoff_time"))
     force_flat = payload.get("force_flat_at_session_end") is True
     force_exit_time = _valid_clock(payload.get("force_exit_time"))
+    expected_source_exit_action = SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL.get(symbol)
     if (
         session not in SUPPORTED_SESSIONS
         or venue not in SUPPORTED_VENUES
@@ -143,7 +149,8 @@ def _validated_session_policy(
             and force_exit_time is not None
             and entry_cutoff >= force_exit_time
         )
-        or payload.get("source_final_exit_action") != "observe_only_no_forced_sell"
+        or expected_source_exit_action is None
+        or payload.get("source_final_exit_action") != expected_source_exit_action
         or str(payload.get("evidence_artifact") or "") != evidence_report_path
         or payload.get("actual_order_submitted") is not False
         or payload.get("broker_guard_bypass") is not False
@@ -185,7 +192,7 @@ def _validated_session_policy(
         "force_flat_at_session_end": force_flat,
         "force_exit_time": force_exit_time,
         "overnight_forbidden": payload.get("overnight_forbidden") is True,
-        "source_final_exit_action": "observe_only_no_forced_sell",
+        "source_final_exit_action": expected_source_exit_action,
         "additional_leg_window": "original_entry_session_only",
         "research_arm": payload.get("research_arm"),
         "evidence_window": payload.get("evidence_window"),

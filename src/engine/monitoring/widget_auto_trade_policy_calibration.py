@@ -49,6 +49,7 @@ from src.trading.widget_auto_trade.policy import (
     POLICY_AUTHORITY,
     POLICY_FILE_PREFIX,
     POLICY_SCHEMA,
+    SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL,
     WIDGET_AUTO_TRADE_LEG_QUANTITY,
     WidgetAutoTradePolicyLoader,
 )
@@ -1157,9 +1158,7 @@ def _calibrate_session(
     provisional_decision = (
         "widget_auto_trade_policy_candidate_ready"
         if selected["ready"] and holdout_ready
-        else selected["reason"]
-        if not selected["ready"]
-        else holdout_reason
+        else selected["reason"] if not selected["ready"] else holdout_reason
     )
     carry_forward_policy = _carry_forward_parameters(previous_runtime_policy)
     carry_forward_calibration_summary = None
@@ -1427,9 +1426,11 @@ def build_report(
                 "status": (
                     "loaded"
                     if spec.symbol in feedback_symbols
-                    else "owner_symbol_not_present"
-                    if micro_feedback["status"] == "loaded"
-                    else micro_feedback["status"]
+                    else (
+                        "owner_symbol_not_present"
+                        if micro_feedback["status"] == "loaded"
+                        else micro_feedback["status"]
+                    )
                 ),
                 "source_date": micro_feedback["source_date"],
                 "selection_effect": False,
@@ -1505,9 +1506,9 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
             elif calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 block_reason = str(calibration["decision"])
             if block_reason is not None:
-                blocked_sessions.setdefault(spec.symbol, {})[session_name] = (
-                    block_reason
-                )
+                blocked_sessions.setdefault(spec.symbol, {})[
+                    session_name
+                ] = block_reason
                 continue
             if calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 continue
@@ -1534,7 +1535,9 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                 "force_flat_at_session_end": session_spec.force_flat,
                 "force_exit_time": selected["force_exit_time"],
                 "overnight_forbidden": session_spec.overnight_forbidden,
-                "source_final_exit_action": "observe_only_no_forced_sell",
+                "source_final_exit_action": SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL[
+                    spec.symbol
+                ],
                 "research_arm": (
                     f"equal_share_{selected['add_trigger_bps_from_initial_fill']}_"
                     f"tp{selected['target_bps']}_multi"

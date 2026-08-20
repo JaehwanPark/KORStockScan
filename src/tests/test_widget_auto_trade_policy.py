@@ -51,7 +51,7 @@ def _policy(*, effective_date: str = "2026-08-12") -> dict:
                         "force_flat_at_session_end": True,
                         "force_exit_time": "15:18:00",
                         "overnight_forbidden": True,
-                        "source_final_exit_action": "observe_only_no_forced_sell",
+                        "source_final_exit_action": "sell_own_filled_quantity",
                         "actual_order_submitted": False,
                         "broker_guard_bypass": False,
                     }
@@ -179,6 +179,21 @@ def test_loader_rejects_same_day_evidence_and_unsafe_contract(tmp_path: Path) ->
     payload["symbols"]["034020"]["sessions"]["KRX_REGULAR"][
         "broker_guard_bypass"
     ] = True
+    _write_policy(tmp_path, "widget_auto_trade_policy_2026-08-12.json", payload)
+
+    assert (
+        WidgetAutoTradePolicyLoader(tmp_path).resolve_all(
+            observed_date=date(2026, 8, 12)
+        )
+        == {}
+    )
+
+
+def test_loader_rejects_static_symbol_exit_action_mismatch(tmp_path: Path) -> None:
+    payload = _policy()
+    payload["symbols"]["034020"]["sessions"]["KRX_REGULAR"][
+        "source_final_exit_action"
+    ] = "observe_only_no_forced_sell"
     _write_policy(tmp_path, "widget_auto_trade_policy_2026-08-12.json", payload)
 
     assert (
