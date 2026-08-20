@@ -232,9 +232,7 @@ def test_risky_micro_episode_joins_passive_fill_and_executable_short_path(tmp_pa
     )
     assert report["summary"]["risky_micro_episode_horizon_observer_event_count"] == 5
     assert (
-        report["summary"][
-            "risky_micro_episode_horizon_observer_fresh_bbo_event_count"
-        ]
+        report["summary"]["risky_micro_episode_horizon_observer_fresh_bbo_event_count"]
         == 5
     )
     assert (
@@ -255,7 +253,13 @@ def test_risky_micro_episode_joins_passive_fill_and_executable_short_path(tmp_pa
         "risky_micro_episode_executable_outcome"
     ]
     assert outcome_contract["decision_authority"] == "source_only_no_runtime_apply"
+    assert "official_route_depth_proof" in outcome_contract["source_quality_gate"]
     assert "cross_venue_outcome_join" in outcome_contract["forbidden_uses"]
+    observer_contract = report["metric_contracts"][
+        "risky_micro_episode_bounded_bbo_observer"
+    ]
+    assert "depth_proven_venue" in observer_contract["window_policy"]
+    assert "official_route_depth_proof" in observer_contract["source_quality_gate"]
     output_json = tmp_path / "report.json"
     output_md = tmp_path / "report.md"
     mod.write_outputs(report, output_json=output_json, output_md=output_md)
@@ -463,8 +467,7 @@ def test_risky_micro_episode_never_joins_cross_venue_bbo(tmp_path):
     assert outcomes[0]["matching_fresh_bbo_observation_count"] == 0
     assert outcomes[0]["matching_fresh_bbo_watermark"] is None
     assert (
-        outcomes[0]["outcome_instrumentation_gap"]
-        == "fresh_bbo_fill_horizon_missing"
+        outcomes[0]["outcome_instrumentation_gap"] == "fresh_bbo_fill_horizon_missing"
     )
     assert outcomes[0]["outcome_instrumentation_gap_matured"] is True
     assert summary["risky_micro_episode_matured_pending_outcome_gap_count"] == 1
@@ -3732,6 +3735,220 @@ def test_submit_safety_preserves_entry_ai_exact_bbo_freshness_provenance():
     assert block["executable_bbo_state"] == "pass"
     assert block["quote_age_ms"] == 25
     assert block["quote_age_sec"] == 0.025
+
+
+def test_blocked_zero_qty_reuses_only_exact_recent_one_share_bbo_for_source_only_outcome(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-21.jsonl"
+    rows = [
+        _event(
+            905,
+            "000905",
+            "position-cap-zero",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "market_data_effective_best_bid": 1000,
+                "market_data_effective_best_ask": 1005,
+            },
+            emitted_at="2026-08-21T08:00:00+09:00",
+        ),
+        _event(
+            905,
+            "000905",
+            "position-cap-zero",
+            "blocked_zero_qty",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "binding_caps": "max_position_qty_cap",
+                "pre_cap_qty": 1,
+                "effective_qty": 0,
+                "budget_base": 120000,
+                "target_budget": 12000,
+                "safe_budget": 11400,
+            },
+            emitted_at="2026-08-21T08:00:00.250000+09:00",
+        ),
+        _event(
+            905,
+            "000905",
+            "position-cap-zero",
+            "scalping_scanner_fast_precheck",
+            {
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "market_data_effective_best_bid": 1020,
+                "market_data_effective_best_ask": 1025,
+            },
+            emitted_at="2026-08-21T08:00:03+09:00",
+        ),
+        _event(
+            905,
+            "000905",
+            "position-cap-zero",
+            "scalping_scanner_fast_precheck",
+            {
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "market_data_effective_best_bid": 995,
+                "market_data_effective_best_ask": 1000,
+            },
+            emitted_at="2026-08-21T08:00:06+09:00",
+        ),
+        _event(
+            905,
+            "000905",
+            "position-cap-zero",
+            "scalping_scanner_fast_precheck",
+            {
+                "effective_venue": "NXT",
+                "market_data_effective_best_bid": 1100,
+                "market_data_effective_best_ask": 1105,
+            },
+            emitted_at="2026-08-21T08:00:09+09:00",
+        ),
+        _event(
+            905,
+            "000905",
+            "position-cap-zero",
+            "scalping_scanner_fast_precheck",
+            {
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "market_data_effective_best_bid": 1200,
+                "market_data_effective_best_ask": 1205,
+            },
+            emitted_at="2026-08-21T09:00:01+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-21", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    block = report["submit_safety_blocker_rows"][0]
+    assert block["stage"] == "blocked_zero_qty"
+    assert block["blocker_bucket"] == "quantity_max_position_qty_cap"
+    assert block["block_price"] == 1005.0
+    assert block["block_price_source"] == (
+        "predecessor:rising_missed_one_share_entry:market_data_effective_bbo:"
+        "executable_ask"
+    )
+    assert block["executable_bbo_predecessor_stage"] == (
+        "rising_missed_one_share_entry"
+    )
+    assert block["executable_bbo_predecessor_age_ms"] == 250.0
+    assert block["one_share_floor_position_cap_conflict"] is True
+    assert block["post_block_executable_bbo_event_count"] == 2
+    assert block["post_block_executable_bbo_venue_mismatch_count"] == 1
+    assert block["post_block_executable_bbo_out_of_window_count"] == 1
+    assert block["mfe_after_block_pct"] == 1.4925
+    assert block["mae_after_block_pct"] == -0.995
+    assert block["post_block_first_hit"] == "net_target_first"
+    assert block["post_block_first_hit_elapsed_sec"] == 2.75
+    assert report["blocked_zero_qty_counterfactual_rows"] == [block]
+    assert report["summary"]["blocked_zero_qty_count"] == 1
+    assert (
+        report["summary"][
+            "blocked_zero_qty_one_share_floor_position_cap_conflict_count"
+        ]
+        == 1
+    )
+    assert report["summary"]["blocked_zero_qty_executable_bbo_labeled_count"] == 1
+
+
+def test_blocked_zero_qty_does_not_reuse_stale_predecessor_bbo(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-21.jsonl"
+    rows = [
+        _event(
+            906,
+            "000906",
+            "stale-position-cap-zero",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "market_data_effective_best_bid": 1000,
+                "market_data_effective_best_ask": 1005,
+            },
+            emitted_at="2026-08-21T08:00:00+09:00",
+        ),
+        _event(
+            906,
+            "000906",
+            "stale-position-cap-zero",
+            "blocked_zero_qty",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "binding_caps": "max_position_qty_cap",
+                "pre_cap_qty": 1,
+                "effective_qty": 0,
+            },
+            emitted_at="2026-08-21T08:00:01.001000+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-21", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    block = report["submit_safety_blocker_rows"][0]
+    assert block["block_price"] is None
+    assert block["executable_bbo_state"] == "source_gap_missing_or_invalid"
+    assert block["executable_bbo_predecessor_stage"] is None
+
+
+def test_blocked_zero_qty_normalizes_naive_pipeline_timestamp_to_kst(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-21.jsonl"
+    rows = [
+        _event(
+            907,
+            "000907",
+            "mixed-timebase-zero",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "market_data_effective_best_bid": 1000,
+                "market_data_effective_best_ask": 1005,
+            },
+            emitted_at="2026-08-21T08:00:00",
+        ),
+        _event(
+            907,
+            "000907",
+            "mixed-timebase-zero",
+            "blocked_zero_qty",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "binding_caps": "max_position_qty_cap",
+                "pre_cap_qty": 1,
+                "effective_qty": 0,
+            },
+            emitted_at="2026-08-21T08:00:00.250000+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-21", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    block = report["blocked_zero_qty_counterfactual_rows"][0]
+    assert block["executable_bbo_state"] == "pass"
+    assert block["executable_bbo_predecessor_age_ms"] == 250.0
 
 
 def test_latency_false_negative_preserves_runtime_dynamic_age_provenance():

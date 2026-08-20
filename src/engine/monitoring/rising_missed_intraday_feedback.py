@@ -40,8 +40,10 @@ LATENCY_CANARY_SPREAD_ONLY_MAX_SPREAD_BPS = 90.0
 LATENCY_ROLLING_MIN_LOW_ADVERSE_RATE_PCT = 30.0
 LATENCY_ROLLING_MIN_READY_RATE_PCT = 30.0
 EXECUTABLE_BBO_COUNTERFACTUAL_STAGES = frozenset(
-    {"latency_block", "rising_missed_tick_speed_entry_block"}
+    {"blocked_zero_qty", "latency_block", "rising_missed_tick_speed_entry_block"}
 )
+EXECUTABLE_BBO_PREDECESSOR_MAX_AGE_SEC = 1.0
+EXECUTABLE_BBO_PREDECESSOR_STAGES = frozenset({"rising_missed_one_share_entry"})
 RISKY_MICRO_HORIZONS_SEC = (3, 10, 20, 30)
 RISKY_MICRO_MAX_ENDPOINT_LAG_SEC = 5.0
 RISKY_MICRO_MAX_INTERNAL_GAP_SEC = 10.0
@@ -213,9 +215,23 @@ def _parse_ts(value: Any) -> datetime | None:
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=KST)
+    return parsed
+
+
+def _compatible_elapsed_seconds(
+    later: datetime | None,
+    earlier: datetime | None,
+) -> float | None:
+    if later is None or earlier is None:
+        return None
+    if (later.tzinfo is None) != (earlier.tzinfo is None):
+        return None
+    return (later - earlier).total_seconds()
 
 
 def _event_code(row: dict[str, Any]) -> str:
@@ -1197,6 +1213,15 @@ def _classify_submit_safety_block(row: dict[str, Any]) -> tuple[str, str, list[s
     fields = _fields(row)
     stage = str(row.get("stage") or "")
     reason = _field_reason(fields)
+    if stage == "blocked_zero_qty":
+        binding_caps = _split_csv_values(fields.get("binding_caps"))
+        components = binding_caps or ["quantity_zero_without_binding_cap"]
+        primary_cap = binding_caps[0] if binding_caps else "unspecified"
+        return (
+            primary_cap,
+            f"quantity_{primary_cap}",
+            components,
+        )
     if stage == "rising_missed_scout_quality_guard_blocked" and reason in {
         "stale_quote_with_weak_ai_or_strength",
         "stale_quote_with_missing_ai_provenance",
@@ -1302,11 +1327,25 @@ def _tp1_counterfactual_decision_context(fields: dict[str, Any]) -> dict[str, An
     }
 
 
-def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
+def _submit_safety_block_row(
+    row: dict[str, Any],
+    *,
+    predecessor_bbo: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     fields = _fields(row)
     reason, bucket, components = _classify_submit_safety_block(row)
     stage = str(row.get("stage") or "")
     executable_bid, executable_ask, executable_bbo_source = _event_executable_bbo(row)
+    predecessor_age_ms = None
+    predecessor_stage = None
+    if executable_bid is None and predecessor_bbo is not None:
+        executable_bid = _safe_float(predecessor_bbo.get("bid"))
+        executable_ask = _safe_float(predecessor_bbo.get("ask"))
+        executable_bbo_source = str(
+            predecessor_bbo.get("source") or "missing_or_invalid_executable_bbo"
+        )
+        predecessor_age_ms = _safe_float(predecessor_bbo.get("age_ms"))
+        predecessor_stage = predecessor_bbo.get("stage")
     requires_executable_bbo = stage in EXECUTABLE_BBO_COUNTERFACTUAL_STAGES
     price = executable_ask if requires_executable_bbo else _event_price(row)
     block_price_source = (
@@ -1342,13 +1381,32 @@ def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
             else "source_gap_missing_or_invalid"
         ),
         "executable_bbo_source": executable_bbo_source,
+        "executable_bbo_predecessor_stage": predecessor_stage,
+        "executable_bbo_predecessor_age_ms": predecessor_age_ms,
         "block_executable_best_bid": executable_bid,
         "block_executable_best_ask": executable_ask,
+        "quantity_pre_cap_qty": _safe_int(fields.get("pre_cap_qty")),
+        "quantity_effective_qty": _safe_int(fields.get("effective_qty")),
+        "quantity_binding_caps": _split_csv_values(fields.get("binding_caps")),
+        "quantity_budget_base_krw": _safe_int(fields.get("budget_base")),
+        "quantity_target_budget_krw": _safe_int(fields.get("target_budget")),
+        "quantity_safe_budget_krw": _safe_int(fields.get("safe_budget")),
+        "one_share_floor_position_cap_conflict": bool(
+            stage == "blocked_zero_qty"
+            and _safe_int(fields.get("pre_cap_qty")) >= 1
+            and _safe_int(fields.get("effective_qty")) == 0
+            and "max_position_qty_cap" in _split_csv_values(fields.get("binding_caps"))
+        ),
         "mfe_after_block_pct": None,
         "mae_after_block_pct": None,
         "post_block_price_event_count": 0,
         "post_block_executable_bbo_event_count": 0,
         "post_block_executable_bbo_source_gap_count": 0,
+        "post_block_executable_bbo_venue_mismatch_count": 0,
+        "post_block_executable_bbo_out_of_window_count": 0,
+        "post_block_first_hit": "not_observed",
+        "post_block_first_hit_ts": None,
+        "post_block_first_hit_elapsed_sec": None,
         "quote_age_ms": quote_age,
         "quote_age_sec": (
             round(quote_age / 1000.0, 3) if quote_age is not None else None
@@ -1478,7 +1536,12 @@ def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _update_block_mfe_mae(block: dict[str, Any], price: float | None) -> None:
+def _update_block_mfe_mae(
+    block: dict[str, Any],
+    price: float | None,
+    *,
+    observation_ts: datetime | None = None,
+) -> None:
     base = _safe_float(block.get("block_price"))
     if base is None or base <= 0 or price is None or price <= 0:
         return
@@ -1496,6 +1559,21 @@ def _update_block_mfe_mae(block: dict[str, Any], price: float | None) -> None:
         if block.get("mae_after_block_pct") is None
         else round(min(float(block["mae_after_block_pct"]), move_pct), 4)
     )
+    if block.get("post_block_first_hit") != "not_observed":
+        return
+    if move_pct >= TP1_NET_TARGET_PCT:
+        first_hit = "net_target_first"
+    elif move_pct <= TP1_ADVERSE_STOP_PCT:
+        first_hit = "adverse_stop_first"
+    else:
+        return
+    source_ts = _parse_ts(block.get("ts"))
+    elapsed_sec = _compatible_elapsed_seconds(observation_ts, source_ts)
+    if elapsed_sec is None or elapsed_sec < 0:
+        return
+    block["post_block_first_hit"] = first_hit
+    block["post_block_first_hit_ts"] = observation_ts.isoformat()
+    block["post_block_first_hit_elapsed_sec"] = round(elapsed_sec, 3)
 
 
 def _is_submit_safety_block(row: dict[str, Any]) -> bool:
@@ -1509,6 +1587,7 @@ def _is_submit_safety_block(row: dict[str, Any]) -> bool:
     if not lineage:
         return False
     if stage in {
+        "blocked_zero_qty",
         "rising_missed_scout_quality_guard_blocked",
         "latency_block",
         "real_weak_ai_micro_entry_block",
@@ -1668,6 +1747,7 @@ def _build_submit_safety_and_backoff_audit(
     latest_seen_ts: datetime | None = None
     dynamic_age_rows_by_trace: dict[str, dict[str, Any]] = {}
     open_dynamic_age_rows_by_code: dict[str, list[dict[str, Any]]] = {}
+    recent_executable_bbo_by_record: dict[str, dict[str, Any]] = {}
 
     for row in iter_jsonl(pipeline_path):
         code = _event_code(row)
@@ -1711,6 +1791,26 @@ def _build_submit_safety_and_backoff_audit(
 
         for block in open_submit_blocks_by_code.get(code, []):
             if block.get("counterfactual_requires_executable_bbo"):
+                block_ts = _parse_ts(block.get("ts"))
+                elapsed_sec = _compatible_elapsed_seconds(parsed_ts, block_ts)
+                if elapsed_sec is None or elapsed_sec < 0 or elapsed_sec > 3600.0:
+                    block["post_block_executable_bbo_out_of_window_count"] = (
+                        _safe_int(
+                            block.get("post_block_executable_bbo_out_of_window_count")
+                        )
+                        + 1
+                    )
+                    continue
+                observation_venue = str(_tp1_effective_venue(fields) or "").upper()
+                block_venue = str(block.get("effective_venue") or "").upper()
+                if observation_venue != block_venue:
+                    block["post_block_executable_bbo_venue_mismatch_count"] = (
+                        _safe_int(
+                            block.get("post_block_executable_bbo_venue_mismatch_count")
+                        )
+                        + 1
+                    )
+                    continue
                 if executable_bid is None:
                     block["post_block_executable_bbo_source_gap_count"] = (
                         _safe_int(
@@ -1722,9 +1822,17 @@ def _build_submit_safety_and_backoff_audit(
                 block["post_block_executable_bbo_event_count"] = (
                     _safe_int(block.get("post_block_executable_bbo_event_count")) + 1
                 )
-                _update_block_mfe_mae(block, executable_bid)
+                _update_block_mfe_mae(
+                    block,
+                    executable_bid,
+                    observation_ts=parsed_ts,
+                )
             else:
-                _update_block_mfe_mae(block, observation_price)
+                _update_block_mfe_mae(
+                    block,
+                    observation_price,
+                    observation_ts=parsed_ts,
+                )
 
         if code in backoff_by_code:
             backoff = backoff_by_code[code]
@@ -1755,7 +1863,34 @@ def _build_submit_safety_and_backoff_audit(
                 )
 
         if _is_submit_safety_block(row):
-            block = _submit_safety_block_row(row)
+            predecessor_bbo = None
+            record_id = str(row.get("record_id") or "").strip()
+            recent_bbo = recent_executable_bbo_by_record.get(record_id)
+            if recent_bbo is not None and parsed_ts is not None:
+                recent_ts = recent_bbo.get("ts")
+                age_sec = _compatible_elapsed_seconds(
+                    parsed_ts,
+                    recent_ts if isinstance(recent_ts, datetime) else None,
+                )
+                same_venue = (
+                    str(recent_bbo.get("venue") or "").upper()
+                    == str(_tp1_effective_venue(fields) or "").upper()
+                )
+                if (
+                    age_sec is not None
+                    and 0.0 <= age_sec <= EXECUTABLE_BBO_PREDECESSOR_MAX_AGE_SEC
+                    and str(recent_bbo.get("stage") or "")
+                    in EXECUTABLE_BBO_PREDECESSOR_STAGES
+                    and same_venue
+                ):
+                    predecessor_bbo = {
+                        **recent_bbo,
+                        "age_ms": round(age_sec * 1000.0, 3),
+                    }
+            block = _submit_safety_block_row(
+                row,
+                predecessor_bbo=predecessor_bbo,
+            )
             submit_blocks.append(block)
             open_submit_blocks_by_code.setdefault(code, []).append(block)
             reason_counts[block["reason"]] += 1
@@ -1778,6 +1913,22 @@ def _build_submit_safety_and_backoff_audit(
             )
             if source:
                 source_counts[str(source)] += 1
+
+        if (
+            parsed_ts is not None
+            and executable_bid is not None
+            and _executable_ask is not None
+        ):
+            record_id = str(row.get("record_id") or "").strip()
+            if record_id:
+                recent_executable_bbo_by_record[record_id] = {
+                    "bid": executable_bid,
+                    "ask": _executable_ask,
+                    "source": (f"predecessor:{stage}:{_executable_bbo_source}"),
+                    "stage": stage,
+                    "ts": parsed_ts,
+                    "venue": _tp1_effective_venue(fields),
+                }
 
         if _is_backoff_event(row):
             source = fields.get("scanner_budget_reallocation_source") or fields.get(
@@ -1870,6 +2021,19 @@ def _build_submit_safety_and_backoff_audit(
         ),
         "submit_safety_executable_bbo_labeled_count": sum(
             bool(item.get("counterfactual_requires_executable_bbo"))
+            and item.get("executable_bbo_state") == "pass"
+            and _safe_int(item.get("post_block_executable_bbo_event_count")) > 0
+            for item in submit_blocks
+        ),
+        "blocked_zero_qty_count": sum(
+            item.get("stage") == "blocked_zero_qty" for item in submit_blocks
+        ),
+        "blocked_zero_qty_one_share_floor_position_cap_conflict_count": sum(
+            bool(item.get("one_share_floor_position_cap_conflict"))
+            for item in submit_blocks
+        ),
+        "blocked_zero_qty_executable_bbo_labeled_count": sum(
+            item.get("stage") == "blocked_zero_qty"
             and item.get("executable_bbo_state") == "pass"
             and _safe_int(item.get("post_block_executable_bbo_event_count")) > 0
             for item in submit_blocks
@@ -5319,18 +5483,14 @@ def _build_risky_micro_episode_source_candidates(
                     fields.get("risky_micro_episode_outcome_join_required")
                 ),
                 "horizon_observer_registered": _boolish(
-                    fields.get(
-                        "risky_micro_episode_horizon_observer_registered"
-                    )
+                    fields.get("risky_micro_episode_horizon_observer_registered")
                 ),
                 "horizon_observer_registration_status": str(
                     fields.get("risky_micro_episode_horizon_observer_status")
                     or "not_instrumented"
                 ),
                 "horizon_observer_registration_key": str(
-                    fields.get(
-                        "risky_micro_episode_horizon_observer_registration_key"
-                    )
+                    fields.get("risky_micro_episode_horizon_observer_registration_key")
                     or "-"
                 ),
             }
@@ -5357,9 +5517,7 @@ def _build_risky_micro_episode_source_candidates(
             ):
                 horizon_observer_event_count += 1
                 if _boolish(
-                    _fields(row).get(
-                        "risky_micro_episode_horizon_observer_quote_fresh"
-                    )
+                    _fields(row).get("risky_micro_episode_horizon_observer_quote_fresh")
                 ):
                     horizon_observer_fresh_bbo_event_count += 1
             ts = row_ts
@@ -6426,7 +6584,8 @@ def build_report(
                 ),
                 "primary_decision_metric": "source_quality_adjusted_ev_pct",
                 "source_quality_gate": (
-                    "passive_ask_touch_and_fresh_executable_bid_with_exact_venue_session"
+                    "passive_ask_touch_and_fresh_executable_bid_with_exact_"
+                    "symbol_session_and_item_venue_or_official_route_depth_proof"
                 ),
                 "forbidden_uses": [
                     *FORBIDDEN_USES,
@@ -6458,14 +6617,14 @@ def build_report(
                     "report_only_bounded_executable_bbo_observer_no_order_authority"
                 ),
                 "window_policy": (
-                    "same_symbol_venue_session_1s_until_45s_after_runtime_candidate"
+                    "same_symbol_session_exact_route_or_depth_proven_venue_"
+                    "1s_until_45s_after_runtime_candidate"
                 ),
                 "sample_floor": "not_applicable_instrumentation",
-                "primary_decision_metric": (
-                    "fresh_executable_bbo_horizon_coverage"
-                ),
+                "primary_decision_metric": ("fresh_executable_bbo_horizon_coverage"),
                 "source_quality_gate": (
-                    "exact_symbol_venue_session_0d_and_fresh_bbo_age_le_1000ms"
+                    "exact_symbol_session_0d_and_exact_item_venue_or_official_"
+                    "route_depth_proof_and_fresh_bbo_age_le_1000ms"
                 ),
                 "forbidden_uses": [
                     *FORBIDDEN_USES,
@@ -6596,6 +6755,11 @@ def build_report(
         # Keep the current intraday window inspectable after the bounded table
         # reaches its payload limit.
         "submit_safety_blocker_rows": submit_safety_rows[-200:],
+        "blocked_zero_qty_counterfactual_rows": [
+            item
+            for item in submit_safety_rows
+            if item.get("stage") == "blocked_zero_qty"
+        ][-200:],
         "backoff_opportunity_audit_rows": backoff_audit_rows[:200],
         "latency_false_negative_review_rows": latency_false_negative_rows[:200],
         "latency_false_negative_canary_candidate_rows": latency_canary_rows[:200],
@@ -7014,6 +7178,18 @@ def write_outputs(
             "spread_bps={spread_bps} source_quality_gate={source_quality_gate} "
             "source_quality_state={source_quality_state} missing_fields={source_quality_missing_fields} "
             "micro_state={orderbook_micro_state}".format(**item)
+        )
+    lines.extend(["", "## Blocked Zero Quantity Counterfactual", ""])
+    for item in report.get("blocked_zero_qty_counterfactual_rows") or []:
+        lines.append(
+            "- ts={ts} code={stock_code} name={stock_name} reason={reason} "
+            "entry_ask={block_executable_best_ask} entry_bbo_source={executable_bbo_source} "
+            "predecessor_age_ms={executable_bbo_predecessor_age_ms} "
+            "pre_cap_qty={quantity_pre_cap_qty} effective_qty={quantity_effective_qty} "
+            "binding_caps={quantity_binding_caps} floor_cap_conflict={one_share_floor_position_cap_conflict} "
+            "mfe_after={mfe_after_block_pct} mae_after={mae_after_block_pct} "
+            "first_hit={post_block_first_hit} first_hit_elapsed_sec={post_block_first_hit_elapsed_sec} "
+            "decision_authority={decision_authority}".format(**item)
         )
     lines.extend(
         [
