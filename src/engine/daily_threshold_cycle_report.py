@@ -83,6 +83,8 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "additional_worsen",
     "ai_recover_ok",
     "ai_recovery_delta",
+    "ai_decision_trace_id",
+    "ai_input_snapshot_id",
     "ai_score",
     "applied",
     "assumed_fill_price",
@@ -162,6 +164,9 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "path_mfe_profit_rate",
     "path_price_quality_valid_sample_count",
     "path_price_quality_invalid_sample_count",
+    "path_quality_contract_version",
+    "path_max_valid_observation_gap_sec",
+    "path_max_allowed_observation_gap_sec",
     "runtime_family_enabled",
     "alternative_executed",
     "anchor_effective_price",
@@ -178,6 +183,9 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "micro_vwap_bps",
     "orderbook_micro_snapshot_age_ms",
     "orderbook_micro_state",
+    "ofi_debounce_profit_delta",
+    "ofi_force_exit_phase",
+    "ofi_force_exit_terminal_reason",
     "order_price",
     "orderable_amount",
     "orderable_cash",
@@ -269,6 +277,7 @@ THRESHOLD_EVENT_INTERNED_TOP_LEVEL_KEYS = {
     "emitted_date",
 }
 THRESHOLD_EVENT_MAX_INTERNED_FIELD_VALUE_CHARS = 80
+SMOOTHING_FIELD_PROJECTION_CONTRACT_START_DATE = "2026-08-21"
 
 CALIBRATION_SAFETY_GUARDS = [
     "hard/protect/emergency stop delay >= 1",
@@ -1313,9 +1322,105 @@ def _normalize_smoothing_stage_counts(value: object) -> dict[str, dict[str, int]
     }
 
 
-def _smoothing_partition_ingestion_audit(
-    rows: list[dict], checkpoint: dict[str, Any]
+def _smoothing_field_projection_audit(
+    rows: list[dict], *, target_date: str
 ) -> dict[str, Any]:
+    """Verify that compact loading preserves smoothing decision fields."""
+
+    schema = "smoothing_field_projection_audit_v1"
+    if target_date < SMOOTHING_FIELD_PROJECTION_CONTRACT_START_DATE:
+        return {
+            "schema": schema,
+            "status": "not_applicable",
+            "required_from_date": SMOOTHING_FIELD_PROJECTION_CONTRACT_START_DATE,
+            "checked_stage_counts": {},
+            "missing_field_counts": {},
+            "invalid_value_counts": {},
+            "issues": [],
+        }
+
+    checked_stage_counts: Counter[str] = Counter()
+    missing_field_counts: Counter[str] = Counter()
+    invalid_value_counts: Counter[str] = Counter()
+
+    def present(fields: dict[str, Any], key: str) -> bool:
+        value = fields.get(key)
+        return value is not None and (not isinstance(value, str) or bool(value.strip()))
+
+    for row in rows:
+        stage = str(row.get("stage") or "")
+        if stage not in {
+            *SMOOTHING_SOURCE_ONLY_PATH_STAGES,
+            "holding_flow_ofi_smoothing_applied",
+            "holding_flow_override_force_exit",
+        }:
+            continue
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        checked_stage_counts[stage] += 1
+
+        if stage in SMOOTHING_SOURCE_ONLY_PATH_STAGES:
+            if not present(fields, "path_quality_contract_version"):
+                missing_field_counts["path_quality_contract_version"] += 1
+            elif fields.get("path_quality_contract_version") != "fresh_observation_gap_v2":
+                invalid_value_counts["path_quality_contract_version"] += 1
+            if stage in {
+                "smoothing_source_only_path_horizon",
+                "smoothing_source_only_path_closed",
+            }:
+                for key in (
+                    "path_max_valid_observation_gap_sec",
+                    "path_max_allowed_observation_gap_sec",
+                ):
+                    if not present(fields, key):
+                        missing_field_counts[key] += 1
+
+        if stage == "holding_flow_ofi_smoothing_applied":
+            for key in ("ai_decision_trace_id", "ai_input_snapshot_id"):
+                if not present(fields, key):
+                    missing_field_counts[key] += 1
+
+        if stage == "holding_flow_override_force_exit":
+            phase = str(fields.get("ofi_force_exit_phase") or "")
+            if not phase:
+                missing_field_counts["ofi_force_exit_phase"] += 1
+            elif phase not in {
+                "pre_smoothing_guard",
+                "post_debounce_guard",
+                "source_quality_guard",
+            }:
+                invalid_value_counts["ofi_force_exit_phase"] += 1
+            if not present(fields, "ofi_force_exit_terminal_reason"):
+                missing_field_counts["ofi_force_exit_terminal_reason"] += 1
+            if phase == "post_debounce_guard" and not present(
+                fields, "ofi_debounce_profit_delta"
+            ):
+                missing_field_counts["ofi_debounce_profit_delta"] += 1
+
+    issues: list[str] = []
+    if missing_field_counts:
+        issues.append("smoothing_compact_required_field_missing")
+    if invalid_value_counts:
+        issues.append("smoothing_compact_contract_value_invalid")
+    return {
+        "schema": schema,
+        "status": "fail" if issues else "pass",
+        "required_from_date": SMOOTHING_FIELD_PROJECTION_CONTRACT_START_DATE,
+        "checked_stage_counts": dict(sorted(checked_stage_counts.items())),
+        "missing_field_counts": dict(sorted(missing_field_counts.items())),
+        "invalid_value_counts": dict(sorted(invalid_value_counts.items())),
+        "issues": issues,
+    }
+
+
+def _smoothing_partition_ingestion_audit(
+    rows: list[dict], checkpoint: dict[str, Any], *, target_date: str | None = None
+) -> dict[str, Any]:
+    effective_target_date = str(
+        target_date or checkpoint.get("target_date") or ""
+    ).strip()
+    field_projection = _smoothing_field_projection_audit(
+        rows, target_date=effective_target_date
+    )
     checkpoint_audit = (
         checkpoint.get("smoothing_source_only_ingestion")
         if isinstance(checkpoint.get("smoothing_source_only_ingestion"), dict)
@@ -1339,6 +1444,7 @@ def _smoothing_partition_ingestion_audit(
             "raw_stage_counts_by_family": _normalize_smoothing_stage_counts({}),
             "written_stage_counts_by_family": _normalize_smoothing_stage_counts({}),
             "partition_stage_counts_by_family": partition_counts,
+            "field_projection": field_projection,
             "issues": ["checkpoint_smoothing_ingestion_audit_missing"],
         }
     raw_counts = _normalize_smoothing_stage_counts(
@@ -1367,6 +1473,8 @@ def _smoothing_partition_ingestion_audit(
         issues.append("raw_written_smoothing_stage_count_mismatch")
     if written_counts != partition_counts:
         issues.append("written_partition_smoothing_stage_count_mismatch")
+    if field_projection.get("status") == "fail":
+        issues.append("smoothing_field_projection_contract_failed")
     return {
         "schema": "smoothing_source_only_partition_ingestion_audit_v1",
         "status": "fail" if issues else "pass",
@@ -1381,6 +1489,7 @@ def _smoothing_partition_ingestion_audit(
         "raw_stage_counts_by_family": raw_counts,
         "written_stage_counts_by_family": written_counts,
         "partition_stage_counts_by_family": partition_counts,
+        "field_projection": field_projection,
         "issues": issues,
     }
 
@@ -1398,7 +1507,9 @@ def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | 
         except OSError:
             continue
     checkpoint = _checkpoint_for_date(target_date)
-    smoothing_ingestion_audit = _smoothing_partition_ingestion_audit(rows, checkpoint)
+    smoothing_ingestion_audit = _smoothing_partition_ingestion_audit(
+        rows, checkpoint, target_date=target_date
+    )
     return PipelineLoadResult(
         rows=rows,
         meta={

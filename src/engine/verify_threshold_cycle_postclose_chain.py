@@ -1017,6 +1017,47 @@ def _smoothing_source_only_path_journal_contract_status(
                 issues.append(
                     "smoothing_source_only_ingestion_unroutable_stage_count_invalid"
                 )
+            if daily_date >= "2026-08-21":
+                field_projection = ingestion.get("field_projection")
+                if not isinstance(field_projection, dict):
+                    issues.append(
+                        "smoothing_source_only_field_projection_audit_missing"
+                    )
+                else:
+                    if field_projection.get("schema") != (
+                        "smoothing_field_projection_audit_v1"
+                    ):
+                        issues.append(
+                            "smoothing_source_only_field_projection_audit_schema_invalid"
+                        )
+                    if field_projection.get("status") != "pass":
+                        issues.append(
+                            "smoothing_source_only_field_projection_audit_failed"
+                        )
+                    if field_projection.get("required_from_date") != "2026-08-21":
+                        issues.append(
+                            "smoothing_source_only_field_projection_required_date_invalid"
+                        )
+                    if not isinstance(
+                        field_projection.get("checked_stage_counts"), dict
+                    ):
+                        issues.append(
+                            "smoothing_source_only_field_projection_stage_counts_invalid"
+                        )
+                    for count_field in (
+                        "missing_field_counts",
+                        "invalid_value_counts",
+                    ):
+                        value = field_projection.get(count_field)
+                        if not isinstance(value, dict) or value:
+                            issues.append(
+                                "smoothing_source_only_field_projection_"
+                                f"{count_field}_invalid"
+                            )
+                    if field_projection.get("issues") != []:
+                        issues.append(
+                            "smoothing_source_only_field_projection_issues_invalid"
+                        )
             partition_counts = (
                 ingestion.get("partition_stage_counts_by_family")
                 if isinstance(ingestion.get("partition_stage_counts_by_family"), dict)

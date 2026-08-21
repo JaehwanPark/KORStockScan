@@ -4392,8 +4392,16 @@ def test_smoothing_attribution_fields_survive_event_compaction():
         "holding_flow_ofi_regime": "neutral",
         "holding_flow_ofi_micro_score_raw": "0.2",
         "holding_flow_ofi_micro_score_smooth": "0.06",
+        "ai_decision_trace_id": "trace-1",
+        "ai_input_snapshot_id": "snapshot-1",
         "raw_flow_action": "EXIT",
         "final_flow_action": "EXIT",
+        "path_quality_contract_version": "fresh_observation_gap_v2",
+        "path_max_valid_observation_gap_sec": 1.0,
+        "path_max_allowed_observation_gap_sec": 2.0,
+        "ofi_force_exit_phase": "post_debounce_guard",
+        "ofi_force_exit_terminal_reason": "hard_breach",
+        "ofi_debounce_profit_delta": -0.31,
     }
 
     event = report_mod._compact_threshold_cycle_event(
@@ -5499,6 +5507,147 @@ def test_partitioned_loader_audits_smoothing_raw_written_partition_counts(
 
     assert incomplete_audit["status"] == "fail"
     assert "checkpoint_not_completed" in incomplete_audit["issues"]
+
+
+def test_partitioned_loader_audits_smoothing_decision_field_projection(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    target_date = "2026-08-21"
+    family = "soft_stop_whipsaw_confirmation"
+    partition_dir = (
+        report_mod.THRESHOLD_CYCLE_DIR / f"date={target_date}" / f"family={family}"
+    )
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    lineage = {
+        "journal_family": family,
+        "journal_arm_id": "arm-1",
+        "path_quality_contract_version": "fresh_observation_gap_v2",
+    }
+    events = [
+        {
+            "event_type": "threshold_cycle_event",
+            "family": family,
+            "stage": "smoothing_source_only_path_armed",
+            "fields": lineage,
+        },
+        {
+            "event_type": "threshold_cycle_event",
+            "family": family,
+            "stage": "smoothing_source_only_path_horizon",
+            "fields": {
+                **lineage,
+                "path_max_valid_observation_gap_sec": 1.0,
+                "path_max_allowed_observation_gap_sec": 2.0,
+            },
+        },
+        {
+            "event_type": "threshold_cycle_event",
+            "family": family,
+            "stage": "smoothing_source_only_path_closed",
+            "fields": {
+                **lineage,
+                "path_max_valid_observation_gap_sec": 1.0,
+                "path_max_allowed_observation_gap_sec": 2.0,
+            },
+        },
+        {
+            "event_type": "threshold_cycle_event",
+            "family": "holding_flow_ofi_smoothing",
+            "stage": "holding_flow_ofi_smoothing_applied",
+            "fields": {
+                "ai_decision_trace_id": "trace-1",
+                "ai_input_snapshot_id": "snapshot-1",
+            },
+        },
+        {
+            "event_type": "threshold_cycle_event",
+            "family": "holding_flow_ofi_smoothing",
+            "stage": "holding_flow_override_force_exit",
+            "fields": {
+                "ofi_force_exit_phase": "post_debounce_guard",
+                "ofi_force_exit_terminal_reason": "hard_breach",
+                "ofi_debounce_profit_delta": -0.31,
+            },
+        },
+    ]
+    (partition_dir / "part-000001.jsonl").write_text(
+        "".join(f"{json.dumps(event)}\n" for event in events),
+        encoding="utf-8",
+    )
+    counts = {
+        target_family: {
+            target_stage: int(target_family == family)
+            for target_stage in (
+                "smoothing_source_only_path_armed",
+                "smoothing_source_only_path_closed",
+                "smoothing_source_only_path_horizon",
+            )
+        }
+        for target_family in (
+            "holding_flow_ofi_smoothing",
+            "soft_stop_whipsaw_confirmation",
+        )
+    }
+    checkpoint_dir = report_mod.THRESHOLD_CYCLE_DIR / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    source_path = tmp_path / "immutable-smoothing-source.jsonl.gz"
+    source_path.write_text("immutable", encoding="utf-8")
+    checkpoint = {
+        "target_date": target_date,
+        "completed": True,
+        "source_path": str(source_path),
+        "smoothing_source_only_ingestion": {
+            "schema": "smoothing_source_only_ingestion_audit_v1",
+            "status": "pass",
+            "runtime_effect": False,
+            "coverage_complete": True,
+            "unroutable_stage_count": 0,
+            "raw_stage_counts_by_family": counts,
+            "written_stage_counts_by_family": counts,
+        },
+    }
+    (checkpoint_dir / f"{target_date}.json").write_text(
+        json.dumps(checkpoint), encoding="utf-8"
+    )
+
+    load_result = report_mod._default_pipeline_load_result(target_date)
+
+    field_projection = load_result.meta["smoothing_source_only_ingestion"][
+        "field_projection"
+    ]
+    assert field_projection["status"] == "pass"
+    assert field_projection["missing_field_counts"] == {}
+    assert field_projection["invalid_value_counts"] == {}
+    assert field_projection["issues"] == []
+    horizon = next(
+        row
+        for row in load_result.rows
+        if row["stage"] == "smoothing_source_only_path_horizon"
+    )
+    assert horizon["fields"]["path_quality_contract_version"] == (
+        "fresh_observation_gap_v2"
+    )
+    assert horizon["fields"]["path_max_valid_observation_gap_sec"] == 1.0
+    assert horizon["fields"]["path_max_allowed_observation_gap_sec"] == 2.0
+
+    uninstrumented = report_mod._smoothing_partition_ingestion_audit(
+        load_result.rows, {"target_date": target_date}, target_date=target_date
+    )
+    assert uninstrumented["status"] == "not_instrumented"
+    assert uninstrumented["field_projection"]["status"] == "pass"
+
+    del horizon["fields"]["path_max_valid_observation_gap_sec"]
+    invalid_audit = report_mod._smoothing_partition_ingestion_audit(
+        load_result.rows, checkpoint, target_date=target_date
+    )
+
+    assert invalid_audit["status"] == "fail"
+    assert "smoothing_field_projection_contract_failed" in invalid_audit["issues"]
+    assert invalid_audit["field_projection"]["missing_field_counts"] == {
+        "path_max_valid_observation_gap_sec": 1
+    }
 
 
 def test_daily_threshold_cycle_report_does_not_reload_same_day_for_rolling_sim_rows():

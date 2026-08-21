@@ -367,6 +367,86 @@ def test_smoothing_source_only_path_journal_rejects_partition_report_count_drift
     )
 
 
+def test_smoothing_source_only_path_journal_rejects_field_projection_failure():
+    daily_families = {
+        "soft_stop_whipsaw_confirmation": {
+            "source_only_path_journal": _smoothing_journal(10, arm_id="soft:1")
+        },
+        "holding_flow_ofi_smoothing": {
+            "source_only_path_journal": _smoothing_journal(20, arm_id="ofi:1")
+        },
+    }
+    stage_counts = {
+        family: {
+            "smoothing_source_only_path_armed": 1,
+            "smoothing_source_only_path_horizon": 5,
+            "smoothing_source_only_path_closed": 1,
+        }
+        for family in daily_families
+    }
+    daily = {
+        "date": "2026-08-21",
+        "meta": {
+            "pipeline_load": {
+                "2026-08-21": {
+                    "smoothing_source_only_ingestion": {
+                        "schema": (
+                            "smoothing_source_only_partition_ingestion_audit_v1"
+                        ),
+                        "status": "pass",
+                        "runtime_effect": False,
+                        "checkpoint_completed": True,
+                        "checkpoint_source_exists": True,
+                        "coverage_complete": True,
+                        "unroutable_stage_count": 0,
+                        "partition_stage_counts_by_family": stage_counts,
+                        "field_projection": {
+                            "schema": "smoothing_field_projection_audit_v1",
+                            "status": "pass",
+                            "required_from_date": "2026-08-21",
+                            "checked_stage_counts": {
+                                "smoothing_source_only_path_horizon": 10
+                            },
+                            "missing_field_counts": {},
+                            "invalid_value_counts": {},
+                            "issues": [],
+                        },
+                    }
+                }
+            }
+        },
+        "threshold_snapshot": daily_families,
+    }
+    cumulative = {
+        "windows": {"cumulative": ["2026-08-21"]},
+        "threshold_snapshot_by_window": {"cumulative": daily_families},
+    }
+
+    valid_status = mod._smoothing_source_only_path_journal_contract_status(
+        daily, cumulative
+    )
+
+    assert valid_status["status"] == "pass"
+
+    field_projection = daily["meta"]["pipeline_load"]["2026-08-21"][
+        "smoothing_source_only_ingestion"
+    ]["field_projection"]
+    field_projection["status"] = "fail"
+    field_projection["missing_field_counts"] = {
+        "path_max_valid_observation_gap_sec": 1
+    }
+    field_projection["issues"] = ["smoothing_compact_required_field_missing"]
+    status = mod._smoothing_source_only_path_journal_contract_status(daily, cumulative)
+
+    assert status["status"] == "fail"
+    assert "smoothing_source_only_field_projection_audit_failed" in status["issues"]
+    assert (
+        "smoothing_source_only_field_projection_missing_field_counts_invalid"
+        in status["issues"]
+    )
+    assert "smoothing_source_only_field_projection_issues_invalid" in status["issues"]
+
+
 def test_smoothing_source_only_path_journal_requires_daily_pipeline_load_meta():
     daily_families = {
         "soft_stop_whipsaw_confirmation": {
