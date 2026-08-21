@@ -102,6 +102,10 @@ NON_LIVE_SELECTABLE_FAMILIES = {
     "panic_entry_freeze_guard",
 }
 RETIRED_RUNTIME_ENV_KEYS = {
+    # The previous-limit-up observation/runtime family was fully retired on
+    # 2026-08-14.  Keep the old persistent operator key in the denylist so a
+    # stale ignored override cannot silently reactivate it at PREOPEN.
+    "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED",
     "KORSTOCKSCAN_LATENCY_CANARY_PROFILE",
     "KORSTOCKSCAN_SCALP_LATENCY_FALLBACK_ENABLED",
     "KORSTOCKSCAN_SCALP_SPLIT_ENTRY_ENABLED",

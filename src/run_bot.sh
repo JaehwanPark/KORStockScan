@@ -311,6 +311,10 @@ export_runtime_source_provenance() {
 }
 
 reset_runtime_policy_env_before_handoff() {
+    # Fully retired previous-limit-up observation family.  The supervisor is
+    # long-lived across graceful child restarts, so explicitly clear inherited
+    # state before loading the reviewed PREOPEN/operator handoff.
+    unset KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED
     unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED
     unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE
     unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION

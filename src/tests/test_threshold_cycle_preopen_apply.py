@@ -8682,6 +8682,7 @@ def test_verify_runtime_env_handoff_rejects_retired_operator_overrides(
     (runtime_dir / "operator_runtime_overrides.env").write_text(
         "\n".join(
             [
+                "export KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED=true",
                 "export KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED=true",
                 "export KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED=true",
             ]
@@ -8697,6 +8698,7 @@ def test_verify_runtime_env_handoff_rejects_retired_operator_overrides(
     assert result["retired_operator_override_keys_blocked"] == [
         "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED",
         "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED",
+        "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED",
     ]
     assert {item["severity"] for item in result["findings"]} == {
         "retired_runtime_override_present"
@@ -9683,9 +9685,7 @@ def test_scalp_sim_policy_audit_rejects_enabled_policy_without_any_file():
 
     assert audit["status"] == "fail"
     assert audit["reason"] == "enabled_policy_file_missing"
-    assert audit["required_env_keys"] == [
-        "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE"
-    ]
+    assert audit["required_env_keys"] == ["KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE"]
 
 
 def test_verify_runtime_env_handoff_rejects_pre_clean_baseline_embedded_plan(

@@ -1581,16 +1581,23 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", target_date)
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES", "3")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED", "false")
 
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 10, "price": 10000, "tif": "DAY"}],
-        stock={"code": "123456", "strategy": "SCALPING"},
+        stock={"id": 7, "code": "123456", "strategy": "SCALPING"},
         latency_gate={
             "latency_state": "SAFE",
             "best_ask_at_submit": 10050,
             "quote_stale_at_submit": False,
+            "entry_ai_submit_authority_blocked": False,
+            "entry_ai_submit_authority_action": "WAIT",
+            "entry_ai_submit_authority_result_source": "live",
+            "entry_ai_submit_authority_confirmed_at": 100.25,
+            "entry_ai_submit_authority_action_source": "latest_stock_ai",
+            "entry_ai_submit_authority_wait_probe_required": True,
+            "entry_ai_submit_authority_decision_trace_id": "entry-trace-1",
         },
         now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
     )
@@ -1614,6 +1621,115 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
     assert reserved_bundle["continuation"] == continuation
     assert reserved_bundle["probe_submit_best_ask"] == 10050
     assert reserved_bundle["timeout_sec"] == 3
+    assert reserved_bundle["ai_action_at_submit"] == "WAIT"
+    assert reserved_bundle["ai_result_source_at_submit"] == "live"
+    assert reserved_bundle["ai_confirmed_at_submit"] == 100.25
+    assert reserved_bundle["ai_action_source_at_submit"] == "latest_stock_ai"
+    assert reserved_bundle["wait_contract_at_submit"] is True
+    assert reserved_bundle["ai_decision_trace_id"] == "entry-trace-1"
+
+    bundle_id = orders[0]["entry_split_order_probe_bundle_id"]
+    split_plan.update_probe_runtime_bundle(
+        bundle_id,
+        phase="probe_submitting",
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+    fill_race_stock = {
+        "id": 7,
+        "code": "123456",
+        "strategy": "SCALPING",
+        "entry_split_probe_phase": "probe_submitting",
+        "entry_split_probe_bundle_id": bundle_id,
+        "entry_split_probe_requested_qty": 10,
+        "entry_split_probe_continuation": continuation,
+        "entry_split_probe_submit_best_ask": 10050,
+        "entry_split_probe_ai_action_at_submit": "-",
+        "entry_split_probe_ai_result_source_at_submit": "not_available",
+        "entry_split_probe_ai_confirmed_at_submit": 0.0,
+        "entry_split_probe_ai_action_source_at_submit": "-",
+        "entry_split_probe_ai_decision_trace_id": "-",
+    }
+    recovered = split_plan.recover_probe_submit_contract_for_fill(
+        fill_race_stock,
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+    assert recovered["recovered"] is True
+    assert fill_race_stock["entry_split_probe_ai_action_at_submit"] == "WAIT"
+    assert fill_race_stock["entry_split_probe_ai_result_source_at_submit"] == "live"
+    assert fill_race_stock["entry_split_probe_ai_confirmed_at_submit"] == 100.25
+    assert (
+        fill_race_stock["entry_split_probe_ai_action_source_at_submit"]
+        == "latest_stock_ai"
+    )
+    assert fill_race_stock["entry_split_probe_wait_contract_at_submit"] is True
+    assert fill_race_stock["entry_split_probe_ai_decision_trace_id"] == "entry-trace-1"
+
+    untrusted_orders, _ = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 4, "price": 9000, "tif": "DAY"}],
+        stock={"code": "654321", "strategy": "SCALPING"},
+        latency_gate={
+            "latency_state": "SAFE",
+            "best_ask_at_submit": 9050,
+            "quote_stale_at_submit": False,
+            "entry_ai_submit_authority_blocked": True,
+            "entry_ai_submit_authority_action": "WAIT",
+            "entry_ai_submit_authority_result_source": "live",
+            "entry_ai_submit_authority_confirmed_at": 100.25,
+            "entry_ai_submit_authority_wait_probe_required": True,
+        },
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+    untrusted_bundle = split_plan.probe_runtime_state_snapshot(
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9)))
+    )["bundles"][untrusted_orders[0]["entry_split_order_probe_bundle_id"]]
+    assert "ai_action_at_submit" not in untrusted_bundle
+    assert "wait_contract_at_submit" not in untrusted_bundle
+
+    drop_orders, _ = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 4, "price": 8900, "tif": "DAY"}],
+        stock={"id": 9, "code": "654322", "strategy": "SCALPING"},
+        latency_gate={
+            "latency_state": "SAFE",
+            "best_ask_at_submit": 8950,
+            "quote_stale_at_submit": False,
+            "entry_ai_submit_authority_blocked": False,
+            "entry_ai_submit_authority_action": "DROP",
+            "entry_ai_submit_authority_result_source": "live",
+            "entry_ai_submit_authority_confirmed_at": 100.25,
+            "entry_ai_submit_authority_action_source": "latest_stock_ai",
+            "entry_ai_submit_authority_decision_trace_id": "drop-trace",
+        },
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+    drop_bundle = split_plan.probe_runtime_state_snapshot(
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9)))
+    )["bundles"][drop_orders[0]["entry_split_order_probe_bundle_id"]]
+    assert "ai_action_at_submit" not in drop_bundle
+    assert "wait_contract_at_submit" not in drop_bundle
+    drop_bundle_id = drop_orders[0]["entry_split_order_probe_bundle_id"]
+    split_plan.update_probe_runtime_bundle(
+        drop_bundle_id,
+        phase="probe_submitting",
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+    incomplete_recovery = split_plan.recover_probe_submit_contract_for_fill(
+        {
+            "id": 9,
+            "code": "654322",
+            "strategy": "SCALPING",
+            "entry_split_probe_phase": "probe_submitting",
+            "entry_split_probe_bundle_id": drop_bundle_id,
+            "entry_split_probe_requested_qty": 4,
+            "entry_split_probe_continuation": drop_bundle["continuation"],
+            "entry_split_probe_submit_best_ask": 8950,
+        },
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+    assert incomplete_recovery["recovered"] is False
+    assert (
+        incomplete_recovery["reason"]
+        == "probe_submit_bundle_missing_immutable_ai_contract"
+    )
 
     residuals, residual_fields = split_plan.build_probe_residual_orders(
         continuation,

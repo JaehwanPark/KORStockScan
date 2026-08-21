@@ -35531,7 +35531,12 @@ def test_probe_fill_recovers_submit_contract_before_residual_callback(
         max_slippage_bps=50.0,
         anchor_mode="fill_clamped_to_fresh_bbo",
         submitting_at=1_000.0,
+        ai_action_at_submit="WAIT",
+        ai_result_source_at_submit="live",
+        ai_confirmed_at_submit=999.5,
+        ai_action_source_at_submit="latest_stock_ai",
         wait_contract_at_submit=True,
+        ai_decision_trace_id="probe-race-trace",
     )
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
@@ -35606,6 +35611,11 @@ def test_probe_fill_recovers_submit_contract_before_residual_callback(
     assert callback_snapshots[0]["entry_split_probe_requested_qty"] == 21
     assert callback_snapshots[0]["entry_split_probe_bundle_id"] == ("123456-probe-race")
     assert callback_snapshots[0]["entry_split_probe_submit_best_ask"] == 10_010
+    assert callback_snapshots[0]["entry_split_probe_ai_action_at_submit"] == "WAIT"
+    assert (
+        callback_snapshots[0]["entry_split_probe_ai_decision_trace_id"]
+        == "probe-race-trace"
+    )
     recovery_event = next(
         fields
         for stage, fields in holding_events

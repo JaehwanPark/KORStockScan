@@ -257,11 +257,34 @@ def recover_probe_submit_contract_for_fill(
     if not code or not target_id:
         return {"recovered": False, "reason": "probe_fill_identity_missing"}
 
+    submit_ai_action = (
+        str(stock.get("entry_split_probe_ai_action_at_submit") or "").strip().upper()
+    )
+    submit_ai_result_source = (
+        str(stock.get("entry_split_probe_ai_result_source_at_submit") or "")
+        .strip()
+        .lower()
+    )
+    immutable_ai_contract_present = bool(
+        submit_ai_action in {"BUY", "WAIT"}
+        and submit_ai_result_source in {"live", "prior_valid"}
+        and _safe_float(stock.get("entry_split_probe_ai_confirmed_at_submit"), 0.0) > 0
+        and str(stock.get("entry_split_probe_ai_action_source_at_submit") or "")
+        .strip()
+        .lower()
+        not in {"", "-", "none", "not_available", "not_evaluated"}
+        and str(stock.get("entry_split_probe_ai_decision_trace_id") or "")
+        .strip()
+        .lower()
+        not in {"", "-", "none", "not_available", "not_evaluated"}
+        and "entry_split_probe_wait_contract_at_submit" in stock
+    )
     required_present = bool(
         str(stock.get("entry_split_probe_bundle_id") or "").strip()
         and _safe_int(stock.get("entry_split_probe_requested_qty"), 0) > 1
         and isinstance(stock.get("entry_split_probe_continuation"), dict)
         and _safe_int(stock.get("entry_split_probe_submit_best_ask"), 0) > 0
+        and immutable_ai_contract_present
     )
     if required_present:
         return {"recovered": False, "reason": "submit_contract_already_hydrated"}
@@ -377,11 +400,63 @@ def recover_probe_submit_contract_for_fill(
                 key == "entry_split_probe_submit_best_ask"
                 and _safe_int(current_value, 0) <= 0
             )
+            or (
+                key == "entry_split_probe_ai_action_at_submit"
+                and str(current_value or "").strip().upper() not in {"BUY", "WAIT"}
+            )
+            or (
+                key == "entry_split_probe_ai_result_source_at_submit"
+                and str(current_value or "").strip().lower()
+                not in {"live", "prior_valid"}
+            )
+            or (
+                key == "entry_split_probe_ai_confirmed_at_submit"
+                and _safe_float(current_value, 0.0) <= 0
+            )
+            or (
+                key
+                in {
+                    "entry_split_probe_ai_action_source_at_submit",
+                    "entry_split_probe_ai_decision_trace_id",
+                }
+                and str(current_value or "").strip().lower()
+                in {"", "-", "none", "not_available", "not_evaluated"}
+            )
         )
         if current_value not in (None, "") and not required_value_invalid:
             continue
         stock[key] = value
         restored_fields.append(key)
+    recovered_ai_action = (
+        str(stock.get("entry_split_probe_ai_action_at_submit") or "").strip().upper()
+    )
+    recovered_ai_result_source = (
+        str(stock.get("entry_split_probe_ai_result_source_at_submit") or "")
+        .strip()
+        .lower()
+    )
+    recovered_contract_complete = bool(
+        recovered_ai_action in {"BUY", "WAIT"}
+        and recovered_ai_result_source in {"live", "prior_valid"}
+        and _safe_float(stock.get("entry_split_probe_ai_confirmed_at_submit"), 0.0) > 0
+        and str(stock.get("entry_split_probe_ai_action_source_at_submit") or "")
+        .strip()
+        .lower()
+        not in {"", "-", "none", "not_available", "not_evaluated"}
+        and str(stock.get("entry_split_probe_ai_decision_trace_id") or "")
+        .strip()
+        .lower()
+        not in {"", "-", "none", "not_available", "not_evaluated"}
+        and "entry_split_probe_wait_contract_at_submit" in stock
+    )
+    if not recovered_contract_complete:
+        return {
+            "recovered": False,
+            "reason": "probe_submit_bundle_missing_immutable_ai_contract",
+            "bundle_id": bundle_id,
+            "bundle_phase": str(bundle.get("phase") or "unknown"),
+            "restored_fields": tuple(restored_fields),
+        }
     return {
         "recovered": True,
         "reason": "probe_submit_contract_recovered_for_fill",
@@ -3691,6 +3766,54 @@ def apply_entry_split_order_policy(
             pct_offsets=pct_offsets,
             common_fields=common_fields,
         )
+        submit_ai_action = (
+            str(latency_gate.get("entry_ai_submit_authority_action") or "")
+            .strip()
+            .upper()
+        )
+        submit_ai_result_source = (
+            str(latency_gate.get("entry_ai_submit_authority_result_source") or "")
+            .strip()
+            .lower()
+        )
+        submit_ai_confirmed_at = _safe_float(
+            latency_gate.get("entry_ai_submit_authority_confirmed_at"), 0.0
+        )
+        submit_ai_action_source = str(
+            latency_gate.get("entry_ai_submit_authority_action_source") or ""
+        ).strip()
+        submit_ai_decision_trace_id = str(
+            latency_gate.get("entry_ai_submit_authority_decision_trace_id") or ""
+        ).strip()
+        submit_ai_contract_trusted = bool(
+            not _safe_bool(latency_gate.get("entry_ai_submit_authority_blocked", True))
+            and submit_ai_action in {"BUY", "WAIT"}
+            and submit_ai_result_source in {"live", "prior_valid"}
+            and submit_ai_confirmed_at > 0
+            and submit_ai_action_source.lower()
+            not in {"", "-", "none", "not_available", "not_evaluated"}
+            and submit_ai_decision_trace_id.lower()
+            not in {"", "-", "none", "not_available", "not_evaluated"}
+        )
+        probe_submit_ai_contract = (
+            {
+                "ai_action_at_submit": submit_ai_action,
+                "ai_result_source_at_submit": submit_ai_result_source,
+                "ai_confirmed_at_submit": submit_ai_confirmed_at,
+                "ai_action_source_at_submit": submit_ai_action_source,
+                "wait_contract_at_submit": bool(
+                    submit_ai_action == "WAIT"
+                    and _safe_bool(
+                        latency_gate.get(
+                            "entry_ai_submit_authority_wait_probe_required"
+                        )
+                    )
+                ),
+                "ai_decision_trace_id": submit_ai_decision_trace_id,
+            }
+            if submit_ai_contract_trusted
+            else {}
+        )
         bundle_id, reservation_reason = _reserve_probe_runtime_bundle(
             stock=stock,
             total_qty=total_qty,
@@ -3700,6 +3823,12 @@ def apply_entry_split_order_policy(
                 "timeout_sec": probe_config["timeout_sec"],
                 "max_slippage_bps": probe_config["max_slippage_bps"],
                 "anchor_mode": probe_config["anchor_mode"],
+                # Freeze the same trusted Entry-AI contract that the submit
+                # owner will attach to stock state.  Kiwoom can return a fill
+                # before that later mutation completes; the reservation is
+                # therefore the only race-safe recovery source for a WAIT
+                # probe and must not degrade it to an unverified stale action.
+                **probe_submit_ai_contract,
             },
             now=now,
         )

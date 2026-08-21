@@ -2123,6 +2123,10 @@ def test_tuning_monitoring_waits_for_threshold_postclose_done_by_default():
 
 def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     script = Path("src/run_bot.sh").read_text(encoding="utf-8")
+    assert "unset KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED" in script
+    assert script.index("unset KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED") < script.index(
+        'if [ -f "$THRESHOLD_RUNTIME_ENV" ]'
+    )
 
     assert "wait_for_threshold_runtime_env" in script
     assert "KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_REQUIRED" in script
