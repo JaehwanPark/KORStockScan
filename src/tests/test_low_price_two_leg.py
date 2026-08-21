@@ -907,6 +907,49 @@ def test_machine_state_and_order_ledger_are_bound_to_one_profile(tmp_path):
     )
 
 
+def test_terminal_partial_fill_does_not_report_whole_episode_as_unfilled(tmp_path):
+    profile = PROFILES["hanse_morning"]
+    gateway = FakeGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    started_at = _profile_run_at(profile.profile_id)
+    state = machine.run_once(started_at)
+    first_order = state["legs"][0]["buy_order_no"]
+    second_order = state["legs"][1]["buy_order_no"]
+    first_price = state["legs"][0]["entry_price"]
+
+    gateway.snapshots[first_order] = ExecutionSnapshot(
+        True, True, 4, 6, 10, first_price
+    )
+    machine.run_once(started_at + timedelta(minutes=3))
+    gateway.snapshots[first_order] = ExecutionSnapshot(
+        True, True, 4, 0, 10, first_price
+    )
+    state = machine.run_once(started_at + timedelta(minutes=3, seconds=1))
+    target_order = state["legs"][0]["target_order_no"]
+    target_price = state["legs"][0]["target_price"]
+    gateway.snapshots[target_order] = ExecutionSnapshot(
+        True, True, 4, 0, 4, target_price
+    )
+    gateway.snapshots[second_order] = ExecutionSnapshot(True, True, 0, 0, 10)
+
+    state = machine.run_once(started_at + timedelta(minutes=3, seconds=2))
+
+    assert state["status"] == "COMPLETE"
+    assert state["position_qty"] == 0
+    assert state["last_action"] == (
+        "unfilled_buy_leg_resolved_after_sibling_completed"
+    )
+    assert state["audit"][-1]["completed_sibling_leg_ids"] == [
+        "signal_close"
+    ]
+
+
 @pytest.mark.parametrize(
     ("prior_status", "prior_reason"),
     [

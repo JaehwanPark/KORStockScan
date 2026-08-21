@@ -33683,6 +33683,11 @@ def register_risky_micro_episode_executable_bbo_observer(
         or fields.get("market_session_bucket")
         or ""
     ).strip()
+    source_market_route = str(
+        fields.get("rising_missed_ws_0d_route")
+        or fields.get("rising_missed_ws_last_route")
+        or ""
+    ).strip().lower()
     normalized_session = session.strip().lower()
     allowed_sessions_by_venue = {
         "KRX": {"krx_regular"},
@@ -33715,7 +33720,32 @@ def register_risky_micro_episode_executable_bbo_observer(
             ),
         }
 
-    registration_key = f"{normalized_code}|{venue}|{session.upper()}"
+    allowed_market_routes_by_venue = {
+        "KRX": {"krx_regular", "krx_nxt_integrated"},
+        "NXT": {"nxt_only"},
+        "PREMARKET_KRX_LIKE": {"nxt_only", "krx_nxt_integrated"},
+    }
+    if not source_market_route:
+        return {
+            **base,
+            "risky_micro_episode_horizon_observer_status": (
+                "market_route_source_quality_blocked"
+            ),
+            "risky_micro_episode_horizon_observer_expected_market_route": "-",
+        }
+    if source_market_route not in allowed_market_routes_by_venue[venue]:
+        return {
+            **base,
+            "risky_micro_episode_horizon_observer_status": (
+                "market_route_source_quality_blocked"
+            ),
+            "risky_micro_episode_horizon_observer_expected_market_route": (
+                source_market_route
+            ),
+        }
+    registration_key = (
+        f"{normalized_code}|{venue}|{session.upper()}|{source_market_route.upper()}"
+    )
     expires_at = observed_at + _RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC
     with ENTRY_LOCK:
         for stale_key, stale in list(_RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.items()):
@@ -33776,6 +33806,7 @@ def register_risky_micro_episode_executable_bbo_observer(
                 "code": normalized_code,
                 "venue": venue,
                 "session": session,
+                "source_market_route": source_market_route,
                 "registered_at_epoch": observed_at,
                 "expires_at_epoch": expires_at,
                 "last_emit_epoch": 0.0,
@@ -33807,6 +33838,9 @@ def register_risky_micro_episode_executable_bbo_observer(
         "risky_micro_episode_horizon_observer_registered": True,
         "risky_micro_episode_horizon_observer_status": registration_status,
         "risky_micro_episode_horizon_observer_registration_key": registration_key,
+        "risky_micro_episode_horizon_observer_expected_market_route": (
+            source_market_route
+        ),
         "risky_micro_episode_horizon_observer_expires_at_epoch": round(expires_at, 3),
     }
 
@@ -33817,6 +33851,7 @@ def _risky_micro_route_scoped_0d_bbo(
     code: str,
     venue: str,
     session: str,
+    expected_market_route: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Select the newest exact-route 0D snapshot without relabeling venues."""
 
@@ -33876,7 +33911,14 @@ def _risky_micro_route_scoped_0d_bbo(
     route_snapshots = ws_data.get("realtime_type_snapshots_by_route")
     route_snapshots = route_snapshots if isinstance(route_snapshots, dict) else {}
     premarket_cohort = venue == "PREMARKET_KRX_LIKE"
-    required_route = "krx_regular" if venue == "KRX" else "nxt_only"
+    required_route = (
+        "krx_regular"
+        if venue == "KRX"
+        else "krx_nxt_integrated"
+        if premarket_cohort
+        else "nxt_only"
+    )
+    candidate_route = str(expected_market_route or required_route).strip().lower()
     matches: list[tuple[dict[str, Any], str, str, str, dict[str, Any]]] = []
     exact_route_outside_session = False
     integrated_route_depth_proof_invalid = False
@@ -33898,13 +33940,15 @@ def _risky_micro_route_scoped_0d_bbo(
         depth_proof: dict[str, Any] = {}
         if premarket_cohort:
             if (
-                observed_route.lower() == "nxt_only"
+                candidate_route == "nxt_only"
+                and observed_route.lower() == "nxt_only"
                 and observed_venue == "NXT"
                 and observed_item == f"{code}_NX"
             ):
                 pass
             elif (
-                observed_route.lower() == "krx_nxt_integrated"
+                candidate_route == "krx_nxt_integrated"
+                and observed_route.lower() == "krx_nxt_integrated"
                 and not observed_venue
                 and observed_item == f"{code}_AL"
             ):
@@ -33921,8 +33965,24 @@ def _risky_micro_route_scoped_0d_bbo(
             else:
                 continue
         elif (
+            venue == "KRX"
+            and candidate_route == "krx_nxt_integrated"
+            and observed_route.lower() == candidate_route
+            and observed_venue in {"", "SOR"}
+            and observed_item == f"{code}_AL"
+        ):
+            # KRX regular entries use the SOR broker route.  Keep that
+            # executable integrated BBO as SOR provenance; never relabel it as
+            # a pure KRX or NXT quote.  Requiring the frozen candidate route
+            # prevents an unrelated integrated subscription from entering the
+            # detached counterfactual path.
+            observed_venue = "SOR"
+            route_scope_status = "exact_0d_integrated_sor_execution_route"
+            observed_venue_resolution = "same_candidate_integrated_sor_route"
+            depth_proof_status = "not_required_integrated_sor_execution"
+        elif (
             observed_venue != venue
-            or observed_route.lower() != required_route
+            or observed_route.lower() != candidate_route
             or (venue == "KRX" and observed_item != code)
             or (venue == "NXT" and observed_item != f"{code}_NX")
         ):
@@ -34074,6 +34134,9 @@ def observe_risky_micro_episode_executable_bbo_paths(
                 code=code,
                 venue=str(registration.get("venue") or "").strip().upper(),
                 session=str(registration.get("session") or "").strip(),
+                expected_market_route=str(
+                    registration.get("source_market_route") or ""
+                ).strip(),
             )
             _, market_fields = build_market_data_enrichment(
                 ws_data=scoped_ws,
@@ -34113,6 +34176,9 @@ def observe_risky_micro_episode_executable_bbo_paths(
                     "risky_micro_episode_horizon_observer_source": (
                         "ws_route_scoped_0d_snapshot"
                     ),
+                    "risky_micro_episode_horizon_observer_expected_market_route": (
+                        registration.get("source_market_route") or "-"
+                    ),
                     "metric_role": "source_quality_instrumentation",
                     "decision_authority": (
                         "report_only_bounded_executable_bbo_observer_no_order_authority"
@@ -34126,8 +34192,9 @@ def observe_risky_micro_episode_executable_bbo_paths(
                         "fresh_executable_bbo_horizon_coverage"
                     ),
                     "source_quality_gate": (
-                        "exact_symbol_session_0d_and_exact_item_venue_or_official_"
-                        "route_depth_proof_and_fresh_bbo_age_le_1000ms"
+                        "same_candidate_market_route_exact_symbol_session_0d_and_"
+                        "exact_item_venue_or_integrated_sor_or_official_route_depth_"
+                        "proof_and_fresh_bbo_age_le_1000ms"
                     ),
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,

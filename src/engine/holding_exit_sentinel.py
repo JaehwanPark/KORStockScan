@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -367,6 +367,45 @@ def _score50_origin_counts(events: list[PipelineEvent]) -> dict[str, int]:
     return dict(sorted(counter.items()))
 
 
+def _count_holding_score_preflight_blocked(events: list[PipelineEvent]) -> int:
+    """Count score fallbacks caused by either local or provider input preflight.
+
+    ``holding_score_preflight_blocked`` describes the local hot-path preflight,
+    while the AI adapter can still reject the exact input bundle later and
+    return ``holding_score_source=input_preflight_blocked``.  Treating only the
+    former as a preflight block under-reports the latter as a generic score-50
+    fallback in this report-only sentinel.
+    """
+    blocked = 0
+    for event in events:
+        if event.stage != "ai_holding_review":
+            continue
+        fields = event.fields
+        score_values = (
+            fields.get("holding_score_effective"),
+            fields.get("ai_score"),
+            fields.get("current_ai_score"),
+        )
+        if not any(_safe_float(value, -1.0) == 50.0 for value in score_values):
+            continue
+        explicit_blocked = _safe_str(
+            fields.get("holding_score_preflight_blocked")
+        ).lower() in {"1", "true", "yes"}
+        adapter_blocked = any(
+            "input_preflight_blocked" in _safe_str(fields.get(key)).lower()
+            for key in (
+                "holding_score_source",
+                "holding_score_raw_source",
+                "holding_score_basis",
+                "holding_score_excluded_reason",
+                "ai_result_source",
+            )
+        )
+        if explicit_blocked or adapter_blocked:
+            blocked += 1
+    return blocked
+
+
 def _max_field(events: list[PipelineEvent], stage: str, field: str) -> float:
     values = [
         _safe_float(event.fields.get(field), 0.0)
@@ -504,8 +543,8 @@ def _summarize_events(
         "stage_unique": stage_unique,
         "reason_top": _stage_reason_top(scoped),
         "score50_origin_counts": score50_origin_counts,
-        "holding_score_preflight_blocked_events": int(
-            score50_origin_counts.get("preflight_source_quality_blocked", 0)
+        "holding_score_preflight_blocked_events": (
+            _count_holding_score_preflight_blocked(scoped)
         ),
         "holding_score_raw_non50_neutralized_events": int(
             score50_origin_counts.get("post_call_source_quality_neutralized", 0)
@@ -593,8 +632,6 @@ def _classify(
     stale_sec = int((as_of - latest).total_seconds()) if latest else None
     during_sentinel_hours = SESSION_START <= as_of.time() <= SENTINEL_END
 
-    exit_signal = int(unique.get("exit_signal", 0) or 0)
-    sell_sent = int(unique.get("sell_order_sent", 0) or 0)
     real_exit_signal = int(unique.get("real_exit_signal", 0) or 0)
     real_sell_sent = int(unique.get("real_sell_order_sent", 0) or 0)
     non_real_exit_signal = int(unique.get("non_real_exit_signal", 0) or 0)

@@ -714,7 +714,24 @@ class SamsungRegularTwoLegMachine:
             return
         if snapshot.found and snapshot.filled_qty == 0 and snapshot.remaining_qty == 0:
             leg.update({"status": "NO_FILL", "buy_cancel_requested": False})
-            self._record(now, "buy_resolved_without_fill", leg_id=leg["leg_id"])
+            completed_sibling_leg_ids = [
+                str(item.get("leg_id") or "")
+                for item in self._state.get("legs", [])
+                if item is not leg
+                and item.get("status") == "COMPLETE"
+                and int(item.get("buy_filled_qty", 0) or 0) > 0
+            ]
+            action = (
+                "unfilled_buy_leg_resolved_after_sibling_completed"
+                if completed_sibling_leg_ids
+                else "buy_resolved_without_fill"
+            )
+            self._record(
+                now,
+                action,
+                leg_id=leg["leg_id"],
+                completed_sibling_leg_ids=completed_sibling_leg_ids,
+            )
             return
         if leg.get("buy_cancel_requested"):
             self._record(now, "buy_cancel_reconciliation_wait", leg_id=leg["leg_id"])

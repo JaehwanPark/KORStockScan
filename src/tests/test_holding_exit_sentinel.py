@@ -233,6 +233,53 @@ def test_score50_origin_counts_split_preflight_and_neutralized(monkeypatch, tmp_
     assert "score50 raw-non50 neutralized" in markdown
 
 
+def test_provider_input_preflight_block_is_not_hidden_as_generic_fallback(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:00:00",
+                "ai_holding_review",
+                record_id=1,
+                fields={
+                    "holding_score_effective": "50",
+                    "holding_score_score50_origin": "fallback_score_50",
+                    "holding_score_preflight_blocked": "False",
+                    "holding_score_source": "input_preflight_blocked",
+                    "holding_score_basis": "ai_input_preflight_blocked",
+                    "holding_score_excluded_reason": (
+                        "holding_score_source_input_preflight_blocked"
+                    ),
+                },
+            ),
+            _event(
+                "2026-05-06",
+                "10:01:00",
+                "ai_holding_review",
+                record_id=2,
+                fields={
+                    "holding_score_effective": "49",
+                    "holding_score_source": "input_preflight_blocked",
+                },
+            ),
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+    )
+    session = report["current"]["session"]
+
+    assert session["score50_origin_counts"] == {"fallback_score_50": 1}
+    assert session["holding_score_preflight_blocked_events"] == 1
+
+
 def test_policy_excludes_telegram_alert(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     _write_events(
