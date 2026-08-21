@@ -3359,6 +3359,7 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
             "openai_primary_timeout_budget_ms": 7000,
             "openai_total_route_timeout_budget_ms": 15000,
             "bedrock_fallback_family": "lite_v2",
+            "bedrock_model_family": "lite_v2",
             "bedrock_fallback_used": True,
             "bedrock_primary_used": False,
             "bedrock_failback_used": False,
@@ -3437,6 +3438,9 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["openai_primary_timeout_budget_ms"] == 7000
     assert fields["openai_total_route_timeout_budget_ms"] == 15000
     assert fields["bedrock_fallback_family"] == "lite_v2"
+    assert fields["bedrock_model_family"] == "lite_v2"
+    assert fields["ai_provider_actual"] == "bedrock"
+    assert fields["ai_model_actual"] == "lite_v2"
     assert fields["bedrock_fallback_used"] is True
     assert fields["bedrock_primary_used"] is False
     assert fields["bedrock_failback_used"] is False
@@ -3518,6 +3522,72 @@ def test_build_ai_ops_log_fields_preserves_missing_request_config_as_null():
 
     assert fields["ai_request_temperature"] is None
     assert fields["ai_request_max_output_tokens"] is None
+
+
+def test_build_ai_ops_log_fields_reports_bedrock_entry_price_actual_model():
+    fields = _build_ai_ops_log_fields(
+        {
+            "ai_result_source": "live",
+            "ai_model": "gpt-5.4-mini",
+            "openai_model": "gpt-5.4-mini",
+            "openai_transport_mode": "bedrock_primary",
+            "bedrock_primary_used": True,
+            "bedrock_model_family": "qwen3_32b",
+            "bedrock_primary_family": "qwen3_32b",
+        }
+    )
+
+    assert fields["ai_provider_actual"] == "bedrock"
+    assert fields["ai_model_actual"] == "qwen3_32b"
+    assert fields["bedrock_model_family"] == "qwen3_32b"
+    assert fields["bedrock_primary_family"] == "qwen3_32b"
+
+
+def test_build_ai_ops_log_fields_reports_bedrock_entry_price_failback_model():
+    fields = _build_ai_ops_log_fields(
+        {
+            "ai_result_source": "live",
+            "ai_model": "gpt-5.4-mini",
+            "openai_transport_mode": "bedrock_primary",
+            "bedrock_primary_used": False,
+            "bedrock_failback_used": True,
+            "bedrock_model_family": "lite_v2",
+            "bedrock_primary_family": "qwen3_32b",
+            "bedrock_failback_family": "lite_v2",
+        }
+    )
+
+    assert fields["ai_provider_actual"] == "bedrock"
+    assert fields["ai_model_actual"] == "lite_v2"
+    assert fields["bedrock_failback_family"] == "lite_v2"
+
+
+def test_build_ai_ops_log_fields_reports_openai_after_holding_bedrock_failure():
+    fields = _build_ai_ops_log_fields(
+        {
+            "ai_result_source": "live",
+            "ai_model": "gpt-5.4-mini",
+            "openai_transport_mode": "http",
+            "bedrock_primary_used": False,
+            "bedrock_failback_used": True,
+        }
+    )
+
+    assert fields["ai_provider_actual"] == "openai"
+    assert fields["ai_model_actual"] == "gpt-5.4-mini"
+
+
+def test_build_ai_ops_log_fields_does_not_claim_provider_before_live_call():
+    fields = _build_ai_ops_log_fields(
+        {
+            "ai_result_source": "input_preflight_blocked",
+            "openai_transport_mode": "responses_ws",
+            "openai_model": "gpt-5.4-nano",
+        }
+    )
+
+    assert fields["ai_provider_actual"] == "-"
+    assert fields["ai_model_actual"] == "-"
 
 
 def test_build_ai_ops_log_fields_preserves_v214_candidate_lifecycle_binding():

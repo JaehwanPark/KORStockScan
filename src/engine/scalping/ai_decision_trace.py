@@ -1323,7 +1323,7 @@ def _optional(payload: dict[str, Any], *keys: str) -> Any:
 def _provider_actual(payload: dict[str, Any], provider_called: bool) -> str | None:
     if not provider_called:
         return None
-    explicit = _optional(payload, "provider", "provider_actual")
+    explicit = _optional(payload, "ai_provider_actual", "provider_actual", "provider")
     if explicit:
         return str(explicit)
     if payload.get("bedrock_primary_used"):
@@ -1331,6 +1331,9 @@ def _provider_actual(payload: dict[str, Any], provider_called: bool) -> str | No
     if payload.get("bedrock_fallback_used"):
         return "bedrock"
     if payload.get("bedrock_failback_used"):
+        transport_mode = str(payload.get("openai_transport_mode") or "").lower()
+        if transport_mode in {"bedrock_primary", "bedrock_fallback"}:
+            return "bedrock"
         return "openai"
     if provider_called:
         return "openai"
@@ -1338,10 +1341,18 @@ def _provider_actual(payload: dict[str, Any], provider_called: bool) -> str | No
 
 
 def _provider_decision_origin(payload: dict[str, Any]) -> str | None:
-    explicit = _optional(payload, "provider", "provider_actual")
+    explicit = _optional(payload, "ai_provider_actual", "provider_actual", "provider")
     if explicit:
         return str(explicit)
-    if payload.get("bedrock_primary_used") or payload.get("bedrock_fallback_used"):
+    transport_mode = str(payload.get("openai_transport_mode") or "").lower()
+    if (
+        payload.get("bedrock_primary_used")
+        or payload.get("bedrock_fallback_used")
+        or (
+            payload.get("bedrock_failback_used")
+            and transport_mode in {"bedrock_primary", "bedrock_fallback"}
+        )
+    ):
         return "bedrock"
     if _optional(payload, "openai_model", "ai_model"):
         return "openai"
@@ -1349,10 +1360,22 @@ def _provider_decision_origin(payload: dict[str, Any]) -> str | None:
 
 
 def _model_actual(payload: dict[str, Any]) -> str | None:
-    if payload.get("bedrock_primary_used") or payload.get("bedrock_fallback_used"):
+    explicit = _optional(payload, "ai_model_actual")
+    if explicit:
+        return str(explicit)
+    transport_mode = str(payload.get("openai_transport_mode") or "").lower()
+    if (
+        payload.get("bedrock_primary_used")
+        or payload.get("bedrock_fallback_used")
+        or (
+            payload.get("bedrock_failback_used")
+            and transport_mode in {"bedrock_primary", "bedrock_fallback"}
+        )
+    ):
         return _optional(
             payload,
             "bedrock_model_family",
+            "bedrock_failback_family",
             "bedrock_fallback_family",
         )
     value = _optional(payload, "ai_model", "openai_model")

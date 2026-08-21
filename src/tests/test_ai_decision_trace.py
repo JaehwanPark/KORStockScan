@@ -1983,6 +1983,36 @@ def test_bedrock_failback_records_openai_as_actual_provider(monkeypatch, tmp_pat
     assert row["model"] == "gpt-failback"
 
 
+def test_entry_price_bedrock_failback_records_bedrock_actual_model(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    trace.record_ai_decision_trace(
+        {
+            "action": "USE_AI",
+            "openai_model": "gpt-requested",
+            "openai_transport_mode": "bedrock_primary",
+            "bedrock_primary_used": False,
+            "bedrock_failback_used": True,
+            "bedrock_model_family": "lite_v2",
+            "bedrock_primary_family": "qwen3_32b",
+            "bedrock_failback_family": "lite_v2",
+            "ai_trace_stock_code": "005930",
+        },
+        prompt_type="entry_price",
+        prompt_version="entry_price_v1",
+        result_source="live",
+        provider_called=True,
+    )
+
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["provider_actual"] == "bedrock"
+    assert row["provider_decision_origin"] == "bedrock"
+    assert row["model_requested"] == "gpt-requested"
+    assert row["model"] == "lite_v2"
+
+
 def test_non_code_identifier_is_not_written_as_stock_code(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
 

@@ -46487,6 +46487,36 @@ def _build_ai_ops_log_fields(
     ai_cooldown_blocked=None,
 ):
     payload = ai_decision or {}
+    bedrock_primary_used = _truthy_log_value(payload.get("bedrock_primary_used"))
+    bedrock_fallback_used = _truthy_log_value(payload.get("bedrock_fallback_used"))
+    bedrock_failback_used = _truthy_log_value(payload.get("bedrock_failback_used"))
+    transport_mode = str(payload.get("openai_transport_mode") or "").strip().lower()
+    result_source = str(payload.get("ai_result_source") or "").strip().lower()
+    bedrock_failback_response_used = bedrock_failback_used and transport_mode in {
+        "bedrock_primary",
+        "bedrock_fallback",
+    }
+    if (
+        bedrock_primary_used
+        or bedrock_fallback_used
+        or bedrock_failback_response_used
+    ):
+        ai_provider_actual = "bedrock"
+        ai_model_actual = str(
+            payload.get("bedrock_model_family")
+            or payload.get("bedrock_failback_family")
+            or payload.get("bedrock_primary_family")
+            or payload.get("bedrock_fallback_family")
+            or "-"
+        )
+    elif result_source == "live" and transport_mode in {"http", "responses_ws"}:
+        ai_provider_actual = "openai"
+        ai_model_actual = str(
+            payload.get("openai_model") or payload.get("ai_model") or "-"
+        )
+    else:
+        ai_provider_actual = "-"
+        ai_model_actual = "-"
     out = {
         "ai_parse_ok": bool(payload.get("ai_parse_ok", False)),
         "ai_parse_fail": bool(payload.get("ai_parse_fail", False)),
@@ -46497,6 +46527,8 @@ def _build_ai_ops_log_fields(
         "ai_result_source": str(payload.get("ai_result_source", "-") or "-"),
         "ai_model": str(payload.get("ai_model", "-") or "-"),
         "ai_model_tier": str(payload.get("ai_model_tier", "-") or "-"),
+        "ai_provider_actual": ai_provider_actual,
+        "ai_model_actual": ai_model_actual,
         "cache_mode": str(payload.get("cache_mode", "-") or "-"),
     }
     normalized_result_source = (
@@ -46657,6 +46689,9 @@ def _build_ai_ops_log_fields(
         "openai_ws_http_fallback_error_type",
         "openai_http_error_type",
         "bedrock_fallback_family",
+        "bedrock_failback_family",
+        "bedrock_model_family",
+        "bedrock_primary_family",
         "bedrock_fallback_error_type",
         "openai_input_tokens",
         "openai_output_tokens",
