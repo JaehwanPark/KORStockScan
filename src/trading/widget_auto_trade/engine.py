@@ -497,8 +497,8 @@ class WidgetSignalAutoTrader:
                     )
                 )
             }
-            added_policy_symbols = (
-                set(self._configured_execution_policies) - set(stored_policies)
+            added_policy_symbols = set(self._configured_execution_policies) - set(
+                stored_policies
             )
             additive_policy_catalog = bool(
                 additive_policy_catalog
@@ -721,10 +721,48 @@ class WidgetSignalAutoTrader:
         self, event_type: str, spec: WidgetSpec, now: datetime, **fields: Any
     ) -> None:
         policy_session = str(fields.pop("execution_policy_session", "") or "")
-        if not policy_session:
-            policy_session = str(spec.contract.session_context(now).name or "")
         symbol_state = (self._state.get("symbols") or {}).get(spec.code)
         symbol_state = symbol_state if isinstance(symbol_state, dict) else None
+        if not policy_session:
+            for key in (
+                "signal_id",
+                "parent_entry_signal_id",
+                "source_signal_id",
+                "exit_signal_id",
+            ):
+                identifier = str(fields.get(key) or "").upper()
+                matched = next(
+                    (
+                        candidate
+                        for candidate in (
+                            "KRX_REGULAR",
+                            "NXT_PREMARKET",
+                            "NXT_AFTERMARKET",
+                        )
+                        if f":{candidate}:" in identifier
+                    ),
+                    None,
+                )
+                if matched:
+                    policy_session = matched
+                    break
+        episode_owned_event = event_type.startswith(
+            ("order_", "buy_cancel_", "take_profit_", "scale_in_")
+        ) or event_type in {
+            "entry_action_telegram_delivery",
+            "policy_force_flat_requested",
+            "sell_terminal_failure",
+        }
+        if not policy_session and episode_owned_event and symbol_state is not None:
+            stored_session = str(symbol_state.get("entry_session") or "").upper()
+            if stored_session in {
+                "KRX_REGULAR",
+                "NXT_PREMARKET",
+                "NXT_AFTERMARKET",
+            }:
+                policy_session = stored_session
+        if not policy_session:
+            policy_session = str(spec.contract.session_context(now).name or "")
         execution_policy = self._execution_policy(
             spec,
             session=policy_session,
@@ -738,6 +776,11 @@ class WidgetSignalAutoTrader:
             "trade_date": now.date().isoformat(),
             "symbol": spec.code,
             "name": spec.name,
+            # Keep the exact policy/session owner on every event.  The venue
+            # alone cannot distinguish NXT premarket from NXT aftermarket,
+            # and downstream execution-quality calibration must never borrow
+            # a successful KRX event to clear an NXT session (or vice versa).
+            "execution_policy_session": policy_session or None,
             "execution_authority": EXECUTION_AUTHORITY,
             "runtime_effect": True,
             "actual_order_submitted": False,

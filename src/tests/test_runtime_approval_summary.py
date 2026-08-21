@@ -23,6 +23,20 @@ def test_protect_trailing_summary_matches_existing_runtime_guard():
     )
 
 
+def test_hold_sample_reason_does_not_claim_floor_gap_when_terminal_ev_is_missing():
+    reasons = mod._hold_sample_reasons(
+        {
+            "sample_count": 13,
+            "source_sample_count": 13,
+            "sample_floor": 10,
+            "runtime_apply_block_reason": "resolved_terminal_counterfactual_ev_contract_missing",
+        }
+    )
+
+    assert reasons == ["resolved_terminal_counterfactual_ev_contract_missing"]
+    assert "family_sample_floor_not_met" not in reasons
+
+
 def test_lifecycle_bucket_summary_preserves_direct_flow_and_total_counts(
     tmp_path, monkeypatch
 ):
@@ -1520,3 +1534,117 @@ def test_runtime_approval_summary_does_not_request_for_inactive_panic_candidate_
     row = report["panic"][0]
     assert row["state"] == "hold"
     assert row["reasons"] == ["hold"]
+
+
+def test_ai_effective_candidate_overrides_deterministic_runtime_eligibility():
+    calibration = {
+        "calibration_candidates": [
+            {
+                "family": "holding_flow_ofi_smoothing",
+                "calibration_state": "adjust_up",
+                "recommended_value": 120,
+                "current_value": 90,
+                "allowed_runtime_apply": True,
+            }
+        ]
+    }
+    ai_review = {
+        "ai_status": "parsed",
+        "items": [
+            {
+                "family": "holding_flow_ofi_smoothing",
+                "guard_decision": {
+                    "effective_state": "hold_sample",
+                    "effective_value": 90,
+                    "route_action": "exclude_from_threshold_candidate_review",
+                },
+            }
+        ],
+    }
+
+    candidate = mod._ai_effective_candidates(calibration, ai_review)[
+        "holding_flow_ofi_smoothing"
+    ]
+
+    assert candidate["deterministic_calibration_state"] == "adjust_up"
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["recommended_value"] == 90
+    assert candidate["allowed_runtime_apply"] is False
+    assert mod._next_preopen_candidate_state(candidate) == "hold_no_next_preopen_change"
+
+
+def test_ai_effective_candidate_cannot_relax_explicit_runtime_contract_block():
+    calibration = {
+        "calibration_candidates": [
+            {
+                "family": "bad_entry_refined_canary",
+                "calibration_state": "hold_sample",
+                "recommended_value": False,
+                "current_value": False,
+                "allowed_runtime_apply": False,
+                "runtime_apply_block_reason": (
+                    "resolved_terminal_counterfactual_ev_contract_missing"
+                ),
+            }
+        ]
+    }
+    ai_review = {
+        "ai_status": "parsed",
+        "items": [
+            {
+                "family": "bad_entry_refined_canary",
+                "guard_decision": {
+                    "effective_state": "hold",
+                    "effective_value": False,
+                    "route_action": "proposal_only",
+                },
+            }
+        ],
+    }
+
+    candidate = mod._ai_effective_candidates(calibration, ai_review)[
+        "bad_entry_refined_canary"
+    ]
+
+    assert candidate["deterministic_calibration_state"] == "hold_sample"
+    assert candidate["ai_proposed_state"] == "hold"
+    assert candidate["ai_effective_state"] == "hold_sample"
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["ai_route_action"] == "deterministic_contract_block"
+
+
+def test_runtime_summary_fail_closes_unparsed_ai_except_deterministic_handoff():
+    calibration = {
+        "calibration_candidates": [
+            {
+                "family": "holding_flow_ofi_smoothing",
+                "calibration_state": "adjust_up",
+                "current_value": 90,
+                "recommended_value": 120,
+                "allowed_runtime_apply": True,
+            },
+            {
+                "family": "entry_split_order_plan",
+                "calibration_state": "adjust_up",
+                "current_value": {"enabled": True},
+                "recommended_value": {"enabled": True},
+                "allowed_runtime_apply": True,
+            },
+        ]
+    }
+
+    candidates = mod._ai_effective_candidates(
+        calibration, {"ai_status": "unavailable"}, require_ai=True
+    )
+
+    assert (
+        candidates["holding_flow_ofi_smoothing"]["calibration_state"] == "hold_sample"
+    )
+    assert candidates["holding_flow_ofi_smoothing"]["allowed_runtime_apply"] is False
+    assert (
+        candidates["holding_flow_ofi_smoothing"]["ai_route_action"]
+        == "ai_review_not_parsed"
+    )
+    assert candidates["entry_split_order_plan"]["calibration_state"] == "adjust_up"
+    assert candidates["entry_split_order_plan"]["allowed_runtime_apply"] is True

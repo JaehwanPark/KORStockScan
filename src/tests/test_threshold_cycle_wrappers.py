@@ -1711,6 +1711,16 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         'run_threshold_cycle_ev_and_wait "post_conversion_lane_workorder_refresh"'
         in script
     )
+    final_ev_index = script.index(
+        'run_threshold_cycle_ev_and_wait "final_consumer_refresh"'
+    )
+    final_workorder_index = script.index(
+        '"code_improvement_workorder_final_source_refresh"', final_ev_index
+    )
+    final_runtime_index = script.index(
+        '"runtime_approval_summary_final_refresh"', final_workorder_index
+    )
+    assert final_ev_index < final_workorder_index < final_runtime_index
     assert "runtime_approval_summary_post_conversion_lane_workorder" in script
     assert (
         '"$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"'

@@ -525,6 +525,72 @@ def test_execution_quality_counts_actual_engine_terminal_failure_names(
     assert quality["terminal_sell_failure_count"] == 3
 
 
+def test_execution_quality_is_attributed_per_widget_session(tmp_path) -> None:
+    target_date = date(2026, 8, 11)
+    path = tmp_path / "widget_signal_auto_trade_events_20260811.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "symbol": "005930",
+                        "event_type": "order_submitted",
+                        "actual_order_submitted": True,
+                        "execution_policy_session": "KRX_REGULAR",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "symbol": "005930",
+                        "event_type": "take_profit_terminal_failure",
+                        "execution_policy_session": "NXT_AFTERMARKET",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    krx = _load_execution_quality(
+        "005930",
+        target_date=target_date,
+        event_dir=tmp_path,
+        session="KRX_REGULAR",
+    )
+    nxt = _load_execution_quality(
+        "005930",
+        target_date=target_date,
+        event_dir=tmp_path,
+        session="NXT_AFTERMARKET",
+    )
+
+    assert krx["runtime_apply_allowed"] is True
+    assert krx["accepted_order_count"] == 1
+    assert krx["execution_event_scope"] == "KRX_REGULAR"
+    assert nxt["runtime_apply_allowed"] is False
+    assert nxt["terminal_execution_failure_count"] == 1
+
+
+def test_unattributed_terminal_failure_vetoes_every_widget_session(tmp_path) -> None:
+    target_date = date(2026, 8, 11)
+    path = tmp_path / "widget_signal_auto_trade_events_20260811.jsonl"
+    path.write_text(
+        '{"symbol":"005930","event_type":"sell_terminal_failure"}\n',
+        encoding="utf-8",
+    )
+
+    quality = _load_execution_quality(
+        "005930",
+        target_date=target_date,
+        event_dir=tmp_path,
+        session="NXT_PREMARKET",
+    )
+
+    assert quality["runtime_apply_allowed"] is False
+    assert quality["unattributed_terminal_failure_count"] == 1
+
+
 def test_write_outputs_requires_report_before_policy_can_load(tmp_path) -> None:
     session_reports = {}
     for spec in calibration.SPECS:

@@ -21,7 +21,7 @@
 
 ## 판정
 
-- 판정: `source_gap_review_required`
+- 판정: `sim_progress_no_live_bucket`
 - bridge_policy_emit_state: `not_emitted_no_live_auto_ready_lifecycle_flow`, promotion_window: `mtd`, verifier_status: `warning`, lifecycle_bucket_windows_status: `pass`.
 - 근거: LDM `sim_policy_approved_total=2` (direct=`0`, lifecycle_flow=`2`), `live_auto_apply_ready=0` (`+0`), swing sim-auto `0` (`n/a`).
 - 실현손익 해석: `real_pnl_is_tuning_performance=false` (post_apply_attribution_not_ready:pending_applied_cohort).
@@ -46,15 +46,15 @@
 
 ## EV 해석
 
-- Daily completed trades `13`, win-rate `53.85`, avg profit pct `-0.29`, realized PnL KRW `-378`.
-- Real split sample `30`, avg `-0.0656`, win-rate `0.7`.
-- Sim split sample `57`, avg `-1.2621`, win-rate `0.4035`.
+- Daily completed trades `14`, win-rate `57.14`, avg profit pct `-0.1866`, realized PnL KRW `-378`.
+- Real split sample `14`, avg `-0.1866`, win-rate `0.5714`.
+- Sim split sample `10`, avg `-1.194`, win-rate `0.6`.
 - EV warnings: `scalp_entry_adm:joined_sample_below_sample_floor, scalp_entry_adm:sim_post_sell_outcome_source_below_sample_floor, scalp_entry_adm:unknown_bucket_source_quality_gap, pattern_lab_ai_review_warning, pattern_lab_propagation_audit_warning`.
 
 ## Workorder
 
-- selected orders `54`, selected decisions `{"attach_existing_family": 53, "implement_now": 1}`, routes `{"ai_review_coverage_review": 1, "existing_family": 49, "join_gap_enrichment": 1, "positive_source_only_review": 1, "source_dimension_rollup": 1, "source_quality_warning_producer_fix": 1}`.
-- root-cause closure `{"handoff_closed_root_cause_open": 1, "implementation_done": 1, "needs_followup_workorder": 1, "root_cause_closed": 47}`, implementation_done `1`, artifact_regeneration_required `0`, handoff_closed_root_cause_open `1`, root_cause_closed `47`, needs_followup `1`.
+- selected orders `53`, selected decisions `{"attach_existing_family": 53}`, routes `{"ai_review_coverage_review": 1, "existing_family": 49, "join_gap_enrichment": 1, "positive_source_only_review": 1, "source_dimension_rollup": 1}`.
+- root-cause closure `{"handoff_closed_root_cause_open": 1, "implementation_done": 1, "root_cause_closed": 47}`, implementation_done `1`, artifact_regeneration_required `0`, handoff_closed_root_cause_open `1`, root_cause_closed `47`, needs_followup `0`.
 - pattern lab AI review source orders `1`, pattern lab currentness source orders `0`.
 - 해석: `implement_now`는 자동 repo 수정이 아니라 `runtime_effect=false` intake다. 사용자가 Codex 구현을 지시한 경우에만 코드 작업이다.
 
@@ -67,6 +67,8 @@
 
 - observation_source_quality_audit: `/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-08-21.json` exists=true json_valid=true
 - threshold_cycle_ev: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-08-21.json` exists=true json_valid=true
+- threshold_cycle_calibration: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_calibration/threshold_cycle_calibration_2026-08-21_postclose.json` exists=true json_valid=true
+- threshold_cycle_ai_review: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_2026-08-21_postclose.json` exists=true json_valid=true
 - runtime_approval_summary: `/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-08-21.json` exists=true json_valid=true
 - runtime_apply_bridge: `/home/ubuntu/KORStockScan/data/report/runtime_apply_bridge/runtime_apply_bridge_2026-08-21.json` exists=true json_valid=true
 - runtime_apply_gap_audit: `/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-08-21.json` exists=true json_valid=true

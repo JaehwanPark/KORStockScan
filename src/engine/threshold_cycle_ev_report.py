@@ -770,6 +770,10 @@ def _cohort_decisions(calibration_report: dict[str, Any]) -> list[dict[str, Any]
                     ),
                     "sample_floor_status": item.get("sample_floor_status")
                     or source.get("sample_floor_status"),
+                    "calibration_reason": item.get("calibration_reason")
+                    or source.get("calibration_reason"),
+                    "runtime_apply_block_reason": item.get("runtime_apply_block_reason")
+                    or source.get("runtime_apply_block_reason"),
                     "source_metrics": (
                         item.get("source_metrics")
                         if isinstance(item.get("source_metrics"), dict)
@@ -1023,6 +1027,8 @@ def _code_improvement_workorder_summary(
             "available": True,
             "artifact": str(json_path),
             "markdown": str(md_path) if md_path.exists() else None,
+            "snapshot_role": "diagnostic_previous_generation_not_ev_decision_input",
+            "freshness_authority": False,
             "selected_order_count": _safe_int(summary.get("selected_order_count"), 0),
             "decision_counts": (
                 summary.get("decision_counts")
@@ -3215,9 +3221,23 @@ def build_threshold_cycle_ev_report(
     wait6579_counterfactual, wait6579_counterfactual_path = (
         _wait6579_counterfactual_summary(target_date)
     )
+    completed_by_source_by_window = (
+        calibration.get("completed_by_source_by_window")
+        if isinstance(calibration.get("completed_by_source_by_window"), dict)
+        else {}
+    )
     completed_by_source = (
-        calibration.get("completed_by_source")
-        if isinstance(calibration.get("completed_by_source"), dict)
+        completed_by_source_by_window.get("same_day")
+        if isinstance(completed_by_source_by_window.get("same_day"), dict)
+        else {}
+    )
+    same_day_source_split_present = (
+        "same_day" in completed_by_source_by_window
+        and isinstance(completed_by_source.get("real"), dict)
+    )
+    same_day_real_source = (
+        completed_by_source.get("real")
+        if isinstance(completed_by_source.get("real"), dict)
         else {}
     )
     pattern_lab_summary, pattern_lab_path, pattern_lab_warnings = (
@@ -3354,10 +3374,36 @@ def build_threshold_cycle_ev_report(
     )
     selected_families = _selected_families(apply_manifest)
     swing_runtime_approval = _swing_runtime_approval_summary(apply_manifest)
-    completed = _safe_int(trade_metrics.get("completed_trades"), 0)
-    win = _safe_int(trade_metrics.get("win_trades"), 0)
-    loss = _safe_int(trade_metrics.get("loss_trades"), 0)
+    trade_review_completed = _safe_int(trade_metrics.get("completed_trades"), 0)
+    trade_review_win = _safe_int(trade_metrics.get("win_trades"), 0)
+    trade_review_loss = _safe_int(trade_metrics.get("loss_trades"), 0)
+    completed = (
+        _safe_int(same_day_real_source.get("sample"), 0)
+        if same_day_source_split_present
+        else trade_review_completed
+    )
+    win = (
+        _safe_int(same_day_real_source.get("win_count"), 0)
+        if same_day_source_split_present
+        else trade_review_win
+    )
+    loss = (
+        _safe_int(same_day_real_source.get("loss_count"), 0)
+        if same_day_source_split_present
+        else trade_review_loss
+    )
     win_rate = round((win / completed) * 100.0, 2) if completed else 0.0
+    trade_review_total = _safe_int(trade_metrics.get("total_trades"), 0)
+    open_trades = (
+        max(0, trade_review_total - completed)
+        if same_day_source_split_present and trade_review_total > 0
+        else _safe_int(trade_metrics.get("open_trades"), 0)
+    )
+    avg_profit_rate_pct = (
+        _safe_float(same_day_real_source.get("avg_profit_rate"), 0.0)
+        if same_day_source_split_present
+        else _safe_float(trade_metrics.get("avg_profit_rate"), 0.0)
+    )
     budget_pass = _safe_int(perf_metrics.get("budget_pass_events"), 0)
     submitted = _safe_int(perf_metrics.get("order_bundle_submitted_events"), 0)
     submitted_rate = round((submitted / budget_pass) * 100.0, 2) if budget_pass else 0.0
@@ -3474,18 +3520,36 @@ def build_threshold_cycle_ev_report(
         },
         "daily_ev_summary": {
             "completed_trades": completed,
-            "open_trades": _safe_int(trade_metrics.get("open_trades"), 0),
+            "open_trades": open_trades,
             "win_trades": win,
             "loss_trades": loss,
             "win_rate_pct": win_rate,
-            "avg_profit_rate_pct": round(
-                _safe_float(trade_metrics.get("avg_profit_rate"), 0.0), 4
-            ),
+            "avg_profit_rate_pct": round(avg_profit_rate_pct, 4),
             "realized_pnl_krw": _safe_int(trade_metrics.get("realized_pnl_krw"), 0),
+            "headline_authority": (
+                "completed_by_source_same_day_real"
+                if same_day_source_split_present
+                else "trade_review_snapshot_fallback"
+            ),
+            "realized_pnl_authority": "trade_review_snapshot_diagnostic",
+            "trade_review_snapshot_reconciliation": {
+                "completed_trades": trade_review_completed,
+                "win_trades": trade_review_win,
+                "loss_trades": trade_review_loss,
+                "open_trades": _safe_int(trade_metrics.get("open_trades"), 0),
+                "count_match": (
+                    trade_review_completed == completed
+                    and trade_review_win == win
+                    and trade_review_loss == loss
+                ),
+                "decision_authority": "diagnostic_only_when_same_day_source_split_present",
+            },
             "full_fill_completed_avg_profit_rate_pct": round(
                 full_fill_completed_avg, 4
             ),
             "source_split": completed_by_source,
+            "source_split_window": "same_day",
+            "source_split_by_window": completed_by_source_by_window,
         },
         "entry_funnel": {
             "budget_pass_events": budget_pass,

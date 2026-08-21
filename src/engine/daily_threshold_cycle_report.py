@@ -752,7 +752,11 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "bad-entry refined는 loser classifier 과적합을 피하기 위해 누적/rolling tail과 당일 safety를 같이 본다.",
             "daily_only_allowed": False,
         },
-        "allowed_runtime_apply": True,
+        "sample_denominator_keys": ["resolved_terminal_sample_count"],
+        # Runtime promotion requires a resolved terminal counterfactual EV contract.
+        # Raw/provisional candidate volume is diagnostic evidence only.
+        "allowed_runtime_apply": False,
+        "runtime_apply_block_reason": "resolved_terminal_counterfactual_ev_contract_missing",
     },
     "holding_exit_decision_matrix_advisory": {
         "priority": 30,
@@ -1083,6 +1087,9 @@ def save_threshold_calibration_report(
         "calibration_source_bundle": report.get("calibration_source_bundle") or {},
         "trade_lifecycle_attribution": report.get("trade_lifecycle_attribution") or {},
         "completed_by_source": report.get("completed_by_source") or {},
+        "completed_by_source_window": report.get("completed_by_source_window"),
+        "completed_by_source_by_window": report.get("completed_by_source_by_window")
+        or {},
         "scalp_simulator": report.get("scalp_simulator") or {},
         "calibration_candidates": report.get("calibration_candidates") or [],
         "window_policy_audit": report.get("window_policy_audit") or {},
@@ -1361,7 +1368,10 @@ def _smoothing_field_projection_audit(
         if stage in SMOOTHING_SOURCE_ONLY_PATH_STAGES:
             if not present(fields, "path_quality_contract_version"):
                 missing_field_counts["path_quality_contract_version"] += 1
-            elif fields.get("path_quality_contract_version") != "fresh_observation_gap_v2":
+            elif (
+                fields.get("path_quality_contract_version")
+                != "fresh_observation_gap_v2"
+            ):
                 invalid_value_counts["path_quality_contract_version"] += 1
             if stage in {
                 "smoothing_source_only_path_horizon",
@@ -4791,7 +4801,11 @@ def _row_rec_date(row: dict) -> date | None:
 
 
 def _filter_completed_rows_by_date(
-    rows: list[dict], start_date: str, end_date: str
+    rows: list[dict],
+    start_date: str,
+    end_date: str,
+    *,
+    allow_missing_date_fallback: bool = True,
 ) -> list[dict]:
     start = datetime.strptime(start_date, "%Y-%m-%d").date()
     end = datetime.strptime(end_date, "%Y-%m-%d").date()
@@ -4804,7 +4818,12 @@ def _filter_completed_rows_by_date(
             continue
         if start <= rec_date <= end:
             filtered.append(row)
-    if not filtered and missing_date_rows and start <= end:
+    if (
+        allow_missing_date_fallback
+        and not filtered
+        and missing_date_rows
+        and start <= end
+    ):
         return list(missing_date_rows)
     return filtered
 
@@ -8526,7 +8545,30 @@ def _build_bad_entry_refined_canary_family(
     sell_order_sent = _stage_count(events, "sell_order_sent")
     sell_completed = _stage_count(events, "sell_completed")
     lifecycle_attribution = _build_bad_entry_lifecycle_attribution(events, target_date)
-    sample_ready = len(refined_candidates) >= 10 and sell_order_failed == 0
+    lifecycle_counts = (
+        lifecycle_attribution.get("final_type_counts")
+        if isinstance(lifecycle_attribution.get("final_type_counts"), dict)
+        else {}
+    )
+    joined_terminal = (
+        _safe_int(lifecycle_attribution.get("post_sell_joined_records"), 0) or 0
+    )
+    pending_terminal = (
+        _safe_int(lifecycle_attribution.get("post_sell_pending_records"), 0) or 0
+    )
+    false_positive_terminal = (
+        _safe_int(lifecycle_counts.get("false_positive_risk_after_candidate"), 0) or 0
+    )
+    # A joined label is not yet a counterfactual EV. Keep this family report-only
+    # until the producer exposes an executable-price terminal EV contract.
+    terminal_ev_contract_complete = False
+    sample_ready = (
+        joined_terminal >= 10
+        and pending_terminal == 0
+        and false_positive_terminal == 0
+        and sell_order_failed == 0
+        and terminal_ev_contract_complete
+    )
     recommended = dict(current)
     if sample_ready:
         recommended["enabled"] = True
@@ -8542,6 +8584,9 @@ def _build_bad_entry_refined_canary_family(
             "sell_completed": sell_completed,
             "sell_order_failed": sell_order_failed,
             "lifecycle_attribution": lifecycle_attribution,
+            "raw_provisional_candidate_count": len(refined_candidates),
+            "resolved_terminal_sample_count": joined_terminal,
+            "terminal_ev_contract_complete": terminal_ev_contract_complete,
         },
         "apply_ready": sample_ready,
         "current": current,
@@ -8551,6 +8596,7 @@ def _build_bad_entry_refined_canary_family(
         ),
         "notes": [
             "bad_entry_refined_candidate는 postclose post_sell outcome join 전까지 provisional signal이다.",
+            "post-sell label join만으로는 EV가 아니며 executable-price terminal counterfactual EV 계약 전에는 runtime apply를 금지한다.",
             "naive bad_entry hard block은 재개하지 않고 refined candidate만 bounded canary 후보로 본다.",
             "목표는 완벽한 loser classifier가 아니라 soft-stop tail/defer cost 감소다.",
             "GOOD_EXIT 감소가 허용 범위 안이면 rollback이 아니라 calibration으로 조정한다.",
@@ -11990,6 +12036,15 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
             or 0,
         )
     if output_family == "bad_entry_refined_canary":
+        if "post_sell_joined_candidate_records" in source_metrics:
+            return (
+                _safe_int(source_metrics.get("post_sell_joined_candidate_records"), 0)
+                or 0
+            )
+        if "resolved_terminal_sample_count" in source_metrics:
+            return (
+                _safe_int(source_metrics.get("resolved_terminal_sample_count"), 0) or 0
+            )
         return max(
             _safe_int(source_metrics.get("refined_candidate"), 0) or 0,
             _safe_int(source_metrics.get("soft_stop_tail_sample"), 0) or 0,
@@ -12536,7 +12591,12 @@ def _calibration_state_for_family(
             "기존 관찰축 추가 없이 source bundle에 묶어 family design candidate로 유지",
         )
     if output_family == "bad_entry_refined_canary":
-        lifecycle = source_metrics.get("lifecycle_attribution")
+        family_sample = (
+            family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        )
+        lifecycle = source_metrics.get("lifecycle_attribution") or family_sample.get(
+            "lifecycle_attribution"
+        )
         lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
         candidate_records = _safe_int(lifecycle.get("candidate_records"), 0) or 0
         if candidate_records > 0:
@@ -12574,6 +12634,11 @@ def _calibration_state_for_family(
                     "freeze",
                     "post-sell MISSED_UPSIDE 후보가 있어 bad-entry live 확대 대신 false-positive risk를 먼저 calibration한다.",
                 )
+            if family_sample.get("terminal_ev_contract_complete") is not True:
+                return (
+                    "hold_sample",
+                    "resolved terminal label은 있으나 executable-price counterfactual EV 계약이 없어 runtime 후보 승격 금지",
+                )
             if (
                 preventable <= 0
                 and refined_exit_finalized <= 0
@@ -12588,6 +12653,11 @@ def _calibration_state_for_family(
                     "hold",
                     "post-sell outcome은 확정됐지만 preventable/refined-exit edge가 없어 값 유지",
                 )
+        if family_sample.get("terminal_ev_contract_complete") is not True:
+            return (
+                "hold_sample",
+                "resolved terminal label은 있으나 executable-price counterfactual EV 계약이 없어 runtime 후보 승격 금지",
+            )
         if sample_count >= sample_floor and ready:
             return (
                 "adjust_up",
@@ -13113,11 +13183,11 @@ def _build_calibration_candidates(
             )
         if output_family == "bad_entry_refined_canary":
             lifecycle = source_metrics.get("lifecycle_attribution")
-            if isinstance(lifecycle, dict):
-                source_sample_count = max(
-                    source_sample_count,
-                    _safe_int(lifecycle.get("post_sell_joined_records"), 0) or 0,
-                )
+            source_sample_count = (
+                _safe_int(lifecycle.get("post_sell_joined_records"), 0) or 0
+                if isinstance(lifecycle, dict)
+                else 0
+            )
         if output_family == "score65_74_recovery_probe":
             # The family sample includes broad funnel events such as budget_pass.
             # Runtime readiness must use the bounded low-score source cohort only.
@@ -13125,6 +13195,10 @@ def _build_calibration_candidates(
         elif output_family == "dynamic_entry_price_resolver":
             sample_count = source_sample_count
         elif output_family == "entry_split_order_plan":
+            sample_count = source_sample_count
+        elif output_family == "bad_entry_refined_canary":
+            # Provisional runtime observations must never satisfy the terminal
+            # outcome sample floor used for runtime promotion.
             sample_count = source_sample_count
         elif output_family == "scale_in_split_order_plan":
             sample_count = source_sample_count
@@ -13455,6 +13529,7 @@ def _build_calibration_candidates(
             ),
             "allowed_runtime_apply": bool(metadata.get("allowed_runtime_apply"))
             and output_family not in source_only_smoothing_families,
+            "runtime_apply_block_reason": metadata.get("runtime_apply_block_reason"),
             "human_approval_required": bool(metadata.get("human_approval_required"))
             or calibration_state == "approval_required",
             "runtime_change": False,
@@ -13893,6 +13968,13 @@ def _build_window_policy_resolution(
     primary_source_sample = _source_sample_count_for_family(
         str(candidate.get("family") or ""), primary_source_metrics
     )
+    is_bad_entry = str(candidate.get("family") or "") == "bad_entry_refined_canary"
+    raw_primary_source_sample = primary_source_sample
+    if is_bad_entry:
+        # The report-source count is raw/provisional volume. Keep it visible for
+        # diagnostics, but make the registered terminal denominator the only
+        # authoritative source count used by resolution and audit consumers.
+        primary_source_sample = primary_sample
     effective_primary_sample = max(
         [
             value
@@ -13901,6 +13983,11 @@ def _build_window_policy_resolution(
         ],
         default=None,
     )
+    if is_bad_entry:
+        # Report-source bad_entry counts are provisional observations. Rolling
+        # authority comes only from the terminal-join denominator in the
+        # family snapshot.
+        effective_primary_sample = primary_sample
     if primary == "daily_intraday":
         effective_primary_sample = (
             daily_sample
@@ -13945,14 +14032,22 @@ def _build_window_policy_resolution(
         source_sample = _source_sample_count_for_family(
             str(candidate.get("family") or ""), source_metrics
         )
+        raw_source_sample = source_sample
+        if is_bad_entry:
+            source_sample = sample
         effective_sample = max(
             [value for value in (sample, source_sample) if value is not None],
             default=None,
         )
+        if is_bad_entry:
+            effective_sample = sample
         secondary[window] = {
             "sample_count": effective_sample,
             "snapshot_sample_count": sample,
             "source_sample_count": source_sample,
+            "raw_provisional_source_sample_count": (
+                raw_source_sample if is_bad_entry else None
+            ),
             "sample_ready": (
                 bool(snapshot.get("sample_ready"))
                 if isinstance(snapshot, dict)
@@ -13968,6 +14063,14 @@ def _build_window_policy_resolution(
         "primary_sample_count": effective_primary_sample,
         "primary_snapshot_sample_count": primary_sample,
         "primary_source_sample_count": primary_source_sample,
+        "primary_raw_provisional_source_sample_count": (
+            raw_primary_source_sample if is_bad_entry else None
+        ),
+        "primary_source_sample_role": (
+            "resolved_terminal_decision_denominator"
+            if is_bad_entry
+            else "registered_family_source_denominator"
+        ),
         "primary_sample_ready": bool(primary_ready),
         "primary_snapshot_available": isinstance(primary_snapshot, dict),
         "primary_source_available": bool(primary_source_metrics),
@@ -14131,6 +14234,12 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
                 ),
                 "primary_source_sample_count": resolution.get(
                     "primary_source_sample_count"
+                ),
+                "primary_raw_provisional_source_sample_count": resolution.get(
+                    "primary_raw_provisional_source_sample_count"
+                ),
+                "primary_source_sample_role": resolution.get(
+                    "primary_source_sample_role"
                 ),
                 "primary_sample_ready": primary_ready,
                 "primary_snapshot_available": primary_available,
@@ -17182,6 +17291,50 @@ def build_daily_threshold_cycle_report(
 
     real_completed_rows = list(completed_rows)
     same_day_sim_completed_rows = _extract_scalp_sim_completed_rows(same_day_events)
+    completed_by_source_by_window = {
+        "same_day": _completed_by_source_summary(
+            _filter_completed_rows_by_date(
+                real_completed_rows,
+                same_day[0],
+                same_day[-1],
+                allow_missing_date_fallback=False,
+            ),
+            _filter_completed_rows_by_date(
+                sim_completed_rows,
+                same_day[0],
+                same_day[-1],
+                allow_missing_date_fallback=False,
+            ),
+        ),
+        "rolling_3d": _completed_by_source_summary(
+            _filter_completed_rows_by_date(
+                real_completed_rows,
+                rolling_3d[0],
+                rolling_3d[-1],
+                allow_missing_date_fallback=False,
+            ),
+            _filter_completed_rows_by_date(
+                sim_completed_rows,
+                rolling_3d[0],
+                rolling_3d[-1],
+                allow_missing_date_fallback=False,
+            ),
+        ),
+        "rolling_7d": _completed_by_source_summary(
+            _filter_completed_rows_by_date(
+                real_completed_rows,
+                rolling_7d[0],
+                rolling_7d[-1],
+                allow_missing_date_fallback=False,
+            ),
+            _filter_completed_rows_by_date(
+                sim_completed_rows,
+                rolling_7d[0],
+                rolling_7d[-1],
+                allow_missing_date_fallback=False,
+            ),
+        ),
+    }
     families = _build_family_reports(
         same_day_events, real_completed_rows, target_date=target_date
     )
@@ -17306,9 +17459,13 @@ def build_daily_threshold_cycle_report(
             ),
             "event_count_same_day": len(same_day_events),
         },
+        # Compatibility alias preserves the legacy loader fallback for older
+        # fixtures/artifacts. Decision consumers must use the strict window map.
         "completed_by_source": _completed_by_source_summary(
             real_completed_rows, sim_completed_rows
         ),
+        "completed_by_source_window": "legacy_loader_window_rolling_7d",
+        "completed_by_source_by_window": completed_by_source_by_window,
         "scalp_simulator": _scalp_simulator_event_summary(
             same_day_events,
             same_day_sim_completed_rows,

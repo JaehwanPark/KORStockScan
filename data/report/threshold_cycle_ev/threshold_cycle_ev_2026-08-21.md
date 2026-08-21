@@ -5,7 +5,7 @@
 - warning_count: `5`
 - warning_contract active/disabled/raw: `5` / `9` / `14`
 - source_quality: status=`pass` allowed=`True`
-- samples real/sim: `13` / `57`
+- samples real/sim: `14` / `10`
 - live_auto_ready_count: `0`
 - primary_verdict: `real_primary_evidence_present`
 
@@ -15,9 +15,9 @@
 - selected_families: `entry_split_order_plan, score65_74_recovery_probe, scalping_scanner_real_source_guard_runtime, score65_74_recovery_probe_strong_micro_override_runtime, entry_price_gap_profile_runtime, profit_stagnation_exit_runtime, latency_spread_relief_real_operator_override, quote_consistency_normalization, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, holding_decision_context_v1, weak_pullback_entry_block_runtime, early_accel_recheck_runtime, real_pyramid_scale_in_quality_guard_runtime, sell_side_open_time_block_runtime, pre_submit_liquidity_relief_runtime, entry_opportunity_recheck_runtime, weak_context_late_entry_guard_runtime, rising_missed_normal_buy_bridge, persistent_operator_overrides_2026_06_26`
 
 ## Daily EV
-- completed: `13` / open: `1`
-- win/loss: `7` / `6` (`53.85`%)
-- avg_profit_rate: `-0.29`%
+- completed: `14` / open: `0`
+- win/loss: `8` / `6` (`57.14`%)
+- avg_profit_rate: `-0.1866`%
 - realized_pnl_krw: `-378`
 - full_fill_completed_avg_profit_rate: `-3.71`%
 
@@ -226,8 +226,8 @@
 - `strength_momentum_soft_gate_p1`: `hold` sample=`6310/20`
 - `overbought_pullback_guard_p1`: `hold` sample=`1881/20`
 - `liquidity_pre_submit_guard_p1`: `hold` sample=`865/20`
-- `bad_entry_refined_canary`: `adjust_up` sample=`13384/10`
-- `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`0/1`
+- `bad_entry_refined_canary`: `hold_sample` sample=`13/10`
+- `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`13/1`
 - `lifecycle_decision_matrix_runtime`: `adjust_up` sample=`2626/20`
 - `scale_in_price_guard`: `hold_sample` sample=`2/20`
 - `position_sizing_dynamic_formula`: `hold_sample` sample=`42/30`

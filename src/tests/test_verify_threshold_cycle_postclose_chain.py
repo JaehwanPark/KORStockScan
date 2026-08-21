@@ -9,6 +9,33 @@ import pytest
 from src.engine import verify_threshold_cycle_postclose_chain as mod
 
 
+def test_workorder_source_fingerprint_detects_changed_bytes(tmp_path):
+    source = tmp_path / "source.json"
+    source.write_text('{"value":1}', encoding="utf-8")
+    import hashlib
+
+    original = source.read_bytes()
+    workorder = {
+        "schema_version": 1,
+        "source_fingerprint": [
+            {
+                "label": "source",
+                "path": str(source),
+                "exists": True,
+                "size_bytes": len(original),
+                "sha256": hashlib.sha256(original).hexdigest(),
+            }
+        ],
+    }
+    assert mod._workorder_source_fingerprint_issues(workorder) == []
+
+    source.write_text('{"value":2}', encoding="utf-8")
+
+    assert mod._workorder_source_fingerprint_issues(workorder) == [
+        "code_improvement_workorder_source_fingerprint_sha256_mismatch:source"
+    ]
+
+
 def test_low_price_postclose_contract_rejects_missing_handoff_artifacts():
     status = mod._low_price_two_leg_postclose_contract_status(
         {}, {}, {}, target_date="2026-08-12"
@@ -100,6 +127,74 @@ def test_low_price_postclose_contract_rejects_malformed_daily_profiles(
     assert status["status"] == "fail"
     assert "tuning_daily_profiles_invalid" in status["issues"]
     assert "tuning_profile_inventory_mismatch" in status["issues"]
+
+
+def test_low_price_recommendations_without_approved_mapping_are_source_only(
+    monkeypatch,
+):
+    from datetime import date
+    from types import SimpleNamespace
+
+    from src.engine.monitoring import low_price_two_leg_expanded_candidate_research
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
+        CandidateRecommendationNotifier,
+    )
+    from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
+    from src.trading.low_price_two_leg import policy_runtime
+    from src.trading.low_price_two_leg.profiles import profiles_for_target_date
+
+    target_date = "2026-08-25"
+    target_profiles = profiles_for_target_date(date.fromisoformat(target_date))
+    monkeypatch.setattr(policy_runtime, "validate_candidate", lambda _: (True, "ok"))
+    monkeypatch.setattr(
+        CandidateRecommendationNotifier,
+        "_valid_report",
+        staticmethod(lambda _: True),
+    )
+    monkeypatch.setattr(
+        low_price_two_leg_expanded_candidate_research,
+        "_target_date_research_inventory",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            research_profiles={},
+            time_extension_profiles={},
+            logic_improvement_profiles={},
+        ),
+    )
+    tuning = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "daily": {"profiles": {profile_id: {} for profile_id in target_profiles}},
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+    }
+    expanded = {
+        "target_date": target_date,
+        "status": "recommendations_ready",
+        "candidate_symbols": {},
+        "candidate_universe_size": 0,
+        "new_symbol_profile_count": 0,
+        "existing_symbol_time_extension_profile_count": 0,
+        "existing_symbol_logic_improvement_profile_count": 0,
+        "research_profile_inventory": {},
+        "profiles": {},
+        "recommendations": [{"profile_id": "future_source_only_candidate"}],
+    }
+
+    status = mod._low_price_two_leg_postclose_contract_status(
+        tuning,
+        {"source_date": target_date},
+        expanded,
+        target_date=target_date,
+    )
+
+    assert status["status"] == "pass"
+    assert (
+        status["recommendation_implementation_status"]
+        == "not_applicable_no_approved_runtime_mapping"
+    )
+    assert status["recommendation_profile_mapping_count"] == 0
+    assert status["recommendation_profile_contract_pass_count"] == 0
 
 
 def test_samsung_machine_entry_postclose_contract_validates_windows_and_candidate():
@@ -419,9 +514,7 @@ def test_smoothing_source_only_path_journal_rejects_field_projection_failure():
         "smoothing_source_only_ingestion"
     ]["field_projection"]
     field_projection["status"] = "fail"
-    field_projection["missing_field_counts"] = {
-        "path_max_valid_observation_gap_sec": 1
-    }
+    field_projection["missing_field_counts"] = {"path_max_valid_observation_gap_sec": 1}
     field_projection["issues"] = ["smoothing_compact_required_field_missing"]
     status = mod._smoothing_source_only_path_journal_contract_status(daily, cumulative)
 
@@ -5453,6 +5546,14 @@ def test_swing_lifecycle_provider_mismatch_warning_uses_done_marker_provider():
 
 def test_consumer_stale_detects_generated_at_ordering():
     consumer = {"generated_at": "2026-05-12T21:20:00+09:00"}
+    source = {"generated_at": "2026-05-12T21:21:00+09:00"}
+
+    assert mod._consumer_stale(consumer, source) is True
+    assert mod._consumer_stale(source, consumer) is False
+
+
+def test_consumer_stale_normalizes_legacy_naive_kst_timestamp():
+    consumer = {"generated_at": "2026-05-12 21:20:00"}
     source = {"generated_at": "2026-05-12T21:21:00+09:00"}
 
     assert mod._consumer_stale(consumer, source) is True

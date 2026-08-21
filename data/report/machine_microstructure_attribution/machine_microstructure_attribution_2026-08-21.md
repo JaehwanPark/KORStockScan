@@ -10,7 +10,7 @@
 
 | Dynamic symbols | Widget symbols | Episode profiles | Anchors | Matched | Gaps |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 18 | 3 | 95 | 66 | 0 | 104 |
+| 25 | 14 | 95 | 70 | 0 | 113 |
 
 ## Fast Lifecycle Objective
 
@@ -40,6 +40,17 @@
 | widget | actual:005930:NXT_AFTERMARKET | 005930 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | widget | 034020:KRX_REGULAR | 034020 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | widget | 042660:KRX_REGULAR | 042660 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| widget | research:006800:KRX_REGULAR | 006800 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| widget | research:010140:KRX_REGULAR | 010140 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| widget | research:080220:KRX_REGULAR | 080220 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| widget | research:475150:KRX_REGULAR | 475150 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| widget | expansion:100790:SOR_REGULAR | 100790 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| widget | expansion:138080:SOR_REGULAR | 138080 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| widget | expansion:033640:SOR_REGULAR | 033640 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| widget | expansion:047810:SOR_REGULAR | 047810 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| widget | expansion:093370:SOR_REGULAR | 093370 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| widget | expansion:007810:SOR_REGULAR | 007810 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| widget | expansion:131290:SOR_REGULAR | 131290 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | samsung_heavy_midday | 010140 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | samsung_heavy_afternoon | 010140 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | sk_eternix_midday | 475150 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
@@ -135,8 +146,6 @@
 | episode | logic_sk_telecom_late_morning | 017670 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | logic_tym_afternoon | 002900 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | logic_tym_midday | 002900 | micro_canary_target_date_evidence_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
-| widget | symbol_research | - | owner_source_missing_or_invalid_json | micro context unavailable |
-| widget | collector_expansion_recommendation | - | owner_source_missing_or_invalid_json | micro context unavailable |
 
 Missing micro data is not imputed as zero return and does not stop the existing owner tuning path.
 

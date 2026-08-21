@@ -1110,3 +1110,32 @@ def test_control_tower_source_freshness_honors_verifier_disabled_stages(
     assert report["source_freshness"]["status"] == "pass"
     assert report["summary"]["source_generation_stale_warning_count"] == 0
     assert "source_generation_stale_warning" not in report["warnings"]
+
+
+def test_control_tower_does_not_warn_for_swing_sources_in_scalp_only_scope(
+    monkeypatch, tmp_path
+):
+    report_root, apply_dir, _ = _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-05-29"
+    _write_control_tower_minimal_sources(report_root, apply_dir, target)
+    for label in (
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+    ):
+        (report_root / label / f"{label}_{target}.json").unlink()
+    _write_json(
+        report_root / "threshold_cycle_ev" / f"threshold_cycle_ev_{target}.json",
+        {
+            "strategy_scope": "scalp_only",
+            "daily_ev_summary": {
+                "source_split": {"combined_authority": "diagnostic_only"}
+            },
+        },
+    )
+
+    report = mod.build_tuning_performance_control_tower(target)
+
+    assert report["strategy_scope"] == "scalp_only"
+    assert "swing_lifecycle_decision_matrix_missing" not in report["warnings"]
+    assert "swing_lifecycle_bucket_discovery_missing" not in report["warnings"]
+    assert report["sources"]["swing_lifecycle_decision_matrix"]["applicable"] is False

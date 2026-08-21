@@ -18,12 +18,18 @@ def test_save_threshold_calibration_report_declares_runtime_handoff_contract_ver
             "calibration_run_phase": "postclose",
         },
         "calibration_candidates": [],
+        "completed_by_source_window": "legacy_loader_window_rolling_7d",
+        "completed_by_source_by_window": {
+            "same_day": {"real": {"sample": 3}, "sim": {"sample": 2}}
+        },
     }
 
     path = report_mod.save_threshold_calibration_report(report)
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     assert payload["runtime_handoff_contract_version"] == 1
+    assert payload["completed_by_source_window"] == "legacy_loader_window_rolling_7d"
+    assert payload["completed_by_source_by_window"]["same_day"]["real"]["sample"] == 3
 
 
 def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
@@ -2492,8 +2498,14 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
     )
     assert (
         candidates["bad_entry_refined_canary"]["apply_mode"]
-        == "efficient_tradeoff_canary_candidate"
+        == "report_only_calibration"
     )
+    assert candidates["bad_entry_refined_canary"]["allowed_runtime_apply"] is False
+    assert (
+        candidates["bad_entry_refined_canary"]["runtime_apply_block_reason"]
+        == "resolved_terminal_counterfactual_ev_contract_missing"
+    )
+    assert candidates["bad_entry_refined_canary"]["sample_count"] == 0
     assert (
         candidates["bad_entry_refined_canary"]["source_metrics"][
             "holding_flow_override_defer_exit"
@@ -2511,6 +2523,100 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
     assert (
         candidates["holding_exit_decision_matrix_advisory"]["sample_floor_status"]
         == "minimum_edge_missing"
+    )
+
+
+def test_daily_completed_source_split_is_not_rolling_window():
+    rows = [
+        {"rec_date": "2026-08-21", "status": "COMPLETED", "profit_rate": 1.0},
+        {"rec_date": "2026-08-20", "status": "COMPLETED", "profit_rate": 2.0},
+    ]
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-08-21",
+        pipeline_loader=lambda unused: [],
+        report_source_loader=lambda unused: {},
+        completed_rows_loader=lambda unused_start, unused_end: rows,
+    )
+
+    assert report["completed_by_source_window"] == "legacy_loader_window_rolling_7d"
+    assert report["completed_by_source_by_window"]["same_day"]["real"]["sample"] == 1
+    assert report["completed_by_source_by_window"]["rolling_7d"]["real"]["sample"] == 2
+
+
+def test_explicit_completed_source_windows_reject_undated_rows():
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-08-21",
+        pipeline_loader=lambda unused: [],
+        report_source_loader=lambda unused: {},
+        completed_rows_loader=lambda unused_start, unused_end: [
+            {"status": "COMPLETED", "profit_rate": 1.0}
+        ],
+    )
+
+    assert report["completed_by_source_by_window"]["same_day"]["real"]["sample"] == 0
+    assert report["completed_by_source_by_window"]["rolling_7d"]["real"]["sample"] == 0
+
+
+def test_bad_entry_window_policy_never_reuses_raw_provisional_volume():
+    candidate = {
+        "family": "bad_entry_refined_canary",
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": False,
+        "sample_count": 13,
+        "source_sample_count": 13,
+        "sample_floor": 10,
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": [],
+            "daily_only_allowed": False,
+        },
+        "current_values": {"enabled": False},
+        "recommended_values": {"enabled": False},
+        "source_metrics": {},
+    }
+    cumulative = {
+        "threshold_snapshot_by_window": {
+            "rolling_10d": {
+                "bad_entry_refined_canary": {
+                    "sample": {
+                        "raw_provisional_candidate_count": 13_384,
+                        "resolved_terminal_sample_count": 13,
+                        "terminal_ev_contract_complete": False,
+                        "lifecycle_attribution": {
+                            "candidate_records": 13,
+                            "post_sell_joined_records": 13,
+                            "post_sell_pending_records": 0,
+                            "final_type_counts": {},
+                        },
+                    },
+                    "current": {"enabled": False},
+                    "recommended": {"enabled": False},
+                    "sample_ready": False,
+                }
+            }
+        },
+        "calibration_source_bundle_by_window": {
+            "rolling_10d": {
+                "source_metrics": {"bad_entry": {"refined_candidate": 13_384}}
+            }
+        },
+    }
+
+    report_mod.apply_window_policy_registry_to_report(
+        {"calibration_candidates": [candidate]}, cumulative
+    )
+
+    assert candidate["sample_count"] == 13
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["apply_mode"] == "report_only_calibration"
+    assert "counterfactual EV" in candidate["calibration_reason"]
+    resolution = candidate["window_policy_resolution"]
+    assert resolution["primary_source_sample_count"] == 13
+    assert resolution["primary_raw_provisional_source_sample_count"] == 13_384
+    assert (
+        resolution["primary_source_sample_role"]
+        == "resolved_terminal_decision_denominator"
     )
 
 
@@ -2877,7 +2983,8 @@ def test_bad_entry_refined_candidate_waits_for_postclose_lifecycle_attribution(
         for item in report["calibration_candidates"]
         if item["family"] == "bad_entry_refined_canary"
     )
-    assert candidate["calibration_state"] == "hold"
+    assert candidate["calibration_state"] == "hold_sample"
+    assert "counterfactual EV" in candidate["calibration_reason"]
     assert candidate["source_metrics"]["post_sell_joined_candidate_records"] == 1
     assert candidate["source_metrics"]["late_detected_soft_stop_zone_records"] == 1
     assert candidate["runtime_change"] is False

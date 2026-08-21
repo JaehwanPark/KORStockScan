@@ -2439,6 +2439,17 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
   "threshold_cycle_postclose_verification"
 run_threshold_cycle_ev_and_wait "final_consumer_refresh"   "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json"   "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md"   "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"
+if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
+  wait_for_postclose_resources "code_improvement_workorder_final_source_refresh"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
+    --date "$TARGET_DATE" \
+    --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS" \
+    "${WORKORDER_SWING_ARGS[@]}"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
+    "code_improvement_workorder_final_source_refresh"
+fi
 wait_for_postclose_resources "runtime_approval_summary_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_approval_summary \
   --date "$TARGET_DATE" "${RUNTIME_APPROVAL_SCOPE_ARGS[@]}"

@@ -682,8 +682,13 @@ def main(argv: list[str] | None = None) -> int:
     report["rolling_reports"] = {
         symbol: {
             "status": rolling.get("status"),
-            "mature_outcome_count": rolling.get("mature_outcome_count"),
-            "sample_floor_met": rolling.get("sample_floor_met"),
+            "rolling_reported_mature_outcome_count": rolling.get(
+                "mature_outcome_count"
+            ),
+            "rolling_policy_sample_floor_met": rolling.get("sample_floor_met"),
+            "sample_floor_semantics": (
+                "qualified_daily_report_count_floor; not mature outcome row count"
+            ),
         }
         for symbol, rolling in rolling_reports.items()
     }

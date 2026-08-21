@@ -833,6 +833,36 @@ def test_pattern_lab_ai_review_resolves_stale_source_missing_gaps_when_feedback_
         item["feedback_handoff_resolution"]["status"]
         for item in report["ai_two_pass_review"]["final_conclusions"]
     } == {"resolved_by_existing_feedback_source_context"}
+    for item in report["ai_two_pass_review"]["final_conclusions"]:
+        assert item["required_followup"] == []
+        assert item["provider_required_followup"] == ["create_workorder"]
+        assert item["provider_asserted_reason"].startswith("Source is missing")
+        assert "superseded" in item["reason"]
+
+
+def test_normalize_final_conclusion_does_not_resurrect_resolved_feedback_gap():
+    item = {
+        "review_id": "threshold_cycle_ev",
+        "domain": "scalping",
+        "final_state": "source_only_keep_collecting",
+        "final_decision": "keep",
+        "reason": "threshold_cycle_ev source is missing",
+        "required_followup": ["generate_threshold_cycle_ev"],
+        "feedback_handoff_resolution": {
+            "status": "resolved_by_existing_feedback_source_context",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+    }
+
+    normalized = mod._normalize_final_conclusion(item, {"sources": {}})
+
+    assert normalized["required_followup"] == []
+    assert normalized["provider_required_followup"] == ["generate_threshold_cycle_ev"]
+    assert normalized["provider_asserted_reason"] == (
+        "threshold_cycle_ev source is missing"
+    )
+    assert "superseded" in normalized["reason"]
 
 
 def test_pattern_lab_ai_review_resolves_code_improvement_workorder_self_review_gap(

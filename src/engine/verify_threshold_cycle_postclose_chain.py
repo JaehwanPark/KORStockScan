@@ -13,6 +13,7 @@ from collections import Counter
 from datetime import date, datetime, time as dtime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.engine.automation.source_quality_clean_baseline import (
     analytics_quarantine_reason,
@@ -37,6 +38,7 @@ from src.engine.monitoring.limit_down_watch_report import (
 from src.engine.threshold_cycle_preopen_apply import (
     runtime_gap_provenance_artifact_path,
 )
+from src.utils.market_day import is_krx_trading_day
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = PROJECT_ROOT / "logs" / "threshold_cycle_postclose_cron.log"
@@ -63,6 +65,59 @@ _PAUSED_MARKER = "[PAUSED] threshold-cycle postclose"
 
 def _normalized_for_match(text: str) -> str:
     return text.lower().replace("_", "")
+
+
+def _workorder_source_fingerprint_issues(
+    workorder: dict[str, Any],
+) -> list[str]:
+    """Validate immutable content identity for every declared workorder source."""
+    if not workorder:
+        return []
+    entries = workorder.get("source_fingerprint")
+    if not isinstance(entries, list):
+        return (
+            ["code_improvement_workorder_source_fingerprint_missing"]
+            if workorder.get("schema_version") == 1
+            else []
+        )
+    issues: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            issues.append("code_improvement_workorder_source_fingerprint_invalid")
+            continue
+        label = str(entry.get("label") or "unknown")
+        raw_path = str(entry.get("path") or "").strip()
+        if not raw_path:
+            issues.append(
+                f"code_improvement_workorder_source_fingerprint_path_missing:{label}"
+            )
+            continue
+        path = Path(raw_path)
+        exists = path.exists()
+        if bool(entry.get("exists")) != exists:
+            issues.append(
+                f"code_improvement_workorder_source_fingerprint_exists_mismatch:{label}"
+            )
+            continue
+        if not exists:
+            continue
+        try:
+            payload = path.read_bytes()
+        except OSError:
+            issues.append(
+                f"code_improvement_workorder_source_fingerprint_unreadable:{label}"
+            )
+            continue
+        if int(entry.get("size_bytes") or -1) != len(payload):
+            issues.append(
+                f"code_improvement_workorder_source_fingerprint_size_mismatch:{label}"
+            )
+        actual_sha = hashlib.sha256(payload).hexdigest()
+        if str(entry.get("sha256") or "") != actual_sha:
+            issues.append(
+                f"code_improvement_workorder_source_fingerprint_sha256_mismatch:{label}"
+            )
+    return sorted(set(issues))
 
 
 _READY_RE = re.compile(
@@ -148,6 +203,10 @@ def _low_price_two_leg_postclose_contract_status(
     )
     from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
     from src.trading.low_price_two_leg.policy_runtime import validate_candidate
+    from src.trading.low_price_two_leg.preflight import (
+        RECOMMENDATION_20260821_PROFILE_MAP,
+        validate_research_evidence,
+    )
     from src.trading.low_price_two_leg.profiles import (
         PROFILES,
         profiles_for_target_date,
@@ -223,6 +282,82 @@ def _low_price_two_leg_postclose_contract_status(
             "existing_symbol_logic_improvement_profile_count"
         ) != len(target_research_inventory.logic_improvement_profiles):
             issues.append("expanded_candidate_logic_lane_count_mismatch")
+
+    recommendation_effective_date: date | None = None
+    recommendation_implementation_status = "not_applicable_no_recommendations"
+    recommendation_profile_failures: dict[str, str] = {}
+    recommendation_profile_pass_count = 0
+    recommendation_ids = {
+        str(row.get("profile_id") or "")
+        for row in expanded.get("recommendations") or []
+        if isinstance(row, dict) and row.get("profile_id")
+    }
+    # A source-only recommendation is not itself runtime authority.  Verify
+    # implementation only when this verifier owns an explicit operator-approved
+    # report-date -> effective-date mapping.  In particular, never apply the
+    # latest embedded map to an older replay or a future unapproved report.
+    approved_recommendation_contracts = {
+        date(2026, 8, 21): (
+            date(2026, 8, 24),
+            RECOMMENDATION_20260821_PROFILE_MAP,
+        )
+    }
+    recommendation_contract = approved_recommendation_contracts.get(
+        parsed_target_date if target_research_inventory is not None else None
+    )
+    if expanded.get("status") == "recommendations_ready" and recommendation_ids:
+        if target_research_inventory is None:
+            issues.append("recommendation_runtime_implementation_unverifiable")
+            recommendation_implementation_status = "unverifiable_target_inventory"
+        elif recommendation_contract is None:
+            recommendation_implementation_status = (
+                "not_applicable_no_approved_runtime_mapping"
+            )
+        else:
+            recommendation_effective_date, recommendation_profile_map = (
+                recommendation_contract
+            )
+            recommendation_contract_valid = True
+            if recommendation_effective_date <= parsed_target_date:
+                issues.append("recommendation_effective_date_invalid")
+                recommendation_contract_valid = False
+            if not is_krx_trading_day(recommendation_effective_date):
+                issues.append("recommendation_effective_date_not_trading_day")
+                recommendation_contract_valid = False
+            expected_report_ids = set(recommendation_profile_map.values())
+            if recommendation_ids != expected_report_ids:
+                issues.append("recommendation_profile_map_mismatch")
+            effective_profiles = profiles_for_target_date(recommendation_effective_date)
+            for runtime_profile_id, report_profile_id in sorted(
+                recommendation_profile_map.items()
+            ):
+                profile = effective_profiles.get(runtime_profile_id)
+                if profile is None:
+                    recommendation_profile_failures[runtime_profile_id] = (
+                        "runtime_profile_missing"
+                    )
+                    continue
+                ready, reason = validate_research_evidence(
+                    profile, target_date=recommendation_effective_date
+                )
+                if not ready:
+                    recommendation_profile_failures[runtime_profile_id] = reason
+                    continue
+                if report_profile_id not in recommendation_ids:
+                    recommendation_profile_failures[runtime_profile_id] = (
+                        "source_recommendation_missing"
+                    )
+                    continue
+                recommendation_profile_pass_count += 1
+            if recommendation_profile_failures:
+                issues.append("recommendation_runtime_implementation_contract_failed")
+            recommendation_implementation_status = (
+                "pass"
+                if not recommendation_profile_failures
+                and recommendation_ids == expected_report_ids
+                and recommendation_contract_valid
+                else "fail"
+            )
     return {
         "status": "fail" if issues else "pass",
         "issues": issues,
@@ -237,6 +372,21 @@ def _low_price_two_leg_postclose_contract_status(
             )
         ),
         "recommendation_count": len(expanded.get("recommendations") or []),
+        "recommendation_implementation_status": (recommendation_implementation_status),
+        "recommendation_effective_date": (
+            recommendation_effective_date.isoformat()
+            if recommendation_effective_date is not None
+            else None
+        ),
+        "recommendation_profile_mapping_count": (
+            len(recommendation_contract[1])
+            if recommendation_contract is not None
+            else 0
+        ),
+        "recommendation_profile_contract_pass_count": (
+            recommendation_profile_pass_count
+        ),
+        "recommendation_profile_contract_failures": (recommendation_profile_failures),
         "quarantined_source_symbol_count": int(
             expanded.get("quarantined_source_symbol_count", 0) or 0
         ),
@@ -569,14 +719,23 @@ def _raw_row_exclusion_handoff_status(
     }
 
 
+_KST = ZoneInfo("Asia/Seoul")
+
+
 def _parse_generated_at(payload: dict[str, Any]) -> datetime | None:
     raw = str(payload.get("generated_at") or "").strip()
     if not raw:
         return None
     try:
-        return datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(raw)
     except ValueError:
         return None
+    # Legacy postclose artifacts emitted a KST wall-clock string without an
+    # explicit offset. Normalize both shapes before predecessor comparison so
+    # mixed legacy/current producers cannot crash the verifier.
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=_KST)
+    return parsed.astimezone(_KST)
 
 
 def _consumer_stale(consumer: dict[str, Any], source: dict[str, Any]) -> bool:
@@ -5880,6 +6039,12 @@ def build_threshold_cycle_postclose_verification(
             for issue in samsung_machine_entry_postclose["issues"]
         )
     threshold_cycle_daily = _load_json(paths["threshold_cycle_daily"])
+    threshold_cycle_calibration = _load_json(paths["threshold_cycle_calibration"])
+    threshold_cycle_ai_review = _load_json(
+        REPORT_DIR
+        / "threshold_cycle_ai_review"
+        / f"threshold_cycle_ai_review_{target_date}_postclose.json"
+    )
     threshold_cycle_cumulative = _load_json(paths["threshold_cycle_cumulative"])
     smoothing_source_only_path_journal = (
         _smoothing_source_only_path_journal_contract_status(
@@ -5890,6 +6055,9 @@ def build_threshold_cycle_postclose_verification(
     if smoothing_source_only_path_journal["status"] == "fail":
         log_issues.extend(smoothing_source_only_path_journal["issues"])
     workorder = _load_json(paths["code_improvement_workorder"])
+    workorder_source_fingerprint_issues = _workorder_source_fingerprint_issues(
+        workorder
+    )
     workorder_contract = _code_improvement_workorder_contract_status(
         workorder, target_date=target_date
     )
@@ -6591,6 +6759,11 @@ def build_threshold_cycle_postclose_verification(
         if key in execution_flags and not execution_flags[key]
     ]
     if (
+        "code_improvement_workorder" not in disabled_stage_flags
+        and workorder_source_fingerprint_issues
+    ):
+        log_issues.extend(workorder_source_fingerprint_issues)
+    if (
         paths["code_improvement_workorder"].exists()
         and "code_improvement_workorder" not in disabled_stage_flags
         and workorder_contract.get("status") == "fail"
@@ -6970,12 +7143,6 @@ def build_threshold_cycle_postclose_verification(
     )
     stale_downstream_links: list[str] = []
     if "daily_ev" not in disabled_stage_flags:
-        if downstream_links.get(
-            "threshold_cycle_ev_sources_workorder"
-        ) and _consumer_stale(ev_report, workorder):
-            stale_downstream_links.append(
-                "threshold_cycle_ev_stale_before_code_improvement_workorder"
-            )
         if (
             "pattern_lab_currentness_audit" not in disabled_stage_flags
             and downstream_links.get(
@@ -7046,6 +7213,8 @@ def build_threshold_cycle_postclose_verification(
             )
     source_generation_warnings: list[str] = []
     freshness_sources = {
+        "threshold_cycle_calibration": threshold_cycle_calibration,
+        "threshold_cycle_ai_review": threshold_cycle_ai_review,
         "lifecycle_decision_matrix": ldm_report,
         "lifecycle_bucket_discovery": discovery_report,
         "swing_lifecycle_decision_matrix": swing_ldm_report,
@@ -7063,6 +7232,33 @@ def build_threshold_cycle_postclose_verification(
                 source_generation_warnings.append(
                     f"runtime_approval_summary_stale_before_{label}"
                 )
+    if "code_improvement_workorder" not in disabled_stage_flags:
+        source_generation_warnings.extend(workorder_source_fingerprint_issues)
+
+    swing_stage_enabled = any(
+        execution_flags.get(key) is True
+        for key in (
+            "swing_lifecycle",
+            "swing_strategy_discovery",
+            "swing_lifecycle_matrix",
+            "swing_lifecycle_bucket_discovery",
+            "deepseek_swing_lab",
+        )
+    )
+    expected_strategy_scope = "scalp_and_swing" if swing_stage_enabled else "scalp_only"
+    for label, payload in (
+        ("threshold_cycle_ev", ev_report),
+        ("runtime_approval_summary", runtime_summary),
+        ("code_improvement_workorder", workorder),
+    ):
+        if (
+            payload
+            and payload.get("strategy_scope") is not None
+            and str(payload.get("strategy_scope")) != expected_strategy_scope
+        ):
+            issue = f"{label}_strategy_scope_mismatch:{expected_strategy_scope}"
+            source_generation_warnings.append(issue)
+            log_issues.append(issue)
     if (
         "lifecycle_decision_matrix" in disabled_stage_flags
         or "lifecycle_decision_matrix" not in execution_flags
@@ -7505,6 +7701,17 @@ def build_threshold_cycle_postclose_verification(
             "priority_rule": "prefer_generation_id_source_hash_lineage_over_mtime",
         },
         "code_improvement_workorder_contract": workorder_contract,
+        "code_improvement_workorder_source_fingerprint": {
+            "status": "pass" if not workorder_source_fingerprint_issues else "fail",
+            "issues": workorder_source_fingerprint_issues,
+        },
+        "strategy_scope_contract": {
+            "expected": expected_strategy_scope,
+            "swing_stage_enabled": swing_stage_enabled,
+            "threshold_cycle_ev": ev_report.get("strategy_scope"),
+            "runtime_approval_summary": runtime_summary.get("strategy_scope"),
+            "code_improvement_workorder": workorder.get("strategy_scope"),
+        },
         "downstream_links": downstream_links,
         "missing_downstream_links": missing_downstream_links,
         "stale_downstream_links": stale_downstream_links,

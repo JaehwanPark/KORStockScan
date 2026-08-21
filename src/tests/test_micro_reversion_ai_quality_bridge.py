@@ -2705,6 +2705,42 @@ def test_bridge_report_records_outcome_only_pipeline_source_census() -> None:
         {key: value for key, value in report.items() if key != "report_content_sha256"}
     )
 
+    mismatched = _entry_pipeline_allocator_row(quantity=50)
+    mismatched["fields"]["market_session_bucket"] = "nxt_regular"
+    mismatch_report = build_bridge_report(
+        target_date="2026-08-14",
+        traces=[_trace()],
+        payloads=[_payload()],
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+        entry_pipeline_rows=[mismatched],
+        entry_pipeline_source={
+            "status": "available_hash_verified",
+            "logical_source_path": "/test/pipeline_events_2026-08-14.jsonl",
+            "source_path": "/test/pipeline_events_2026-08-14.jsonl",
+            "source_compression": "plain",
+            "source_bytes": 123,
+            "source_sha256": "c" * 64,
+            "source_content_sha256": "d" * 64,
+            "source_content_bytes": 456,
+            "source_line_count": 1,
+            "source_nonempty_line_count": 1,
+            "source_json_object_row_count": 1,
+            "source_snapshot_stable": True,
+        },
+        verified_symbol_metadata_by_trace={"trace-1": _verified_symbol_metadata()},
+    )
+    assert mismatch_report["status"] == "warning"
+    assert mismatch_report["decision"] == (
+        "entry_pipeline_allocator_join_contract_gap_report_only"
+    )
+    assert (
+        mismatch_report["summary"]["entry_pipeline_allocator_tuning_input_allowed"]
+        is False
+    )
+
     missing = build_bridge_report(
         target_date="2026-08-14",
         traces=[_trace()],

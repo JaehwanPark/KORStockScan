@@ -29,9 +29,9 @@
 - stage_hook_runtime_scaffold: `-`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-08-21.json`
 - microstructure_reaction_context: `/home/ubuntu/KORStockScan/data/report/microstructure_reaction_context/microstructure_reaction_context_2026-08-21.json`
-- generated_at: `2026-08-21T21:40:06+09:00`
-- generation_id: `2026-08-21-39eba9578b23`
-- source_hash: `39eba9578b23e718ef5b29bad4c514a211f649563d52e10bc91028b86d0c3a9b`
+- generated_at: `2026-08-22T01:17:33+09:00`
+- generation_id: `2026-08-21-8c5615e4b8f0`
+- source_hash: `8c5615e4b8f0d7dc39b7cae409880eff7c537bb019c724cf206130cfb83c6f1c`
 
 ## 운영 원칙
 
@@ -53,10 +53,10 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-08-21-e190f3503e94`
-- previous_source_hash: `e190f3503e94e7d45de8b4fdd4979fbca5a644008ba2bf2a2b436afb8449ddc7`
+- previous_generation_id: `2026-08-21-b85158f88d3d`
+- previous_source_hash: `b85158f88d3d6bddb3c58fc04dc4277184524ae4f0efd1876843770daa47114d`
 - new_order_ids: `[]`
-- removed_order_ids: `['order_observation_source_quality_unknown_token_provenance_gap']`
+- removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
 
 ## Summary

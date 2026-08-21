@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,14 @@ SOURCE_SPECS: dict[str, tuple[Path, str]] = {
     "threshold_cycle_ev": (
         REPORT_ROOT_DIR / "threshold_cycle_ev",
         "threshold_cycle_ev",
+    ),
+    "threshold_cycle_calibration": (
+        REPORT_ROOT_DIR / "threshold_cycle_calibration",
+        "threshold_cycle_calibration",
+    ),
+    "threshold_cycle_ai_review": (
+        REPORT_ROOT_DIR / "threshold_cycle_ai_review",
+        "threshold_cycle_ai_review",
     ),
     "runtime_approval_summary": (
         REPORT_ROOT_DIR / "runtime_approval_summary",
@@ -68,6 +76,11 @@ SOURCE_SPECS: dict[str, tuple[Path, str]] = {
 }
 
 OPTIONAL_CONTROL_TOWER_SOURCES = {"key_lineage_ledger", "conversion_lane"}
+GENERATION_CONTRACT_SOURCES = {
+    "threshold_cycle_calibration",
+    "threshold_cycle_ai_review",
+}
+GENERATION_CONTRACT_EFFECTIVE_DATE = date(2026, 8, 21)
 
 PROGRESS_KEYS: dict[str, tuple[str, ...]] = {
     "lifecycle_bucket_discovery": (
@@ -141,6 +154,8 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
 
 def _source_path(label: str, target_date: str) -> Path:
     directory, prefix = SOURCE_SPECS[label]
+    if label in {"threshold_cycle_calibration", "threshold_cycle_ai_review"}:
+        return directory / f"{prefix}_{target_date}_postclose.json"
     return directory / f"{prefix}_{target_date}.json"
 
 
@@ -703,6 +718,8 @@ def _source_freshness(
     }
     source_flag_by_key = {
         "observation_source_quality_audit": "observation_source_quality_audit",
+        "threshold_cycle_calibration": "daily_ev",
+        "threshold_cycle_ai_review": "daily_ev",
         "lifecycle_decision_matrix": "lifecycle_decision_matrix",
         "lifecycle_bucket_discovery": "lifecycle_bucket_discovery",
         "swing_lifecycle_decision_matrix": "swing_lifecycle_matrix",
@@ -1466,6 +1483,12 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         sources[label] = _artifact_status(path, payload)
         if label in OPTIONAL_CONTROL_TOWER_SOURCES and not path.exists():
             continue
+        if (
+            label in GENERATION_CONTRACT_SOURCES
+            and date.fromisoformat(target_date) < GENERATION_CONTRACT_EFFECTIVE_DATE
+            and not path.exists()
+        ):
+            continue
         if not path.exists():
             warnings.append(f"{label}_missing")
         elif not payload:
@@ -1499,6 +1522,25 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     )
 
     threshold_ev = payloads["threshold_cycle_ev"]
+    strategy_scope = str(
+        threshold_ev.get("strategy_scope")
+        or payloads["runtime_approval_summary"].get("strategy_scope")
+        or "scalp_and_swing"
+    ).strip()
+    if strategy_scope == "scalp_only":
+        scope_disabled_sources = {
+            "swing_lifecycle_decision_matrix",
+            "swing_lifecycle_bucket_discovery",
+        }
+        warnings = [
+            warning
+            for warning in warnings
+            if warning.removesuffix("_missing") not in scope_disabled_sources
+            and warning.removesuffix("_parse_failed") not in scope_disabled_sources
+        ]
+        for label in scope_disabled_sources:
+            sources[label]["applicable"] = False
+            sources[label]["not_applicable_reason"] = "strategy_scope=scalp_only"
     ldm_bucket = _progress_section(
         label="lifecycle_bucket_discovery",
         target_date=target_date,
@@ -1570,6 +1612,7 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "report_type": REPORT_TYPE,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "strategy_scope": strategy_scope,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "decision_authority": "operator_read_only_tuning_performance_summary",

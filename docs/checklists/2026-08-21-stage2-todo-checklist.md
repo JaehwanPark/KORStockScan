@@ -16,6 +16,11 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+- [x] `[PostcloseTuningSemanticIntegrity0821] 장후 튜닝 결과 의미계약·generation·consumer 검증 보강` (`Due: 2026-08-21`, `Slot: POSTCLOSE`, `TimeWindow: 23:20~23:59`, `Track: RuntimeStability`)
+  - Source: [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [threshold_cycle_ev_report.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_ev_report.py), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)
+  - 판정 기준: same-day와 rolling source split을 분리하고, provisional bad-entry volume은 terminal executable counterfactual EV 전까지 runtime apply 표본으로 금지하며, parsed AI guard effective state를 runtime approval에 반영한다. 최종 EV 뒤 workorder content fingerprint를 재생성하고 calibration/AI/EV/runtime generation 및 실제 swing 실행 범위와 strategy scope 일치를 verifier가 확인한다.
+  - 금지: raw 후보 이벤트 수를 terminal outcome 표본으로 사용하거나, AI가 `exclude_from_threshold_candidate_review`로 보낸 family를 deterministic `adjust_up`만으로 PREOPEN eligible로 표시하거나, 오래된 workorder fingerprint를 DONE으로 인정하지 않는다.
+
 - [ ] `[LowPriceTwoLeg0821InstallVerify0824] 8월 21일 승인 14프로필 서비스 설치 및 PREOPEN 검증` (`Due: 2026-08-24`, `Slot: PREOPEN`, `TimeWindow: 08:40~09:10`, `Track: ScalpingLogic`)
   - Source: [low_price_two_leg_expanded_profile_evidence_2026-08-21.json](/home/ubuntu/KORStockScan/data/config/low_price_two_leg_expanded_profile_evidence_2026-08-21.json), [low-price-two-leg-machines.md](/home/ubuntu/KORStockScan/docs/low-price-two-leg-machines.md), [install_low_price_two_leg_systemd.sh](/home/ubuntu/KORStockScan/deploy/install_low_price_two_leg_systemd.sh)
   - 판정 기준: review gate가 닫힌 소스를 main에 반영한 뒤 별도 운영 승인으로 installer를 실행하고, 35개 profile의 preflight/live timer 70개가 enabled 상태인지, exact-date applied policy와 authority artifact가 2026-08-24 generation을 선택하는지, 기존 HELD/주문 custody가 보존되는지 확인한다. 설치·기동 전까지 이번 소스 변경은 runtime effect가 없다.

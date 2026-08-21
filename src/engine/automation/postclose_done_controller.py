@@ -446,9 +446,7 @@ def _runner_completed(
     ).strip()
     if not workorder_generation_id:
         return True
-    runner_generation_id = str(
-        runner_report.get("source_generation_id") or ""
-    ).strip()
+    runner_generation_id = str(runner_report.get("source_generation_id") or "").strip()
     return runner_generation_id == workorder_generation_id
 
 
@@ -852,6 +850,13 @@ def _tail_stage_repair_actions(
                     *_threshold_ev_scope_args(verification),
                 ],
                 "wrapper tail repair EV refresh after upstream audits and workorder",
+            ),
+            RecoveryAction(
+                "refresh_code_improvement_workorder_final",
+                _workorder_command(
+                    target_date, verification, max_orders=workorder_max_orders
+                ),
+                "wrapper tail repair final workorder source fingerprint refresh after EV",
             ),
             RecoveryAction(
                 "refresh_runtime_approval_summary",

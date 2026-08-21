@@ -327,6 +327,27 @@ def test_samsung_entry_telegram_follows_accepted_machine_action_only(
     )
     assert recorder.events[-1]["event_type"] == "entry_action_telegram_delivery"
     assert recorder.events[-1]["actual_order_submitted"] is True
+    assert recorder.events[-1]["execution_policy_session"] == "KRX_REGULAR"
+
+
+def test_episode_terminal_event_keeps_entry_session_after_session_transition(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now)}
+    trader, _, recorder = _trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    symbol_state = trader._state["symbols"]["999999"]
+    symbol_state["entry_session"] = "NXT_PREMARKET"
+
+    trader._event(
+        "sell_terminal_failure",
+        trader.specs[0],
+        now,
+        remaining_qty=1,
+    )
+
+    assert recorder.events[-1]["execution_policy_session"] == "NXT_PREMARKET"
 
 
 def test_nxt_collector_entry_block_creates_no_machine_action_telegram(
@@ -2056,7 +2077,9 @@ def test_long_running_trader_refreshes_dynamic_specs_at_trade_date_boundary(tmp_
     assert [spec.code for spec in trader.specs] == ["999999"]
 
 
-def test_long_running_trader_admits_late_same_day_additive_policy(tmp_path, monkeypatch):
+def test_long_running_trader_admits_late_same_day_additive_policy(
+    tmp_path, monkeypatch
+):
     now = datetime(2026, 8, 18, 8, 0, tzinfo=KST)
     monkeypatch.setattr(engine, "_now_kst", lambda: now)
     dynamic_spec = WidgetSpec(
@@ -2100,9 +2123,7 @@ def test_long_running_trader_admits_late_same_day_additive_policy(tmp_path, monk
         "888888": {"KRX_REGULAR": "dynamic-same-day"}
     }
     assert state["execution_eligible_symbols"] == ["888888"]
-    assert state["last_policy_catalog_additions"] == {
-        "888888": ["KRX_REGULAR"]
-    }
+    assert state["last_policy_catalog_additions"] == {"888888": ["KRX_REGULAR"]}
     assert state["symbols"]["999999"]["orders"] == []
     assert state["symbols"]["888888"]["orders"] == []
 
@@ -2119,9 +2140,7 @@ def test_same_day_additive_policy_restart_preserves_unrelated_open_position(
                 "schema_version": engine.STATE_SCHEMA_VERSION,
                 "execution_authority": engine.EXECUTION_AUTHORITY,
                 "active_date": now.date().isoformat(),
-                "execution_policies": {
-                    "999999": {"KRX_REGULAR": "base-policy"}
-                },
+                "execution_policies": {"999999": {"KRX_REGULAR": "base-policy"}},
                 "symbols": {
                     "999999": {
                         "entry_episode_open": True,
@@ -2276,7 +2295,9 @@ def test_postclose_widget_evaluation_writes_next_day_execution_policy():
     wrapper = Path("deploy/run_widget_evaluation.sh").read_text(encoding="utf-8")
 
     assert service.count("ExecStart=") == 1
-    assert "ExecStart=/home/ubuntu/KORStockScan/deploy/run_widget_evaluation.sh" in service
+    assert (
+        "ExecStart=/home/ubuntu/KORStockScan/deploy/run_widget_evaluation.sh" in service
+    )
     assert "resolve_completed_policy_target_date" in wrapper
     assert "widget_advisory_calibration" in wrapper
     assert '--target-date "$completed_target_date"' in wrapper
@@ -2291,11 +2312,11 @@ def test_widget_evaluation_wrapper_reuses_one_completed_date(
     fake_python.write_text(
         "#!/usr/bin/env bash\n"
         "set -eu\n"
-        "if [[ \"${1:-}\" == \"-c\" ]]; then\n"
+        'if [[ "${1:-}" == "-c" ]]; then\n'
         "  printf 'dependency startup banner\\n'\n"
         "  printf '2026-08-14\\n'\n"
         "else\n"
-        "  printf '%s\\n' \"$*\" >> \"$CALL_LOG\"\n"
+        '  printf \'%s\\n\' "$*" >> "$CALL_LOG"\n'
         "fi\n",
         encoding="utf-8",
     )

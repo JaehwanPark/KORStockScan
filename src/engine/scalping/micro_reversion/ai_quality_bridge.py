@@ -7376,6 +7376,9 @@ def build_bridge_report(
         for row in rows
         if (row.get("future_outcome") or {}).get("allocator_provenance_error")
     )
+    allocator_join_contract_gap = bool(sum(allocator_error_counts.values()) > 0)
+    allocator_valid_join_available = allocator_outcome_joined > 0
+    allocator_all_rows_contract_clean = not allocator_join_contract_gap
     pipeline_missing_observation_only = bool(
         pipeline_source_status == "missing_observation_only"
         and any(
@@ -7392,19 +7395,29 @@ def build_bridge_report(
         "generated_at": generated.isoformat(),
         "status": (
             "pass"
-            if replay_context_eligible and not pipeline_missing_observation_only
+            if replay_context_eligible
+            and not pipeline_missing_observation_only
+            and not allocator_join_contract_gap
             else "warning"
         ),
         "decision": (
             "entry_pipeline_missing_standardized_one_share_observation_only"
             if pipeline_missing_observation_only
             else (
-                "micro_three_arm_paired_replay_materialization_eligible"
-                if paired_eligible
+                (
+                    "entry_pipeline_allocator_partial_join_valid_rows_only"
+                    if allocator_valid_join_available
+                    else "entry_pipeline_allocator_join_contract_gap_report_only"
+                )
+                if allocator_join_contract_gap
                 else (
-                    "micro_replay_context_ready_control_response_excluded"
-                    if replay_context_eligible
-                    else "micro_context_keep_collecting_or_source_gap"
+                    "micro_three_arm_paired_replay_materialization_eligible"
+                    if paired_eligible
+                    else (
+                        "micro_replay_context_ready_control_response_excluded"
+                        if replay_context_eligible
+                        else "micro_context_keep_collecting_or_source_gap"
+                    )
                 )
             )
         ),
@@ -7459,6 +7472,25 @@ def build_bridge_report(
             "entry_pipeline_allocator_outcome_joined_count": (allocator_outcome_joined),
             "entry_pipeline_allocator_status_counts": dict(allocator_status_counts),
             "entry_pipeline_allocator_error_counts": dict(allocator_error_counts),
+            "entry_pipeline_allocator_join_contract_gap": (allocator_join_contract_gap),
+            "entry_pipeline_allocator_all_rows_contract_clean": (
+                allocator_all_rows_contract_clean
+            ),
+            "entry_pipeline_allocator_invalid_rows_excluded": (
+                allocator_join_contract_gap
+            ),
+            "entry_pipeline_allocator_tuning_input_allowed": (
+                allocator_valid_join_available
+            ),
+            "entry_pipeline_allocator_decision_authority": (
+                "valid_joined_rows_only_invalid_rows_excluded"
+                if allocator_join_contract_gap and allocator_valid_join_available
+                else (
+                    "report_only_contract_gap"
+                    if allocator_join_contract_gap
+                    else "source_quality_eligible"
+                )
+            ),
             "entry_pipeline_source_status": pipeline_source_status,
             "primary_metric_denominator": (
                 "eligible_exact_trace_parent_wave_stage_rows"

@@ -1801,32 +1801,42 @@ def _apply_feedback_handoff_resolutions(
             or self_review_gap
             or ai_review_contract_gap
         ):
+            resolution_status = (
+                "resolved_by_currentness_feedback_handoff_pass"
+                if generic_review
+                else (
+                    "resolved_by_existing_code_improvement_workorder_context"
+                    if self_review_gap
+                    else (
+                        "resolved_by_currentness_feedback_handoff_pass"
+                        if closed_handoff_gap
+                        else (
+                            "resolved_by_currentness_ai_review_contract_pass"
+                            if ai_review_contract_gap
+                            else "resolved_by_existing_feedback_source_context"
+                        )
+                    )
+                )
+            )
             resolved_ids.append(review_id)
             resolved_conclusions.append(
                 {
                     **item,
                     "final_state": "source_only_keep_collecting",
                     "final_decision": "keep",
+                    "provider_asserted_reason": item.get("reason"),
+                    "provider_required_followup": list(
+                        item.get("required_followup") or []
+                    ),
+                    "reason": (
+                        "Deterministic feedback-source reconciliation superseded "
+                        f"the provider gap assertion ({resolution_status})."
+                    ),
+                    "required_followup": [],
                     "explicit_gap_type": None,
                     "auditor_pass": True,
                     "feedback_handoff_resolution": {
-                        "status": (
-                            "resolved_by_currentness_feedback_handoff_pass"
-                            if generic_review
-                            else (
-                                "resolved_by_existing_code_improvement_workorder_context"
-                                if self_review_gap
-                                else (
-                                    "resolved_by_currentness_feedback_handoff_pass"
-                                    if closed_handoff_gap
-                                    else (
-                                        "resolved_by_currentness_ai_review_contract_pass"
-                                        if ai_review_contract_gap
-                                        else "resolved_by_existing_feedback_source_context"
-                                    )
-                                )
-                            )
-                        ),
+                        "status": resolution_status,
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
                         "decision_authority": "pattern_lab_feedback_handoff_source_only",
@@ -2063,6 +2073,33 @@ def _source_path_labels_for_domain(context: dict[str, Any], domain: str) -> list
 def _normalize_final_conclusion(
     item: dict[str, Any], context: dict[str, Any]
 ) -> dict[str, Any]:
+    feedback_resolution = (
+        item.get("feedback_handoff_resolution")
+        if isinstance(item.get("feedback_handoff_resolution"), dict)
+        else {}
+    )
+    feedback_resolution_status = str(feedback_resolution.get("status") or "").strip()
+    if feedback_resolution_status.startswith("resolved_"):
+        # A provenance-only refresh can feed an already-normalized conclusion
+        # back through the parser. Do not resurrect the provider's original
+        # missing-source assertion or its obsolete follow-up merely because
+        # the final state is already source_only_keep_collecting.
+        provider_asserted_reason = item.get("provider_asserted_reason") or item.get(
+            "reason"
+        )
+        provider_required_followup = item.get("provider_required_followup")
+        if not isinstance(provider_required_followup, list):
+            provider_required_followup = list(item.get("required_followup") or [])
+        item = {
+            **item,
+            "provider_asserted_reason": provider_asserted_reason,
+            "provider_required_followup": provider_required_followup,
+            "reason": (
+                "Deterministic feedback-source reconciliation superseded the "
+                f"provider gap assertion ({feedback_resolution_status})."
+            ),
+            "required_followup": [],
+        }
     final_state = str(item.get("final_state") or "source_only_keep_collecting")
     if final_state not in FINAL_STATES:
         final_state = "code_patch_required"

@@ -62,7 +62,7 @@
 
 | family | decision | samples_ready | EV_windows_positive | risk_ready | risk_review | next_action |
 | --- | --- | --- | ---: | --- | --- | --- |
-| soft_stop_whipsaw_confirmation | hold_sample | False | 3 | True | False | keep_collecting_exact_paths |
+| soft_stop_whipsaw_confirmation | hold_sample | False | 3 | True | True | keep_collecting_exact_paths |
 | holding_flow_ofi_smoothing | hold_sample | False | 0 | False | False | keep_collecting_exact_paths |
 
 ## Family Readiness
@@ -81,7 +81,7 @@
 | cumulative | liquidity_pre_submit_guard_p1 | entry | 25103 | False | report_only_reference |
 | cumulative | entry_ofi_ai_smoothing | entry | 105 | False | report_only_reference |
 | cumulative | bad_entry_block | holding_exit | 2026 | True | report_only_reference |
-| cumulative | bad_entry_refined_canary | holding_exit | 244627 | True | report_only_reference |
+| cumulative | bad_entry_refined_canary | holding_exit | 13 | False | report_only_reference |
 | cumulative | reversal_add | holding_exit | 102344 | False | report_only_reference |
 | cumulative | soft_stop_micro_grace | holding_exit | 17249 | True | report_only_reference |
 | cumulative | soft_stop_whipsaw_confirmation | holding_exit | 17249 | False | report_only_reference |
@@ -104,7 +104,7 @@
 | rolling_5d | liquidity_pre_submit_guard_p1 | entry | 865 | False | report_only_reference |
 | rolling_5d | entry_ofi_ai_smoothing | entry | 112 | False | report_only_reference |
 | rolling_5d | bad_entry_block | holding_exit | 743 | True | report_only_reference |
-| rolling_5d | bad_entry_refined_canary | holding_exit | 8088 | True | report_only_reference |
+| rolling_5d | bad_entry_refined_canary | holding_exit | 13 | False | report_only_reference |
 | rolling_5d | reversal_add | holding_exit | 2339 | False | report_only_reference |
 | rolling_5d | soft_stop_micro_grace | holding_exit | 1491 | True | report_only_reference |
 | rolling_5d | soft_stop_whipsaw_confirmation | holding_exit | 1491 | False | report_only_reference |
@@ -127,7 +127,7 @@
 | rolling_10d | liquidity_pre_submit_guard_p1 | entry | 1464 | False | report_only_reference |
 | rolling_10d | entry_ofi_ai_smoothing | entry | 63 | False | report_only_reference |
 | rolling_10d | bad_entry_block | holding_exit | 1018 | True | report_only_reference |
-| rolling_10d | bad_entry_refined_canary | holding_exit | 13384 | True | report_only_reference |
+| rolling_10d | bad_entry_refined_canary | holding_exit | 13 | False | report_only_reference |
 | rolling_10d | reversal_add | holding_exit | 4368 | False | report_only_reference |
 | rolling_10d | soft_stop_micro_grace | holding_exit | 1830 | True | report_only_reference |
 | rolling_10d | soft_stop_whipsaw_confirmation | holding_exit | 1830 | False | report_only_reference |
@@ -150,7 +150,7 @@
 | rolling_20d | liquidity_pre_submit_guard_p1 | entry | 4224 | False | report_only_reference |
 | rolling_20d | entry_ofi_ai_smoothing | entry | 59 | False | report_only_reference |
 | rolling_20d | bad_entry_block | holding_exit | 1568 | True | report_only_reference |
-| rolling_20d | bad_entry_refined_canary | holding_exit | 18363 | True | report_only_reference |
+| rolling_20d | bad_entry_refined_canary | holding_exit | 13 | False | report_only_reference |
 | rolling_20d | reversal_add | holding_exit | 6827 | False | report_only_reference |
 | rolling_20d | soft_stop_micro_grace | holding_exit | 2235 | True | report_only_reference |
 | rolling_20d | soft_stop_whipsaw_confirmation | holding_exit | 2235 | False | report_only_reference |

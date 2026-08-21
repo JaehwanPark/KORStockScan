@@ -27,8 +27,8 @@
 ## Final Conclusions
 
 - `scalping_pattern_lab_automation` domain=`scalping` state=`source_only_keep_collecting` decision=`keep` reason=`scalp_entry_adm source_quality_contract blocked due to joined_sample_below_sample_floor (10/20). tuning_input_allowed=false. Cannot proceed without sample floor met.` source_context_resolution=`resolved_by_classified_source_quality_warning` contract=`pattern_lab_ai_review_classified_source_quality_warning`
-- `threshold_cycle_ev` domain=`scalping` state=`source_only_keep_collecting` decision=`keep` reason=`threshold_cycle_ev source is missing. This late-bound feedback source is required for pattern lab re-entry and LDM/threshold feedback integration.`
-- `pattern_lab_propagation_audit` domain=`scalping` state=`source_only_keep_collecting` decision=`keep` reason=`pattern_lab_propagation_audit source is missing. This audit is required to validate that pattern lab decisions propagate correctly to downstream systems.`
+- `threshold_cycle_ev` domain=`scalping` state=`source_only_keep_collecting` decision=`keep` reason=`Deterministic feedback-source reconciliation superseded the provider gap assertion (resolved_by_existing_feedback_source_context).`
+- `pattern_lab_propagation_audit` domain=`scalping` state=`source_only_keep_collecting` decision=`keep` reason=`Deterministic feedback-source reconciliation superseded the provider gap assertion (resolved_by_existing_feedback_source_context).`
 - `lifecycle_decision_matrix` domain=`scalping` state=`source_quality_gap` decision=`block_runtime_use` reason=`source_quality_preflight_gate excluded 263 rows due to field gaps (e.g., minute_candle_window_fresh_contract) and invalid labels. This indicates upstream instrumentation and labeling defects that degrade source quality.`
 
 ## Code Improvement Orders

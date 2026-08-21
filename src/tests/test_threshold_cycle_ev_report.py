@@ -501,6 +501,17 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
         json.dumps(
             {
                 "run_phase": "postclose",
+                "completed_by_source_by_window": {
+                    "same_day": {
+                        "real": {
+                            "sample": 3,
+                            "win_count": 2,
+                            "loss_count": 1,
+                            "avg_profit_rate": 0.4,
+                        },
+                        "sim": {"sample": 1},
+                    }
+                },
                 "calibration_candidates": [
                     {
                         "family": "score65_74_recovery_probe",
@@ -612,10 +623,19 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
         "bad_entry_refined_canary",
         "swing_one_share_real_canary_phase0",
     ]
-    assert report["daily_ev_summary"]["completed_trades"] == 2
+    assert report["daily_ev_summary"]["completed_trades"] == 3
+    assert report["daily_ev_summary"]["win_trades"] == 2
+    assert report["daily_ev_summary"]["avg_profit_rate_pct"] == 0.4
+    assert (
+        report["daily_ev_summary"]["headline_authority"]
+        == "completed_by_source_same_day_real"
+    )
+    assert not report["daily_ev_summary"]["trade_review_snapshot_reconciliation"][
+        "count_match"
+    ]
     assert report["daily_ev_summary"]["realized_pnl_krw"] == -282
     assert report["summary"]["status"] == "warning"
-    assert report["summary"]["real_sample"] == 2
+    assert report["summary"]["real_sample"] == 3
     assert report["summary"]["live_auto_ready_count"] == 0
     assert report["summary"]["runtime_effect"] is False
     assert report["entry_funnel"]["budget_pass_to_submitted_rate_pct"] == 5.0

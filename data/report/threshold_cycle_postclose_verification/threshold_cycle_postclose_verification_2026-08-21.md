@@ -90,8 +90,8 @@
 ## AI Correction
 - status: `pass`
 - ai_status: `parsed`
-- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 122149, 'input_context_chars': 120739, 'input_context_hash': 'db138f0d0bfeaea97563a0ab08e0fe01b15cd5e9cc90d32af375fa8a3bc137ef', 'elapsed_ms': 96212, 'output_chars': 12917, 'input_tokens': 35001, 'output_tokens': 8541, 'total_tokens': 43542, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
-- blocking_runtime_candidate_families: `['bad_entry_refined_canary', 'entry_split_order_plan', 'holding_exit_decision_matrix_advisory', 'lifecycle_decision_matrix_runtime', 'score65_74_recovery_probe']`
+- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 122714, 'input_context_chars': 121304, 'input_context_hash': 'fb22eb65c7cead9a693afcb1bc133bdea69de0ece46585e5260c0749997292f0', 'elapsed_ms': 93949, 'output_chars': 14240, 'input_tokens': 35086, 'output_tokens': 7781, 'total_tokens': 42867, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
+- blocking_runtime_candidate_families: `['entry_split_order_plan', 'holding_exit_decision_matrix_advisory', 'lifecycle_decision_matrix_runtime', 'score65_74_recovery_probe']`
 - parse_warnings: `[]`
 - interpretation: `AI correction parsed successfully`
 
@@ -227,11 +227,11 @@
 - gap_affected_handoff_count: `0`
 
 ## Workorder Snapshot
-- generation_id: `2026-08-21-39eba9578b23`
-- source_hash: `39eba9578b23e718ef5b29bad4c514a211f649563d52e10bc91028b86d0c3a9b`
+- generation_id: `2026-08-21-8c5615e4b8f0`
+- source_hash: `8c5615e4b8f0d7dc39b7cae409880eff7c537bb019c724cf206130cfb83c6f1c`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-08-21-e190f3503e94`
-- previous_source_hash: `e190f3503e94e7d45de8b4fdd4979fbca5a644008ba2bf2a2b436afb8449ddc7`
+- previous_generation_id: `2026-08-21-b85158f88d3d`
+- previous_source_hash: `b85158f88d3d6bddb3c58fc04dc4277184524ae4f0efd1876843770daa47114d`
 - new_order_ids: `[]`
-- removed_order_ids: `['order_observation_source_quality_unknown_token_provenance_gap']`
+- removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

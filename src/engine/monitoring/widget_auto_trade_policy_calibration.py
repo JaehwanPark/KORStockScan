@@ -790,10 +790,50 @@ def _load_execution_quality(
     *,
     target_date: date,
     event_dir: Path = DEFAULT_EXECUTION_EVENT_DIR,
+    session: str | None = None,
 ) -> dict[str, Any]:
     path = event_dir / f"widget_signal_auto_trade_events_{target_date:%Y%m%d}.jsonl"
     counts: dict[str, int] = {}
     accepted_order_count = 0
+    attributed_event_count = 0
+    unattributed_terminal_failure_count = 0
+    terminal_failure_types = {
+        "buy_cancel_terminal_failure",
+        "sell_terminal_failure",
+        "take_profit_cancel_terminal_failure",
+        "take_profit_terminal_failure",
+    }
+
+    def event_session(row: dict[str, Any]) -> str | None:
+        for key in (
+            "execution_policy_session",
+            "market_session",
+            "session_bucket",
+            "session",
+        ):
+            value = str(row.get(key) or "").strip().upper()
+            if value in {"KRX_REGULAR", "NXT_PREMARKET", "NXT_AFTERMARKET"}:
+                return value
+        for key in ("signal_id", "parent_entry_signal_id"):
+            value = str(row.get(key) or "").upper()
+            for candidate in ("KRX_REGULAR", "NXT_PREMARKET", "NXT_AFTERMARKET"):
+                if f":{candidate}:" in value:
+                    return candidate
+        venue = str(row.get("market_venue") or "").strip().upper()
+        if venue == "KRX":
+            return "KRX_REGULAR"
+        if venue == "NXT":
+            try:
+                observed = datetime.fromisoformat(str(row.get("observed_at") or ""))
+            except ValueError:
+                return None
+            return (
+                "NXT_PREMARKET"
+                if observed.timetz().replace(tzinfo=None) < time(9, 0)
+                else "NXT_AFTERMARKET"
+            )
+        return None
+
     if path.exists():
         with path.open(encoding="utf-8") as handle:
             for line in handle:
@@ -806,18 +846,25 @@ def _load_execution_quality(
                 event_type = str(row.get("event_type") or "")
                 if not event_type:
                     continue
+                row_session = event_session(row)
+                if session is not None and row_session != session:
+                    # An unscoped terminal failure remains a global safety
+                    # veto.  Ordinary unscoped observations are diagnostics,
+                    # not evidence for a different session.
+                    if (
+                        event_type not in terminal_failure_types
+                        or row_session is not None
+                    ):
+                        continue
+                    unattributed_terminal_failure_count += 1
+                else:
+                    attributed_event_count += 1
                 counts[event_type] = counts.get(event_type, 0) + 1
                 if (
                     event_type == "order_submitted"
                     and row.get("actual_order_submitted") is True
                 ):
                     accepted_order_count += 1
-    terminal_failure_types = {
-        "buy_cancel_terminal_failure",
-        "sell_terminal_failure",
-        "take_profit_cancel_terminal_failure",
-        "take_profit_terminal_failure",
-    }
     terminal_failures = sum(
         count
         for event_type, count in counts.items()
@@ -832,8 +879,22 @@ def _load_execution_quality(
         "terminal_sell_failure_count": terminal_failures,
         "event_counts": dict(sorted(counts.items())),
         "runtime_apply_allowed": terminal_failures == 0,
-        "decision_authority": "execution_quality_real_only",
+        "decision_authority": "execution_quality_real_only_safety_veto",
+        "execution_event_scope": session or "symbol_all_sessions",
+        "session_attributed_event_count": attributed_event_count,
+        "unattributed_terminal_failure_count": (unattributed_terminal_failure_count),
+        "execution_sample_observed": accepted_order_count > 0,
     }
+
+
+def _session_execution_quality(
+    symbol_report: dict[str, Any], session: str
+) -> dict[str, Any]:
+    by_session = symbol_report.get("execution_quality_by_session")
+    if isinstance(by_session, dict) and isinstance(by_session.get(session), dict):
+        return by_session[session]
+    quality = symbol_report.get("execution_quality")
+    return quality if isinstance(quality, dict) else {}
 
 
 def _candidate_ready(
@@ -1408,6 +1469,17 @@ def build_report(
             )
             for session in spec.sessions
         }
+        execution_quality = _load_execution_quality(
+            spec.symbol, target_date=target_date
+        )
+        execution_quality_by_session = {
+            session.session: _load_execution_quality(
+                spec.symbol,
+                target_date=target_date,
+                session=session.session,
+            )
+            for session in spec.sessions
+        }
         symbol_reports[spec.symbol] = {
             "name": spec.name,
             "source_row_count": len(rows),
@@ -1418,9 +1490,8 @@ def build_report(
             "source_dates": source_dates,
             "actual_evidence_start_date": source_dates[0] if source_dates else None,
             "analysis_start_date": spec.analysis_start_date.isoformat(),
-            "execution_quality": _load_execution_quality(
-                spec.symbol, target_date=target_date
-            ),
+            "execution_quality": execution_quality,
+            "execution_quality_by_session": execution_quality_by_session,
             "sessions": sessions,
             "microstructure_prior_trading_day_diagnostic": {
                 "status": (
@@ -1445,17 +1516,23 @@ def build_report(
     )
     carried_forward_count = sum(
         symbol_report["source_quality_status"] == "PASS"
-        and symbol_report["execution_quality"]["runtime_apply_allowed"] is True
+        and _session_execution_quality(symbol_report, session_name).get(
+            "runtime_apply_allowed"
+        )
+        is True
         and session_report["decision"] == "carry_forward_previous_verified_policy"
         for symbol_report in symbol_reports.values()
-        for session_report in symbol_report["sessions"].values()
+        for session_name, session_report in symbol_report["sessions"].items()
     )
     ready_count = sum(
         symbol_report["source_quality_status"] == "PASS"
-        and symbol_report["execution_quality"]["runtime_apply_allowed"] is True
+        and _session_execution_quality(symbol_report, session_name).get(
+            "runtime_apply_allowed"
+        )
+        is True
         and session_report["decision"] in RUNTIME_READY_DECISIONS
         for symbol_report in symbol_reports.values()
-        for session_report in symbol_report["sessions"].values()
+        for session_name, session_report in symbol_report["sessions"].items()
     )
     return {
         "schema": "widget_auto_trade_policy_calibration_report_v1",
@@ -1496,12 +1573,11 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
         session_specs = {value.session: value for value in spec.sessions}
         sessions: dict[str, Any] = {}
         for session_name, calibration in source["sessions"].items():
+            execution_quality = _session_execution_quality(source, session_name)
             block_reason = None
             if source.get("source_quality_status") != "PASS":
                 block_reason = "source_quality_blocked"
-            elif not source.get("execution_quality", {}).get(
-                "runtime_apply_allowed", False
-            ):
+            elif not execution_quality.get("runtime_apply_allowed", False):
                 block_reason = "execution_quality_safety_veto"
             elif calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 block_reason = str(calibration["decision"])
@@ -1555,7 +1631,7 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                     "carry_forward_from_policy_id"
                 ),
                 "rollback_condition": calibration["rollback_condition"],
-                "execution_quality": source["execution_quality"],
+                "execution_quality": execution_quality,
                 "actual_order_submitted": False,
                 "broker_guard_bypass": False,
                 "research_accumulation_start_date": research_accumulation["start_date"],

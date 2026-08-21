@@ -30,6 +30,7 @@ PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 PATTERN_LAB_AI_REVIEW_DIR = REPORT_DIR / "pattern_lab_ai_review"
 PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
+THRESHOLD_CYCLE_AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = (
     Path(__file__).resolve().parents[2] / "data" / "threshold_cycle" / "approvals"
 )
@@ -38,6 +39,13 @@ LEGACY_PHASE0_REAL_CANARY_FAMILIES = {
     "swing_one_share_real_canary_phase0",
     "swing_scale_in_real_canary_phase0",
 }
+DETERMINISTIC_POLICY_HANDOFF_FAMILIES = frozenset(
+    {
+        "entry_split_order_plan",
+        "scale_in_split_order_plan",
+        "post_probe_winner_recovery",
+    }
+)
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -64,6 +72,8 @@ _REASON_LABELS = {
     "db_load_gap": "DB gap",
     "runtime_family_guard_missing": "runtime guard 없음",
     "family_sample_floor_not_met": "표본 부족",
+    "resolved_terminal_counterfactual_ev_contract_missing": "terminal counterfactual EV 계약 미완성",
+    "hold_sample_reason_unspecified": "보류 사유 미명시",
     "sample_floor_not_met": "표본 부족",
     "source_sample_missing": "소스 표본 없음",
     "counterfactual_join_gap": "counterfactual join gap",
@@ -801,6 +811,122 @@ def _next_preopen_candidate_state(candidate: dict[str, Any]) -> str:
     return "pending_preopen_review"
 
 
+def _ai_effective_candidates(
+    calibration_report: dict[str, Any],
+    ai_review: dict[str, Any],
+    *,
+    require_ai: bool = False,
+) -> dict[str, dict[str, Any]]:
+    """Overlay parsed AI guard decisions without losing deterministic provenance."""
+    candidates = _candidate_by_family(calibration_report.get("calibration_candidates"))
+    if str(ai_review.get("ai_status") or "") != "parsed" and not require_ai:
+        return candidates
+    items = {
+        str(item.get("family") or ""): item
+        for item in (ai_review.get("items") or [])
+        if isinstance(item, dict) and str(item.get("family") or "")
+    }
+    effective: dict[str, dict[str, Any]] = {}
+    for family, source in candidates.items():
+        candidate = dict(source)
+        deterministic_state = candidate.get("calibration_state")
+        deterministic_value = candidate.get("recommended_value")
+        item = items.get(family)
+        guard = (
+            item.get("guard_decision")
+            if isinstance(item, dict) and isinstance(item.get("guard_decision"), dict)
+            else {}
+        )
+        runtime_apply_block_reason = str(
+            candidate.get("runtime_apply_block_reason") or ""
+        ).strip()
+        if runtime_apply_block_reason:
+            blocked_state = (
+                deterministic_state
+                if deterministic_state
+                in {"hold", "hold_no_edge", "hold_sample", "freeze"}
+                else "hold_sample"
+            )
+            blocked_value = candidate.get("current_value")
+            if blocked_value is None:
+                blocked_value = deterministic_value
+            candidate.update(
+                {
+                    "deterministic_calibration_state": deterministic_state,
+                    "deterministic_recommended_value": deterministic_value,
+                    "ai_proposed_state": guard.get("effective_state")
+                    or guard.get("proposed_state"),
+                    "ai_proposed_value": guard.get("effective_value"),
+                    "ai_effective_state": blocked_state,
+                    "ai_effective_value": blocked_value,
+                    "ai_route_action": "deterministic_contract_block",
+                    "calibration_state": blocked_state,
+                    "recommended_value": blocked_value,
+                    "allowed_runtime_apply": False,
+                }
+            )
+            effective[family] = candidate
+            continue
+        if family in DETERMINISTIC_POLICY_HANDOFF_FAMILIES:
+            candidate.update(
+                {
+                    "deterministic_calibration_state": deterministic_state,
+                    "deterministic_recommended_value": deterministic_value,
+                    "ai_effective_state": deterministic_state,
+                    "ai_effective_value": deterministic_value,
+                    "ai_route_action": "deterministic_policy_handoff",
+                }
+            )
+            effective[family] = candidate
+            continue
+        if str(ai_review.get("ai_status") or "") != "parsed":
+            candidate.update(
+                {
+                    "deterministic_calibration_state": deterministic_state,
+                    "deterministic_recommended_value": deterministic_value,
+                    "ai_effective_state": "hold_sample",
+                    "ai_effective_value": candidate.get("current_value"),
+                    "ai_route_action": "ai_review_not_parsed",
+                    "calibration_state": "hold_sample",
+                    "recommended_value": candidate.get("current_value"),
+                    "allowed_runtime_apply": False,
+                }
+            )
+            effective[family] = candidate
+            continue
+        if guard:
+            effective_state = guard.get("effective_state") or deterministic_state
+            effective_value = guard.get("effective_value")
+            if effective_value is None:
+                effective_value = deterministic_value
+            route_action = str(guard.get("route_action") or "")
+        else:
+            effective_state = "hold_sample"
+            effective_value = candidate.get("current_value")
+            route_action = "ai_review_item_missing"
+        candidate.update(
+            {
+                "deterministic_calibration_state": deterministic_state,
+                "deterministic_recommended_value": deterministic_value,
+                "ai_effective_state": effective_state,
+                "ai_effective_value": effective_value,
+                "ai_route_action": route_action,
+                "calibration_state": effective_state,
+                "recommended_value": effective_value,
+                "allowed_runtime_apply": bool(candidate.get("allowed_runtime_apply"))
+                and effective_state == "adjust_up"
+                and route_action
+                not in {
+                    "exclude_from_threshold_candidate_review",
+                    "ai_review_item_missing",
+                    "hold_sample",
+                },
+            }
+        )
+        effective[family] = candidate
+    return effective
+
+
 def _attach_runtime_selection_contract(
     row: dict[str, Any],
     *,
@@ -838,6 +964,15 @@ def _attach_runtime_selection_contract(
     row["postclose_recommended_value"] = candidate.get("recommended_value")
     row["postclose_recommended_values"] = candidate.get("recommended_values")
     row["next_preopen_candidate_state"] = _next_preopen_candidate_state(candidate)
+    row["postclose_deterministic_state"] = candidate.get(
+        "deterministic_calibration_state", candidate.get("calibration_state")
+    )
+    row["postclose_deterministic_recommended_value"] = candidate.get(
+        "deterministic_recommended_value", candidate.get("recommended_value")
+    )
+    row["postclose_ai_effective_state"] = candidate.get("ai_effective_state")
+    row["postclose_ai_effective_value"] = candidate.get("ai_effective_value")
+    row["postclose_ai_route_action"] = candidate.get("ai_route_action")
     row["selected_auto_bounded_live_semantics"] = (
         "compatibility_alias_of_current_runtime_selected"
     )
@@ -880,7 +1015,15 @@ def _hold_sample_reasons(item: dict[str, Any]) -> list[str]:
     ).strip()
     if "recovery_count=" in recommended_reason and "below floor=" in recommended_reason:
         reasons.append("recovery_floor_not_met")
-    return list(dict.fromkeys(reasons or ["family_sample_floor_not_met"]))
+    runtime_apply_block_reason = str(
+        item.get("runtime_apply_block_reason") or ""
+    ).strip()
+    if runtime_apply_block_reason:
+        reasons.append(runtime_apply_block_reason)
+    calibration_reason = str(item.get("calibration_reason") or "").strip()
+    if calibration_reason:
+        reasons.append(calibration_reason)
+    return list(dict.fromkeys(reasons or ["hold_sample_reason_unspecified"]))
 
 
 def _count_field(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
@@ -892,7 +1035,11 @@ def _count_field(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
 
 
 def _scalping_rows(
-    ev_report: dict[str, Any], calibration_report: dict[str, Any]
+    ev_report: dict[str, Any],
+    calibration_report: dict[str, Any],
+    ai_review: dict[str, Any] | None = None,
+    *,
+    require_ai: bool = False,
 ) -> list[dict[str, Any]]:
     outcome = (
         ev_report.get("calibration_outcome")
@@ -902,7 +1049,9 @@ def _scalping_rows(
     decisions = (
         outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
     )
-    candidates = _candidate_by_family(calibration_report.get("calibration_candidates"))
+    candidates = _ai_effective_candidates(
+        calibration_report, ai_review or {}, require_ai=require_ai
+    )
     runtime_selections = _runtime_selection_by_family(ev_report)
     selected = set(
         (ev_report.get("runtime_apply") or {}).get("selected_families") or []
@@ -922,10 +1071,22 @@ def _scalping_rows(
         if family == "lifecycle_decision_matrix_runtime" and lifecycle_matrix:
             continue
         candidate = candidates.get(family, {})
-        state = str(item.get("calibration_state") or "-")
+        state = str(
+            candidate.get("calibration_state") or item.get("calibration_state") or "-"
+        )
         reasons: list[str] = []
         if state == "hold_sample":
             reasons.extend(_hold_sample_reasons(item))
+        ai_route_action = str(candidate.get("ai_route_action") or "").strip()
+        if ai_route_action in {
+            "ai_review_item_missing",
+            "ai_review_not_parsed",
+            "exclude_from_threshold_candidate_review",
+            "hold_sample",
+            "reject_or_hold_sample",
+            "report_only_hold",
+        }:
+            reasons.append(ai_route_action)
         if state == "freeze":
             reasons.append(str(item.get("calibration_reason") or "freeze"))
         if family in selected:
@@ -2672,6 +2833,11 @@ def build_runtime_approval_summary(
     calibration_report = (
         _load_json(Path(str(calibration_source))) if calibration_source else {}
     )
+    threshold_ai_review_path = (
+        THRESHOLD_CYCLE_AI_REVIEW_DIR
+        / f"threshold_cycle_ai_review_{target_date}_postclose.json"
+    )
+    threshold_ai_review = _load_json(threshold_ai_review_path)
     currentness_path = (
         Path(str(sources.get("pattern_lab_currentness_audit")))
         if sources.get("pattern_lab_currentness_audit")
@@ -2707,7 +2873,12 @@ def build_runtime_approval_summary(
         }
     )
     propagation_audit = _audit_summary(propagation_path)
-    scalping_rows = _scalping_rows(ev_report, calibration_report)
+    scalping_rows = _scalping_rows(
+        ev_report,
+        calibration_report,
+        threshold_ai_review,
+        require_ai=True,
+    )
     swing_rows = _swing_rows(swing_report) if include_swing else []
     panic_rows = _panic_rows(calibration_report, target_date)
     scalp_entry_adm_summary = _entry_adm_summary(ev_report, scalp_entry_adm_path)
@@ -2779,6 +2950,11 @@ def build_runtime_approval_summary(
         "source_quality_preflight_gate": source_quality_preflight_gate,
         "sources": {
             "threshold_cycle_ev": str(ev_json) if ev_json.exists() else None,
+            "threshold_cycle_ai_review": (
+                str(threshold_ai_review_path)
+                if threshold_ai_review_path.exists()
+                else None
+            ),
             "observation_source_quality_audit": source_quality_preflight_gate.get(
                 "artifact"
             ),

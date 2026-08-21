@@ -8,7 +8,7 @@
 - Actionable: `0`
 - Objective follow-ups: `1`
 - Objective follow-up rejections: `0`
-- Reminder: `not_needed_or_duplicate`
+- Reminder: `sent`
 - Runtime apply performed: `false`
 
 ## Fast Lifecycle Objective Follow-up
