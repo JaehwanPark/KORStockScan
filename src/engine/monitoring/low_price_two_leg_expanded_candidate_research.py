@@ -40,7 +40,10 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     fetch_sor_history,
     select_profile_spot,
 )
-from src.trading.low_price_two_leg.profiles import PROFILES as LIVE_PROFILES
+from src.trading.low_price_two_leg.profiles import (
+    PROFILES as LIVE_PROFILES,
+    profiles_for_target_date,
+)
 from src.trading.low_price_two_leg.policy_runtime import load_applied_profile_policy
 from src.trading.order.regular_two_leg_machine import KST
 from src.utils import kiwoom_utils
@@ -256,7 +259,10 @@ def _new_symbol_profiles(
     candidate_symbols: dict[str, str] | None = None,
 ) -> dict[str, ResearchProfile]:
     result: dict[str, ResearchProfile] = {}
-    for symbol, name in (candidate_symbols or CANDIDATE_SYMBOLS).items():
+    selected_symbols = (
+        CANDIDATE_SYMBOLS if candidate_symbols is None else candidate_symbols
+    )
+    for symbol, name in selected_symbols.items():
         for session, window in SESSION_WINDOWS.items():
             profile_id = f"candidate_{symbol}_{session}"
             observation_spec = OPERATOR_OBSERVATION_PROFILE_SPECS.get(profile_id)
@@ -281,7 +287,11 @@ def _dynamic_candidate_snapshot(
     *,
     path: Path = DEFAULT_DYNAMIC_UNIVERSE_PATH,
     diagnostic_path: Path | None = None,
+    implemented_symbols: dict[str, str] | None = None,
 ) -> tuple[date | None, dict[str, str]]:
+    selected_implemented_symbols = (
+        IMPLEMENTED_SYMBOLS if implemented_symbols is None else implemented_symbols
+    )
     completion_marker = diagnostic_path or path.with_name(
         DEFAULT_DYNAMIC_UNIVERSE_DIAGNOSTIC_PATH.name
     )
@@ -339,7 +349,7 @@ def _dynamic_candidate_snapshot(
                 or not name
                 or not 0 < close <= MAX_LATEST_CLOSE_PRICE
                 or symbol in REVIEWED_SYMBOLS
-                or symbol in IMPLEMENTED_SYMBOLS
+                or symbol in selected_implemented_symbols
             ):
                 continue
             candidate = (rank, symbol, name)
@@ -358,32 +368,66 @@ def _dynamic_candidate_symbols(
     target_date: date,
     *,
     path: Path = DEFAULT_DYNAMIC_UNIVERSE_PATH,
+    implemented_symbols: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    return _dynamic_candidate_snapshot(target_date, path=path)[1]
+    return _dynamic_candidate_snapshot(
+        target_date,
+        path=path,
+        implemented_symbols=implemented_symbols,
+    )[1]
 
 
 def _research_inventory(
     candidate_symbols: dict[str, str],
     applied_policy_snapshots: dict[str, dict[str, Any]] | None = None,
+    *,
+    live_profiles: dict[str, Any] | None = None,
+    implemented_symbols: dict[str, str] | None = None,
+    active_symbol_sessions: frozenset[tuple[str, str]] | None = None,
 ) -> tuple[dict[str, ResearchProfile], dict[str, ResearchProfile]]:
+    selected_live_profiles = LIVE_PROFILES if live_profiles is None else live_profiles
+    selected_implemented_symbols = (
+        IMPLEMENTED_SYMBOLS if implemented_symbols is None else implemented_symbols
+    )
+    selected_active_symbol_sessions = (
+        ACTIVE_SYMBOL_SESSIONS
+        if active_symbol_sessions is None
+        else active_symbol_sessions
+    )
     new_profiles = _new_symbol_profiles(candidate_symbols)
     return (
         new_profiles,
         {
             **new_profiles,
-            **EXISTING_SYMBOL_TIME_EXTENSION_PROFILES,
+            **_existing_symbol_time_extension_profiles(
+                implemented_symbols=selected_implemented_symbols,
+                active_symbol_sessions=selected_active_symbol_sessions,
+            ),
             **_existing_symbol_logic_improvement_profiles(
-                applied_policy_snapshots=applied_policy_snapshots
+                applied_policy_snapshots=applied_policy_snapshots,
+                live_profiles=selected_live_profiles,
             ),
         },
     )
 
 
-def _existing_symbol_time_extension_profiles() -> dict[str, ResearchProfile]:
+def _existing_symbol_time_extension_profiles(
+    *,
+    implemented_symbols: dict[str, str] | None = None,
+    active_symbol_sessions: frozenset[tuple[str, str]] | None = None,
+) -> dict[str, ResearchProfile]:
+    selected_implemented_symbols = (
+        IMPLEMENTED_SYMBOLS if implemented_symbols is None else implemented_symbols
+    )
+    selected_active_symbol_sessions = (
+        ACTIVE_SYMBOL_SESSIONS
+        if active_symbol_sessions is None
+        else active_symbol_sessions
+    )
     result: dict[str, ResearchProfile] = {}
-    for symbol, name in IMPLEMENTED_SYMBOLS.items():
+    for symbol, name in selected_implemented_symbols.items():
         for session, window in SESSION_WINDOWS.items():
-            if (symbol, session) in ACTIVE_SYMBOL_SESSIONS:
+            if (symbol, session) in selected_active_symbol_sessions:
                 continue
             profile_id = f"existing_{symbol}_{session}"
             result[profile_id] = ResearchProfile(
@@ -398,10 +442,13 @@ def _existing_symbol_time_extension_profiles() -> dict[str, ResearchProfile]:
 
 
 def _existing_symbol_logic_improvement_profiles(
-    *, applied_policy_snapshots: dict[str, dict[str, Any]] | None = None
+    *,
+    applied_policy_snapshots: dict[str, dict[str, Any]] | None = None,
+    live_profiles: dict[str, Any] | None = None,
 ) -> dict[str, ResearchProfile]:
+    selected_live_profiles = LIVE_PROFILES if live_profiles is None else live_profiles
     result: dict[str, ResearchProfile] = {}
-    for live_profile_id, live_profile in LIVE_PROFILES.items():
+    for live_profile_id, live_profile in selected_live_profiles.items():
         policy = live_profile.policy
         snapshot = (applied_policy_snapshots or {}).get(live_profile_id) or {}
         applied = snapshot.get("policy")
@@ -443,6 +490,85 @@ def _existing_symbol_logic_improvement_profiles(
             discovery_lane="existing_symbol_logic_improvement",
         )
     return result
+
+
+@dataclass(frozen=True)
+class TargetDateResearchInventory:
+    live_profiles: dict[str, Any]
+    implemented_symbols: dict[str, str]
+    candidate_symbols: dict[str, str]
+    active_symbol_sessions: frozenset[tuple[str, str]]
+    new_symbol_profiles: dict[str, ResearchProfile]
+    time_extension_profiles: dict[str, ResearchProfile]
+    logic_improvement_profiles: dict[str, ResearchProfile]
+    research_profiles: dict[str, ResearchProfile]
+    research_symbols: frozenset[str]
+
+
+def _target_date_research_inventory(
+    target_date: date,
+    *,
+    candidate_symbols: dict[str, str] | None = None,
+    applied_policy_snapshots: dict[str, dict[str, Any]] | None = None,
+) -> TargetDateResearchInventory:
+    """Reconstruct the profile catalog that was effective on ``target_date``."""
+
+    live_profiles = profiles_for_target_date(target_date)
+    implemented_symbols = {
+        profile.symbol: profile.name for profile in live_profiles.values()
+    }
+    base_candidate_symbols = {
+        symbol: name
+        for symbol, name in REVIEWED_SYMBOLS.items()
+        if symbol not in implemented_symbols
+    }
+    selected_candidate_symbols = (
+        base_candidate_symbols if candidate_symbols is None else dict(candidate_symbols)
+    )
+    active_symbol_sessions = frozenset(
+        (profile.symbol, profile.session) for profile in live_profiles.values()
+    )
+    new_symbol_profiles = _new_symbol_profiles(selected_candidate_symbols)
+    time_extension_profiles = _existing_symbol_time_extension_profiles(
+        implemented_symbols=implemented_symbols,
+        active_symbol_sessions=active_symbol_sessions,
+    )
+    logic_improvement_profiles = _existing_symbol_logic_improvement_profiles(
+        applied_policy_snapshots=applied_policy_snapshots,
+        live_profiles=live_profiles,
+    )
+    research_profiles = {
+        **new_symbol_profiles,
+        **time_extension_profiles,
+        **logic_improvement_profiles,
+    }
+    return TargetDateResearchInventory(
+        live_profiles=live_profiles,
+        implemented_symbols=implemented_symbols,
+        candidate_symbols=selected_candidate_symbols,
+        active_symbol_sessions=active_symbol_sessions,
+        new_symbol_profiles=new_symbol_profiles,
+        time_extension_profiles=time_extension_profiles,
+        logic_improvement_profiles=logic_improvement_profiles,
+        research_profiles=research_profiles,
+        research_symbols=frozenset(selected_candidate_symbols)
+        | frozenset(implemented_symbols),
+    )
+
+
+def _research_profile_inventory_public(
+    profiles: dict[str, ResearchProfile],
+) -> dict[str, dict[str, Any]]:
+    return {
+        profile_id: {
+            "symbol": profile.symbol,
+            "name": profile.name,
+            "session": profile.session,
+            "discovery_lane": profile.discovery_lane,
+            "fixed_observation": profile.fixed_observation,
+        }
+        for profile_id, profile in profiles.items()
+    }
 
 
 NEW_SYMBOL_PROFILES = _new_symbol_profiles()
@@ -501,8 +627,18 @@ def _recommendation_rows(
     source_meta: dict[str, dict[str, Any]],
     *,
     research_profiles: dict[str, ResearchProfile] | None = None,
+    live_profiles: dict[str, Any] | None = None,
+    active_symbol_sessions: frozenset[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
-    profile_inventory = research_profiles or RESEARCH_PROFILES
+    profile_inventory = (
+        RESEARCH_PROFILES if research_profiles is None else research_profiles
+    )
+    selected_live_profiles = LIVE_PROFILES if live_profiles is None else live_profiles
+    selected_active_symbol_sessions = (
+        ACTIVE_SYMBOL_SESSIONS
+        if active_symbol_sessions is None
+        else active_symbol_sessions
+    )
     rows: list[dict[str, Any]] = []
     for profile_id, item in profiles.items():
         if item.get("decision") != "holdout_pass_source_only_early_candidate":
@@ -523,7 +659,7 @@ def _recommendation_rows(
             raise ResearchError("recommendation_profile_identity_mismatch")
         if (
             profile.discovery_lane == "existing_symbol_time_extension"
-            and (profile.symbol, profile.session) in ACTIVE_SYMBOL_SESSIONS
+            and (profile.symbol, profile.session) in selected_active_symbol_sessions
         ):
             raise ResearchError("existing_symbol_lane_active_session_conflict")
         if profile.discovery_lane == "existing_symbol_logic_improvement" and (
@@ -556,7 +692,7 @@ def _recommendation_rows(
                 "discovery_lane": profile.discovery_lane,
                 "active_profile_ids_for_symbol": sorted(
                     live_profile_id
-                    for live_profile_id, live_profile in LIVE_PROFILES.items()
+                    for live_profile_id, live_profile in selected_live_profiles.items()
                     if live_profile.symbol == profile.symbol
                 ),
                 "latest_close_price": latest_close,
@@ -628,13 +764,19 @@ def _target_date_logic_attribution(
     contexts_by_symbol: dict[str, dict[date, DayContext]],
     target_date: date,
     applied_policy_snapshots: dict[str, dict[str, Any]],
+    logic_improvement_profiles: dict[str, ResearchProfile] | None = None,
+    live_profiles: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Attribute cumulative logic candidates on the latest untouched day only."""
 
+    selected_logic_profiles = (
+        EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
+        if logic_improvement_profiles is None
+        else logic_improvement_profiles
+    )
+    selected_live_profiles = LIVE_PROFILES if live_profiles is None else live_profiles
     rows: list[dict[str, Any]] = []
-    for profile_id, research_profile in sorted(
-        EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES.items()
-    ):
+    for profile_id, research_profile in sorted(selected_logic_profiles.items()):
         item = profiles.get(profile_id) or {}
         context = (contexts_by_symbol.get(research_profile.symbol) or {}).get(
             target_date
@@ -673,7 +815,7 @@ def _target_date_logic_attribution(
         parameters = item.get("recommended_spot")
         if not isinstance(parameters, dict):
             raise ResearchError("logic_recommendation_parameters_missing")
-        live_profile = LIVE_PROFILES[row["active_profile_id"]]
+        live_profile = selected_live_profiles[row["active_profile_id"]]
         compiled_baseline = baseline_candidate(live_profile)
         try:
             baseline = SpotCandidate(
@@ -746,22 +888,27 @@ def build_report(
         raise ValueError("research_window_must_start_at_clean_baseline")
     expected_dates = clean_baseline_trading_dates(end_date)
     calibration_days = len(expected_dates) - HOLDOUT_DAYS
-    selected_candidate_symbols = candidate_symbols or CANDIDATE_SYMBOLS
-    selected_new_profiles, default_profiles = _research_inventory(
-        selected_candidate_symbols,
+    target_inventory = _target_date_research_inventory(
+        end_date,
+        candidate_symbols=candidate_symbols,
         applied_policy_snapshots=applied_policy_snapshots,
     )
-    selected_profiles = research_profiles or default_profiles
-    selected_symbols = frozenset(selected_candidate_symbols) | frozenset(
-        IMPLEMENTED_SYMBOLS
+    selected_candidate_symbols = target_inventory.candidate_symbols
+    selected_profiles = (
+        target_inventory.research_profiles
+        if research_profiles is None
+        else research_profiles
     )
+    if selected_profiles != target_inventory.research_profiles:
+        raise ResearchError("research_profile_target_date_inventory_mismatch")
+    selected_symbols = target_inventory.research_symbols
     if set(sources) - set(selected_symbols):
         raise ResearchError("expanded_candidate_source_set_mismatch")
     conflicting_profiles = [
         profile.profile_id
         for profile in selected_profiles.values()
         if profile.discovery_lane != "existing_symbol_logic_improvement"
-        and (profile.symbol, profile.session) in ACTIVE_SYMBOL_SESSIONS
+        and (profile.symbol, profile.session) in target_inventory.active_symbol_sessions
     ]
     if conflicting_profiles:
         raise ResearchError(
@@ -819,13 +966,13 @@ def build_report(
         selected["discovery_lane"] = profile.discovery_lane
         selected["active_profile_ids_for_symbol"] = sorted(
             live_profile_id
-            for live_profile_id, live_profile in LIVE_PROFILES.items()
+            for live_profile_id, live_profile in target_inventory.live_profiles.items()
             if live_profile.symbol == profile.symbol
         )
         selected["active_symbol_session_conflict"] = (
             profile.symbol,
             profile.session,
-        ) in ACTIVE_SYMBOL_SESSIONS
+        ) in target_inventory.active_symbol_sessions
         selected["observation_candidate"] = observation_contract
         if profile.discovery_lane == "existing_symbol_logic_improvement":
             active_profile_id = profile.profile_id.removeprefix("logic_")
@@ -841,7 +988,11 @@ def build_report(
             selected["baseline_policy_reason"] = policy_snapshot.get("reason")
         profiles[profile_id] = selected
     recommendations = _recommendation_rows(
-        profiles, source_meta, research_profiles=selected_profiles
+        profiles,
+        source_meta,
+        research_profiles=selected_profiles,
+        live_profiles=target_inventory.live_profiles,
+        active_symbol_sessions=target_inventory.active_symbol_sessions,
     )
     new_symbol_recommendations = [
         row for row in recommendations if row["discovery_lane"] == "new_symbol"
@@ -861,6 +1012,8 @@ def build_report(
         contexts_by_symbol=contexts_by_symbol,
         target_date=end_date,
         applied_policy_snapshots=applied_policy_snapshots or {},
+        logic_improvement_profiles=target_inventory.logic_improvement_profiles,
+        live_profiles=target_inventory.live_profiles,
     )
     cumulative_logic_ids = {
         row["profile_id"] for row in existing_symbol_logic_improvement_recommendations
@@ -896,28 +1049,21 @@ def build_report(
         ),
         "candidate_universe_size": len(selected_candidate_symbols),
         "candidate_symbols": selected_candidate_symbols,
-        "existing_symbol_universe_size": len(IMPLEMENTED_SYMBOLS),
+        "existing_symbol_universe_size": len(target_inventory.implemented_symbols),
         "source_symbol_count": len(selected_symbols),
-        "new_symbol_profile_count": len(selected_new_profiles),
+        "new_symbol_profile_count": len(target_inventory.new_symbol_profiles),
         "existing_symbol_time_extension_profile_count": len(
-            EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
+            target_inventory.time_extension_profiles
         ),
         "existing_symbol_logic_improvement_profile_count": len(
-            EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
+            target_inventory.logic_improvement_profiles
         ),
         "eligible_source_symbol_count": len(contexts_by_symbol),
         "quarantined_source_symbol_count": len(source_quarantine),
         "source_quarantine": source_quarantine,
-        "research_profile_inventory": {
-            profile_id: {
-                "symbol": profile.symbol,
-                "name": profile.name,
-                "session": profile.session,
-                "discovery_lane": profile.discovery_lane,
-                "fixed_observation": profile.fixed_observation,
-            }
-            for profile_id, profile in selected_profiles.items()
-        },
+        "research_profile_inventory": _research_profile_inventory_public(
+            selected_profiles
+        ),
         "operator_observation_candidate_count": len(
             _operator_observation_inventory(selected_profiles)
         ),
@@ -973,6 +1119,7 @@ def build_source_quality_blocked_report(
     if start_date != CLEAN_BASELINE_DATE or end_date < start_date:
         raise ValueError("research_window_must_start_at_clean_baseline")
     expected_dates = clean_baseline_trading_dates(end_date)
+    target_inventory = _target_date_research_inventory(end_date)
     return {
         "schema": REPORT_SCHEMA,
         "report_type": REPORT_TYPE,
@@ -992,37 +1139,30 @@ def build_source_quality_blocked_report(
             "and_existing_symbol_missing_sessions_and_logic_v5"
         ),
         "dynamic_universe_source_date": None,
-        "candidate_universe_size": len(CANDIDATE_SYMBOLS),
-        "candidate_symbols": CANDIDATE_SYMBOLS,
-        "existing_symbol_universe_size": len(IMPLEMENTED_SYMBOLS),
-        "source_symbol_count": len(RESEARCH_SYMBOLS),
-        "new_symbol_profile_count": len(NEW_SYMBOL_PROFILES),
+        "candidate_universe_size": len(target_inventory.candidate_symbols),
+        "candidate_symbols": target_inventory.candidate_symbols,
+        "existing_symbol_universe_size": len(target_inventory.implemented_symbols),
+        "source_symbol_count": len(target_inventory.research_symbols),
+        "new_symbol_profile_count": len(target_inventory.new_symbol_profiles),
         "existing_symbol_time_extension_profile_count": len(
-            EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
+            target_inventory.time_extension_profiles
         ),
         "existing_symbol_logic_improvement_profile_count": len(
-            EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
+            target_inventory.logic_improvement_profiles
         ),
         "eligible_source_symbol_count": 0,
-        "quarantined_source_symbol_count": len(RESEARCH_SYMBOLS),
+        "quarantined_source_symbol_count": len(target_inventory.research_symbols),
         "source_quarantine": {
-            symbol: str(reason) for symbol in sorted(RESEARCH_SYMBOLS)
+            symbol: str(reason) for symbol in sorted(target_inventory.research_symbols)
         },
-        "research_profile_inventory": {
-            profile_id: {
-                "symbol": profile.symbol,
-                "name": profile.name,
-                "session": profile.session,
-                "discovery_lane": profile.discovery_lane,
-                "fixed_observation": profile.fixed_observation,
-            }
-            for profile_id, profile in RESEARCH_PROFILES.items()
-        },
+        "research_profile_inventory": _research_profile_inventory_public(
+            target_inventory.research_profiles
+        ),
         "operator_observation_candidate_count": len(
-            _operator_observation_inventory(RESEARCH_PROFILES)
+            _operator_observation_inventory(target_inventory.research_profiles)
         ),
         "operator_observation_candidate_inventory": (
-            _operator_observation_inventory(RESEARCH_PROFILES)
+            _operator_observation_inventory(target_inventory.research_profiles)
         ),
         "source_meta": {},
         "profiles": {},
@@ -1377,6 +1517,22 @@ class CandidateRecommendationNotifier:
         candidate_symbols = report.get("candidate_symbols")
         profile_inventory = report.get("research_profile_inventory")
         observation_inventory = report.get("operator_observation_candidate_inventory")
+        if not isinstance(candidate_symbols, dict):
+            return False
+        try:
+            start_date = date.fromisoformat(str(report.get("start_date") or ""))
+            end_date = date.fromisoformat(str(report.get("end_date") or ""))
+            target_date = date.fromisoformat(str(report.get("target_date") or ""))
+            base_target_inventory = _target_date_research_inventory(target_date)
+            target_inventory = _target_date_research_inventory(
+                target_date,
+                candidate_symbols=candidate_symbols,
+            )
+        except (TypeError, ValueError):
+            return False
+        expected_profile_inventory = _research_profile_inventory_public(
+            target_inventory.research_profiles
+        )
         basic_valid = bool(
             report.get("schema") == REPORT_SCHEMA
             and report.get("report_type") == REPORT_TYPE
@@ -1397,7 +1553,6 @@ class CandidateRecommendationNotifier:
             and report.get("actual_order_submitted") is False
             and report.get("broker_order_forbidden") is True
             and isinstance(recommendations, list)
-            and isinstance(candidate_symbols, dict)
             and all(
                 isinstance(symbol, str)
                 and len(symbol) == 6
@@ -1407,19 +1562,22 @@ class CandidateRecommendationNotifier:
                 for symbol, name in candidate_symbols.items()
             )
             and report.get("candidate_universe_size") == len(candidate_symbols)
-            and set(CANDIDATE_SYMBOLS).issubset(candidate_symbols)
-            and len(set(candidate_symbols) - set(CANDIDATE_SYMBOLS))
+            and set(base_target_inventory.candidate_symbols).issubset(candidate_symbols)
+            and len(
+                set(candidate_symbols) - set(base_target_inventory.candidate_symbols)
+            )
             <= MAX_DYNAMIC_SYMBOLS_PER_DAY
-            and set(candidate_symbols).isdisjoint(IMPLEMENTED_SYMBOLS)
-            and report.get("existing_symbol_universe_size") == len(IMPLEMENTED_SYMBOLS)
+            and set(candidate_symbols).isdisjoint(target_inventory.implemented_symbols)
+            and report.get("existing_symbol_universe_size")
+            == len(target_inventory.implemented_symbols)
             and report.get("source_symbol_count")
-            == len(set(candidate_symbols) | set(IMPLEMENTED_SYMBOLS))
+            == len(target_inventory.research_symbols)
             and report.get("new_symbol_profile_count")
-            == len(candidate_symbols) * len(SESSION_WINDOWS)
+            == len(target_inventory.new_symbol_profiles)
             and report.get("existing_symbol_time_extension_profile_count")
-            == len(EXISTING_SYMBOL_TIME_EXTENSION_PROFILES)
+            == len(target_inventory.time_extension_profiles)
             and report.get("existing_symbol_logic_improvement_profile_count")
-            == len(EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES)
+            == len(target_inventory.logic_improvement_profiles)
             and report.get("recommendation_count") == len(recommendations or [])
             and isinstance(report.get("new_symbol_recommendations"), list)
             and report.get("new_symbol_recommendation_count")
@@ -1456,8 +1614,9 @@ class CandidateRecommendationNotifier:
             )
             and set(report.get("source_meta") or {})
             | set(report.get("source_quarantine") or {})
-            == set(candidate_symbols) | set(IMPLEMENTED_SYMBOLS)
+            == set(target_inventory.research_symbols)
             and isinstance(profile_inventory, dict)
+            and profile_inventory == expected_profile_inventory
             and isinstance(observation_inventory, dict)
             and report.get("operator_observation_candidate_count")
             == len(observation_inventory)
@@ -1474,7 +1633,7 @@ class CandidateRecommendationNotifier:
             + int(report.get("existing_symbol_time_extension_profile_count", -1))
             + int(report.get("existing_symbol_logic_improvement_profile_count", -1))
             and set(report.get("source_quarantine") or {}).issubset(
-                set(candidate_symbols) | set(IMPLEMENTED_SYMBOLS)
+                set(target_inventory.research_symbols)
             )
         )
         if not basic_valid:
@@ -1498,12 +1657,6 @@ class CandidateRecommendationNotifier:
             for profile_id, item in (report.get("profiles") or {}).items()
         ):
             return False
-        try:
-            start_date = date.fromisoformat(str(report.get("start_date") or ""))
-            end_date = date.fromisoformat(str(report.get("end_date") or ""))
-            target_date = date.fromisoformat(str(report.get("target_date") or ""))
-        except ValueError:
-            return False
         dynamic_source_date: date | None = None
         if report.get("dynamic_universe_source_date") is not None:
             try:
@@ -1526,7 +1679,10 @@ class CandidateRecommendationNotifier:
                 )
             )
             or (
-                bool(set(candidate_symbols) - set(CANDIDATE_SYMBOLS))
+                bool(
+                    set(candidate_symbols)
+                    - set(base_target_inventory.candidate_symbols)
+                )
                 and dynamic_source_date is None
             )
         ):
@@ -1597,14 +1753,14 @@ class CandidateRecommendationNotifier:
         ]
         if (
             report.get("target_date_logic_attribution_count")
-            != len(EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES)
+            != len(target_inventory.logic_improvement_profiles)
             or postclose_logic != expected_postclose_logic
         ):
             return False
         if not all(
             isinstance(row, dict)
-            and row.get("profile_id") in EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
-            and row.get("active_profile_id") in LIVE_PROFILES
+            and row.get("profile_id") in target_inventory.logic_improvement_profiles
+            and row.get("active_profile_id") in target_inventory.live_profiles
             and row.get("runtime_effect") is False
             and row.get("actual_order_submitted") is False
             and row.get("broker_order_forbidden") is True
@@ -1631,8 +1787,15 @@ class CandidateRecommendationNotifier:
                 row.get("discovery_lane") != "existing_symbol_time_extension"
                 or (
                     (str(row.get("symbol")), str(row.get("session")))
-                    not in ACTIVE_SYMBOL_SESSIONS
-                    and bool(row.get("active_profile_ids_for_symbol"))
+                    not in target_inventory.active_symbol_sessions
+                    and row.get("active_profile_ids_for_symbol")
+                    == sorted(
+                        profile_id
+                        for profile_id, live_profile in (
+                            target_inventory.live_profiles.items()
+                        )
+                        if live_profile.symbol == str(row.get("symbol"))
+                    )
                 )
             )
             and isinstance(row.get("recommended_spot"), dict)
@@ -1780,10 +1943,17 @@ def main(argv: list[str] | None = None) -> int:
         token = kiwoom_utils.get_cached_kiwoom_token()
         if not token:
             raise ResearchError("cached_token_missing_no_issue_or_refresh_allowed")
-        dynamic_source_date, dynamic_symbols = _dynamic_candidate_snapshot(target_date)
-        candidate_symbols = {**CANDIDATE_SYMBOLS, **dynamic_symbols}
+        base_target_inventory = _target_date_research_inventory(target_date)
+        dynamic_source_date, dynamic_symbols = _dynamic_candidate_snapshot(
+            target_date,
+            implemented_symbols=base_target_inventory.implemented_symbols,
+        )
+        candidate_symbols = {
+            **base_target_inventory.candidate_symbols,
+            **dynamic_symbols,
+        }
         applied_policy_snapshots: dict[str, dict[str, Any]] = {}
-        for profile_id in sorted(LIVE_PROFILES):
+        for profile_id in sorted(base_target_inventory.live_profiles):
             policy, applied_hash, reason = load_applied_profile_policy(
                 profile_id, target_date=target_date
             )
@@ -1793,11 +1963,13 @@ def main(argv: list[str] | None = None) -> int:
                 "policy_hash": applied_hash or None,
                 "policy": policy,
             }
-        _, research_profiles = _research_inventory(
-            candidate_symbols,
+        target_inventory = _target_date_research_inventory(
+            target_date,
+            candidate_symbols=candidate_symbols,
             applied_policy_snapshots=applied_policy_snapshots,
         )
-        allowlist = frozenset(candidate_symbols) | frozenset(IMPLEMENTED_SYMBOLS)
+        research_profiles = target_inventory.research_profiles
+        allowlist = target_inventory.research_symbols
         sources: dict[str, tuple[list[Bar], dict[str, Any]]] = {}
         fetch_failures: dict[str, str] = {}
         for symbol in sorted(allowlist):

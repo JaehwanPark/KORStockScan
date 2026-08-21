@@ -144,9 +144,7 @@ def _low_price_two_leg_postclose_contract_status(
 ) -> dict[str, Any]:
     from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
         CandidateRecommendationNotifier,
-        EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES,
-        EXISTING_SYMBOL_TIME_EXTENSION_PROFILES,
-        RESEARCH_PROFILES,
+        _target_date_research_inventory,
     )
     from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
     from src.trading.low_price_two_leg.policy_runtime import validate_candidate
@@ -161,9 +159,20 @@ def _low_price_two_leg_postclose_contract_status(
     if tuning.get("target_date") != target_date:
         issues.append("tuning_target_date_mismatch")
     try:
-        target_date_profiles = profiles_for_target_date(date.fromisoformat(target_date))
+        parsed_target_date = date.fromisoformat(target_date)
+        target_date_profiles = profiles_for_target_date(parsed_target_date)
+        expanded_candidate_symbols = expanded.get("candidate_symbols")
+        target_research_inventory = _target_date_research_inventory(
+            parsed_target_date,
+            candidate_symbols=(
+                expanded_candidate_symbols
+                if isinstance(expanded_candidate_symbols, dict)
+                else None
+            ),
+        )
     except (TypeError, ValueError):
         target_date_profiles = {}
+        target_research_inventory = None
         issues.append("tuning_target_date_invalid")
     daily = tuning.get("daily")
     raw_daily_profiles = daily.get("profiles") if isinstance(daily, dict) else None
@@ -204,13 +213,15 @@ def _low_price_two_leg_postclose_contract_status(
             int(expanded.get("candidate_universe_size", 0) or 0) * 4
         ):
             issues.append("expanded_candidate_new_symbol_lane_count_mismatch")
-        if expanded.get("existing_symbol_time_extension_profile_count") != len(
-            EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
+        if target_research_inventory is None:
+            issues.append("expanded_candidate_target_inventory_unavailable")
+        elif expanded.get("existing_symbol_time_extension_profile_count") != len(
+            target_research_inventory.time_extension_profiles
         ):
             issues.append("expanded_candidate_time_lane_count_mismatch")
-        if expanded.get("existing_symbol_logic_improvement_profile_count") != len(
-            EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
-        ):
+        if target_research_inventory is not None and expanded.get(
+            "existing_symbol_logic_improvement_profile_count"
+        ) != len(target_research_inventory.logic_improvement_profiles):
             issues.append("expanded_candidate_logic_lane_count_mismatch")
     return {
         "status": "fail" if issues else "pass",
@@ -218,7 +229,12 @@ def _low_price_two_leg_postclose_contract_status(
         "live_profile_count": len(target_date_profiles),
         "live_catalog_profile_count": len(PROFILES),
         "research_profile_count": len(
-            expanded.get("research_profile_inventory") or RESEARCH_PROFILES
+            expanded.get("research_profile_inventory")
+            or (
+                target_research_inventory.research_profiles
+                if target_research_inventory is not None
+                else {}
+            )
         ),
         "recommendation_count": len(expanded.get("recommendations") or []),
         "quarantined_source_symbol_count": int(

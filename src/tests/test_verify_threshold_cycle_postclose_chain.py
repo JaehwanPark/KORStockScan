@@ -26,9 +26,7 @@ def test_low_price_postclose_contract_uses_target_date_profile_inventory(
     from datetime import date
 
     from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
-        CandidateRecommendationNotifier,
-        EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES,
-        EXISTING_SYMBOL_TIME_EXTENSION_PROFILES,
+        build_source_quality_blocked_report,
     )
     from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
     from src.trading.low_price_two_leg import policy_runtime
@@ -37,15 +35,11 @@ def test_low_price_postclose_contract_uses_target_date_profile_inventory(
         profiles_for_target_date,
     )
 
-    target_date = "2026-08-20"
-    target_profiles = profiles_for_target_date(date.fromisoformat(target_date))
+    target_date = "2026-08-21"
+    parsed_target_date = date.fromisoformat(target_date)
+    target_profiles = profiles_for_target_date(parsed_target_date)
     assert len(target_profiles) < len(PROFILES)
     monkeypatch.setattr(policy_runtime, "validate_candidate", lambda _: (True, "ok"))
-    monkeypatch.setattr(
-        CandidateRecommendationNotifier,
-        "_valid_report",
-        staticmethod(lambda _: True),
-    )
     tuning = {
         "schema": REPORT_SCHEMA,
         "target_date": target_date,
@@ -55,21 +49,11 @@ def test_low_price_postclose_contract_uses_target_date_profile_inventory(
         "actual_order_submitted": False,
     }
     candidate = {"source_date": target_date}
-    expanded = {
-        "target_date": target_date,
-        "status": "pass",
-        "profiles": {},
-        "research_profile_inventory": {},
-        "candidate_universe_size": 0,
-        "new_symbol_profile_count": 0,
-        "existing_symbol_time_extension_profile_count": len(
-            EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
-        ),
-        "existing_symbol_logic_improvement_profile_count": len(
-            EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
-        ),
-        "recommendations": [],
-    }
+    expanded = build_source_quality_blocked_report(
+        start_date=date(2026, 6, 5),
+        end_date=parsed_target_date,
+        reason="test_source_quality_blocked",
+    )
 
     status = mod._low_price_two_leg_postclose_contract_status(
         tuning, candidate, expanded, target_date=target_date
@@ -78,6 +62,9 @@ def test_low_price_postclose_contract_uses_target_date_profile_inventory(
     assert status["status"] == "pass"
     assert status["live_profile_count"] == len(target_profiles)
     assert status["live_catalog_profile_count"] == len(PROFILES)
+    assert status["research_profile_count"] == len(
+        expanded["research_profile_inventory"]
+    )
 
 
 def test_low_price_postclose_contract_rejects_malformed_daily_profiles(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -223,10 +224,34 @@ def test_expanded_report_fails_closed_on_incomplete_source_universe():
         )
 
 
+def test_expanded_report_rejects_target_date_profile_policy_drift():
+    end_date = date(2026, 8, 21)
+    inventory = expanded._target_date_research_inventory(end_date)
+    research_profiles = dict(inventory.research_profiles)
+    profile_id = sorted(research_profiles)[0]
+    profile = research_profiles[profile_id]
+    research_profiles[profile_id] = replace(
+        profile,
+        policy=replace(profile.policy, target_ticks=profile.policy.target_ticks + 1),
+    )
+
+    with pytest.raises(
+        ResearchError, match="research_profile_target_date_inventory_mismatch"
+    ):
+        expanded.build_report(
+            sources={},
+            start_date=expanded.CLEAN_BASELINE_DATE,
+            end_date=end_date,
+            candidate_symbols=inventory.candidate_symbols,
+            research_profiles=research_profiles,
+        )
+
+
 def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
     monkeypatch,
 ):
     end_date = date(2026, 8, 11)
+    target_inventory = expanded._target_date_research_inventory(end_date)
     start_date = expanded.CLEAN_BASELINE_DATE
     trading_dates = list(expanded.clean_baseline_trading_dates(end_date))
     monkeypatch.setattr(
@@ -258,7 +283,7 @@ def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
             [SimpleNamespace(close_price=20_000)],
             {"source_quality_status": "PASS"},
         )
-        for symbol in expanded.RESEARCH_SYMBOLS
+        for symbol in target_inventory.research_symbols
     }
 
     report = expanded.build_report(
@@ -268,15 +293,15 @@ def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
     )
 
     assert report["status"] == "no_qualified_candidate"
-    assert len(report["profiles"]) == len(expanded.RESEARCH_PROFILES)
+    assert len(report["profiles"]) == len(target_inventory.research_profiles)
     assert report["trading_date_count"] == 47
     assert report["calibration_trading_day_count"] == 31
     assert report["holdout_trading_day_count"] == 16
     assert report["existing_symbol_time_extension_profile_count"] == len(
-        expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
+        target_inventory.time_extension_profiles
     )
     assert report["existing_symbol_logic_improvement_profile_count"] == len(
-        expanded.EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
+        target_inventory.logic_improvement_profiles
     )
     assert report["recommendation_count"] == 0
     assert report["runtime_effect"] is False
@@ -290,6 +315,7 @@ def test_expanded_report_quarantines_one_bad_symbol_without_blocking_others(
     monkeypatch,
 ):
     end_date = date(2026, 8, 11)
+    target_inventory = expanded._target_date_research_inventory(end_date)
     trading_dates = list(expanded.clean_baseline_trading_dates(end_date))
     monkeypatch.setattr(
         expanded,
@@ -308,13 +334,13 @@ def test_expanded_report_quarantines_one_bad_symbol_without_blocking_others(
             "baseline": {"holdout": {"notional_weighted_ev_pct": None}},
         },
     )
-    missing_symbol = sorted(expanded.RESEARCH_SYMBOLS)[0]
+    missing_symbol = sorted(target_inventory.research_symbols)[0]
     sources = {
         symbol: (
             [SimpleNamespace(close_price=20_000)],
             {"source_quality_status": "PASS"},
         )
-        for symbol in expanded.RESEARCH_SYMBOLS
+        for symbol in target_inventory.research_symbols
         if symbol != missing_symbol
     }
 
@@ -326,7 +352,10 @@ def test_expanded_report_quarantines_one_bad_symbol_without_blocking_others(
 
     assert report["status"] == "partial_source_quality"
     assert report["source_quarantine"] == {missing_symbol: "source_missing"}
-    assert report["eligible_source_symbol_count"] == len(expanded.RESEARCH_SYMBOLS) - 1
+    assert (
+        report["eligible_source_symbol_count"]
+        == len(target_inventory.research_symbols) - 1
+    )
     assert all(
         item["decision"] == "source_quality_quarantined_no_evaluation"
         for item in report["profiles"].values()
@@ -399,12 +428,47 @@ def test_dynamic_universe_uses_latest_completed_snapshot_not_after_target(tmp_pa
     ) == (None, {})
 
 
+def test_dynamic_universe_uses_target_date_implemented_symbol_inventory(tmp_path):
+    target_date = date(2026, 8, 21)
+    target_inventory = expanded._target_date_research_inventory(target_date)
+    path = tmp_path / "daily.csv"
+    diagnostic_path = tmp_path / "completion.json"
+    diagnostic_path.write_text(
+        '{"latest_date":"2026-08-21","selected_count":1}', encoding="utf-8"
+    )
+    path.write_text(
+        "date,code,name,close,score_rank\n"
+        "2026-08-21,111770,historical-dynamic-candidate,38600,1\n",
+        encoding="utf-8",
+    )
+
+    assert "111770" in expanded.IMPLEMENTED_SYMBOLS
+    assert "111770" not in target_inventory.implemented_symbols
+    source_date, symbols = expanded._dynamic_candidate_snapshot(
+        target_date,
+        path=path,
+        diagnostic_path=diagnostic_path,
+        implemented_symbols=target_inventory.implemented_symbols,
+    )
+
+    assert source_date == target_date
+    assert symbols == {"111770": "historical-dynamic-candidate"}
+
+
 def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypatch):
-    end_date = date(2026, 8, 11)
+    end_date = date(2026, 8, 21)
     trading_dates = list(expanded.clean_baseline_trading_dates(end_date))
-    candidate_symbols = {**expanded.CANDIDATE_SYMBOLS, "000990": "DB하이텍"}
-    _, research_profiles = expanded._research_inventory(candidate_symbols)
-    source_symbols = set(candidate_symbols) | set(expanded.IMPLEMENTED_SYMBOLS)
+    base_inventory = expanded._target_date_research_inventory(end_date)
+    candidate_symbols = {
+        **base_inventory.candidate_symbols,
+        "000990": "DB하이텍",
+    }
+    target_inventory = expanded._target_date_research_inventory(
+        end_date,
+        candidate_symbols=candidate_symbols,
+    )
+    research_profiles = target_inventory.research_profiles
+    source_symbols = target_inventory.research_symbols
     monkeypatch.setattr(
         expanded,
         "build_day_contexts",
@@ -439,11 +503,17 @@ def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypa
     )
 
     assert report["candidate_symbols"]["000990"] == "DB하이텍"
-    assert report["dynamic_universe_source_date"] == "2026-08-11"
+    assert report["dynamic_universe_source_date"] == "2026-08-21"
     assert report["new_symbol_profile_count"] == len(candidate_symbols) * 4
+    assert report["existing_symbol_universe_size"] == 13
+    assert report["existing_symbol_logic_improvement_profile_count"] == 27
+    assert (
+        len(expanded.LIVE_PROFILES)
+        > report["existing_symbol_logic_improvement_profile_count"]
+    )
     assert expanded.CandidateRecommendationNotifier._valid_report(report)
 
-    report["dynamic_universe_source_date"] = "2026-08-12"
+    report["dynamic_universe_source_date"] = "2026-08-24"
     assert not expanded.CandidateRecommendationNotifier._valid_report(report)
     report["dynamic_universe_source_date"] = None
     assert not expanded.CandidateRecommendationNotifier._valid_report(report)
@@ -742,12 +812,12 @@ def _notification_report(recommendations: list[dict] | None = None) -> dict:
         "report_type": expanded.REPORT_TYPE,
         "status": "recommendations_ready" if rows else "no_qualified_candidate",
         "authority": expanded.AUTHORITY,
-        "target_date": "2026-08-11",
+        "target_date": "2026-08-24",
         "clean_tuning_baseline_date": "2026-06-05",
         "start_date": "2026-06-05",
-        "end_date": "2026-08-11",
-        "trading_date_count": 47,
-        "calibration_trading_day_count": 31,
+        "end_date": "2026-08-24",
+        "trading_date_count": 55,
+        "calibration_trading_day_count": 39,
         "holdout_trading_day_count": 16,
         "candidate_universe_size": len(expanded.CANDIDATE_SYMBOLS),
         "candidate_symbols": expanded.CANDIDATE_SYMBOLS,
