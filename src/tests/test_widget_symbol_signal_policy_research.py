@@ -227,6 +227,39 @@ def test_policy_grid_bounds_expansion_and_widens_chase_only_in_morning():
     )
 
 
+def test_subset_evaluation_reuses_full_simulation_without_metric_drift():
+    first_date = date(2026, 8, 10)
+    second_date = date(2026, 8, 11)
+    episodes = [
+        {
+            "trade_date": first_date.isoformat(),
+            "daily_entry_ordinal": 1,
+            "entry_price": 10_000,
+            "net_return_pct": 0.3,
+            "exit_reason": "target",
+            "entry_state": "ENTRY_READY",
+            "peak_return_pct": 0.5,
+        },
+        {
+            "trade_date": second_date.isoformat(),
+            "daily_entry_ordinal": 1,
+            "entry_price": 20_000,
+            "net_return_pct": -0.2,
+            "exit_reason": "confirmed_support_break",
+            "entry_state": "ENTRY_CAUTION",
+            "peak_return_pct": 0.1,
+        },
+    ]
+
+    subset = research._subset_evaluation({"episodes": episodes}, [first_date])
+
+    assert subset["episode_count"] == 1
+    assert subset["target_count"] == 1
+    assert subset["notional_weighted_ev_pct"] == pytest.approx(0.3)
+    assert subset["entry_cap_comparison"]["1"]["cumulative"]["episode_count"] == 1
+    assert subset["episodes"] == [episodes[0]]
+
+
 def test_entry_replay_enforces_the_same_calibrated_reclaim_chase_band():
     rows = _bars(
         [
@@ -409,34 +442,30 @@ def test_discovery_selects_on_calibration_and_can_fail_untouched_holdout(
     }
     monkeypatch.setattr(research, "_group_bars", lambda bars: grouped)
     monkeypatch.setattr(research, "policy_grid", lambda: (selected,))
+    evaluated_windows: list[tuple[date, ...]] = []
 
     def fake_evaluate(grouped_arg, dates, policy, *, include_episodes=False):
         del grouped_arg, policy
+        evaluated_windows.append(tuple(dates))
         is_holdout = dates == expected_dates[-research.HOLDOUT_DAYS :]
-        result = {
-            "episode_count": 4 if is_holdout else max(4, len(dates)),
-            "target_count": 0,
-            "adverse_exit_count": 0,
-            "force_flat_count": 0,
-            "entry_ready_count": 0,
-            "entry_caution_count": 0,
-            "notional_weighted_ev_pct": -0.1 if is_holdout else 0.2,
-            "worst_episode_return_pct": -0.5,
-            "average_peak_return_pct": 0.3,
-        }
-        result["entry_cap_comparison"] = {
-            str(cap): {
-                "cumulative": dict(result),
-                "incremental": {
-                    "episode_count": 1,
-                    "notional_weighted_ev_pct": 0.1,
-                },
-                "incremental_ev_positive": True,
+        net_return = -0.1 if is_holdout else 0.2
+        episodes = [
+            {
+                "trade_date": trade_date.isoformat(),
+                "daily_entry_ordinal": cap,
+                "entry_price": 10_000,
+                "net_return_pct": net_return,
+                "exit_reason": "target" if net_return > 0 else "force_flat",
+                "entry_state": "ENTRY_READY",
+                "peak_return_pct": max(net_return, 0.0),
             }
+            for trade_date in dates
             for cap in research.ENTRY_CAP_VALUES
-        }
+        ]
+        result = research._summarize_episodes(episodes)
+        result["entry_cap_comparison"] = research._entry_cap_comparison(episodes)
         if include_episodes:
-            result["episodes"] = []
+            result["episodes"] = episodes
         return result
 
     monkeypatch.setattr(research, "evaluate_policy", fake_evaluate)
@@ -449,6 +478,12 @@ def test_discovery_selects_on_calibration_and_can_fail_untouched_holdout(
     }
     assert result["decision"] == "holdout_failed_no_widget_runtime_promotion"
     assert result["allowed_runtime_apply"] is False
+    calibration_dates = tuple(expected_dates[: -research.HOLDOUT_DAYS])
+    split = len(calibration_dates) // 2
+    assert evaluated_windows.count(calibration_dates) == 1
+    assert tuple(calibration_dates[:split]) not in evaluated_windows
+    assert tuple(calibration_dates[split:]) not in evaluated_windows
+    assert len(evaluated_windows) == 2
 
 
 def test_discovery_auto_expands_to_positive_fourth_episode_without_chasing_cap_ev(
@@ -463,30 +498,25 @@ def test_discovery_auto_expands_to_positive_fourth_episode_without_chasing_cap_e
     monkeypatch.setattr(research, "policy_grid", lambda: (selected,))
 
     def fake_evaluate(grouped_arg, dates, policy, *, include_episodes=False):
-        del grouped_arg, dates, policy
-        cumulative_ev = {1: 0.5, 2: 0.4, 3: 0.3, 4: 0.25, 5: 0.2}
-        incremental_ev = {1: 0.5, 2: 0.3, 3: 0.1, 4: 0.05, 5: -0.1}
-        comparisons = {}
-        for cap in research.ENTRY_CAP_VALUES:
-            comparisons[str(cap)] = {
-                "cumulative": {
-                    "episode_count": 12,
-                    "target_count": 8,
-                    "notional_weighted_ev_pct": cumulative_ev[cap],
-                    "worst_episode_return_pct": -0.5,
-                },
-                "incremental": {
-                    "episode_count": 2,
-                    "notional_weighted_ev_pct": incremental_ev[cap],
-                },
-                "incremental_ev_positive": incremental_ev[cap] > 0,
+        del grouped_arg, policy
+        incremental_ev = {1: 0.5, 2: 0.3, 3: 0.15, 4: 0.05, 5: -0.1}
+        episodes = [
+            {
+                "trade_date": trade_date.isoformat(),
+                "daily_entry_ordinal": cap,
+                "entry_price": 10_000,
+                "net_return_pct": incremental_ev[cap],
+                "exit_reason": "target" if incremental_ev[cap] > 0 else "force_flat",
+                "entry_state": "ENTRY_READY",
+                "peak_return_pct": max(incremental_ev[cap], 0.0),
             }
-        result = {
-            **comparisons["5"]["cumulative"],
-            "entry_cap_comparison": comparisons,
-        }
+            for trade_date in dates
+            for cap in research.ENTRY_CAP_VALUES
+        ]
+        result = research._summarize_episodes(episodes)
+        result["entry_cap_comparison"] = research._entry_cap_comparison(episodes)
         if include_episodes:
-            result["episodes"] = []
+            result["episodes"] = episodes
         return result
 
     monkeypatch.setattr(research, "evaluate_policy", fake_evaluate)

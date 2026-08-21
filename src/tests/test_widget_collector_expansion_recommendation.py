@@ -137,6 +137,8 @@ def test_recommendation_ranks_positive_liquid_non_active_symbol(tmp_path):
     candidate = report["recommendations"][0]
     assert candidate["collector_created"] is False
     assert candidate["service_started"] is False
+    assert candidate["research_collection_status"] == "not_enrolled"
+    assert candidate["already_enrolled_research_watch"] is False
     assert candidate["estimated_added_requests_per_minute"] is None
     assert candidate["estimated_added_memory_mb"] is None
     assert (
@@ -154,6 +156,18 @@ def test_recommendation_ranks_positive_liquid_non_active_symbol(tmp_path):
     assert candidate["observed_trading_date_count"] == 1
     assert report["runtime_effect"] is False
     assert report["allowed_runtime_apply"] is False
+
+    active_report = rec.build_recommendation_report(
+        target_date=target_date,
+        replay_dir=replay_dir,
+        payload_dir=payload_dir,
+        active_research_watch_codes=frozenset({"111111"}),
+    )
+    active_candidate = active_report["recommendations"][0]
+    assert active_candidate["research_collection_status"] == "active_shared_collector"
+    assert active_candidate["already_enrolled_research_watch"] is True
+    assert active_report["recommended_active_research_watch_count"] == 1
+    assert active_report["recommended_not_enrolled_count"] == 0
 
 
 def test_recommendation_artifact_retains_twenty_and_surfaces_collector_overflow(
@@ -282,7 +296,43 @@ def test_admin_notifier_sends_once_and_never_creates_service(tmp_path):
     assert notifier.notify(report) == "sent"
     assert notifier.notify(report) == "duplicate"
     assert sent[0][0:2] == ("token", "admin")
-    assert "자동 생성/기동 없음" in sent[0][2]
+    assert "자동 생성/기동 권한 없음" in sent[0][2]
+
+
+def test_telegram_distinguishes_already_enrolled_research_watch():
+    report = {
+        "target_date": "2026-08-21",
+        "recommendations": [
+            {
+                "stock_code": "111111",
+                "stock_name": "기존관찰",
+                "recommendation_score": 70.0,
+                "recommendation_tier": "research_watch",
+                "observed_trading_date_count": 3,
+                "sample_count": 5,
+                "target_first_count": 3,
+                "adverse_first_count": 1,
+                "source_quality_adjusted_ev_pct": 0.3,
+                "median_entry_liquidity_score": 70.0,
+                "median_intraday_range_pct": 4.0,
+                "median_spread_bp": 10.0,
+                "estimated_shared_total_requests_per_minute": 15,
+                "estimated_shared_service_memory_cap_mb": 256,
+                "research_collection_status": "active_shared_collector",
+            }
+        ],
+        "implementation_review_candidate_count": 0,
+        "research_watch_candidate_count": 1,
+        "recommended_active_research_watch_count": 1,
+        "recommended_not_enrolled_count": 0,
+        "research_watch_capacity_status": "verified_active_candidate_union",
+    }
+
+    message = rec.build_telegram_message(report)
+
+    assert "수집상태: 기존 공동수집기 등록·축적 중" in message
+    assert "표시된 후보는 기존 공동수집기에 모두 등록" in message
+    assert "미등록 후보" not in message
 
 
 def test_default_target_date_uses_completed_session_date():

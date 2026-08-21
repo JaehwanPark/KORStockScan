@@ -564,6 +564,18 @@ def build_recommendation_report(
                 "estimated_shared_service_memory_cap_mb": (
                     SHARED_COLLECTOR_MEMORY_CAP_MB
                 ),
+                "research_collection_status": (
+                    "active_shared_collector"
+                    if code in active_research_watch_codes
+                    else (
+                        "active_inventory_unverified"
+                        if active_inventory_issues
+                        else "not_enrolled"
+                    )
+                ),
+                "already_enrolled_research_watch": (
+                    code in active_research_watch_codes
+                ),
                 "collector_created": False,
                 "service_started": False,
             }
@@ -584,6 +596,13 @@ def build_recommendation_report(
     )
     implementation_review_candidate_count = sum(
         row["implementation_review_ready"] is True for row in candidates
+    )
+    recommended_active_research_watch_count = sum(
+        row["research_collection_status"] == "active_shared_collector"
+        for row in recommendations
+    )
+    recommended_not_enrolled_count = sum(
+        row["research_collection_status"] == "not_enrolled" for row in recommendations
     )
     return {
         "schema": "widget_collector_expansion_recommendation_v1",
@@ -613,6 +632,10 @@ def build_recommendation_report(
         "implementation_review_candidate_count": (
             implementation_review_candidate_count
         ),
+        "recommended_active_research_watch_count": (
+            recommended_active_research_watch_count
+        ),
+        "recommended_not_enrolled_count": recommended_not_enrolled_count,
         "research_watch_candidate_count": (
             len(candidates) - implementation_review_candidate_count
         ),
@@ -659,7 +682,7 @@ def build_telegram_message(report: dict[str, Any]) -> str:
     lines = [
         "📋 [위젯 수집서비스 확대 후보]",
         f"기준일: {report.get('target_date')}",
-        "권한: 추천 전용 · 자동 생성/기동 없음",
+        "권한: 추천 자체는 자동 생성/기동 권한 없음",
     ]
     recommendations = report.get("recommendations")
     if not isinstance(recommendations, list) or not recommendations:
@@ -712,13 +735,37 @@ def build_telegram_message(report: dict[str, Any]) -> str:
                     "req/min, 서비스 메모리 상한 "
                     f"{row.get('estimated_shared_service_memory_cap_mb', 256)}MB"
                 ),
+                (
+                    "   수집상태: "
+                    + {
+                        "active_shared_collector": "기존 공동수집기 등록·축적 중",
+                        "not_enrolled": "미등록·사용자 지시 필요",
+                        "active_inventory_unverified": "활성 목록 검증 필요",
+                    }.get(
+                        str(row.get("research_collection_status") or ""),
+                        "확인 필요",
+                    )
+                ),
             ]
         )
     if int(report.get("implementation_review_candidate_count") or 0) == 0:
         lines.append(
             "즉시 구현검토 후보는 없으며 연구관찰 후보는 표본을 더 축적합니다."
         )
-    lines.append("사용자 지시 전에는 collector/service를 만들거나 시작하지 않습니다.")
+    not_enrolled_count = int(report.get("recommended_not_enrolled_count") or 0)
+    active_count = int(report.get("recommended_active_research_watch_count") or 0)
+    if not_enrolled_count:
+        lines.append(
+            f"미등록 후보 {not_enrolled_count}개는 사용자 지시 전에 "
+            "collector/service를 변경하거나 시작하지 않습니다."
+        )
+    elif active_count == len(recommendations):
+        lines.append(
+            "표시된 후보는 기존 공동수집기에 모두 등록되어 "
+            "표본을 축적 중입니다. 이 추천 작업 자체는 서비스를 변경하지 않습니다."
+        )
+    else:
+        lines.append("활성 관찰목록 검증 후 등록 여부를 재확인해야 합니다.")
     return "\n".join(lines)
 
 

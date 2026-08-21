@@ -724,6 +724,27 @@ def evaluate_policy(
     return result
 
 
+def _subset_evaluation(evaluation: dict[str, Any], dates: list[date]) -> dict[str, Any]:
+    """Summarize an already simulated policy over an exact date subset.
+
+    Policy episodes are independent by trading date. Reusing the full
+    calibration simulation avoids replaying the same minute bars separately
+    for the first half, second half, and full window without changing setup,
+    exit, cooldown, or entry-cap semantics.
+    """
+
+    allowed_dates = {value.isoformat() for value in dates}
+    episodes = [
+        row
+        for row in evaluation.get("episodes", [])
+        if isinstance(row, dict) and row.get("trade_date") in allowed_dates
+    ]
+    result = _summarize_episodes(episodes)
+    result["entry_cap_comparison"] = _entry_cap_comparison(episodes)
+    result["episodes"] = episodes
+    return result
+
+
 def _summarize_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
     attempted_notional = sum(row["entry_price"] for row in episodes)
     pnl = sum(row["entry_price"] * row["net_return_pct"] / 100.0 for row in episodes)
@@ -865,6 +886,7 @@ def discover_symbol_policy(
             dict[str, dict[str, Any]],
             dict[str, dict[str, Any]],
             dict[str, dict[str, Any]],
+            dict[str, Any],
         ]
     ] = []
     best_diagnostic: (
@@ -887,9 +909,14 @@ def discover_symbol_policy(
     }
     evaluated = 0
     for policy in policy_grid():
-        full_evaluation = evaluate_policy(grouped, calibration_dates, policy)
-        first_evaluation = evaluate_policy(grouped, first_dates, policy)
-        second_evaluation = evaluate_policy(grouped, second_dates, policy)
+        full_evaluation = evaluate_policy(
+            grouped,
+            calibration_dates,
+            policy,
+            include_episodes=True,
+        )
+        first_evaluation = _subset_evaluation(full_evaluation, first_dates)
+        second_evaluation = _subset_evaluation(full_evaluation, second_dates)
         full_comparison = full_evaluation["entry_cap_comparison"]
         first_comparison = first_evaluation["entry_cap_comparison"]
         second_comparison = second_evaluation["entry_cap_comparison"]
@@ -958,6 +985,7 @@ def discover_symbol_policy(
                     full_comparison,
                     first_comparison,
                     second_comparison,
+                    full_evaluation,
                 )
             )
     if not candidates:
@@ -998,6 +1026,7 @@ def discover_symbol_policy(
         calibration_cap_comparison,
         first_cap_comparison,
         second_cap_comparison,
+        calibration_selected_evaluation,
     ) = (base_candidates or candidates)[0]
     calibration_selected_cap = base_entry_cap
     for high_cap in range(HIGH_ENTRY_CAP_START, max(ENTRY_CAP_VALUES) + 1):
@@ -1044,8 +1073,12 @@ def discover_symbol_policy(
         for row in holdout_evaluation["episodes"]
         if int(row["daily_entry_ordinal"]) <= selected_entry_cap
     ]
-    full_window_evaluation = evaluate_policy(grouped, expected_dates, selected)
-    full_window_cap_comparison = full_window_evaluation["entry_cap_comparison"]
+    full_window_cap_comparison = _entry_cap_comparison(
+        [
+            *calibration_selected_evaluation["episodes"],
+            *holdout_evaluation["episodes"],
+        ]
+    )
     full_window = full_window_cap_comparison[str(selected_entry_cap)]["cumulative"]
     holdout_pass = holdout_cap_ready(selected_entry_cap)
     return {
