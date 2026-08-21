@@ -341,6 +341,139 @@ def test_risky_micro_episode_observer_does_not_relabel_cross_venue_bbo(monkeypat
     assert fields["market_data_effective_best_ask"] == "-"
 
 
+def test_risky_micro_episode_observer_accepts_premarket_integrated_bbo_only_with_nxt_depth_proof(
+    monkeypatch,
+):
+    started_at = datetime(2026, 8, 21, 8, 7, tzinfo=state_handlers._KST).timestamp()
+    logs = []
+    state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "retain_ws_subscription_until",
+        lambda _code, _until_ts: True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        type(
+            "Manager",
+            (),
+            {
+                "get_latest_data": lambda _self, _code: {
+                    "realtime_type_snapshots_by_route": {
+                        "_AL|krx_nxt_integrated": {
+                            "0D": {
+                                "observed_epoch": started_at + 0.1,
+                                "item": "488280_AL",
+                                "market_route": "krx_nxt_integrated",
+                                "effective_venue": "",
+                                "orderbook": {
+                                    "asks": [{"price": 10_850, "volume": 103}],
+                                    "bids": [{"price": 10_780, "volume": 92}],
+                                },
+                                "route_depth_totals": {
+                                    "combined": {"ask": 3_170, "bid": 1_362},
+                                    "KRX": {"ask": 0, "bid": 0},
+                                    "NXT": {"ask": 3_170, "bid": 1_362},
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda _pipeline, _name, _code, stage, **kwargs: logs.append(
+            (stage, kwargs["fields"])
+        ),
+    )
+
+    registration = state_handlers.register_risky_micro_episode_executable_bbo_observer(
+        {"id": 11, "name": "TEST", "code": "488280"},
+        "488280",
+        candidate_fields={
+            "risky_micro_episode_status": "recheck_required",
+            "effective_venue": "PREMARKET_KRX_LIKE",
+            "market_session_bucket": "krx_like_premarket",
+        },
+        now_ts=started_at,
+    )
+    observed = state_handlers.observe_risky_micro_episode_executable_bbo_paths(
+        now_ts=started_at + 0.2
+    )
+
+    assert registration["risky_micro_episode_horizon_observer_registered"] is True
+    assert observed["fresh_bbo_event_count"] == 1
+    fields = logs[0][1]
+    assert fields["risky_micro_episode_horizon_observer_quote_fresh"] is True
+    assert (
+        fields["risky_micro_episode_horizon_observer_route_scope_status"]
+        == "exact_0d_integrated_route_nxt_only_depth_proven"
+    )
+    assert fields["risky_micro_episode_horizon_observer_observed_venue"] == "NXT"
+    assert (
+        fields["risky_micro_episode_horizon_observer_observed_venue_resolution"]
+        == "official_0d_route_depth_totals_krx_zero_nxt_positive"
+    )
+    assert fields["risky_micro_episode_horizon_observer_observed_item"] == "488280_AL"
+    assert fields["risky_micro_episode_horizon_observer_route_depth_krx_ask"] == 0
+    assert fields["risky_micro_episode_horizon_observer_route_depth_nxt_ask"] == 3_170
+    assert fields["market_data_effective_best_bid"] == 10_780
+    assert fields["market_data_effective_best_ask"] == 10_850
+    assert fields["runtime_effect"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+
+def test_risky_micro_episode_observer_rejects_integrated_bbo_without_exact_depth_proof():
+    observed_at = datetime(2026, 8, 21, 8, 7, tzinfo=state_handlers._KST).timestamp()
+    for route_depth_totals in (
+        None,
+        {
+            "combined": {"ask": 3_270, "bid": 1_462},
+            "KRX": {"ask": 100, "bid": 100},
+            "NXT": {"ask": 3_170, "bid": 1_362},
+        },
+    ):
+        snapshot = {
+            "observed_epoch": observed_at,
+            "item": "488280_AL",
+            "market_route": "krx_nxt_integrated",
+            "effective_venue": "",
+            "orderbook": {
+                "asks": [{"price": 10_850, "volume": 103}],
+                "bids": [{"price": 10_780, "volume": 92}],
+            },
+        }
+        if route_depth_totals is not None:
+            snapshot["route_depth_totals"] = route_depth_totals
+        scoped, provenance = state_handlers._risky_micro_route_scoped_0d_bbo(
+            {
+                "realtime_type_snapshots_by_route": {
+                    "_AL|krx_nxt_integrated": {
+                        "0D": snapshot,
+                    }
+                }
+            },
+            code="488280",
+            venue="PREMARKET_KRX_LIKE",
+            session="krx_like_premarket",
+        )
+
+        assert scoped == {}
+        assert (
+            provenance["risky_micro_episode_horizon_observer_route_scope_status"]
+            == "integrated_0d_route_depth_proof_missing_or_invalid"
+        )
+        assert (
+            provenance["risky_micro_episode_horizon_observer_route_scope_eligible"]
+            is False
+        )
+
+
 def test_risky_micro_episode_observer_rejects_route_snapshot_outside_session():
     observed_at = datetime(
         2026, 8, 14, 16, 0, tzinfo=state_handlers._KST

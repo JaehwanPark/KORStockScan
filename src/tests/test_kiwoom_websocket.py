@@ -2611,6 +2611,10 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently()
                                 "71": "200",
                                 "121": "100",
                                 "125": "200",
+                                "6064": "0",
+                                "6065": "0",
+                                "6086": "100",
+                                "6087": "200",
                             },
                         },
                         {
@@ -2647,6 +2651,11 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently()
         snapshots["_AL|krx_nxt_integrated"]["0D"]["orderbook"]["asks"][0]["price"]
         == 10010
     )
+    assert snapshots["_AL|krx_nxt_integrated"]["0D"]["route_depth_totals"] == {
+        "combined": {"ask": 100, "bid": 200},
+        "KRX": {"ask": 0, "bid": 0},
+        "NXT": {"ask": 100, "bid": 200},
+    }
     assert snapshots["KRX|krx_regular"]["0B"]["current_price"] == 9990
     assert snapshots["KRX|krx_regular"]["0D"]["orderbook"]["bids"][0]["price"] == 9990
     depth = manager.realtime_data["039490"]["last_depth_tick"]

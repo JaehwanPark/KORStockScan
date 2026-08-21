@@ -3856,6 +3856,27 @@ class KiwoomWSManager:
                                             "asks": copy.deepcopy(current_asks[:1]),
                                             "bids": copy.deepcopy(current_bids[:1]),
                                         }
+                                        current_depth_tick = target.get(
+                                            "last_depth_tick"
+                                        )
+                                        if isinstance(current_depth_tick, dict) and str(
+                                            current_depth_tick.get("item") or ""
+                                        ) == str(raw_item_code or ""):
+                                            route_depth_totals = current_depth_tick.get(
+                                                "route_depth_totals"
+                                            )
+                                            if isinstance(route_depth_totals, dict):
+                                                realtime_snapshot[
+                                                    "route_depth_totals"
+                                                ] = copy.deepcopy(route_depth_totals)
+                                            realtime_snapshot["orderbook_time_raw"] = (
+                                                str(
+                                                    current_depth_tick.get(
+                                                        "orderbook_time_raw"
+                                                    )
+                                                    or ""
+                                                )
+                                            )
                                     route_snapshot[real_type] = realtime_snapshot
                             target["time"] = datetime.now().strftime("%H:%M:%S")
 

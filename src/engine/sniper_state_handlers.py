@@ -33820,6 +33820,35 @@ def _risky_micro_route_scoped_0d_bbo(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Select the newest exact-route 0D snapshot without relabeling venues."""
 
+    def _integrated_nxt_only_depth_proven(
+        snapshot: dict[str, Any],
+    ) -> tuple[bool, dict[str, int]]:
+        totals = snapshot.get("route_depth_totals")
+        totals = totals if isinstance(totals, dict) else {}
+
+        def _side(venue_name: str, side: str) -> int:
+            venue_totals = totals.get(venue_name)
+            venue_totals = venue_totals if isinstance(venue_totals, dict) else {}
+            return _safe_int(venue_totals.get(side), -1)
+
+        proof = {
+            "combined_ask": _side("combined", "ask"),
+            "combined_bid": _side("combined", "bid"),
+            "krx_ask": _side("KRX", "ask"),
+            "krx_bid": _side("KRX", "bid"),
+            "nxt_ask": _side("NXT", "ask"),
+            "nxt_bid": _side("NXT", "bid"),
+        }
+        proven = bool(
+            proof["krx_ask"] == 0
+            and proof["krx_bid"] == 0
+            and proof["nxt_ask"] > 0
+            and proof["nxt_bid"] > 0
+            and proof["combined_ask"] == proof["nxt_ask"]
+            and proof["combined_bid"] == proof["nxt_bid"]
+        )
+        return proven, proof
+
     def _epoch_in_candidate_session(epoch: float) -> bool:
         local_time = datetime.fromtimestamp(epoch, tz=_KST).time()
         normalized = session.strip().lower()
@@ -33846,12 +33875,11 @@ def _risky_micro_route_scoped_0d_bbo(
 
     route_snapshots = ws_data.get("realtime_type_snapshots_by_route")
     route_snapshots = route_snapshots if isinstance(route_snapshots, dict) else {}
-    required_venues = (
-        {"NXT", "PREMARKET_KRX_LIKE"} if venue == "PREMARKET_KRX_LIKE" else {venue}
-    )
+    premarket_cohort = venue == "PREMARKET_KRX_LIKE"
     required_route = "krx_regular" if venue == "KRX" else "nxt_only"
-    matches: list[dict[str, Any]] = []
+    matches: list[tuple[dict[str, Any], str, str, str, dict[str, Any]]] = []
     exact_route_outside_session = False
+    integrated_route_depth_proof_invalid = False
     for route_snapshot in route_snapshots.values():
         if not isinstance(route_snapshot, dict):
             continue
@@ -33862,10 +33890,41 @@ def _risky_micro_route_scoped_0d_bbo(
         observed_route = str(snapshot.get("market_route") or "").strip()
         observed_item = str(snapshot.get("item") or "").strip().upper()
         observed_code = observed_item.split("_", 1)[0][-6:]
-        if (
-            observed_venue not in required_venues
+        if observed_code != code:
+            continue
+        route_scope_status = "exact_0d_route_snapshot"
+        observed_venue_resolution = "subscription_item_exact_venue"
+        depth_proof_status = "not_required_exact_venue"
+        depth_proof: dict[str, Any] = {}
+        if premarket_cohort:
+            if (
+                observed_route.lower() == "nxt_only"
+                and observed_venue == "NXT"
+                and observed_item == f"{code}_NX"
+            ):
+                pass
+            elif (
+                observed_route.lower() == "krx_nxt_integrated"
+                and not observed_venue
+                and observed_item == f"{code}_AL"
+            ):
+                depth_proven, depth_proof = _integrated_nxt_only_depth_proven(snapshot)
+                if not depth_proven:
+                    integrated_route_depth_proof_invalid = True
+                    continue
+                observed_venue = "NXT"
+                route_scope_status = "exact_0d_integrated_route_nxt_only_depth_proven"
+                observed_venue_resolution = (
+                    "official_0d_route_depth_totals_krx_zero_nxt_positive"
+                )
+                depth_proof_status = "krx_zero_nxt_positive_combined_equals_nxt"
+            else:
+                continue
+        elif (
+            observed_venue != venue
             or observed_route.lower() != required_route
-            or observed_code != code
+            or (venue == "KRX" and observed_item != code)
+            or (venue == "NXT" and observed_item != f"{code}_NX")
         ):
             continue
         observed_epoch = _safe_float(snapshot.get("observed_epoch"), 0.0)
@@ -33874,23 +33933,46 @@ def _risky_micro_route_scoped_0d_bbo(
         if not _epoch_in_candidate_session(observed_epoch):
             exact_route_outside_session = True
             continue
-        matches.append(snapshot)
+        matches.append(
+            (
+                snapshot,
+                route_scope_status,
+                observed_venue,
+                observed_venue_resolution,
+                {**depth_proof, "status": depth_proof_status},
+            )
+        )
 
     if not matches:
+        if exact_route_outside_session:
+            status = "exact_0d_route_snapshot_outside_candidate_session"
+        elif integrated_route_depth_proof_invalid:
+            status = "integrated_0d_route_depth_proof_missing_or_invalid"
+        else:
+            status = "exact_0d_route_snapshot_missing"
         return {}, {
-            "risky_micro_episode_horizon_observer_route_scope_status": (
-                "exact_0d_route_snapshot_outside_candidate_session"
-                if exact_route_outside_session
-                else "exact_0d_route_snapshot_missing"
-            ),
+            "risky_micro_episode_horizon_observer_route_scope_status": status,
+            "risky_micro_episode_horizon_observer_route_scope_eligible": False,
             "risky_micro_episode_horizon_observer_observed_venue": "-",
+            "risky_micro_episode_horizon_observer_observed_venue_resolution": "-",
             "risky_micro_episode_horizon_observer_observed_route": "-",
             "risky_micro_episode_horizon_observer_observed_item": "-",
+            "risky_micro_episode_horizon_observer_route_depth_proof_status": (
+                "missing_or_invalid"
+                if integrated_route_depth_proof_invalid
+                else "not_available"
+            ),
         }
 
-    snapshot = max(
+    (
+        snapshot,
+        route_scope_status,
+        observed_venue,
+        observed_venue_resolution,
+        depth_proof,
+    ) = max(
         matches,
-        key=lambda item: _safe_float(item.get("observed_epoch"), 0.0),
+        key=lambda item: _safe_float(item[0].get("observed_epoch"), 0.0),
     )
     orderbook = snapshot.get("orderbook")
     orderbook = orderbook if isinstance(orderbook, dict) else {}
@@ -33915,17 +33997,32 @@ def _risky_micro_route_scoped_0d_bbo(
         "last_ws_update_ts": observed_epoch,
     }
     return scoped_ws, {
-        "risky_micro_episode_horizon_observer_route_scope_status": (
-            "exact_0d_route_snapshot"
-        ),
-        "risky_micro_episode_horizon_observer_observed_venue": str(
-            snapshot.get("effective_venue") or "-"
+        "risky_micro_episode_horizon_observer_route_scope_status": route_scope_status,
+        "risky_micro_episode_horizon_observer_route_scope_eligible": True,
+        "risky_micro_episode_horizon_observer_observed_venue": observed_venue,
+        "risky_micro_episode_horizon_observer_observed_venue_resolution": (
+            observed_venue_resolution
         ),
         "risky_micro_episode_horizon_observer_observed_route": str(
             snapshot.get("market_route") or "-"
         ),
         "risky_micro_episode_horizon_observer_observed_item": str(
             snapshot.get("item") or "-"
+        ),
+        "risky_micro_episode_horizon_observer_route_depth_proof_status": (
+            depth_proof.get("status") or "not_available"
+        ),
+        "risky_micro_episode_horizon_observer_route_depth_krx_ask": (
+            depth_proof.get("krx_ask", "-")
+        ),
+        "risky_micro_episode_horizon_observer_route_depth_krx_bid": (
+            depth_proof.get("krx_bid", "-")
+        ),
+        "risky_micro_episode_horizon_observer_route_depth_nxt_ask": (
+            depth_proof.get("nxt_ask", "-")
+        ),
+        "risky_micro_episode_horizon_observer_route_depth_nxt_bid": (
+            depth_proof.get("nxt_bid", "-")
         ),
     }
 
@@ -33990,9 +34087,8 @@ def observe_risky_micro_episode_executable_bbo_paths(
             )
             fresh = bool(
                 route_scope_fields.get(
-                    "risky_micro_episode_horizon_observer_route_scope_status"
+                    "risky_micro_episode_horizon_observer_route_scope_eligible"
                 )
-                == "exact_0d_route_snapshot"
                 and market_fields.get("market_data_effective_price_source") == "ws"
                 and bid > 0
                 and ask >= bid
@@ -34021,13 +34117,17 @@ def observe_risky_micro_episode_executable_bbo_paths(
                     "decision_authority": (
                         "report_only_bounded_executable_bbo_observer_no_order_authority"
                     ),
-                    "window_policy": "same_symbol_venue_session_1s_until_45s",
+                    "window_policy": (
+                        "same_symbol_session_exact_route_or_depth_proven_venue_"
+                        "1s_until_45s"
+                    ),
                     "sample_floor": "not_applicable_instrumentation",
                     "primary_decision_metric": (
                         "fresh_executable_bbo_horizon_coverage"
                     ),
                     "source_quality_gate": (
-                        "exact_symbol_venue_session_0d_and_fresh_bbo_age_le_1000ms"
+                        "exact_symbol_session_0d_and_exact_item_venue_or_official_"
+                        "route_depth_proof_and_fresh_bbo_age_le_1000ms"
                     ),
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
