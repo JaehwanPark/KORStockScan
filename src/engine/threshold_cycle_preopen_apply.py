@@ -84,6 +84,12 @@ SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR = (
 ENTRY_AI_GATE_BACKTEST_DIR = DATA_DIR / "report" / "entry_ai_gate_backtest"
 ENTRY_AI_GATE_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
 CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
+POST_PROBE_WINNER_RECOVERY_FAMILY = "post_probe_winner_recovery"
+POST_PROBE_WINNER_RECOVERY_STAGE = "post_probe_recovery"
+POST_PROBE_WINNER_RECOVERY_READY_STATE = (
+    "bounded_one_share_canary_evidence_ready"
+)
+POST_PROBE_WINNER_RECOVERY_VENUES = ("KRX", "NXT", "PREMARKET_KRX_LIKE")
 RUNTIME_GAP_PROVENANCE_DIR = DATA_DIR / "threshold_cycle" / "runtime_gap_provenance"
 ENTRY_CANCEL_WAIT_TUNING_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
 ENTRY_CANCEL_WAIT_FAMILY = "entry_cancel_wait_runtime"
@@ -234,6 +240,11 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED": "strong_continuation_enabled",
     "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT": "strong_continuation_min_profit_pct",
     "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT": "strong_continuation_max_drawdown_pct",
+    "SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED": "enabled",
+    "SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE": "active_date",
+    "SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED": "krx_enabled",
+    "SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED": "nxt_enabled",
+    "SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED": "premarket_enabled",
     "SHALLOW_VOLATILITY_AVG_DOWN_ENABLED": "shallow_enabled",
     "SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN": "shallow_pnl_min",
     "SHALLOW_VOLATILITY_AVG_DOWN_PNL_MAX": "shallow_pnl_max",
@@ -565,6 +576,7 @@ DETERMINISTIC_POLICY_HANDOFF_FAMILIES = frozenset(
     {
         "entry_split_order_plan",
         "scale_in_split_order_plan",
+        POST_PROBE_WINNER_RECOVERY_FAMILY,
     }
 )
 
@@ -1174,8 +1186,213 @@ def _block_candidates_by_source_quality_preflight(
     return blocked_candidates, status
 
 
+def _winner_recovery_auto_apply_candidate(
+    payload: dict[str, Any],
+    *,
+    target_date: str | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Build the next-PREOPEN, venue-bounded one-share recovery candidate."""
+
+    observation = (
+        payload.get("winner_recovery_bounded_canary_observation")
+        if isinstance(
+            payload.get("winner_recovery_bounded_canary_observation"), dict
+        )
+        else {}
+    )
+    real_observation = (
+        payload.get("winner_recovery_real_execution_observation")
+        if isinstance(payload.get("winner_recovery_real_execution_observation"), dict)
+        else {}
+    )
+    status: dict[str, Any] = {
+        "state": "not_ready",
+        "target_date": target_date,
+        "eligible_venues": [],
+        "blocked_venues": {},
+        "counterfactual_state": observation.get("state"),
+        "real_execution_state": real_observation.get("state"),
+    }
+    if not target_date:
+        status["state"] = "missing_target_date"
+        return None, status
+
+    real_by_venue = {
+        str(row.get("entry_effective_venue") or "").strip().upper(): row
+        for row in (real_observation.get("by_entry_effective_venue") or [])
+        if isinstance(row, dict) and row.get("entry_effective_venue")
+    }
+    evidence_by_venue = {
+        str(row.get("effective_venue") or "").strip().upper(): row
+        for row in (observation.get("by_effective_venue") or [])
+        if isinstance(row, dict) and row.get("effective_venue")
+    }
+    eligible_venues: list[str] = []
+    blocked_venues: dict[str, list[str]] = {}
+    venue_evidence: dict[str, dict[str, Any]] = {}
+    for venue in POST_PROBE_WINNER_RECOVERY_VENUES:
+        evidence = evidence_by_venue.get(venue) or {}
+        blockers: list[str] = []
+        sample_count = _int_or_default(evidence.get("sample_count"), 0) or 0
+        sample_floor = _int_or_default(evidence.get("sample_floor"), 0) or 0
+        ev_eligible_count = (
+            _int_or_default(evidence.get("ev_eligible_sample_count"), 0) or 0
+        )
+        counterfactual_ev = _bridge_candidate_float(
+            evidence.get("notional_weighted_ev_pct")
+        )
+        if str(evidence.get("state") or "") != (
+            POST_PROBE_WINNER_RECOVERY_READY_STATE
+        ):
+            blockers.append("counterfactual_state_not_ready")
+        if not bool(evidence.get("sample_floor_met")):
+            blockers.append("counterfactual_sample_floor_not_met")
+        if sample_floor <= 0 or sample_count < sample_floor:
+            blockers.append("counterfactual_sample_count_below_floor")
+        if ev_eligible_count < sample_floor:
+            blockers.append("counterfactual_ev_sample_count_below_floor")
+        if counterfactual_ev is None or counterfactual_ev <= 0:
+            blockers.append("counterfactual_ev_not_positive")
+
+        real = real_by_venue.get(venue) or {}
+        real_count = (
+            _int_or_default(real.get("source_quality_valid_closed_count"), 0) or 0
+        )
+        real_floor = (
+            _int_or_default(real_observation.get("sample_floor"), 0) or 0
+        )
+        real_ev = _bridge_candidate_float(real.get("source_quality_adjusted_ev_pct"))
+        if real_floor > 0 and real_count >= real_floor and (
+            real_ev is None or real_ev <= 0
+        ):
+            blockers.append("real_execution_ev_non_positive_rollback")
+
+        venue_evidence[venue] = {
+            "counterfactual_sample_count": sample_count,
+            "counterfactual_sample_floor": sample_floor,
+            "counterfactual_ev_eligible_sample_count": ev_eligible_count,
+            "counterfactual_notional_weighted_ev_pct": counterfactual_ev,
+            "real_execution_source_quality_valid_closed_count": real_count,
+            "real_execution_sample_floor": real_floor,
+            "real_execution_source_quality_adjusted_ev_pct": real_ev,
+            "blockers": blockers,
+        }
+        if blockers:
+            blocked_venues[venue] = blockers
+        else:
+            eligible_venues.append(venue)
+
+    status.update(
+        eligible_venues=eligible_venues,
+        blocked_venues=blocked_venues,
+        venue_evidence=venue_evidence,
+    )
+    if not eligible_venues:
+        status["state"] = "no_eligible_venue"
+        return None, status
+
+    status["state"] = "next_preopen_auto_bounded_live_candidate"
+    recommended_values = {
+        "enabled": True,
+        "active_date": target_date,
+        "krx_enabled": "KRX" in eligible_venues,
+        "nxt_enabled": "NXT" in eligible_venues,
+        "premarket_enabled": "PREMARKET_KRX_LIKE" in eligible_venues,
+    }
+    candidate = {
+        "family": POST_PROBE_WINNER_RECOVERY_FAMILY,
+        "stage": POST_PROBE_WINNER_RECOVERY_STAGE,
+        "priority": 38,
+        "family_type": "bounded_tunable_post_probe_one_share_recovery",
+        "calibration_state": "adjust_up",
+        "calibration_reason": (
+            "positive_exact_blocker_ev_and_venue_sample_floor_auto_apply"
+        ),
+        "threshold_version": (
+            f"{POST_PROBE_WINNER_RECOVERY_FAMILY}:{target_date}:v1"
+        ),
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "post_apply_attribution_required": True,
+        "operator_action_required": False,
+        "operator_authorization_provenance": (
+            "explicit_operator_direction_2026-08-21_"
+            "post_probe_winner_recovery_auto_apply"
+        ),
+        "initial_real_qty_cap": 1,
+        "automatic_quantity_increase_above_one_share_allowed": False,
+        "sample_count": sum(
+            int(venue_evidence[venue]["counterfactual_sample_count"])
+            for venue in eligible_venues
+        ),
+        "sample_floor": int(observation.get("sample_floor") or 0),
+        "current_values": {
+            "enabled": False,
+            "active_date": "",
+            "krx_enabled": False,
+            "nxt_enabled": False,
+            "premarket_enabled": False,
+        },
+        "recommended_values": recommended_values,
+        "target_env_keys": [
+            "SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED",
+            "SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE",
+            "SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED",
+            "SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED",
+            "SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED",
+        ],
+        "source_quality_gate": "pass",
+        "source_quality_status": "pass",
+        "source_metrics": {
+            "source_quality_pass": True,
+            "provenance_present": True,
+            "eligible_venues": eligible_venues,
+            "blocked_venues": blocked_venues,
+            "venue_evidence": venue_evidence,
+        },
+        "runtime_handoff_contract": {
+            "decision_authority": "next_preopen_bounded_candidate_only",
+            "runtime_effect": False,
+            "same_stage_max_selected": 1,
+            "post_apply_attribution_required": True,
+            "preopen_selection_state": "pending_not_applied",
+            "manipulation_point": POST_PROBE_WINNER_RECOVERY_STAGE,
+            "rollback_guard": (
+                "source_quality_block_or_venue_ev_non_positive_after_real_floor"
+            ),
+        },
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": (
+            "postclose_deterministic_next_preopen_bounded_live_candidate"
+        ),
+        "metric_role": "bounded_tunable_post_probe_winner_recovery",
+        "window_policy": (
+            "rolling_clean_baseline_exact_blocker_by_effective_venue"
+        ),
+        "primary_decision_metric": "notional_weighted_ev_pct",
+        "forbidden_uses": [
+            "intraday_runtime_apply",
+            "full_residual_submit",
+            "automatic_quantity_increase_above_one_share",
+            "cross_venue_promotion",
+            "hard_safety_relaxation",
+            "broker_guard_bypass",
+            "order_guard_relaxation",
+            "quantity_guard_relaxation",
+            "position_cap_release",
+            "provider_route_change",
+            "bot_restart",
+        ],
+    }
+    return candidate, status
+
+
 def _load_scalping_pyramid_quality_calibration_candidates(
     source_date: str | None,
+    *,
+    target_date: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not source_date:
         return [], {"status": "missing_source_date", "path": None}
@@ -1206,13 +1423,19 @@ def _load_scalping_pyramid_quality_calibration_candidates(
             }
             for item in normalized
         ]
-    normalized, preflight_status = _block_candidates_by_source_quality_preflight(
-        normalized,
+    winner_recovery_candidate, winner_recovery_status = (
+        _winner_recovery_auto_apply_candidate(payload, target_date=target_date)
+    )
+    all_candidates = [*normalized]
+    if winner_recovery_candidate:
+        all_candidates.append(winner_recovery_candidate)
+    all_candidates, preflight_status = _block_candidates_by_source_quality_preflight(
+        all_candidates,
         source_date,
         source_report_type="scalping_pyramid_quality_calibration",
     )
-    selected_candidate = normalized[0] if normalized else {}
-    return normalized, {
+    selected_candidate = all_candidates[0] if all_candidates else {}
+    return all_candidates, {
         "status": "loaded",
         "path": str(path),
         "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
@@ -1221,6 +1444,7 @@ def _load_scalping_pyramid_quality_calibration_candidates(
         "source_quality_preflight": preflight_status,
         "source_quality_blocked": bool(preflight_status.get("blocked")),
         "runtime_update_contract_error": cumulative_contract_error or None,
+        "winner_recovery_auto_apply": winner_recovery_status,
     }
 
 
@@ -1650,6 +1874,9 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "score65_74_recovery_probe": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_",
     "rising_missed_first_touch_avgdown_decision_gate": "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_",
     "scalping_pyramid_quality_gate": "KORSTOCKSCAN_SCALPING_PYRAMID_",
+    POST_PROBE_WINNER_RECOVERY_FAMILY: (
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
+    ),
     "shallow_volatility_avg_down_quality_gate": "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_",
     "deep_recovery_avg_down_quality_gate": "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_",
     SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY: "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_",
@@ -4106,6 +4333,13 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
     "scalping_pyramid_quality_gate": [
         "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT",
     ],
+    POST_PROBE_WINNER_RECOVERY_FAMILY: [
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED",
+    ],
     "scalp_sim_candidate_window_expansion": [
         "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED",
     ],
@@ -4192,7 +4426,7 @@ def _runtime_env_enabled(value: Any) -> bool:
 DATED_RUNTIME_AUTO_RENEW_ENABLED_KEY = "KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED"
 
 
-DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
+DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, Any], ...] = (
     {
         "family": "rising_missed_tp1_selector",
         "enabled_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED",
@@ -4360,6 +4594,17 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
         "enabled_key": "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED",
         "active_date_key": "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE",
     },
+    {
+        "family": POST_PROBE_WINNER_RECOVERY_FAMILY,
+        "enabled_key": "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED",
+        "active_date_key": (
+            "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE"
+        ),
+        # This is recalibrated by each PREOPEN manifest.  Carrying yesterday's
+        # enabled value across dates could bypass a new EV/source-quality
+        # rollback decision.
+        "auto_renew": False,
+    },
 )
 
 
@@ -4381,6 +4626,8 @@ def _dated_runtime_auto_renew_expected_env(
     renewed_env: dict[str, str] = {}
     renewed_keys: list[str] = []
     for spec in DATED_RUNTIME_OVERRIDE_SPECS:
+        if spec.get("auto_renew") is False:
+            continue
         enabled_key = spec["enabled_key"]
         if not _runtime_env_enabled(effective_env.get(enabled_key)):
             continue
@@ -6197,7 +6444,10 @@ def build_preopen_apply_manifest(
         if latency_candidates:
             calibration_candidates = [*calibration_candidates, *latency_candidates]
         scalping_pyramid_quality_candidates, scalping_pyramid_quality_calibration = (
-            _load_scalping_pyramid_quality_calibration_candidates(report_source_date)
+            _load_scalping_pyramid_quality_calibration_candidates(
+                report_source_date,
+                target_date=target_date,
+            )
         )
         if scalping_pyramid_quality_candidates:
             calibration_candidates = [

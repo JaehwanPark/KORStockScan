@@ -643,7 +643,9 @@ def test_winner_recovery_counterfactual_isolates_exact_blocker_by_venue(
     assert observation["state"] == "bounded_one_share_canary_evidence_ready"
     assert observation["sample_count"] == 10
     assert observation["ready_venue_count"] == 1
-    assert observation["operator_action_required"] is True
+    assert observation["operator_action_required"] is False
+    assert observation["next_preopen_auto_apply_candidate"] is True
+    assert observation["auto_apply_mode"] == "next_preopen_auto_bounded_live"
     assert observation["allowed_runtime_apply"] is False
     assert observation["initial_real_qty_cap"] == 1
     assert observation["by_effective_venue"] == [

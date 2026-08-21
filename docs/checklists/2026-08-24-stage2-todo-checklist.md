@@ -104,6 +104,15 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 사용자 지시 구현
+
+- [ ] `[PostProbeWinnerRecoveryAutoApply0824] post-probe winner recovery 자동 PREOPEN 선택·rollback 검증` (`Due: 2026-08-24`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:05`, `Track: ScalpingLogic`)
+  - Source: [scalping_pyramid_quality_calibration_2026-08-21.json](/home/ubuntu/KORStockScan/data/report/scalping_pyramid_quality_calibration/scalping_pyramid_quality_calibration_2026-08-21.json), [threshold_apply_2026-08-24.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-08-24.json), [threshold_runtime_env_2026-08-24.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-08-24.json), [threshold_runtime_env_verify_2026-08-24.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-08-24.json)
+  - 판정 기준: exact `profit_not_enough` 표본·양의 비용 반영 EV·source-quality gate를 통과한 venue만 `post_probe_winner_recovery` family로 선택되고 active date가 `2026-08-24`인지 확인한다. 현재 근거대로면 KRX=true, NXT=false, PREMARKET=false와 1주 추가 상한이 명시돼야 한다. venue별 실제 종료 표본이 20건 이상일 때 비용 반영 EV가 비양수이면 해당 venue가 자동 OFF돼야 한다.
+  - 금지: 일반 PYRAMID threshold 변경, full residual 제출, 1주 초과 recovery, hard/stale/broker/account/order/quantity/cooldown guard 우회, provider·bot 변경을 열지 않는다.
+  - 다음 액션: `auto_selected_and_verified`, `source_quality_blocked_no_env`, `venue_evidence_below_floor`, `real_ev_rollback_applied`, `runtime_verify_failed` 중 하나로 닫는다.
+
+
 
 ## Project/Calendar 동기화
 

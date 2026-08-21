@@ -409,6 +409,115 @@ def test_scalping_pyramid_quality_gate_candidate_emits_runtime_env_overrides():
     }
 
 
+def test_post_probe_winner_recovery_auto_candidate_emits_dated_venue_env():
+    payload = {
+        "winner_recovery_bounded_canary_observation": {
+            "state": "bounded_one_share_canary_evidence_ready",
+            "sample_floor": 10,
+            "by_effective_venue": [
+                {
+                    "effective_venue": "KRX",
+                    "state": "bounded_one_share_canary_evidence_ready",
+                    "sample_count": 12,
+                    "ev_eligible_sample_count": 12,
+                    "sample_floor": 10,
+                    "sample_floor_met": True,
+                    "notional_weighted_ev_pct": 0.1142,
+                },
+                {
+                    "effective_venue": "NXT",
+                    "state": "hold_sample",
+                    "sample_count": 1,
+                    "ev_eligible_sample_count": 1,
+                    "sample_floor": 10,
+                    "sample_floor_met": False,
+                    "notional_weighted_ev_pct": 0.2898,
+                },
+            ],
+        },
+        "winner_recovery_real_execution_observation": {
+            "state": "observe_one_share_canary",
+            "sample_floor": 20,
+            "by_entry_effective_venue": [],
+        },
+    }
+
+    candidate, status = mod._winner_recovery_auto_apply_candidate(
+        payload,
+        target_date="2026-08-24",
+    )
+
+    assert candidate is not None
+    assert status["eligible_venues"] == ["KRX"]
+    assert candidate["operator_action_required"] is False
+    assert candidate["initial_real_qty_cap"] == 1
+    assert candidate["automatic_quantity_increase_above_one_share_allowed"] is False
+    assert candidate["operator_authorization_provenance"].startswith(
+        "explicit_operator_direction_2026-08-21"
+    )
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={"items_by_family": {}},
+        require_ai=True,
+        target_date="2026-08-24",
+    )
+    assert [item["family"] for item in selected] == [
+        mod.POST_PROBE_WINNER_RECOVERY_FAMILY
+    ]
+    assert decisions[0]["decision_reason"] == "deterministic_policy_handoff"
+    assert env == {
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE": (
+            "2026-08-24"
+        ),
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED": "false",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED": "false",
+    }
+
+
+def test_post_probe_winner_recovery_auto_candidate_rolls_back_non_positive_real_ev():
+    payload = {
+        "winner_recovery_bounded_canary_observation": {
+            "state": "bounded_one_share_canary_evidence_ready",
+            "sample_floor": 10,
+            "by_effective_venue": [
+                {
+                    "effective_venue": "KRX",
+                    "state": "bounded_one_share_canary_evidence_ready",
+                    "sample_count": 20,
+                    "ev_eligible_sample_count": 20,
+                    "sample_floor": 10,
+                    "sample_floor_met": True,
+                    "notional_weighted_ev_pct": 0.2,
+                }
+            ],
+        },
+        "winner_recovery_real_execution_observation": {
+            "state": "non_positive_ev_hold",
+            "sample_floor": 20,
+            "by_entry_effective_venue": [
+                {
+                    "entry_effective_venue": "KRX",
+                    "source_quality_valid_closed_count": 20,
+                    "source_quality_adjusted_ev_pct": -0.01,
+                }
+            ],
+        },
+    }
+
+    candidate, status = mod._winner_recovery_auto_apply_candidate(
+        payload,
+        target_date="2026-08-24",
+    )
+
+    assert candidate is None
+    assert status["state"] == "no_eligible_venue"
+    assert status["blocked_venues"]["KRX"] == [
+        "real_execution_ev_non_positive_rollback"
+    ]
+
+
 def test_entry_split_order_plan_allows_deterministic_ai_unavailable(
     tmp_path, monkeypatch
 ):
@@ -1128,7 +1237,27 @@ def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(
                         "target_env_keys": ["SCALPING_PYRAMID_MIN_PROFIT_PCT"],
                         "recommended_values": {"min_profit_pct": 1.1},
                     }
-                ]
+                ],
+                "winner_recovery_bounded_canary_observation": {
+                    "state": "bounded_one_share_canary_evidence_ready",
+                    "sample_floor": 10,
+                    "by_effective_venue": [
+                        {
+                            "effective_venue": "KRX",
+                            "state": "bounded_one_share_canary_evidence_ready",
+                            "sample_count": 12,
+                            "ev_eligible_sample_count": 12,
+                            "sample_floor": 10,
+                            "sample_floor_met": True,
+                            "notional_weighted_ev_pct": 0.2,
+                        }
+                    ],
+                },
+                "winner_recovery_real_execution_observation": {
+                    "state": "observe_one_share_canary",
+                    "sample_floor": 20,
+                    "by_entry_effective_venue": [],
+                },
             }
         ),
         encoding="utf-8",
@@ -1156,7 +1285,10 @@ def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(
     )
 
     pyramid_candidates, pyramid_status = (
-        mod._load_scalping_pyramid_quality_calibration_candidates("2026-07-03")
+        mod._load_scalping_pyramid_quality_calibration_candidates(
+            "2026-07-03",
+            target_date="2026-07-04",
+        )
     )
     avg_down_candidates, avg_down_status = (
         mod._load_scalping_avg_down_recovery_calibration_candidates("2026-07-03")
@@ -1164,9 +1296,13 @@ def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(
 
     assert pyramid_status["source_quality_blocked"] is True
     assert avg_down_status["source_quality_blocked"] is True
-    assert pyramid_candidates[0]["allowed_runtime_apply"] is False
+    assert len(pyramid_candidates) == 2
+    assert all(item["allowed_runtime_apply"] is False for item in pyramid_candidates)
     assert avg_down_candidates[0]["allowed_runtime_apply"] is False
-    assert pyramid_candidates[0]["source_quality_gate"] == "source_quality_blocked"
+    assert all(
+        item["source_quality_gate"] == "source_quality_blocked"
+        for item in pyramid_candidates
+    )
     assert avg_down_candidates[0]["source_quality_gate"] == "source_quality_blocked"
 
 
@@ -9428,6 +9564,8 @@ def test_dated_runtime_auto_renew_projects_only_enabled_members_to_target_date()
         "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE": ("2026-07-31"),
         "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED": "true",
         "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE": "2026-07-31",
     }
 
     expected, expected_keys = mod._dated_runtime_auto_renew_expected_env(
@@ -9445,6 +9583,7 @@ def test_dated_runtime_auto_renew_projects_only_enabled_members_to_target_date()
     }
     assert expected_keys == sorted(expected)
     assert "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED" not in expected
+    assert "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED" not in expected
 
 
 def test_verify_runtime_env_handoff_accepts_explicit_dated_auto_renew_contract(
@@ -9598,6 +9737,8 @@ def test_dated_runtime_override_audits_accept_current_runtime_bundle():
         "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED": "true",
         "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE": target_date,
     }
 
     audits = mod._dated_runtime_override_audits(target_date, env)

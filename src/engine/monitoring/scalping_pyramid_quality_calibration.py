@@ -495,11 +495,13 @@ def _normal_winner_expansion_observation(
         "sample_count": len(exact_blocker_rows),
         "sample_floor": WINNER_RECOVERY_COUNTERFACTUAL_SAMPLE_FLOOR,
         "ready_venue_count": len(positive_ready),
-        "operator_action_required": bool(positive_ready),
+        "operator_action_required": False,
+        "next_preopen_auto_apply_candidate": bool(positive_ready),
+        "auto_apply_mode": "next_preopen_auto_bounded_live",
         "standalone_real_order_conversion_allowed": False,
         "remaining_real_authority_requirements": [
-            "explicit_operator_approval_or_existing_authorized_canary_provenance",
-            "dated_venue_cohort_runtime_selection",
+            "deterministic_preopen_source_quality_and_venue_gate",
+            "dated_venue_cohort_runtime_selection_by_threshold_cycle",
             "post_apply_real_execution_attribution",
         ],
         "by_effective_venue": bounded_canary_by_venue,
@@ -1320,7 +1322,13 @@ def _calibration_candidate(
             winner_recovery_bounded_canary,
             winner_recovery_real_execution,
         ):
-            if observation.get("operator_action_required"):
+            if observation.get("operator_action_required") or str(
+                observation.get("state") or ""
+            ) in {
+                "bounded_one_share_canary_evidence_ready",
+                "venue_conflict_requires_independent_decision",
+                "first_planned_residual_leg_candidate_ready",
+            }:
                 observation["evidence_state_before_source_quality_gate"] = (
                     observation.get("state")
                 )

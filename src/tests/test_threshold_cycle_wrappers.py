@@ -2359,10 +2359,49 @@ def test_run_bot_dated_auto_renew_registry_matches_handoff_verifier_registry():
     verifier_specs = {
         (spec["enabled_key"], spec["active_date_key"])
         for spec in DATED_RUNTIME_OVERRIDE_SPECS
+        if spec.get("auto_renew") is not False
     }
 
     assert len(shell_specs) == 23
     assert shell_specs == verifier_specs
+
+
+def test_run_bot_winner_recovery_is_reset_and_not_auto_renewed():
+    script = Path("src/run_bot.sh").read_text(encoding="utf-8")
+    renewal_registry = script[
+        script.index("DATED_RUNTIME_AUTO_RENEW_SPECS=(") : script.index(
+            "\n)\n\nrenew_enabled_dated_runtime_overrides"
+        )
+    ]
+    reset_block = script[
+        script.index("reset_runtime_policy_env_before_handoff()") : script.index(
+            "\n}\n\n# 무한 루프 시작",
+            script.index("reset_runtime_policy_env_before_handoff()"),
+        )
+    ]
+    expired_block = script[
+        script.index("disable_expired_dated_runtime_overrides()") : script.index(
+            "\n}\n\nverify_threshold_runtime_env_handoff",
+            script.index("disable_expired_dated_runtime_overrides()"),
+        )
+    ]
+
+    assert "SCALP_POST_PROBE_WINNER_RECOVERY" not in renewal_registry
+    for suffix in (
+        "ENABLED",
+        "ACTIVE_DATE",
+        "KRX_ENABLED",
+        "NXT_ENABLED",
+        "PREMARKET_ENABLED",
+    ):
+        assert (
+            f"unset KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_{suffix}"
+            in reset_block
+        )
+    assert (
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED:"
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE:"
+    ) in expired_block
 
 
 def test_run_bot_does_not_auto_renew_without_explicit_operator_authority():
