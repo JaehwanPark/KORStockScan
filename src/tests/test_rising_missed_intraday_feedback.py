@@ -135,6 +135,47 @@ def test_risky_micro_episode_source_candidates_are_consumed_by_feedback_report(
         "entry_ai"
         in report["summary"]["risky_micro_episode_unobserved_source_categories"]
     )
+    assert report["summary"]["risky_micro_episode_tick_context_gap_reason_counts"] == []
+
+
+def test_risky_micro_report_preserves_tick_context_gap_owner(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    row = _event(
+        "micro-gap",
+        "475560",
+        "THEBORN",
+        "risky_micro_episode_source_candidate_observed",
+        {
+            "risky_micro_episode_status": "source_quality_blocked",
+            "risky_micro_episode_reason": "tick_context_missing",
+            "risky_micro_episode_source_stage": "latency_block",
+            "risky_micro_episode_instrumentation_gap": "tick_context_missing",
+            "risky_micro_episode_tick_context_gap_reason": (
+                "tp1_signed_tick_sample_floor_not_met"
+            ),
+            "risky_micro_episode_tick_context_tp1_sample_count": 4,
+            "risky_micro_episode_tick_context_tp1_age_sec": 0.2,
+            "risky_micro_episode_tick_context_tp1_source": (
+                "trusted_ws_signed_0b_10tick_received_ts"
+            ),
+            "risky_micro_episode_best_bid": 16_220,
+            "risky_micro_episode_best_ask": 16_310,
+            "risky_micro_episode_quote_age_ms": 100,
+        },
+        emitted_at="2026-08-14T09:10:00+09:00",
+    )
+    pipeline_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    report = mod.build_report("2026-08-14", pipeline_path=pipeline_path)
+
+    candidate = report["risky_micro_episode_source_candidate_rows"][0]
+    assert candidate["tick_context_gap_reason"] == (
+        "tp1_signed_tick_sample_floor_not_met"
+    )
+    assert candidate["tick_context_tp1_sample_count"] == 4
+    assert report["summary"]["risky_micro_episode_tick_context_gap_reason_counts"] == [
+        {"reason": "tp1_signed_tick_sample_floor_not_met", "count": 1}
+    ]
 
 
 def test_risky_micro_episode_joins_passive_fill_and_executable_short_path(tmp_path):

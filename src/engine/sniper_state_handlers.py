@@ -33560,6 +33560,24 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
         )
         >= 10
     )
+    tp1_tick_sample_count = _safe_int(
+        tp1_context.get(
+            "rising_missed_tp1_submit_context_tick_window_sample_count"
+        ),
+        0,
+    )
+    tp1_tick_age_sec = _safe_float(
+        tp1_context.get(
+            "rising_missed_tp1_submit_context_tick_acceleration_age_sec"
+        ),
+        None,
+    )
+    tp1_tick_source = str(
+        tp1_context.get(
+            "rising_missed_tp1_submit_context_tick_acceleration_source"
+        )
+        or ""
+    ).strip()
     tick_context_source = "direct_entry_tick_context"
     if tp1_tick_context_fresh:
         if tick_acceleration_ratio is None:
@@ -33576,6 +33594,33 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
             )
         if tick_acceleration_ratio is not None and tick_window_span_sec is not None:
             tick_context_source = "trusted_tp1_ws_signed_0b_10tick_context"
+    tick_context_gap_reason = "none"
+    if tick_acceleration_ratio is None or tick_window_span_sec is None:
+        if not tp1_context:
+            if tick_acceleration_ratio is None and tick_window_span_sec is None:
+                tick_context_gap_reason = "direct_and_tp1_tick_context_missing"
+            elif tick_acceleration_ratio is None:
+                tick_context_gap_reason = "tick_acceleration_missing"
+            else:
+                tick_context_gap_reason = "tick_window_span_missing"
+        elif tp1_tick_sample_count < 10:
+            tick_context_gap_reason = "tp1_signed_tick_sample_floor_not_met"
+        elif tp1_tick_source != "trusted_ws_signed_0b_10tick_received_ts":
+            tick_context_gap_reason = "tp1_tick_source_untrusted_or_missing"
+        elif tp1_tick_age_sec is None:
+            tick_context_gap_reason = "tp1_tick_context_age_missing"
+        elif tp1_tick_age_sec > 3.0:
+            tick_context_gap_reason = "tp1_tick_context_stale"
+        elif not _truthy_field(
+            tp1_context.get("rising_missed_tp1_submit_context_fresh")
+        ):
+            tick_context_gap_reason = "tp1_submit_context_freshness_unconfirmed"
+        elif tick_acceleration_ratio is None and tick_window_span_sec is None:
+            tick_context_gap_reason = "tick_acceleration_and_window_span_missing"
+        elif tick_acceleration_ratio is None:
+            tick_context_gap_reason = "tick_acceleration_missing"
+        else:
+            tick_context_gap_reason = "tick_window_span_missing"
     tp1_true_ofi = _safe_float(
         tp1_context.get("rising_missed_tp1_submit_context_true_ofi_ewma"), None
     )
@@ -33622,6 +33667,7 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
         quote_age_ms=quote_age_ms,
         tick_acceleration_ratio=tick_acceleration_ratio,
         tick_window_span_sec=tick_window_span_sec,
+        tick_context_gap_reason=tick_context_gap_reason,
         positive_micro_support=positive_micro_support,
         adverse_micro_detected=adverse_micro_detected,
         large_sell_detected=large_sell_detected,
@@ -33630,6 +33676,13 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
     result["risky_micro_episode_tick_context_fallback_applied"] = bool(
         tick_context_source == "trusted_tp1_ws_signed_0b_10tick_context"
     )
+    result["risky_micro_episode_tick_context_tp1_sample_count"] = (
+        tp1_tick_sample_count
+    )
+    result["risky_micro_episode_tick_context_tp1_age_sec"] = (
+        round(tp1_tick_age_sec, 6) if tp1_tick_age_sec is not None else "-"
+    )
+    result["risky_micro_episode_tick_context_tp1_source"] = tp1_tick_source or "-"
     return result
 
 
@@ -34342,6 +34395,60 @@ def _post_sell_exact_route_subscription_snapshot(
         }
 
 
+def _post_sell_executable_bbo_gap_reason(
+    *,
+    subscription_snapshot: dict[str, Any],
+    route_scope_fields: dict[str, Any],
+    market_fields: dict[str, Any],
+    bid: int,
+    ask: int,
+    quote_epoch: float,
+    sell_epoch: float,
+    quote_age_ms: float | None,
+) -> str:
+    """Return one canonical source-gap owner for a post-sell horizon."""
+
+    subscription_resolution = str(
+        subscription_snapshot.get("resolution") or "unknown"
+    )
+    if not subscription_snapshot.get("exact_route_subscription_present"):
+        if subscription_resolution == "base_subscribed_but_exact_route_missing":
+            return "exact_route_subscription_missing"
+        if subscription_resolution == "base_subscription_missing":
+            return "base_subscription_missing"
+        if subscription_resolution == "route_snapshot_unavailable":
+            return "subscription_route_snapshot_unavailable"
+        if subscription_resolution.startswith("route_snapshot_error:"):
+            return "subscription_route_snapshot_error"
+        return "exact_route_subscription_unconfirmed"
+
+    route_scope_status = str(
+        route_scope_fields.get(
+            "risky_micro_episode_horizon_observer_route_scope_status"
+        )
+        or "unknown"
+    )
+    if not route_scope_fields.get(
+        "risky_micro_episode_horizon_observer_route_scope_eligible"
+    ):
+        return f"route_scope_{route_scope_status}"
+    if market_fields.get("market_data_effective_price_source") != "ws":
+        return "route_scoped_ws_price_missing"
+    if bid <= 0 or ask < bid:
+        return "route_scoped_bbo_missing_or_invalid"
+    if quote_epoch <= 0:
+        return "route_scoped_quote_epoch_missing"
+    if quote_epoch <= sell_epoch:
+        return "route_scoped_quote_not_after_sell"
+    if quote_age_ms is None:
+        return "route_scoped_quote_age_missing"
+    if quote_age_ms < 0.0:
+        return "route_scoped_quote_epoch_in_future"
+    if quote_age_ms > 1000.0:
+        return "route_scoped_quote_stale"
+    return "none"
+
+
 def observe_post_sell_executable_bbo_horizons(
     *, now_ts: float | None = None
 ) -> dict[str, int]:
@@ -34402,17 +34509,18 @@ def observe_post_sell_executable_bbo_horizons(
             quote_age_ms = _safe_float(
                 market_fields.get("market_data_effective_quote_age_ms"), None
             )
+            source_gap_reason = _post_sell_executable_bbo_gap_reason(
+                subscription_snapshot=subscription_snapshot,
+                route_scope_fields=route_scope_fields,
+                market_fields=market_fields,
+                bid=bid,
+                ask=ask,
+                quote_epoch=quote_epoch,
+                sell_epoch=sell_epoch,
+                quote_age_ms=quote_age_ms,
+            )
             fresh = bool(
-                subscription_present
-                and route_scope_fields.get(
-                    "risky_micro_episode_horizon_observer_route_scope_eligible"
-                )
-                and market_fields.get("market_data_effective_price_source") == "ws"
-                and bid > 0
-                and ask >= bid
-                and quote_epoch > sell_epoch
-                and quote_age_ms is not None
-                and 0.0 <= quote_age_ms <= 1000.0
+                source_gap_reason == "none"
             )
             continuity = update_post_sell_executable_bbo_observer(
                 registration_key,
@@ -34438,6 +34546,12 @@ def observe_post_sell_executable_bbo_horizons(
                     if fresh_at_horizon
                     else "fresh_executable_bbo_missing_after_grace"
                 )
+                horizon_source_gap_reason = source_gap_reason
+                if not fresh_at_horizon and not horizon_window_open:
+                    if horizon_source_gap_reason == "none":
+                        horizon_source_gap_reason = (
+                            "horizon_observation_after_final_grace"
+                        )
                 return_pct = (
                     round(((bid / sell_price) - 1.0) * 100.0, 6)
                     if fresh_at_horizon
@@ -34464,6 +34578,14 @@ def observe_post_sell_executable_bbo_horizons(
                         round(quote_epoch, 3) if quote_epoch > 0 else "-"
                     ),
                     "post_sell_executable_bbo_quote_fresh": fresh_at_horizon,
+                    "post_sell_executable_bbo_source_gap_reason": (
+                        horizon_source_gap_reason
+                    ),
+                    "post_sell_executable_bbo_source_quality_status": (
+                        "source_quality_pass"
+                        if fresh_at_horizon
+                        else "source_quality_gap"
+                    ),
                     "post_sell_executable_bbo_subscription_present": (
                         subscription_present
                     ),
@@ -34497,6 +34619,50 @@ def observe_post_sell_executable_bbo_horizons(
                     ),
                     "post_sell_executable_bbo_fresh_sample_count": _safe_int(
                         continuity.get("fresh_sample_count"), 0
+                    ),
+                    "post_sell_executable_bbo_first_fresh_quote_epoch": (
+                        round(
+                            _safe_float(
+                                continuity.get("first_fresh_quote_epoch"), 0.0
+                            ),
+                            3,
+                        )
+                        if _safe_float(
+                            continuity.get("first_fresh_quote_epoch"), 0.0
+                        )
+                        > 0
+                        else "-"
+                    ),
+                    "post_sell_executable_bbo_last_fresh_quote_epoch": (
+                        round(
+                            _safe_float(
+                                continuity.get("last_fresh_quote_epoch"), 0.0
+                            ),
+                            3,
+                        )
+                        if _safe_float(
+                            continuity.get("last_fresh_quote_epoch"), 0.0
+                        )
+                        > 0
+                        else "-"
+                    ),
+                    "post_sell_executable_bbo_seconds_since_last_fresh_quote": (
+                        round(
+                            max(
+                                0.0,
+                                observed_at
+                                - _safe_float(
+                                    continuity.get("last_fresh_quote_epoch"),
+                                    0.0,
+                                ),
+                            ),
+                            3,
+                        )
+                        if _safe_float(
+                            continuity.get("last_fresh_quote_epoch"), 0.0
+                        )
+                        > 0
+                        else "-"
                     ),
                     "post_sell_executable_bbo_max_fresh_quote_gap_sec": round(
                         _safe_float(continuity.get("max_fresh_quote_gap_sec"), 0.0),

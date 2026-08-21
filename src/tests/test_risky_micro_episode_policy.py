@@ -100,6 +100,37 @@ def test_missing_bbo_and_tick_context_have_canonical_instrumentation_gaps():
         == "tick_context_missing"
     )
     assert missing_tick["risky_micro_episode_tick_context_state"] == "missing"
+    assert (
+        missing_tick["risky_micro_episode_tick_context_gap_reason"]
+        == "tick_acceleration_and_window_span_missing"
+    )
+
+
+def test_tick_context_gap_reason_preserves_producer_diagnosis():
+    result = _evaluate(
+        tick_acceleration_ratio=None,
+        tick_window_span_sec=None,
+        tick_context_gap_reason="tp1_signed_tick_sample_floor_not_met",
+    )
+
+    assert result["risky_micro_episode_status"] == "source_quality_blocked"
+    assert (
+        result["risky_micro_episode_tick_context_gap_reason"]
+        == "tp1_signed_tick_sample_floor_not_met"
+    )
+
+
+def test_tick_context_gap_reason_rejects_unknown_producer_token():
+    result = _evaluate(
+        tick_acceleration_ratio=None,
+        tick_window_span_sec=None,
+        tick_context_gap_reason="unexpected producer label",
+    )
+
+    assert (
+        result["risky_micro_episode_tick_context_gap_reason"]
+        == "unclassified_tick_context_gap"
+    )
 
 
 def test_long_tick_window_is_not_a_micro_episode():

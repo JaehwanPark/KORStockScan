@@ -10,6 +10,7 @@ from typing import Any
 from src.engine.scalping.risky_micro_episode import (
     POLICY_VERSION as RISKY_MICRO_POLICY_VERSION,
     PRIMARY_ENTRY_PROFILE as RISKY_MICRO_PRIMARY_ENTRY_PROFILE,
+    TICK_CONTEXT_GAP_REASONS as RISKY_MICRO_TICK_CONTEXT_GAP_REASONS,
     evaluate_risky_micro_episode,
 )
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
@@ -5278,6 +5279,7 @@ def _build_risky_micro_episode_source_candidates(
     source_stage_counts: Counter[str] = Counter()
     source_category_counts: Counter[str] = Counter()
     instrumentation_gap_counts: Counter[str] = Counter()
+    tick_context_gap_reason_counts: Counter[str] = Counter()
     unique_symbols: set[str] = set()
     seen: set[tuple[str, str, str, str, str]] = set()
     rows: list[dict[str, Any]] = []
@@ -5335,8 +5337,20 @@ def _build_risky_micro_episode_source_candidates(
             else:
                 instrumentation_gap = "none"
         instrumentation_gap = str(instrumentation_gap)
+        tick_context_gap_reason = str(
+            fields.get("risky_micro_episode_tick_context_gap_reason")
+            or (
+                "tick_acceleration_and_window_span_missing"
+                if instrumentation_gap == "tick_context_missing"
+                else "none"
+            )
+        )
+        if tick_context_gap_reason not in RISKY_MICRO_TICK_CONTEXT_GAP_REASONS:
+            tick_context_gap_reason = "unclassified_tick_context_gap"
         candidate_quote_age_ms = _risky_micro_quote_age_ms(fields)
         instrumentation_gap_counts[instrumentation_gap] += 1
+        if instrumentation_gap == "tick_context_missing":
+            tick_context_gap_reason_counts[tick_context_gap_reason] += 1
         rows.append(
             {
                 "ts": _event_ts(row),
@@ -5398,6 +5412,16 @@ def _build_risky_micro_episode_source_candidates(
                         is not None
                         else "missing"
                     ),
+                ),
+                "tick_context_gap_reason": tick_context_gap_reason,
+                "tick_context_tp1_sample_count": fields.get(
+                    "risky_micro_episode_tick_context_tp1_sample_count", "-"
+                ),
+                "tick_context_tp1_age_sec": fields.get(
+                    "risky_micro_episode_tick_context_tp1_age_sec", "-"
+                ),
+                "tick_context_tp1_source": fields.get(
+                    "risky_micro_episode_tick_context_tp1_source", "-"
                 ),
                 "source_stage": source_stage,
                 "source_category": fields.get(
@@ -5672,6 +5696,10 @@ def _build_risky_micro_episode_source_candidates(
         "risky_micro_episode_tick_context_missing_count": (
             instrumentation_gap_counts.get("tick_context_missing", 0)
         ),
+        "risky_micro_episode_tick_context_gap_reason_counts": [
+            {"reason": key, "count": value}
+            for key, value in tick_context_gap_reason_counts.most_common()
+        ],
         "risky_micro_episode_stale_quote_count": (
             instrumentation_gap_counts.get("stale_quote", 0)
         ),
@@ -7012,6 +7040,8 @@ def write_outputs(
         f"{summary.get('risky_micro_episode_horizon_observer_fresh_bbo_event_count')}",
         f"- risky_micro_episode_instrumentation_gap_counts: "
         f"{summary.get('risky_micro_episode_instrumentation_gap_counts')}",
+        f"- risky_micro_episode_tick_context_gap_reason_counts: "
+        f"{summary.get('risky_micro_episode_tick_context_gap_reason_counts')}",
         f"- risky_micro_episode_resolved_eligible_episode_count: "
         f"{summary.get('risky_micro_episode_resolved_eligible_episode_count')}",
         f"- risky_micro_episode_recheck_diagnostic_resolved_count: "

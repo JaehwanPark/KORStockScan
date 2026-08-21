@@ -157,7 +157,74 @@ def test_risky_micro_episode_reuses_fresh_trusted_tp1_tick_window_provenance():
     assert result["risky_micro_episode_tick_acceleration_ratio"] == 1.12
     assert result["risky_micro_episode_tick_window_span_sec"] == 8.0
     assert result["risky_micro_episode_tick_context_fallback_applied"] is True
+    assert result["risky_micro_episode_tick_context_gap_reason"] == "none"
+    assert result["risky_micro_episode_tick_context_tp1_sample_count"] == 10
     assert result["risky_micro_episode_runtime_effect"] is False
+
+
+def test_risky_micro_episode_explains_missing_tick_sample_floor():
+    result = state_handlers._evaluate_rising_missed_risky_micro_episode_source_only(
+        stock={
+            "code": "475560",
+            "name": "THEBORN",
+            "rising_missed_tp1_submit_context_at": time.time(),
+            "rising_missed_tp1_submit_context_evaluation_id": "tp1-eval-thin",
+            "rising_missed_tp1_submit_context_tick_acceleration_fresh": True,
+            "rising_missed_tp1_submit_context_tick_acceleration_source": (
+                "trusted_ws_signed_0b_10tick_received_ts"
+            ),
+            "rising_missed_tp1_submit_context_tick_acceleration_age_sec": 0.2,
+            "rising_missed_tp1_submit_context_tick_window_sample_count": 4,
+        },
+        runtime={},
+        latency_gate={"quote_age_ms": 100.0},
+        ws_data={
+            "orderbook": {
+                "asks": [{"price": 16_310, "volume": 50}],
+                "bids": [{"price": 16_220, "volume": 50}],
+            }
+        },
+        orderbook_fields={},
+        microstructure_fields={},
+        source_stage="latency_block",
+        source_block_reason="wide_spread",
+        rising_missed_entry_lineage=True,
+    )
+
+    assert result["risky_micro_episode_status"] == "source_quality_blocked"
+    assert (
+        result["risky_micro_episode_tick_context_gap_reason"]
+        == "tp1_signed_tick_sample_floor_not_met"
+    )
+    assert result["risky_micro_episode_tick_context_tp1_sample_count"] == 4
+
+
+def test_risky_micro_episode_preserves_partial_direct_tick_gap_owner():
+    result = state_handlers._evaluate_rising_missed_risky_micro_episode_source_only(
+        stock={"code": "475560", "name": "THEBORN"},
+        runtime={},
+        latency_gate={
+            "quote_age_ms": 100.0,
+            "tick_acceleration_ratio": 1.1,
+        },
+        ws_data={
+            "orderbook": {
+                "asks": [{"price": 16_310, "volume": 50}],
+                "bids": [{"price": 16_220, "volume": 50}],
+            }
+        },
+        orderbook_fields={},
+        microstructure_fields={},
+        source_stage="latency_block",
+        source_block_reason="wide_spread",
+        rising_missed_entry_lineage=True,
+    )
+
+    assert result["risky_micro_episode_status"] == "source_quality_blocked"
+    assert (
+        result["risky_micro_episode_tick_context_gap_reason"]
+        == "tick_window_span_missing"
+    )
 
 
 def test_risky_micro_episode_observer_retains_and_emits_fresh_executable_bbo(
@@ -528,6 +595,10 @@ def test_post_sell_bbo_observer_emits_fresh_exact_route_horizon(monkeypatch):
     assert fields["post_sell_executable_bbo_horizon_status"] == (
         "fresh_executable_bbo_observed"
     )
+    assert fields["post_sell_executable_bbo_source_gap_reason"] == "none"
+    assert fields["post_sell_executable_bbo_source_quality_status"] == (
+        "source_quality_pass"
+    )
     assert fields["post_sell_executable_bbo_bid_return_pct"] == round(
         ((63_500 / 63_000) - 1.0) * 100.0, 6
     )
@@ -623,6 +694,12 @@ def test_post_sell_bbo_observer_does_not_accept_unsubscribed_cached_quote(
     assert fields["post_sell_executable_bbo_subscription_present"] is False
     assert fields["post_sell_executable_bbo_horizon_status"] == (
         "fresh_executable_bbo_missing_after_grace"
+    )
+    assert fields["post_sell_executable_bbo_source_gap_reason"] == (
+        "base_subscription_missing"
+    )
+    assert fields["post_sell_executable_bbo_source_quality_status"] == (
+        "source_quality_gap"
     )
     assert fields["post_sell_executable_bbo_bid_return_pct"] == "-"
 
@@ -829,6 +906,9 @@ def test_post_sell_bbo_observer_does_not_backfill_horizon_after_grace(monkeypatc
     assert result["missing_horizon_count"] == 1
     assert logs[0][1]["post_sell_executable_bbo_horizon_status"] == (
         "fresh_executable_bbo_missing_after_grace"
+    )
+    assert logs[0][1]["post_sell_executable_bbo_source_gap_reason"] == (
+        "horizon_observation_after_final_grace"
     )
     assert logs[0][1]["post_sell_executable_bbo_horizon_window_delay_sec"] == 16.0
 

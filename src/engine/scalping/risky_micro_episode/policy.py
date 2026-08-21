@@ -21,6 +21,21 @@ from src.trading.order.tick_utils import (
 SCHEMA = "risky_micro_episode_source_candidate_v2"
 POLICY_VERSION = "rising_missed_passive_micro_episode_source_only_v2"
 PRIMARY_ENTRY_PROFILE = "bid_plus_one_ttl_3s"
+TICK_CONTEXT_GAP_REASONS = frozenset(
+    {
+        "none",
+        "direct_and_tp1_tick_context_missing",
+        "tp1_signed_tick_sample_floor_not_met",
+        "tp1_tick_source_untrusted_or_missing",
+        "tp1_tick_context_age_missing",
+        "tp1_tick_context_stale",
+        "tp1_submit_context_freshness_unconfirmed",
+        "tick_acceleration_and_window_span_missing",
+        "tick_acceleration_missing",
+        "tick_window_span_missing",
+        "unclassified_tick_context_gap",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +138,7 @@ def evaluate_risky_micro_episode(
     quote_age_ms: float | None,
     tick_acceleration_ratio: float | None,
     tick_window_span_sec: float | None,
+    tick_context_gap_reason: str | None = None,
     positive_micro_support: bool,
     adverse_micro_detected: bool,
     large_sell_detected: bool,
@@ -204,6 +220,19 @@ def evaluate_risky_micro_episode(
     else:
         instrumentation_gap = "none"
 
+    normalized_tick_gap_reason = str(tick_context_gap_reason or "").strip()
+    if tick_acceleration_ratio is not None and tick_window_span_sec is not None:
+        normalized_tick_gap_reason = "none"
+    elif not normalized_tick_gap_reason:
+        if tick_acceleration_ratio is None and tick_window_span_sec is None:
+            normalized_tick_gap_reason = "tick_acceleration_and_window_span_missing"
+        elif tick_acceleration_ratio is None:
+            normalized_tick_gap_reason = "tick_acceleration_missing"
+        else:
+            normalized_tick_gap_reason = "tick_window_span_missing"
+    if normalized_tick_gap_reason not in TICK_CONTEXT_GAP_REASONS:
+        normalized_tick_gap_reason = "unclassified_tick_context_gap"
+
     return {
         **payload,
         "risky_micro_episode_status": status,
@@ -226,6 +255,7 @@ def evaluate_risky_micro_episode(
             if tick_acceleration_ratio is not None and tick_window_span_sec is not None
             else "missing"
         ),
+        "risky_micro_episode_tick_context_gap_reason": (normalized_tick_gap_reason),
         "risky_micro_episode_instrumentation_gap": instrumentation_gap,
         "risky_micro_episode_spread_bps": (
             round(spread_bps, 3) if spread_bps is not None else "-"
