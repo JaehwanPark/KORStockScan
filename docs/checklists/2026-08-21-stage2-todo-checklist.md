@@ -16,6 +16,10 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+- [ ] `[LowPriceTwoLeg0821InstallVerify0824] 8월 21일 승인 14프로필 서비스 설치 및 PREOPEN 검증` (`Due: 2026-08-24`, `Slot: PREOPEN`, `TimeWindow: 08:40~09:10`, `Track: ScalpingLogic`)
+  - Source: [low_price_two_leg_expanded_profile_evidence_2026-08-21.json](/home/ubuntu/KORStockScan/data/config/low_price_two_leg_expanded_profile_evidence_2026-08-21.json), [low-price-two-leg-machines.md](/home/ubuntu/KORStockScan/docs/low-price-two-leg-machines.md), [install_low_price_two_leg_systemd.sh](/home/ubuntu/KORStockScan/deploy/install_low_price_two_leg_systemd.sh)
+  - 판정 기준: review gate가 닫힌 소스를 main에 반영한 뒤 별도 운영 승인으로 installer를 실행하고, 35개 profile의 preflight/live timer 70개가 enabled 상태인지, exact-date applied policy와 authority artifact가 2026-08-24 generation을 선택하는지, 기존 HELD/주문 custody가 보존되는지 확인한다. 설치·기동 전까지 이번 소스 변경은 runtime effect가 없다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-08-20` postclose -> `2026-08-21`)
 

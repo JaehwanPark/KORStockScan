@@ -61,6 +61,22 @@ TIMERS=(
   korstockscan-low-price-two-leg-tym-midday.timer
   korstockscan-low-price-two-leg-tym-afternoon-preflight.timer
   korstockscan-low-price-two-leg-tym-afternoon.timer
+  korstockscan-low-price-two-leg-cj-cgv-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-cj-cgv-late-morning.timer
+  korstockscan-low-price-two-leg-kepco-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-kepco-late-morning.timer
+  korstockscan-low-price-two-leg-kepco-midday-preflight.timer
+  korstockscan-low-price-two-leg-kepco-midday.timer
+  korstockscan-low-price-two-leg-hanse-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-hanse-late-morning.timer
+  korstockscan-low-price-two-leg-hanse-midday-preflight.timer
+  korstockscan-low-price-two-leg-hanse-midday.timer
+  korstockscan-low-price-two-leg-nhn-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-nhn-afternoon.timer
+  korstockscan-low-price-two-leg-youngone-morning-preflight.timer
+  korstockscan-low-price-two-leg-youngone-morning.timer
+  korstockscan-low-price-two-leg-youngone-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-youngone-afternoon.timer
 )
 SERVICES=(
   korstockscan-low-price-two-leg@samsung_heavy_midday.service
@@ -121,6 +137,22 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@tym_midday.service
   korstockscan-low-price-two-leg@tym_afternoon.service
   korstockscan-low-price-two-leg-preflight@tym_afternoon.service
+  korstockscan-low-price-two-leg@cj_cgv_late_morning.service
+  korstockscan-low-price-two-leg-preflight@cj_cgv_late_morning.service
+  korstockscan-low-price-two-leg@kepco_late_morning.service
+  korstockscan-low-price-two-leg-preflight@kepco_late_morning.service
+  korstockscan-low-price-two-leg@kepco_midday.service
+  korstockscan-low-price-two-leg-preflight@kepco_midday.service
+  korstockscan-low-price-two-leg@hanse_late_morning.service
+  korstockscan-low-price-two-leg-preflight@hanse_late_morning.service
+  korstockscan-low-price-two-leg@hanse_midday.service
+  korstockscan-low-price-two-leg-preflight@hanse_midday.service
+  korstockscan-low-price-two-leg@nhn_afternoon.service
+  korstockscan-low-price-two-leg-preflight@nhn_afternoon.service
+  korstockscan-low-price-two-leg@youngone_morning.service
+  korstockscan-low-price-two-leg-preflight@youngone_morning.service
+  korstockscan-low-price-two-leg@youngone_afternoon.service
+  korstockscan-low-price-two-leg-preflight@youngone_afternoon.service
 )
 FILES=(
   korstockscan-low-price-two-leg@.service

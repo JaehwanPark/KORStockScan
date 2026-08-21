@@ -38,8 +38,17 @@ CJ_CGV_MIDDAY_WINDOW = (time(13, 20), time(13, 49))
 CJ_CGV_AFTERNOON_WINDOW = (time(14, 15), time(14, 24))
 TYM_MIDDAY_WINDOW = (time(13, 15), time(13, 44))
 TYM_AFTERNOON_WINDOW = (time(14, 30), time(14, 39))
+CJ_CGV_LATE_MORNING_WINDOW = (time(10, 0), time(10, 9))
+KEPCO_LATE_MORNING_WINDOW = (time(10, 0), time(10, 59))
+KEPCO_MIDDAY_WINDOW = (time(13, 30), time(13, 49))
+HANSE_LATE_MORNING_WINDOW = (time(10, 0), time(10, 59))
+HANSE_MIDDAY_WINDOW = (time(13, 20), time(13, 49))
+NHN_AFTERNOON_WINDOW = (time(14, 0), time(14, 40))
+YOUNGONE_MORNING_WINDOW = (time(9, 20), time(9, 39))
+YOUNGONE_AFTERNOON_WINDOW = (time(14, 30), time(14, 40))
 PROFILE_REVISION_20260819_EFFECTIVE_DATE = date(2026, 8, 19)
 PROFILE_REVISION_20260821_EFFECTIVE_DATE = date(2026, 8, 21)
+PROFILE_REVISION_20260824_EFFECTIVE_DATE = date(2026, 8, 24)
 # Compatibility alias for consumers that own the first recommendation transition.
 PROFILE_REVISION_EFFECTIVE_DATE = PROFILE_REVISION_20260819_EFFECTIVE_DATE
 ALLOWED_SYMBOLS = frozenset(
@@ -56,6 +65,8 @@ ALLOWED_SYMBOLS = frozenset(
         "079160",
         "080220",
         "105630",
+        "111770",
+        "181710",
         "475150",
     }
 )
@@ -91,6 +102,14 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         CJ_CGV_AFTERNOON_WINDOW,
         TYM_MIDDAY_WINDOW,
         TYM_AFTERNOON_WINDOW,
+        CJ_CGV_LATE_MORNING_WINDOW,
+        KEPCO_LATE_MORNING_WINDOW,
+        KEPCO_MIDDAY_WINDOW,
+        HANSE_LATE_MORNING_WINDOW,
+        HANSE_MIDDAY_WINDOW,
+        NHN_AFTERNOON_WINDOW,
+        YOUNGONE_MORNING_WINDOW,
+        YOUNGONE_AFTERNOON_WINDOW,
     }
 )
 
@@ -704,6 +723,271 @@ PROFILES.update(
         ),
     }
 )
+
+# Build only the 2026-08-24 recommendation overlay here because every target
+# profile already exists at this stage. The authoritative 27-profile prior is
+# captured after the later 2026-08-20 generation is assembled below.
+_PROFILES_20260824_BUILD_BASE = dict(PROFILES)
+_REVISION_20260824_SOURCE = (
+    "clean_baseline_38d_calibration_16d_holdout_user_approved_v4"
+)
+# Four profiles are introduced by the still-later 2026-08-20 generation. Seed
+# only their immutable identity/window fields so the next-date overlay can be
+# assembled once and merged onto that authoritative generation at the end.
+_PROFILES_20260824_BUILD_BASE.update(
+    {
+        profile.profile_id: profile
+        for profile in (
+            _profile(
+                "cj_cgv_afternoon",
+                "079160",
+                "CJ CGV",
+                "afternoon",
+                window=CJ_CGV_AFTERNOON_WINDOW,
+                lookback_bars=20,
+                drawdown_pct=0.50,
+                near_low_pct=0.35,
+                target_ticks=2,
+            ),
+            _profile(
+                "tym_midday",
+                "002900",
+                "TYM",
+                "midday",
+                window=TYM_MIDDAY_WINDOW,
+                lookback_bars=15,
+                drawdown_pct=0.50,
+                near_low_pct=0.75,
+                target_ticks=2,
+            ),
+            _profile(
+                "hanse_morning",
+                "105630",
+                "한세실업",
+                "morning",
+                window=HANSE_MORNING_WINDOW,
+                lookback_bars=15,
+                drawdown_pct=0.75,
+                near_low_pct=0.75,
+                target_ticks=2,
+            ),
+            _profile(
+                "hanse_afternoon",
+                "105630",
+                "한세실업",
+                "afternoon",
+                window=HANSE_AFTERNOON_WINDOW,
+                lookback_bars=30,
+                drawdown_pct=0.50,
+                near_low_pct=0.75,
+                target_ticks=2,
+            ),
+        )
+    }
+)
+
+
+def _revise_20260824(
+    profile_id: str,
+    *,
+    lookback_bars: int,
+    drawdown_pct: float,
+    near_low_pct: float,
+    entry_offsets_ticks: tuple[int, int] = (0, -1),
+    entry_valid_completed_bars: int = 5,
+    target_ticks: int,
+) -> MachineProfile:
+    prior = _PROFILES_20260824_BUILD_BASE[profile_id]
+    return replace(
+        prior,
+        policy=replace(
+            prior.policy,
+            lookback_bars=lookback_bars,
+            rolling_high_drawdown_pct=drawdown_pct,
+            rolling_low_proximity_pct=near_low_pct,
+            entry_offsets_ticks=entry_offsets_ticks,
+            entry_valid_completed_bars=entry_valid_completed_bars,
+            target_ticks=target_ticks,
+            runtime_policy_source=_REVISION_20260824_SOURCE,
+            runtime_policy_hash="",
+        ),
+    )
+
+
+_PROFILES_20260824_OVERLAY_BUILD = dict(_PROFILES_20260824_BUILD_BASE)
+_PROFILES_20260824_OVERLAY_BUILD.update(
+    {
+        "cj_cgv_afternoon": _revise_20260824(
+            "cj_cgv_afternoon",
+            lookback_bars=30,
+            drawdown_pct=0.50,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "kepco_afternoon": _revise_20260824(
+            "kepco_afternoon",
+            lookback_bars=45,
+            drawdown_pct=0.75,
+            near_low_pct=0.75,
+            entry_valid_completed_bars=3,
+            target_ticks=4,
+        ),
+        "tym_midday": _revise_20260824(
+            "tym_midday",
+            lookback_bars=20,
+            drawdown_pct=0.50,
+            near_low_pct=0.35,
+            target_ticks=4,
+        ),
+        "hanse_morning": _revise_20260824(
+            "hanse_morning",
+            lookback_bars=15,
+            drawdown_pct=0.75,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "samsung_ea_late_morning": _revise_20260824(
+            "samsung_ea_late_morning",
+            lookback_bars=45,
+            drawdown_pct=1.00,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "hanse_afternoon": _revise_20260824(
+            "hanse_afternoon",
+            lookback_bars=15,
+            drawdown_pct=0.50,
+            near_low_pct=0.75,
+            entry_offsets_ticks=(-1, -2),
+            target_ticks=4,
+        ),
+    }
+)
+_PROFILE_REVISION_20260824_IDS = frozenset(
+    {
+        "cj_cgv_afternoon",
+        "kepco_afternoon",
+        "tym_midday",
+        "hanse_morning",
+        "samsung_ea_late_morning",
+        "hanse_afternoon",
+        "cj_cgv_late_morning",
+        "kepco_late_morning",
+        "kepco_midday",
+        "hanse_late_morning",
+        "hanse_midday",
+        "nhn_afternoon",
+        "youngone_morning",
+        "youngone_afternoon",
+    }
+)
+_PROFILES_20260824_OVERLAY_BUILD.update(
+    {
+        profile.profile_id: profile
+        for profile in (
+            _profile(
+                "cj_cgv_late_morning",
+                "079160",
+                "CJ CGV",
+                "late_morning",
+                window=CJ_CGV_LATE_MORNING_WINDOW,
+                lookback_bars=15,
+                drawdown_pct=0.50,
+                near_low_pct=0.75,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260824_SOURCE,
+            ),
+            _profile(
+                "kepco_late_morning",
+                "015760",
+                "한국전력",
+                "late_morning",
+                window=KEPCO_LATE_MORNING_WINDOW,
+                lookback_bars=15,
+                drawdown_pct=0.75,
+                near_low_pct=0.05,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260824_SOURCE,
+            ),
+            _profile(
+                "kepco_midday",
+                "015760",
+                "한국전력",
+                "midday",
+                window=KEPCO_MIDDAY_WINDOW,
+                lookback_bars=45,
+                drawdown_pct=0.50,
+                near_low_pct=0.50,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260824_SOURCE,
+            ),
+            _profile(
+                "hanse_late_morning",
+                "105630",
+                "한세실업",
+                "late_morning",
+                window=HANSE_LATE_MORNING_WINDOW,
+                lookback_bars=30,
+                drawdown_pct=0.75,
+                near_low_pct=0.75,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260824_SOURCE,
+            ),
+            _profile(
+                "hanse_midday",
+                "105630",
+                "한세실업",
+                "midday",
+                window=HANSE_MIDDAY_WINDOW,
+                lookback_bars=15,
+                drawdown_pct=0.50,
+                near_low_pct=0.75,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260824_SOURCE,
+            ),
+            _profile(
+                "nhn_afternoon",
+                "181710",
+                "NHN",
+                "afternoon",
+                window=NHN_AFTERNOON_WINDOW,
+                lookback_bars=15,
+                drawdown_pct=0.50,
+                near_low_pct=0.75,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260824_SOURCE,
+            ),
+            _profile(
+                "youngone_morning",
+                "111770",
+                "영원무역",
+                "morning",
+                window=YOUNGONE_MORNING_WINDOW,
+                lookback_bars=20,
+                drawdown_pct=0.50,
+                near_low_pct=0.50,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260824_SOURCE,
+            ),
+            _profile(
+                "youngone_afternoon",
+                "111770",
+                "영원무역",
+                "afternoon",
+                window=YOUNGONE_AFTERNOON_WINDOW,
+                lookback_bars=30,
+                drawdown_pct=0.50,
+                near_low_pct=0.75,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260824_SOURCE,
+            ),
+        )
+    }
+)
+_PROFILE_REVISION_20260824_OVERLAY = {
+    profile_id: _PROFILES_20260824_OVERLAY_BUILD[profile_id]
+    for profile_id in _PROFILE_REVISION_20260824_IDS
+}
 PROFILES.update(
     {
         profile.profile_id: profile
@@ -890,12 +1174,20 @@ PROFILES.update(
     }
 )
 
+# The 27-profile generation remains authoritative through 2026-08-21. The
+# postclose-approved overlay becomes effective on the next KRX trading date
+# without changing prior-date orders or held-position custody.
+PROFILES_20260824_PRIOR = dict(PROFILES)
+PROFILES.update(_PROFILE_REVISION_20260824_OVERLAY)
+
 
 def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
     if target_date < PROFILE_REVISION_20260819_EFFECTIVE_DATE:
         return PRE_RECOMMENDATION_PROFILES
     if target_date < PROFILE_REVISION_20260821_EFFECTIVE_DATE:
         return PROFILES_20260819
+    if target_date < PROFILE_REVISION_20260824_EFFECTIVE_DATE:
+        return PROFILES_20260824_PRIOR
     return PROFILES
 
 

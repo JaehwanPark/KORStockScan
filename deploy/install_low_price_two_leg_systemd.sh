@@ -63,6 +63,22 @@ UNITS=(
   korstockscan-low-price-two-leg-tym-midday.timer
   korstockscan-low-price-two-leg-tym-afternoon-preflight.timer
   korstockscan-low-price-two-leg-tym-afternoon.timer
+  korstockscan-low-price-two-leg-cj-cgv-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-cj-cgv-late-morning.timer
+  korstockscan-low-price-two-leg-kepco-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-kepco-late-morning.timer
+  korstockscan-low-price-two-leg-kepco-midday-preflight.timer
+  korstockscan-low-price-two-leg-kepco-midday.timer
+  korstockscan-low-price-two-leg-hanse-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-hanse-late-morning.timer
+  korstockscan-low-price-two-leg-hanse-midday-preflight.timer
+  korstockscan-low-price-two-leg-hanse-midday.timer
+  korstockscan-low-price-two-leg-nhn-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-nhn-afternoon.timer
+  korstockscan-low-price-two-leg-youngone-morning-preflight.timer
+  korstockscan-low-price-two-leg-youngone-morning.timer
+  korstockscan-low-price-two-leg-youngone-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-youngone-afternoon.timer
 )
 TIMERS=(
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
@@ -119,6 +135,22 @@ TIMERS=(
   korstockscan-low-price-two-leg-tym-midday.timer
   korstockscan-low-price-two-leg-tym-afternoon-preflight.timer
   korstockscan-low-price-two-leg-tym-afternoon.timer
+  korstockscan-low-price-two-leg-cj-cgv-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-cj-cgv-late-morning.timer
+  korstockscan-low-price-two-leg-kepco-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-kepco-late-morning.timer
+  korstockscan-low-price-two-leg-kepco-midday-preflight.timer
+  korstockscan-low-price-two-leg-kepco-midday.timer
+  korstockscan-low-price-two-leg-hanse-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-hanse-late-morning.timer
+  korstockscan-low-price-two-leg-hanse-midday-preflight.timer
+  korstockscan-low-price-two-leg-hanse-midday.timer
+  korstockscan-low-price-two-leg-nhn-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-nhn-afternoon.timer
+  korstockscan-low-price-two-leg-youngone-morning-preflight.timer
+  korstockscan-low-price-two-leg-youngone-morning.timer
+  korstockscan-low-price-two-leg-youngone-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-youngone-afternoon.timer
 )
 RETIRED_DAEWOO_UNITS=(
   korstockscan-low-price-two-leg-daewoo-ec-midday-preflight.timer
@@ -164,6 +196,8 @@ owners = {
     "105630": "hanse_low_price_two_leg_owner",
     "079160": "cj_cgv_low_price_two_leg_owner",
     "002900": "tym_low_price_two_leg_owner",
+    "111770": "youngone_low_price_two_leg_owner",
+    "181710": "nhn_low_price_two_leg_owner",
 }
 for code, owner in owners.items():
     add_manual_control_exclusion_code(code, comment=f"manual_operator {owner}")
@@ -173,4 +207,4 @@ PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed twenty-seven lower-price profile timers; retired Daewoo units were removed"
+echo "installed thirty-five lower-price profile timers; retired Daewoo units were removed"

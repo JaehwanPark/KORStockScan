@@ -1,0 +1,11 @@
+[Unit]
+Description=Prepare Youngone Morning Two-Leg Authority
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:15:00 Asia/Seoul
+Persistent=false
+AccuracySec=1s
+Unit=korstockscan-low-price-two-leg-preflight@youngone_morning.service
+
+[Install]
+WantedBy=timers.target

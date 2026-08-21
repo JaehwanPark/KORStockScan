@@ -97,6 +97,14 @@ PROFILE_FIRST_OPERATIONAL_DATES = {
     "cj_cgv_afternoon": date(2026, 8, 21),
     "tym_midday": date(2026, 8, 21),
     "tym_afternoon": date(2026, 8, 21),
+    "cj_cgv_late_morning": date(2026, 8, 24),
+    "kepco_late_morning": date(2026, 8, 24),
+    "kepco_midday": date(2026, 8, 24),
+    "hanse_late_morning": date(2026, 8, 24),
+    "hanse_midday": date(2026, 8, 24),
+    "nhn_afternoon": date(2026, 8, 24),
+    "youngone_morning": date(2026, 8, 24),
+    "youngone_afternoon": date(2026, 8, 24),
 }
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {

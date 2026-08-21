@@ -1,0 +1,11 @@
+[Unit]
+Description=Prepare CJ CGV Late Morning Two-Leg Authority
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:55:00 Asia/Seoul
+Persistent=false
+AccuracySec=1s
+Unit=korstockscan-low-price-two-leg-preflight@cj_cgv_late_morning.service
+
+[Install]
+WantedBy=timers.target

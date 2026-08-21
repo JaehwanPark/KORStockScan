@@ -2,7 +2,7 @@
 
 ## Scope
 
-Twenty-seven independent regular-session profiles implement the user-selected active
+Thirty-five independent regular-session profiles implement the user-selected active
 scope. Every profile owns its process, lock, durable state,
 authority artifact, and exact broker-order ledger.
 
@@ -35,6 +35,14 @@ authority artifact, and exact broker-order ledger.
 | `cj_cgv_afternoon` | CJ CGV `079160` | SOR regular | 14:15 through 14:24 |
 | `tym_midday` | TYM `002900` | SOR regular | 13:15 through 13:44 |
 | `tym_afternoon` | TYM `002900` | SOR regular | 14:30 through 14:39 |
+| `cj_cgv_late_morning` | CJ CGV `079160` | SOR regular | 10:00 through 10:09 |
+| `kepco_late_morning` | 한국전력 `015760` | SOR regular | 10:00 through 10:59 |
+| `kepco_midday` | 한국전력 `015760` | SOR regular | 13:30 through 13:49 |
+| `hanse_late_morning` | 한세실업 `105630` | SOR regular | 10:00 through 10:59 |
+| `hanse_midday` | 한세실업 `105630` | SOR regular | 13:20 through 13:49 |
+| `nhn_afternoon` | NHN `181710` | SOR regular | 14:00 through 14:40 |
+| `youngone_morning` | 영원무역 `111770` | SOR regular | 09:20 through 09:39 |
+| `youngone_afternoon` | 영원무역 `111770` | SOR regular | 14:30 through 14:40 |
 
 The original 30-day calibration and 16-day untouched holdout selected independent entry
 contracts: Samsung Heavy midday uses 30 bars, drawdown at least 0.75%, and
@@ -217,6 +225,43 @@ widget auto-trading owners. Neither owner reads the other's state, position
 quantity, or order numbers, and neither may cancel or sell the other's orders
 or quantity. Both may independently submit orders for the same symbol.
 
+## 2026-08-21 recommendation implementation
+
+The tracked `data/config/low_price_two_leg_expanded_profile_evidence_2026-08-21.json`
+projection binds the complete 54-trading-day clean baseline, 38-day calibration,
+16-day holdout, all 14 final recommendations, and the source report canonical
+hash. The exact-date transition preserves the 27-profile Friday generation and
+selects the 35-profile generation only from 2026-08-24. Existing orders and held
+positions retain their entry-date policy snapshot.
+
+Six existing profiles adopt the reviewed logic improvements:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---:|---|---:|---:|
+| `cj_cgv_afternoon` | 14:15~14:24 | 30 | 0.50% | 0.75% | close/-1 tick | 5 | +4 ticks |
+| `kepco_afternoon` | 14:00~14:29 | 45 | 0.75% | 0.75% | close/-1 tick | 3 | +4 ticks |
+| `tym_midday` | 13:15~13:44 | 20 | 0.50% | 0.35% | close/-1 tick | 5 | +4 ticks |
+| `hanse_morning` | 09:15~09:44 | 15 | 0.75% | 0.75% | close/-1 tick | 5 | +4 ticks |
+| `samsung_ea_late_morning` | 10:05~10:14 | 45 | 1.00% | 0.75% | close/-1 tick | 5 | +4 ticks |
+| `hanse_afternoon` | 14:20~14:29 | 15 | 0.50% | 0.75% | -1/-2 ticks | 5 | +4 ticks |
+
+Eight new independent profiles use the following frozen rows:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---:|---|---:|---:|
+| `cj_cgv_late_morning` | 10:00~10:09 | 15 | 0.50% | 0.75% | close/-1 tick | 5 | +2 ticks |
+| `kepco_late_morning` | 10:00~10:59 | 15 | 0.75% | 0.05% | close/-1 tick | 5 | +2 ticks |
+| `kepco_midday` | 13:30~13:49 | 45 | 0.50% | 0.50% | close/-1 tick | 5 | +2 ticks |
+| `hanse_late_morning` | 10:00~10:59 | 30 | 0.75% | 0.75% | close/-1 tick | 5 | +2 ticks |
+| `hanse_midday` | 13:20~13:49 | 15 | 0.50% | 0.75% | close/-1 tick | 5 | +2 ticks |
+| `nhn_afternoon` | 14:00~14:40 | 15 | 0.50% | 0.75% | close/-1 tick | 5 | +2 ticks |
+| `youngone_morning` | 09:20~09:39 | 20 | 0.50% | 0.50% | close/-1 tick | 5 | +2 ticks |
+| `youngone_afternoon` | 14:30~14:40 | 30 | 0.50% | 0.75% | close/-1 tick | 5 | +2 ticks |
+
+The fixed Theborn Korea observation and non-passing profiles remain source-only.
+This source implementation adds timer definitions and ownership guards but does
+not install, enable, or start a service.
+
 ## Runtime authority and isolation
 
 The live service is fail-closed unless all of the following are true for the
@@ -233,10 +278,9 @@ exact profile and date:
   leg is exactly 10 shares. Legacy owned one-share orders remain valid custody
   state and are never resized retroactively.
 
-Activation uses protected `manual_operator` markers for all thirteen symbols in
-`data/config/manual_control_excluded_codes.txt`. The reviewed installer adds
-the new CJ CGV and TYM markers together with the previously reviewed markers
-immediately before enabling the new timers, so
+Activation requires protected `manual_operator` markers for all fifteen symbols.
+The reviewed installer adds the Youngone and NHN markers together with the
+previously installed markers immediately before enabling the new timers, so
 source implementation alone does not partially transfer their runtime owner.
 This excludes the symbols from
 the primary bot while leaving the Doosan/Hanwha widget owners and episode
