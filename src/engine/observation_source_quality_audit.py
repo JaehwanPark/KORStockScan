@@ -2802,6 +2802,7 @@ def _reviewed_unknown_reason_for_stage_field(
             "rising_missed_tick_absolute_throughput_relief_applied",
             "rising_missed_tick_speed_entry_block",
             "scalp_entry_action_decision_snapshot",
+            "krx_direct_canary_live_ai_wait_submit_block",
         }:
             return False
         if str(value or "").strip().lower() != "unknown":
@@ -3288,6 +3289,7 @@ def _reviewed_unknown_reason_for_stage_field(
                 "scanner_promotion_reanchor_effective_venue",
                 "scanner_stale_backoff_canonical_effective_venue",
                 "opening_rotation_no_pullback_continuation_effective_venue",
+                "market_session_bucket",
             }
             and (runtime_event_fail_closed or explicit_reviewed_fail_closed)
             and (_is_falseish("runtime_effect") or explicit_reviewed_fail_closed)
@@ -3586,6 +3588,7 @@ def _reviewed_unknown_reason_for_stage_field(
             "position_rebased_after_fill",
             "scale_in_executed",
             "sell_completed",
+            "sell_partial_fill_progress",
         }:
             return False
         if (
@@ -3600,6 +3603,53 @@ def _reviewed_unknown_reason_for_stage_field(
             and _field_text("broker_actual_exchange_name") in {"", "-", "SOR"}
             and _field_text("broker_sor_flag") in {"", "-", "Y"}
             and _is_falseish("broker_execution_provenance_complete")
+        )
+
+    def _is_reviewed_main_lifecycle_venue_not_available() -> bool:
+        if (
+            str(key or "") != "main_lifecycle_venue"
+            or str(value or "").strip().upper() != "UNKNOWN"
+        ):
+            return False
+        if (
+            _field_text("main_lifecycle_decision_authority")
+            != "source_only_lifecycle_observation"
+            or _field_text("main_lifecycle_source_stage") != stage
+            or not _is_falseish("main_lifecycle_order_authority")
+            or not _is_falseish("main_lifecycle_provider_authority")
+        ):
+            return False
+        provenance_status = _field_text("main_lifecycle_venue_provenance_status")
+        provenance_source = _field_text("main_lifecycle_venue_source")
+        if (
+            provenance_status == "not_available_explicit_source"
+            and provenance_source == "not_available_explicit_tradable_venue"
+        ):
+            return True
+        # Older exact lifecycle rows predate the explicit source/status fields.
+        # Their shared producer emitted UNKNOWN only after exhausting its finite
+        # explicit venue key list.  Keep that absence reviewed and source-only;
+        # never infer KRX/NXT from symbol or wall-clock time.
+        return (
+            not provenance_status
+            and not provenance_source
+            and _field_text("main_lifecycle_session_bucket").lower()
+            in {"nan", "unknown"}
+        )
+
+    def _is_reviewed_main_lifecycle_session_not_available() -> bool:
+        return (
+            str(key or "") == "main_lifecycle_session_bucket"
+            and str(value or "").strip().lower() == "unknown"
+            and _field_text("main_lifecycle_decision_authority")
+            == "source_only_lifecycle_observation"
+            and _field_text("main_lifecycle_source_stage") == stage
+            and _is_falseish("main_lifecycle_order_authority")
+            and _is_falseish("main_lifecycle_provider_authority")
+            and _field_text("main_lifecycle_session_provenance_status")
+            == "not_available_explicit_source"
+            and _field_text("main_lifecycle_session_bucket_source")
+            == "not_available_explicit_session_bucket"
         )
 
     def _is_reviewed_shallow_stale_not_available() -> bool:
@@ -3820,6 +3870,10 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_legacy_fast_exit_route_provenance"
     if _is_reviewed_broker_actual_venue_not_available():
         return "reviewed_broker_actual_venue_not_available"
+    if _is_reviewed_main_lifecycle_venue_not_available():
+        return "reviewed_main_lifecycle_venue_not_available"
+    if _is_reviewed_main_lifecycle_session_not_available():
+        return "reviewed_main_lifecycle_session_not_available"
     if _is_reviewed_shallow_stale_not_available():
         return "reviewed_shallow_stale_flag_not_available"
     if _is_reviewed_first_touch_quote_stale_not_available():

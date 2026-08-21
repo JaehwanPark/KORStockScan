@@ -1,7 +1,7 @@
 # Observation Source Quality Audit - 2026-08-21
 
 - status: `pass`
-- event_count: `23949`
+- event_count: `322361`
 - tuning_input_policy: `exclude_defective_rows_not_full_day_raw`
 - hard_blocking_excluded_row_count: `0`
 - tuning_input_allowed: `True`
@@ -25,45 +25,45 @@
 - none
 
 ## Reviewed Unknown Token Findings
-- `scalping_scanner_fast_precheck` count=`5893` routing=`reviewed_unknown_token_provenance` fields=`scanner_stale_backoff_raw_0d_route=10(reviewed_scanner_stale_backoff_route_not_available), scanner_stale_backoff_raw_0b_route=9(reviewed_scanner_stale_backoff_route_not_available)`
-- `rising_missed_watch_not_rising_skipped` count=`1290` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=1290(reviewed_rising_missed_nxt_eligibility_not_available)`
-- `scalping_scanner_watching_runtime_skip` count=`632` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=51(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=51(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=51(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=51(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `rising_missed_one_share_entry` count=`28` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=28(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=2(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=2(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=2(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `scalp_entry_action_decision_snapshot` count=`28` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=28(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=28(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=28(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=28(reviewed_explicit_sizing_unknown_venue_fallback), holding_exit_matrix_score_prior_band=4(reviewed_score_prior_neutral_unknown_not_decision_input), risk_regime_context=4(reviewed_missing_risk_regime_context)`
-- `rising_missed_tp1_counterfactual_submit_safety` count=`24` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=24(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=4(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=4(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=4(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `rising_missed_tp1_candidate_blocked` count=`22` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=22(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=4(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=4(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=4(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `budget_pass` count=`19` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=19(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=19(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=19(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=19(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `orderbook_stability_observed` count=`19` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=19(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=19(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=19(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=19(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `risky_micro_episode_source_candidate_observed` count=`14` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=14(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=14(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=14(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=14(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `entry_ai_price_canary_applied` count=`10` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=10(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=10(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=10(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=10(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `blocked_zero_qty` count=`9` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=9(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=9(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=9(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=9(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `latency_block` count=`9` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=9(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=9(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=9(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=9(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `ai_confirmed` count=`5` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=5(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=5(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=5(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=5(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `latency_pass` count=`5` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=5(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=5(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=5(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=5(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `pre_submit_entry_ai_authority_guard_block` count=`5` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=5(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=5(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=5(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=5(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `rising_missed_scout_allocator_order_plan` count=`5` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=5(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=5(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=5(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=5(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `rising_missed_tick_speed_entry_block` count=`5` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=5(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=5(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=5(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=5(reviewed_explicit_sizing_unknown_venue_fallback), entry_order_flow_status=2(reviewed_entry_order_flow_not_available)`
-- `rising_missed_reversal_up_volatile_recheck_enqueued` count=`3` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=3(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=3(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=3(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=3(reviewed_explicit_sizing_unknown_venue_fallback)`
-- `rising_missed_tp1_candidate_deferred` count=`2` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=2(reviewed_rising_missed_nxt_eligibility_not_available)`
+- `scalping_scanner_promotion_latency_trace` count=`70606` routing=`reviewed_unknown_token_provenance` fields=`venue=40(reviewed_scanner_venue_fail_closed_provenance), effective_venue=40(reviewed_scanner_venue_fail_closed_provenance)`
+- `scalping_scanner_fast_precheck` count=`54921` routing=`reviewed_unknown_token_provenance` fields=`scanner_stale_backoff_raw_0b_route=1616(reviewed_scanner_stale_backoff_route_not_available), scanner_stale_backoff_raw_0d_route=550(reviewed_scanner_stale_backoff_route_not_available), venue=30(reviewed_scanner_venue_fail_closed_provenance), effective_venue=30(reviewed_scanner_venue_fail_closed_provenance), scanner_promotion_reanchor_effective_venue=30(reviewed_scanner_venue_fail_closed_provenance), scanner_stale_backoff_canonical_effective_venue=30(reviewed_scanner_venue_fail_closed_provenance), main_lifecycle_venue=22(reviewed_main_lifecycle_venue_not_available), rising_missed_submit_safety_backoff_reason=4(reviewed_rising_missed_submit_safety_backoff_source_quality_provenance)`
+- `scalping_scanner_runtime_queue_lag` count=`29517` routing=`reviewed_unknown_token_provenance` fields=`venue=20(reviewed_scanner_venue_fail_closed_provenance), effective_venue=20(reviewed_scanner_venue_fail_closed_provenance)`
+- `scalping_scanner_heavy_eval_completion` count=`16165` routing=`reviewed_unknown_token_provenance` fields=`venue=10(reviewed_scanner_venue_fail_closed_provenance), effective_venue=10(reviewed_scanner_venue_fail_closed_provenance)`
+- `scalping_scanner_heavy_eval_lag` count=`15685` routing=`reviewed_unknown_token_provenance` fields=`venue=10(reviewed_scanner_venue_fail_closed_provenance), effective_venue=10(reviewed_scanner_venue_fail_closed_provenance)`
+- `scalping_scanner_runtime_target_attach` count=`14818` routing=`reviewed_unknown_token_provenance` fields=`venue=4(reviewed_scanner_venue_fail_closed_provenance), effective_venue=4(reviewed_scanner_venue_fail_closed_provenance), market_session_bucket=4(reviewed_scanner_venue_fail_closed_provenance)`
+- `scalping_scanner_watching_runtime_skip` count=`13184` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=990(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=51(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=51(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=51(reviewed_explicit_sizing_unknown_venue_fallback), venue=8(reviewed_scanner_venue_fail_closed_provenance), effective_venue=8(reviewed_scanner_venue_fail_closed_provenance)`
+- `rising_missed_nxt_post_block_price_sample` count=`10859` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_post_block_ws_0b_route=200(reviewed_rising_missed_nxt_post_block_route_not_available), rising_missed_nxt_post_block_ws_0d_route=195(reviewed_rising_missed_nxt_post_block_route_not_available)`
+- `rising_missed_watch_not_rising_skipped` count=`6789` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=5429(reviewed_rising_missed_nxt_eligibility_not_available), venue=2(reviewed_observation_only_venue_not_available)`
+- `rising_missed_tp1_counterfactual_submit_safety` count=`4028` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=2328(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=4(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=4(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=4(reviewed_explicit_sizing_unknown_venue_fallback)`
+- `rising_missed_tp1_candidate_blocked` count=`2456` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=2078(reviewed_rising_missed_nxt_eligibility_not_available), tier_reason=4(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=4(reviewed_explicit_sizing_unknown_venue_fallback), sizing_tier_reason_at_allocation=4(reviewed_explicit_sizing_unknown_venue_fallback)`
+- `scalping_scanner_watch_eviction` count=`2196` routing=`reviewed_unknown_token_provenance` fields=`venue=1(reviewed_scanner_venue_fail_closed_provenance), effective_venue=1(reviewed_scanner_venue_fail_closed_provenance), venue=1(reviewed_observation_only_venue_not_available), effective_venue=1(reviewed_observation_only_venue_not_available)`
+- `strength_momentum_observed` count=`1964` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=5(reviewed_rising_missed_nxt_eligibility_not_available)`
+- `stat_action_decision_snapshot` count=`1797` routing=`reviewed_unknown_token_provenance` fields=`prior_probe_residual_direction_state=50(reviewed_prior_probe_residual_source_gap), prior_probe_residual_failure_signature=50(reviewed_prior_probe_residual_source_gap), main_lifecycle_venue=24(reviewed_main_lifecycle_venue_not_available), tick_context_stale=15(reviewed_stale_flag_not_available), quote_stale=15(reviewed_stale_flag_not_available), shallow_tick_context_stale=10(reviewed_shallow_stale_flag_not_available), shallow_quote_stale=10(reviewed_shallow_stale_flag_not_available), prior_probe_residual_orderbook_state=5(reviewed_prior_probe_residual_source_gap)`
+- `rising_missed_tp1_candidate_deferred` count=`1572` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=250(reviewed_rising_missed_nxt_eligibility_not_available)`
+- `exit_signal` count=`1395` routing=`reviewed_unknown_token_provenance` fields=`main_lifecycle_venue=20(reviewed_main_lifecycle_venue_not_available)`
+- `blocked_strength_momentum` count=`1380` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=5(reviewed_rising_missed_nxt_eligibility_not_available)`
+- `scalp_entry_action_decision_snapshot` count=`1376` routing=`reviewed_unknown_token_provenance` fields=`rising_missed_nxt_eligible=916(reviewed_rising_missed_nxt_eligibility_not_available), holding_exit_matrix_score_prior_band=348(reviewed_score_prior_neutral_unknown_not_decision_input), entry_order_flow_status=91(reviewed_entry_order_flow_not_available), risk_regime_context=88(reviewed_missing_risk_regime_context), score_prior_band=29(reviewed_score_prior_neutral_unknown_not_decision_input), score_prior_confidence=29(reviewed_score_prior_neutral_unknown_not_decision_input), tier_reason=28(reviewed_explicit_sizing_unknown_venue_fallback), sizing_venue_at_allocation=28(reviewed_explicit_sizing_unknown_venue_fallback)`
+- `scalp_sim_panic_context_warning` count=`1172` routing=`reviewed_unknown_token_provenance` fields=`panic_epoch_id=1172(reviewed_missing_risk_regime_context), market_risk_state=1172(reviewed_missing_risk_regime_context), liquidity_state=1172(reviewed_missing_risk_regime_context), risk_regime_epoch_id=1172(reviewed_missing_risk_regime_context)`
+- `scalping_scanner_ws_backoff_watch_retained` count=`1146` routing=`reviewed_unknown_token_provenance` fields=`venue=1(reviewed_scanner_venue_fail_closed_provenance), effective_venue=1(reviewed_scanner_venue_fail_closed_provenance)`
 
 ## Top Stages
-- `scalping_scanner_promotion_latency_trace`: `7795`
-- `scalping_scanner_fast_precheck`: `5893`
-- `scalping_scanner_runtime_queue_lag`: `3129`
-- `scalping_scanner_heavy_eval_lag`: `1902`
-- `scalping_scanner_heavy_eval_completion`: `1902`
-- `rising_missed_watch_not_rising_skipped`: `1290`
-- `scalping_scanner_runtime_target_attach`: `835`
-- `scalping_scanner_watching_runtime_skip`: `632`
-- `scalping_scanner_candidate_promoted`: `74`
-- `scalping_scanner_candidate_observed`: `58`
-- `scalping_scanner_real_source_guard_block`: `58`
-- `scalping_scanner_watch_eviction`: `47`
-- `scalping_scanner_ws_backoff_watch_retained`: `36`
-- `risky_micro_episode_executable_bbo_observed`: `34`
-- `rising_missed_one_share_entry`: `28`
-- `scalp_entry_action_decision_snapshot`: `28`
-- `rising_missed_tp1_counterfactual_submit_safety`: `24`
-- `scalping_scanner_low_rebound_source_observed`: `22`
-- `rising_missed_tp1_candidate_blocked`: `22`
-- `budget_pass`: `19`
+- `scalping_scanner_promotion_latency_trace`: `70606`
+- `scalping_scanner_fast_precheck`: `54921`
+- `scalping_scanner_runtime_queue_lag`: `29517`
+- `scalping_scanner_candidate_observed`: `19570`
+- `scalping_scanner_real_source_guard_block`: `19570`
+- `scalping_scanner_heavy_eval_completion`: `16165`
+- `scalping_scanner_heavy_eval_lag`: `15685`
+- `scalping_scanner_runtime_target_attach`: `14818`
+- `scalping_scanner_watching_runtime_skip`: `13184`
+- `rising_missed_nxt_post_block_price_sample`: `10859`
+- `rising_missed_watch_not_rising_skipped`: `6789`
+- `rising_missed_tp1_counterfactual_submit_safety`: `4028`
+- `scalping_scanner_candidate_promoted`: `2576`
+- `rising_missed_tp1_candidate_blocked`: `2456`
+- `scalping_scanner_watch_eviction`: `2196`
+- `bad_entry_refined_candidate`: `2140`
+- `strength_momentum_observed`: `1964`
+- `stat_action_decision_snapshot`: `1797`
+- `risky_micro_episode_executable_bbo_observed`: `1720`
+- `scalp_sim_panic_level1_partial_skipped_min_remaining`: `1629`

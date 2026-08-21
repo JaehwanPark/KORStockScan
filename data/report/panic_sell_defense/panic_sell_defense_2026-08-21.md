@@ -9,27 +9,27 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-08-21T15:28:01`
-- latest_event_at: `2026-08-21T15:28:11`
+- as_of: `2026-08-21T21:09:39`
+- latest_event_at: `2026-08-21T20:00:00`
 - reasons: `panic thresholds not breached`
 
 ## 입력 자원 계약
 
 - memory_bounded_streaming: `true`
-- scanned_row_count: `186238`
-- retained_exit_event_count: `4340`
+- scanned_row_count: `322361`
+- retained_exit_event_count: `11193`
 - full_event_list_materialized: `false`
 - out_of_order_event_count: `0`
-- unique_market_observation_count: `17830`
-- duplicate_snapshot_skipped_count: `18385`
+- unique_market_observation_count: `40330`
+- duplicate_snapshot_skipped_count: `43090`
 
 ## 패닉 지표
 
 - panic_decision_basis: `real_exit_with_broker_provenance_only`
 - real_exit_provenance_required: `true`
 - real_exit_count: `0`
-- non_real_exit_count: `39`
-- unproven_exit_count: `39`
+- non_real_exit_count: `1395`
+- unproven_exit_count: `1395`
 - sim_probe_exit_excluded_from_panic: `true`
 - stop_loss_exit_count: `0`
 - current_30m_stop_loss_exit_count: `0`
@@ -57,15 +57,15 @@
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `1232`
+- evaluated_symbol_count: `1579`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `489`
-- degraded_orderbook_count: `489`
-- stale_or_unhealthy_orderbook_count: `16`
+- missing_orderbook_count: `976`
+- degraded_orderbook_count: `976`
+- stale_or_unhealthy_orderbook_count: `12`
 - panic_report_entry_count: `0`
 - panic_active_confirmation_count: `0`
 - recovery_release_transition_count: `0`
@@ -80,11 +80,11 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-08-21T15:28:01`
+- market_panic_breadth_as_of: `2026-08-21T21:09:38`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `true`
-- evaluated_symbol_count: `1232`
+- evaluated_symbol_count: `1579`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
 - confirmed_risk_off_advisory: `false`

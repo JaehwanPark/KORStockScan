@@ -2531,6 +2531,73 @@ def test_pipeline_heartbeat_is_generated_only_for_exposure_stages() -> None:
     assert scanner["main_lifecycle_heartbeat"] is False
 
 
+def test_pipeline_lifecycle_preserves_venue_provenance_and_rejects_nan() -> None:
+    stock = {
+        "id": 708,
+        "code": "005930",
+        "scanner_generation_id": "005930:SCANPROM-708:r1",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+    }
+
+    holding = pipeline_lifecycle_fields_safe(
+        stock,
+        "005930",
+        pipeline="HOLDING_PIPELINE",
+        source_stage="ai_holding_review",
+        source_fields={
+            "holding_context_venue": "NXT",
+            "holding_context_session": "nxt_aftermarket",
+        },
+        observed_at=BASE,
+    )
+    unavailable = pipeline_lifecycle_fields_safe(
+        stock,
+        "005930",
+        pipeline="HOLDING_PIPELINE",
+        source_stage="exit_signal",
+        source_fields={},
+        observed_at=BASE,
+    )
+
+    assert holding["main_lifecycle_venue"] == "NXT"
+    assert holding["main_lifecycle_venue_source"] == (
+        "source_fields.holding_context_venue"
+    )
+    assert holding["main_lifecycle_venue_provenance_status"] == "resolved"
+    assert holding["main_lifecycle_session_bucket"] == "nxt_aftermarket"
+    assert holding["main_lifecycle_session_bucket_source"] == (
+        "source_fields.holding_context_session"
+    )
+    assert unavailable["main_lifecycle_venue"] == "KRX"
+    assert unavailable["main_lifecycle_venue_source"] == "stock.effective_venue"
+    assert unavailable["main_lifecycle_session_bucket"] == "krx_regular"
+    assert unavailable["main_lifecycle_session_bucket_source"] == (
+        "stock.market_session_bucket"
+    )
+
+    missing = pipeline_lifecycle_fields_safe(
+        {
+            "id": 709,
+            "code": "005930",
+            "scanner_generation_id": "005930:SCANPROM-709:r1",
+            "market_session_bucket": float("nan"),
+        },
+        "005930",
+        pipeline="HOLDING_PIPELINE",
+        source_stage="exit_signal",
+        source_fields={},
+        observed_at=BASE,
+    )
+    assert missing["main_lifecycle_session_bucket"] == "unknown"
+    assert missing["main_lifecycle_session_bucket_source"] == (
+        "not_available_explicit_session_bucket"
+    )
+    assert missing["main_lifecycle_session_provenance_status"] == (
+        "not_available_explicit_source"
+    )
+
+
 def test_default_pipeline_source_path_is_daily_and_not_sync_journal() -> None:
     assert pipeline_event_path(TARGET_DATE).name == ("pipeline_events_2026-08-14.jsonl")
 

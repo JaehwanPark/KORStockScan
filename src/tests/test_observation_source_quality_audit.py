@@ -8230,6 +8230,7 @@ def test_observation_source_quality_reviews_aug18_unknown_provenance_variants(
             "position_rebased_after_fill",
             "scale_in_executed",
             "sell_completed",
+            "sell_partial_fill_progress",
         ),
         start=4,
     ):
@@ -8276,9 +8277,124 @@ def test_observation_source_quality_reviews_aug18_unknown_provenance_variants(
         "position_rebased_after_fill",
         "scale_in_executed",
         "sell_completed",
+        "sell_partial_fill_progress",
     ):
         assert reviewed[stage] == {
             "broker_actual_execution_venue": (
                 "reviewed_broker_actual_venue_not_available"
             )
         }
+
+
+def test_observation_source_quality_reviews_explicit_20260821_provenance_gaps(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    lifecycle_base = {
+        "main_lifecycle_venue": "UNKNOWN",
+        "main_lifecycle_decision_authority": "source_only_lifecycle_observation",
+        "main_lifecycle_order_authority": False,
+        "main_lifecycle_provider_authority": False,
+    }
+    _write_events(
+        tmp_path,
+        "2026-08-21",
+        [
+            _event(
+                "scalping_scanner_runtime_target_attach",
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "market_session_bucket": "UNKNOWN",
+                    "venue_resolution": (
+                        "conflicting_explicit_market_session_bucket:"
+                        "payload.market_session_bucket=krx_regular,"
+                        "target.market_session_bucket=nan"
+                    ),
+                    "venue_source_quality_status": "reviewed_fail_closed",
+                    "venue_unknown_reviewed_reason": (
+                        "conflicting_explicit_market_session_bucket:"
+                        "payload.market_session_bucket=krx_regular,"
+                        "target.market_session_bucket=nan"
+                    ),
+                    "decision_authority": (
+                        "real_scalping_scanner_runtime_watchlist_handoff_only"
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=1,
+            ),
+            _event(
+                "krx_direct_canary_live_ai_wait_submit_block",
+                {
+                    "entry_order_flow_status": "unknown",
+                    "entry_context_quality": "stale",
+                    "entry_context_missing_features": (
+                        "quote_freshness,order_flow_pressure"
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=2,
+            ),
+            _event(
+                "stat_action_decision_snapshot",
+                {
+                    **lifecycle_base,
+                    "main_lifecycle_session_bucket": "nan",
+                    "main_lifecycle_source_stage": ("stat_action_decision_snapshot"),
+                },
+                record_id=3,
+            ),
+            _event(
+                "exit_signal",
+                {
+                    **lifecycle_base,
+                    "main_lifecycle_session_bucket": "unknown",
+                    "main_lifecycle_source_stage": "exit_signal",
+                    "main_lifecycle_venue_source": (
+                        "not_available_explicit_tradable_venue"
+                    ),
+                    "main_lifecycle_venue_provenance_status": (
+                        "not_available_explicit_source"
+                    ),
+                    "main_lifecycle_session_bucket_source": (
+                        "not_available_explicit_session_bucket"
+                    ),
+                    "main_lifecycle_session_provenance_status": (
+                        "not_available_explicit_source"
+                    ),
+                },
+                record_id=4,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-08-21")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["scalping_scanner_runtime_target_attach"] == {
+        "effective_venue": "reviewed_scanner_venue_fail_closed_provenance",
+        "market_session_bucket": "reviewed_scanner_venue_fail_closed_provenance",
+        "venue": "reviewed_scanner_venue_fail_closed_provenance",
+    }
+    assert reviewed["krx_direct_canary_live_ai_wait_submit_block"] == {
+        "entry_order_flow_status": "reviewed_entry_order_flow_not_available"
+    }
+    assert reviewed["stat_action_decision_snapshot"] == {
+        "main_lifecycle_venue": "reviewed_main_lifecycle_venue_not_available"
+    }
+    assert reviewed["exit_signal"] == {
+        "main_lifecycle_session_bucket": (
+            "reviewed_main_lifecycle_session_not_available"
+        ),
+        "main_lifecycle_venue": "reviewed_main_lifecycle_venue_not_available",
+    }

@@ -857,36 +857,55 @@ def pipeline_lifecycle_stage_mapped(*, pipeline: Any, source_stage: Any) -> bool
     ) in PIPELINE_STAGE_MAP
 
 
-def _pipeline_explicit_venue(
+def _pipeline_explicit_venue_with_source(
     stock: Mapping[str, Any], source_fields: Mapping[str, Any]
-) -> str:
-    for source in (stock, source_fields):
-        for key in (
-            "effective_venue",
-            "rising_missed_effective_venue",
-            "entry_setup_live_policy_effective_venue",
-            "venue",
+) -> tuple[str, str]:
+    # Prefer exact stage-local execution/context fields over the long-lived
+    # stock snapshot.  A stale stock.effective_venue must not hide the broker
+    # execution venue or the venue attached to the current holding decision.
+    for key in (
+        "broker_actual_execution_venue",
+        "holding_context_venue",
+        "entry_execution_cohort",
+        "effective_venue",
+        "rising_missed_effective_venue",
+        "entry_setup_live_policy_effective_venue",
+        "venue",
+    ):
+        for source_name, source in (
+            ("source_fields", source_fields),
+            ("stock", stock),
         ):
             value = str(source.get(key) or "").strip().upper()
             if value in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}:
-                return value
-    return "UNKNOWN"
+                return value, f"{source_name}.{key}"
+    return "UNKNOWN", "not_available_explicit_tradable_venue"
 
 
-def _pipeline_explicit_session_bucket(
+def _pipeline_explicit_session_bucket_with_source(
     stock: Mapping[str, Any], source_fields: Mapping[str, Any]
-) -> str:
-    for source in (stock, source_fields):
-        for key in (
-            "market_session_bucket",
-            "rising_missed_market_session_bucket",
-            "entry_setup_live_policy_session_bucket",
-            "session_bucket",
+) -> tuple[str, str]:
+    for key in (
+        "holding_context_session",
+        "market_session_bucket",
+        "rising_missed_market_session_bucket",
+        "entry_setup_live_policy_session_bucket",
+        "session_bucket",
+    ):
+        for source_name, source in (
+            ("source_fields", source_fields),
+            ("stock", stock),
         ):
             value = str(source.get(key) or "").strip().lower()
-            if value and value not in {"-", "none", "null", "unknown"}:
-                return value[:80]
-    return "unknown"
+            if value and value not in {
+                "-",
+                "nan",
+                "none",
+                "null",
+                "unknown",
+            }:
+                return value[:80], f"{source_name}.{key}"
+    return "unknown", "not_available_explicit_session_bucket"
 
 
 def _pipeline_decision_trace_id(
@@ -1077,6 +1096,12 @@ def pipeline_lifecycle_fields_safe(
         timestamp = _aware_datetime(observed_at).astimezone(KST)
         lifecycle_id = mint_main_lifecycle_id(**lineage)
         decision_trace_id = _pipeline_decision_trace_id(stock, fields)
+        lifecycle_venue, lifecycle_venue_source = _pipeline_explicit_venue_with_source(
+            stock, fields
+        )
+        lifecycle_session, lifecycle_session_source = (
+            _pipeline_explicit_session_bucket_with_source(stock, fields)
+        )
         result: dict[str, Any] = {
             "main_lifecycle_identity_schema": PIPELINE_IDENTITY_SCHEMA,
             "main_lifecycle_id": lifecycle_id,
@@ -1086,9 +1111,19 @@ def pipeline_lifecycle_fields_safe(
             "main_lifecycle_stock_code": lineage["stock_code"],
             "main_lifecycle_trade_date": timestamp.date().isoformat(),
             "main_lifecycle_observed_at": timestamp.isoformat(timespec="microseconds"),
-            "main_lifecycle_venue": _pipeline_explicit_venue(stock, fields),
-            "main_lifecycle_session_bucket": _pipeline_explicit_session_bucket(
-                stock, fields
+            "main_lifecycle_venue": lifecycle_venue,
+            "main_lifecycle_venue_source": lifecycle_venue_source,
+            "main_lifecycle_venue_provenance_status": (
+                "resolved"
+                if lifecycle_venue != "UNKNOWN"
+                else "not_available_explicit_source"
+            ),
+            "main_lifecycle_session_bucket": lifecycle_session,
+            "main_lifecycle_session_bucket_source": lifecycle_session_source,
+            "main_lifecycle_session_provenance_status": (
+                "resolved"
+                if lifecycle_session != "unknown"
+                else "not_available_explicit_source"
             ),
             "main_lifecycle_source_pipeline": normalized_pipeline,
             "main_lifecycle_source_stage": normalized_source_stage,
