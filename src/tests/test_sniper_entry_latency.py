@@ -162,6 +162,54 @@ def test_risky_micro_episode_reuses_fresh_trusted_tp1_tick_window_provenance():
     assert result["risky_micro_episode_runtime_effect"] is False
 
 
+def test_risky_micro_episode_does_not_relabel_complete_direct_zero_tick_context():
+    result = state_handlers._evaluate_rising_missed_risky_micro_episode_source_only(
+        stock={
+            "code": "475560",
+            "name": "THEBORN",
+            "rising_missed_tp1_submit_context_at": time.time(),
+            "rising_missed_tp1_submit_context_evaluation_id": "tp1-eval-direct",
+            "rising_missed_tp1_submit_context_candidate_allowed": True,
+            "rising_missed_tp1_submit_context_tick_acceleration": 1.12,
+            "rising_missed_tp1_submit_context_tick_acceleration_fresh": True,
+            "rising_missed_tp1_submit_context_tick_acceleration_source": (
+                "trusted_ws_signed_0b_10tick_received_ts"
+            ),
+            "rising_missed_tp1_submit_context_tick_acceleration_age_sec": 0.2,
+            "rising_missed_tp1_submit_context_tick_window_span_sec": 8.0,
+            "rising_missed_tp1_submit_context_tick_window_sample_count": 10,
+        },
+        runtime={},
+        latency_gate={
+            "quote_age_ms": 100.0,
+            "tick_acceleration_ratio": 0.0,
+            "tick_window_span_sec": 1.0,
+        },
+        ws_data={
+            "orderbook": {
+                "asks": [{"price": 16_310, "volume": 50}],
+                "bids": [{"price": 16_220, "volume": 50}],
+            }
+        },
+        orderbook_fields={},
+        microstructure_fields={},
+        source_stage="rising_missed_tick_speed_entry_block",
+        source_block_reason="tick_acceleration_ratio_lt_1",
+        rising_missed_entry_lineage=True,
+    )
+
+    assert result["risky_micro_episode_tick_acceleration_ratio"] == 0.0
+    assert result["risky_micro_episode_tick_window_span_sec"] == 1.0
+    assert result["risky_micro_episode_tick_context_source"] == (
+        "direct_entry_tick_context"
+    )
+    assert result["risky_micro_episode_tick_context_fallback_applied"] is False
+    assert (
+        result["risky_micro_episode_tick_acceleration_fallback_applied"] is False
+    )
+    assert result["risky_micro_episode_tick_window_fallback_applied"] is False
+
+
 def test_risky_micro_episode_explains_missing_tick_sample_floor():
     result = state_handlers._evaluate_rising_missed_risky_micro_episode_source_only(
         stock={

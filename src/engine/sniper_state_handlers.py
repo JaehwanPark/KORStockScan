@@ -33579,11 +33579,16 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
         or ""
     ).strip()
     tick_context_source = "direct_entry_tick_context"
+    tp1_tick_acceleration_fallback_applied = False
+    tp1_tick_window_fallback_applied = False
     if tp1_tick_context_fresh:
         if tick_acceleration_ratio is None:
             tick_acceleration_ratio = _safe_float(
                 tp1_context.get("rising_missed_tp1_submit_context_tick_acceleration"),
                 None,
+            )
+            tp1_tick_acceleration_fallback_applied = (
+                tick_acceleration_ratio is not None
             )
         if tick_window_span_sec is None:
             tick_window_span_sec = _safe_float(
@@ -33592,8 +33597,17 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
                 ),
                 None,
             )
-        if tick_acceleration_ratio is not None and tick_window_span_sec is not None:
+            tp1_tick_window_fallback_applied = tick_window_span_sec is not None
+        if (
+            tp1_tick_acceleration_fallback_applied
+            and tp1_tick_window_fallback_applied
+        ):
             tick_context_source = "trusted_tp1_ws_signed_0b_10tick_context"
+        elif (
+            tp1_tick_acceleration_fallback_applied
+            or tp1_tick_window_fallback_applied
+        ):
+            tick_context_source = "direct_entry_tick_context_completed_by_trusted_tp1"
     tick_context_gap_reason = "none"
     if tick_acceleration_ratio is None or tick_window_span_sec is None:
         if not tp1_context:
@@ -33674,7 +33688,13 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
     )
     result["risky_micro_episode_tick_context_source"] = tick_context_source
     result["risky_micro_episode_tick_context_fallback_applied"] = bool(
-        tick_context_source == "trusted_tp1_ws_signed_0b_10tick_context"
+        tp1_tick_acceleration_fallback_applied or tp1_tick_window_fallback_applied
+    )
+    result["risky_micro_episode_tick_acceleration_fallback_applied"] = bool(
+        tp1_tick_acceleration_fallback_applied
+    )
+    result["risky_micro_episode_tick_window_fallback_applied"] = bool(
+        tp1_tick_window_fallback_applied
     )
     result["risky_micro_episode_tick_context_tp1_sample_count"] = (
         tp1_tick_sample_count
@@ -37808,6 +37828,29 @@ def _retry_entry_ai_submit_authority_before_block(
             if trusted_result
             else {}
         )
+        if trusted_result:
+            exploration_terminal_fields = (
+                _entry_setup_exploration_terminal_state_fields(
+                    ai_decision,
+                    trusted_result=True,
+                )
+            )
+            policy_mode = str(
+                ai_decision.get("entry_setup_live_policy_mode") or ""
+            ).strip()
+            _clear_superseded_entry_setup_exploration_arm(
+                stock,
+                current_policy_mode=(
+                    "one_share_exploration"
+                    if exploration_terminal_fields
+                    else (
+                        "one_share_exploration_inactive"
+                        if policy_mode.lower() == "one_share_exploration"
+                        else policy_mode
+                    )
+                ),
+            )
+            trusted_state_fields.update(exploration_terminal_fields)
         _mutate_stock_state(
             stock,
             set_fields={
@@ -53447,6 +53490,61 @@ def _entry_setup_exploration_micro_relief(
         "entry_setup_exploration_micro_relief_authority": (
             "one_share_exploration_only_residual_and_scale_in_forbidden"
         ),
+    }
+
+
+def _entry_setup_exploration_terminal_state_fields(
+    ai_decision: dict | None,
+    *,
+    trusted_result: bool,
+) -> dict[str, Any]:
+    """Preserve a trusted one-share policy on every Entry AI call path.
+
+    The ordinary WATCHING path already attaches these terminal restrictions
+    after its micro recheck. Scanner pre-submit retry paths can become the
+    final trusted Entry AI producer immediately before broker submission, so
+    dropping the policy fields there incorrectly exposes a residual bundle and
+    later scale-in to owners that the selected policy explicitly forbids.
+    """
+
+    decision = ai_decision if isinstance(ai_decision, dict) else {}
+    mode = str(decision.get("entry_setup_live_policy_mode") or "").strip().lower()
+    policy_runtime_effect = _truthy_field(
+        decision.get("entry_setup_live_policy_runtime_effect")
+    )
+    probe_first_required = _truthy_field(decision.get("entry_probe_first_required"))
+    full_entry_forbidden = _truthy_field(decision.get("entry_ai_full_entry_forbidden"))
+    if not (
+        trusted_result
+        and mode == "one_share_exploration"
+        and policy_runtime_effect
+        and probe_first_required
+        and full_entry_forbidden
+    ):
+        return {}
+    return {
+        "entry_setup_live_policy_mode": "one_share_exploration",
+        "entry_setup_live_policy_status": str(
+            decision.get("entry_setup_live_policy_status") or "active_bounded_canary"
+        ),
+        "entry_setup_live_policy_max_daily_exploration_probes": max(
+            0,
+            _safe_int(
+                decision.get("entry_setup_live_policy_max_daily_exploration_probes"),
+                0,
+            ),
+        ),
+        "entry_setup_live_policy_activation_sha256": str(
+            decision.get("entry_setup_live_policy_activation_sha256") or ""
+        ),
+        "entry_setup_live_policy_candidate_contract_sha256": str(
+            decision.get("entry_setup_live_policy_candidate_contract_sha256") or ""
+        ),
+        "entry_opportunity_recheck_exploration_probe_only": True,
+        "entry_setup_bounded_exploration_probe_only": True,
+        "entry_split_probe_residual_expand_forbidden": True,
+        "entry_split_probe_scale_in_forbidden": True,
+        "probe_expand_forbidden": True,
     }
 
 
@@ -70979,6 +71077,23 @@ def _record_scanner_entry_ai_attempt(
         _mutate_stock_state(stock, set_fields=attempt_fields)
         return False
 
+    exploration_terminal_fields = _entry_setup_exploration_terminal_state_fields(
+        ai_decision,
+        trusted_result=True,
+    )
+    policy_mode = str(ai_decision.get("entry_setup_live_policy_mode") or "").strip()
+    _clear_superseded_entry_setup_exploration_arm(
+        stock,
+        current_policy_mode=(
+            "one_share_exploration"
+            if exploration_terminal_fields
+            else (
+                "one_share_exploration_inactive"
+                if policy_mode.lower() == "one_share_exploration"
+                else policy_mode
+            )
+        ),
+    )
     _mutate_stock_state(
         stock,
         set_fields={
@@ -71010,6 +71125,7 @@ def _record_scanner_entry_ai_attempt(
                 ai_decision.get("entry_probe_intent_after_cost_reward_risk")
             ),
             "last_watching_ai_probe_intent_submit_guard_required": True,
+            **exploration_terminal_fields,
         },
         pop_fields=[
             "_scanner_entry_ai_transport_retry_after_epoch",

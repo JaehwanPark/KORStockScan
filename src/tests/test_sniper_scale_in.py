@@ -5319,6 +5319,16 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
                 "entry_probe_intent": True,
                 "entry_probe_intent_status": "eligible_wait_probe",
                 "entry_probe_intent_prompt_version": ("decision_quality_v2_7_probe_v1"),
+                "entry_setup_live_policy_status": "active_bounded_krx_canary",
+                "entry_setup_live_policy_mode": "one_share_exploration",
+                "entry_setup_live_policy_runtime_effect": True,
+                "entry_setup_live_policy_max_daily_exploration_probes": 3,
+                "entry_setup_live_policy_activation_sha256": "activation-retry",
+                "entry_setup_live_policy_candidate_contract_sha256": (
+                    "candidate-retry"
+                ),
+                "entry_probe_first_required": True,
+                "entry_ai_full_entry_forbidden": True,
             }
 
     monkeypatch.setattr(state_handlers.time, "time", lambda: clock["now"])
@@ -5403,6 +5413,13 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     assert stock["last_watching_ai_attempt_probe_intent"] is True
     assert stock["last_watching_ai_attempt_trusted"] is True
     assert stock["last_watching_ai_attempt_contract_status"] == "pass"
+    assert stock["entry_setup_live_policy_mode"] == "one_share_exploration"
+    assert stock["entry_opportunity_recheck_exploration_probe_only"] is True
+    assert stock["entry_setup_bounded_exploration_probe_only"] is True
+    assert stock["entry_split_probe_residual_expand_forbidden"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_setup_live_policy_max_daily_exploration_probes"] == 3
     assert retry["pre_submit_entry_ai_authority_retry_contract_status"] == "pass"
     assert (
         stock["last_watching_ai_attempt_decision_trace_id"]

@@ -557,6 +557,14 @@ def test_scanner_entry_ai_attempt_promotes_trusted_terminal_result():
             "entry_probe_intent": True,
             "entry_probe_intent_status": "eligible_wait_probe",
             "entry_probe_intent_prompt_version": "decision_quality_v2_7_probe_v1",
+            "entry_setup_live_policy_status": "active_bounded_krx_canary",
+            "entry_setup_live_policy_mode": "one_share_exploration",
+            "entry_setup_live_policy_runtime_effect": True,
+            "entry_setup_live_policy_max_daily_exploration_probes": 3,
+            "entry_setup_live_policy_activation_sha256": "activation-async",
+            "entry_setup_live_policy_candidate_contract_sha256": "candidate-async",
+            "entry_probe_first_required": True,
+            "entry_ai_full_entry_forbidden": True,
             "parse_ok": True,
             "ai_decision_snapshot_id": "aims-pass",
             "ai_decision_trace_id": "aidt-pass",
@@ -586,8 +594,64 @@ def test_scanner_entry_ai_attempt_promotes_trusted_terminal_result():
         == "decision_quality_v2_7_probe_v1"
     )
     assert stock["last_watching_ai_probe_intent_submit_guard_required"] is True
+    assert stock["entry_setup_live_policy_mode"] == "one_share_exploration"
+    assert stock["entry_opportunity_recheck_exploration_probe_only"] is True
+    assert stock["entry_setup_bounded_exploration_probe_only"] is True
+    assert stock["entry_split_probe_residual_expand_forbidden"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_setup_live_policy_max_daily_exploration_probes"] == 3
     assert "_scanner_entry_ai_transport_retry_after_epoch" not in stock
     assert "_scanner_entry_ai_transport_retry_until_epoch" not in stock
+
+
+def test_scanner_entry_ai_attempt_clears_inactive_one_share_policy_residue():
+    generation = _generation("KRX")
+    stock = {
+        "entry_opportunity_recheck_armed": True,
+        "entry_opportunity_recheck_exploration_probe_only": True,
+        "entry_setup_bounded_exploration_probe_only": True,
+        "entry_split_probe_residual_expand_forbidden": True,
+        "entry_split_probe_scale_in_forbidden": True,
+        "probe_expand_forbidden": True,
+        "entry_setup_live_policy_mode": "one_share_exploration",
+    }
+
+    trusted = handlers._record_scanner_entry_ai_attempt(
+        stock,
+        ai_decision={
+            "action": "WAIT",
+            "score": 64,
+            "decision_quality_contract_status": "pass",
+            "entry_probe_intent": True,
+            "entry_probe_intent_status": "eligible_wait_probe",
+            "entry_setup_live_policy_mode": "one_share_exploration",
+            "entry_setup_live_policy_runtime_effect": False,
+            "entry_probe_first_required": True,
+            "entry_ai_full_entry_forbidden": True,
+            "parse_ok": True,
+            "ai_decision_snapshot_id": "aims-inactive",
+            "ai_decision_trace_id": "aidt-inactive",
+        },
+        action="WAIT",
+        score=64.0,
+        result_source="live",
+        completed_epoch=1003.0,
+        generation=generation,
+        decision_price=1005,
+        state_signature={"available_axes": ["quote_freshness"]},
+        source_quality_fields={"ai_result_source": "live"},
+        trigger_reason="rising_missed_entry_ai_not_evaluated_async_v1",
+    )
+
+    assert trusted is True
+    assert stock["entry_opportunity_recheck_armed"] is False
+    assert "entry_opportunity_recheck_exploration_probe_only" not in stock
+    assert "entry_setup_bounded_exploration_probe_only" not in stock
+    assert "entry_split_probe_residual_expand_forbidden" not in stock
+    assert "entry_split_probe_scale_in_forbidden" not in stock
+    assert "probe_expand_forbidden" not in stock
+    assert "entry_setup_live_policy_mode" not in stock
 
 
 def test_scanner_entry_ai_contract_valid_zero_score_drop_clears_prior_probe_intent():
