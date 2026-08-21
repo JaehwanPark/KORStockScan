@@ -483,6 +483,7 @@ class PathWriterMetrics:
     journal_fsync_latency_ms: float
     bytes_written: int
     disk_free_bytes: int | None
+    low_disk_watermark_breached: bool
     storage_self_disabled: bool
     writer_alive: bool
     last_writer_error_type: str | None
@@ -692,6 +693,7 @@ class NonBlockingPathJournalWriter:
         self._last_fsync_latency_ms = 0.0
         self._bytes_written = 0
         self._disk_free_bytes: int | None = None
+        self._low_disk_watermark_breached = False
         self._storage_self_disabled = False
         self._last_order_by_segment: dict[str, tuple[datetime, int]] = {}
         self._last_writer_error_type: str | None = None
@@ -783,6 +785,7 @@ class NonBlockingPathJournalWriter:
                 journal_fsync_latency_ms=round(self._last_fsync_latency_ms, 6),
                 bytes_written=self._bytes_written,
                 disk_free_bytes=self._disk_free_bytes,
+                low_disk_watermark_breached=(self._low_disk_watermark_breached),
                 storage_self_disabled=self._storage_self_disabled,
                 writer_alive=(self._thread is not None and self._thread.is_alive()),
                 last_writer_error_type=self._last_writer_error_type,
@@ -907,7 +910,12 @@ class NonBlockingPathJournalWriter:
                         )
                         self._last_order_by_segment = next_order
                         if disk_free < self._storage_policy.low_disk_watermark_bytes:
-                            self._capture_degraded = True
+                            # A successful durable write below the preventive
+                            # watermark is a capacity warning, not evidence of
+                            # lost capture.  Critical capacity, write errors,
+                            # queue loss, and projection shutdown remain
+                            # capture-degrading paths above/below this branch.
+                            self._low_disk_watermark_breached = True
                         elapsed = time.monotonic() - self._first_write_monotonic
                         if elapsed >= self._storage_policy.projection_min_elapsed_sec:
                             projected_total = round(

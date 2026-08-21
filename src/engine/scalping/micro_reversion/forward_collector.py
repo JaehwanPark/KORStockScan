@@ -156,6 +156,25 @@ DEPTH_CALLBACK_LATENCY_METRIC_CONTRACT = {
         "threshold_provider_bot_quantity_or_cap_mutation",
     ),
 }
+LOW_DISK_CAPACITY_WARNING_METRIC_CONTRACT = {
+    "metric_role": "operational_capacity_warning",
+    "decision_authority": "storage_maintenance_attention_only",
+    "window_policy": "current_process_cumulative_successful_writer_batches",
+    "sample_floor": "one_successful_write_below_low_disk_watermark",
+    "primary_decision_metric": (
+        "writer_and_depth_writer_low_disk_watermark_breach_count"
+    ),
+    "source_quality_gate": (
+        "warning_does_not_imply_row_loss_and_actual_drop_error_self_disable_"
+        "manifest_or_projection_failure_remains_capture_degraded"
+    ),
+    "forbidden_uses": (
+        "whole_date_source_quality_stop_without_capture_loss",
+        "sim_or_live_policy_selection",
+        "broker_order_submission",
+        "threshold_provider_bot_quantity_or_cap_mutation",
+    ),
+}
 
 
 class ProducerCanaryResult(StrEnum):
@@ -331,6 +350,9 @@ class ForwardCollectorSnapshot:
     writer_bytes_per_persisted_envelope: float | None
     writer_bytes_by_trade_date: dict[str, int]
     writer_disk_free_bytes_min: int | None
+    writer_low_disk_watermark_bytes: int
+    writer_critical_disk_watermark_bytes: int
+    writer_low_disk_watermark_breach_count: int
     writer_capture_degraded_count: int
     writer_last_error_types: tuple[str, ...]
     writer_last_persisted_sequence: int | None
@@ -353,6 +375,7 @@ class ForwardCollectorSnapshot:
     depth_writer_storage_self_disabled_count: int
     depth_writer_manifest_error_count: int
     depth_writer_projection_breach_count: int
+    depth_writer_low_disk_watermark_breach_count: int
     depth_writer_bytes_written: int
     canonical_stream_point_count: int
     canonical_stream_duplicate_count: int
@@ -396,6 +419,9 @@ class ForwardCollectorSnapshot:
                     EXCHANGE_TIMESTAMP_REGRESSION_CANARY_METRIC_CONTRACT
                 ),
                 "depth_callback_latency": DEPTH_CALLBACK_LATENCY_METRIC_CONTRACT,
+                "low_disk_capacity_warning": (
+                    LOW_DISK_CAPACITY_WARNING_METRIC_CONTRACT
+                ),
             },
         }
 
@@ -1152,6 +1178,15 @@ class ForwardObservationCollector:
                 ),
                 writer_bytes_by_trade_date=dict(sorted(bytes_by_trade_date.items())),
                 writer_disk_free_bytes_min=aggregate["disk_free_min"],
+                writer_low_disk_watermark_bytes=(
+                    self.config.storage_policy.low_disk_watermark_bytes
+                ),
+                writer_critical_disk_watermark_bytes=(
+                    self.config.storage_policy.critical_disk_watermark_bytes
+                ),
+                writer_low_disk_watermark_breach_count=aggregate[
+                    "low_disk_watermark_breaches"
+                ],
                 writer_capture_degraded_count=aggregate["capture_degraded"],
                 writer_last_error_types=aggregate["last_error_types"],
                 writer_last_persisted_sequence=aggregate["last_sequence"],
@@ -1183,6 +1218,9 @@ class ForwardObservationCollector:
                 depth_writer_manifest_error_count=depth_aggregate["manifest_errors"],
                 depth_writer_projection_breach_count=depth_aggregate[
                     "projection_breaches"
+                ],
+                depth_writer_low_disk_watermark_breach_count=depth_aggregate[
+                    "low_disk_watermark_breaches"
                 ],
                 depth_writer_bytes_written=depth_aggregate["bytes_written"],
                 canonical_stream_point_count=self._canonical_stream_points,
@@ -1859,6 +1897,9 @@ def _aggregate_writer_metrics(
         ),
         "bytes_written": sum(row.bytes_written for row in rows),
         "disk_free_min": min(disk_free) if disk_free else None,
+        "low_disk_watermark_breaches": sum(
+            1 for row in rows if row.low_disk_watermark_breached
+        ),
         "capture_degraded": sum(1 for row in rows if row.capture_degraded),
         "last_error_types": tuple(
             sorted(

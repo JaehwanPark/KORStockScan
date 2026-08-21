@@ -48,8 +48,10 @@ CANARY_MONITOR_METRIC_CONTRACT = {
     "primary_decision_metric": "stop_required",
     "source_quality_gate": (
         "fresh_collector_snapshot_and_valid_frozen_guard_config;_bounded_ingress_"
-        "queue_loss_is_source_quality_exclusion_and_provider_replay_hold;_worker_"
-        "writer_storage_or_authority_failure_is_immediate_stop"
+        "queue_loss_is_source_quality_exclusion_and_provider_replay_hold;_"
+        "successful_write_below_preventive_low_disk_watermark_is_operational_"
+        "warning_only;_worker_writer_actual_capture_loss_storage_self_disable_"
+        "or_authority_failure_is_immediate_stop"
     ),
     "forbidden_uses": (
         "broker_order_submission",
@@ -171,6 +173,7 @@ def evaluate_canary_snapshot(
 ) -> dict[str, Any]:
     snapshot = dict(collector_snapshot or {})
     reasons: list[str] = []
+    operational_capacity_warnings: list[str] = []
     lifecycle = str(snapshot.get("collector_lifecycle") or "unknown").lower()
     running = lifecycle == "running"
 
@@ -209,6 +212,19 @@ def evaluate_canary_snapshot(
             reasons.append(f"forbidden_authority_field:{field}")
     if snapshot.get("broker_order_forbidden") is not True:
         reasons.append("forbidden_authority_field:broker_order_forbidden")
+
+    for field, label in (
+        ("writer_low_disk_watermark_breach_count", "writer"),
+        ("depth_writer_low_disk_watermark_breach_count", "depth_writer"),
+    ):
+        low_disk_breach_count = _nonnegative_int(snapshot.get(field, 0))
+        if low_disk_breach_count is None:
+            reasons.append(f"missing_or_invalid_metric:{field}")
+        elif low_disk_breach_count > 0:
+            operational_capacity_warnings.append(
+                f"{label}_low_disk_watermark_capacity_warning:"
+                f"writers={low_disk_breach_count}"
+            )
 
     if running:
         for field in (
@@ -316,6 +332,7 @@ def evaluate_canary_snapshot(
         "stop_required": bool(unique_reasons),
         "stop_reasons": unique_reasons,
         "source_quality_row_exclusions": tuple(source_quality_row_exclusions),
+        "operational_capacity_warnings": tuple(operational_capacity_warnings),
         "raw_row_exclusion_required": bool(source_quality_row_exclusions),
         "latency_guard_armed": latency_guard_armed,
         "callback_sample_count": callback_count,

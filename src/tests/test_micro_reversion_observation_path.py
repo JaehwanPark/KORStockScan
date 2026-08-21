@@ -324,6 +324,33 @@ def test_writer_self_disables_only_capture_at_critical_disk(
     assert metrics.persisted_envelope_count == 0
 
 
+def test_writer_low_disk_watermark_is_warning_without_capture_loss(
+    tmp_path: Path, monkeypatch
+) -> None:
+    policy = PathStoragePolicy()
+    writer = NonBlockingPathJournalWriter(
+        tmp_path / "path.jsonl",
+        storage_policy=policy,
+    )
+    monkeypatch.setattr(
+        writer,
+        "_disk_free_space",
+        lambda: policy.low_disk_watermark_bytes - 1,
+    )
+    writer.start()
+
+    assert writer.submit(_point(1)) is True
+    writer.close()
+
+    metrics = writer.metrics()
+    assert metrics.persisted_envelope_count == 1
+    assert metrics.journal_dropped_envelopes == 0
+    assert metrics.journal_writer_error_count == 0
+    assert metrics.storage_self_disabled is False
+    assert metrics.low_disk_watermark_breached is True
+    assert metrics.capture_degraded is False
+
+
 def test_writer_rotates_full_path_shard_and_publishes_manifest(tmp_path: Path) -> None:
     base = tmp_path / "market_path.jsonl"
     first = _point(1)

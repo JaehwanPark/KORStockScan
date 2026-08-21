@@ -93,6 +93,28 @@ def test_guard_loader_and_healthy_snapshot_contract(tmp_path) -> None:
     assert evaluation["latency_guard_armed"] is True
 
 
+def test_low_disk_warning_does_not_stop_healthy_lossless_capture() -> None:
+    evaluation = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            writer_low_disk_watermark_breach_count=1,
+            writer_capture_degraded_count=0,
+            writer_dropped_envelope_count=0,
+            writer_error_count=0,
+            writer_storage_self_disabled_count=0,
+            depth_writer_low_disk_watermark_breach_count=2,
+        ),
+        _guard(),
+    )
+
+    assert evaluation["status"] == "healthy_observer_canary"
+    assert evaluation["stop_required"] is False
+    assert evaluation["stop_reasons"] == ()
+    assert evaluation["operational_capacity_warnings"] == (
+        "writer_low_disk_watermark_capacity_warning:writers=1",
+        "depth_writer_low_disk_watermark_capacity_warning:writers=2",
+    )
+
+
 def test_guard_excludes_queue_loss_but_stops_on_authority_and_latency() -> None:
     evaluation = evaluate_canary_snapshot(
         _healthy_snapshot(

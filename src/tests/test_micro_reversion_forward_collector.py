@@ -277,6 +277,44 @@ def test_0d_depth_capture_uses_separate_journal_and_sequence(tmp_path) -> None:
     assert row["broker_order_forbidden"] is True
 
 
+def test_low_disk_warning_propagates_for_path_and_depth_without_capture_loss(
+    tmp_path, monkeypatch
+) -> None:
+    low_but_not_critical_bytes = 4 * 1024 * 1024 * 1024
+    monkeypatch.setattr(
+        "src.engine.scalping.micro_reversion.path_journal."
+        "NonBlockingPathJournalWriter._disk_free_space",
+        lambda _writer: low_but_not_critical_bytes,
+    )
+    collector = _collector(
+        tmp_path,
+        path_capture_enabled=True,
+        depth_capture_enabled=True,
+    )
+    try:
+        assert (
+            collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
+            is ProducerCanaryResult.ENQUEUED
+        )
+        assert (
+            collector.observe_kiwoom_0d("000001", _depth_snapshot(), realtime_type="0D")
+            is ProducerCanaryResult.ENQUEUED
+        )
+    finally:
+        collector.close()
+    runtime = collector.runtime_snapshot()
+
+    assert runtime.writer_persisted_envelope_count == 1
+    assert runtime.depth_writer_persisted_envelope_count == 1
+    assert runtime.writer_low_disk_watermark_breach_count == 1
+    assert runtime.depth_writer_low_disk_watermark_breach_count == 1
+    assert runtime.writer_capture_degraded_count == 0
+    assert runtime.writer_dropped_envelope_count == 0
+    assert runtime.depth_writer_dropped_envelope_count == 0
+    assert runtime.writer_storage_self_disabled_count == 0
+    assert runtime.depth_writer_storage_self_disabled_count == 0
+
+
 def test_0d_callback_latency_does_not_poison_frozen_0b_canary_metric(
     tmp_path,
 ) -> None:
@@ -298,6 +336,7 @@ def test_0d_callback_latency_does_not_poison_frozen_0b_canary_metric(
     payload = runtime.as_dict()
     assert payload["schema"] == "scalp_micro_reversion_forward_collector_v9"
     depth_contract = payload["metric_contracts"]["depth_callback_latency"]
+    capacity_contract = payload["metric_contracts"]["low_disk_capacity_warning"]
     assert {
         "metric_role",
         "decision_authority",
@@ -311,6 +350,20 @@ def test_0d_callback_latency_does_not_poison_frozen_0b_canary_metric(
         "satisfy_or_bypass_0b_callback_latency_canary"
         in (depth_contract["forbidden_uses"])
     )
+    assert {
+        "metric_role",
+        "decision_authority",
+        "window_policy",
+        "sample_floor",
+        "primary_decision_metric",
+        "source_quality_gate",
+        "forbidden_uses",
+    } <= set(capacity_contract)
+    assert runtime.writer_low_disk_watermark_bytes > (
+        runtime.writer_critical_disk_watermark_bytes
+    )
+    assert runtime.writer_low_disk_watermark_breach_count >= 0
+    assert runtime.depth_writer_low_disk_watermark_breach_count >= 0
 
 
 def test_0d_depth_capture_is_independently_default_off(tmp_path) -> None:
