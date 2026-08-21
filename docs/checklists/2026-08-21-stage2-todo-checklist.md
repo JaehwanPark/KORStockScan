@@ -114,6 +114,12 @@
 
 ## 사용자 지시 구현
 
+- [x] `[LogCleanupGenerationAndIncidentFingerprint0821] 숫자 slot generation 압축·writer defer 누적·중복 incident 경보 보완` (`Due: 2026-08-21`, `Slot: POSTCLOSE`, `TimeWindow: 21:30~22:20`, `Track: RuntimeStability`)
+  - Source: [run_logs_rotation_cleanup_cron.sh](/home/ubuntu/KORStockScan/deploy/run_logs_rotation_cleanup_cron.sh), [notify_error_detection_admin.py](/home/ubuntu/KORStockScan/src/engine/notify_error_detection_admin.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정: 숫자 slot을 영속 archive identity로 사용하던 계약과 일시 writer-active defer의 즉시 cleanup 실패, 동일 활성 incident의 반복 Telegram 발송을 분리 보완했다.
+  - 구현: `name.log.N`은 숫자 slot을 제거한 content-hash generation gzip으로 검증하고, writer-active는 로그 계열 identity별 `deferred_writer_active` 상태를 원자 누적한다. 기본 3회 연속 defer만 cleanup failure로 승격하며 stable pass가 누적을 초기화한다. detector는 정규화 fingerprint별 활성 set을 보존하여 신규 incident만 알리고 정상 report 뒤 재발은 다시 알린다.
+  - 권한 경계: 운영 cleanup/notification 계약만 변경했으며 trading runtime, 주문, threshold, provider, bot process에는 영향이 없다. 실제 cleanup wrapper 실행과 bot 재기동은 수행하지 않는다.
+
 - [x] `[PostSellExecutableBboRetention0821] 매도 후 1·3·5·10분 exact-route executable BBO 경로 보강` (`Due: 2026-08-21`, `Slot: INTRADAY`, `TimeWindow: 09:45~10:30`, `Track: ScalpingLogic`)
   - Source: [post_sell_candidates_2026-08-21.jsonl](/home/ubuntu/KORStockScan/data/post_sell/post_sell_candidates_2026-08-21.jsonl), [sniper_post_sell_feedback.py](/home/ubuntu/KORStockScan/src/engine/sniper_post_sell_feedback.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [kiwoom-api-data-contract.md](/home/ubuntu/KORStockScan/docs/kiwoom-api-data-contract.md)
   - 판정: 기존 기본값 `POST_SELL_WS_RETAIN_MINUTES=0`으로 인해 삼성공조 매도 뒤 inactive prune이 구독을 제거해 3·5·10분 연속 executable 경로가 단절됐다. 10분 bounded retention, active 8건 cap, 15초 final grace를 적용하고 실제 매도 영수증의 canonical broker route 및 venue/session을 고정했다.

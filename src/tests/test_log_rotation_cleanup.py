@@ -13,6 +13,14 @@ from pathlib import Path
 import pytest
 
 
+def _generation_gzip(source: Path) -> Path:
+    base_name, numeric_slot = source.name.rsplit(".", 1)
+    assert numeric_slot.isdigit()
+    matches = sorted(source.parent.glob(f"{base_name}.generation_*.gz"))
+    assert len(matches) == 1
+    return matches[0]
+
+
 def test_log_rotation_cleanup_defers_active_rotation_preserves_open_backups_and_runs_peers(
     tmp_path,
 ):
@@ -66,7 +74,7 @@ def test_log_rotation_cleanup_defers_active_rotation_preserves_open_backups_and_
             check=False,
         )
 
-        assert result.returncode == 1
+        assert result.returncode == 0
         assert active_log.read_text(encoding="utf-8") == active_payload
         assert source_backup.read_text(encoding="utf-8") == "source-backup"
         assert open_backup.read_text(encoding="utf-8") == "open-backup"
@@ -74,9 +82,7 @@ def test_log_rotation_cleanup_defers_active_rotation_preserves_open_backups_and_
             assert path.stat().st_ino == inode
         assert os.fstat(open_handle.fileno()).st_nlink == 1
         assert peer_archive.exists()
-        with gzip.open(
-            peer_archive.with_suffix(".3.gz"), "rt", encoding="utf-8"
-        ) as handle:
+        with gzip.open(_generation_gzip(peer_archive), "rt", encoding="utf-8") as handle:
             assert handle.read() == "closed-peer"
         assert not micro_source.exists()
         assert micro_source.with_suffix(".jsonl.gz").exists()
@@ -87,8 +93,8 @@ def test_log_rotation_cleanup_defers_active_rotation_preserves_open_backups_and_
         assert "active_rotated=0" in result.stdout
         assert "archive_compressed=1" in result.stdout
         assert "micro_reversion_storage_status=pass" in result.stdout
-        assert result.stdout.count("[FAIL] log_rotation_cleanup") == 1
-        assert "[DONE] log_rotation_cleanup" not in result.stdout
+        assert "writer_defer_escalated=0" in result.stdout
+        assert "[DONE] log_rotation_cleanup" in result.stdout
     finally:
         open_handle.close()
 
@@ -127,13 +133,16 @@ def test_log_rotation_cleanup_ignores_unsafe_active_rotation_opt_in(tmp_path):
         check=False,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert active_log.read_text(encoding="utf-8") == active_payload
     assert backup.read_text(encoding="utf-8") == "old1"
     assert (active_log.stat().st_ino, backup.stat().st_ino) == original_inodes
     assert not (log_dir / "run_error_detection_cron.log.2").exists()
     assert "active_rotation_status=disabled_pending_writer_owner" in result.stdout
+    assert "status=deferred_writer_active" in result.stdout
     assert "active_rotation_deferred=1" in result.stdout
+    assert "writer_defer_escalated=0" in result.stdout
+    assert "[DONE] log_rotation_cleanup" in result.stdout
     assert "[LOG_ROTATE]" not in result.stdout
 
 
@@ -177,7 +186,7 @@ def test_log_rotation_cleanup_compresses_closed_archive_without_shifting_slots(
         encoding="utf-8"
     ) == "old1"
     assert slot_two.exists()
-    with gzip.open(slot_two.with_suffix(".2.gz"), "rt", encoding="utf-8") as handle:
+    with gzip.open(_generation_gzip(slot_two), "rt", encoding="utf-8") as handle:
         assert handle.read() == "old2"
     assert not (log_dir / "threshold_cycle_postclose_cron.log.3.gz").exists()
     assert "active_rotation_deferred=0" in result.stdout
@@ -224,14 +233,15 @@ def test_log_rotation_cleanup_uses_proc_when_fuser_cannot_verify_open_archive(
             check=False,
         )
 
-        assert result.returncode == 1
+        assert result.returncode == 0
         assert archive.stat().st_ino == original_inode
         assert archive.read_text(encoding="utf-8") == "held-open"
         assert os.fstat(handle.fileno()).st_nlink == 1
         assert not archive.with_suffix(".2.gz").exists()
-        assert "reason=source_in_use" in result.stdout
-        assert result.stdout.count("[FAIL] log_rotation_cleanup") == 1
-        assert "[DONE] log_rotation_cleanup" not in result.stdout
+        assert "status=deferred_writer_active reason=source_in_use" in result.stdout
+        assert "archive_writer_active_deferred=1" in result.stdout
+        assert "writer_defer_escalated=0" in result.stdout
+        assert "[DONE] log_rotation_cleanup" in result.stdout
     finally:
         handle.close()
 
@@ -527,7 +537,7 @@ def test_log_rotation_cleanup_preserves_open_micro_source_and_compresses_peer(
         os.fsync(source_handle.fileno())
         assert peer_archive.exists()
         with gzip.open(
-            peer_archive.with_suffix(".3.gz"), "rt", encoding="utf-8"
+            _generation_gzip(peer_archive), "rt", encoding="utf-8"
         ) as handle:
             assert handle.read() == "peer"
         assert "[MICRO_REVERSION_STORAGE_FAIL]" in result.stdout
@@ -768,11 +778,11 @@ def test_log_rotation_cleanup_defers_conflicting_gzip_and_finishes_micro_lane(
     assert result.returncode == 0
     assert archive.read_text(encoding="utf-8") == original_archive
     assert existing_gzip.read_bytes() == original_existing_gzip
-    generation_gzip = next(iter(log_dir.glob("*.generation_*.gz")))
+    generation_gzip = _generation_gzip(archive)
     with gzip.open(generation_gzip, "rt", encoding="utf-8") as handle:
         assert handle.read() == original_archive
     assert stable_peer.exists()
-    with gzip.open(stable_peer.with_suffix(".2.gz"), "rt", encoding="utf-8") as handle:
+    with gzip.open(_generation_gzip(stable_peer), "rt", encoding="utf-8") as handle:
         assert handle.read() == "stable-peer\n"
     assert not list(log_dir.glob("*.tmp.*"))
     assert not micro_source.exists()
@@ -780,7 +790,7 @@ def test_log_rotation_cleanup_defers_conflicting_gzip_and_finishes_micro_lane(
     assert not stale_tmp.exists()
     assert "micro_reversion_storage_status=pass" in result.stdout
     assert "archive_compressed=2" in result.stdout
-    assert "archive_collision_reconciled=1" in result.stdout
+    assert "archive_generation_compressed=2" in result.stdout
     assert "archive_compression_failures=0" in result.stdout
     assert "archive_deleted=0" in result.stdout
     assert "[DONE] log_rotation_cleanup" in result.stdout
@@ -816,12 +826,48 @@ def test_log_rotation_cleanup_verifies_matching_gzip_and_preserves_source(tmp_pa
 
     assert archive.read_bytes() == payload
     assert existing_gzip.read_bytes() == original_gzip
-    assert "archive_compressed=0" in result.stdout
+    generation_gzip = _generation_gzip(archive)
+    with gzip.open(generation_gzip, "rb") as handle:
+        assert handle.read() == payload
+    assert "archive_compressed=1" in result.stdout
     assert "archive_compression_finalized=0" in result.stdout
-    assert "archive_verified_existing_source_preserved=1" in result.stdout
+    assert "archive_generation_compressed=1" in result.stdout
     assert "archive_compression_failures=0" in result.stdout
     assert "archive_source_unlink_deferred=1" in result.stdout
     assert "[DONE] log_rotation_cleanup" in result.stdout
+
+
+def test_log_rotation_cleanup_reuses_generation_across_numeric_slots(tmp_path):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    slot_two = log_dir / "shared_identity.log.2"
+    slot_three = log_dir / "shared_identity.log.3"
+    log_dir.mkdir(parents=True)
+    slot_two.write_text("same-generation\n", encoding="utf-8")
+    slot_three.write_text("same-generation\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "TARGET_DATE": "2026-05-22",
+            "DATA_MAINTENANCE_ENABLED": "false",
+            "LOG_ROTATION_ARCHIVE_QUIET_SECONDS": "0",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert _generation_gzip(slot_two) == _generation_gzip(slot_three)
+    assert "archive_generation_compressed=1" in result.stdout
+    assert "archive_generation_verified=1" in result.stdout
 
 
 def test_log_rotation_cleanup_reuses_verified_collision_generation(tmp_path):
@@ -833,7 +879,9 @@ def test_log_rotation_cleanup_reuses_verified_collision_generation(tmp_path):
     source_payload = b"new-generation-awaiting-unlink\n"
     existing_gzip_bytes = gzip.compress(b"previous-generation\n", mtime=0)
     generation_hash = hashlib.sha256(source_payload).hexdigest()[:16]
-    generation_gzip = Path(f"{archive}.generation_{generation_hash}.gz")
+    generation_gzip = archive.with_name(
+        f"collision_retry.log.generation_{generation_hash}.gz"
+    )
     generation_gzip_bytes = gzip.compress(source_payload, mtime=0)
     archive.write_bytes(source_payload)
     existing_gzip.write_bytes(existing_gzip_bytes)
@@ -862,7 +910,7 @@ def test_log_rotation_cleanup_reuses_verified_collision_generation(tmp_path):
     assert generation_gzip.read_bytes() == generation_gzip_bytes
     assert "archive_compressed=0" in result.stdout
     assert "archive_compression_finalized=0" in result.stdout
-    assert "archive_collision_reconciled=1" in result.stdout
+    assert "archive_generation_verified=1" in result.stdout
     assert "archive_compression_failures=0" in result.stdout
     assert "[DONE] log_rotation_cleanup" in result.stdout
 
@@ -891,19 +939,125 @@ def test_log_rotation_cleanup_defers_recent_archive_then_compresses_next_archive
         check=False,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert recent_archive.read_text(encoding="utf-8") == "still-growing\n"
     assert not recent_archive.with_suffix(".2.gz").exists()
     assert stable_archive.exists()
-    with gzip.open(
-        stable_archive.with_suffix(".3.gz"), "rt", encoding="utf-8"
-    ) as handle:
+    with gzip.open(_generation_gzip(stable_archive), "rt", encoding="utf-8") as handle:
         assert handle.read() == "stable\n"
-    assert "reason=source_not_quiet" in result.stdout
+    assert "status=deferred_writer_active reason=source_not_quiet" in result.stdout
     assert "archive_compressed=1" in result.stdout
-    assert "archive_compression_failures=1" in result.stdout
+    assert "archive_compression_failures=0" in result.stdout
+    assert "archive_writer_active_deferred=1" in result.stdout
     assert "[LOG_CLEANUP]" in result.stdout
-    assert result.stdout.count("[FAIL] log_rotation_cleanup") == 1
+    assert "[DONE] log_rotation_cleanup" in result.stdout
+
+
+def test_log_rotation_cleanup_escalates_only_after_repeated_writer_defer(tmp_path):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    archive = log_dir / "writer_active.log.2"
+    log_dir.mkdir(parents=True)
+    archive.write_text("writer-active\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "TARGET_DATE": "2026-05-22",
+            "DATA_MAINTENANCE_ENABLED": "false",
+            "LOG_ROTATION_ARCHIVE_QUIET_SECONDS": "0",
+            "LOG_ROTATION_WRITER_DEFER_FAILURE_THRESHOLD": "3",
+        }
+    )
+
+    handle = archive.open("rb")
+    try:
+        results = [
+            subprocess.run(
+                ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+                cwd=Path(__file__).resolve().parents[2],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            for _ in range(3)
+        ]
+    finally:
+        handle.close()
+
+    assert [result.returncode for result in results] == [0, 0, 1]
+    assert all("status=deferred_writer_active" in result.stdout for result in results)
+    assert "writer_defer_max_consecutive=1" in results[0].stdout
+    assert "writer_defer_max_consecutive=2" in results[1].stdout
+    assert "[WRITER_DEFER_ESCALATED]" in results[2].stdout
+    assert "writer_defer_escalated=1" in results[2].stdout
+    assert results[2].stdout.count("[FAIL] log_rotation_cleanup") == 1
+    state_payload = json.loads(
+        (project_root / "tmp/log_rotation_cleanup_writer_defer_state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert list(state_payload["entries"]) == ["numeric_archive:writer_active.log"]
+    assert next(iter(state_payload["entries"].values()))["observed_slot"] == (
+        "writer_active.log.2"
+    )
+
+
+def test_log_rotation_cleanup_resets_writer_defer_after_stable_pass(tmp_path):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    archive = log_dir / "writer_reset.log.2"
+    log_dir.mkdir(parents=True)
+    archive.write_text("writer-reset\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "TARGET_DATE": "2026-05-22",
+            "DATA_MAINTENANCE_ENABLED": "false",
+            "LOG_ROTATION_ARCHIVE_QUIET_SECONDS": "0",
+            "LOG_ROTATION_WRITER_DEFER_FAILURE_THRESHOLD": "3",
+        }
+    )
+
+    handle = archive.open("rb")
+    try:
+        first = subprocess.run(
+            ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+            cwd=Path(__file__).resolve().parents[2],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    finally:
+        handle.close()
+    stable = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    handle = archive.open("rb")
+    try:
+        recurrence = subprocess.run(
+            ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+            cwd=Path(__file__).resolve().parents[2],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    finally:
+        handle.close()
+
+    assert [first.returncode, stable.returncode, recurrence.returncode] == [0, 0, 0]
+    assert "writer_defer_max_consecutive=1" in first.stdout
+    assert "writer_defer_tracked=0" in stable.stdout
+    assert "writer_defer_max_consecutive=1" in recurrence.stdout
 
 
 def test_log_rotation_cleanup_preserves_invalid_existing_gzip(tmp_path):
@@ -930,14 +1084,15 @@ def test_log_rotation_cleanup_preserves_invalid_existing_gzip(tmp_path):
         check=False,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert archive.read_text(encoding="utf-8") == "source-generation\n"
     assert existing_gzip.read_bytes() == invalid_gzip
-    assert "reason=existing_gzip_invalid_conflict" in result.stdout
-    assert "archive_retention_protected=2" in result.stdout
-    assert "reason=failed_compression_evidence_preserved" in result.stdout
+    with gzip.open(_generation_gzip(archive), "rt", encoding="utf-8") as handle:
+        assert handle.read() == "source-generation\n"
+    assert "archive_generation_compressed=1" in result.stdout
+    assert "archive_compression_failures=0" in result.stdout
     assert "archive_deleted=0" in result.stdout
-    assert result.stdout.count("[FAIL] log_rotation_cleanup") == 1
+    assert "[DONE] log_rotation_cleanup" in result.stdout
 
 
 def test_log_rotation_cleanup_aggregates_micro_failure_after_generic_cleanup(
@@ -973,7 +1128,7 @@ def test_log_rotation_cleanup_aggregates_micro_failure_after_generic_cleanup(
     assert result.returncode == 1
     assert "[MICRO_REVERSION_STORAGE_FAIL]" in result.stdout
     assert archive.exists()
-    with gzip.open(archive.with_suffix(".2.gz"), "rt", encoding="utf-8") as handle:
+    with gzip.open(_generation_gzip(archive), "rt", encoding="utf-8") as handle:
         assert handle.read() == "stable-after-micro-failure\n"
     assert "archive_compressed=1" in result.stdout
     assert "micro_reversion_storage_status=failed" in result.stdout
@@ -1018,7 +1173,7 @@ def test_log_rotation_cleanup_reports_micro_global_lock_busy_and_runs_peer(
 
     assert result.returncode == 1
     assert archive.exists()
-    assert archive.with_suffix(".2.gz").exists()
+    assert _generation_gzip(archive).exists()
     assert "micro_reversion_storage_status=lock_busy" in result.stdout
     assert "micro_reversion_storage_failures=1" in result.stdout
     assert result.stdout.count("[FAIL] log_rotation_cleanup") == 1
@@ -1059,7 +1214,7 @@ def test_log_rotation_cleanup_rejects_micro_lock_symlink_without_truncating_targ
     assert result.returncode == 1
     assert external.read_text(encoding="utf-8") == "DO-NOT-TRUNCATE"
     assert archive.exists()
-    assert archive.with_suffix(".2.gz").exists()
+    assert _generation_gzip(archive).exists()
     assert "micro_reversion_storage_status=unsafe_lock" in result.stdout
     assert result.stdout.count("[FAIL] log_rotation_cleanup") == 1
     assert "[DONE] log_rotation_cleanup" not in result.stdout
@@ -1330,21 +1485,22 @@ def test_log_rotation_cleanup_preserves_source_changed_during_gzip(tmp_path):
         check=False,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert archive.read_text(encoding="utf-8") == (
         "before-growth\ngrowth-during-compression\n"
     )
     assert not archive.with_suffix(".2.gz").exists()
-    assert "reason=source_changed_during_compression" in result.stdout
+    assert "status=deferred_writer_active reason=source_changed_during_compression" in result.stdout
     assert "source_preserved=true" in result.stdout
-    assert "[FAIL] log_rotation_cleanup" in result.stdout
+    assert "archive_writer_active_deferred=1" in result.stdout
+    assert "archive_compression_failures=0" in result.stdout
+    assert "[DONE] log_rotation_cleanup" in result.stdout
 
 
 def test_log_rotation_cleanup_preserves_post_publish_source_change(tmp_path):
     project_root = tmp_path / "project"
     log_dir = project_root / "logs"
     archive = log_dir / "publish_boundary.log.2"
-    gzip_path = archive.with_suffix(".2.gz")
     log_dir.mkdir(parents=True)
     original = "before-publish-boundary\n"
     archive.write_text(original, encoding="utf-8")
@@ -1359,8 +1515,8 @@ def test_log_rotation_cleanup_preserves_post_publish_source_change(tmp_path):
         'destination="${@: -1}"\n'
         f'"{real_ln}" "$@"\n'
         "rc=$?\n"
-        'if [[ "$rc" -eq 0 && "$destination" == *"publish_boundary.log.2.gz" ]]; then\n'
-        "  printf 'growth-after-publish\\n' >> \"${destination%.gz}\"\n"
+        'if [[ "$rc" -eq 0 && "$destination" == *"publish_boundary.log.generation_"*".gz" ]]; then\n'
+        f"  printf 'growth-after-publish\\n' >> '{archive}'\n"
         "fi\n"
         'exit "$rc"\n',
         encoding="utf-8",
@@ -1385,13 +1541,15 @@ def test_log_rotation_cleanup_preserves_post_publish_source_change(tmp_path):
         check=False,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert archive.read_text(encoding="utf-8") == (original + "growth-after-publish\n")
-    with gzip.open(gzip_path, "rt", encoding="utf-8") as handle:
+    with gzip.open(_generation_gzip(archive), "rt", encoding="utf-8") as handle:
         assert handle.read() == original
-    assert "reason=source_changed_after_gzip_publish" in result.stdout
+    assert "status=deferred_writer_active reason=source_changed_after_gzip_publish" in result.stdout
     assert "source_preserved=true" in result.stdout
-    assert "[FAIL] log_rotation_cleanup" in result.stdout
+    assert "archive_writer_active_deferred=1" in result.stdout
+    assert "archive_compression_failures=0" in result.stdout
+    assert "[DONE] log_rotation_cleanup" in result.stdout
 
 
 def test_log_rotation_cleanup_does_not_purge_expired_micro_storage_by_default(

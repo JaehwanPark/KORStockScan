@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 from urllib import parse, request
@@ -40,21 +41,30 @@ def _send_telegram(token: str, admin_id: str, message: str) -> None:
 
 def _load_report(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _load_state(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _write_state(path: Path, state: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _is_alert_result(item: dict) -> bool:
@@ -94,6 +104,39 @@ def _signature(report: dict, fail_results: list[dict]) -> str:
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _normalize_incident_summary(value: object) -> str:
+    text = " ".join(str(value or "").split()).lower()
+    text = re.sub(r"\b\d{4}-\d{2}-\d{2}t\S+", "<timestamp>", text)
+    text = re.sub(r"(?<![a-z])[-+]?\d+(?:\.\d+)?", "<n>", text)
+    return text
+
+
+def _incident_fingerprint(item: dict) -> str:
+    payload = {
+        "detector_id": str(item.get("detector_id") or ""),
+        "severity": str(item.get("severity") or "").lower(),
+        "summary_class": _normalize_incident_summary(item.get("summary")),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _write_active_incident_state(
+    state_file: Path,
+    state: dict,
+    *,
+    fingerprints: list[str],
+    report: dict,
+    now: float,
+) -> None:
+    updated = dict(state)
+    updated["active_incident_fingerprints"] = sorted(set(fingerprints))
+    updated["active_incident_count"] = len(set(fingerprints))
+    updated["last_seen_at_ts"] = now
+    updated["last_seen_at"] = report.get("timestamp") or ""
+    _write_state(state_file, updated)
 
 
 def _build_message(
@@ -146,31 +189,74 @@ def notify_from_report(
 
     report = _load_report(report_file)
     fail_results = _alert_results(report)
+    now = time.time() if now_ts is None else now_ts
+    state = _load_state(state_file)
     if not fail_results:
+        if state.get("active_incident_fingerprints"):
+            _write_active_incident_state(
+                state_file,
+                state,
+                fingerprints=[],
+                report=report,
+                now=now,
+            )
         return "no_alert"
 
-    now = time.time() if now_ts is None else now_ts
     sig = _signature(report, fail_results)
-    state = _load_state(state_file)
+    fingerprinted_results = [(_incident_fingerprint(item), item) for item in fail_results]
+    current_fingerprints = [fingerprint for fingerprint, _ in fingerprinted_results]
+    previous_fingerprints = {
+        str(value)
+        for value in state.get("active_incident_fingerprints", [])
+        if str(value)
+    }
+    if previous_fingerprints:
+        new_results = [
+            item
+            for fingerprint, item in fingerprinted_results
+            if fingerprint not in previous_fingerprints
+        ]
+        if not new_results:
+            _write_active_incident_state(
+                state_file,
+                state,
+                fingerprints=current_fingerprints,
+                report=report,
+                now=now,
+            )
+            return "duplicate_incident"
+    else:
+        new_results = fail_results
+
+    # Backward-compatible cooldown for pre-fingerprint state and a narrow
+    # protection against duplicated invocations racing before state promotion.
     last_sig = str(state.get("signature") or "")
     last_ts = float(state.get("sent_at_ts") or 0.0)
-    if sig == last_sig and now - last_ts < cooldown_sec:
+    if (
+        "active_incident_fingerprints" not in state
+        and sig == last_sig
+        and now - last_ts < cooldown_sec
+    ):
         return "cooldown"
 
     token, admin_id = _load_telegram_config()
     if not token or not admin_id:
         return "missing_config"
 
-    message = _build_message(report, fail_results, mode=mode, log_file=log_file)
+    message = _build_message(report, new_results, mode=mode, log_file=log_file)
     _send_telegram(token, admin_id, message)
     _write_state(
         state_file,
         {
             "signature": sig,
+            "active_incident_fingerprints": sorted(set(current_fingerprints)),
+            "active_incident_count": len(set(current_fingerprints)),
             "sent_at_ts": now,
             "sent_at": report.get("timestamp") or "",
+            "last_seen_at_ts": now,
+            "last_seen_at": report.get("timestamp") or "",
             "mode": mode,
-            "fail_count": len(fail_results),
+            "fail_count": len(new_results),
         },
     )
     return "sent"

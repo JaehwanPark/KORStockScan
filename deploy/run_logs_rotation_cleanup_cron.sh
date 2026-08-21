@@ -11,6 +11,8 @@ ACTIVE_LOG_MAX_BYTES="${LOG_ROTATION_ACTIVE_MAX_BYTES:-${KORSTOCKSCAN_LOG_ROTATE
 ACTIVE_LOG_BACKUP_COUNT="${LOG_ROTATION_BACKUP_COUNT:-5}"
 ACTIVE_LOG_COMPRESS_MIN_INDEX="${LOG_ROTATION_COMPRESS_MIN_INDEX:-2}"
 ARCHIVE_COMPRESSION_QUIET_SECONDS="${LOG_ROTATION_ARCHIVE_QUIET_SECONDS:-300}"
+WRITER_DEFER_FAILURE_THRESHOLD="${LOG_ROTATION_WRITER_DEFER_FAILURE_THRESHOLD:-3}"
+WRITER_DEFER_STATE_FILE="${LOG_ROTATION_WRITER_DEFER_STATE_FILE:-$PROJECT_DIR/tmp/log_rotation_cleanup_writer_defer_state.json}"
 ACTIVE_LOG_RETENTION_DAYS="${LOG_ROTATION_ACTIVE_RETENTION_DAYS:-14}"
 SYSTEM_METRIC_RETENTION_DAYS="${SYSTEM_METRIC_RETENTION_DAYS:-3}"
 DATA_MAINTENANCE_ENABLED="${DATA_MAINTENANCE_ENABLED:-true}"
@@ -46,6 +48,10 @@ if [[ ! "$ARCHIVE_COMPRESSION_QUIET_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "[LOG_CLEANUP_ERROR] archive compression quiet seconds must be integer: $ARCHIVE_COMPRESSION_QUIET_SECONDS"
   exit 2
 fi
+if [[ ! "$WRITER_DEFER_FAILURE_THRESHOLD" =~ ^[0-9]+$ || "$WRITER_DEFER_FAILURE_THRESHOLD" -lt 1 ]]; then
+  echo "[LOG_CLEANUP_ERROR] writer defer failure threshold must be positive integer: $WRITER_DEFER_FAILURE_THRESHOLD"
+  exit 2
+fi
 if [[ ! "$ACTIVE_LOG_RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
   echo "[LOG_CLEANUP_ERROR] active log retention days must be integer: $ACTIVE_LOG_RETENTION_DAYS"
   exit 2
@@ -79,14 +85,19 @@ if [[ "$MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED" != "true" && "$MICRO_REVERS
   exit 2
 fi
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$PROJECT_DIR/tmp"
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[START] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} archive_compression_quiet_seconds=${ARCHIVE_COMPRESSION_QUIET_SECONDS} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_log_max_bytes=${ACTIVE_LOG_MAX_BYTES} active_log_backup_count=${ACTIVE_LOG_BACKUP_COUNT} active_rotation_status=disabled_pending_writer_owner data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} micro_reversion_storage_maintenance_enabled=${MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED} micro_reversion_storage_purge_enabled=${MICRO_REVERSION_STORAGE_PURGE_ENABLED} started_at=${started_at}"
+cleanup_run_id="${TARGET_DATE}:$$:$(date +%s%N)"
+echo "[START] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} archive_compression_quiet_seconds=${ARCHIVE_COMPRESSION_QUIET_SECONDS} writer_defer_failure_threshold=${WRITER_DEFER_FAILURE_THRESHOLD} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_log_max_bytes=${ACTIVE_LOG_MAX_BYTES} active_log_backup_count=${ACTIVE_LOG_BACKUP_COUNT} active_rotation_status=disabled_pending_writer_owner data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} micro_reversion_storage_maintenance_enabled=${MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED} micro_reversion_storage_purge_enabled=${MICRO_REVERSION_STORAGE_PURGE_ENABLED} started_at=${started_at}"
 trap 'failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"; echo "[FAIL] log_rotation_cleanup target_date=${TARGET_DATE} failed_at=${failed_at}"' ERR
+
+writer_defer_keys_file="$(mktemp "$PROJECT_DIR/tmp/.log_rotation_writer_defer_keys.XXXXXX")"
+writer_defer_result_file="$(mktemp "$PROJECT_DIR/tmp/.log_rotation_writer_defer_result.XXXXXX")"
+trap 'rm -f "$writer_defer_keys_file" "$writer_defer_result_file"' EXIT
 
 archive_log_find_args=(
   "$LOG_DIR" -maxdepth 1 -type f
-  \( -name '*.log.[0-9]*' -o -name '*.log.before_*' \)
+  \( -name '*.log.[0-9]*' -o -name '*.log.generation_*.gz' -o -name '*.log.before_*' \)
 )
 before_count=0
 before_size="$(du -sh "$LOG_DIR" | awk '{print $1}')"
@@ -126,12 +137,20 @@ compressed_archive_count=0
 archive_compression_finalized_count=0
 archive_verified_existing_source_preserved_count=0
 archive_collision_reconciled_count=0
+archive_generation_compressed_count=0
+archive_generation_verified_count=0
 archive_compression_failure_count=0
 archive_compression_source_preserved_count=0
+archive_writer_active_deferred_count=0
+archive_writer_active_deferred_bytes=0
 archive_retention_protected_count=0
 archive_pruned_to_backup_limit_count=0
 active_rotation_status="disabled_pending_writer_owner"
 active_rotation_deferred_count=0
+writer_defer_tracked_count=0
+writer_defer_escalated_count=0
+writer_defer_max_consecutive=0
+writer_defer_state_failure_count=0
 active_log_retention_failure_count=0
 archive_retention_failure_count=0
 active_log_retention_deferred_count=0
@@ -167,6 +186,151 @@ collect_find_results() {
     return 1
   fi
   return 0
+}
+
+register_writer_defer() {
+  local lane="$1"
+  local path="$2"
+  local reason="$3"
+  local observed_slot identity
+  observed_slot="$(basename "$path")"
+  identity="$observed_slot"
+  if [[ "$lane" == "numeric_archive" && "$observed_slot" =~ ^(.+\.log)\.[0-9]+$ ]]; then
+    identity="${BASH_REMATCH[1]}"
+  fi
+  printf '%s\t%s\t%s\t%s\n' "$lane" "$identity" "$observed_slot" "$reason" >>"$writer_defer_keys_file"
+}
+
+compression_reason_is_writer_active() {
+  case "$1" in
+    source_in_use|source_not_quiet|source_changed_during_compression|source_in_use_after_compression|source_changed_after_gzip_publish|source_in_use_after_gzip_publish|source_changed_or_open_during_existing_verify|source_changed_or_open_during_generation_verify)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+update_writer_defer_state() {
+  if ! "$PYTHON_BIN" - "$WRITER_DEFER_STATE_FILE" "$writer_defer_keys_file" "$writer_defer_result_file" "$WRITER_DEFER_FAILURE_THRESHOLD" "$TARGET_DATE" "$cleanup_run_id" "$find_enumeration_failure_count" <<'PY'
+import json
+import os
+import sys
+import uuid
+from pathlib import Path
+
+state_path = Path(sys.argv[1])
+keys_path = Path(sys.argv[2])
+result_path = Path(sys.argv[3])
+threshold = int(sys.argv[4])
+target_date = sys.argv[5]
+run_id = sys.argv[6]
+observation_complete = int(sys.argv[7]) == 0
+
+if state_path.is_symlink():
+    raise SystemExit("writer defer state path must not be a symlink")
+
+previous = {}
+if state_path.exists():
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        if isinstance(payload.get("entries"), dict):
+            previous = payload["entries"]
+        else:
+            raise ValueError("writer defer state entries must be an object")
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise SystemExit(f"writer defer state unreadable: {type(exc).__name__}") from exc
+
+current = {}
+for raw in keys_path.read_text(encoding="utf-8", errors="replace").splitlines():
+    parts = raw.split("\t", 3)
+    if len(parts) != 4:
+        continue
+    lane, identity, observed_slot, reason = parts
+    current[f"{lane}:{identity}"] = {
+        "lane": lane,
+        "identity": identity,
+        "observed_slot": observed_slot,
+        "reason": reason,
+    }
+
+entries = {}
+for key, item in sorted(current.items()):
+    old = previous.get(key) if isinstance(previous.get(key), dict) else {}
+    old_count = int(old.get("consecutive_count") or 0)
+    count = old_count if old.get("last_run_id") == run_id else old_count + 1
+    entries[key] = {
+        **item,
+        "consecutive_count": count,
+        "first_seen_target_date": old.get("first_seen_target_date") or target_date,
+        "last_seen_target_date": target_date,
+        "last_run_id": run_id,
+    }
+if not observation_complete:
+    for key, old in previous.items():
+        if key not in entries and isinstance(old, dict):
+            entries[key] = old
+
+escalated = [
+    {"key": key, **item}
+    for key, item in entries.items()
+    if int(item["consecutive_count"]) >= threshold
+]
+state_payload = {
+    "schema_version": 1,
+    "target_date": target_date,
+    "last_run_id": run_id,
+    "failure_threshold": threshold,
+    "observation_complete": observation_complete,
+    "entries": entries,
+}
+state_path.parent.mkdir(parents=True, exist_ok=True)
+tmp_path = state_path.with_name(f".{state_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+try:
+    tmp_path.write_text(json.dumps(state_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, state_path)
+finally:
+    tmp_path.unlink(missing_ok=True)
+
+result_payload = {
+    "tracked_count": len(entries),
+    "escalated_count": len(escalated),
+    "max_consecutive": max((int(item["consecutive_count"]) for item in entries.values()), default=0),
+    "escalated": escalated,
+}
+result_path.write_text(json.dumps(result_payload, ensure_ascii=False), encoding="utf-8")
+PY
+  then
+    writer_defer_state_failure_count=1
+    echo "[WRITER_DEFER_STATE_FAIL] state_file=${WRITER_DEFER_STATE_FILE}"
+    return 1
+  fi
+
+  read -r writer_defer_tracked_count writer_defer_escalated_count writer_defer_max_consecutive < <(
+    "$PYTHON_BIN" - "$writer_defer_result_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(payload["tracked_count"], payload["escalated_count"], payload["max_consecutive"])
+PY
+  )
+  "$PYTHON_BIN" - "$writer_defer_result_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+for item in payload.get("escalated", []):
+    print(
+        "[WRITER_DEFER_ESCALATED] "
+        f"lane={item['lane']} identity={item['identity']} "
+        f"observed_slot={item['observed_slot']} reason={item['reason']} "
+        f"consecutive_count={item['consecutive_count']}"
+    )
+PY
 }
 
 run_with_safe_lock() {
@@ -510,8 +674,9 @@ path_has_open_fd() {
 compress_file_verified() {
   local source_path="$1"
   local quiet_seconds="${2:-0}"
-  local _collision_generation_enabled="${3:-false}"
+  local generation_identity_enabled="${3:-false}"
   local standard_gzip_path="${source_path}.gz"
+  local generation_base_path=""
   local gzip_path="$standard_gzip_path"
   local tmp_path=""
   local source_size source_mtime_epoch now_epoch source_quiet_age restored_size
@@ -552,6 +717,17 @@ compress_file_verified() {
     compression_failure_reason="source_hash_failed"
     return 1
   fi
+  if [[ "$generation_identity_enabled" == "true" ]]; then
+    if [[ ! "$(basename "$source_path")" =~ ^.+\.log\.[0-9]+$ ]]; then
+      compression_failure_reason="numeric_generation_source_name_invalid"
+      return 1
+    fi
+    collision_generation_hash="${source_sha256:0:16}"
+    generation_base_path="${source_path%.*}"
+    standard_gzip_path="${generation_base_path}.generation_${collision_generation_hash}.gz"
+    gzip_path="$standard_gzip_path"
+    compression_output_path="$gzip_path"
+  fi
 
   if [[ -e "$standard_gzip_path" || -L "$standard_gzip_path" ]]; then
     if [[ ! -f "$standard_gzip_path" || -L "$standard_gzip_path" ]]; then
@@ -589,60 +765,12 @@ compress_file_verified() {
       return 1
     fi
     if [[ "$target_sha256" != "$source_sha256" ]]; then
-      if [[ "$_collision_generation_enabled" != "true" ]]; then
+      if [[ "$generation_identity_enabled" == "true" ]]; then
+        compression_failure_reason="generation_identity_content_mismatch"
+        return 1
+      else
         compression_failure_reason="existing_gzip_content_conflict_source_authoritative"
         return 1
-      fi
-      collision_generation_hash="${source_sha256:0:16}"
-      gzip_path="${source_path}.generation_${collision_generation_hash}.gz"
-      compression_output_path="$gzip_path"
-      compression_preserved_existing_gzip_path="$standard_gzip_path"
-      if [[ -e "$gzip_path" || -L "$gzip_path" ]]; then
-        if [[ ! -f "$gzip_path" || -L "$gzip_path" ]]; then
-          compression_failure_reason="collision_generation_unsafe_type"
-          return 1
-        fi
-        if path_has_open_fd "$gzip_path"; then
-          compression_failure_reason="collision_generation_in_use"
-          return 1
-        fi
-        if ! target_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$gzip_path")" || \
-           ! target_file_sha256="$(sha256sum -- "$gzip_path" | awk '{print $1}')"; then
-          compression_failure_reason="collision_generation_stat_or_hash_failed"
-          return 1
-        fi
-        if ! gzip -t -- "$gzip_path" || \
-           ! target_sha256="$(gzip -cd -- "$gzip_path" | sha256sum | awk '{print $1}')"; then
-          compression_failure_reason="collision_generation_invalid"
-          return 1
-        fi
-        if [[ "$target_sha256" != "$source_sha256" ]]; then
-          compression_failure_reason="collision_generation_content_mismatch"
-          return 1
-        fi
-        if ! target_verified_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$gzip_path")" || \
-           ! target_verified_sha256="$(sha256sum -- "$gzip_path" | awk '{print $1}')"; then
-          compression_failure_reason="collision_generation_recheck_failed"
-          return 1
-        fi
-        if [[ "$target_verified_metadata" != "$target_metadata" || "$target_verified_sha256" != "$target_file_sha256" ]] || \
-           path_has_open_fd "$gzip_path"; then
-          compression_failure_reason="collision_generation_changed_or_open_during_verify"
-          return 1
-        fi
-        if ! verified_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$source_path")" || \
-           ! verified_sha256="$(sha256sum -- "$source_path" | awk '{print $1}')"; then
-          compression_failure_reason="source_recheck_failed"
-          return 1
-        fi
-        if [[ "$verified_metadata" != "$source_metadata" || "$verified_sha256" != "$source_sha256" ]] || \
-           path_has_open_fd "$source_path"; then
-          compression_failure_reason="source_changed_or_open_during_collision_verify"
-          return 1
-        fi
-        compression_failure_reason="none"
-        compression_action="verified_collision_generation_source_preserved"
-        return 0
       fi
     else
       if ! verified_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$source_path")" || \
@@ -652,11 +780,19 @@ compress_file_verified() {
       fi
       if [[ "$verified_metadata" != "$source_metadata" || "$verified_sha256" != "$source_sha256" ]] || \
          path_has_open_fd "$source_path"; then
-        compression_failure_reason="source_changed_or_open_during_existing_verify"
+        if [[ "$generation_identity_enabled" == "true" ]]; then
+          compression_failure_reason="source_changed_or_open_during_generation_verify"
+        else
+          compression_failure_reason="source_changed_or_open_during_existing_verify"
+        fi
         return 1
       fi
       compression_failure_reason="none"
-      compression_action="verified_existing_gzip_source_preserved"
+      if [[ "$generation_identity_enabled" == "true" ]]; then
+        compression_action="verified_generation_source_preserved"
+      else
+        compression_action="verified_existing_gzip_source_preserved"
+      fi
       return 0
     fi
   fi
@@ -772,7 +908,9 @@ compress_file_verified() {
     return 1
   fi
   compression_failure_reason="none"
-  if [[ "$gzip_path" == "$standard_gzip_path" ]]; then
+  if [[ "$generation_identity_enabled" == "true" ]]; then
+    compression_action="compressed_generation_source_preserved"
+  elif [[ "$gzip_path" == "$standard_gzip_path" ]]; then
     compression_action="compressed_copy_source_preserved"
   else
     compression_action="compressed_collision_generation_source_preserved"
@@ -814,9 +952,10 @@ while IFS= read -r -d '' active_log; do
   active_size_bytes="$(stat -c%s "$active_log" 2>/dev/null || echo 0)"
   if [[ "$active_size_bytes" -ge "$ACTIVE_LOG_MAX_BYTES" ]]; then
     active_rotation_deferred_count=$((active_rotation_deferred_count + 1))
+    register_writer_defer "active_log" "$active_log" "writer_owned_oversize"
     archive_retention_protected_paths["$active_log"]=1
     archive_retention_protection_reasons["$active_log"]="active_rotation_disabled_pending_writer_owner"
-    echo "[ACTIVE_LOG_ROTATION_DEFERRED] active_log=$(basename "$active_log") size_bytes=${active_size_bytes} status=${active_rotation_status} active_preserved=true numeric_rename_shift_prune_disabled=true cleanup_will_continue=true"
+    echo "[ACTIVE_LOG_ROTATION_DEFERRED] active_log=$(basename "$active_log") size_bytes=${active_size_bytes} status=deferred_writer_active owner_status=${active_rotation_status} active_preserved=true numeric_rename_shift_prune_disabled=true cleanup_will_continue=true"
   fi
 done <"$active_find_path"
 rm -f "$active_find_path"
@@ -834,6 +973,15 @@ if [[ "$ACTIVE_LOG_BACKUP_COUNT" -ge "$ACTIVE_LOG_COMPRESS_MIN_INDEX" ]]; then
     archive_source_unlink_deferred_bytes=$((archive_source_unlink_deferred_bytes + $(stat -c%s "$archive_path" 2>/dev/null || echo 0)))
     echo "[ARCHIVE_SOURCE_UNLINK_DEFERRED] archive=$(basename "$archive_path") status=disabled_pending_writer_owner source_authoritative=true cleanup_will_continue=true"
     if ! compress_file_verified "$archive_path" "$ARCHIVE_COMPRESSION_QUIET_SECONDS" true; then
+      if compression_reason_is_writer_active "$compression_failure_reason"; then
+        archive_writer_active_deferred_count=$((archive_writer_active_deferred_count + 1))
+        archive_writer_active_deferred_bytes=$((archive_writer_active_deferred_bytes + $(stat -c%s "$archive_path" 2>/dev/null || echo 0)))
+        register_writer_defer "numeric_archive" "$archive_path" "$compression_failure_reason"
+        archive_retention_protected_paths["$archive_path"]=1
+        archive_retention_protection_reasons["$archive_path"]="deferred_writer_active"
+        echo "[ARCHIVE_COMPRESSION_DEFERRED] archive=$(basename "$archive_path") status=deferred_writer_active reason=${compression_failure_reason} source_preserved=true cleanup_will_continue=true"
+        continue
+      fi
       compression_verify_failure_count=$((compression_verify_failure_count + 1))
       archive_compression_failure_count=$((archive_compression_failure_count + 1))
       source_preserved="false"
@@ -857,6 +1005,14 @@ if [[ "$ACTIVE_LOG_BACKUP_COUNT" -ge "$ACTIVE_LOG_COMPRESS_MIN_INDEX" ]]; then
       continue
     fi
     case "$compression_action" in
+      verified_generation_source_preserved)
+        archive_verified_existing_source_preserved_count=$((archive_verified_existing_source_preserved_count + 1))
+        archive_generation_verified_count=$((archive_generation_verified_count + 1))
+        ;;
+      compressed_generation_source_preserved)
+        compressed_archive_count=$((compressed_archive_count + 1))
+        archive_generation_compressed_count=$((archive_generation_compressed_count + 1))
+        ;;
       verified_existing_gzip_source_preserved)
         archive_verified_existing_source_preserved_count=$((archive_verified_existing_source_preserved_count + 1))
         ;;
@@ -1212,12 +1368,14 @@ fi
 rm -f "$after_archive_find_path"
 after_size="$(du -sh "$LOG_DIR" | awk '{print $1}')"
 
+update_writer_defer_state || true
+
 echo "[DATA_COMPRESSION] sentinel_compressed=$sentinel_compressed_count sentinel_verified_existing_source_preserved=$sentinel_verified_existing_source_preserved_count snapshot_compressed=$snapshot_compressed_count snapshot_verified_existing_source_preserved=$snapshot_verified_existing_source_preserved_count source_unlink_deferred=$data_source_unlink_deferred_count source_unlink_deferred_bytes=$data_source_unlink_deferred_bytes"
-echo "[LOG_CLEANUP] archive_retention_days=$RETENTION_DAYS active_log_retention_days=$ACTIVE_LOG_RETENTION_DAYS active_log_compress_min_index=$ACTIVE_LOG_COMPRESS_MIN_INDEX archive_compression_quiet_seconds=$ARCHIVE_COMPRESSION_QUIET_SECONDS system_metric_retention_days=$SYSTEM_METRIC_RETENTION_DAYS raw_row_exclusion_backup_retention_days=$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS active_rotation_status=$active_rotation_status active_rotation_deferred=$active_rotation_deferred_count active_rotated=$rotated_active_count active_retention_failures=$active_log_retention_failure_count active_retention_deferred=$active_log_retention_deferred_count active_retention_deferred_bytes=$active_log_retention_deferred_bytes active_deleted=$active_deleted_count archive_deleted=$deleted_count archive_compressed=$compressed_archive_count archive_compression_finalized=$archive_compression_finalized_count archive_verified_existing_source_preserved=$archive_verified_existing_source_preserved_count archive_collision_reconciled=$archive_collision_reconciled_count archive_compression_failures=$archive_compression_failure_count archive_compression_sources_preserved=$archive_compression_source_preserved_count archive_source_unlink_deferred=$archive_source_unlink_deferred_count archive_source_unlink_deferred_bytes=$archive_source_unlink_deferred_bytes archive_retention_failures=$archive_retention_failure_count archive_retention_deferred=$archive_retention_deferred_count archive_retention_deferred_bytes=$archive_retention_deferred_bytes archive_retention_protected=$archive_retention_protected_count archive_pruned_to_backup_limit=$archive_pruned_to_backup_limit_count archive_before=$before_count archive_after=$after_count size_before=$before_size size_after=$after_size find_enumeration_failures=$find_enumeration_failure_count system_metric_retained=$system_metric_retained system_metric_pruned=$system_metric_pruned system_metric_invalid=$system_metric_invalid system_metric_size_before=$system_metric_before_size system_metric_size_after=$system_metric_after_size data_maintenance_enabled=$DATA_MAINTENANCE_ENABLED data_maintenance_failures=$data_maintenance_failure_count tmp_deleted=$tmp_deleted_count cache_deleted=$cache_deleted_count sentinel_compressed=$sentinel_compressed_count snapshot_compressed=$snapshot_compressed_count data_source_unlink_deferred=$data_source_unlink_deferred_count data_source_unlink_deferred_bytes=$data_source_unlink_deferred_bytes compression_verify_failures=$compression_verify_failure_count raw_row_exclusion_deleted=$raw_row_exclusion_deleted_count raw_row_exclusion_delete_deferred=$raw_row_exclusion_delete_deferred_count raw_row_exclusion_delete_deferred_bytes=$raw_row_exclusion_delete_deferred_bytes raw_row_exclusion_backup_deleted=$raw_row_exclusion_backup_deleted_count raw_row_exclusion_backup_delete_deferred=$raw_row_exclusion_backup_delete_deferred_count raw_row_exclusion_backup_delete_deferred_bytes=$raw_row_exclusion_backup_delete_deferred_bytes micro_reversion_storage_status=$micro_reversion_storage_status micro_reversion_storage_failures=$micro_reversion_storage_failure_count micro_reversion_storage_partition_failures=$micro_reversion_storage_partition_failure_count micro_reversion_storage_failed_candidates=$micro_reversion_storage_failed_candidate_count micro_reversion_storage_failed_candidate_bytes=$micro_reversion_storage_failed_candidate_bytes micro_reversion_storage_recovery_required=$micro_reversion_storage_recovery_required_count micro_reversion_storage_actions=$micro_reversion_storage_action_count micro_reversion_storage_compressed=$micro_reversion_storage_compressed_count micro_reversion_storage_purged=$micro_reversion_storage_purged_count micro_reversion_storage_purge_partial=$micro_reversion_storage_purge_partial_count micro_reversion_storage_source_bytes=$micro_reversion_storage_source_bytes micro_reversion_storage_purge_enabled=$micro_reversion_storage_purge_enabled micro_reversion_storage_purge_status=$micro_reversion_storage_purge_status micro_reversion_storage_purge_candidates=$micro_reversion_storage_purge_candidate_count micro_reversion_storage_purge_candidate_bytes=$micro_reversion_storage_purge_candidate_bytes"
+echo "[LOG_CLEANUP] archive_retention_days=$RETENTION_DAYS active_log_retention_days=$ACTIVE_LOG_RETENTION_DAYS active_log_compress_min_index=$ACTIVE_LOG_COMPRESS_MIN_INDEX archive_compression_quiet_seconds=$ARCHIVE_COMPRESSION_QUIET_SECONDS writer_defer_failure_threshold=$WRITER_DEFER_FAILURE_THRESHOLD writer_defer_tracked=$writer_defer_tracked_count writer_defer_escalated=$writer_defer_escalated_count writer_defer_max_consecutive=$writer_defer_max_consecutive writer_defer_state_failures=$writer_defer_state_failure_count system_metric_retention_days=$SYSTEM_METRIC_RETENTION_DAYS raw_row_exclusion_backup_retention_days=$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS active_rotation_status=$active_rotation_status active_rotation_deferred=$active_rotation_deferred_count active_rotated=$rotated_active_count active_retention_failures=$active_log_retention_failure_count active_retention_deferred=$active_log_retention_deferred_count active_retention_deferred_bytes=$active_log_retention_deferred_bytes active_deleted=$active_deleted_count archive_deleted=$deleted_count archive_compressed=$compressed_archive_count archive_compression_finalized=$archive_compression_finalized_count archive_verified_existing_source_preserved=$archive_verified_existing_source_preserved_count archive_collision_reconciled=$archive_collision_reconciled_count archive_generation_compressed=$archive_generation_compressed_count archive_generation_verified=$archive_generation_verified_count archive_compression_failures=$archive_compression_failure_count archive_compression_sources_preserved=$archive_compression_source_preserved_count archive_writer_active_deferred=$archive_writer_active_deferred_count archive_writer_active_deferred_bytes=$archive_writer_active_deferred_bytes archive_source_unlink_deferred=$archive_source_unlink_deferred_count archive_source_unlink_deferred_bytes=$archive_source_unlink_deferred_bytes archive_retention_failures=$archive_retention_failure_count archive_retention_deferred=$archive_retention_deferred_count archive_retention_deferred_bytes=$archive_retention_deferred_bytes archive_retention_protected=$archive_retention_protected_count archive_pruned_to_backup_limit=$archive_pruned_to_backup_limit_count archive_before=$before_count archive_after=$after_count size_before=$before_size size_after=$after_size find_enumeration_failures=$find_enumeration_failure_count system_metric_retained=$system_metric_retained system_metric_pruned=$system_metric_pruned system_metric_invalid=$system_metric_invalid system_metric_size_before=$system_metric_before_size system_metric_size_after=$system_metric_after_size data_maintenance_enabled=$DATA_MAINTENANCE_ENABLED data_maintenance_failures=$data_maintenance_failure_count tmp_deleted=$tmp_deleted_count cache_deleted=$cache_deleted_count sentinel_compressed=$sentinel_compressed_count snapshot_compressed=$snapshot_compressed_count data_source_unlink_deferred=$data_source_unlink_deferred_count data_source_unlink_deferred_bytes=$data_source_unlink_deferred_bytes compression_verify_failures=$compression_verify_failure_count raw_row_exclusion_deleted=$raw_row_exclusion_deleted_count raw_row_exclusion_delete_deferred=$raw_row_exclusion_delete_deferred_count raw_row_exclusion_delete_deferred_bytes=$raw_row_exclusion_delete_deferred_bytes raw_row_exclusion_backup_deleted=$raw_row_exclusion_backup_deleted_count raw_row_exclusion_backup_delete_deferred=$raw_row_exclusion_backup_delete_deferred_count raw_row_exclusion_backup_delete_deferred_bytes=$raw_row_exclusion_backup_delete_deferred_bytes micro_reversion_storage_status=$micro_reversion_storage_status micro_reversion_storage_failures=$micro_reversion_storage_failure_count micro_reversion_storage_partition_failures=$micro_reversion_storage_partition_failure_count micro_reversion_storage_failed_candidates=$micro_reversion_storage_failed_candidate_count micro_reversion_storage_failed_candidate_bytes=$micro_reversion_storage_failed_candidate_bytes micro_reversion_storage_recovery_required=$micro_reversion_storage_recovery_required_count micro_reversion_storage_actions=$micro_reversion_storage_action_count micro_reversion_storage_compressed=$micro_reversion_storage_compressed_count micro_reversion_storage_purged=$micro_reversion_storage_purged_count micro_reversion_storage_purge_partial=$micro_reversion_storage_purge_partial_count micro_reversion_storage_source_bytes=$micro_reversion_storage_source_bytes micro_reversion_storage_purge_enabled=$micro_reversion_storage_purge_enabled micro_reversion_storage_purge_status=$micro_reversion_storage_purge_status micro_reversion_storage_purge_candidates=$micro_reversion_storage_purge_candidate_count micro_reversion_storage_purge_candidate_bytes=$micro_reversion_storage_purge_candidate_bytes"
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-if [[ "$active_rotation_deferred_count" -gt 0 || "$active_log_retention_failure_count" -gt 0 || "$archive_compression_failure_count" -gt 0 || "$archive_retention_failure_count" -gt 0 || "$data_maintenance_failure_count" -gt 0 || "$micro_reversion_storage_failure_count" -gt 0 || "$find_enumeration_failure_count" -gt 0 ]]; then
-  echo "[FAIL] log_rotation_cleanup target_date=${TARGET_DATE} active_rotation_status=${active_rotation_status} active_rotation_deferred=${active_rotation_deferred_count} active_retention_failures=${active_log_retention_failure_count} archive_compression_failures=${archive_compression_failure_count} archive_compression_sources_preserved=${archive_compression_source_preserved_count} archive_retention_failures=${archive_retention_failure_count} archive_retention_protected=${archive_retention_protected_count} find_enumeration_failures=${find_enumeration_failure_count} data_maintenance_failures=${data_maintenance_failure_count} micro_reversion_storage_status=${micro_reversion_storage_status} micro_reversion_storage_failures=${micro_reversion_storage_failure_count} micro_reversion_storage_partition_failures=${micro_reversion_storage_partition_failure_count} micro_reversion_storage_failed_candidates=${micro_reversion_storage_failed_candidate_count} micro_reversion_storage_failed_candidate_bytes=${micro_reversion_storage_failed_candidate_bytes} micro_reversion_storage_recovery_required=${micro_reversion_storage_recovery_required_count} compression_verify_failures=${compression_verify_failure_count} finished_at=${finished_at}"
+if [[ "$writer_defer_escalated_count" -gt 0 || "$writer_defer_state_failure_count" -gt 0 || "$active_log_retention_failure_count" -gt 0 || "$archive_compression_failure_count" -gt 0 || "$archive_retention_failure_count" -gt 0 || "$data_maintenance_failure_count" -gt 0 || "$micro_reversion_storage_failure_count" -gt 0 || "$find_enumeration_failure_count" -gt 0 ]]; then
+  echo "[FAIL] log_rotation_cleanup target_date=${TARGET_DATE} active_rotation_status=${active_rotation_status} active_rotation_deferred=${active_rotation_deferred_count} writer_defer_escalated=${writer_defer_escalated_count} writer_defer_max_consecutive=${writer_defer_max_consecutive} writer_defer_state_failures=${writer_defer_state_failure_count} active_retention_failures=${active_log_retention_failure_count} archive_compression_failures=${archive_compression_failure_count} archive_compression_sources_preserved=${archive_compression_source_preserved_count} archive_writer_active_deferred=${archive_writer_active_deferred_count} archive_retention_failures=${archive_retention_failure_count} archive_retention_protected=${archive_retention_protected_count} find_enumeration_failures=${find_enumeration_failure_count} data_maintenance_failures=${data_maintenance_failure_count} micro_reversion_storage_status=${micro_reversion_storage_status} micro_reversion_storage_failures=${micro_reversion_storage_failure_count} micro_reversion_storage_partition_failures=${micro_reversion_storage_partition_failure_count} micro_reversion_storage_failed_candidates=${micro_reversion_storage_failed_candidate_count} micro_reversion_storage_failed_candidate_bytes=${micro_reversion_storage_failed_candidate_bytes} micro_reversion_storage_recovery_required=${micro_reversion_storage_recovery_required_count} compression_verify_failures=${compression_verify_failure_count} finished_at=${finished_at}"
   trap - ERR
   exit 1
 fi
-echo "[DONE] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} archive_compression_quiet_seconds=${ARCHIVE_COMPRESSION_QUIET_SECONDS} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_rotation_status=${active_rotation_status} active_rotation_deferred=${active_rotation_deferred_count} active_rotated=${rotated_active_count} active_retention_failures=${active_log_retention_failure_count} active_retention_deferred=${active_log_retention_deferred_count} active_retention_deferred_bytes=${active_log_retention_deferred_bytes} active_deleted=${active_deleted_count} archive_deleted=${deleted_count} archive_compressed=${compressed_archive_count} archive_compression_finalized=${archive_compression_finalized_count} archive_verified_existing_source_preserved=${archive_verified_existing_source_preserved_count} archive_collision_reconciled=${archive_collision_reconciled_count} archive_compression_failures=${archive_compression_failure_count} archive_compression_sources_preserved=${archive_compression_source_preserved_count} archive_source_unlink_deferred=${archive_source_unlink_deferred_count} archive_source_unlink_deferred_bytes=${archive_source_unlink_deferred_bytes} archive_retention_failures=${archive_retention_failure_count} archive_retention_deferred=${archive_retention_deferred_count} archive_retention_deferred_bytes=${archive_retention_deferred_bytes} archive_retention_protected=${archive_retention_protected_count} archive_pruned_to_backup_limit=${archive_pruned_to_backup_limit_count} find_enumeration_failures=${find_enumeration_failure_count} system_metric_pruned=${system_metric_pruned} system_metric_invalid=${system_metric_invalid} data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} data_maintenance_failures=${data_maintenance_failure_count} tmp_deleted=${tmp_deleted_count} cache_deleted=${cache_deleted_count} sentinel_compressed=${sentinel_compressed_count} snapshot_compressed=${snapshot_compressed_count} data_source_unlink_deferred=${data_source_unlink_deferred_count} data_source_unlink_deferred_bytes=${data_source_unlink_deferred_bytes} compression_verify_failures=${compression_verify_failure_count} raw_row_exclusion_deleted=${raw_row_exclusion_deleted_count} raw_row_exclusion_delete_deferred=${raw_row_exclusion_delete_deferred_count} raw_row_exclusion_delete_deferred_bytes=${raw_row_exclusion_delete_deferred_bytes} raw_row_exclusion_backup_deleted=${raw_row_exclusion_backup_deleted_count} raw_row_exclusion_backup_delete_deferred=${raw_row_exclusion_backup_delete_deferred_count} raw_row_exclusion_backup_delete_deferred_bytes=${raw_row_exclusion_backup_delete_deferred_bytes} micro_reversion_storage_status=${micro_reversion_storage_status} micro_reversion_storage_failures=${micro_reversion_storage_failure_count} micro_reversion_storage_partition_failures=${micro_reversion_storage_partition_failure_count} micro_reversion_storage_failed_candidates=${micro_reversion_storage_failed_candidate_count} micro_reversion_storage_failed_candidate_bytes=${micro_reversion_storage_failed_candidate_bytes} micro_reversion_storage_recovery_required=${micro_reversion_storage_recovery_required_count} micro_reversion_storage_actions=${micro_reversion_storage_action_count} micro_reversion_storage_compressed=${micro_reversion_storage_compressed_count} micro_reversion_storage_purged=${micro_reversion_storage_purged_count} micro_reversion_storage_source_bytes=${micro_reversion_storage_source_bytes} micro_reversion_storage_purge_enabled=${micro_reversion_storage_purge_enabled} micro_reversion_storage_purge_status=${micro_reversion_storage_purge_status} micro_reversion_storage_purge_candidates=${micro_reversion_storage_purge_candidate_count} micro_reversion_storage_purge_candidate_bytes=${micro_reversion_storage_purge_candidate_bytes} finished_at=${finished_at}"
+echo "[DONE] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} archive_compression_quiet_seconds=${ARCHIVE_COMPRESSION_QUIET_SECONDS} writer_defer_failure_threshold=${WRITER_DEFER_FAILURE_THRESHOLD} writer_defer_tracked=${writer_defer_tracked_count} writer_defer_escalated=${writer_defer_escalated_count} writer_defer_max_consecutive=${writer_defer_max_consecutive} writer_defer_state_failures=${writer_defer_state_failure_count} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_rotation_status=${active_rotation_status} active_rotation_deferred=${active_rotation_deferred_count} active_rotated=${rotated_active_count} active_retention_failures=${active_log_retention_failure_count} active_retention_deferred=${active_log_retention_deferred_count} active_retention_deferred_bytes=${active_log_retention_deferred_bytes} active_deleted=${active_deleted_count} archive_deleted=$deleted_count archive_compressed=$compressed_archive_count archive_compression_finalized=$archive_compression_finalized_count archive_verified_existing_source_preserved=$archive_verified_existing_source_preserved_count archive_collision_reconciled=$archive_collision_reconciled_count archive_generation_compressed=$archive_generation_compressed_count archive_generation_verified=$archive_generation_verified_count archive_compression_failures=$archive_compression_failure_count archive_compression_sources_preserved=$archive_compression_source_preserved_count archive_writer_active_deferred=$archive_writer_active_deferred_count archive_writer_active_deferred_bytes=$archive_writer_active_deferred_bytes archive_source_unlink_deferred=$archive_source_unlink_deferred_count archive_source_unlink_deferred_bytes=$archive_source_unlink_deferred_bytes archive_retention_failures=$archive_retention_failure_count archive_retention_deferred=$archive_retention_deferred_count archive_retention_deferred_bytes=$archive_retention_deferred_bytes archive_retention_protected=$archive_retention_protected_count archive_pruned_to_backup_limit=$archive_pruned_to_backup_limit_count find_enumeration_failures=$find_enumeration_failure_count system_metric_pruned=$system_metric_pruned system_metric_invalid=$system_metric_invalid data_maintenance_enabled=$DATA_MAINTENANCE_ENABLED data_maintenance_failures=$data_maintenance_failure_count tmp_deleted=$tmp_deleted_count cache_deleted=$cache_deleted_count sentinel_compressed=$sentinel_compressed_count snapshot_compressed=$snapshot_compressed_count data_source_unlink_deferred=$data_source_unlink_deferred_count data_source_unlink_deferred_bytes=$data_source_unlink_deferred_bytes compression_verify_failures=$compression_verify_failure_count raw_row_exclusion_deleted=$raw_row_exclusion_deleted_count raw_row_exclusion_delete_deferred=$raw_row_exclusion_delete_deferred_count raw_row_exclusion_delete_deferred_bytes=$raw_row_exclusion_delete_deferred_bytes raw_row_exclusion_backup_deleted=$raw_row_exclusion_backup_deleted_count raw_row_exclusion_backup_delete_deferred=$raw_row_exclusion_backup_delete_deferred_count raw_row_exclusion_backup_delete_deferred_bytes=$raw_row_exclusion_backup_delete_deferred_bytes micro_reversion_storage_status=$micro_reversion_storage_status micro_reversion_storage_failures=$micro_reversion_storage_failure_count micro_reversion_storage_partition_failures=$micro_reversion_storage_partition_failure_count micro_reversion_storage_failed_candidates=$micro_reversion_storage_failed_candidate_count micro_reversion_storage_failed_candidate_bytes=$micro_reversion_storage_failed_candidate_bytes micro_reversion_storage_recovery_required=$micro_reversion_storage_recovery_required_count micro_reversion_storage_actions=$micro_reversion_storage_action_count micro_reversion_storage_compressed=$micro_reversion_storage_compressed_count micro_reversion_storage_purged=$micro_reversion_storage_purged_count micro_reversion_storage_source_bytes=$micro_reversion_storage_source_bytes micro_reversion_storage_purge_enabled=$micro_reversion_storage_purge_enabled micro_reversion_storage_purge_status=$micro_reversion_storage_purge_status micro_reversion_storage_purge_candidates=$micro_reversion_storage_purge_candidate_count micro_reversion_storage_purge_candidate_bytes=$micro_reversion_storage_purge_candidate_bytes finished_at=$finished_at"
