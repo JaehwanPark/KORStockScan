@@ -201,9 +201,12 @@ from src.engine.ai_response_contracts import (
     normalize_gatekeeper_action_key,
 )
 from src.engine.sniper_post_sell_feedback import (
+    POST_SELL_EXECUTABLE_BBO_FINAL_GRACE_SEC,
+    active_post_sell_executable_bbo_observers,
     record_sim_post_sell_candidate,
     retain_ws_subscription_until,
     should_retain_ws_subscription,
+    update_post_sell_executable_bbo_observer,
 )
 from src.engine.holding_exit_matrix_runtime import (
     resolve_holding_exit_matrix_scale_in_bias,
@@ -26808,8 +26811,9 @@ def _dispatch_scalp_preset_exit(
             ).strip()
             or "caller_route_fallback"
         )
+        sell_execution_ts = time.time()
         sell_execution_cohort = _scalping_execution_cohort(
-            time.time(), sell_broker_route
+            sell_execution_ts, sell_broker_route
         )
         set_fields.update(
             {
@@ -26823,6 +26827,9 @@ def _dispatch_scalp_preset_exit(
                     sell_broker_route_resolution
                 ),
                 "last_sell_execution_cohort": sell_execution_cohort,
+                "last_sell_execution_session_bucket": (
+                    _rising_missed_nxt_session_bucket(sell_execution_ts)
+                ),
             }
         )
         ord_no = (
@@ -34247,6 +34254,205 @@ def observe_risky_micro_episode_executable_bbo_paths(
         "emitted_event_count": emitted_count,
         "fresh_bbo_event_count": fresh_bbo_count,
         "closed_registration_count": closed_count,
+        "failed_operation_count": failed_count,
+    }
+
+
+def observe_post_sell_executable_bbo_horizons(
+    *, now_ts: float | None = None
+) -> dict[str, int]:
+    """Emit exact-route 1/3/5/10-minute post-sell BBO receipts.
+
+    This observer reads the already-subscribed route retained by the post-sell
+    registry.  It never sends REG/REMOVE, orders, or runtime mutations.
+    """
+
+    observed_at = float(time.time() if now_ts is None else now_ts)
+    registrations = active_post_sell_executable_bbo_observers(now_ts=observed_at)
+    emitted_count = 0
+    fresh_horizon_count = 0
+    missing_horizon_count = 0
+    failed_count = 0
+    for registration in registrations:
+        registration_key = str(registration.get("registration_key") or "")
+        code = str(registration.get("stock_code") or "").strip()[:6]
+        sell_epoch = _safe_float(registration.get("sell_epoch"), 0.0)
+        sell_price = _safe_int(registration.get("sell_price"), 0)
+        if not registration_key or not code or sell_epoch <= 0 or sell_price <= 0:
+            failed_count += 1
+            continue
+        try:
+            ws_data: dict[str, Any] = {}
+            subscribed_codes = set()
+            if WS_MANAGER is not None and hasattr(WS_MANAGER, "get_latest_data"):
+                subscribed_codes = {
+                    str(value or "").strip()[:6]
+                    for value in (
+                        getattr(WS_MANAGER, "subscribed_codes", set()) or set()
+                    )
+                }
+                latest = WS_MANAGER.get_latest_data(code) or {}
+                if isinstance(latest, dict):
+                    ws_data = latest
+            subscription_present = code in subscribed_codes
+            scoped_ws, route_scope_fields = _risky_micro_route_scoped_0d_bbo(
+                ws_data,
+                code=code,
+                venue=str(registration.get("venue") or "").strip().upper(),
+                session=str(registration.get("session") or "").strip(),
+                expected_market_route=str(
+                    registration.get("expected_market_route") or ""
+                ).strip(),
+            )
+            _, market_fields = build_market_data_enrichment(
+                ws_data=scoped_ws,
+                now_ts=observed_at,
+                max_ws_age_ms=1000.0,
+            )
+            bid = _safe_int(market_fields.get("market_data_effective_best_bid"), 0)
+            ask = _safe_int(market_fields.get("market_data_effective_best_ask"), 0)
+            quote_epoch = _safe_float(scoped_ws.get("last_ws_update_ts"), 0.0)
+            quote_age_ms = _safe_float(
+                market_fields.get("market_data_effective_quote_age_ms"), None
+            )
+            fresh = bool(
+                subscription_present
+                and route_scope_fields.get(
+                    "risky_micro_episode_horizon_observer_route_scope_eligible"
+                )
+                and market_fields.get("market_data_effective_price_source") == "ws"
+                and bid > 0
+                and ask >= bid
+                and quote_epoch > sell_epoch
+                and quote_age_ms is not None
+                and 0.0 <= quote_age_ms <= 1000.0
+            )
+            continuity = update_post_sell_executable_bbo_observer(
+                registration_key,
+                quote_epoch=quote_epoch if quote_epoch > 0 else None,
+                fresh=fresh,
+            )
+            pending_horizons = [
+                int(value) for value in registration.get("pending_horizons_sec", [])
+            ]
+            for horizon_sec in pending_horizons:
+                due_at = sell_epoch + horizon_sec
+                if observed_at < due_at:
+                    continue
+                horizon_delay_sec = observed_at - due_at
+                horizon_window_open = (
+                    horizon_delay_sec <= POST_SELL_EXECUTABLE_BBO_FINAL_GRACE_SEC
+                )
+                fresh_at_horizon = bool(fresh and horizon_window_open)
+                if not fresh_at_horizon and horizon_window_open:
+                    continue
+                horizon_status = (
+                    "fresh_executable_bbo_observed"
+                    if fresh_at_horizon
+                    else "fresh_executable_bbo_missing_after_grace"
+                )
+                return_pct = (
+                    round(((bid / sell_price) - 1.0) * 100.0, 6)
+                    if fresh_at_horizon
+                    else "-"
+                )
+                event_fields = {
+                    **market_fields,
+                    **route_scope_fields,
+                    "post_sell_id": registration.get("post_sell_id") or "-",
+                    "post_sell_executable_bbo_registration_key": registration_key,
+                    "post_sell_executable_bbo_policy_version": "post_sell_bbo_v1",
+                    "post_sell_executable_bbo_horizon_sec": horizon_sec,
+                    "post_sell_executable_bbo_horizon_min": horizon_sec // 60,
+                    "post_sell_executable_bbo_horizon_status": horizon_status,
+                    "post_sell_executable_bbo_sell_epoch": round(sell_epoch, 3),
+                    "post_sell_executable_bbo_observed_at_epoch": round(observed_at, 3),
+                    "post_sell_executable_bbo_horizon_window_delay_sec": round(
+                        horizon_delay_sec, 3
+                    ),
+                    "post_sell_executable_bbo_horizon_final_grace_sec": (
+                        POST_SELL_EXECUTABLE_BBO_FINAL_GRACE_SEC
+                    ),
+                    "post_sell_executable_bbo_quote_epoch": (
+                        round(quote_epoch, 3) if quote_epoch > 0 else "-"
+                    ),
+                    "post_sell_executable_bbo_quote_fresh": fresh_at_horizon,
+                    "post_sell_executable_bbo_subscription_present": (
+                        subscription_present
+                    ),
+                    "post_sell_executable_bbo_sell_price": sell_price,
+                    "post_sell_executable_bbo_bid_return_pct": return_pct,
+                    "post_sell_executable_bbo_expected_market_route": (
+                        registration.get("expected_market_route") or "-"
+                    ),
+                    "post_sell_executable_bbo_broker_route": (
+                        registration.get("broker_route") or "-"
+                    ),
+                    "post_sell_executable_bbo_venue": (
+                        registration.get("venue") or "UNKNOWN"
+                    ),
+                    "post_sell_executable_bbo_session": (
+                        registration.get("session") or "unknown"
+                    ),
+                    "post_sell_executable_bbo_fresh_sample_count": _safe_int(
+                        continuity.get("fresh_sample_count"), 0
+                    ),
+                    "post_sell_executable_bbo_max_fresh_quote_gap_sec": round(
+                        _safe_float(continuity.get("max_fresh_quote_gap_sec"), 0.0),
+                        3,
+                    ),
+                    "metric_role": "exit_post_sell_executable_bbo_source",
+                    "decision_authority": "source_quality_only_no_order_authority",
+                    "window_policy": (
+                        "same_sell_exact_route_1_3_5_10m_plus_15s_final_grace"
+                    ),
+                    "sample_floor": "one_fresh_exact_route_bbo_per_horizon",
+                    "primary_decision_metric": (
+                        "post_sell_executable_bid_return_by_horizon_pct"
+                    ),
+                    "source_quality_gate": (
+                        "retained_subscription_present_and_same_sell_symbol_session_"
+                        "route_fresh_0d_bbo_age_le_1000ms"
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": (
+                        "broker_order_submit|broker_order_cancel|entry_or_exit_authority|"
+                        "threshold_or_provider_change|stale_quote_or_hard_safety_bypass"
+                    ),
+                }
+                emit_pipeline_event(
+                    "HOLDING_PIPELINE",
+                    str(registration.get("stock_name") or "-"),
+                    code,
+                    "post_sell_executable_bbo_horizon_observed",
+                    record_id=registration.get("recommendation_id"),
+                    fields=event_fields,
+                )
+                update_post_sell_executable_bbo_observer(
+                    registration_key,
+                    completed_horizon_sec=horizon_sec,
+                )
+                emitted_count += 1
+                if fresh_at_horizon:
+                    fresh_horizon_count += 1
+                else:
+                    missing_horizon_count += 1
+        except Exception as exc:
+            failed_count += 1
+            log_info(
+                "[POST_SELL_BBO_OBSERVER] row failed without runtime effect "
+                f"code={code or '-'} registration={registration_key or '-'}: {exc}"
+            )
+    return {
+        "active_registration_count": len(
+            active_post_sell_executable_bbo_observers(now_ts=observed_at)
+        ),
+        "emitted_horizon_count": emitted_count,
+        "fresh_horizon_count": fresh_horizon_count,
+        "missing_horizon_count": missing_horizon_count,
         "failed_operation_count": failed_count,
     }
 
@@ -83917,8 +84123,9 @@ def handle_holding_state(
             ).strip() or str(
                 sell_exchange_resolution.get("reason") or "caller_route_fallback"
             )
+            sell_execution_ts = time.time()
             sell_execution_cohort = _scalping_execution_cohort(
-                time.time(), sell_broker_route
+                sell_execution_ts, sell_broker_route
             )
             log_info(
                 f"✅ [{stock['name']}] 매도 주문 전송 완료. 체결 영수증 처리 대기 중..."
@@ -83936,6 +84143,9 @@ def handle_holding_state(
                     sell_broker_route_resolution
                 ),
                 "last_sell_execution_cohort": sell_execution_cohort,
+                "last_sell_execution_session_bucket": (
+                    _rising_missed_nxt_session_bucket(sell_execution_ts)
+                ),
             }
             if ord_no:
                 set_fields["sell_odno"] = ord_no

@@ -14721,6 +14721,15 @@ def run_sniper(is_test_mode=False):
                     f"runtime effect: {exc}"
                 )
             try:
+                sniper_state_handlers.observe_post_sell_executable_bbo_horizons(
+                    now_ts=time.time()
+                )
+            except Exception as exc:
+                log_info(
+                    "[POST_SELL_BBO_OBSERVER] bounded observer failed without "
+                    f"runtime effect: {exc}"
+                )
+            try:
                 sniper_state_handlers.observe_risky_micro_episode_executable_bbo_paths(
                     now_ts=time.time()
                 )

@@ -68,6 +68,29 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-08-21 Post-sell Executable-BBO Retention Gate
+
+- Re-verified at `2026-08-21T10:01:17+09:00` against current upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`; inspected
+  `kiwoom_docs/실시간시세.md`, `kiwoom/realtime/packets.py`,
+  `kiwoom/core/ws_client.py`, and Postman WebSocket requests.
+- The official contract uses `REG` and `REMOVE`; `refresh=1` retains previous
+  registrations, and one group accepts at most 100 items. KRX uses the raw
+  symbol, NXT uses `_NX`, and the integrated SOR route uses `_AL`. The local
+  observer therefore retains an already registered sold symbol instead of
+  creating a second subscription owner, and validates the exact frozen sell
+  route before accepting a `0D` BBO.
+- A confirmed real sell may retain the existing WS subscription for the
+  bounded 1/3/5/10-minute horizons plus a 15-second final receipt grace. At
+  most eight sell episodes are active. A receipt is valid only while the base
+  symbol remains in the manager subscription set and a same-symbol,
+  same-session, exact-route `0D` BBO is at most one second old. Missing route,
+  route conflict, unsubscribe, stale quote, or missing BBO produces an
+  explicit source-quality result rather than mark-price substitution.
+- This path is observation-only. It never sends `REG`/`REMOVE`, submits or
+  cancels an order, changes entry/exit logic, thresholds, quantity, provider,
+  bot state, or bypasses broker/account/cooldown/stale/hard-safety guards.
+
 ### 2026-08-20 Episode Realized-PnL Account Gate
 
 - Re-verified at `2026-08-20T14:59:07+09:00` against current upstream commit

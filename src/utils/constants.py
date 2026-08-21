@@ -1313,7 +1313,7 @@ class TradingConfig:
     POST_SELL_FEEDBACK_MISSED_UPSIDE_CLOSE_PCT: float = 0.3
     POST_SELL_FEEDBACK_GOOD_EXIT_MAE_PCT: float = -0.6
     POST_SELL_FEEDBACK_GOOD_EXIT_CLOSE_PCT: float = -0.2
-    POST_SELL_WS_RETAIN_MINUTES: int = 0  # 0이면 매도 이후 WS 유지 비활성(MVP 기본값)
+    POST_SELL_WS_RETAIN_MINUTES: int = 10
 
     # ==========================================
     # ⚡ 성능 최적화 캐시 설정

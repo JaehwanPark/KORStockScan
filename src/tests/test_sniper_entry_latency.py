@@ -427,6 +427,322 @@ def test_risky_micro_episode_observer_accepts_same_candidate_integrated_sor_rout
     assert fields["broker_order_forbidden"] is True
 
 
+def test_post_sell_bbo_observer_emits_fresh_exact_route_horizon(monkeypatch):
+    sell_epoch = datetime(2026, 8, 21, 9, 31, tzinfo=state_handlers._KST).timestamp()
+    observed_at = sell_epoch + 60.2
+    logs = []
+    updates = []
+    registration = {
+        "registration_key": "post-sell-1",
+        "post_sell_id": "post-sell-1",
+        "recommendation_id": 13,
+        "stock_code": "005090",
+        "stock_name": "TEST",
+        "sell_price": 63_000,
+        "sell_epoch": sell_epoch,
+        "expected_market_route": "krx_nxt_integrated",
+        "broker_route": "SOR",
+        "venue": "KRX",
+        "session": "krx_regular",
+        "pending_horizons_sec": [60],
+    }
+
+    class FakeWsManager:
+        subscribed_codes = {"005090"}
+
+        def get_latest_data(self, code):
+            assert code == "005090"
+            return {
+                "realtime_type_snapshots_by_route": {
+                    "_AL|krx_nxt_integrated": {
+                        "0D": {
+                            "observed_epoch": observed_at,
+                            "item": "005090_AL",
+                            "market_route": "krx_nxt_integrated",
+                            "effective_venue": "",
+                            "orderbook": {
+                                "asks": [{"price": 64_000, "volume": 21}],
+                                "bids": [{"price": 63_500, "volume": 34}],
+                            },
+                        }
+                    }
+                }
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setattr(
+        state_handlers,
+        "active_post_sell_executable_bbo_observers",
+        lambda **_kwargs: [registration],
+    )
+
+    def _update(registration_key, **kwargs):
+        updates.append((registration_key, kwargs))
+        return {"fresh_sample_count": 1, "max_fresh_quote_gap_sec": 0.2}
+
+    monkeypatch.setattr(
+        state_handlers, "update_post_sell_executable_bbo_observer", _update
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda _pipeline, _name, _code, stage, **kwargs: logs.append(
+            (stage, kwargs["fields"])
+        ),
+    )
+
+    result = state_handlers.observe_post_sell_executable_bbo_horizons(
+        now_ts=observed_at
+    )
+
+    assert result["emitted_horizon_count"] == 1
+    assert result["fresh_horizon_count"] == 1
+    assert result["missing_horizon_count"] == 0
+    assert len(updates) == 2
+    assert updates[1][1]["completed_horizon_sec"] == 60
+    stage, fields = logs[0]
+    assert stage == "post_sell_executable_bbo_horizon_observed"
+    assert fields["post_sell_executable_bbo_subscription_present"] is True
+    assert fields["post_sell_executable_bbo_horizon_status"] == (
+        "fresh_executable_bbo_observed"
+    )
+    assert fields["post_sell_executable_bbo_bid_return_pct"] == round(
+        ((63_500 / 63_000) - 1.0) * 100.0, 6
+    )
+    assert fields["runtime_effect"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+
+def test_post_sell_bbo_observer_does_not_accept_unsubscribed_cached_quote(
+    monkeypatch,
+):
+    sell_epoch = datetime(2026, 8, 21, 9, 31, tzinfo=state_handlers._KST).timestamp()
+    observed_at = sell_epoch + 76.0
+    logs = []
+    registration = {
+        "registration_key": "post-sell-2",
+        "post_sell_id": "post-sell-2",
+        "recommendation_id": 14,
+        "stock_code": "005090",
+        "stock_name": "TEST",
+        "sell_price": 63_000,
+        "sell_epoch": sell_epoch,
+        "expected_market_route": "krx_nxt_integrated",
+        "broker_route": "SOR",
+        "venue": "KRX",
+        "session": "krx_regular",
+        "pending_horizons_sec": [60],
+    }
+
+    class FakeWsManager:
+        subscribed_codes = set()
+
+        def get_latest_data(self, _code):
+            return {
+                "realtime_type_snapshots_by_route": {
+                    "_AL|krx_nxt_integrated": {
+                        "0D": {
+                            "observed_epoch": observed_at,
+                            "item": "005090_AL",
+                            "market_route": "krx_nxt_integrated",
+                            "effective_venue": "",
+                            "orderbook": {
+                                "asks": [{"price": 64_000, "volume": 21}],
+                                "bids": [{"price": 63_500, "volume": 34}],
+                            },
+                        }
+                    }
+                }
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setattr(
+        state_handlers,
+        "active_post_sell_executable_bbo_observers",
+        lambda **_kwargs: [registration],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "update_post_sell_executable_bbo_observer",
+        lambda *_args, **_kwargs: {
+            "fresh_sample_count": 0,
+            "max_fresh_quote_gap_sec": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda _pipeline, _name, _code, stage, **kwargs: logs.append(
+            (stage, kwargs["fields"])
+        ),
+    )
+
+    result = state_handlers.observe_post_sell_executable_bbo_horizons(
+        now_ts=observed_at
+    )
+
+    assert result["emitted_horizon_count"] == 1
+    assert result["fresh_horizon_count"] == 0
+    assert result["missing_horizon_count"] == 1
+    fields = logs[0][1]
+    assert fields["post_sell_executable_bbo_subscription_present"] is False
+    assert fields["post_sell_executable_bbo_horizon_status"] == (
+        "fresh_executable_bbo_missing_after_grace"
+    )
+    assert fields["post_sell_executable_bbo_bid_return_pct"] == "-"
+
+
+def test_post_sell_bbo_observer_accepts_quote_just_before_due_when_still_fresh(
+    monkeypatch,
+):
+    sell_epoch = datetime(2026, 8, 21, 9, 31, tzinfo=state_handlers._KST).timestamp()
+    observed_at = sell_epoch + 60.2
+    quote_epoch = sell_epoch + 59.8
+    logs = []
+    registration = {
+        "registration_key": "post-sell-before-due",
+        "post_sell_id": "post-sell-before-due",
+        "recommendation_id": 15,
+        "stock_code": "005090",
+        "stock_name": "TEST",
+        "sell_price": 63_000,
+        "sell_epoch": sell_epoch,
+        "expected_market_route": "krx_nxt_integrated",
+        "broker_route": "SOR",
+        "venue": "KRX",
+        "session": "krx_regular",
+        "pending_horizons_sec": [60],
+    }
+
+    class FakeWsManager:
+        subscribed_codes = {"005090"}
+
+        def get_latest_data(self, _code):
+            return {
+                "realtime_type_snapshots_by_route": {
+                    "_AL|krx_nxt_integrated": {
+                        "0D": {
+                            "observed_epoch": quote_epoch,
+                            "item": "005090_AL",
+                            "market_route": "krx_nxt_integrated",
+                            "effective_venue": "",
+                            "orderbook": {
+                                "asks": [{"price": 64_000, "volume": 21}],
+                                "bids": [{"price": 63_500, "volume": 34}],
+                            },
+                        }
+                    }
+                }
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setattr(
+        state_handlers,
+        "active_post_sell_executable_bbo_observers",
+        lambda **_kwargs: [registration],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "update_post_sell_executable_bbo_observer",
+        lambda *_args, **_kwargs: {
+            "fresh_sample_count": 1,
+            "max_fresh_quote_gap_sec": 0.4,
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda _pipeline, _name, _code, stage, **kwargs: logs.append(
+            (stage, kwargs["fields"])
+        ),
+    )
+
+    result = state_handlers.observe_post_sell_executable_bbo_horizons(
+        now_ts=observed_at
+    )
+
+    assert result["fresh_horizon_count"] == 1
+    assert logs[0][1]["post_sell_executable_bbo_horizon_status"] == (
+        "fresh_executable_bbo_observed"
+    )
+    assert logs[0][1]["post_sell_executable_bbo_horizon_window_delay_sec"] == 0.2
+
+
+def test_post_sell_bbo_observer_does_not_backfill_horizon_after_grace(monkeypatch):
+    sell_epoch = datetime(2026, 8, 21, 9, 31, tzinfo=state_handlers._KST).timestamp()
+    observed_at = sell_epoch + 76.0
+    logs = []
+    registration = {
+        "registration_key": "post-sell-late",
+        "post_sell_id": "post-sell-late",
+        "recommendation_id": 16,
+        "stock_code": "005090",
+        "stock_name": "TEST",
+        "sell_price": 63_000,
+        "sell_epoch": sell_epoch,
+        "expected_market_route": "krx_nxt_integrated",
+        "broker_route": "SOR",
+        "venue": "KRX",
+        "session": "krx_regular",
+        "pending_horizons_sec": [60],
+    }
+
+    class FakeWsManager:
+        subscribed_codes = {"005090"}
+
+        def get_latest_data(self, _code):
+            return {
+                "realtime_type_snapshots_by_route": {
+                    "_AL|krx_nxt_integrated": {
+                        "0D": {
+                            "observed_epoch": observed_at,
+                            "item": "005090_AL",
+                            "market_route": "krx_nxt_integrated",
+                            "effective_venue": "",
+                            "orderbook": {
+                                "asks": [{"price": 64_000, "volume": 21}],
+                                "bids": [{"price": 63_500, "volume": 34}],
+                            },
+                        }
+                    }
+                }
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setattr(
+        state_handlers,
+        "active_post_sell_executable_bbo_observers",
+        lambda **_kwargs: [registration],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "update_post_sell_executable_bbo_observer",
+        lambda *_args, **_kwargs: {
+            "fresh_sample_count": 1,
+            "max_fresh_quote_gap_sec": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda _pipeline, _name, _code, stage, **kwargs: logs.append(
+            (stage, kwargs["fields"])
+        ),
+    )
+
+    result = state_handlers.observe_post_sell_executable_bbo_horizons(
+        now_ts=observed_at
+    )
+
+    assert result["fresh_horizon_count"] == 0
+    assert result["missing_horizon_count"] == 1
+    assert logs[0][1]["post_sell_executable_bbo_horizon_status"] == (
+        "fresh_executable_bbo_missing_after_grace"
+    )
+    assert logs[0][1]["post_sell_executable_bbo_horizon_window_delay_sec"] == 16.0
+
+
 def test_risky_micro_episode_observer_blocks_unknown_candidate_market_route(
     monkeypatch,
 ):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from collections import Counter, defaultdict
 import json
 import threading
@@ -22,9 +23,13 @@ _WRITE_LOCK = threading.RLock()
 _RECORDED_KEYS: dict[tuple[str, str, str, str], float] = {}
 _SIM_RECORDED_KEYS: dict[tuple[str, str, str, str], float] = {}
 _WS_RETAIN_UNTIL: dict[str, float] = {}
+_POST_SELL_EXECUTABLE_BBO_OBSERVERS: dict[str, dict] = {}
 POST_SELL_REPORT_SCHEMA_VERSION = 4
 POST_SELL_FEEDBACK_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
 POST_SELL_LONG_HORIZONS_MIN = (20, 30, 60)
+POST_SELL_EXECUTABLE_BBO_HORIZONS_SEC = (60, 180, 300, 600)
+POST_SELL_EXECUTABLE_BBO_FINAL_GRACE_SEC = 15
+POST_SELL_EXECUTABLE_BBO_MAX_ACTIVE = 8
 HIGH_AI_HARD_STOP_SCORE_FLOOR = 70.0
 HIGH_AI_HARD_STOP_EXIT_RULES = {
     "scalp_hard_stop_pct",
@@ -451,6 +456,342 @@ def retain_ws_subscription_until(code: str, until_ts: float) -> bool:
     return True
 
 
+def _post_sell_execution_route_contract(
+    stock: dict,
+    *,
+    sell_dt: datetime,
+) -> dict[str, str]:
+    """Freeze the executable quote route used by one completed sell."""
+
+    source = stock if isinstance(stock, dict) else {}
+    broker_route = (
+        str(
+            source.get("last_sell_execution_broker_route")
+            or source.get("last_exit_broker_route")
+            or source.get("fast_exit_broker_route")
+            or source.get("entry_execution_broker_route")
+            or source.get("broker_route")
+            or source.get("dmst_stex_tp")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    expected_market_route = (
+        str(
+            source.get("post_sell_expected_market_route")
+            or source.get("rising_missed_ws_0d_route")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    route_from_broker = {
+        "KRX": "krx_regular",
+        "NXT": "nxt_only",
+        "SOR": "krx_nxt_integrated",
+    }.get(broker_route, "")
+    if expected_market_route and route_from_broker:
+        route_resolution = "explicit_ws_0d_route_and_broker_route"
+        if expected_market_route != route_from_broker:
+            return {
+                "status": "route_source_quality_blocked",
+                "reason": "explicit_ws_route_conflicts_with_broker_route",
+                "broker_route": broker_route or "-",
+                "expected_market_route": expected_market_route,
+                "venue": "UNKNOWN",
+                "session": "unknown",
+            }
+    elif expected_market_route:
+        route_resolution = "explicit_ws_0d_route"
+    elif route_from_broker:
+        expected_market_route = route_from_broker
+        route_resolution = "official_broker_route_to_ws_item_contract"
+    else:
+        return {
+            "status": "route_source_quality_blocked",
+            "reason": "broker_and_ws_route_missing",
+            "broker_route": "-",
+            "expected_market_route": "-",
+            "venue": "UNKNOWN",
+            "session": "unknown",
+        }
+
+    venue = (
+        str(
+            source.get("last_sell_execution_cohort")
+            or source.get("main_lifecycle_venue")
+            or source.get("rising_missed_effective_venue")
+            or source.get("effective_venue")
+            or source.get("venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    session = (
+        str(
+            source.get("last_sell_execution_session_bucket")
+            or source.get("main_lifecycle_session_bucket")
+            or source.get("rising_missed_market_session_bucket")
+            or source.get("market_session_bucket")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    sell_time = sell_dt.time()
+    if not session:
+        configured_cutoff = str(
+            getattr(TRADING_RULES, "SCALPING_NEW_BUY_CUTOFF", "19:45:00")
+            or "19:45:00"
+        ).strip()
+        try:
+            new_buy_cutoff = datetime.strptime(
+                configured_cutoff, "%H:%M:%S"
+            ).time()
+        except ValueError:
+            new_buy_cutoff = datetime.strptime("19:45:00", "%H:%M:%S").time()
+        if datetime.strptime("08:00:00", "%H:%M:%S").time() <= sell_time < (
+            datetime.strptime("08:50:00", "%H:%M:%S").time()
+        ):
+            session = "krx_like_premarket"
+        elif datetime.strptime("09:00:00", "%H:%M:%S").time() <= sell_time <= (
+            datetime.strptime("15:30:00", "%H:%M:%S").time()
+        ):
+            session = "nxt_regular_overlap" if broker_route == "NXT" else "krx_regular"
+        elif datetime.strptime("16:00:00", "%H:%M:%S").time() <= sell_time < (
+            datetime.strptime("16:10:00", "%H:%M:%S").time()
+        ):
+            session = "nxt_open_observe"
+        elif datetime.strptime("16:10:00", "%H:%M:%S").time() <= sell_time < (
+            new_buy_cutoff
+        ):
+            session = "nxt_entry_window"
+        elif new_buy_cutoff <= sell_time < datetime.strptime(
+            "20:00:00", "%H:%M:%S"
+        ).time():
+            session = "nxt_close_only"
+        else:
+            session = "outside_krx_nxt_window"
+    if not venue:
+        if session in {"krx_like_premarket", "premarket_krx_like", "nxt_premarket"}:
+            venue = "PREMARKET_KRX_LIKE"
+        elif broker_route == "NXT" and session.startswith("nxt_"):
+            venue = "NXT"
+        elif broker_route in {"KRX", "SOR"} and session == "krx_regular":
+            venue = "KRX"
+
+    allowed_routes = {
+        "KRX": {"krx_regular", "krx_nxt_integrated"},
+        "NXT": {"nxt_only"},
+        "PREMARKET_KRX_LIKE": {"nxt_only", "krx_nxt_integrated"},
+    }
+    allowed_sessions = {
+        "KRX": {"krx_regular"},
+        "NXT": {
+            "nxt_regular_overlap",
+            "nxt_open_observe",
+            "nxt_entry_window",
+            "nxt_close_only",
+            "nxt_aftermarket",
+        },
+        "PREMARKET_KRX_LIKE": {
+            "krx_like_premarket",
+            "premarket_krx_like",
+            "nxt_premarket",
+        },
+    }
+    if (
+        expected_market_route not in allowed_routes.get(venue, set())
+        or session not in allowed_sessions.get(venue, set())
+    ):
+        return {
+            "status": "route_source_quality_blocked",
+            "reason": "venue_session_route_contract_mismatch",
+            "broker_route": broker_route or "-",
+            "expected_market_route": expected_market_route or "-",
+            "venue": venue or "UNKNOWN",
+            "session": session or "unknown",
+        }
+    return {
+        "status": "route_contract_ready",
+        "reason": route_resolution,
+        "broker_route": broker_route or "-",
+        "expected_market_route": expected_market_route,
+        "venue": venue,
+        "session": session,
+    }
+
+
+def _register_post_sell_executable_bbo_observer(
+    *,
+    payload: dict,
+    stock: dict,
+    sell_dt: datetime,
+    retain_minutes: int,
+    now_ts: float,
+) -> dict[str, object]:
+    """Register bounded source-only BBO horizons without order authority."""
+
+    base: dict[str, object] = {
+        "post_sell_executable_bbo_observer_registered": False,
+        "post_sell_executable_bbo_observer_status": "disabled",
+        "post_sell_executable_bbo_policy_version": "post_sell_bbo_v1",
+        "post_sell_executable_bbo_horizons_sec": list(
+            POST_SELL_EXECUTABLE_BBO_HORIZONS_SEC
+        ),
+        "post_sell_executable_bbo_retain_minutes": max(0, int(retain_minutes)),
+        "post_sell_executable_bbo_max_active": POST_SELL_EXECUTABLE_BBO_MAX_ACTIVE,
+        "post_sell_executable_bbo_runtime_effect": False,
+        "post_sell_executable_bbo_allowed_runtime_apply": False,
+        "post_sell_executable_bbo_actual_order_submitted": False,
+        "post_sell_executable_bbo_broker_order_forbidden": True,
+    }
+    if retain_minutes <= 0:
+        return base
+    sell_epoch = sell_dt.timestamp()
+    retain_until = sell_epoch + (retain_minutes * 60.0)
+    observer_expires_at = retain_until + POST_SELL_EXECUTABLE_BBO_FINAL_GRACE_SEC
+    if observer_expires_at <= now_ts:
+        return {
+            **base,
+            "post_sell_executable_bbo_observer_status": "expired_before_registration",
+        }
+    route = _post_sell_execution_route_contract(stock, sell_dt=sell_dt)
+    if route["status"] != "route_contract_ready":
+        return {
+            **base,
+            "post_sell_executable_bbo_observer_status": route["status"],
+            "post_sell_executable_bbo_route_reason": route["reason"],
+            "post_sell_executable_bbo_expected_market_route": route[
+                "expected_market_route"
+            ],
+            "post_sell_executable_bbo_venue": route["venue"],
+            "post_sell_executable_bbo_session": route["session"],
+        }
+
+    for key, observer in list(_POST_SELL_EXECUTABLE_BBO_OBSERVERS.items()):
+        if (
+            float(observer.get("observer_expires_at_epoch", 0.0) or 0.0) + 60.0
+            <= now_ts
+        ):
+            _POST_SELL_EXECUTABLE_BBO_OBSERVERS.pop(key, None)
+    if len(_POST_SELL_EXECUTABLE_BBO_OBSERVERS) >= POST_SELL_EXECUTABLE_BBO_MAX_ACTIVE:
+        return {
+            **base,
+            "post_sell_executable_bbo_observer_status": "capacity_rejected",
+            "post_sell_executable_bbo_route_reason": route["reason"],
+            "post_sell_executable_bbo_expected_market_route": route[
+                "expected_market_route"
+            ],
+            "post_sell_executable_bbo_venue": route["venue"],
+            "post_sell_executable_bbo_session": route["session"],
+        }
+
+    registration_key = str(payload.get("post_sell_id") or "").strip()
+    if not registration_key:
+        return {
+            **base,
+            "post_sell_executable_bbo_observer_status": "registration_key_missing",
+        }
+    _POST_SELL_EXECUTABLE_BBO_OBSERVERS[registration_key] = {
+        "registration_key": registration_key,
+        "post_sell_id": registration_key,
+        "recommendation_id": payload.get("recommendation_id"),
+        "stock_code": payload.get("stock_code"),
+        "stock_name": payload.get("stock_name"),
+        "sell_price": payload.get("sell_price"),
+        "sell_epoch": sell_epoch,
+        "registered_at_epoch": now_ts,
+        "retain_until_epoch": retain_until,
+        "observer_expires_at_epoch": observer_expires_at,
+        "expected_market_route": route["expected_market_route"],
+        "broker_route": route["broker_route"],
+        "venue": route["venue"],
+        "session": route["session"],
+        "route_reason": route["reason"],
+        "pending_horizons_sec": list(POST_SELL_EXECUTABLE_BBO_HORIZONS_SEC),
+        "fresh_sample_count": 0,
+        "first_fresh_quote_epoch": 0.0,
+        "last_fresh_quote_epoch": 0.0,
+        "max_fresh_quote_gap_sec": 0.0,
+    }
+    current_until = float(_WS_RETAIN_UNTIL.get(str(payload["stock_code"]), 0.0) or 0.0)
+    if observer_expires_at > current_until:
+        _WS_RETAIN_UNTIL[str(payload["stock_code"])] = observer_expires_at
+    return {
+        **base,
+        "post_sell_executable_bbo_observer_registered": True,
+        "post_sell_executable_bbo_observer_status": "registered",
+        "post_sell_executable_bbo_registration_key": registration_key,
+        "post_sell_executable_bbo_route_reason": route["reason"],
+        "post_sell_executable_bbo_expected_market_route": route[
+            "expected_market_route"
+        ],
+        "post_sell_executable_bbo_broker_route": route["broker_route"],
+        "post_sell_executable_bbo_venue": route["venue"],
+        "post_sell_executable_bbo_session": route["session"],
+        "post_sell_executable_bbo_retain_until_epoch": round(observer_expires_at, 3),
+    }
+
+
+def active_post_sell_executable_bbo_observers(
+    *, now_ts: float | None = None
+) -> list[dict]:
+    """Return active observer snapshots for the main-loop source collector."""
+
+    current_ts = float(time.time() if now_ts is None else now_ts)
+    with _WRITE_LOCK:
+        for key, observer in list(_POST_SELL_EXECUTABLE_BBO_OBSERVERS.items()):
+            expires_at = float(observer.get("observer_expires_at_epoch", 0.0) or 0.0)
+            if expires_at + 60.0 <= current_ts:
+                _POST_SELL_EXECUTABLE_BBO_OBSERVERS.pop(key, None)
+        return copy.deepcopy(list(_POST_SELL_EXECUTABLE_BBO_OBSERVERS.values()))
+
+
+def update_post_sell_executable_bbo_observer(
+    registration_key: str,
+    *,
+    quote_epoch: float | None = None,
+    fresh: bool = False,
+    completed_horizon_sec: int | None = None,
+) -> dict:
+    """Record one source-only quote observation and/or close one horizon."""
+
+    with _WRITE_LOCK:
+        observer = _POST_SELL_EXECUTABLE_BBO_OBSERVERS.get(str(registration_key))
+        if not isinstance(observer, dict):
+            return {}
+        if fresh and quote_epoch is not None:
+            observed_epoch = float(quote_epoch)
+            last_epoch = float(observer.get("last_fresh_quote_epoch", 0.0) or 0.0)
+            if observed_epoch > last_epoch:
+                baseline_epoch = last_epoch or float(observer.get("sell_epoch", 0.0))
+                gap_sec = max(0.0, observed_epoch - baseline_epoch)
+                observer["max_fresh_quote_gap_sec"] = max(
+                    float(observer.get("max_fresh_quote_gap_sec", 0.0) or 0.0),
+                    gap_sec,
+                )
+                observer["last_fresh_quote_epoch"] = observed_epoch
+                if not float(observer.get("first_fresh_quote_epoch", 0.0) or 0.0):
+                    observer["first_fresh_quote_epoch"] = observed_epoch
+                observer["fresh_sample_count"] = (
+                    int(observer.get("fresh_sample_count", 0) or 0) + 1
+                )
+        if completed_horizon_sec is not None:
+            pending = [
+                int(value)
+                for value in observer.get("pending_horizons_sec", [])
+                if int(value) != int(completed_horizon_sec)
+            ]
+            observer["pending_horizons_sec"] = pending
+        snapshot = copy.deepcopy(observer)
+        if not observer.get("pending_horizons_sec"):
+            _POST_SELL_EXECUTABLE_BBO_OBSERVERS.pop(str(registration_key), None)
+        return snapshot
+
+
 def record_post_sell_candidate(
     *,
     recommendation_id=None,
@@ -649,21 +990,37 @@ def record_post_sell_candidate(
                 ai_transport_mode=payload["ai_transport_mode"],
             )
         )
-
-        _append_jsonl(_candidate_path(target_date), payload)
-        _RECORDED_KEYS[dedupe_key] = now.timestamp()
-        retain_minutes = int(
-            getattr(TRADING_RULES, "POST_SELL_WS_RETAIN_MINUTES", 0) or 0
+        configured_retain_minutes = int(
+            getattr(TRADING_RULES, "POST_SELL_WS_RETAIN_MINUTES", 10) or 0
         )
-        if retain_minutes > 0:
-            retain_until = sell_dt.timestamp() + (retain_minutes * 60.0)
-            current_until = float(_WS_RETAIN_UNTIL.get(norm_code, 0.0) or 0.0)
-            if retain_until > current_until:
-                _WS_RETAIN_UNTIL[norm_code] = retain_until
+        retain_minutes = min(
+            max(POST_SELL_EXECUTABLE_BBO_HORIZONS_SEC) // 60,
+            max(0, configured_retain_minutes),
+        )
+        observer_fields = _register_post_sell_executable_bbo_observer(
+            payload=payload,
+            stock=stock,
+            sell_dt=sell_dt,
+            retain_minutes=retain_minutes,
+            now_ts=now.timestamp(),
+        )
+        payload.update(observer_fields)
+        try:
+            _append_jsonl(_candidate_path(target_date), payload)
+        except Exception:
+            registration_key = str(
+                observer_fields.get("post_sell_executable_bbo_registration_key") or ""
+            )
+            if registration_key:
+                _POST_SELL_EXECUTABLE_BBO_OBSERVERS.pop(registration_key, None)
+            raise
+        _RECORDED_KEYS[dedupe_key] = now.timestamp()
         log_info(
             f"[POST_SELL_CANDIDATE] {payload['stock_name']}({payload['stock_code']}) "
             f"sell={payload['sell_price']} ret={payload['profit_rate']:+.2f}% "
-            f"exit_rule={payload['exit_rule']} revive={payload['revive']}"
+            f"exit_rule={payload['exit_rule']} revive={payload['revive']} "
+            "bbo_observer="
+            f"{payload['post_sell_executable_bbo_observer_status']}"
         )
         return payload
 
