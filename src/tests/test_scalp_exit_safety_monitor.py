@@ -1052,6 +1052,43 @@ def _nxt_quote_snapshot(code: str, now_ts: float) -> dict:
     }
 
 
+def _exact_nxt_0d_snapshot(
+    code: str,
+    now_ts: float,
+    *,
+    observed_age_ms: float = 0.0,
+    bid: int = 9_800,
+    bid_qty: int = 20,
+) -> dict:
+    observed_epoch = now_ts - (observed_age_ms / 1000.0)
+    orderbook = {
+        "asks": [{"price": bid + 10, "volume": 15}],
+        "bids": [{"price": bid, "volume": bid_qty}],
+    }
+    return {
+        "curr": bid + 5,
+        "orderbook": orderbook,
+        "last_realtime_type_ts": {"0D": observed_epoch},
+        "last_realtime_type_item": {"0D": f"{code}_NX"},
+        "last_realtime_type_market_suffix": {"0D": "_NX"},
+        "last_realtime_type_market_route": {"0D": "nxt_only"},
+        "last_realtime_type_effective_venue": {"0D": "NXT"},
+        "realtime_type_snapshots_by_route": {
+            "_NX|nxt_only": {
+                "0D": {
+                    "realtime_type": "0D",
+                    "observed_epoch": observed_epoch,
+                    "item": f"{code}_NX",
+                    "market_suffix": "_NX",
+                    "market_route": "nxt_only",
+                    "effective_venue": "NXT",
+                    "orderbook": orderbook,
+                }
+            }
+        },
+    }
+
+
 def test_fast_exit_route_guard_resolves_nxt_and_premarket_as_nxt():
     code = "123456"
     nxt_ts = datetime(2026, 7, 23, 16, 20, tzinfo=handlers._KST).timestamp()
@@ -1092,30 +1129,154 @@ def test_fast_exit_route_guard_resolves_nxt_and_premarket_as_nxt():
     assert premarket_fields["fast_exit_route_source_quality_blocked"] is False
 
 
-def test_fast_exit_route_provenance_labels_outside_supported_session():
+def test_fast_exit_route_provenance_recognizes_nxt_aftermarket_at_1545():
     code = "123456"
     outside_ts = datetime(2026, 7, 23, 15, 45, tzinfo=handlers._KST).timestamp()
 
     fields = handlers._fast_exit_execution_route_fields(
         {"is_nxt": True},
         code,
-        _nxt_quote_snapshot(code, outside_ts),
+        _exact_nxt_0d_snapshot(code, outside_ts),
         now_ts=outside_ts,
     )
 
     assert fields["fast_exit_broker_route"] == "NXT"
-    assert fields["fast_exit_execution_cohort"] == "OUTSIDE_SUPPORTED_SESSION"
+    assert fields["fast_exit_execution_cohort"] == "NXT"
     assert fields["fast_exit_execution_cohort_resolution"] == (
-        "outside_supported_execution_session"
+        "session_and_broker_route_resolved"
     )
-    assert fields["fast_exit_route_resolution_reason"] == (
-        "outside_supported_sell_execution_session"
+    assert fields["fast_exit_route_resolution_reason"] == "nxt_session_nxt_enabled"
+    assert fields["fast_exit_execution_session_blocked"] is False
+    assert fields["fast_exit_broker_route_blocked"] is False
+    assert fields["fast_exit_route_guard_reason"] == "nxt_ws_route_proven"
+
+
+def test_nxt_aftermarket_early_sell_requires_fresh_exact_nx_executable_bid():
+    code = "123456"
+    now_ts = datetime(2026, 8, 21, 15, 45, tzinfo=handlers._KST).timestamp()
+    stock = {
+        "status": "HOLDING",
+        "buy_qty": 3,
+        "is_nxt": True,
+        "entry_execution_broker_route": "NXT",
+    }
+
+    fields, exact_view = handlers._nxt_aftermarket_early_sell_quote_context(
+        stock,
+        code,
+        _exact_nxt_0d_snapshot(code, now_ts, bid=10_020, bid_qty=7),
+        now_ts=now_ts,
     )
-    assert fields["fast_exit_execution_session_blocked"] is True
-    assert fields["fast_exit_broker_route_blocked"] is True
-    assert fields["fast_exit_route_guard_reason"] == (
-        "outside_supported_sell_execution_session"
+
+    assert fields["nxt_aftermarket_early_sell_allowed"] is True
+    assert fields["nxt_aftermarket_early_sell_reason"] == (
+        "fresh_exact_nxt_executable_bid"
     )
+    assert fields["nxt_aftermarket_early_sell_quote_item"] == f"{code}_NX"
+    assert fields["nxt_aftermarket_early_sell_quote_route"] == "nxt_only"
+    assert fields["nxt_aftermarket_early_sell_executable_bid"] == 10_020
+    assert fields["nxt_aftermarket_early_sell_executable_bid_qty"] == 7
+    assert exact_view["executable_sell_price"] == 10_020
+    assert exact_view["orderbook"]["bids"][0]["price"] == 10_020
+    assert exact_view["last_realtime_type_market_route"]["0D"] == "nxt_only"
+
+
+@pytest.mark.parametrize(
+    ("now_hhmm", "snapshot_factory", "expected_reason"),
+    [
+        (
+            (15, 44, 59),
+            lambda code, now_ts: _exact_nxt_0d_snapshot(code, now_ts),
+            "outside_nxt_aftermarket_early_sell_window",
+        ),
+        (
+            (15, 45, 0),
+            lambda code, now_ts: _exact_nxt_0d_snapshot(
+                code, now_ts, observed_age_ms=1001.0
+            ),
+            "exact_nxt_0d_stale",
+        ),
+        (
+            (15, 45, 0),
+            lambda code, now_ts: _nxt_quote_snapshot(code, now_ts),
+            "exact_nxt_0d_missing",
+        ),
+        (
+            (15, 45, 0),
+            lambda code, now_ts: _exact_nxt_0d_snapshot(
+                code, now_ts, bid=0, bid_qty=20
+            ),
+            "exact_nxt_executable_bid_missing",
+        ),
+        (
+            (15, 45, 0),
+            lambda code, now_ts: _exact_nxt_0d_snapshot(
+                code, now_ts, bid=9_800, bid_qty=0
+            ),
+            "exact_nxt_executable_bid_depth_missing",
+        ),
+    ],
+)
+def test_nxt_aftermarket_early_sell_fails_closed_without_exact_fresh_bid(
+    now_hhmm,
+    snapshot_factory,
+    expected_reason,
+):
+    code = "123456"
+    now_ts = datetime(
+        2026,
+        8,
+        21,
+        now_hhmm[0],
+        now_hhmm[1],
+        now_hhmm[2],
+        tzinfo=handlers._KST,
+    ).timestamp()
+    fields, _ = handlers._nxt_aftermarket_early_sell_quote_context(
+        {"status": "HOLDING", "buy_qty": 3, "is_nxt": True},
+        code,
+        snapshot_factory(code, now_ts),
+        now_ts=now_ts,
+    )
+
+    assert fields["nxt_aftermarket_early_sell_allowed"] is False
+    assert fields["nxt_aftermarket_early_sell_reason"] == expected_reason
+
+
+def test_nxt_aftermarket_early_sell_fails_closed_for_krx_only_holding():
+    code = "123456"
+    now_ts = datetime(2026, 8, 21, 15, 45, tzinfo=handlers._KST).timestamp()
+    fields, _ = handlers._nxt_aftermarket_early_sell_quote_context(
+        {"status": "HOLDING", "buy_qty": 3, "is_nxt": False},
+        code,
+        _exact_nxt_0d_snapshot(code, now_ts),
+        now_ts=now_ts,
+    )
+
+    assert fields["nxt_aftermarket_early_sell_allowed"] is False
+    assert fields["nxt_aftermarket_early_sell_reason"] == "nxt_sell_route_not_proven"
+
+
+def test_nxt_aftermarket_early_sell_trusts_confirmed_nxt_position_route():
+    code = "123456"
+    now_ts = datetime(2026, 8, 21, 15, 45, tzinfo=handlers._KST).timestamp()
+    fields, _ = handlers._nxt_aftermarket_early_sell_quote_context(
+        {
+            "status": "HOLDING",
+            "buy_qty": 3,
+            "is_nxt": False,
+            "entry_execution_broker_route": "NXT",
+        },
+        code,
+        _exact_nxt_0d_snapshot(code, now_ts),
+        now_ts=now_ts,
+    )
+
+    assert fields["nxt_aftermarket_early_sell_allowed"] is True
+    assert fields["nxt_aftermarket_early_sell_nxt_flag_source"] == (
+        "confirmed_entry_execution_route"
+    )
+    assert fields["nxt_aftermarket_early_sell_confirmed_nxt_position"] is True
 
 
 def test_sell_route_guard_blocks_inter_session_gap_even_for_nxt_holding():
@@ -1335,6 +1496,184 @@ def test_fast_exit_dispatch_passes_explicit_nxt_route(monkeypatch):
     assert stock["sell_ord_no"] == "NXT-S1"
 
 
+def test_fast_exit_dispatch_1545_uses_exact_nxt_bid_time_passthrough(monkeypatch):
+    now_ts = datetime(2026, 8, 21, 15, 45, tzinfo=handlers._KST).timestamp()
+    monkeypatch.setattr(handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(handlers, "WS_MANAGER", None)
+    monkeypatch.setattr(handlers, "_remember_exit_context", lambda **kwargs: None)
+    pipeline_logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_sell_side_open_time_block_fields",
+        lambda **kwargs: {
+            "runtime_family": "sell_side_open_time_block_runtime",
+            "policy_version": "sell_side_open_time_block_v1",
+            "sell_time_block_checked": True,
+            "sell_time_block_applied": True,
+            "sell_time_block_passthrough_reason": "-",
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_confirm_cancel_or_reload_remaining",
+        lambda *args, **kwargs: 3,
+    )
+    sells = []
+    monkeypatch.setattr(
+        handlers,
+        "_send_exit_best_ioc",
+        lambda code, qty, token, **kwargs: sells.append((code, qty, kwargs))
+        or {"return_code": "0", "ord_no": "NXT-1545"},
+    )
+    stock = {
+        "name": "NXT종목",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 3,
+        "is_nxt": True,
+        "entry_execution_broker_route": "NXT",
+        "fast_exit_broker_route": "NXT",
+        "fast_exit_execution_cohort": "NXT",
+        "exit_token": "token-nxt-1545",
+        "exit_decided_at": now_ts,
+    }
+
+    handlers._dispatch_scalp_preset_exit(
+        stock=stock,
+        code="123456",
+        now_ts=now_ts,
+        curr_p=10_100,
+        buy_p=10_000,
+        profit_rate=1.0,
+        peak_profit=2.0,
+        strategy="SCALPING",
+        sell_reason_type="TRAILING",
+        reason="test NXT 15:45 trailing",
+        exit_rule="scalp_trailing_take_profit",
+        ws_data=_exact_nxt_0d_snapshot("123456", now_ts, bid=10_090, bid_qty=10),
+        fast_exit=True,
+    )
+
+    assert sells == [
+        (
+            "123456",
+            3,
+            {
+                "dmst_stex_tp": "NXT",
+                "reason_type": "TRAILING",
+                "strategy": "SCALPING",
+                "bypass_open_time_block": True,
+            },
+        )
+    ]
+    assert not [
+        fields
+        for stage, fields in pipeline_logs
+        if stage == "sell_order_blocked_open_time"
+    ]
+    passthrough = [
+        fields
+        for stage, fields in pipeline_logs
+        if stage == "nxt_aftermarket_early_sell_passthrough"
+    ]
+    assert passthrough
+    assert passthrough[-1]["nxt_aftermarket_early_sell_executable_bid"] == 10_090
+    sent = [fields for stage, fields in pipeline_logs if stage == "sell_order_sent"]
+    assert sent[-1]["sell_time_block_passthrough_reason"] == (
+        "nxt_aftermarket_fresh_executable_bid"
+    )
+
+
+def test_fast_exit_dispatch_1545_blocks_when_final_nxt_bid_turns_stale(monkeypatch):
+    now_ts = datetime(2026, 8, 21, 15, 45, tzinfo=handlers._KST).timestamp()
+    monkeypatch.setattr(handlers.time, "time", lambda: now_ts)
+
+    class StaleFinalQuoteManager:
+        @staticmethod
+        def get_latest_data(code):
+            return _exact_nxt_0d_snapshot(
+                code,
+                now_ts,
+                observed_age_ms=1001.0,
+                bid=10_080,
+                bid_qty=10,
+            )
+
+    monkeypatch.setattr(handlers, "WS_MANAGER", StaleFinalQuoteManager())
+    monkeypatch.setattr(handlers, "_remember_exit_context", lambda **kwargs: None)
+    pipeline_logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_sell_side_open_time_block_fields",
+        lambda **kwargs: {
+            "sell_time_block_applied": True,
+            "sell_time_block_passthrough_reason": "-",
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_confirm_cancel_or_reload_remaining",
+        lambda *args, **kwargs: 3,
+    )
+    sells = []
+    monkeypatch.setattr(
+        handlers,
+        "_send_exit_best_ioc",
+        lambda *args, **kwargs: sells.append((args, kwargs)),
+    )
+    stock = {
+        "name": "NXT종목",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 3,
+        "is_nxt": True,
+        "entry_execution_broker_route": "NXT",
+        "fast_exit_broker_route": "NXT",
+        "fast_exit_execution_cohort": "NXT",
+        "exit_token": "token-nxt-stale",
+        "exit_decided_at": now_ts,
+    }
+
+    handlers._dispatch_scalp_preset_exit(
+        stock=stock,
+        code="123456",
+        now_ts=now_ts,
+        curr_p=10_100,
+        buy_p=10_000,
+        profit_rate=1.0,
+        peak_profit=2.0,
+        strategy="SCALPING",
+        sell_reason_type="TRAILING",
+        reason="test stale final NXT bid",
+        exit_rule="scalp_trailing_take_profit",
+        ws_data=_exact_nxt_0d_snapshot("123456", now_ts, bid=10_090, bid_qty=10),
+        fast_exit=True,
+    )
+
+    assert sells == []
+    assert stock["status"] == "HOLDING"
+    blocked = [
+        fields
+        for stage, fields in pipeline_logs
+        if stage == "nxt_aftermarket_early_sell_pre_submit_blocked"
+    ]
+    assert blocked[-1]["nxt_aftermarket_early_sell_reason"] == ("exact_nxt_0d_stale")
+
+
 def test_fast_exit_broker_reject_uses_shared_sell_backoff(monkeypatch):
     now_ts = datetime(2026, 8, 14, 16, 20, tzinfo=handlers._KST).timestamp()
     monkeypatch.setattr(handlers, "_remember_exit_context", lambda **kwargs: None)
@@ -1431,6 +1770,28 @@ def test_shared_exit_wrapper_preserves_explicit_route_and_guard_context(monkeypa
             "strategy": "SCALPING",
         }
     ]
+
+
+def test_shared_exit_wrapper_forwards_proven_time_block_bypass(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        sniper_trade_utils.kiwoom_orders,
+        "send_sell_order_market",
+        lambda **kwargs: calls.append(kwargs) or {"return_code": "0"},
+    )
+
+    sniper_trade_utils.send_exit_best_ioc(
+        "123456",
+        3,
+        "token",
+        dmst_stex_tp="NXT",
+        reason_type="TRAILING",
+        strategy="SCALPING",
+        bypass_open_time_block=True,
+    )
+
+    assert calls[-1]["dmst_stex_tp"] == "NXT"
+    assert calls[-1]["bypass_open_time_block"] is True
 
 
 def test_handler_exit_wrapper_preserves_legacy_three_argument_dependency(monkeypatch):

@@ -11510,19 +11510,25 @@ def _send_exit_best_ioc(
     dmst_stex_tp=None,
     reason_type=None,
     strategy=None,
+    bypass_open_time_block=False,
 ):
     if SEND_EXIT_BEST_IOC is None:
         return {}
-    if dmst_stex_tp is None and reason_type is None and strategy is None:
+    if (
+        dmst_stex_tp is None
+        and reason_type is None
+        and strategy is None
+        and not bypass_open_time_block
+    ):
         return SEND_EXIT_BEST_IOC(code, qty, token)
-    return SEND_EXIT_BEST_IOC(
-        code,
-        qty,
-        token,
-        dmst_stex_tp=dmst_stex_tp,
-        reason_type=reason_type,
-        strategy=strategy,
-    )
+    kwargs = {
+        "dmst_stex_tp": dmst_stex_tp,
+        "reason_type": reason_type,
+        "strategy": strategy,
+    }
+    if bypass_open_time_block:
+        kwargs["bypass_open_time_block"] = True
+    return SEND_EXIT_BEST_IOC(code, qty, token, **kwargs)
 
 
 def _format_entry_price_text(value):
@@ -26230,8 +26236,8 @@ def _fast_exit_execution_route_fields(
             stock, code, now_t=observed_dt.time()
         )
     broker_route = str(resolution.get("dmst_stex_tp") or "").strip().upper()
-    session_bucket = _rising_missed_nxt_session_bucket(float(now_ts))
-    execution_cohort = _scalping_execution_cohort(float(now_ts), broker_route)
+    session_bucket = _holding_sell_execution_session_bucket(float(now_ts))
+    execution_cohort = _holding_sell_execution_cohort(float(now_ts), broker_route)
     execution_cohort_resolution = "session_and_broker_route_resolved"
     if execution_cohort == "UNKNOWN":
         execution_cohort = "OUTSIDE_SUPPORTED_SESSION"
@@ -26552,6 +26558,43 @@ def _dispatch_scalp_preset_exit(
         exit_rule=exit_rule,
         now=datetime.fromtimestamp(float(now_ts), tz=_KST),
     )
+    nxt_aftermarket_early_sell_passthrough = False
+    if bool(sell_time_block_fields.get("sell_time_block_applied")):
+        early_sell_fields, early_sell_ws = (
+            _nxt_aftermarket_early_sell_quote_context(
+                stock,
+                code,
+                ws_data,
+                now_ts=float(now_ts),
+            )
+        )
+        sell_time_block_fields.update(
+            {
+                key: value
+                for key, value in early_sell_fields.items()
+                if key.startswith("nxt_aftermarket_early_sell_")
+            }
+        )
+        if early_sell_fields.get("nxt_aftermarket_early_sell_allowed"):
+            nxt_aftermarket_early_sell_passthrough = True
+            sell_time_block_fields["sell_time_block_applied"] = False
+            sell_time_block_fields["sell_time_block_passthrough_reason"] = (
+                "nxt_aftermarket_fresh_executable_bid"
+            )
+            ws_data = early_sell_ws
+            _log_holding_pipeline(
+                stock,
+                code,
+                "nxt_aftermarket_early_sell_passthrough",
+                **{
+                    **early_sell_fields,
+                    "sell_reason_type": sell_reason_type,
+                    "exit_rule": exit_rule or "-",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": False,
+                    "runtime_effect": True,
+                },
+            )
     if bool(sell_time_block_fields.get("sell_time_block_applied")):
         _log_holding_pipeline(
             stock,
@@ -26691,6 +26734,7 @@ def _dispatch_scalp_preset_exit(
     if (
         rem_qty > 0
         and not fast_exit
+        and not nxt_aftermarket_early_sell_passthrough
         and not is_opening_rotation_position(stock.get("position_tag"))
     ):
         retry_result = _attempt_late_loss_avg_down_retry_before_sell(
@@ -26717,6 +26761,48 @@ def _dispatch_scalp_preset_exit(
         if _loss_recovery_intercepts_sell(retry_result):
             return
 
+    if nxt_aftermarket_early_sell_passthrough:
+        final_early_sell_fields, final_early_sell_ws = (
+            _latest_nxt_aftermarket_early_sell_quote_context(
+                stock,
+                code,
+                ws_data,
+                now_ts=time.time(),
+            )
+        )
+        sell_time_block_fields.update(
+            {
+                key: value
+                for key, value in final_early_sell_fields.items()
+                if key.startswith("nxt_aftermarket_early_sell_")
+            }
+        )
+        if not final_early_sell_fields.get("nxt_aftermarket_early_sell_allowed"):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "nxt_aftermarket_early_sell_pre_submit_blocked",
+                **{
+                    **final_early_sell_fields,
+                    "sell_reason_type": sell_reason_type,
+                    "exit_rule": exit_rule or "-",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": True,
+                },
+            )
+            _defer_fast_exit_retry(
+                "nxt_aftermarket_executable_bid_not_fresh_at_submit",
+                retry_delay_sec=0.25,
+                retry_fields={
+                    key: value
+                    for key, value in final_early_sell_fields.items()
+                    if key.startswith("nxt_aftermarket_early_sell_")
+                },
+            )
+            return
+        ws_data = final_early_sell_ws
+
     try:
         if target_id:
             with DB.get_session() as session:
@@ -26737,13 +26823,18 @@ def _dispatch_scalp_preset_exit(
     if rem_qty > 0:
         exit_order_sent_at = time.time()
         if fast_exit:
+            fast_exit_send_kwargs = {
+                "dmst_stex_tp": fast_exit_broker_route,
+                "reason_type": sell_reason_type,
+                "strategy": strategy,
+            }
+            if nxt_aftermarket_early_sell_passthrough:
+                fast_exit_send_kwargs["bypass_open_time_block"] = True
             sell_res = _send_exit_best_ioc(
                 code,
                 rem_qty,
                 KIWOOM_TOKEN,
-                dmst_stex_tp=fast_exit_broker_route,
-                reason_type=sell_reason_type,
-                strategy=strategy,
+                **fast_exit_send_kwargs,
             )
         else:
             sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
@@ -26812,7 +26903,7 @@ def _dispatch_scalp_preset_exit(
             or "caller_route_fallback"
         )
         sell_execution_ts = time.time()
-        sell_execution_cohort = _scalping_execution_cohort(
+        sell_execution_cohort = _holding_sell_execution_cohort(
             sell_execution_ts, sell_broker_route
         )
         set_fields.update(
@@ -26828,7 +26919,7 @@ def _dispatch_scalp_preset_exit(
                 ),
                 "last_sell_execution_cohort": sell_execution_cohort,
                 "last_sell_execution_session_bucket": (
-                    _rising_missed_nxt_session_bucket(sell_execution_ts)
+                    _holding_sell_execution_session_bucket(sell_execution_ts)
                 ),
             }
         )
@@ -69318,6 +69409,23 @@ def _scalping_execution_cohort(now_ts: float, broker_route: str) -> str:
     return "UNKNOWN"
 
 
+def _holding_sell_execution_session_bucket(now_ts: float) -> str:
+    """Apply the operator-selected 15:45 NXT start only to held-position exits."""
+
+    now_t = datetime.fromtimestamp(float(now_ts), tz=_KST).time()
+    if datetime_time(hour=15, minute=45) <= now_t < datetime_time(hour=16):
+        return "nxt_aftermarket_early_sell"
+    return _rising_missed_nxt_session_bucket(now_ts)
+
+
+def _holding_sell_execution_cohort(now_ts: float, broker_route: str) -> str:
+    route = str(broker_route or "").strip().upper()
+    session_bucket = _holding_sell_execution_session_bucket(now_ts)
+    if session_bucket == "nxt_aftermarket_early_sell" and route == "NXT":
+        return "NXT"
+    return _scalping_execution_cohort(now_ts, broker_route)
+
+
 def _rising_missed_nxt_observation_fields(
     stock: dict | None,
     code: str,
@@ -73503,12 +73611,27 @@ def _holding_sell_krx_regular_session(now_t) -> bool:
 def _resolve_holding_sell_dmst_stex_tp(
     stock: dict | None, code: str, now_t=None
 ) -> dict:
+    stock = stock if isinstance(stock, dict) else {}
     current_t = now_t or datetime.now().time()
     is_nxt_enabled, source = _holding_sell_nxt_enabled_status(stock, code)
+    confirmed_nxt_position = bool(
+        str(stock.get("status") or "").strip().upper() == "HOLDING"
+        and _safe_int(stock.get("buy_qty"), 0) > 0
+        and str(stock.get("entry_execution_broker_route") or "")
+        .strip()
+        .upper()
+        == "NXT"
+    )
+    if confirmed_nxt_position:
+        # A broker-confirmed NXT entry route is stronger position provenance
+        # than a stale daily-security eligibility flag.  It grants only the
+        # matching sell route; freshness and order guards remain independent.
+        is_nxt_enabled = True
+        source = "confirmed_entry_execution_route"
     krx_regular = _holding_sell_krx_regular_session(current_t)
     nxt_execution_session = bool(
         datetime_time(hour=8) <= current_t < datetime_time(hour=8, minute=50)
-        or datetime_time(hour=16) <= current_t < TIME_20_00
+        or datetime_time(hour=15, minute=45) <= current_t < TIME_20_00
     )
     if krx_regular:
         return {
@@ -73545,6 +73668,271 @@ def _resolve_holding_sell_dmst_stex_tp(
             else "nxt_session_nxt_capability_unconfirmed"
         ),
     }
+
+
+_NXT_AFTERMARKET_EARLY_SELL_START = datetime_time(hour=15, minute=45)
+_NXT_AFTERMARKET_EARLY_SELL_END = datetime_time(hour=20)
+_NXT_AFTERMARKET_EARLY_SELL_MAX_0D_AGE_MS = 1000.0
+
+
+def _nxt_aftermarket_early_sell_quote_context(
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Prove the exact NXT bid required to bypass the generic SELL window.
+
+    This is deliberately narrower than the normal quote-consistency path.  An
+    integrated ``_AL`` quote or a mark price cannot open this route: only the
+    exact ``_NX``/``nxt_only`` 0D snapshot for the held symbol may do so.
+    """
+
+    stock = stock if isinstance(stock, dict) else {}
+    snapshot = ws_data if isinstance(ws_data, dict) else {}
+    normalized_code = str(code or "").strip()[:6]
+    observed_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
+    observed_time = observed_dt.time()
+    in_window = bool(
+        _NXT_AFTERMARKET_EARLY_SELL_START
+        <= observed_time
+        < _NXT_AFTERMARKET_EARLY_SELL_END
+    )
+
+    route_resolution = _resolve_holding_sell_dmst_stex_tp(
+        stock, normalized_code, now_t=observed_time
+    )
+    confirmed_nxt_position = bool(
+        str(stock.get("status") or "").strip().upper() == "HOLDING"
+        and _safe_int(stock.get("buy_qty"), 0) > 0
+        and str(stock.get("entry_execution_broker_route") or "").strip().upper()
+        == "NXT"
+    )
+    route_allowed = bool(
+        not route_resolution.get("blocked")
+        and str(route_resolution.get("dmst_stex_tp") or "").strip().upper()
+        == "NXT"
+        and (
+            route_resolution.get("nxt_enabled") is True
+            or confirmed_nxt_position
+        )
+    )
+
+    exact_quote: dict[str, Any] = {}
+    quote_source = "missing_exact_nxt_route_snapshot"
+    route_snapshots = snapshot.get("realtime_type_snapshots_by_route")
+    route_snapshots = route_snapshots if isinstance(route_snapshots, dict) else {}
+    for route_bucket in route_snapshots.values():
+        if not isinstance(route_bucket, dict):
+            continue
+        candidate = route_bucket.get("0D")
+        if not isinstance(candidate, dict):
+            continue
+        item = str(candidate.get("item") or "").strip().upper()
+        route = str(candidate.get("market_route") or "").strip().lower()
+        suffix = str(candidate.get("market_suffix") or "").strip().upper()
+        if (
+            item == f"{normalized_code}_NX"
+            and suffix == "_NX"
+            and route == "nxt_only"
+            and str(candidate.get("effective_venue") or "").strip().upper()
+            == "NXT"
+        ):
+            exact_quote = candidate
+            quote_source = "realtime_type_snapshots_by_route_exact_nxt_0d"
+            break
+
+    if not exact_quote:
+        type_items = snapshot.get("last_realtime_type_item")
+        type_items = type_items if isinstance(type_items, dict) else {}
+        type_suffixes = snapshot.get("last_realtime_type_market_suffix")
+        type_suffixes = type_suffixes if isinstance(type_suffixes, dict) else {}
+        type_routes = snapshot.get("last_realtime_type_market_route")
+        type_routes = type_routes if isinstance(type_routes, dict) else {}
+        type_venues = snapshot.get("last_realtime_type_effective_venue")
+        type_venues = type_venues if isinstance(type_venues, dict) else {}
+        if (
+            str(type_items.get("0D") or "").strip().upper()
+            == f"{normalized_code}_NX"
+            and str(type_suffixes.get("0D") or "").strip().upper() == "_NX"
+            and str(type_routes.get("0D") or "").strip().lower() == "nxt_only"
+            and str(type_venues.get("0D") or "NXT").strip().upper() == "NXT"
+        ):
+            type_ts = snapshot.get("last_realtime_type_ts")
+            type_ts = type_ts if isinstance(type_ts, dict) else {}
+            exact_quote = {
+                "realtime_type": "0D",
+                "observed_epoch": type_ts.get("0D"),
+                "item": type_items.get("0D"),
+                "market_suffix": type_suffixes.get("0D"),
+                "market_route": type_routes.get("0D"),
+                "effective_venue": type_venues.get("0D") or "NXT",
+                "orderbook": snapshot.get("orderbook"),
+            }
+            quote_source = "latest_exact_nxt_0d"
+
+    quote_epoch = _safe_float(exact_quote.get("observed_epoch"), 0.0)
+    quote_age_ms = (
+        max(0.0, (float(now_ts) - quote_epoch) * 1000.0)
+        if 0 < quote_epoch <= float(now_ts)
+        else None
+    )
+    orderbook = exact_quote.get("orderbook")
+    orderbook = orderbook if isinstance(orderbook, dict) else {}
+    bids = orderbook.get("bids")
+    bids = bids if isinstance(bids, list) else []
+    asks = orderbook.get("asks")
+    asks = asks if isinstance(asks, list) else []
+    bid_row = bids[0] if bids and isinstance(bids[0], dict) else {}
+    ask_row = asks[0] if asks and isinstance(asks[0], dict) else {}
+    executable_bid = _safe_int(bid_row.get("price"), 0)
+    executable_bid_qty = _safe_int(
+        bid_row.get("volume") or bid_row.get("quantity"), 0
+    )
+    best_ask = _safe_int(ask_row.get("price"), 0)
+    fresh = bool(
+        quote_age_ms is not None
+        and quote_age_ms <= _NXT_AFTERMARKET_EARLY_SELL_MAX_0D_AGE_MS
+    )
+    allowed = bool(
+        in_window
+        and route_allowed
+        and fresh
+        and executable_bid > 0
+        and executable_bid_qty > 0
+    )
+
+    if not in_window:
+        reason = "outside_nxt_aftermarket_early_sell_window"
+    elif not route_allowed:
+        reason = "nxt_sell_route_not_proven"
+    elif not exact_quote:
+        reason = "exact_nxt_0d_missing"
+    elif quote_age_ms is None:
+        reason = "exact_nxt_0d_timestamp_missing"
+    elif not fresh:
+        reason = "exact_nxt_0d_stale"
+    elif executable_bid <= 0:
+        reason = "exact_nxt_executable_bid_missing"
+    elif executable_bid_qty <= 0:
+        reason = "exact_nxt_executable_bid_depth_missing"
+    else:
+        reason = "fresh_exact_nxt_executable_bid"
+
+    fields = {
+        "nxt_aftermarket_early_sell_checked": True,
+        "nxt_aftermarket_early_sell_allowed": allowed,
+        "nxt_aftermarket_early_sell_reason": reason,
+        "nxt_aftermarket_early_sell_policy_version": (
+            "nxt_aftermarket_early_sell_v1"
+        ),
+        "nxt_aftermarket_early_sell_window": "15:45:00-19:59:59",
+        "nxt_aftermarket_early_sell_route": (
+            str(route_resolution.get("dmst_stex_tp") or "-").strip().upper()
+        ),
+        "nxt_aftermarket_early_sell_route_reason": (
+            route_resolution.get("reason") or "-"
+        ),
+        "nxt_aftermarket_early_sell_nxt_enabled": route_resolution.get(
+            "nxt_enabled"
+        ),
+        "nxt_aftermarket_early_sell_nxt_flag_source": route_resolution.get(
+            "nxt_flag_source"
+        )
+        or "-",
+        "nxt_aftermarket_early_sell_confirmed_nxt_position": (
+            confirmed_nxt_position
+        ),
+        "nxt_aftermarket_early_sell_quote_source": quote_source,
+        "nxt_aftermarket_early_sell_quote_item": (
+            exact_quote.get("item") or "-"
+        ),
+        "nxt_aftermarket_early_sell_quote_suffix": (
+            exact_quote.get("market_suffix") or "-"
+        ),
+        "nxt_aftermarket_early_sell_quote_route": (
+            exact_quote.get("market_route") or "-"
+        ),
+        "nxt_aftermarket_early_sell_quote_age_ms": (
+            round(quote_age_ms, 3) if quote_age_ms is not None else "-"
+        ),
+        "nxt_aftermarket_early_sell_max_quote_age_ms": (
+            _NXT_AFTERMARKET_EARLY_SELL_MAX_0D_AGE_MS
+        ),
+        "nxt_aftermarket_early_sell_executable_bid": executable_bid,
+        "nxt_aftermarket_early_sell_executable_bid_qty": executable_bid_qty,
+        "nxt_aftermarket_early_sell_best_ask": best_ask,
+        "metric_role": "hard_source_quality_gate",
+        "decision_authority": "real_scalping_nxt_aftermarket_sell_time_passthrough",
+        "window_policy": "same_symbol_exact_nxt_0d_at_15_45_to_20_00_kst",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "fresh_exact_nxt_executable_bid",
+        "source_quality_gate": (
+            "nxt_route_and_exact_nx_nxt_only_0d_age_le_1000ms_positive_bid_depth"
+        ),
+        "forbidden_uses": (
+            "krx_sell|sor_sell|integrated_al_quote|mark_price_substitution|"
+            "stale_quote_bypass|broker_guard_bypass|quantity_change|entry_authority"
+        ),
+    }
+
+    if not allowed:
+        return fields, dict(snapshot)
+
+    exact_view = dict(snapshot)
+    exact_view["orderbook"] = {
+        "asks": [dict(ask_row)] if ask_row else [],
+        "bids": [dict(bid_row)],
+    }
+    exact_view["best_bid"] = executable_bid
+    exact_view["best_ask"] = best_ask
+    exact_view["executable_sell_price"] = executable_bid
+    exact_view.setdefault("curr", executable_bid)
+    exact_view["last_ws_item"] = f"{normalized_code}_NX"
+    exact_view["last_ws_market_suffix"] = "_NX"
+    exact_view["last_ws_market_route"] = "nxt_only"
+    for key, value in (
+        ("last_realtime_type_ts", quote_epoch),
+        ("last_realtime_type_item", f"{normalized_code}_NX"),
+        ("last_realtime_type_market_suffix", "_NX"),
+        ("last_realtime_type_market_route", "nxt_only"),
+        ("last_realtime_type_effective_venue", "NXT"),
+    ):
+        current = exact_view.get(key)
+        current = dict(current) if isinstance(current, dict) else {}
+        current["0D"] = value
+        exact_view[key] = current
+    return fields, exact_view
+
+
+def _latest_nxt_aftermarket_early_sell_quote_context(
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    latest = ws_data if isinstance(ws_data, dict) else {}
+    refresh_source = "caller_snapshot"
+    refresh_error = "-"
+    if WS_MANAGER is not None and hasattr(WS_MANAGER, "get_latest_data"):
+        try:
+            refreshed = WS_MANAGER.get_latest_data(str(code or "").strip()[:6]) or {}
+            if isinstance(refreshed, dict) and refreshed:
+                latest = refreshed
+                refresh_source = "ws_manager_latest_snapshot"
+        except Exception as exc:
+            refresh_error = type(exc).__name__
+    fields, exact_view = _nxt_aftermarket_early_sell_quote_context(
+        stock,
+        code,
+        latest,
+        now_ts=now_ts,
+    )
+    fields["nxt_aftermarket_early_sell_refresh_source"] = refresh_source
+    fields["nxt_aftermarket_early_sell_refresh_error"] = refresh_error
+    return fields, exact_view
 
 
 def _nxt_rising_missed_tp1_partial_runner_enabled(now_dt: datetime) -> bool:
@@ -84043,6 +84431,45 @@ def handle_holding_state(
             exit_rule=exit_rule or stock.get("last_exit_rule"),
             now=now_dt,
         )
+        nxt_aftermarket_early_sell_passthrough = False
+        if bool(sell_time_block_fields.get("sell_time_block_applied")):
+            early_sell_fields, early_sell_ws = (
+                _nxt_aftermarket_early_sell_quote_context(
+                    stock,
+                    code,
+                    ws_data,
+                    now_ts=float(now_ts),
+                )
+            )
+            sell_time_block_fields.update(
+                {
+                    key: value
+                    for key, value in early_sell_fields.items()
+                    if key.startswith("nxt_aftermarket_early_sell_")
+                }
+            )
+            if early_sell_fields.get("nxt_aftermarket_early_sell_allowed"):
+                nxt_aftermarket_early_sell_passthrough = True
+                sell_time_block_fields["sell_time_block_applied"] = False
+                sell_time_block_fields["sell_time_block_passthrough_reason"] = (
+                    "nxt_aftermarket_fresh_executable_bid"
+                )
+                ws_data = early_sell_ws
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "nxt_aftermarket_early_sell_passthrough",
+                    **{
+                        **early_sell_fields,
+                        "sell_reason_type": sell_reason_type,
+                        "exit_rule": exit_rule
+                        or stock.get("last_exit_rule")
+                        or "-",
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": False,
+                        "runtime_effect": True,
+                    },
+                )
         if bool(sell_time_block_fields.get("sell_time_block_applied")):
             _log_holding_pipeline(
                 stock,
@@ -84107,24 +84534,25 @@ def handle_holding_state(
                 stock["_sell_order_retry_backoff_logged_key"] = log_key
             return
 
-        late_loss_retry_result = _attempt_late_loss_avg_down_retry_before_sell(
-            stock=stock,
-            code=code,
-            ws_data=ws_data,
-            strategy=strategy,
-            market_regime=market_regime,
-            admin_id=admin_id,
-            sell_reason_type=sell_reason_type,
-            exit_rule=exit_rule or stock.get("last_exit_rule"),
-            profit_rate=profit_rate,
-            peak_profit=peak_profit,
-            current_ai_score=current_ai_score,
-            held_sec=held_sec,
-            now_ts=now_ts,
-            context_fields={"sell_intercept_context": "standard_exit_before_submit"},
-        )
-        if _loss_recovery_intercepts_sell(late_loss_retry_result):
-            return
+        if not nxt_aftermarket_early_sell_passthrough:
+            late_loss_retry_result = _attempt_late_loss_avg_down_retry_before_sell(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                strategy=strategy,
+                market_regime=market_regime,
+                admin_id=admin_id,
+                sell_reason_type=sell_reason_type,
+                exit_rule=exit_rule or stock.get("last_exit_rule"),
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                now_ts=now_ts,
+                context_fields={"sell_intercept_context": "standard_exit_before_submit"},
+            )
+            if _loss_recovery_intercepts_sell(late_loss_retry_result):
+                return
 
         sell_safety_exit = _is_sell_side_open_time_safety_exit(
             exit_rule or stock.get("last_exit_rule"),
@@ -84153,7 +84581,8 @@ def handle_holding_state(
             and not sell_safety_exit
         )
         discretionary_scalp_pre_submit_recheck = bool(
-            nxt_soft_stop_pre_submit_recheck
+            nxt_aftermarket_early_sell_passthrough
+            or nxt_soft_stop_pre_submit_recheck
             or _requires_scalping_discretionary_sell_quote_revalidation(
                 strategy=strategy,
                 exit_rule=exit_rule or stock.get("last_exit_rule"),
@@ -84498,6 +84927,64 @@ def handle_holding_state(
             )
             return
 
+        if nxt_aftermarket_early_sell_passthrough:
+            final_early_sell_fields, final_early_sell_ws = (
+                _latest_nxt_aftermarket_early_sell_quote_context(
+                    stock,
+                    code,
+                    ws_data,
+                    now_ts=time.time(),
+                )
+            )
+            sell_time_block_fields.update(
+                {
+                    key: value
+                    for key, value in final_early_sell_fields.items()
+                    if key.startswith("nxt_aftermarket_early_sell_")
+                }
+            )
+            if not final_early_sell_fields.get(
+                "nxt_aftermarket_early_sell_allowed"
+            ):
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "nxt_aftermarket_early_sell_pre_submit_blocked",
+                    **{
+                        **final_early_sell_fields,
+                        "sell_reason_type": sell_reason_type,
+                        "exit_rule": exit_rule
+                        or stock.get("last_exit_rule")
+                        or "-",
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "runtime_effect": True,
+                    },
+                )
+                return
+            ws_data = final_early_sell_ws
+            final_executable_bid = _safe_int(
+                final_early_sell_fields.get(
+                    "nxt_aftermarket_early_sell_executable_bid"
+                ),
+                0,
+            )
+            if final_executable_bid > 0:
+                sell_order_price = final_executable_bid
+                sell_quote_fields.update(
+                    {
+                        "nxt_aftermarket_early_sell_final_executable_bid": (
+                            final_executable_bid
+                        ),
+                        "nxt_aftermarket_early_sell_final_bid_checked_at_epoch": (
+                            round(time.time(), 6)
+                        ),
+                        "quote_consistency_executable_sell_price": (
+                            final_executable_bid
+                        ),
+                    }
+                )
+
         try:
             with DB.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update(
@@ -84524,7 +85011,9 @@ def handle_holding_state(
             ws_data=ws_data,
             reason_type=sell_reason_type,
             strategy=strategy,
-            bypass_open_time_block=sell_safety_exit,
+            bypass_open_time_block=(
+                sell_safety_exit or nxt_aftermarket_early_sell_passthrough
+            ),
             dmst_stex_tp=sell_exchange_resolution.get("dmst_stex_tp", "SOR"),
         )
 
@@ -84562,7 +85051,7 @@ def handle_holding_state(
                 sell_exchange_resolution.get("reason") or "caller_route_fallback"
             )
             sell_execution_ts = time.time()
-            sell_execution_cohort = _scalping_execution_cohort(
+            sell_execution_cohort = _holding_sell_execution_cohort(
                 sell_execution_ts, sell_broker_route
             )
             log_info(
@@ -84582,7 +85071,7 @@ def handle_holding_state(
                 ),
                 "last_sell_execution_cohort": sell_execution_cohort,
                 "last_sell_execution_session_bucket": (
-                    _rising_missed_nxt_session_bucket(sell_execution_ts)
+                    _holding_sell_execution_session_bucket(sell_execution_ts)
                 ),
             }
             if ord_no:
