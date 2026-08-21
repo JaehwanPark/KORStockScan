@@ -14,6 +14,7 @@ from src.engine.scalping import ai_decision_quality as quality
 from src.engine.scalping import main_lifecycle_journal as lifecycle_journal
 from src.engine.scalping import main_lifecycle_paired as lifecycle_paired
 from src.engine.scalping.micro_reversion import ai_quality_cycle as cycle
+from src.engine.scalping.micro_reversion import ai_quality_bridge as bridge
 
 
 def _paired_request(trace_id: str = "trace-1", *, stage: str = "entry") -> dict:
@@ -833,6 +834,12 @@ def test_rolling_r2_r3_emits_source_only_candidate_after_strict_20_day_gate():
 
     assert rolling["joined_parent_count"] == 20
     assert rolling["partitions"][0]["r3_source_candidate_eligible"] is True
+    confirmation_axis = rolling["partitions"][0]["confirmation_window_tuning_axis"]
+    assert confirmation_axis["missing_legacy_axis_count"] == 20
+    assert confirmation_axis["policy_ev_evaluation_status"] == (
+        "awaiting_eligible_post_confirmation_outcomes"
+    )
+    assert confirmation_axis["runtime_effect"] is False
     metrics = rolling["partitions"][0]["windows"]["20"]
     assert metrics["eligible_signals_per_session_hour"] == pytest.approx(1.0)
     assert metrics["average_actual_holding_duration_sec"] == 120.0
@@ -844,6 +851,105 @@ def test_rolling_r2_r3_emits_source_only_candidate_after_strict_20_day_gate():
     assert candidate["first_exact_candidate_approval_required"] is True
     assert candidate["continuous_auto_chain_eligible"] is False
     assert manifest["first_runtime_candidate_auto_apply_performed"] is False
+
+
+def _confirmation_axis(*, net_return_bps: float) -> dict:
+    observation = {
+        "horizon_sec": 120,
+        "confirmation_fraction": 0.5,
+        "mature": True,
+        "classification_eligible": True,
+        "post_trade_count": 12,
+        "additional_mae_bps": -30.0,
+        "post_low_delay_ms": 20_000,
+        "terminal_trade_return_bps": 40.0,
+        "max_reclaim_from_post_low_bps": 70.0,
+        "half_reclaim_confirmed": True,
+        "confirmation_count": 1,
+        "recovery_invalidation_count": 0,
+        "active_confirmation_delay_ms": 60_000,
+        "active_confirmation_trade_price": 10_000.0,
+        "active_confirmation_best_ask": 10_010.0,
+        "active_confirmation_quote_age_ms": 0.0,
+        "confirmation_followthrough_ms": 60_000,
+        "confirmation_followthrough_trade_count": 6,
+        "confirmation_fresh_bbo_count": 6,
+        "confirmation_to_terminal_trade_return_bps": 40.0,
+        "confirmation_to_terminal_trade_mfe_bps": 60.0,
+        "confirmation_to_terminal_trade_mae_bps": -10.0,
+        "confirmation_to_terminal_bbo_proxy_gross_return_bps": (net_return_bps + 23.0),
+        "confirmation_to_terminal_bbo_proxy_mfe_bps": 63.0,
+        "confirmation_to_terminal_bbo_proxy_mae_bps": 3.0,
+        "fixed_followthrough_outcomes": [
+            {
+                "followthrough_sec": 30,
+                "mature": True,
+                "entry_observed_at_ms": 1_000_000,
+                "entry_delay_from_confirmation_ms": 0,
+                "entry_best_ask": 10_010.0,
+                "endpoint_observed_at_ms": 1_030_000,
+                "endpoint_lag_ms": 0,
+                "endpoint_best_bid": 10_010.0
+                * (1.0 + (net_return_bps + 23.0) / 10_000.0),
+                "fresh_bbo_observation_count": 6,
+                "max_fresh_bbo_gap_ms": 1_000,
+                "standardized_one_share_gross_return_bps": (net_return_bps + 23.0),
+                "verified_roundtrip_cost_bps": 23.0,
+                "standardized_one_share_net_return_bps": net_return_bps,
+                "standardized_one_share_net_mfe_bps": 40.0,
+                "standardized_one_share_net_mae_bps": -20.0,
+                "tuning_outcome_eligible": True,
+                "source_quality_blockers": [],
+                "tuning_outcome_blockers": [],
+            }
+        ],
+        "terminal_trade_lag_ms": 0,
+        "direction_state": "REVERSION_CONFIRMED",
+        "source_quality_blockers": [],
+    }
+    return {
+        "schema": bridge.CONFIRMATION_WINDOW_SCHEMA,
+        "axis_role": "micro_reversion_tuning_only",
+        "horizons_sec": [120],
+        "followthrough_horizons_sec": [30],
+        "confirmation_fraction": 0.5,
+        "max_endpoint_lag_ms": 2_500,
+        "max_internal_gap_ms": 2_500,
+        "max_quote_age_ms": 1_000,
+        "outcome_basis": (
+            "standardized_one_share_confirmation_deadline_fresh_ask_to_fixed_"
+            "followthrough_fresh_bid_top_of_book_proxy_"
+            "after_verified_roundtrip_cost"
+        ),
+        "observations": [observation],
+        "included_in_prompt_context": False,
+        **bridge.CONFIRMATION_WINDOW_METRIC_CONTRACT,
+        **bridge.AUTHORITY_CONTRACT,
+    }
+
+
+def test_confirmation_window_census_reports_post_signal_net_outcome() -> None:
+    census = cycle._confirmation_window_tuning_census(
+        [
+            {"confirmation_window_axis": _confirmation_axis(net_return_bps=10.0)},
+            {"confirmation_window_axis": _confirmation_axis(net_return_bps=-5.0)},
+        ]
+    )
+
+    assert census["policy_ev_evaluation_status"] == (
+        "standardized_one_share_source_only_outcome_observed"
+    )
+    assert census["tuning_outcome_eligible_counts"] == {"confirm_120s_follow_30s": 2}
+    metrics = census["outcome_metrics"]["confirm_120s_follow_30s"]
+    assert metrics["sample_count"] == 2
+    assert metrics["equal_weight_avg_profit_pct"] == pytest.approx(0.025)
+    assert metrics["diagnostic_win_rate_pct"] == 50.0
+    assert metrics["mean_standardized_one_share_net_mfe_pct"] == 0.4
+    assert metrics["mean_standardized_one_share_net_mae_pct"] == -0.2
+    assert metrics["median_active_confirmation_delay_ms"] == 60_000.0
+    assert metrics["median_entry_deadline_lag_ms"] == 0.0
+    assert census["runtime_effect"] is False
+    assert census["allowed_runtime_apply"] is False
 
 
 @pytest.mark.parametrize("failure_kind", ("contract", "collection"))
@@ -1665,7 +1771,7 @@ def test_historical_execution_rejects_self_rehashed_provider_and_join_receipts(
     elif mutation == "provider_attempt_hash":
         report["results"][0]["replay_result"]["candidate_attempts"][0][
             "provider_provenance"
-        ]["provider_budget_attempt_identity_sha256"] = "x" * 64
+        ]["provider_budget_attempt_identity_sha256"] = ("x" * 64)
         _reseal_execution_result_ids(report)
     elif mutation == "provider_cost_underreported":
         report["provider_budget"]["committed_cost_usd"] = "0.01"

@@ -492,7 +492,9 @@ def resolve_candidate_reason_code_conflicts(
             "confirmed": "recovery_trigger_confirmed",
             "recovery_required": "recovery_trigger_required",
             "failed": "recovery_trigger_failed",
-        }.get(trigger),
+        }.get(
+            trigger
+        ),
     }
     try:
         upside = float(response.get("expected_upside_pct"))
@@ -8376,6 +8378,8 @@ def _micro_reversion_bridge_config(value: Any) -> Any:
     for field in (
         "participation_grid",
         "outcome_horizons_sec",
+        "reversion_confirmation_horizons_sec",
+        "reversion_followthrough_horizons_sec",
         "cost_profile_venues",
     ):
         if isinstance(normalized.get(field), list):
@@ -10084,6 +10088,11 @@ def _validate_micro_reversion_action_neutral_label(
     }
     if not declared_hash or declared_hash != _sha256(content):
         raise ValueError("micro_reversion_action_neutral_label_content_hash_mismatch")
+    from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+        _validate_confirmation_window_axis,
+    )
+
+    _validate_confirmation_window_axis(label.get("confirmation_window_axis"))
     for field, expected in (
         ("runtime_effect", False),
         ("allowed_runtime_apply", False),
@@ -10177,6 +10186,7 @@ def build_micro_reversion_action_neutral_outcome_labels(
         OUTCOME_SCHEMA,
         REPORT_SCHEMA,
         TACTICAL_EVIDENCE_SCHEMA,
+        _validate_confirmation_window_axis,
     )
 
     if bridge_report.get("schema") != REPORT_SCHEMA:
@@ -10277,6 +10287,11 @@ def build_micro_reversion_action_neutral_outcome_labels(
                 or str(evidence.get("decision_trace_id") or "") != trace_id
             ):
                 raise ValueError("micro_reversion_bridge_outcome_hash_mismatch")
+            _validate_confirmation_window_axis(outcome.get("confirmation_window_axis"))
+            if (evidence.get("event") or {}).get("shock_event_id") and not isinstance(
+                outcome.get("confirmation_window_axis"), dict
+            ):
+                raise ValueError("micro_reversion_confirmation_window_axis_missing")
             embedded_evidence = [
                 (request.get("candidate_input") or {}).get(TACTICAL_EVIDENCE_SCHEMA)
                 for request in trace_requests
@@ -10574,6 +10589,9 @@ def build_micro_reversion_action_neutral_outcome_labels(
                     metric["horizon_sec"] for metric in horizon_metrics.values()
                 ),
                 "horizon_metrics": horizon_metrics,
+                "confirmation_window_axis": deepcopy(
+                    outcome.get("confirmation_window_axis")
+                ),
                 "outcome_semantics": (
                     "entry_ask_sweep_to_future_bid_sweep_after_verified_cost"
                     if stage == "entry"
@@ -10902,6 +10920,9 @@ def build_micro_reversion_three_arm_evaluation(
                 "position_horizon_sec": _number(
                     metric.get("position_horizon_sec")
                     or metric.get("holding_duration_sec")
+                ),
+                "confirmation_window_axis": deepcopy(
+                    label.get("confirmation_window_axis")
                 ),
                 "decision_ts": next(iter(by_arm.values())).get("decision_ts"),
                 "arms": arm_values,
@@ -15591,16 +15612,12 @@ def build_paired_replay_report(
         control_execution_cost_pct = (
             _number(execution_cost.get("conservative_execution_cost_pct"))
             if execution_cost_contract_applied and control_exposure_selected
-            else 0.0
-            if execution_cost_contract_applied
-            else None
+            else 0.0 if execution_cost_contract_applied else None
         )
         candidate_execution_cost_pct = (
             _number(execution_cost.get("conservative_execution_cost_pct"))
             if execution_cost_contract_applied and candidate_exposure_selected
-            else 0.0
-            if execution_cost_contract_applied
-            else None
+            else 0.0 if execution_cost_contract_applied else None
         )
         control_primary_value = (
             (outcome if control_exposure_selected else 0.0)

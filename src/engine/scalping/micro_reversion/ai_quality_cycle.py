@@ -28,7 +28,7 @@ from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from statistics import fmean
+from statistics import fmean, median
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
@@ -41,6 +41,10 @@ from src.engine.scalping.main_lifecycle_journal import (
     PIPELINE_IDENTITY_SCHEMA,
 )
 from src.engine.scalping.micro_reversion.contracts import CLEAN_BASELINE_DATE
+from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+    CONFIRMATION_WINDOW_METRIC_CONTRACT,
+    _validate_confirmation_window_axis,
+)
 from src.engine.scalping.micro_reversion.provider_budget import (
     AUTHORITY_CONTRACT as PROVIDER_BUDGET_AUTHORITY_CONTRACT,
 )
@@ -946,6 +950,10 @@ def _validate_execution_exact_census(
     for raw_row in evaluation_rows:
         if not isinstance(raw_row, Mapping):
             _execution_census_error("evaluation_row_not_object")
+        try:
+            _validate_confirmation_window_axis(raw_row.get("confirmation_window_axis"))
+        except ValueError:
+            _execution_census_error("evaluation_confirmation_window_axis_invalid")
         parent_id = str(raw_row.get("paired_replay_parent_id") or "").strip()
         parent_results = result_by_parent.get(parent_id)
         arms = raw_row.get("arms")
@@ -1622,7 +1630,9 @@ def _validate_current_execution_artifact(
         "blocking_execution_exclusions"
     ) != expected_blocking_exclusions or report.get(
         "blocking_execution_exclusion_count"
-    ) != len(expected_blocking_exclusions):
+    ) != len(
+        expected_blocking_exclusions
+    ):
         raise ValueError("current_execution_blocking_exclusion_census_mismatch")
     report_status = report.get("status")
     if (
@@ -2728,6 +2738,121 @@ def _window_gate_findings(metrics: Mapping[str, Any]) -> list[str]:
     return findings
 
 
+def _confirmation_window_tuning_census(
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    direction_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    classification_eligible_counts: Counter[str] = Counter()
+    tuning_outcome_eligible_counts: Counter[str] = Counter()
+    net_returns_bps: dict[str, list[float]] = defaultdict(list)
+    net_mfe_bps: dict[str, list[float]] = defaultdict(list)
+    net_mae_bps: dict[str, list[float]] = defaultdict(list)
+    confirmation_delays_ms: dict[str, list[float]] = defaultdict(list)
+    entry_deadline_lags_ms: dict[str, list[float]] = defaultdict(list)
+    missing_axis_count = 0
+    for row in rows:
+        axis = row.get("confirmation_window_axis")
+        if not isinstance(axis, Mapping):
+            missing_axis_count += 1
+            continue
+        _validate_confirmation_window_axis(axis)
+        for observation in axis.get("observations") or []:
+            horizon = str(observation.get("horizon_sec") or "unknown")
+            direction_counts[horizon][
+                str(observation.get("direction_state") or "unknown")
+            ] += 1
+            if observation.get("classification_eligible") is True:
+                classification_eligible_counts[horizon] += 1
+            for fixed_outcome in observation.get("fixed_followthrough_outcomes") or []:
+                if fixed_outcome.get("tuning_outcome_eligible") is not True:
+                    continue
+                followthrough = str(fixed_outcome.get("followthrough_sec") or "unknown")
+                policy_key = f"confirm_{horizon}s_follow_{followthrough}s"
+                tuning_outcome_eligible_counts[policy_key] += 1
+                for field, target in (
+                    ("standardized_one_share_net_return_bps", net_returns_bps),
+                    ("standardized_one_share_net_mfe_bps", net_mfe_bps),
+                    ("standardized_one_share_net_mae_bps", net_mae_bps),
+                    ("entry_delay_from_confirmation_ms", entry_deadline_lags_ms),
+                ):
+                    value = _finite_number(fixed_outcome.get(field))
+                    if value is not None:
+                        target[policy_key].append(value)
+                active_delay = _finite_number(
+                    observation.get("active_confirmation_delay_ms")
+                )
+                if active_delay is not None:
+                    confirmation_delays_ms[policy_key].append(active_delay)
+    observed_policies = sorted(
+        set(tuning_outcome_eligible_counts) | set(net_returns_bps),
+        key=lambda value: tuple(int(part) for part in re.findall(r"\d+", value)),
+    )
+    outcome_metrics = {}
+    for policy_key in observed_policies:
+        returns = net_returns_bps[policy_key]
+        mfes = net_mfe_bps[policy_key]
+        maes = net_mae_bps[policy_key]
+        delays = confirmation_delays_ms[policy_key]
+        deadline_lags = entry_deadline_lags_ms[policy_key]
+        outcome_metrics[policy_key] = {
+            "sample_count": len(returns),
+            "equal_weight_avg_profit_pct": (
+                None if not returns else round(fmean(returns) / 100.0, 6)
+            ),
+            "diagnostic_win_rate_pct": (
+                None
+                if not returns
+                else round(
+                    sum(value > 0 for value in returns) / len(returns) * 100.0,
+                    6,
+                )
+            ),
+            "mean_standardized_one_share_net_mfe_pct": (
+                None if not mfes else round(fmean(mfes) / 100.0, 6)
+            ),
+            "mean_standardized_one_share_net_mae_pct": (
+                None if not maes else round(fmean(maes) / 100.0, 6)
+            ),
+            "median_active_confirmation_delay_ms": (
+                None if not delays else round(median(delays), 3)
+            ),
+            "median_entry_deadline_lag_ms": (
+                None if not deadline_lags else round(median(deadline_lags), 3)
+            ),
+        }
+    return {
+        **CONFIRMATION_WINDOW_METRIC_CONTRACT,
+        "direction_counts": {
+            horizon: dict(counts)
+            for horizon, counts in sorted(
+                direction_counts.items(),
+                key=lambda item: int(item[0]) if item[0].isdigit() else math.inf,
+            )
+        },
+        "classification_eligible_counts": dict(
+            sorted(
+                classification_eligible_counts.items(),
+                key=lambda item: int(item[0]) if item[0].isdigit() else math.inf,
+            )
+        ),
+        "tuning_outcome_eligible_counts": dict(
+            sorted(tuning_outcome_eligible_counts.items())
+        ),
+        "outcome_metrics": outcome_metrics,
+        "missing_legacy_axis_count": missing_axis_count,
+        "policy_ev_evaluation_status": (
+            "standardized_one_share_source_only_outcome_observed"
+            if sum(tuning_outcome_eligible_counts.values()) > 0
+            else "awaiting_eligible_post_confirmation_outcomes"
+        ),
+        "selection_authority": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def build_rolling_source_only_candidates(
     *,
     target_date: str,
@@ -2918,6 +3043,9 @@ def build_rolling_source_only_candidates(
             ),
             "source_row_count": len(rows),
             "source_dates": sorted({row["target_date"] for row in rows}),
+            "confirmation_window_tuning_axis": (
+                _confirmation_window_tuning_census(rows)
+            ),
             "windows": windows,
             "gate_findings": gate_findings,
             "r3_source_candidate_eligible": all_gates_pass,

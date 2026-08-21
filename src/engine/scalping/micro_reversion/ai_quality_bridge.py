@@ -33,8 +33,13 @@ from .contracts import (
     normalize_venue,
     registration_item_identity,
 )
+from .confirmation_window import analyze_confirmation_window
 from .depth_join import validate_depth_row
-from .onset_quality import reconstruct_shock_onset_context
+from .onset_quality import (
+    ShockOnsetContext,
+    ShockTriggerBasis,
+    reconstruct_shock_onset_context,
+)
 from .p2_replay import (
     DEFAULT_SOURCE_EXCLUSION_MANIFEST,
     P2ReplayPoint,
@@ -61,9 +66,10 @@ THREE_ARM_SCHEMA = "micro_reversion_ai_quality_three_arm_manifest_v1"
 THREE_ARM_REQUEST_SCHEMA = "micro_reversion_ai_quality_three_arm_requests_v1"
 REPORT_SCHEMA = "micro_reversion_ai_quality_bridge_v1"
 BRIDGE_CONFIG_SCHEMA = "micro_reversion_ai_quality_bridge_config_v1"
-BRIDGE_PRODUCER_VERSION = "micro_reversion_ai_quality_bridge_v1_3"
+BRIDGE_PRODUCER_VERSION = "micro_reversion_ai_quality_bridge_v1_4"
 COST_PROFILE_SCHEMA = "micro_reversion_reviewed_cost_profile_v1"
 COST_CATALOG_SCHEMA = "micro_reversion_reviewed_cost_catalog_v2"
+CONFIRMATION_WINDOW_SCHEMA = "micro_reversion_confirmation_window_axis_v1"
 
 MARKET_SCHEMAS = {
     "scalp_micro_reversion_market_stream_point_v1",
@@ -125,6 +131,33 @@ AUTHORITY_CONTRACT: dict[str, Any] = {
     "actual_order_submitted": False,
     "broker_order_forbidden": True,
     "selection_authority": False,
+}
+
+CONFIRMATION_WINDOW_METRIC_CONTRACT: dict[str, Any] = {
+    "metric_role": "micro_reversion_causal_confirmation_tuning_axis",
+    "decision_authority": "offline_micro_reversion_tuning_evidence_only",
+    "window_policy": (
+        "fixed_post_shock_confirmation_deadline_then_fixed_followthrough_"
+        "fresh_top_of_book_proxy_without_imputation"
+    ),
+    "sample_floor": (
+        "one_mature_source_quality_pass_standardized_one_share_outcome_starts_"
+        "cumulative_observation_no_promotion_authority"
+    ),
+    "primary_decision_metric": "equal_weight_avg_profit_pct",
+    "source_quality_gate": (
+        "same_symbol_venue_session_epoch_monotonic_trade_path_fresh_deadline_"
+        "ask_fresh_fixed_followthrough_bid_and_verified_cost_profile"
+    ),
+    "forbidden_uses": (
+        "prompt_input",
+        "widget_entry_or_exit_signal_mutation",
+        "widget_or_main_bot_order_submission",
+        "direct_live_or_sim_runtime_selection",
+        "target_stop_trailing_quantity_cap_provider_or_bot_mutation",
+        "future_path_or_immature_horizon_imputation",
+        "cross_symbol_cross_venue_cross_session_or_cross_epoch_join",
+    ),
 }
 
 OUTCOME_METRIC_CONTRACT: dict[str, Any] = {
@@ -329,6 +362,7 @@ OUTCOME_ONLY_FIELD_NAMES = frozenset(
         "post_decision_mae",
         "counterfactual_net_mfe_bps",
         "counterfactual_net_mae_bps",
+        "confirmation_window_axis",
     }
 )
 
@@ -355,6 +389,9 @@ class BridgeConfig:
     max_outcome_endpoint_lag_ms: int = 2_500
     max_outcome_internal_gap_ms: int = 2_500
     outcome_horizons_sec: tuple[int, ...] = (1, 3, 5, 10, 20, 30, 60, 120, 180)
+    reversion_confirmation_horizons_sec: tuple[int, ...] = (120, 180)
+    reversion_followthrough_horizons_sec: tuple[int, ...] = (30, 60)
+    reversion_confirmation_fraction: float = 0.5
     cost_profile_source: str = "missing_verified_instrument_cost_profile"
     cost_profile_verified: bool = False
     cost_profile_artifact_id: str = ""
@@ -528,9 +565,47 @@ class BridgeConfig:
             not self.outcome_horizons_sec
             or tuple(sorted(set(self.outcome_horizons_sec)))
             != self.outcome_horizons_sec
-            or self.outcome_horizons_sec[0] <= 0
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+                for value in self.outcome_horizons_sec
+            )
         ):
             raise ValueError("outcome horizons must be sorted unique positive values")
+        if (
+            not self.reversion_confirmation_horizons_sec
+            or tuple(sorted(set(self.reversion_confirmation_horizons_sec)))
+            != self.reversion_confirmation_horizons_sec
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+                for value in self.reversion_confirmation_horizons_sec
+            )
+            or self.reversion_confirmation_horizons_sec[-1]
+            > self.active_wave_max_age_sec
+        ):
+            raise ValueError(
+                "reversion confirmation horizons must be sorted unique positive "
+                "values within the active wave window"
+            )
+        if (
+            not self.reversion_followthrough_horizons_sec
+            or tuple(sorted(set(self.reversion_followthrough_horizons_sec)))
+            != self.reversion_followthrough_horizons_sec
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+                for value in self.reversion_followthrough_horizons_sec
+            )
+        ):
+            raise ValueError(
+                "reversion followthrough horizons must be sorted unique positive "
+                "values"
+            )
+        if (
+            isinstance(self.reversion_confirmation_fraction, bool)
+            or not isinstance(self.reversion_confirmation_fraction, (int, float))
+            or not math.isfinite(float(self.reversion_confirmation_fraction))
+            or not 0 < float(self.reversion_confirmation_fraction) <= 1
+        ):
+            raise ValueError("reversion confirmation fraction must be in (0, 1]")
 
 
 def _bridge_config_contract(config: BridgeConfig) -> dict[str, Any]:
@@ -540,6 +615,16 @@ def _bridge_config_contract(config: BridgeConfig) -> dict[str, Any]:
         "values": asdict(config),
     }
     return {**body, "config_sha256": _sha256(body)}
+
+
+def _post_snapshot_source_horizon_sec(config: BridgeConfig) -> int:
+    """Return the longest causal source window needed by any outcome axis."""
+
+    return max(
+        config.outcome_horizons_sec[-1],
+        config.reversion_confirmation_horizons_sec[-1]
+        + config.reversion_followthrough_horizons_sec[-1],
+    )
 
 
 def _bridge_config_from_contract(contract: Mapping[str, Any]) -> BridgeConfig:
@@ -560,6 +645,8 @@ def _bridge_config_from_contract(contract: Mapping[str, Any]) -> BridgeConfig:
     for field in (
         "participation_grid",
         "outcome_horizons_sec",
+        "reversion_confirmation_horizons_sec",
+        "reversion_followthrough_horizons_sec",
         "cost_profile_venues",
     ):
         value = normalized.get(field)
@@ -1614,6 +1701,925 @@ def _p2_point(row: Mapping[str, Any]) -> P2ReplayPoint:
     )
 
 
+def _fresh_market_bbo(row: Mapping[str, Any], *, max_quote_age_ms: int) -> bool:
+    bid = _positive_float(row.get("best_bid"))
+    ask = _positive_float(row.get("best_ask"))
+    quote_age_ms = _finite_float(row.get("quote_age_ms"))
+    return bool(
+        bid is not None
+        and ask is not None
+        and ask >= bid
+        and quote_age_ms is not None
+        and 0 <= quote_age_ms <= max_quote_age_ms
+    )
+
+
+def _confirmation_fixed_followthrough_outcomes(
+    *,
+    accepted: Sequence[Mapping[str, Any]],
+    rejected_at_ms: Sequence[int],
+    event_sequence: int,
+    confirmation_deadline_ms: int,
+    direction_state: str,
+    classification_eligible: bool,
+    verified_roundtrip_cost_bps: float | None,
+    config: BridgeConfig,
+) -> list[dict[str, Any]]:
+    entry = next(
+        (
+            row
+            for row in accepted
+            if confirmation_deadline_ms
+            <= _timestamp_ms(row.get("local_receive_timestamp"))
+            <= confirmation_deadline_ms + config.max_outcome_endpoint_lag_ms
+            and _fresh_market_bbo(row, max_quote_age_ms=config.max_quote_age_ms)
+        ),
+        None,
+    )
+    entry_ms = (
+        None if entry is None else _timestamp_ms(entry.get("local_receive_timestamp"))
+    )
+    entry_ask = None if entry is None else _positive_float(entry.get("best_ask"))
+    results: list[dict[str, Any]] = []
+    for followthrough_sec in config.reversion_followthrough_horizons_sec:
+        target_ms = confirmation_deadline_ms + followthrough_sec * 1_000
+        raw_marker = next(
+            (
+                row
+                for row in accepted
+                if _timestamp_ms(row.get("local_receive_timestamp")) >= target_ms
+            ),
+            None,
+        )
+        raw_marker_ms = (
+            None
+            if raw_marker is None
+            else _timestamp_ms(raw_marker.get("local_receive_timestamp"))
+        )
+        rejected_marker_ms = next(
+            (value for value in sorted(rejected_at_ms) if value >= target_ms),
+            None,
+        )
+        maturity_boundary_ms = (
+            raw_marker_ms if raw_marker_ms is not None else rejected_marker_ms
+        )
+        mature = maturity_boundary_ms is not None
+        endpoint = next(
+            (
+                row
+                for row in accepted
+                if target_ms
+                <= _timestamp_ms(row.get("local_receive_timestamp"))
+                <= target_ms + config.max_outcome_endpoint_lag_ms
+                and _fresh_market_bbo(
+                    row,
+                    max_quote_age_ms=config.max_quote_age_ms,
+                )
+            ),
+            None,
+        )
+        endpoint_ms = (
+            None
+            if endpoint is None
+            else _timestamp_ms(endpoint.get("local_receive_timestamp"))
+        )
+        continuity_boundary_ms = (
+            endpoint_ms if endpoint_ms is not None else maturity_boundary_ms
+        )
+        bounded_rows = [
+            row
+            for row in accepted
+            if continuity_boundary_ms is not None
+            and _timestamp_ms(row.get("local_receive_timestamp"))
+            <= continuity_boundary_ms
+        ]
+        source_findings = set(
+            _series_sequence_findings(bounded_rows, prefix="confirmation_followthrough")
+        )
+        if bounded_rows and int(bounded_rows[0].get("source_sequence") or 0) != (
+            event_sequence + 1
+        ):
+            source_findings.add("confirmation_followthrough_anchor_sequence_gap")
+        if continuity_boundary_ms is not None and any(
+            value <= continuity_boundary_ms for value in rejected_at_ms
+        ):
+            source_findings.add("confirmation_followthrough_invalid_market_row_in_path")
+        if not mature:
+            source_findings.add("confirmation_followthrough_horizon_immature")
+        if entry is None or entry_ms is None or entry_ask is None:
+            source_findings.add("confirmation_signal_fresh_ask_missing")
+        if endpoint is None or endpoint_ms is None:
+            source_findings.add("confirmation_followthrough_fresh_bid_missing")
+        bbo_path = [
+            row
+            for row in accepted
+            if entry_ms is not None
+            and endpoint_ms is not None
+            and entry_ms
+            <= _timestamp_ms(row.get("local_receive_timestamp"))
+            <= endpoint_ms
+            and _fresh_market_bbo(row, max_quote_age_ms=config.max_quote_age_ms)
+        ]
+        bbo_times = [
+            _timestamp_ms(row.get("local_receive_timestamp")) for row in bbo_path
+        ]
+        max_bbo_gap_ms = max(
+            (
+                right - left
+                for left, right in zip(bbo_times, bbo_times[1:], strict=False)
+            ),
+            default=None,
+        )
+        if (
+            bbo_path
+            and len(bbo_path) > 1
+            and max_bbo_gap_ms is not None
+            and max_bbo_gap_ms > config.max_outcome_internal_gap_ms
+        ):
+            source_findings.add("confirmation_followthrough_bbo_internal_gap")
+        tuning_blockers = set(source_findings)
+        if direction_state != "REVERSION_CONFIRMED" or not classification_eligible:
+            tuning_blockers.add("reversion_confirmation_not_eligible")
+        if verified_roundtrip_cost_bps is None:
+            tuning_blockers.add("verified_roundtrip_cost_unavailable")
+        gross_returns = (
+            []
+            if entry_ask is None
+            else [
+                (float(row["best_bid"]) / entry_ask - 1.0) * 10_000.0
+                for row in bbo_path
+                if _positive_float(row.get("best_bid")) is not None
+            ]
+        )
+        terminal_bid = (
+            None if endpoint is None else _positive_float(endpoint.get("best_bid"))
+        )
+        gross_return_bps = (
+            None
+            if entry_ask is None or terminal_bid is None
+            else (terminal_bid / entry_ask - 1.0) * 10_000.0
+        )
+        tuning_outcome_eligible = bool(
+            not tuning_blockers
+            and gross_return_bps is not None
+            and gross_returns
+            and verified_roundtrip_cost_bps is not None
+        )
+        results.append(
+            {
+                "followthrough_sec": followthrough_sec,
+                "mature": mature,
+                "entry_observed_at_ms": entry_ms,
+                "entry_delay_from_confirmation_ms": (
+                    None if entry_ms is None else entry_ms - confirmation_deadline_ms
+                ),
+                "entry_best_ask": entry_ask,
+                "endpoint_observed_at_ms": endpoint_ms,
+                "endpoint_lag_ms": (
+                    None if endpoint_ms is None else endpoint_ms - target_ms
+                ),
+                "endpoint_best_bid": terminal_bid,
+                "fresh_bbo_observation_count": len(bbo_path),
+                "max_fresh_bbo_gap_ms": max_bbo_gap_ms,
+                "standardized_one_share_gross_return_bps": (
+                    None if gross_return_bps is None else round(gross_return_bps, 6)
+                ),
+                "verified_roundtrip_cost_bps": verified_roundtrip_cost_bps,
+                "standardized_one_share_net_return_bps": (
+                    None
+                    if not tuning_outcome_eligible
+                    or gross_return_bps is None
+                    or verified_roundtrip_cost_bps is None
+                    else round(
+                        gross_return_bps - verified_roundtrip_cost_bps,
+                        6,
+                    )
+                ),
+                "standardized_one_share_net_mfe_bps": (
+                    None
+                    if not tuning_outcome_eligible
+                    or not gross_returns
+                    or verified_roundtrip_cost_bps is None
+                    else round(
+                        max(gross_returns) - verified_roundtrip_cost_bps,
+                        6,
+                    )
+                ),
+                "standardized_one_share_net_mae_bps": (
+                    None
+                    if not tuning_outcome_eligible
+                    or not gross_returns
+                    or verified_roundtrip_cost_bps is None
+                    else round(
+                        min(gross_returns) - verified_roundtrip_cost_bps,
+                        6,
+                    )
+                ),
+                "tuning_outcome_eligible": tuning_outcome_eligible,
+                "source_quality_blockers": sorted(source_findings),
+                "tuning_outcome_blockers": sorted(tuning_blockers),
+            }
+        )
+    return results
+
+
+def _confirmation_window_outcome_axis(
+    *,
+    evidence: Mapping[str, Any],
+    market_rows: Sequence[Mapping[str, Any]],
+    config: BridgeConfig,
+) -> dict[str, Any] | None:
+    """Label 120/180-second shock response for offline tuning only."""
+
+    event = evidence.get("event")
+    event = event if isinstance(event, Mapping) else {}
+    event_ms = _nonnegative_int(event.get("event_detected_at_ms"))
+    event_sequence = _nonnegative_int(event.get("event_source_sequence"))
+    reference_price = _positive_float(event.get("reference_price"))
+    shock_price = _positive_float(event.get("shock_price"))
+    shock_bps = _finite_float(event.get("shock_bps"))
+    epoch = _nonnegative_int(evidence.get("sequence_epoch"))
+    if (
+        event_ms is None
+        or event_ms <= 0
+        or event_sequence is None
+        or event_sequence <= 0
+        or reference_price is None
+        or shock_price is None
+        or shock_bps is None
+        or shock_bps > 0
+        or epoch is None
+        or epoch <= 0
+    ):
+        return None
+    symbol = normalize_symbol(evidence.get("stock_code"))
+    venue = normalize_venue(evidence.get("micro_venue"))
+    session = _session(evidence.get("micro_session_bucket"))
+    horizons_sec = config.reversion_confirmation_horizons_sec
+    confirmation_fraction = float(config.reversion_confirmation_fraction)
+    economics = evidence.get("economics")
+    economics = economics if isinstance(economics, Mapping) else {}
+    cost_components = tuple(
+        _finite_float(economics.get(field))
+        for field in (
+            "buy_fee_bps",
+            "sell_fee_bps",
+            "statutory_sell_tax_bps",
+            "uncertainty_buffer_bps",
+        )
+    )
+    verified_roundtrip_cost_bps = (
+        sum(float(value) for value in cost_components if value is not None)
+        if economics.get("cost_profile_verified") is True
+        and all(value is not None for value in cost_components)
+        else None
+    )
+    upper_ms = (
+        event_ms
+        + (horizons_sec[-1] + config.reversion_followthrough_horizons_sec[-1]) * 1_000
+        + config.max_outcome_endpoint_lag_ms
+    )
+    accepted: list[Mapping[str, Any]] = []
+    rejected_at_ms: list[int] = []
+    for row in market_rows:
+        if _scope_key(row) != (symbol, venue, session, epoch):
+            continue
+        try:
+            received_ms = _timestamp_ms(row.get("local_receive_timestamp"))
+        except (TypeError, ValueError):
+            continue
+        if not event_ms < received_ms <= upper_ms:
+            continue
+        valid, _ = _valid_market_row(row)
+        if not valid:
+            rejected_at_ms.append(received_ms)
+            continue
+        accepted.append(row)
+    accepted.sort(
+        key=lambda row: (
+            _timestamp_us(row.get("local_receive_timestamp")),
+            int(row.get("source_sequence") or 0),
+        )
+    )
+    context = ShockOnsetContext(
+        shock_event_id=str(event.get("shock_event_id") or "offline-reconstructed"),
+        symbol=symbol,
+        venue=venue,
+        session_bucket=session,
+        sequence_epoch=epoch,
+        shock_horizon_ms=int(event.get("shock_horizon_ms") or 1),
+        event_exchange_timestamp_ms=event_ms,
+        event_local_receive_timestamp_ms=event_ms,
+        event_source_sequence=event_sequence,
+        reference_price=reference_price,
+        shock_price=shock_price,
+        shock_return_bps=shock_bps,
+        trigger_trade_qty=None,
+        trigger_aggressor_side=None,
+        trigger_basis=ShockTriggerBasis.UNKNOWN_RECONSTRUCTED,
+    )
+    try:
+        report = analyze_confirmation_window(
+            tuple(_p2_point(row) for row in accepted),
+            context=context,
+            horizons_ms=tuple(horizon * 1_000 for horizon in horizons_sec),
+            confirmation_fraction=confirmation_fraction,
+            max_terminal_trade_lag_ms=config.max_outcome_endpoint_lag_ms,
+            max_quote_age_ms=config.max_quote_age_ms,
+        )
+    except (TypeError, ValueError):
+        report = None
+    observations: list[dict[str, Any]] = []
+    for horizon_sec in horizons_sec:
+        horizon_ms = horizon_sec * 1_000
+        horizon = (
+            None
+            if report is None
+            else next(row for row in report if row.horizon_ms == horizon_ms)
+        )
+        deadline_ms = event_ms + horizon_ms
+        marker = next(
+            (
+                row
+                for row in accepted
+                if _timestamp_ms(row.get("local_receive_timestamp")) >= deadline_ms
+            ),
+            None,
+        )
+        marker_ms = (
+            None
+            if marker is None
+            else _timestamp_ms(marker.get("local_receive_timestamp"))
+        )
+        rejected_marker_ms = next(
+            (value for value in sorted(rejected_at_ms) if value >= deadline_ms),
+            None,
+        )
+        maturity_boundary_ms = (
+            marker_ms if marker_ms is not None else rejected_marker_ms
+        )
+        bounded_rows = [
+            row
+            for row in accepted
+            if maturity_boundary_ms is not None
+            and _timestamp_ms(row.get("local_receive_timestamp"))
+            <= maturity_boundary_ms
+        ]
+        findings = set(_series_sequence_findings(bounded_rows, prefix="confirmation"))
+        if bounded_rows and int(bounded_rows[0].get("source_sequence") or 0) != (
+            event_sequence + 1
+        ):
+            findings.add("confirmation_anchor_sequence_gap")
+        if maturity_boundary_ms is not None and any(
+            value <= maturity_boundary_ms for value in rejected_at_ms
+        ):
+            findings.add("confirmation_invalid_market_row_in_path")
+        if report is None:
+            findings.add("confirmation_path_reconstruction_failed")
+        elif horizon is not None and horizon.direction_state.value == "SOURCE_GAP":
+            findings.add("confirmation_endpoint_missing_or_stale")
+        direction_state = (
+            "SOURCE_GAP"
+            if findings
+            else ("DATA_WAIT" if horizon is None else horizon.direction_state.value)
+        )
+        mature = bool(
+            (horizon is not None and horizon.mature) or rejected_marker_ms is not None
+        )
+        classification_eligible = bool(
+            horizon is not None
+            and mature
+            and not findings
+            and direction_state in {"REVERSION_CONFIRMED", "CONTINUATION_CONFIRMED"}
+        )
+        fixed_followthrough_outcomes = _confirmation_fixed_followthrough_outcomes(
+            accepted=accepted,
+            rejected_at_ms=rejected_at_ms,
+            event_sequence=event_sequence,
+            confirmation_deadline_ms=deadline_ms,
+            direction_state=direction_state,
+            classification_eligible=classification_eligible,
+            verified_roundtrip_cost_bps=verified_roundtrip_cost_bps,
+            config=config,
+        )
+        observations.append(
+            {
+                "horizon_sec": horizon_sec,
+                "confirmation_fraction": confirmation_fraction,
+                "mature": mature,
+                "classification_eligible": classification_eligible,
+                "post_trade_count": 0 if horizon is None else horizon.post_trade_count,
+                "additional_mae_bps": (
+                    None if horizon is None else horizon.additional_mae_bps
+                ),
+                "post_low_delay_ms": (
+                    None if horizon is None else horizon.post_low_delay_ms
+                ),
+                "terminal_trade_return_bps": (
+                    None if horizon is None else horizon.terminal_trade_return_bps
+                ),
+                "max_reclaim_from_post_low_bps": (
+                    None if horizon is None else horizon.max_reclaim_from_post_low_bps
+                ),
+                "half_reclaim_confirmed": bool(
+                    horizon is not None and horizon.half_reclaim_confirmed
+                ),
+                "confirmation_count": (
+                    0 if horizon is None else horizon.confirmation_count
+                ),
+                "recovery_invalidation_count": (
+                    0 if horizon is None else horizon.recovery_invalidation_count
+                ),
+                "active_confirmation_delay_ms": (
+                    None if horizon is None else horizon.active_confirmation_delay_ms
+                ),
+                "active_confirmation_trade_price": (
+                    None if horizon is None else horizon.active_confirmation_trade_price
+                ),
+                "active_confirmation_best_ask": (
+                    None if horizon is None else horizon.active_confirmation_best_ask
+                ),
+                "active_confirmation_quote_age_ms": (
+                    None
+                    if horizon is None
+                    else horizon.active_confirmation_quote_age_ms
+                ),
+                "confirmation_followthrough_ms": (
+                    None if horizon is None else horizon.confirmation_followthrough_ms
+                ),
+                "confirmation_followthrough_trade_count": (
+                    0
+                    if horizon is None
+                    else horizon.confirmation_followthrough_trade_count
+                ),
+                "confirmation_fresh_bbo_count": (
+                    0 if horizon is None else horizon.confirmation_fresh_bbo_count
+                ),
+                "confirmation_to_terminal_trade_return_bps": (
+                    None
+                    if horizon is None
+                    else horizon.confirmation_to_terminal_trade_return_bps
+                ),
+                "confirmation_to_terminal_trade_mfe_bps": (
+                    None
+                    if horizon is None
+                    else horizon.confirmation_to_terminal_trade_mfe_bps
+                ),
+                "confirmation_to_terminal_trade_mae_bps": (
+                    None
+                    if horizon is None
+                    else horizon.confirmation_to_terminal_trade_mae_bps
+                ),
+                "confirmation_to_terminal_bbo_proxy_gross_return_bps": (
+                    None
+                    if horizon is None
+                    else horizon.confirmation_to_terminal_bbo_proxy_gross_return_bps
+                ),
+                "confirmation_to_terminal_bbo_proxy_mfe_bps": (
+                    None
+                    if horizon is None
+                    else horizon.confirmation_to_terminal_bbo_proxy_mfe_bps
+                ),
+                "confirmation_to_terminal_bbo_proxy_mae_bps": (
+                    None
+                    if horizon is None
+                    else horizon.confirmation_to_terminal_bbo_proxy_mae_bps
+                ),
+                "fixed_followthrough_outcomes": fixed_followthrough_outcomes,
+                "terminal_trade_lag_ms": (
+                    None if horizon is None else horizon.terminal_trade_lag_ms
+                ),
+                "direction_state": direction_state,
+                "source_quality_blockers": sorted(findings),
+            }
+        )
+    return {
+        "schema": CONFIRMATION_WINDOW_SCHEMA,
+        "axis_role": "micro_reversion_tuning_only",
+        "horizons_sec": list(horizons_sec),
+        "followthrough_horizons_sec": list(config.reversion_followthrough_horizons_sec),
+        "confirmation_fraction": confirmation_fraction,
+        "max_endpoint_lag_ms": config.max_outcome_endpoint_lag_ms,
+        "max_internal_gap_ms": config.max_outcome_internal_gap_ms,
+        "max_quote_age_ms": config.max_quote_age_ms,
+        "outcome_basis": (
+            "standardized_one_share_confirmation_deadline_fresh_ask_to_fixed_"
+            "followthrough_fresh_bid_top_of_book_proxy_"
+            "after_verified_roundtrip_cost"
+        ),
+        "observations": observations,
+        "included_in_prompt_context": False,
+        **CONFIRMATION_WINDOW_METRIC_CONTRACT,
+        **AUTHORITY_CONTRACT,
+    }
+
+
+def _validate_confirmation_window_axis(
+    axis: Mapping[str, Any] | None,
+    *,
+    expected_horizons_sec: tuple[int, ...] | None = None,
+    expected_followthrough_horizons_sec: tuple[int, ...] | None = None,
+    expected_confirmation_fraction: float | None = None,
+    expected_max_endpoint_lag_ms: int | None = None,
+    expected_max_internal_gap_ms: int | None = None,
+    expected_max_quote_age_ms: int | None = None,
+) -> None:
+    if axis is None:
+        return
+    allowed_fields = {
+        "schema",
+        "axis_role",
+        "horizons_sec",
+        "followthrough_horizons_sec",
+        "confirmation_fraction",
+        "max_endpoint_lag_ms",
+        "max_internal_gap_ms",
+        "max_quote_age_ms",
+        "outcome_basis",
+        "observations",
+        "included_in_prompt_context",
+        *CONFIRMATION_WINDOW_METRIC_CONTRACT,
+        *AUTHORITY_CONTRACT,
+    }
+    if (
+        set(axis) != allowed_fields
+        or axis.get("schema") != CONFIRMATION_WINDOW_SCHEMA
+        or axis.get("axis_role") != "micro_reversion_tuning_only"
+        or axis.get("included_in_prompt_context") is not False
+        or axis.get("outcome_basis")
+        != (
+            "standardized_one_share_confirmation_deadline_fresh_ask_to_fixed_"
+            "followthrough_fresh_bid_top_of_book_proxy_"
+            "after_verified_roundtrip_cost"
+        )
+    ):
+        raise ValueError("micro_confirmation_window_contract_invalid")
+    for field, expected in CONFIRMATION_WINDOW_METRIC_CONTRACT.items():
+        if _sha256(axis.get(field)) != _sha256(expected):
+            raise ValueError(f"micro_confirmation_window_metric_invalid:{field}")
+    for field, expected in AUTHORITY_CONTRACT.items():
+        if axis.get(field) is not expected:
+            raise ValueError(f"micro_confirmation_window_authority_invalid:{field}")
+    horizons_sec = axis.get("horizons_sec")
+    followthrough_horizons_sec = axis.get("followthrough_horizons_sec")
+    confirmation_fraction = axis.get("confirmation_fraction")
+    max_endpoint_lag_ms = axis.get("max_endpoint_lag_ms")
+    max_internal_gap_ms = axis.get("max_internal_gap_ms")
+    max_quote_age_ms = axis.get("max_quote_age_ms")
+    observations = axis.get("observations")
+    if (
+        not isinstance(horizons_sec, list)
+        or not horizons_sec
+        or tuple(sorted(set(horizons_sec))) != tuple(horizons_sec)
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in horizons_sec
+        )
+        or (
+            expected_horizons_sec is not None
+            and tuple(horizons_sec) != expected_horizons_sec
+        )
+        or not isinstance(followthrough_horizons_sec, list)
+        or not followthrough_horizons_sec
+        or tuple(sorted(set(followthrough_horizons_sec)))
+        != tuple(followthrough_horizons_sec)
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in followthrough_horizons_sec
+        )
+        or (
+            expected_followthrough_horizons_sec is not None
+            and tuple(followthrough_horizons_sec) != expected_followthrough_horizons_sec
+        )
+        or not isinstance(observations, list)
+        or len(observations) != len(horizons_sec)
+        or isinstance(confirmation_fraction, bool)
+        or not isinstance(confirmation_fraction, (int, float))
+        or not math.isfinite(float(confirmation_fraction))
+        or not 0 < float(confirmation_fraction) <= 1
+        or (
+            expected_confirmation_fraction is not None
+            and not math.isclose(
+                float(confirmation_fraction),
+                float(expected_confirmation_fraction),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        )
+        or isinstance(max_endpoint_lag_ms, bool)
+        or not isinstance(max_endpoint_lag_ms, int)
+        or max_endpoint_lag_ms < 0
+        or (
+            expected_max_endpoint_lag_ms is not None
+            and max_endpoint_lag_ms != expected_max_endpoint_lag_ms
+        )
+        or isinstance(max_internal_gap_ms, bool)
+        or not isinstance(max_internal_gap_ms, int)
+        or max_internal_gap_ms <= 0
+        or (
+            expected_max_internal_gap_ms is not None
+            and max_internal_gap_ms != expected_max_internal_gap_ms
+        )
+        or isinstance(max_quote_age_ms, bool)
+        or not isinstance(max_quote_age_ms, int)
+        or max_quote_age_ms < 0
+        or (
+            expected_max_quote_age_ms is not None
+            and max_quote_age_ms != expected_max_quote_age_ms
+        )
+    ):
+        raise ValueError("micro_confirmation_window_horizons_invalid")
+    observation_fields = {
+        "horizon_sec",
+        "confirmation_fraction",
+        "mature",
+        "classification_eligible",
+        "post_trade_count",
+        "additional_mae_bps",
+        "post_low_delay_ms",
+        "terminal_trade_return_bps",
+        "max_reclaim_from_post_low_bps",
+        "half_reclaim_confirmed",
+        "confirmation_count",
+        "recovery_invalidation_count",
+        "active_confirmation_delay_ms",
+        "active_confirmation_trade_price",
+        "active_confirmation_best_ask",
+        "active_confirmation_quote_age_ms",
+        "confirmation_followthrough_ms",
+        "confirmation_followthrough_trade_count",
+        "confirmation_fresh_bbo_count",
+        "confirmation_to_terminal_trade_return_bps",
+        "confirmation_to_terminal_trade_mfe_bps",
+        "confirmation_to_terminal_trade_mae_bps",
+        "confirmation_to_terminal_bbo_proxy_gross_return_bps",
+        "confirmation_to_terminal_bbo_proxy_mfe_bps",
+        "confirmation_to_terminal_bbo_proxy_mae_bps",
+        "fixed_followthrough_outcomes",
+        "terminal_trade_lag_ms",
+        "direction_state",
+        "source_quality_blockers",
+    }
+    direction_states = {
+        "DATA_WAIT",
+        "SOURCE_GAP",
+        "REVERSION_CONFIRMED",
+        "CONTINUATION_CONFIRMED",
+        "INCONCLUSIVE",
+    }
+    optional_float_fields = {
+        "additional_mae_bps",
+        "terminal_trade_return_bps",
+        "max_reclaim_from_post_low_bps",
+        "active_confirmation_trade_price",
+        "active_confirmation_best_ask",
+        "active_confirmation_quote_age_ms",
+        "confirmation_to_terminal_trade_return_bps",
+        "confirmation_to_terminal_trade_mfe_bps",
+        "confirmation_to_terminal_trade_mae_bps",
+        "confirmation_to_terminal_bbo_proxy_gross_return_bps",
+        "confirmation_to_terminal_bbo_proxy_mfe_bps",
+        "confirmation_to_terminal_bbo_proxy_mae_bps",
+    }
+    optional_nonnegative_int_fields = {
+        "post_low_delay_ms",
+        "active_confirmation_delay_ms",
+        "confirmation_followthrough_ms",
+        "terminal_trade_lag_ms",
+    }
+    for expected_horizon, observation in zip(horizons_sec, observations, strict=True):
+        blockers = (
+            observation.get("source_quality_blockers")
+            if isinstance(observation, Mapping)
+            else None
+        )
+        fixed_outcomes = (
+            observation.get("fixed_followthrough_outcomes")
+            if isinstance(observation, Mapping)
+            else None
+        )
+        if (
+            not isinstance(observation, Mapping)
+            or set(observation) != observation_fields
+            or observation.get("horizon_sec") != expected_horizon
+            or not math.isclose(
+                float(observation.get("confirmation_fraction") or 0.0),
+                float(confirmation_fraction),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            or observation.get("direction_state") not in direction_states
+            or not isinstance(observation.get("mature"), bool)
+            or not isinstance(observation.get("classification_eligible"), bool)
+            or not isinstance(observation.get("half_reclaim_confirmed"), bool)
+            or isinstance(observation.get("post_trade_count"), bool)
+            or not isinstance(observation.get("post_trade_count"), int)
+            or observation.get("post_trade_count") < 0
+            or isinstance(observation.get("confirmation_count"), bool)
+            or not isinstance(observation.get("confirmation_count"), int)
+            or observation.get("confirmation_count") < 0
+            or isinstance(observation.get("recovery_invalidation_count"), bool)
+            or not isinstance(observation.get("recovery_invalidation_count"), int)
+            or observation.get("recovery_invalidation_count") < 0
+            or isinstance(
+                observation.get("confirmation_followthrough_trade_count"), bool
+            )
+            or not isinstance(
+                observation.get("confirmation_followthrough_trade_count"), int
+            )
+            or observation.get("confirmation_followthrough_trade_count") < 0
+            or isinstance(observation.get("confirmation_fresh_bbo_count"), bool)
+            or not isinstance(observation.get("confirmation_fresh_bbo_count"), int)
+            or observation.get("confirmation_fresh_bbo_count") < 0
+            or not isinstance(blockers, list)
+            or any(not isinstance(value, str) or not value for value in blockers)
+            or blockers != sorted(set(blockers))
+            or not isinstance(fixed_outcomes, list)
+            or len(fixed_outcomes) != len(followthrough_horizons_sec)
+            or any(
+                value is not None
+                and (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                )
+                for value in (observation.get(field) for field in optional_float_fields)
+            )
+            or any(
+                value is not None
+                and (isinstance(value, bool) or not isinstance(value, int) or value < 0)
+                for value in (
+                    observation.get(field) for field in optional_nonnegative_int_fields
+                )
+            )
+        ):
+            raise ValueError("micro_confirmation_window_observation_invalid")
+        direction_state = observation.get("direction_state")
+        expected_eligible = bool(
+            observation.get("mature") is True
+            and not blockers
+            and direction_state in {"REVERSION_CONFIRMED", "CONTINUATION_CONFIRMED"}
+        )
+        if (
+            observation.get("classification_eligible") is not expected_eligible
+            or (direction_state == "DATA_WAIT" and observation.get("mature") is True)
+            or (direction_state == "DATA_WAIT" and blockers)
+            or (direction_state == "SOURCE_GAP" and not blockers)
+        ):
+            raise ValueError("micro_confirmation_window_eligibility_invalid")
+        _validate_fixed_followthrough_outcomes(
+            fixed_outcomes,
+            expected_horizons_sec=followthrough_horizons_sec,
+            reversion_confirmation_eligible=(
+                expected_eligible and direction_state == "REVERSION_CONFIRMED"
+            ),
+        )
+
+
+def _validate_fixed_followthrough_outcomes(
+    outcomes: Sequence[Mapping[str, Any]],
+    *,
+    expected_horizons_sec: Sequence[int],
+    reversion_confirmation_eligible: bool,
+) -> None:
+    fields = {
+        "followthrough_sec",
+        "mature",
+        "entry_observed_at_ms",
+        "entry_delay_from_confirmation_ms",
+        "entry_best_ask",
+        "endpoint_observed_at_ms",
+        "endpoint_lag_ms",
+        "endpoint_best_bid",
+        "fresh_bbo_observation_count",
+        "max_fresh_bbo_gap_ms",
+        "standardized_one_share_gross_return_bps",
+        "verified_roundtrip_cost_bps",
+        "standardized_one_share_net_return_bps",
+        "standardized_one_share_net_mfe_bps",
+        "standardized_one_share_net_mae_bps",
+        "tuning_outcome_eligible",
+        "source_quality_blockers",
+        "tuning_outcome_blockers",
+    }
+    optional_numbers = {
+        "entry_best_ask",
+        "endpoint_best_bid",
+        "standardized_one_share_gross_return_bps",
+        "verified_roundtrip_cost_bps",
+        "standardized_one_share_net_return_bps",
+        "standardized_one_share_net_mfe_bps",
+        "standardized_one_share_net_mae_bps",
+    }
+    optional_nonnegative_ints = {
+        "entry_observed_at_ms",
+        "entry_delay_from_confirmation_ms",
+        "endpoint_observed_at_ms",
+        "endpoint_lag_ms",
+        "max_fresh_bbo_gap_ms",
+    }
+    for expected_horizon, outcome in zip(expected_horizons_sec, outcomes, strict=True):
+        source_blockers = (
+            outcome.get("source_quality_blockers")
+            if isinstance(outcome, Mapping)
+            else None
+        )
+        tuning_blockers = (
+            outcome.get("tuning_outcome_blockers")
+            if isinstance(outcome, Mapping)
+            else None
+        )
+        if (
+            not isinstance(outcome, Mapping)
+            or set(outcome) != fields
+            or outcome.get("followthrough_sec") != expected_horizon
+            or not isinstance(outcome.get("mature"), bool)
+            or not isinstance(outcome.get("tuning_outcome_eligible"), bool)
+            or isinstance(outcome.get("fresh_bbo_observation_count"), bool)
+            or not isinstance(outcome.get("fresh_bbo_observation_count"), int)
+            or outcome.get("fresh_bbo_observation_count") < 0
+            or not isinstance(source_blockers, list)
+            or source_blockers != sorted(set(source_blockers))
+            or any(not isinstance(value, str) or not value for value in source_blockers)
+            or not isinstance(tuning_blockers, list)
+            or tuning_blockers != sorted(set(tuning_blockers))
+            or any(not isinstance(value, str) or not value for value in tuning_blockers)
+            or any(
+                value is not None
+                and (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                )
+                for value in (outcome.get(field) for field in optional_numbers)
+            )
+            or any(
+                outcome.get(field) is not None and outcome.get(field) <= 0
+                for field in ("entry_best_ask", "endpoint_best_bid")
+            )
+            or (
+                outcome.get("verified_roundtrip_cost_bps") is not None
+                and outcome.get("verified_roundtrip_cost_bps") < 0
+            )
+            or any(
+                value is not None
+                and (isinstance(value, bool) or not isinstance(value, int) or value < 0)
+                for value in (outcome.get(field) for field in optional_nonnegative_ints)
+            )
+        ):
+            raise ValueError("micro_confirmation_followthrough_outcome_invalid")
+        eligible = outcome.get("tuning_outcome_eligible") is True
+        expected_eligible = bool(
+            reversion_confirmation_eligible
+            and outcome.get("mature") is True
+            and not source_blockers
+            and not tuning_blockers
+            and outcome.get("entry_observed_at_ms") is not None
+            and outcome.get("entry_best_ask") is not None
+            and outcome.get("entry_best_ask") > 0
+            and outcome.get("endpoint_observed_at_ms") is not None
+            and outcome.get("endpoint_best_bid") is not None
+            and outcome.get("endpoint_best_bid") > 0
+            and outcome.get("fresh_bbo_observation_count") > 0
+            and outcome.get("standardized_one_share_gross_return_bps") is not None
+            and outcome.get("verified_roundtrip_cost_bps") is not None
+        )
+        net_fields = tuple(
+            outcome.get(field)
+            for field in (
+                "standardized_one_share_net_return_bps",
+                "standardized_one_share_net_mfe_bps",
+                "standardized_one_share_net_mae_bps",
+            )
+        )
+        if (
+            eligible is not expected_eligible
+            or (eligible and any(value is None for value in net_fields))
+            or (not eligible and any(value is not None for value in net_fields))
+        ):
+            raise ValueError("micro_confirmation_followthrough_eligibility_invalid")
+        if eligible:
+            gross = float(outcome["standardized_one_share_gross_return_bps"])
+            cost = float(outcome["verified_roundtrip_cost_bps"])
+            expected_gross = (
+                float(outcome["endpoint_best_bid"]) / float(outcome["entry_best_ask"])
+                - 1.0
+            ) * 10_000.0
+            if (
+                not math.isclose(gross, expected_gross, abs_tol=1e-6)
+                or not math.isclose(
+                    float(outcome["standardized_one_share_net_return_bps"]),
+                    gross - cost,
+                    abs_tol=1e-6,
+                )
+                or float(outcome["standardized_one_share_net_mfe_bps"])
+                < float(outcome["standardized_one_share_net_return_bps"])
+                or float(outcome["standardized_one_share_net_mae_bps"])
+                > float(outcome["standardized_one_share_net_return_bps"])
+            ):
+                raise ValueError("micro_confirmation_followthrough_economics_invalid")
+
+
 def _liquidity_projection(
     *,
     depth: Mapping[str, Any] | None,
@@ -1672,9 +2678,7 @@ def _liquidity_projection(
         immediate_exit_capacity = (
             None
             if immediate_exit_floor is None
-            else max(1, immediate_exit_floor)
-            if bid_capacity > 0
-            else 0
+            else max(1, immediate_exit_floor) if bid_capacity > 0 else 0
         )
         passive_ask_fill_support_qty = (
             None
@@ -2958,8 +3962,9 @@ def build_tactical_evidence(
     )
     if active_reference is not None and latest_market is not None:
         try:
+            causal_points = tuple(_p2_point(row) for row in accepted_market)
             onset = reconstruct_shock_onset_context(
-                tuple(_p2_point(row) for row in accepted_market),
+                causal_points,
                 reference=dict(active_reference),
                 reference_max_lag_ms=2_000,
             )
@@ -3341,6 +4346,8 @@ def build_future_outcome(
     ):
         raise ValueError("future_outcome_evidence_sha256_mismatch")
     selected_config = config or BridgeConfig()
+    market_source_rows = tuple(market_rows)
+    depth_source_rows = tuple(depth_rows)
     selected_contract = _bridge_config_contract(selected_config)
     if (
         evidence.get("bridge_producer_version") != BRIDGE_PRODUCER_VERSION
@@ -3510,7 +4517,7 @@ def build_future_outcome(
         position_average_price = None
     rows: list[Mapping[str, Any]] = []
     rejected_market_times_us: list[int] = []
-    for row in market_rows:
+    for row in market_source_rows:
         if _scope_key(row) != (symbol, venue, session, epoch):
             continue
         try:
@@ -3523,7 +4530,7 @@ def build_future_outcome(
             < received_ms
             <= (
                 start_ms
-                + selected_config.outcome_horizons_sec[-1] * 1_000
+                + _post_snapshot_source_horizon_sec(selected_config) * 1_000
                 + selected_config.max_outcome_endpoint_lag_ms
             )
         ):
@@ -3540,7 +4547,7 @@ def build_future_outcome(
     )
     depths: list[Mapping[str, Any]] = []
     rejected_depth_times_us: list[int] = []
-    for row in depth_rows:
+    for row in depth_source_rows:
         if _scope_key(row) != (symbol, venue, session, epoch):
             continue
         try:
@@ -3553,7 +4560,7 @@ def build_future_outcome(
             <= received_ms
             <= (
                 start_ms
-                + selected_config.outcome_horizons_sec[-1] * 1_000
+                + _post_snapshot_source_horizon_sec(selected_config) * 1_000
                 + selected_config.max_outcome_endpoint_lag_ms
             )
         ):
@@ -4038,6 +5045,24 @@ def build_future_outcome(
         notional_net_profit_eligible
         and any(horizon.get("mature") is True for horizon in horizons)
     )
+    confirmation_window_axis = _confirmation_window_outcome_axis(
+        evidence=evidence,
+        market_rows=market_source_rows,
+        config=selected_config,
+    )
+    _validate_confirmation_window_axis(
+        confirmation_window_axis,
+        expected_horizons_sec=selected_config.reversion_confirmation_horizons_sec,
+        expected_followthrough_horizons_sec=(
+            selected_config.reversion_followthrough_horizons_sec
+        ),
+        expected_confirmation_fraction=(
+            selected_config.reversion_confirmation_fraction
+        ),
+        expected_max_endpoint_lag_ms=selected_config.max_outcome_endpoint_lag_ms,
+        expected_max_internal_gap_ms=selected_config.max_outcome_internal_gap_ms,
+        expected_max_quote_age_ms=selected_config.max_quote_age_ms,
+    )
     outcome_without_hash = {
         "schema": OUTCOME_SCHEMA,
         "bridge_config_sha256": selected_contract["config_sha256"],
@@ -4136,6 +5161,7 @@ def build_future_outcome(
             if neutral_adverse_first_ms is None
             else neutral_adverse_first_ms - start_ms
         ),
+        "confirmation_window_axis": confirmation_window_axis,
         "horizons": horizons,
         **OUTCOME_METRIC_CONTRACT,
         **AUTHORITY_CONTRACT,
@@ -6072,7 +7098,7 @@ def build_bridge_report(
         outcome_end_us = (
             watermark_us
             + (
-                selected_config.outcome_horizons_sec[-1] * 1_000
+                _post_snapshot_source_horizon_sec(selected_config) * 1_000
                 + selected_config.max_outcome_endpoint_lag_ms
             )
             * 1_000
@@ -6312,6 +7338,28 @@ def build_bridge_report(
         and row.get("primary_mature_outcome_parent_wave_stage_row") is True
         for row in rows
     )
+    confirmation_window_direction_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    confirmation_window_tuning_outcome_counts: Counter[str] = Counter()
+    for row in rows:
+        evidence = row[TACTICAL_EVIDENCE_SCHEMA]
+        if (
+            row.get("primary_parent_wave_stage_row") is not True
+            or (evidence.get("source_quality") or {}).get("status") != "pass"
+        ):
+            continue
+        axis = (row.get("future_outcome") or {}).get("confirmation_window_axis") or {}
+        for observation in axis.get("observations") or []:
+            horizon = str(observation.get("horizon_sec") or "unknown")
+            confirmation_window_direction_counts[horizon][
+                str(observation.get("direction_state") or "unknown")
+            ] += 1
+            for fixed_outcome in observation.get("fixed_followthrough_outcomes") or []:
+                if fixed_outcome.get("tuning_outcome_eligible") is True:
+                    followthrough = str(
+                        fixed_outcome.get("followthrough_sec") or "unknown"
+                    )
+                    policy_key = f"confirm_{horizon}s_follow_{followthrough}s"
+                    confirmation_window_tuning_outcome_counts[policy_key] += 1
     allocator_outcome_joined = sum(
         (row.get("future_outcome") or {}).get("allocator_event_sha256") is not None
         for row in rows
@@ -6393,6 +7441,21 @@ def build_bridge_report(
             "paired_decision_quality_eligible_primary_episode_count": (paired_eligible),
             "net_economic_eligible_primary_episode_count": economic_eligible,
             "mature_outcome_eligible_primary_episode_count": (mature_outcome_eligible),
+            "confirmation_window_primary_episode_direction_counts": {
+                horizon: dict(counts)
+                for horizon, counts in sorted(
+                    confirmation_window_direction_counts.items(),
+                    key=lambda item: (int(item[0]) if item[0].isdigit() else math.inf),
+                )
+            },
+            "confirmation_window_primary_episode_tuning_outcome_eligible_counts": (
+                dict(
+                    sorted(
+                        confirmation_window_tuning_outcome_counts.items(),
+                        key=lambda item: item[0],
+                    )
+                )
+            ),
             "entry_pipeline_allocator_outcome_joined_count": (allocator_outcome_joined),
             "entry_pipeline_allocator_status_counts": dict(allocator_status_counts),
             "entry_pipeline_allocator_error_counts": dict(allocator_error_counts),
@@ -6506,7 +7569,7 @@ def _relevant_windows(
         )
         end_ms = (
             watermark_ms
-            + config.outcome_horizons_sec[-1] * 1_000
+            + _post_snapshot_source_horizon_sec(config) * 1_000
             + config.max_outcome_endpoint_lag_ms
         )
         raw_windows[key].append((start_ms, end_ms))

@@ -362,7 +362,7 @@ def _past_market_rows() -> list[dict]:
     ]
 
 
-def _verified_config() -> BridgeConfig:
+def _verified_config(*, max_outcome_internal_gap_ms: int = 2_500) -> BridgeConfig:
     artifact = {
         "schema": "micro_reversion_reviewed_cost_profile_v1",
         "artifact_id": "test-cost-profile-2026-08-14",
@@ -376,6 +376,7 @@ def _verified_config() -> BridgeConfig:
         "uncertainty_buffer_bps": 3.0,
     }
     return BridgeConfig(
+        max_outcome_internal_gap_ms=max_outcome_internal_gap_ms,
         statutory_sell_tax_bps=20.0,
         uncertainty_buffer_bps=3.0,
         cost_profile_source="verified_test_profile",
@@ -543,6 +544,7 @@ def test_builds_past_only_context_and_liquidity_bounded_lifecycle() -> None:
     assert evidence["state"] == "reversion_confirmed"
     assert evidence["event"]["asof_trade_price"] == 9_960
     assert evidence["event"]["parent_wave_id"] == "wave-1"
+    assert "confirmation_window_axis" not in evidence["event"]
     assert evidence["source_quality"]["parent_wave_reference_count"] == 1
     assert evidence["source_quality"]["future_outcome_fields_in_context"] is False
     assert evidence["decision_watermark"]["past_only_join"] is True
@@ -570,6 +572,133 @@ def test_builds_past_only_context_and_liquidity_bounded_lifecycle() -> None:
     for key, expected in AUTHORITY_CONTRACT.items():
         assert evidence[key] is expected
         assert lifecycle[key] is expected
+
+
+def test_confirmation_window_is_future_label_not_prompt_context() -> None:
+    config = _verified_config(max_outcome_internal_gap_ms=30_000)
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=config,
+        verified_symbol_metadata=_verified_symbol_metadata(),
+    )
+    future_rows = [
+        _market(
+            "2026-08-14T09:01:06.000+09:00",
+            price=9_800,
+            side="SELL",
+            qty=100,
+            sequence=5,
+        ),
+        _market(
+            "2026-08-14T09:02:05.000+09:00",
+            price=9_950,
+            side="BUY",
+            qty=100,
+            sequence=6,
+        ),
+        _market(
+            "2026-08-14T09:02:06.000+09:00",
+            price=9_950,
+            side="BUY",
+            qty=100,
+            sequence=7,
+        ),
+        _market(
+            "2026-08-14T09:02:36.000+09:00",
+            price=9_700,
+            side="SELL",
+            qty=100,
+            sequence=8,
+        ),
+        _market(
+            "2026-08-14T09:03:06.000+09:00",
+            price=9_800,
+            side="BUY",
+            qty=100,
+            sequence=9,
+        ),
+    ]
+
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=[*_past_market_rows(), *future_rows],
+        config=config,
+    )
+
+    assert "confirmation_window_axis" not in evidence["event"]
+    axis = outcome["confirmation_window_axis"]
+    assert axis["axis_role"] == "micro_reversion_tuning_only"
+    assert axis["horizons_sec"] == [120, 180]
+    assert axis["followthrough_horizons_sec"] == [30, 60]
+    assert axis["confirmation_fraction"] == 0.5
+    assert axis["included_in_prompt_context"] is False
+    assert axis["runtime_effect"] is False
+    assert axis["selection_authority"] is False
+    assert [row["direction_state"] for row in axis["observations"]] == [
+        "REVERSION_CONFIRMED",
+        "CONTINUATION_CONFIRMED",
+    ]
+    assert all(row["classification_eligible"] for row in axis["observations"])
+    assert axis["observations"][0]["active_confirmation_delay_ms"] == 119_000
+    fixed = axis["observations"][0]["fixed_followthrough_outcomes"]
+    assert [row["followthrough_sec"] for row in fixed] == [30, 60]
+    assert all(row["tuning_outcome_eligible"] is True for row in fixed)
+    assert fixed[0]["entry_delay_from_confirmation_ms"] == 0
+    assert fixed[0]["standardized_one_share_net_return_bps"] == pytest.approx(
+        -284.306533
+    )
+    assert all(
+        row["tuning_outcome_eligible"] is False
+        for row in axis["observations"][1]["fixed_followthrough_outcomes"]
+    )
+
+
+def test_confirmation_window_marks_invalid_endpoint_as_source_gap() -> None:
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+    )
+    invalid_marker = _market(
+        "2026-08-14T09:02:07.000+09:00",
+        price=9_940,
+        side="BUY",
+        qty=100,
+        sequence=6,
+    )
+    invalid_marker["realtime_type"] = "INVALID"
+
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=[
+            *_past_market_rows(),
+            _market(
+                "2026-08-14T09:01:46.000+09:00",
+                price=9_900,
+                side="SELL",
+                qty=100,
+                sequence=5,
+            ),
+            invalid_marker,
+        ],
+        config=_verified_config(),
+    )
+
+    observation = outcome["confirmation_window_axis"]["observations"][0]
+    assert observation["horizon_sec"] == 120
+    assert observation["mature"] is True
+    assert observation["classification_eligible"] is False
+    assert observation["direction_state"] == "SOURCE_GAP"
+    assert observation["source_quality_blockers"] == [
+        "confirmation_invalid_market_row_in_path"
+    ]
 
 
 def test_one_share_probe_floor_requires_real_bid_and_ask_capacity() -> None:
@@ -910,9 +1039,8 @@ def test_missing_snapshot_date_is_row_local_observation_only_with_symbol_master(
 
     assert evidence["state"] == "source_unavailable"
     assert evidence["economics"]["symbol_metadata_status"] == "missing"
-    assert (
-        "verified_symbol_metadata_snapshot_date_unavailable"
-        in (evidence["source_quality"]["blockers"])
+    assert "verified_symbol_metadata_snapshot_date_unavailable" in (
+        evidence["source_quality"]["blockers"]
     )
     outcome = build_future_outcome(
         evidence=evidence,
@@ -2294,6 +2422,12 @@ def test_report_deduplicates_same_parent_wave_per_stage() -> None:
     assert report["summary"]["trace_payload_join_count"] == 2
     assert report["summary"]["micro_context_eligible_primary_episode_count"] == 1
     assert report["summary"]["same_parent_wave_repeat_count"] == 1
+    assert report["summary"][
+        "confirmation_window_primary_episode_direction_counts"
+    ] == {
+        "120": {"DATA_WAIT": 1},
+        "180": {"DATA_WAIT": 1},
+    }
     assert report["source_exact_payload_mutated"] is False
     assert report["future_outcomes_separate_from_prompt_context"] is True
 
