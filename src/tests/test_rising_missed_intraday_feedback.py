@@ -3778,6 +3778,57 @@ def test_submit_safety_preserves_entry_ai_exact_bbo_freshness_provenance():
     assert block["quote_age_sec"] == 0.025
 
 
+def test_submit_safety_preserves_tick_speed_veto_and_relief_provenance():
+    block = mod._submit_safety_block_row(
+        _event(
+            905,
+            "000905",
+            "relative-accel-only",
+            "rising_missed_tick_speed_entry_block",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "reason": "tick_acceleration_ratio_lt_1",
+                "best_bid_at_submit": 5390,
+                "best_ask_at_submit": 5410,
+                "rising_missed_tick_window_span_sec": 15,
+                "rising_missed_tick_window_span_sec_raw": 15,
+                "rising_missed_tick_window_max_span_sec": 60,
+                "rising_missed_tick_window_slow": False,
+                "rising_missed_tick_acceleration_ratio": 0.857,
+                "rising_missed_tick_acceleration_ratio_raw": 0.857,
+                "rising_missed_min_tick_acceleration_ratio": 1.0,
+                "rising_missed_tick_accel_slow": True,
+                "rising_missed_tick_absolute_recent_5tick_seconds": 6.0,
+                "rising_missed_tick_absolute_sample_count": 10,
+                "rising_missed_tick_absolute_quote_age_ms": 1.487,
+                "rising_missed_tick_absolute_orderbook_state": "insufficient",
+                "rising_missed_tick_absolute_tp1_support_count": 2,
+                "rising_missed_tick_absolute_large_sell_detected": False,
+                "rising_missed_tick_absolute_throughput_relief_enabled": True,
+                "rising_missed_tick_absolute_throughput_relief_active_date": (
+                    "2026-08-21"
+                ),
+                "rising_missed_tick_absolute_throughput_relief_applied": False,
+                "rising_missed_tick_absolute_throughput_relief_path": "none",
+                "rising_missed_tick_absolute_throughput_relief_checks": (
+                    "enabled,active_date,only_relative_accel_slow,fresh_quote,"
+                    "fresh_tp1_support,no_large_sell"
+                ),
+            },
+            emitted_at="2026-08-21T14:32:45+09:00",
+        )
+    )
+
+    assert block["tick_speed_block_profile"] == "relative_acceleration_only"
+    assert block["tick_speed_decision_input_complete"] is True
+    assert block["tick_speed_window_span_sec"] == 15.0
+    assert block["tick_speed_acceleration_ratio"] == 0.857
+    assert block["tick_speed_absolute_recent_5tick_seconds"] == 6.0
+    assert block["tick_speed_absolute_sample_count"] == 10
+    assert block["tick_speed_absolute_relief_applied"] is False
+    assert block["tick_speed_absolute_relief_path"] == "none"
+
+
 def test_blocked_zero_qty_reuses_only_exact_recent_one_share_bbo_for_source_only_outcome(
     tmp_path,
 ):
