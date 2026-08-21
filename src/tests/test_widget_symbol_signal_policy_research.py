@@ -187,6 +187,66 @@ def test_entry_uses_next_completed_bar_open_and_not_signal_bar_price():
     assert volume_ratio == pytest.approx(1.2)
 
 
+def test_setup_feature_supports_calibrated_early_history_and_session_anchor():
+    rows = _bars(
+        [
+            (10_000, 10_100, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_950, 9_980, 100),
+            (9_980, 9_990, 9_900, 9_910, 100),
+            (9_910, 9_950, 9_900, 9_930, 100),
+            (9_930, 9_970, 9_920, 9_960, 100),
+        ]
+    )
+
+    feature = research._setup_feature(
+        rows,
+        4,
+        15,
+        anchor_mode="session",
+        minimum_history_bars=5,
+    )
+
+    assert feature is not None
+    drawdown, near_low = feature
+    assert drawdown == pytest.approx((10_100 - 9_960) / 10_100 * 100)
+    assert near_low == pytest.approx((9_960 - 9_900) / 9_900 * 100)
+
+
+def test_policy_grid_bounds_expansion_and_widens_chase_only_in_morning():
+    policies = list(research.policy_grid())
+
+    assert len(policies) == 1_536
+    assert any(
+        policy.segment == "morning" and policy.max_reclaim_chase_ticks == 6
+        for policy in policies
+    )
+    assert all(
+        policy.segment == "morning"
+        for policy in policies
+        if policy.max_reclaim_chase_ticks == 6
+    )
+
+
+def test_entry_replay_enforces_the_same_calibrated_reclaim_chase_band():
+    rows = _bars(
+        [
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_900, 9_900, 100),
+            (9_900, 9_950, 9_900, 9_950, 120),
+            (9_940, 9_970, 9_930, 9_960, 100),
+        ]
+    )
+    narrow = SignalPolicy("morning", 3, 0.5, 0.5, 1, 50, max_reclaim_chase_ticks=2)
+    wider = SignalPolicy("morning", 3, 0.5, 0.5, 1, 50, max_reclaim_chase_ticks=6)
+
+    assert research._find_entry(rows, 5, narrow, segment_end=time(10, 30)) is None
+    assert research._find_entry(rows, 5, wider, segment_end=time(10, 30)) is not None
+
+
 def test_daily_source_coverage_requires_open_close_and_volume():
     trade_date = date(2026, 8, 11)
     rows = _bars([(10_000, 10_000, 10_000, 10_000, 100)] * 381)

@@ -57,6 +57,21 @@ COLLECTION_END = clock_time(15, 31)
 CACHE_BOUNDARY_REQUEST_CAPACITY = 52
 REQUESTS_PER_MINUTE = 64
 
+ENTRY_DIAGNOSTIC_METRIC_CONTRACT = {
+    "metric_role": "widget_symbol_entry_first_blocker_instrumentation",
+    "decision_authority": "instrumentation_only",
+    "window_policy": "exact_policy_date_completed_krx_regular_1m",
+    "sample_floor": "one_source_quality_pass_evaluation",
+    "primary_decision_metric": "first_blocker",
+    "source_quality_gate": ("same_symbol_fresh_quote_bbo_and_contiguous_completed_1m"),
+    "forbidden_uses": [
+        "automatic_order_authority",
+        "same_day_threshold_mutation",
+        "cross_symbol_policy_transfer",
+        "broker_guard_bypass",
+    ],
+}
+
 
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,11 +129,26 @@ def _trend_not_down(rows: list[MinuteBar], end_index: int, horizon: int) -> bool
 
 
 def _setup_feature(
-    rows: list[MinuteBar], index: int, lookback: int
+    rows: list[MinuteBar],
+    index: int,
+    lookback: int,
+    *,
+    anchor_mode: str = "rolling",
+    minimum_history_bars: int | None = None,
 ) -> tuple[float, float] | None:
-    if index + 1 < lookback:
+    minimum_history = (
+        lookback if minimum_history_bars is None else int(minimum_history_bars)
+    )
+    if minimum_history < 2 or minimum_history > lookback or index + 1 < minimum_history:
         return None
-    window = rows[index - lookback + 1 : index + 1]
+    if anchor_mode == "session":
+        window = rows[: index + 1]
+    elif anchor_mode == "rolling":
+        window = rows[max(0, index - lookback + 1) : index + 1]
+    else:
+        return None
+    if not _bars_are_contiguous(window):
+        return None
     high = max(row.high for row in window)
     low = min(row.low for row in window)
     close = rows[index].close
@@ -445,62 +475,154 @@ class WidgetSymbolRuntimeCollector:
         episode: EpisodeState,
         observed_at: datetime,
     ) -> dict[str, Any] | None:
+        candidate, _diagnostic = WidgetSymbolRuntimeCollector._entry_evaluation(
+            bars=bars,
+            current_price=current_price,
+            bbo=bbo,
+            policy=policy,
+            episode=episode,
+            observed_at=observed_at,
+        )
+        return candidate
+
+    @staticmethod
+    def _entry_evaluation(
+        *,
+        bars: list[MinuteBar],
+        current_price: int,
+        bbo: dict[str, Any],
+        policy: dict[str, Any],
+        episode: EpisodeState,
+        observed_at: datetime,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        diagnostic: dict[str, Any] = {
+            "first_blocker": None,
+            "evaluated_at": observed_at.isoformat(),
+            "best_observed_drawdown_pct": None,
+            "best_observed_near_low_pct": None,
+            "metric_contract": ENTRY_DIAGNOSTIC_METRIC_CONTRACT,
+            "authority": "instrumentation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+
+        def blocked(reason: str) -> tuple[None, dict[str, Any]]:
+            diagnostic["first_blocker"] = reason
+            return None, diagnostic
+
         if episode.active or (
             episode.cooldown_until is not None and observed_at < episode.cooldown_until
         ):
-            return None
+            return blocked("episode_active_or_cooldown")
         signal = policy["signal_policy"]
         latest_index = len(bars) - 1
         lookback = int(signal["lookback_bars"])
-        if latest_index < lookback:
-            return None
-        continuity_window = bars[
-            max(0, latest_index - lookback - int(signal["setup_valid_bars"]) + 1) :
-        ]
+        minimum_history = int(signal.get("minimum_history_bars", lookback))
+        anchor_mode = str(signal.get("anchor_mode", "rolling"))
+        max_reclaim_chase_ticks = int(signal.get("max_reclaim_chase_ticks", 2))
+        diagnostic.update(
+            {
+                "anchor_mode": anchor_mode,
+                "lookback_bars": lookback,
+                "minimum_history_bars": minimum_history,
+                "max_reclaim_chase_ticks": max_reclaim_chase_ticks,
+            }
+        )
+        if latest_index + 1 < minimum_history:
+            return blocked("history_below_policy_minimum")
+        continuity_window = (
+            bars
+            if anchor_mode == "session"
+            else bars[
+                max(
+                    0,
+                    latest_index - lookback - int(signal["setup_valid_bars"]) + 1,
+                ) :
+            ]
+        )
         if not _bars_are_contiguous(continuity_window):
-            return None
+            return blocked("completed_bar_continuity_gap")
         latest = bars[latest_index]
         if not (
             _clock(signal["segment_start_time"])
             <= _bar_clock(latest)
             < _clock(signal["segment_end_time"])
         ):
-            return None
+            return blocked("outside_policy_segment")
         ask = _positive_int(bbo.get("best_ask"))
         bid = _positive_int(bbo.get("best_bid"))
         if ask is None or bid is None or ask < bid:
-            return None
+            return blocked("bbo_invalid")
         tick = get_tick_size(max(current_price, ask))
-        if ask - bid > tick * 2 or _bbo_age_sec(bbo) > 35.0:
-            return None
-        first_setup = max(lookback - 1, latest_index - int(signal["setup_valid_bars"]))
+        if ask - bid > tick * 2:
+            return blocked("spread_above_two_ticks")
+        if _bbo_age_sec(bbo) > 35.0:
+            return blocked("bbo_stale")
+        first_setup = max(
+            minimum_history - 1,
+            latest_index - int(signal["setup_valid_bars"]),
+        )
+        saw_drawdown = False
+        saw_near_low = False
+        saw_reclaim = False
+        saw_non_down = False
+        saw_non_chasing_price = False
         for setup_index in range(first_setup, latest_index):
-            feature = _setup_feature(bars, setup_index, lookback)
+            feature = _setup_feature(
+                bars,
+                setup_index,
+                lookback,
+                anchor_mode=anchor_mode,
+                minimum_history_bars=minimum_history,
+            )
             if feature is None:
                 continue
             drawdown, near_low = feature
-            if drawdown + 1e-12 < float(
-                signal["drawdown_pct"]
-            ) or near_low - 1e-12 > float(signal["near_low_pct"]):
+            diagnostic["best_observed_drawdown_pct"] = round(
+                max(float(diagnostic["best_observed_drawdown_pct"] or 0.0), drawdown),
+                6,
+            )
+            if drawdown + 1e-12 < float(signal["drawdown_pct"]):
                 continue
+            saw_drawdown = True
+            current_best_near_low = diagnostic["best_observed_near_low_pct"]
+            diagnostic["best_observed_near_low_pct"] = round(
+                min(
+                    (
+                        float(current_best_near_low)
+                        if current_best_near_low is not None
+                        else near_low
+                    ),
+                    near_low,
+                ),
+                6,
+            )
+            if near_low - 1e-12 > float(signal["near_low_pct"]):
+                continue
+            saw_near_low = True
             setup = bars[setup_index]
             reclaim = move_price_by_ticks(setup.close, int(signal["reclaim_ticks"]))
+            if not (latest.close >= reclaim and latest.close >= latest.open):
+                continue
+            saw_reclaim = True
             if not (
-                latest.close >= reclaim
-                and latest.close >= latest.open
-                and _trend_not_down(bars, latest_index, 3)
+                _trend_not_down(bars, latest_index, 3)
                 and _trend_not_down(bars, latest_index, 5)
-                and current_price <= move_price_by_ticks(reclaim, 2)
             ):
                 continue
+            saw_non_down = True
+            if current_price > move_price_by_ticks(reclaim, max_reclaim_chase_ticks):
+                continue
+            saw_non_chasing_price = True
             support = min(row.low for row in bars[setup_index : latest_index + 1])
             state, volume_ratio = _volume_state(bars, latest_index)
             entry_low = max(reclaim, bid)
-            entry_high = min(ask, move_price_by_ticks(reclaim, 2))
+            entry_high = min(ask, move_price_by_ticks(reclaim, max_reclaim_chase_ticks))
             if entry_low > entry_high:
                 continue
             target = move_price_up_by_bps(entry_high, int(signal["target_bps"]))
-            return {
+            candidate = {
                 "state": state,
                 "entry_price_low": entry_low,
                 "entry_price_high": entry_high,
@@ -515,7 +637,19 @@ class WidgetSymbolRuntimeCollector:
                 ),
                 "reclaim_price": reclaim,
             }
-        return None
+            diagnostic["candidate_state"] = candidate["state"]
+            return candidate, diagnostic
+        if not saw_drawdown:
+            return blocked("drawdown_below_threshold")
+        if not saw_near_low:
+            return blocked("near_low_above_threshold")
+        if not saw_reclaim:
+            return blocked("reclaim_not_confirmed")
+        if not saw_non_down:
+            return blocked("three_or_five_minute_trend_down")
+        if not saw_non_chasing_price:
+            return blocked("reclaim_chase_guard")
+        return blocked("entry_price_range_invalid")
 
     def _record(self, symbol: str, payload: dict[str, Any]) -> None:
         latest = payload.get("latest_completed_bar") or {}
@@ -568,6 +702,16 @@ class WidgetSymbolRuntimeCollector:
                     "auxiliary_status": "LIMITED",
                 },
                 "unmet_conditions": [reason],
+                "entry_diagnostic": {
+                    "first_blocker": "source_quality_blocked",
+                    "source_reason": reason,
+                    "evaluated_at": observed_at.isoformat(),
+                    "metric_contract": ENTRY_DIAGNOSTIC_METRIC_CONTRACT,
+                    "authority": "instrumentation_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
                 "metric_contract": METRIC_CONTRACT,
                 "strategy_profile": contract.STRATEGY_PROFILE,
                 "authority": ADVISORY_AUTHORITY,
@@ -714,8 +858,8 @@ class WidgetSymbolRuntimeCollector:
             if same_policy_snapshot and source_quality == "PASS"
             else None
         )
-        candidate = (
-            self._entry_candidate(
+        candidate, entry_diagnostic = (
+            self._entry_evaluation(
                 bars=bars,
                 current_price=current_price,
                 bbo=bbo,
@@ -724,7 +868,18 @@ class WidgetSymbolRuntimeCollector:
                 observed_at=observed_at,
             )
             if source_quality == "PASS"
-            else None
+            else (
+                None,
+                {
+                    "first_blocker": "source_quality_blocked",
+                    "evaluated_at": observed_at.isoformat(),
+                    "metric_contract": ENTRY_DIAGNOSTIC_METRIC_CONTRACT,
+                    "authority": "instrumentation_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            )
         )
         if candidate is not None and candidate["signal_bar"] != episode.entry_bar:
             episode.sequence += 1
@@ -822,6 +977,7 @@ class WidgetSymbolRuntimeCollector:
                 ),
                 "metric_contract": METRIC_CONTRACT,
                 "strategy_profile": contract.STRATEGY_PROFILE,
+                "entry_diagnostic": entry_diagnostic,
                 "authority": ADVISORY_AUTHORITY,
                 "runtime_effect": False,
             },

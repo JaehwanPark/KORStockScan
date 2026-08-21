@@ -31,6 +31,9 @@ def _research() -> dict:
         "near_low_pct": 0.5,
         "reclaim_ticks": 1,
         "target_bps": 50,
+        "anchor_mode": "rolling",
+        "minimum_history_bars": 15,
+        "max_reclaim_chase_ticks": 2,
         "max_completed_entries_per_day": 3,
         "setup_valid_bars": 5,
         "reentry_cooldown_bars": 10,
@@ -105,6 +108,41 @@ def test_build_policy_promotes_only_holdout_passed_symbol():
     assert policy["official_reference"]["commit_sha"] == (
         "69642586f7d84ba9fd8a6faf1f1537c7fda6568b"
     )
+
+
+def test_build_policy_preserves_calibrated_anchor_and_early_history_contract():
+    research = _research()
+    selected = research["symbols"]["006800"]["selected_policy"]
+    selected["segment"] = "morning"
+    selected["anchor_mode"] = "session"
+    selected["minimum_history_bars"] = 15
+    selected["max_reclaim_chase_ticks"] = 6
+
+    policy = runtime.build_policy(research)
+
+    signal = policy["symbols"]["006800"]["signal_policy"]
+    assert signal["anchor_mode"] == "session"
+    assert signal["minimum_history_bars"] == 15
+    assert signal["max_reclaim_chase_ticks"] == 6
+
+
+def test_v2_research_keeps_legacy_signal_shape_for_exact_policy_round_trip():
+    research = _research()
+    research["schema"] = "widget_symbol_signal_policy_research_v2"
+    for result in research["symbols"].values():
+        for key in (
+            "anchor_mode",
+            "minimum_history_bars",
+            "max_reclaim_chase_ticks",
+        ):
+            result["selected_policy"].pop(key)
+
+    policy = runtime.build_policy(research)
+
+    signal = policy["symbols"]["006800"]["signal_policy"]
+    assert "anchor_mode" not in signal
+    assert "minimum_history_bars" not in signal
+    assert "max_reclaim_chase_ticks" not in signal
 
 
 def test_loader_requires_exact_effective_date_and_round_trip(tmp_path):

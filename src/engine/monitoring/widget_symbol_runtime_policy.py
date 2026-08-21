@@ -35,6 +35,10 @@ DEFAULT_RESEARCH_DIR = DATA_DIR / "report" / "widget_symbol_signal_policy_resear
 DEFAULT_POLICY_DIR = DATA_DIR / "runtime" / "widget_symbol_runtime_policy"
 DEFAULT_APPLY_REPORT_DIR = DATA_DIR / "report" / "widget_symbol_runtime_policy_apply"
 POLICY_PREFIX = "widget_symbol_runtime_policy"
+SUPPORTED_RESEARCH_SCHEMAS = {
+    "widget_symbol_signal_policy_research_v2",
+    REPORT_SCHEMA,
+}
 
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
@@ -162,7 +166,12 @@ def _normalized_selected_parameters(selected: object) -> dict[str, Any] | None:
         "reentry_cooldown_bars",
         "force_flat_time",
     }
-    if set(selected) != required:
+    optional = {
+        "anchor_mode",
+        "minimum_history_bars",
+        "max_reclaim_chase_ticks",
+    }
+    if not required.issubset(selected) or set(selected) - required - optional:
         return None
     try:
         lookback = int(selected["lookback_bars"])
@@ -173,9 +182,12 @@ def _normalized_selected_parameters(selected: object) -> dict[str, Any] | None:
         max_entries = int(selected["max_completed_entries_per_day"])
         setup_valid = int(selected["setup_valid_bars"])
         cooldown = int(selected["reentry_cooldown_bars"])
+        minimum_history = int(selected.get("minimum_history_bars", lookback))
+        max_reclaim_chase_ticks = int(selected.get("max_reclaim_chase_ticks", 2))
     except (TypeError, ValueError):
         return None
     segment = str(selected["segment"])
+    anchor_mode = str(selected.get("anchor_mode", "rolling"))
     segment_windows = {
         "morning": ("09:03:00", "10:30:00"),
         "midday": ("10:30:00", "13:30:00"),
@@ -184,6 +196,10 @@ def _normalized_selected_parameters(selected: object) -> dict[str, Any] | None:
     if (
         segment not in segment_windows
         or lookback not in {15, 30, 45}
+        or anchor_mode not in {"rolling", "session"}
+        or not 2 <= minimum_history <= lookback
+        or max_reclaim_chase_ticks not in {2, 6}
+        or (max_reclaim_chase_ticks != 2 and segment != "morning")
         or not 0.5 <= drawdown <= 2.0
         or not 0.2 <= near_low <= 0.75
         or reclaim_ticks not in {1, 2}
@@ -208,6 +224,12 @@ def _normalized_selected_parameters(selected: object) -> dict[str, Any] | None:
         "reentry_cooldown_bars": cooldown,
         "force_flat_time": "15:19:00",
     }
+    if "anchor_mode" in selected:
+        signal_policy["anchor_mode"] = anchor_mode
+    if "minimum_history_bars" in selected:
+        signal_policy["minimum_history_bars"] = minimum_history
+    if "max_reclaim_chase_ticks" in selected:
+        signal_policy["max_reclaim_chase_ticks"] = max_reclaim_chase_ticks
     return {
         "signal_policy": signal_policy,
         "execution_policy": {
@@ -292,7 +314,7 @@ def build_policy(
     research: dict[str, Any], *, evidence_report_path: Path | None = None
 ) -> dict[str, Any]:
     if (
-        research.get("schema") != REPORT_SCHEMA
+        research.get("schema") not in SUPPORTED_RESEARCH_SCHEMAS
         or research.get("status") != "complete"
         or research.get("start_date") != CLEAN_BASELINE_DATE.isoformat()
         or research.get("runtime_effect") is not False
@@ -324,6 +346,21 @@ def build_policy(
     observation_symbols: dict[str, Any] = {}
     for symbol, name in SYMBOLS.items():
         result = (research.get("symbols") or {}).get(symbol)
+        if research.get("schema") == REPORT_SCHEMA and isinstance(result, dict):
+            selected_contract = result.get("selected_policy")
+            if not isinstance(selected_contract, dict):
+                diagnostic = result.get("best_diagnostic_candidate")
+                selected_contract = (
+                    diagnostic.get("parameters")
+                    if isinstance(diagnostic, dict)
+                    else None
+                )
+            if isinstance(selected_contract, dict) and not {
+                "anchor_mode",
+                "minimum_history_bars",
+                "max_reclaim_chase_ticks",
+            }.issubset(selected_contract):
+                raise ValueError("widget_symbol_research_v3_parameters_missing")
         observation = _validated_observation_policy(result)
         if observation is not None:
             observation_symbols[symbol] = {"name": name, **observation}
@@ -446,21 +483,26 @@ class WidgetSymbolRuntimePolicyLoader:
             raw_signal_policy = (
                 raw_signal_policy if isinstance(raw_signal_policy, dict) else {}
             )
+            signal_keys = {
+                "segment",
+                "lookback_bars",
+                "drawdown_pct",
+                "near_low_pct",
+                "reclaim_ticks",
+                "target_bps",
+                "setup_valid_bars",
+                "reentry_cooldown_bars",
+                "force_flat_time",
+                "anchor_mode",
+                "minimum_history_bars",
+                "max_reclaim_chase_ticks",
+            }
             selected = {
                 "selected_policy": {
                     **{
-                        key: raw_signal_policy.get(key)
-                        for key in {
-                            "segment",
-                            "lookback_bars",
-                            "drawdown_pct",
-                            "near_low_pct",
-                            "reclaim_ticks",
-                            "target_bps",
-                            "setup_valid_bars",
-                            "reentry_cooldown_bars",
-                            "force_flat_time",
-                        }
+                        key: raw_signal_policy[key]
+                        for key in signal_keys
+                        if key in raw_signal_policy
                     },
                     "max_completed_entries_per_day": (
                         value.get("execution_policy") or {}

@@ -97,9 +97,7 @@ def _depth_row(
         "item": (
             f"{symbol}_AL"
             if venue == "SOR"
-            else f"{symbol}_NX"
-            if venue == "NXT"
-            else symbol
+            else f"{symbol}_NX" if venue == "NXT" else symbol
         ),
         "orderbook_time_raw": "100000",
         "bid_depth": 1000,
@@ -1064,7 +1062,7 @@ def test_prospective_widget_and_episode_target_date_episodes_create_anchors(tmp_
         / "widget_symbol_signal_policy_research"
         / f"widget_symbol_signal_policy_research_{target_date}.json",
         {
-            "schema": "widget_symbol_signal_policy_research_v2",
+            "schema": "widget_symbol_signal_policy_research_v3",
             "end_date": target_date,
             "symbols": {
                 "111111": {

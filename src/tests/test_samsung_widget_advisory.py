@@ -153,6 +153,47 @@ def test_exit_advisory_requires_a_second_completed_bar_for_ready():
     assert "broken_support_reclaim_failed" in ready["reasons"]
 
 
+def test_exit_ready_is_only_a_reversal_watch_after_a_completed_recovery_bar():
+    start = datetime(2026, 8, 3, 11, 0, tzinfo=KST)
+    ready_bar = "20260803110300"
+    exit_advisory = {
+        "state": "EXIT_READY",
+        "source_quality": _exit_source_quality(),
+        "continuity": {
+            "ready_bar": ready_bar,
+            "bars_without_new_low": 1,
+            "reclaim_bars": 1,
+        },
+    }
+    bars = _bars(start, [100_000, 99_800, 99_600, 99_500, 99_700])
+
+    observation = advisory._exit_contrarian_reversal_observation(exit_advisory, bars)
+
+    assert observation["state"] == "REVERSAL_WATCH"
+    assert observation["direct_entry_authority"] is False
+    assert observation["actual_order_submitted"] is False
+    assert "completed_recovery_bar" in observation["reasons"]
+
+
+def test_exit_ready_does_not_grant_reversal_watch_before_post_signal_bar():
+    start = datetime(2026, 8, 3, 11, 0, tzinfo=KST)
+    bars = _bars(start, [100_000, 99_800, 99_600, 99_500])
+    exit_advisory = {
+        "state": "EXIT_READY",
+        "source_quality": _exit_source_quality(),
+        "continuity": {
+            "ready_bar": bars[-1].source_time,
+            "bars_without_new_low": 0,
+            "reclaim_bars": 0,
+        },
+    }
+
+    observation = advisory._exit_contrarian_reversal_observation(exit_advisory, bars)
+
+    assert observation["state"] == "WAIT_CONFIRMATION"
+    assert observation["unmet_conditions"] == ["first_post_exit_ready_bar_pending"]
+
+
 def test_exit_advisory_cancels_after_two_completed_support_reclaims():
     start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
     bars = _bars(

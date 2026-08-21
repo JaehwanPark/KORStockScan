@@ -1471,7 +1471,10 @@ def _widget_inventory(
         / f"widget_collector_expansion_recommendation_{target_date}.json"
     )
     calibration_schemas = ("widget_auto_trade_policy_calibration_report_v1",)
-    research_schemas = ("widget_symbol_signal_policy_research_v2",)
+    research_schemas = (
+        "widget_symbol_signal_policy_research_v2",
+        "widget_symbol_signal_policy_research_v3",
+    )
     expansion_schemas = ("widget_collector_expansion_recommendation_v1",)
     calibration = _read_target_json(
         calibration_path, target_date, expected_schemas=calibration_schemas

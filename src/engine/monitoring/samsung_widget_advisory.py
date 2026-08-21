@@ -111,6 +111,21 @@ INTRADAY_REGIME_MIN_DECLINE_TICKS = 3
 ENTRY_TARGET_BPS = 100
 ENTRY_MIN_REWARD_RISK_RATIO = 1.0
 
+EXIT_REVERSAL_METRIC_CONTRACT = {
+    "metric_role": "samsung_exit_contrarian_reversal_observation",
+    "decision_authority": "widget_advisory_observation_only",
+    "window_policy": "same_session_completed_1m_after_exit_ready",
+    "sample_floor": "one_completed_bar_after_exit_ready",
+    "primary_decision_metric": "reversal_observation_state",
+    "source_quality_gate": "exit_advisory_pass_and_contiguous_completed_1m",
+    "forbidden_uses": [
+        "direct_buy_from_exit_ready",
+        "automatic_order_submission",
+        "same_day_threshold_mutation",
+        "forced_position_exit_override",
+    ],
+}
+
 EXTERNAL_THRESHOLDS = {
     "NQ": -0.40,
     "MU": -0.80,
@@ -3449,6 +3464,94 @@ class ExitAdvisoryStateMachine:
         return payload
 
 
+def _exit_contrarian_reversal_observation(
+    exit_advisory: dict[str, Any], bars: list[MinuteBar]
+) -> dict[str, Any]:
+    """Interpret an exit episode as a separate, non-actionable reversal watch."""
+
+    result: dict[str, Any] = {
+        "state": "NOT_APPLICABLE",
+        "reasons": [],
+        "unmet_conditions": [],
+        "direct_entry_authority": False,
+        "authority": "widget_advisory_observation_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "metric_contract": EXIT_REVERSAL_METRIC_CONTRACT,
+    }
+    source_quality = exit_advisory.get("source_quality") or {}
+    if source_quality.get("status") != "PASS" or len(bars) < 2:
+        result["state"] = "DATA_WAIT"
+        result["unmet_conditions"] = ["fresh_completed_reversal_evidence_missing"]
+        return result
+    state = str(exit_advisory.get("state") or "")
+    continuity = exit_advisory.get("continuity") or {}
+    cancel_reason = str(
+        continuity.get("cancel_reason")
+        or next(iter(exit_advisory.get("reasons") or []), "")
+    )
+    if state == "EXIT_CANCELLED" and cancel_reason == (
+        "broken_support_reclaimed_two_bars"
+    ):
+        result["state"] = "REVERSAL_CONFIRMED"
+        result["reasons"] = [cancel_reason]
+        return result
+    if state == "EXIT_CANCELLED" and cancel_reason == (
+        "no_new_low_for_five_completed_bars"
+    ):
+        result["state"] = "REVERSAL_WATCH"
+        result["reasons"] = [cancel_reason, "support_reclaim_still_required"]
+        return result
+    if state != "EXIT_READY":
+        result["unmet_conditions"] = ["exit_ready_episode_not_active"]
+        return result
+
+    latest = bars[-1]
+    previous = bars[-2]
+    ready_bar = str(continuity.get("ready_bar") or "")
+    try:
+        bars_without_new_low = int(continuity.get("bars_without_new_low") or 0)
+        reclaim_bars = int(continuity.get("reclaim_bars") or 0)
+    except (TypeError, ValueError):
+        result["state"] = "DATA_WAIT"
+        result["unmet_conditions"] = ["exit_continuity_invalid"]
+        return result
+    result.update(
+        {
+            "ready_bar": ready_bar or None,
+            "latest_bar": latest.source_time,
+            "bars_without_new_low": bars_without_new_low,
+            "reclaim_bars": reclaim_bars,
+        }
+    )
+    if latest.source_time == ready_bar:
+        result["state"] = "WAIT_CONFIRMATION"
+        result["unmet_conditions"] = ["first_post_exit_ready_bar_pending"]
+        return result
+    recovery_bar = bool(
+        bars_without_new_low >= 1
+        and latest.close >= latest.open
+        and latest.close > previous.close
+    )
+    if recovery_bar:
+        result["state"] = "REVERSAL_WATCH"
+        result["reasons"] = [
+            "no_new_low_after_exit_ready",
+            "completed_recovery_bar",
+        ]
+        if reclaim_bars:
+            result["reasons"].append("broken_support_reclaim_started")
+        return result
+    if bars_without_new_low == 0:
+        result["state"] = "CONTINUATION_RISK"
+        result["reasons"] = ["new_low_after_exit_ready"]
+        return result
+    result["state"] = "WAIT_CONFIRMATION"
+    result["unmet_conditions"] = ["completed_recovery_bar_not_confirmed"]
+    return result
+
+
 def _regular_flow_recoverable_for_aftermarket(
     flow: dict[str, Any], observed_at: datetime
 ) -> bool:
@@ -4482,6 +4585,9 @@ class SamsungWidgetCollector:
                 exit_advisory["entry_episode_reset"] = False
                 exit_advisory["entry_conflict_rejected"] = True
                 exit_advisory["continuity"] = self.exit_state_machine.snapshot()
+        exit_advisory["contrarian_reversal"] = _exit_contrarian_reversal_observation(
+            exit_advisory, bars
+        )
         day_low = _positive_int(quote.get("low_pric"))
         day_low_delta = (
             current_price - day_low

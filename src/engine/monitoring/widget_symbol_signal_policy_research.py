@@ -34,7 +34,7 @@ from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
-REPORT_SCHEMA = "widget_symbol_signal_policy_research_v2"
+REPORT_SCHEMA = "widget_symbol_signal_policy_research_v3"
 KST = ZoneInfo("Asia/Seoul")
 AUTHORITY = "widget_symbol_signal_policy_discovery_only"
 OWNER = "widget_symbol_auto_trade"
@@ -57,6 +57,8 @@ LOOKBACK_GRID = (15, 30, 45)
 DRAWDOWN_GRID = (0.50, 1.00, 1.50, 2.00)
 NEAR_LOW_GRID = (0.20, 0.50, 0.75)
 RECLAIM_TICK_GRID = (1, 2)
+BASE_MAX_RECLAIM_CHASE_TICKS = 2
+MORNING_MAX_RECLAIM_CHASE_TICK_GRID = (2, 6)
 TARGET_BPS_GRID = (30, 50, 75, 100)
 SETUP_VALID_BARS = 5
 REENTRY_COOLDOWN_BARS = 10
@@ -141,6 +143,9 @@ class SignalPolicy:
     near_low_pct: float
     reclaim_ticks: int
     target_bps: int
+    anchor_mode: str = "rolling"
+    minimum_history_bars: int | None = None
+    max_reclaim_chase_ticks: int = 2
     setup_valid_bars: int = SETUP_VALID_BARS
     reentry_cooldown_bars: int = REENTRY_COOLDOWN_BARS
     force_flat_time: str = FORCE_FLAT_TIME.isoformat()
@@ -361,19 +366,32 @@ def fetch_krx_history(
 
 def policy_grid() -> Iterable[SignalPolicy]:
     for segment in SEGMENTS:
-        for lookback in LOOKBACK_GRID:
+        anchor_lookbacks = [
+            *(("rolling", lookback) for lookback in LOOKBACK_GRID),
+            ("session", min(LOOKBACK_GRID)),
+        ]
+        max_chase_grid = (
+            MORNING_MAX_RECLAIM_CHASE_TICK_GRID
+            if segment == "morning"
+            else (BASE_MAX_RECLAIM_CHASE_TICKS,)
+        )
+        for anchor_mode, lookback in anchor_lookbacks:
             for drawdown in DRAWDOWN_GRID:
                 for near_low in NEAR_LOW_GRID:
                     for reclaim_ticks in RECLAIM_TICK_GRID:
                         for target_bps in TARGET_BPS_GRID:
-                            yield SignalPolicy(
-                                segment,
-                                lookback,
-                                drawdown,
-                                near_low,
-                                reclaim_ticks,
-                                target_bps,
-                            )
+                            for max_chase_ticks in max_chase_grid:
+                                yield SignalPolicy(
+                                    segment,
+                                    lookback,
+                                    drawdown,
+                                    near_low,
+                                    reclaim_ticks,
+                                    target_bps,
+                                    anchor_mode=anchor_mode,
+                                    minimum_history_bars=min(15, lookback),
+                                    max_reclaim_chase_ticks=max_chase_ticks,
+                                )
 
 
 def _clean_trading_dates(end_date: date) -> list[date]:
@@ -481,11 +499,24 @@ def _trend_not_down(rows: tuple[Bar, ...], end_index: int, horizon: int) -> bool
 
 
 def _setup_feature(
-    rows: tuple[Bar, ...], index: int, lookback: int
+    rows: tuple[Bar, ...],
+    index: int,
+    lookback: int,
+    *,
+    anchor_mode: str = "rolling",
+    minimum_history_bars: int | None = None,
 ) -> tuple[float, float] | None:
-    if index + 1 < lookback:
+    minimum_history = (
+        lookback if minimum_history_bars is None else int(minimum_history_bars)
+    )
+    if minimum_history < 2 or minimum_history > lookback or index + 1 < minimum_history:
         return None
-    window = rows[index - lookback + 1 : index + 1]
+    if anchor_mode == "session":
+        window = rows[: index + 1]
+    elif anchor_mode == "rolling":
+        window = rows[max(0, index - lookback + 1) : index + 1]
+    else:
+        return None
     if not _contiguous(window):
         return None
     rolling_high = max(row.high_price for row in window)
@@ -536,8 +567,14 @@ def _find_entry(
         ):
             entry_price = clamp_price_to_tick(rows[entry_index].open_price)
             support = min(row.low_price for row in rows[setup_index:entry_index])
+            maximum_entry = move_price_by_ticks(
+                reclaim_price, policy.max_reclaim_chase_ticks
+            )
+            conservative_chase_check_price = move_price_by_ticks(entry_price, 1)
             if entry_price < support:
                 return None
+            if conservative_chase_check_price > maximum_entry:
+                continue
             state, volume_ratio = _volume_state(rows, index)
             return entry_index, entry_price, state, volume_ratio
     return None
@@ -612,7 +649,12 @@ def evaluate_policy(
     episodes: list[dict[str, Any]] = []
     for trade_date in dates:
         rows = grouped[trade_date]
-        index = policy.lookback_bars - 1
+        minimum_history = (
+            policy.lookback_bars
+            if policy.minimum_history_bars is None
+            else policy.minimum_history_bars
+        )
+        index = minimum_history - 1
         cooldown_until = -1
         daily_entry_count = 0
         while index < len(rows) - 1:
@@ -624,7 +666,13 @@ def evaluate_policy(
                 continue
             if bar.timestamp.time() >= segment_end:
                 break
-            feature = _setup_feature(rows, index, policy.lookback_bars)
+            feature = _setup_feature(
+                rows,
+                index,
+                policy.lookback_bars,
+                anchor_mode=policy.anchor_mode,
+                minimum_history_bars=minimum_history,
+            )
             if feature is None:
                 index += 1
                 continue

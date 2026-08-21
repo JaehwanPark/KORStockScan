@@ -108,6 +108,72 @@ def test_entry_candidate_blocks_stale_or_wide_bbo_and_active_episode():
     )
 
 
+def test_entry_evaluation_can_use_partial_early_history_when_policy_calibrated_it():
+    bars = [_bar(index, 10_000, 10_010, 9_990, 10_000, 100) for index in range(12)]
+    bars[-4] = _bar(8, 9_950, 9_960, 9_900, 9_910, 100)
+    bars[-3] = _bar(9, 9_910, 9_920, 9_890, 9_900, 100)
+    bars[-2] = _bar(10, 9_900, 9_940, 9_900, 9_930, 100)
+    bars[-1] = _bar(11, 9_930, 9_960, 9_920, 9_950, 150)
+    policy = {
+        "signal_policy": {
+            "segment_start_time": "10:30:00",
+            "segment_end_time": "13:30:00",
+            "lookback_bars": 15,
+            "minimum_history_bars": 8,
+            "anchor_mode": "rolling",
+            "drawdown_pct": 0.5,
+            "near_low_pct": 0.5,
+            "reclaim_ticks": 1,
+            "setup_valid_bars": 5,
+            "target_bps": 50,
+        }
+    }
+
+    candidate, diagnostic = WidgetSymbolRuntimeCollector._entry_evaluation(
+        bars=bars,
+        current_price=9_950,
+        bbo={"best_bid": 9_940, "best_ask": 9_950, "age_sec": 1.0},
+        policy=policy,
+        episode=EpisodeState(trade_date="2026-08-12"),
+        observed_at=datetime(2026, 8, 12, 11, 12, tzinfo=KST),
+    )
+
+    assert candidate is not None
+    assert diagnostic["first_blocker"] is None
+    assert diagnostic["minimum_history_bars"] == 8
+    assert diagnostic["runtime_effect"] is False
+
+
+def test_entry_evaluation_reports_drawdown_as_first_policy_blocker():
+    bars = [_bar(index, 10_000, 10_010, 9_990, 10_000, 100) for index in range(30)]
+    policy = {
+        "signal_policy": {
+            "segment_start_time": "10:30:00",
+            "segment_end_time": "13:30:00",
+            "lookback_bars": 15,
+            "drawdown_pct": 2.0,
+            "near_low_pct": 0.5,
+            "reclaim_ticks": 1,
+            "setup_valid_bars": 5,
+            "target_bps": 50,
+        }
+    }
+
+    candidate, diagnostic = WidgetSymbolRuntimeCollector._entry_evaluation(
+        bars=bars,
+        current_price=10_000,
+        bbo={"best_bid": 9_990, "best_ask": 10_000, "age_sec": 1.0},
+        policy=policy,
+        episode=EpisodeState(trade_date="2026-08-12"),
+        observed_at=datetime(2026, 8, 12, 11, 30, tzinfo=KST),
+    )
+
+    assert candidate is None
+    assert diagnostic["first_blocker"] == "drawdown_below_threshold"
+    assert diagnostic["best_observed_drawdown_pct"] == 0.0999
+    assert diagnostic["actual_order_submitted"] is False
+
+
 def test_support_break_confirmation_advances_once_per_completed_bar():
     episode = EpisodeState(trade_date="2026-08-12", active=True, support=10_000)
     first = _bar(28, 9_990, 10_000, 9_980, 9_990, 100)
@@ -254,6 +320,10 @@ def test_degraded_symbol_payload_clears_actionable_events(monkeypatch, tmp_path)
     assert payload["status"] == "data_wait"
     assert payload["advisory"]["state"] == "DATA_WAIT"
     assert payload["advisory"]["source_quality"]["status"] == "BLOCKED"
+    assert (
+        payload["advisory"]["entry_diagnostic"]["first_blocker"]
+        == "source_quality_blocked"
+    )
     assert payload["entry_event"] is None
     assert payload["exit_event"] is None
     assert payload["actual_order_submitted"] is False
