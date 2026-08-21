@@ -26952,17 +26952,39 @@ def evaluate_and_dispatch_fast_scalp_exit(
     quote_fields, mark_price, executable_buy_price, executable_sell_price = (
         _build_quote_consistency_fields(ws_data, side="sell", now_ts=observed_at)
     )
+
+    def _quote_blocks_fast_exit(
+        fields: dict[str, Any],
+        *,
+        executable_sell: int | float,
+    ) -> bool:
+        quote_reason_value = str(
+            fields.get("quote_consistency_reason") or ""
+        ).lower()
+        quote_state_value = str(fields.get("quote_consistency_state") or "").lower()
+        stale_quote = quote_reason_value in {"quote_stale", "stale_quote"}
+        safety_exit_allowed = bool(
+            _truthy_log_value(
+                fields.get("quote_consistency_safety_exit_allowed")
+            )
+            and _safe_float(executable_sell, 0.0) > 0
+        )
+        if safety_exit_allowed:
+            return False
+        return bool(
+            quote_state_value in {"missing", "diverged", "blocked"}
+            or quote_reason_value in {"conflicted", "price_conflict"}
+            or stale_quote
+            or _safe_float(executable_sell, 0.0) <= 0
+        )
+
     quote_reason = str(quote_fields.get("quote_consistency_reason") or "").lower()
     quote_state = str(quote_fields.get("quote_consistency_state") or "").lower()
     quote_blocked = bool(
-        quote_state in {"missing", "diverged", "blocked"}
-        or quote_reason
-        in {
-            "quote_stale",
-            "stale_quote",
-            "conflicted",
-            "price_conflict",
-        }
+        _quote_blocks_fast_exit(
+            quote_fields,
+            executable_sell=executable_sell_price,
+        )
         or _truthy_log_value(quote_fields.get("quote_consistency_entry_blocked"))
     )
     rest_state = "not_attempted"
@@ -26993,11 +27015,9 @@ def evaluate_and_dispatch_fast_scalp_exit(
         )
         quote_reason = str(quote_fields.get("quote_consistency_reason") or "").lower()
         quote_state = str(quote_fields.get("quote_consistency_state") or "").lower()
-        quote_blocked = bool(
-            quote_state in {"missing", "diverged", "blocked"}
-            or quote_reason
-            in {"quote_stale", "stale_quote", "conflicted", "price_conflict"}
-            or executable_sell_price <= 0
+        quote_blocked = _quote_blocks_fast_exit(
+            quote_fields,
+            executable_sell=executable_sell_price,
         )
         route_fields = _fast_exit_execution_route_fields(
             stock,
@@ -27017,8 +27037,8 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 "rest_check_state": rest_state,
                 "rest_check_elapsed_ms": round(rest_elapsed_ms, 3),
                 "source_quality_gate": (
-                    "fresh_ws_or_bounded_rest_consistent_sell_quote_and_"
-                    "venue_proven_execution_route"
+                    "fresh_ws_or_bounded_rest_consistent_sell_quote_or_"
+                    "explicit_cached_safety_exit_and_venue_proven_execution_route"
                 ),
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,

@@ -1359,6 +1359,30 @@ def _submit_safety_block_row(
         )
     )
     quote_age = _quote_age_ms(fields)
+    tick_speed_window_span_sec = _safe_float(
+        fields.get("rising_missed_tick_window_span_sec")
+    )
+    tick_speed_acceleration_ratio = _safe_float(
+        fields.get("rising_missed_tick_acceleration_ratio")
+    )
+    tick_speed_window_slow = _optional_boolish(
+        fields.get("rising_missed_tick_window_slow")
+    )
+    tick_speed_acceleration_slow = _optional_boolish(
+        fields.get("rising_missed_tick_accel_slow")
+    )
+    if stage != "rising_missed_tick_speed_entry_block":
+        tick_speed_block_profile = "not_applicable"
+    elif tick_speed_window_span_sec is None or tick_speed_acceleration_ratio is None:
+        tick_speed_block_profile = "missing_decision_input"
+    elif tick_speed_window_slow and tick_speed_acceleration_slow:
+        tick_speed_block_profile = "slow_window_and_relative_acceleration"
+    elif tick_speed_window_slow:
+        tick_speed_block_profile = "slow_window_only"
+    elif tick_speed_acceleration_slow:
+        tick_speed_block_profile = "relative_acceleration_only"
+    else:
+        tick_speed_block_profile = "guard_inputs_not_slow"
     return {
         "ts": _event_ts(row),
         "stage": row.get("stage"),
@@ -1522,6 +1546,63 @@ def _submit_safety_block_row(
         ),
         "orderbook_micro_state": fields.get("orderbook_micro_state"),
         "orderbook_micro_reason": fields.get("orderbook_micro_reason"),
+        # Preserve the exact tick-speed veto inputs. The runtime guard stays the
+        # authority; these fields only let postclose consumers distinguish a
+        # slow absolute tape from a relative-acceleration-only false negative.
+        "tick_speed_block_profile": tick_speed_block_profile,
+        "tick_speed_decision_input_complete": bool(
+            tick_speed_window_span_sec is not None
+            and tick_speed_acceleration_ratio is not None
+        ),
+        "tick_speed_window_span_sec": tick_speed_window_span_sec,
+        "tick_speed_window_span_sec_raw": _safe_float(
+            fields.get("rising_missed_tick_window_span_sec_raw")
+        ),
+        "tick_speed_window_max_span_sec": _safe_float(
+            fields.get("rising_missed_tick_window_max_span_sec")
+        ),
+        "tick_speed_window_slow": tick_speed_window_slow,
+        "tick_speed_acceleration_ratio": tick_speed_acceleration_ratio,
+        "tick_speed_acceleration_ratio_raw": _safe_float(
+            fields.get("rising_missed_tick_acceleration_ratio_raw")
+        ),
+        "tick_speed_min_acceleration_ratio": _safe_float(
+            fields.get("rising_missed_min_tick_acceleration_ratio")
+        ),
+        "tick_speed_acceleration_slow": tick_speed_acceleration_slow,
+        "tick_speed_absolute_recent_5tick_seconds": _safe_float(
+            fields.get("rising_missed_tick_absolute_recent_5tick_seconds")
+        ),
+        "tick_speed_absolute_sample_count": _safe_int(
+            fields.get("rising_missed_tick_absolute_sample_count")
+        ),
+        "tick_speed_absolute_quote_age_ms": _safe_float(
+            fields.get("rising_missed_tick_absolute_quote_age_ms")
+        ),
+        "tick_speed_absolute_orderbook_state": fields.get(
+            "rising_missed_tick_absolute_orderbook_state"
+        ),
+        "tick_speed_absolute_tp1_support_count": _safe_int(
+            fields.get("rising_missed_tick_absolute_tp1_support_count")
+        ),
+        "tick_speed_absolute_large_sell_detected": _optional_boolish(
+            fields.get("rising_missed_tick_absolute_large_sell_detected")
+        ),
+        "tick_speed_absolute_relief_enabled": _optional_boolish(
+            fields.get("rising_missed_tick_absolute_throughput_relief_enabled")
+        ),
+        "tick_speed_absolute_relief_active_date": fields.get(
+            "rising_missed_tick_absolute_throughput_relief_active_date"
+        ),
+        "tick_speed_absolute_relief_applied": _optional_boolish(
+            fields.get("rising_missed_tick_absolute_throughput_relief_applied")
+        ),
+        "tick_speed_absolute_relief_path": fields.get(
+            "rising_missed_tick_absolute_throughput_relief_path"
+        ),
+        "tick_speed_absolute_relief_checks": fields.get(
+            "rising_missed_tick_absolute_throughput_relief_checks"
+        ),
         "buy_pressure_usable": _optional_boolish(
             fields.get("weak_ai_micro_entry_block_buy_pressure_usable")
         ),
@@ -2024,6 +2105,24 @@ def _build_submit_safety_and_backoff_audit(
             bool(item.get("counterfactual_requires_executable_bbo"))
             and item.get("executable_bbo_state") == "pass"
             and _safe_int(item.get("post_block_executable_bbo_event_count")) > 0
+            for item in submit_blocks
+        ),
+        "tick_speed_block_count": sum(
+            item.get("stage") == "rising_missed_tick_speed_entry_block"
+            for item in submit_blocks
+        ),
+        "tick_speed_decision_input_complete_count": sum(
+            item.get("stage") == "rising_missed_tick_speed_entry_block"
+            and bool(item.get("tick_speed_decision_input_complete"))
+            for item in submit_blocks
+        ),
+        "tick_speed_relative_acceleration_only_block_count": sum(
+            item.get("tick_speed_block_profile") == "relative_acceleration_only"
+            for item in submit_blocks
+        ),
+        "tick_speed_absolute_relief_applied_count": sum(
+            item.get("stage") == "rising_missed_tick_speed_entry_block"
+            and bool(item.get("tick_speed_absolute_relief_applied"))
             for item in submit_blocks
         ),
         "blocked_zero_qty_count": sum(
@@ -7207,7 +7306,13 @@ def write_outputs(
             "true_ofi={true_ofi_ewma} true_ofi_reason={true_ofi_reason} "
             "spread_bps={spread_bps} source_quality_gate={source_quality_gate} "
             "source_quality_state={source_quality_state} missing_fields={source_quality_missing_fields} "
-            "micro_state={orderbook_micro_state}".format(**item)
+            "micro_state={orderbook_micro_state} tick_profile={tick_speed_block_profile} "
+            "tick_span_sec={tick_speed_window_span_sec} "
+            "tick_accel={tick_speed_acceleration_ratio} "
+            "absolute_5tick_sec={tick_speed_absolute_recent_5tick_seconds} "
+            "absolute_samples={tick_speed_absolute_sample_count} "
+            "absolute_relief_applied={tick_speed_absolute_relief_applied} "
+            "absolute_relief_path={tick_speed_absolute_relief_path}".format(**item)
         )
     lines.extend(["", "## Blocked Zero Quantity Counterfactual", ""])
     for item in report.get("blocked_zero_qty_counterfactual_rows") or []:

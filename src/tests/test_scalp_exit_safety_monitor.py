@@ -184,6 +184,113 @@ def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch):
     assert len(dispatches) == 1
 
 
+def test_fast_exit_uses_cached_sell_quote_when_safety_contract_allows_it(
+    monkeypatch,
+):
+    now_ts = 1_784_778_400.0
+    active_date = datetime.fromtimestamp(now_ts, tz=handlers._KST).date().isoformat()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", active_date)
+    monkeypatch.setattr(handlers, "_has_active_sell_order_pending", lambda stock: False)
+    monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda *args: False)
+    monkeypatch.setattr(
+        handlers,
+        "_fast_exit_execution_route_fields",
+        lambda *args, **kwargs: {
+            "fast_exit_broker_route": "SOR",
+            "fast_exit_execution_cohort": "KRX",
+            "fast_exit_route_source_quality_blocked": False,
+            "fast_exit_broker_route_blocked": False,
+        },
+    )
+
+    def quote_fields(*_args, safety_exit=False, **_kwargs):
+        return (
+            {
+                "quote_consistency_state": "stale",
+                "quote_consistency_reason": "quote_stale",
+                "quote_consistency_safety_exit_allowed": safety_exit,
+            },
+            9_800,
+            9_810,
+            9_800,
+        )
+
+    monkeypatch.setattr(handlers, "_build_quote_consistency_fields", quote_fields)
+    monkeypatch.setattr(
+        handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda *args, **kwargs: ({}, "timeout", 400.0),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "calculate_net_profit_rate",
+        lambda buy_price, price: ((float(price) - float(buy_price)) / float(buy_price))
+        * 100.0,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_rule_float",
+        lambda name, default=0.0: {
+            "SCALP_TRAILING_START_PCT": 0.6,
+            "SCALP_TRAILING_LIMIT_WEAK": 0.4,
+            "SCALP_TRAILING_LIMIT_STRONG": 0.8,
+        }.get(name, default),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_holding_score_runtime_context",
+        lambda *args, **kwargs: {"usable_for_negative_exit": False},
+    )
+    monkeypatch.setattr(handlers, "_holding_score_role_log_fields", lambda context: {})
+    monkeypatch.setattr(
+        handlers, "_scalping_micro_estimator_log_fields", lambda **_kwargs: {}
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_scalp_trailing_loss_conversion_recheck",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_scalp_trailing_continuation_recheck",
+        lambda **_kwargs: False,
+    )
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    dispatches = []
+    monkeypatch.setattr(
+        handlers,
+        "_dispatch_scalp_preset_exit",
+        lambda **kwargs: dispatches.append(kwargs),
+    )
+    handlers.HIGHEST_PRICES = {"475560": 10_077}
+    stock = {
+        "id": 475560,
+        "name": "cached-safety-exit",
+        "code": "475560",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "hard_stop_pct": -1.5,
+    }
+
+    assert handlers.evaluate_and_dispatch_fast_scalp_exit(
+        stock,
+        "475560",
+        {"curr": 9_800},
+        now_ts=now_ts,
+    )
+    assert len(dispatches) == 1
+    assert dispatches[0]["curr_p"] == 9_800
+    assert not any(stage == "scalp_fast_exit_quote_blocked" for stage, _ in logs)
+
+
 def test_dongyang_wide_spread_trailing_uses_confirmed_rest_bid(monkeypatch):
     now_ts = 1_784_778_400.0
     active_date = datetime.fromtimestamp(now_ts, tz=handlers._KST).date().isoformat()
@@ -1423,7 +1530,12 @@ def test_sell_cancel_error_keeps_confirmed_broker_position_holding(monkeypatch):
     monkeypatch.setattr(
         handlers.kiwoom_orders,
         "get_my_inventory",
-        lambda token: ([{"code": "123456", "qty": 3}], {"KRX"}),
+        lambda token: ([{"code": "123456", "qty": 7}], {"KRX"}),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_sell_order_terminal_absence_confirmed",
+        lambda code, order_no: (True, "ka10075_terminal_absence_confirmed"),
     )
     monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
     monkeypatch.setattr(handlers, "log_info", lambda *args, **kwargs: None)
@@ -1443,7 +1555,7 @@ def test_sell_cancel_error_keeps_confirmed_broker_position_holding(monkeypatch):
     handlers.process_sell_cancellation(stock, "123456", "O1", db)
 
     assert stock["status"] == "HOLDING"
-    assert stock["buy_qty"] == 3
+    assert stock["buy_qty"] == 7
     assert stock["sell_order_failure_count"] == 1
     assert "sell_odno" not in stock
     assert "exit_token" not in stock
@@ -1451,7 +1563,7 @@ def test_sell_cancel_error_keeps_confirmed_broker_position_holding(monkeypatch):
     assert db.updates == [{"status": "HOLDING"}]
 
 
-def test_sell_cancel_error_completes_only_after_all_venue_zero_confirmation(
+def test_sell_cancel_error_all_venue_zero_still_requires_exact_receipt(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -1479,10 +1591,15 @@ def test_sell_cancel_error_completes_only_after_all_venue_zero_confirmation(
 
     handlers.process_sell_cancellation(stock, "123456", "O1", db)
 
-    assert stock["status"] == "COMPLETED"
-    assert "sell_odno" not in stock
-    assert "123456" not in handlers.HIGHEST_PRICES
-    assert db.updates == [{"status": "COMPLETED"}]
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["sell_odno"] == "O1"
+    assert stock["sell_cancel_reconciliation_required"] is True
+    assert (
+        stock["sell_cancel_reconciliation_source"]
+        == "zero_inventory_exact_receipt_required"
+    )
+    assert "123456" in handlers.HIGHEST_PRICES
+    assert db.updates == [{"status": "SELL_ORDERED"}]
 
 
 def test_sell_cancel_error_with_partial_inventory_evidence_stays_sell_ordered(
