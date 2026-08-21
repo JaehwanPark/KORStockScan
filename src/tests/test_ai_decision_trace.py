@@ -956,6 +956,31 @@ def test_prompt_sanitizer_preserves_nonsecret_json_enum_token(monkeypatch, tmp_p
     assert fields["ai_prompt_replay_exact"] is False
 
 
+def test_prompt_sanitizer_keeps_nonsecret_json_enum_only_prompt_exact(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    prompt = "The action value must be exactly one JSON enum token: BUY, WAIT, or DROP."
+
+    fields = trace.capture_ai_request(
+        prompt=prompt,
+        user_input={"stock_code": "005930"},
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="request-enum-token-only",
+        model="gpt-test",
+        schema_name="entry_v1",
+        require_json=True,
+    )
+
+    prompt_row = _rows(trace._prompt_path(trace._date_text()))[0]
+    assert prompt_row["sanitized_prompt"] == prompt
+    assert prompt_row["redacted"] is False
+    assert prompt_row["replay_exact"] is True
+    assert fields["ai_prompt_redacted"] is False
+    assert fields["ai_prompt_replay_exact"] is True
+
+
 def test_payload_sanitizer_preserves_nonsecret_token_metrics_and_redacts_opaque_keys(
     monkeypatch, tmp_path
 ):

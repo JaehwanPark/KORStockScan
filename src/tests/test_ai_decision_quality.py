@@ -5711,6 +5711,27 @@ def test_micro_reversion_recovers_known_nonsecret_prompt_redaction_by_hash():
     )
 
 
+def test_micro_reversion_accepts_hash_exact_false_positive_redaction_flag():
+    exact = "The action value must be exactly one JSON enum token: BUY, WAIT, or DROP."
+    row = {
+        "sanitized_prompt": exact,
+        "replay_exact": False,
+        "redacted": True,
+    }
+
+    assert quality._verified_stored_prompt_body(
+        row,
+        expected_prompt_sha256=quality._stored_prompt_sha256(exact),
+    ) == (exact, "hash_exact_false_positive_redaction_flag")
+    assert (
+        quality._verified_stored_prompt_body(
+            row,
+            expected_prompt_sha256="f" * 64,
+        )
+        is None
+    )
+
+
 def test_micro_reversion_materialization_fails_closed_without_full_control_prompt():
     prepared, source_bundle = _micro_reversion_materialization_fixture()
     source_bundle["rows"][0]["current_control_prompt_contract"].pop("system_prompt")

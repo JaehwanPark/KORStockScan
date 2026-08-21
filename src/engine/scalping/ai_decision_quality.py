@@ -730,6 +730,13 @@ def _verified_stored_prompt_body(
         return None
     if row.get("replay_exact") is not False or row.get("redacted") is not True:
         return None
+    # Older trace producers counted an intentionally preserved
+    # ``JSON enum token: BUY`` sanitizer match as a redaction.  When the stored
+    # bytes still match the pre-sanitization prompt hash, no content changed and
+    # the prompt remains exact.  The hash comparison is mandatory so this path
+    # cannot restore a genuinely redacted credential-bearing prompt.
+    if _stored_prompt_sha256(prompt) == expected_prompt_sha256:
+        return prompt, "hash_exact_false_positive_redaction_flag"
     if prompt.count("[REDACTED]") != 1:
         return None
     for redacted_fragment, exact_fragment in _KNOWN_NON_SECRET_PROMPT_REDACTION_REPAIRS:

@@ -348,7 +348,10 @@ def _sanitize_text(value: str) -> tuple[str, bool]:
         cleaned = replaced
         redacted = redacted or count > 0
 
+    assignment_redacted = False
+
     def _redact_assignment(match: re.Match[str]) -> str:
+        nonlocal assignment_redacted
         prefix = match.string[max(0, match.start() - 10) : match.start()].lower()
         raw_value = match.group(3).strip("\"'").upper()
         if (
@@ -357,13 +360,14 @@ def _sanitize_text(value: str) -> tuple[str, bool]:
             and raw_value in {"BUY", "WAIT", "DROP"}
         ):
             return match.group(0)
+        assignment_redacted = True
         return f"{match.group(1)}{match.group(2)}[REDACTED]"
 
-    cleaned, count = _EMBEDDED_SECRET_ASSIGNMENT.subn(
+    cleaned, _ = _EMBEDDED_SECRET_ASSIGNMENT.subn(
         _redact_assignment,
         cleaned,
     )
-    return cleaned, bool(redacted or count > 0)
+    return cleaned, bool(redacted or assignment_redacted)
 
 
 def _normalized_key(value: Any) -> str:
