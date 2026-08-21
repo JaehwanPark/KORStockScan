@@ -25,12 +25,31 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
 
+# A child-only graceful restart can keep the long-lived supervisor's inherited
+# environment.  Strip retired trading authority before importing modules that
+# may snapshot env-backed runtime flags.
+from src.utils.runtime_flags import (
+    clear_startup_retired_runtime_env,
+    is_trading_paused,
+)
+
+_RETIRED_RUNTIME_ENV_CLEARED_AT_STARTUP = clear_startup_retired_runtime_env()
+if __name__ == "__main__" and _RETIRED_RUNTIME_ENV_CLEARED_AT_STARTUP:
+    # Python can remove a value from os.environ for module consumers while the
+    # original exec environment remains visible in /proc/<pid>/environ.  Re-exec
+    # once with the sanitized mapping so runtime provenance and effective
+    # authority agree even under an older long-lived run_bot supervisor.
+    os.execve(
+        sys.executable,
+        [sys.executable, *sys.argv],
+        dict(os.environ),
+    )
+
 # 💡 [아키텍처 포인트 1] 텔레그램 라이브러리(telebot) 임포트 완전 제거 (의존성 분리)
 # 모든 텔레그램 로직은 telegram_manager가 전담합니다.
 
 # 💡 내부 모듈 임포트
 from src.utils import kiwoom_utils
-from src.utils.runtime_flags import is_trading_paused
 from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 from src.engine.daily_report_service import (

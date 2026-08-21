@@ -1,8 +1,34 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import MutableMapping
 
 from src.utils.constants import PROJECT_ROOT
+
+STARTUP_RETIRED_RUNTIME_ENV_KEYS = frozenset(
+    {
+        # The previous-limit-up entry/observation family was fully retired on
+        # 2026-08-14.  A long-lived run_bot supervisor may still carry the old
+        # value across child-only graceful restarts, so the child entrypoint
+        # must remove it before importing any trading module.
+        "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED",
+    }
+)
+
+
+def clear_startup_retired_runtime_env(
+    environ: MutableMapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Remove retired inherited runtime authority before engine imports."""
+
+    target = os.environ if environ is None else environ
+    removed: list[str] = []
+    for key in sorted(STARTUP_RETIRED_RUNTIME_ENV_KEYS):
+        if key in target:
+            target.pop(key, None)
+            removed.append(key)
+    return tuple(removed)
 
 
 def get_pause_flag_path() -> Path:

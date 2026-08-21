@@ -61,6 +61,7 @@ from src.engine.swing.sim_auto_approval_control_tower import (
 )
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import count_krx_trading_days
+from src.utils.runtime_flags import STARTUP_RETIRED_RUNTIME_ENV_KEYS
 
 APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
 RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
@@ -102,10 +103,6 @@ NON_LIVE_SELECTABLE_FAMILIES = {
     "panic_entry_freeze_guard",
 }
 RETIRED_RUNTIME_ENV_KEYS = {
-    # The previous-limit-up observation/runtime family was fully retired on
-    # 2026-08-14.  Keep the old persistent operator key in the denylist so a
-    # stale ignored override cannot silently reactivate it at PREOPEN.
-    "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED",
     "KORSTOCKSCAN_LATENCY_CANARY_PROFILE",
     "KORSTOCKSCAN_SCALP_LATENCY_FALLBACK_ENABLED",
     "KORSTOCKSCAN_SCALP_SPLIT_ENTRY_ENABLED",
@@ -143,7 +140,7 @@ RETIRED_RUNTIME_ENV_KEYS = {
     "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_TICK_ACCEL",
     "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_BUY_PRESSURE",
     "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP",
-}
+} | set(STARTUP_RETIRED_RUNTIME_ENV_KEYS)
 REMOVED_RUNTIME_ENV_KEYS = {
     "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED",
     "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY",

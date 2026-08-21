@@ -445,6 +445,10 @@ while true; do
     record_enabled_dated_runtime_provenance "$RUNTIME_TARGET_DATE"
     apply_authoritative_ai_context_promotion "$RUNTIME_TARGET_DATE" || exit 1
     verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE" || exit 1
+    # Reassert retirement after every sourced layer.  bot_main also performs
+    # the same fail-safe before engine imports for child-only restarts under an
+    # older long-lived supervisor.
+    unset KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED
     export_runtime_source_provenance
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)

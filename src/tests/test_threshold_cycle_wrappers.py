@@ -2127,6 +2127,9 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert script.index("unset KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED") < script.index(
         'if [ -f "$THRESHOLD_RUNTIME_ENV" ]'
     )
+    assert script.rindex("unset KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED") > script.index(
+        "verify_threshold_runtime_env_handoff"
+    )
 
     assert "wait_for_threshold_runtime_env" in script
     assert "KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_REQUIRED" in script
@@ -2214,10 +2217,14 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert 'export KORSTOCKSCAN_RUNTIME_SOURCE_ROOT="$PROJECT_DIR"' in script
     assert 'export KORSTOCKSCAN_RUNTIME_SOURCE_DIRTY="$source_dirty"' in script
     assert "KORSTOCKSCAN_RUNTIME_STARTED_AT_KST" in script
-    assert (
-        'verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE" || exit 1\n'
-        "    export_runtime_source_provenance\n" in script
+    verify_call_index = script.index(
+        'verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE" || exit 1'
     )
+    retired_unset_index = script.rindex("unset KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED")
+    provenance_export_index = script.index(
+        "export_runtime_source_provenance", verify_call_index
+    )
+    assert verify_call_index < retired_unset_index < provenance_export_index
     assert (
         "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED:KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE:"
         in script
