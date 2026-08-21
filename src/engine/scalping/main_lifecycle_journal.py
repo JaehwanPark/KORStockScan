@@ -314,7 +314,12 @@ def _raw_execution_no(value: Any) -> str:
         text = _raw_wire_text(value)
     except ValueError as exc:
         raise ValueError("broker_execution_execution_no_invalid") from exc
-    if not re.fullmatch(r"[0-9]{7}", text) or int(text) == 0:
+    # FID 909 is documented as an opaque String without a fixed length.  Live
+    # receipts include shorter positive decimal identifiers (for example
+    # ``7207`` and ``53289``), so preserve the exact wire text instead of
+    # manufacturing a seven-digit value.  The bounded decimal contract keeps
+    # empty, zero, signed, coerced, and unreasonably large values fail-closed.
+    if not re.fullmatch(r"[0-9]{1,20}", text) or int(text) == 0:
         raise ValueError("broker_execution_execution_no_invalid")
     return text
 

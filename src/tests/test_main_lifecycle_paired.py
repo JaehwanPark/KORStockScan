@@ -1808,11 +1808,19 @@ def test_official_broker_execution_native_contract_is_strict_and_source_only() -
             "broker_execution_order_status_not_execution",
         ),
         ({"909": "0000000"}, "broker_execution_execution_no_invalid"),
+        (
+            {"909": "123456789012345678901"},
+            "broker_execution_execution_no_invalid",
+        ),
         ({"908": "250000"}, "broker_execution_time_invalid"),
         ({"908": "09:00:03"}, "broker_execution_time_invalid"),
         ({"905": "++매 수"}, "broker_execution_side_text_invalid"),
         ({"2134": "K R X"}, "broker_execution_venue_code_invalid"),
         ({"2135": "한국거래소"}, "broker_execution_venue_text_invalid"),
+        (
+            {"2134": "0", "2135": "SOR", "2136": "Y"},
+            "broker_execution_venue_text_invalid",
+        ),
     ],
 )
 def test_official_execution_rejects_wrong_stock_side_status_or_execution_id(
@@ -1842,6 +1850,35 @@ def test_official_execution_rejects_wrong_stock_side_status_or_execution_id(
 
     assert proof["broker_execution_provenance_state"] == "invalid"
     assert proof["broker_execution_provenance_error"] == expected_error
+
+
+@pytest.mark.parametrize("execution_no", ["7207", "53289", "0001901"])
+def test_official_execution_accepts_variable_length_positive_fid_909(
+    execution_no: str,
+) -> None:
+    native = _broker_raw_fields(
+        order_no="0000901",
+        execution_no=execution_no,
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+    )
+
+    proof = build_broker_execution_provenance(
+        native,
+        expected_qty=5,
+        expected_price=10_000,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+
+    assert proof["broker_execution_provenance_state"] == "complete"
+    assert proof["broker_execution_no"] == execution_no
 
 
 def test_pipeline_partial_full_replay_is_deduped_by_exact_execution_identity(

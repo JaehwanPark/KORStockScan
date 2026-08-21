@@ -25,6 +25,12 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
+- [ ] `[MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0824] micro observer 저장공간·연속수집 source gap 복구 확인` (`Due: 2026-08-24`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: RuntimeStability`)
+  - Source: [main_ai_quality_r0_r3_cycle_2026-08-21.json](/home/ubuntu/KORStockScan/data/report/main_ai_quality_r0_r3/main_ai_quality_r0_r3_cycle_2026-08-21.json)
+  - 판정 기준: workorder `main-ai-gap-9255430e31f5ce8afdedd9dd`의 owner=`MicroReversionForwardCollectorContinuity`, reason_codes=`stop_required, past_market_row_missing=167`를 source-only producer 보완으로 닫는다. 장전 free bytes가 writer low-disk watermark를 충분히 상회하는지 확인하고, 부족하면 실주문과 무관한 closed-date verified compression만 실행한 뒤 observer canary를 재검증한다.
+  - 완료 조건: exact-date canary remains pass or row-exclusion-only through close; later clean windows continue collecting; provider replay remains held until queue-loss scope
+  - 권한 경계: 이 항목은 source-quality/instrumentation 복구 전용이며 runtime env, 실주문·취소, threshold, provider/bot, quantity/cap, hard safety 또는 broker guard 변경 권한이 없다.
+
 - [ ] `[ThresholdEnvAutoApplyPreopen0824] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-08-24`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-08-21.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-08-21.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
@@ -77,6 +83,12 @@
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
   - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
+
+- [ ] `[MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824] RuntimeExecutionReceiptCustodyRepair main lifecycle source gap 복구 확인` (`Due: 2026-08-24`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:20`, `Track: ScalpingLogic`)
+  - Source: [main_ai_quality_r0_r3_cycle_2026-08-21.json](/home/ubuntu/KORStockScan/data/report/main_ai_quality_r0_r3/main_ai_quality_r0_r3_cycle_2026-08-21.json)
+  - 판정 기준: workorder `main-ai-gap-5a12fd3b4602bc8929fb5f32`의 owner=`RuntimeExecutionReceiptCustodyRepair`, reason_codes=`broker_execution_provenance_gap_count=2`를 source-only producer 보완으로 닫는다. 공식 raw execution envelope의 order/execution identity를 합성 없이 검증하고 결손 lifecycle만 제외한 뒤 paired producer를 재검증한다.
+  - 완료 조건: official raw execution envelope/order/execution identity is complete for at least one reconciled lifecycle while custody and order authority remain unchanged
+  - 권한 경계: 이 항목은 source-quality/instrumentation 복구 전용이며 runtime env, 실주문·취소, threshold, provider/bot, quantity/cap, hard safety 또는 broker guard 변경 권한이 없다.
 
 - [ ] `[CodeImprovementWorkorderReview0824] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-08-24`, `Slot: POSTCLOSE`, `TimeWindow: 21:15~21:25`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-08-21.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-08-21.md), [code_improvement_workorder_2026-08-21.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-08-21.json)

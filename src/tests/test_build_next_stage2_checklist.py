@@ -27,6 +27,7 @@ def _patch_dirs(monkeypatch, tmp_path):
         tmp_path / "data" / "report" / "automation_chain_trigger_decision"
     )
     rising_missed = tmp_path / "data" / "report" / "rising_missed_scout_workorder"
+    main_ai_quality = tmp_path / "data" / "report" / "main_ai_quality_r0_r3"
     machine_micro_approval = (
         tmp_path / "data" / "report" / "machine_microstructure_policy_approval"
     )
@@ -43,6 +44,7 @@ def _patch_dirs(monkeypatch, tmp_path):
         tuning_performance,
         trigger_decision,
         rising_missed,
+        main_ai_quality,
         machine_micro_approval,
         machine_micro_attribution,
     ):
@@ -58,6 +60,7 @@ def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "TUNING_PERFORMANCE_REPORT_DIR", tuning_performance)
     monkeypatch.setattr(mod, "AUTOMATION_TRIGGER_DECISION_REPORT_DIR", trigger_decision)
     monkeypatch.setattr(mod, "RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR", rising_missed)
+    monkeypatch.setattr(mod, "MAIN_AI_QUALITY_REPORT_DIR", main_ai_quality)
     monkeypatch.setattr(
         mod,
         "MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR",
@@ -74,6 +77,50 @@ def _patch_dirs(monkeypatch, tmp_path):
 def _write_json(path: Path, payload: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _main_ai_quality_report(source_date: str, owners: list[str]) -> dict:
+    workorders = []
+    for owner in owners:
+        content = {
+            "target_date": source_date,
+            "owner": owner,
+            "reason_codes": [f"{owner}=1"],
+            "acceptance_test": f"{owner} acceptance closes",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        workorders.append(
+            {
+                "schema": "main_ai_quality_source_only_gap_workorder_v1",
+                "workorder_id": f"main-ai-gap-{mod._canonical_sha256(content)[:24]}",
+                "status": "open_source_producer_repair",
+                **content,
+            }
+        )
+    body = {
+        "schema": "main_ai_quality_postclose_r0_r3_cycle_v1",
+        "target_date": source_date,
+        "decision_authority": "postclose_source_only_ai_quality_research",
+        "source_gap_diagnostics": {
+            "schema": "main_ai_quality_source_only_gap_diagnostics_v1",
+            "target_date": source_date,
+            "contract_findings": [],
+            "workorders": workorders,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+        "source_only_gap_workorders": workorders,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    return {**body, "artifact_content_sha256": mod._canonical_sha256(body)}
 
 
 def _write_machine_micro_approval_report(path: Path, payload: dict) -> None:
@@ -1593,3 +1640,207 @@ def test_build_next_stage2_checklist_preserves_unknown_tasks_inside_auto_block(
     assert "[CustomPostclose0526]" in text
     assert text.index("[CustomPreopen0526]") < text.index("## 장중 체크리스트")
     assert text.index("[CustomPostclose0526]") > text.index("## 장후 체크리스트")
+
+
+def test_build_next_stage2_checklist_hands_off_main_ai_source_gap_workorders(
+    monkeypatch, tmp_path
+) -> None:
+    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
+        monkeypatch, tmp_path
+    )
+    source_date = "2026-08-21"
+    _write_json(
+        ev_dir / f"threshold_cycle_ev_{source_date}.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    report_path = (
+        mod.MAIN_AI_QUALITY_REPORT_DIR
+        / f"main_ai_quality_r0_r3_cycle_{source_date}.json"
+    )
+    _write_json(
+        report_path,
+        _main_ai_quality_report(
+            source_date,
+            [
+                "MicroReversionForwardCollectorContinuity",
+                "RuntimeExecutionReceiptCustodyRepair",
+            ],
+        ),
+    )
+
+    summary = mod.build_next_stage2_checklist(source_date)
+
+    text = Path(summary["path"]).read_text(encoding="utf-8")
+    assert (
+        "[MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0824]" in text
+    )
+    assert "[MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824]" in text
+    assert "closed-date verified compression" in text
+    assert "공식 raw execution envelope" in text
+    assert "runtime env, 실주문·취소" in text
+    monkeypatch.setenv("DOC_CHECKLIST_PATH", summary["path"])
+    parsed = parse_checklist_tasks()
+    parsed_titles = {task.title for task in parsed}
+    assert any(
+        "MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0824" in title
+        for title in parsed_titles
+    )
+    assert any(
+        "MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824" in title
+        for title in parsed_titles
+    )
+
+
+def test_build_next_stage2_checklist_rejects_tampered_main_ai_workorder_report(
+    monkeypatch, tmp_path
+) -> None:
+    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
+        monkeypatch, tmp_path
+    )
+    source_date = "2026-08-21"
+    _write_json(
+        ev_dir / f"threshold_cycle_ev_{source_date}.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    report = _main_ai_quality_report(
+        source_date, ["RuntimeExecutionReceiptCustodyRepair"]
+    )
+    report["source_only_gap_workorders"][0]["runtime_effect"] = True
+    report["artifact_content_sha256"] = mod._canonical_sha256(
+        {
+            key: value
+            for key, value in report.items()
+            if key != "artifact_content_sha256"
+        }
+    )
+    _write_json(
+        mod.MAIN_AI_QUALITY_REPORT_DIR
+        / f"main_ai_quality_r0_r3_cycle_{source_date}.json",
+        report,
+    )
+
+    summary = mod.build_next_stage2_checklist(source_date)
+
+    text = Path(summary["path"]).read_text(encoding="utf-8")
+    assert "[MainAIQualitySourceGapArtifactContract0824]" in text
+    assert (
+        "[MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824]" not in text
+    )
+    assert "source_status=`invalid_workorder_authority`" in text
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "expected_status"),
+    [
+        ("report", "provider_authority", "invalid_authority"),
+        ("diagnostics", "runtime_authority", "invalid_workorder_authority"),
+        ("workorder", "order_authority", "invalid_workorder_authority"),
+    ],
+)
+def test_build_next_stage2_checklist_rejects_main_ai_optional_authority_tamper(
+    monkeypatch,
+    tmp_path,
+    target: str,
+    field: str,
+    expected_status: str,
+) -> None:
+    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
+        monkeypatch, tmp_path
+    )
+    source_date = "2026-08-21"
+    _write_json(
+        ev_dir / f"threshold_cycle_ev_{source_date}.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    report = _main_ai_quality_report(
+        source_date, ["RuntimeExecutionReceiptCustodyRepair"]
+    )
+    if target == "report":
+        report[field] = True
+    elif target == "diagnostics":
+        report["source_gap_diagnostics"][field] = True
+    else:
+        report["source_only_gap_workorders"][0][field] = True
+        report["source_gap_diagnostics"]["workorders"] = report[
+            "source_only_gap_workorders"
+        ]
+    report["artifact_content_sha256"] = mod._canonical_sha256(
+        {
+            key: value
+            for key, value in report.items()
+            if key != "artifact_content_sha256"
+        }
+    )
+    _write_json(
+        mod.MAIN_AI_QUALITY_REPORT_DIR
+        / f"main_ai_quality_r0_r3_cycle_{source_date}.json",
+        report,
+    )
+
+    summary = mod.build_next_stage2_checklist(source_date)
+
+    text = Path(summary["path"]).read_text(encoding="utf-8")
+    assert "[MainAIQualitySourceGapArtifactContract0824]" in text
+    assert f"source_status=`{expected_status}`" in text
+    assert (
+        "[MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824]" not in text
+    )
+
+
+def test_build_next_stage2_checklist_rejects_main_ai_diagnostic_contract_findings(
+    monkeypatch, tmp_path
+) -> None:
+    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
+        monkeypatch, tmp_path
+    )
+    source_date = "2026-08-21"
+    _write_json(
+        ev_dir / f"threshold_cycle_ev_{source_date}.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    report = _main_ai_quality_report(
+        source_date, ["RuntimeExecutionReceiptCustodyRepair"]
+    )
+    report["source_gap_diagnostics"]["contract_findings"] = [
+        "lifecycle_content_hash_invalid"
+    ]
+    report["artifact_content_sha256"] = mod._canonical_sha256(
+        {
+            key: value
+            for key, value in report.items()
+            if key != "artifact_content_sha256"
+        }
+    )
+    _write_json(
+        mod.MAIN_AI_QUALITY_REPORT_DIR
+        / f"main_ai_quality_r0_r3_cycle_{source_date}.json",
+        report,
+    )
+
+    summary = mod.build_next_stage2_checklist(source_date)
+
+    text = Path(summary["path"]).read_text(encoding="utf-8")
+    assert "[MainAIQualitySourceGapArtifactContract0824]" in text
+    assert "source_status=`invalid_workorders`" in text
+    assert (
+        "[MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824]" not in text
+    )
+
+
+def test_build_next_stage2_checklist_surfaces_missing_main_ai_report_after_contract_start(
+    monkeypatch, tmp_path
+) -> None:
+    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
+        monkeypatch, tmp_path
+    )
+    source_date = "2026-08-21"
+    _write_json(
+        ev_dir / f"threshold_cycle_ev_{source_date}.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+
+    summary = mod.build_next_stage2_checklist(source_date)
+
+    text = Path(summary["path"]).read_text(encoding="utf-8")
+    assert "[MainAIQualitySourceGapArtifactContract0824]" in text
+    assert "source_status=`missing_artifact`" in text
