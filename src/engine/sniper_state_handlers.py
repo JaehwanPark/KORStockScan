@@ -34258,6 +34258,90 @@ def observe_risky_micro_episode_executable_bbo_paths(
     }
 
 
+def _post_sell_exact_route_subscription_snapshot(
+    *, code: str, expected_market_route: str, observed_at: float
+) -> dict[str, Any]:
+    """Resolve exact registered WS route without treating a base code as enough."""
+
+    base_subscription_present = False
+    registered_items: list[str] = []
+    registered_routes: list[str] = []
+    resolution = "ws_manager_unavailable"
+    if WS_MANAGER is None:
+        return {
+            "base_subscription_present": base_subscription_present,
+            "exact_route_subscription_present": False,
+            "registered_items": registered_items,
+            "registered_routes": registered_routes,
+            "resolution": resolution,
+        }
+
+    subscribed_codes = {
+        str(value or "").strip()[:6]
+        for value in (getattr(WS_MANAGER, "subscribed_codes", set()) or set())
+    }
+    base_subscription_present = code in subscribed_codes
+    snapshot_fn = getattr(WS_MANAGER, "get_subscription_freshness_snapshot", None)
+    if not callable(snapshot_fn):
+        resolution = "route_snapshot_unavailable"
+        return {
+            "base_subscription_present": base_subscription_present,
+            "exact_route_subscription_present": False,
+            "registered_items": registered_items,
+            "registered_routes": registered_routes,
+            "resolution": resolution,
+        }
+    try:
+        snapshot = snapshot_fn([code], now_ts=observed_at) or {}
+        rows = snapshot.get("rows") if isinstance(snapshot, dict) else []
+        row = next(
+            (
+                item
+                for item in (rows or [])
+                if isinstance(item, dict)
+                and str(item.get("stock_code") or "").strip()[:6] == code
+            ),
+            {},
+        )
+        registered_items = [
+            str(value or "").strip()
+            for value in (row.get("registered_items") or [])
+            if str(value or "").strip()
+        ]
+        registered_routes = [
+            str(value or "").strip()
+            for value in (row.get("registered_market_routes") or [])
+            if str(value or "").strip()
+        ]
+        base_subscription_present = bool(row.get("subscribed"))
+        exact_route_present = bool(
+            base_subscription_present
+            and expected_market_route
+            and expected_market_route in registered_routes
+        )
+        if exact_route_present:
+            resolution = "exact_registered_market_route_present"
+        elif base_subscription_present:
+            resolution = "base_subscribed_but_exact_route_missing"
+        else:
+            resolution = "base_subscription_missing"
+        return {
+            "base_subscription_present": base_subscription_present,
+            "exact_route_subscription_present": exact_route_present,
+            "registered_items": registered_items,
+            "registered_routes": registered_routes,
+            "resolution": resolution,
+        }
+    except Exception as exc:
+        return {
+            "base_subscription_present": base_subscription_present,
+            "exact_route_subscription_present": False,
+            "registered_items": registered_items,
+            "registered_routes": registered_routes,
+            "resolution": f"route_snapshot_error:{type(exc).__name__}",
+        }
+
+
 def observe_post_sell_executable_bbo_horizons(
     *, now_ts: float | None = None
 ) -> dict[str, int]:
@@ -34283,18 +34367,21 @@ def observe_post_sell_executable_bbo_horizons(
             continue
         try:
             ws_data: dict[str, Any] = {}
-            subscribed_codes = set()
             if WS_MANAGER is not None and hasattr(WS_MANAGER, "get_latest_data"):
-                subscribed_codes = {
-                    str(value or "").strip()[:6]
-                    for value in (
-                        getattr(WS_MANAGER, "subscribed_codes", set()) or set()
-                    )
-                }
                 latest = WS_MANAGER.get_latest_data(code) or {}
                 if isinstance(latest, dict):
                     ws_data = latest
-            subscription_present = code in subscribed_codes
+            expected_market_route = str(
+                registration.get("expected_market_route") or ""
+            ).strip()
+            subscription_snapshot = _post_sell_exact_route_subscription_snapshot(
+                code=code,
+                expected_market_route=expected_market_route,
+                observed_at=observed_at,
+            )
+            subscription_present = bool(
+                subscription_snapshot.get("exact_route_subscription_present")
+            )
             scoped_ws, route_scope_fields = _risky_micro_route_scoped_0d_bbo(
                 ws_data,
                 code=code,
@@ -34379,6 +34466,20 @@ def observe_post_sell_executable_bbo_horizons(
                     "post_sell_executable_bbo_quote_fresh": fresh_at_horizon,
                     "post_sell_executable_bbo_subscription_present": (
                         subscription_present
+                    ),
+                    "post_sell_executable_bbo_base_subscription_present": bool(
+                        subscription_snapshot.get("base_subscription_present")
+                    ),
+                    "post_sell_executable_bbo_registered_items": "|".join(
+                        subscription_snapshot.get("registered_items") or []
+                    )
+                    or "-",
+                    "post_sell_executable_bbo_registered_market_routes": "|".join(
+                        subscription_snapshot.get("registered_routes") or []
+                    )
+                    or "-",
+                    "post_sell_executable_bbo_subscription_resolution": str(
+                        subscription_snapshot.get("resolution") or "unknown"
                     ),
                     "post_sell_executable_bbo_sell_price": sell_price,
                     "post_sell_executable_bbo_bid_return_pct": return_pct,

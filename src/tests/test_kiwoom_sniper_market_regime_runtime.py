@@ -10621,6 +10621,41 @@ def test_ws_prune_retains_widget_price_comparison_subscription(monkeypatch):
     assert published == []
 
 
+def test_ws_prune_preserves_post_sell_exact_route_before_observation_demotion(
+    monkeypatch,
+):
+    demoted = []
+    published = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "WS_MANAGER",
+        SimpleNamespace(
+            subscribed_codes={"005930"},
+            is_pinned_observation_subscription=lambda code: code == "005930",
+            retain_micro_reversion_as_observation_only=lambda code: demoted.append(
+                code
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "should_retain_ws_subscription",
+        lambda code, now_ts=None: code == "005930",
+    )
+
+    kiwoom_sniper_v2._prune_ws_subscriptions_for_inactive_targets([])
+
+    assert demoted == []
+    assert published == []
+
+
 def test_execution_dependencies_bind_non_revive_smoothing_registration(monkeypatch):
     captured = {}
     monkeypatch.setattr(kiwoom_sniper_v2, "_EXECUTION_DEPS", {})

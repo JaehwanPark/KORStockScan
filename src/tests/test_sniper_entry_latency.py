@@ -450,6 +450,20 @@ def test_post_sell_bbo_observer_emits_fresh_exact_route_horizon(monkeypatch):
     class FakeWsManager:
         subscribed_codes = {"005090"}
 
+        def get_subscription_freshness_snapshot(self, codes, *, now_ts):
+            assert codes == ["005090"]
+            assert now_ts == observed_at
+            return {
+                "rows": [
+                    {
+                        "stock_code": "005090",
+                        "subscribed": True,
+                        "registered_items": ["005090_AL"],
+                        "registered_market_routes": ["krx_nxt_integrated"],
+                    }
+                ]
+            }
+
         def get_latest_data(self, code):
             assert code == "005090"
             return {
@@ -503,6 +517,14 @@ def test_post_sell_bbo_observer_emits_fresh_exact_route_horizon(monkeypatch):
     stage, fields = logs[0]
     assert stage == "post_sell_executable_bbo_horizon_observed"
     assert fields["post_sell_executable_bbo_subscription_present"] is True
+    assert fields["post_sell_executable_bbo_base_subscription_present"] is True
+    assert fields["post_sell_executable_bbo_registered_items"] == "005090_AL"
+    assert fields["post_sell_executable_bbo_registered_market_routes"] == (
+        "krx_nxt_integrated"
+    )
+    assert fields["post_sell_executable_bbo_subscription_resolution"] == (
+        "exact_registered_market_route_present"
+    )
     assert fields["post_sell_executable_bbo_horizon_status"] == (
         "fresh_executable_bbo_observed"
     )
@@ -537,6 +559,18 @@ def test_post_sell_bbo_observer_does_not_accept_unsubscribed_cached_quote(
 
     class FakeWsManager:
         subscribed_codes = set()
+
+        def get_subscription_freshness_snapshot(self, codes, *, now_ts):
+            return {
+                "rows": [
+                    {
+                        "stock_code": "005090",
+                        "subscribed": False,
+                        "registered_items": [],
+                        "registered_market_routes": [],
+                    }
+                ]
+            }
 
         def get_latest_data(self, _code):
             return {
@@ -593,6 +627,38 @@ def test_post_sell_bbo_observer_does_not_accept_unsubscribed_cached_quote(
     assert fields["post_sell_executable_bbo_bid_return_pct"] == "-"
 
 
+def test_post_sell_bbo_subscription_requires_exact_registered_route(monkeypatch):
+    class FakeWsManager:
+        subscribed_codes = {"005090"}
+
+        def get_subscription_freshness_snapshot(self, codes, *, now_ts):
+            assert codes == ["005090"]
+            return {
+                "rows": [
+                    {
+                        "stock_code": "005090",
+                        "subscribed": True,
+                        "registered_items": ["005090"],
+                        "registered_market_routes": ["krx_regular"],
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+
+    result = state_handlers._post_sell_exact_route_subscription_snapshot(
+        code="005090",
+        expected_market_route="krx_nxt_integrated",
+        observed_at=1.0,
+    )
+
+    assert result["base_subscription_present"] is True
+    assert result["exact_route_subscription_present"] is False
+    assert result["registered_items"] == ["005090"]
+    assert result["registered_routes"] == ["krx_regular"]
+    assert result["resolution"] == "base_subscribed_but_exact_route_missing"
+
+
 def test_post_sell_bbo_observer_accepts_quote_just_before_due_when_still_fresh(
     monkeypatch,
 ):
@@ -617,6 +683,18 @@ def test_post_sell_bbo_observer_accepts_quote_just_before_due_when_still_fresh(
 
     class FakeWsManager:
         subscribed_codes = {"005090"}
+
+        def get_subscription_freshness_snapshot(self, codes, *, now_ts):
+            return {
+                "rows": [
+                    {
+                        "stock_code": "005090",
+                        "subscribed": True,
+                        "registered_items": ["005090_AL"],
+                        "registered_market_routes": ["krx_nxt_integrated"],
+                    }
+                ]
+            }
 
         def get_latest_data(self, _code):
             return {
@@ -690,6 +768,18 @@ def test_post_sell_bbo_observer_does_not_backfill_horizon_after_grace(monkeypatc
 
     class FakeWsManager:
         subscribed_codes = {"005090"}
+
+        def get_subscription_freshness_snapshot(self, codes, *, now_ts):
+            return {
+                "rows": [
+                    {
+                        "stock_code": "005090",
+                        "subscribed": True,
+                        "registered_items": ["005090_AL"],
+                        "registered_market_routes": ["krx_nxt_integrated"],
+                    }
+                ]
+            }
 
         def get_latest_data(self, _code):
             return {

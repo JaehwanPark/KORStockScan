@@ -99,6 +99,7 @@ _BROKER_EXECUTION_RAW_FIELD_KEYS = (
     "911",
     "914",
     "915",
+    "919",
     "2134",
     "2135",
     "2136",
@@ -4863,7 +4864,16 @@ def _find_order_notice_target(code, exec_type, order_no):
     return None
 
 
-def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, status):
+def _apply_order_notice_to_target(
+    target_stock,
+    *,
+    code,
+    exec_type,
+    order_no,
+    status,
+    broker_reject_reason_raw="",
+    broker_execution_time_raw="",
+):
     changed = False
 
     if exec_type == "BUY":
@@ -4876,7 +4886,12 @@ def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, st
                 if not isinstance(notices, dict):
                     notices = {}
                     target_stock["pending_add_notice_by_order_no"] = notices
-                notices[str(order_no)] = {"status": status, "notice_at": time.time()}
+                notices[str(order_no)] = {
+                    "status": status,
+                    "notice_at": time.time(),
+                    "broker_reject_reason_raw": broker_reject_reason_raw,
+                    "broker_execution_time_raw": broker_execution_time_raw,
+                }
                 changed = True
             if changed:
                 log_info(
@@ -4900,15 +4915,36 @@ def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, st
         if target_order:
             target_order["notice_status"] = status
             target_order["notice_at"] = time.time()
+            target_order["notice_broker_reject_reason_raw"] = (
+                broker_reject_reason_raw
+            )
+            target_order["notice_broker_execution_time_raw"] = (
+                broker_execution_time_raw
+            )
             changed = True
 
         known_target_order_no = str(target_stock.get("odno", "") or "").strip()
         if order_no == known_target_order_no:
             target_stock["entry_order_notice_status"] = status
             target_stock["entry_order_notice_at"] = time.time()
+            target_stock["entry_order_notice_broker_reject_reason_raw"] = (
+                broker_reject_reason_raw
+            )
+            target_stock["entry_order_notice_broker_execution_time_raw"] = (
+                broker_execution_time_raw
+            )
             changed = True
 
     elif exec_type == "SELL":
+        target_stock["last_sell_order_notice_status"] = status
+        target_stock["last_sell_order_notice_at"] = time.time()
+        target_stock["last_sell_order_notice_broker_reject_reason_raw"] = (
+            broker_reject_reason_raw
+        )
+        target_stock["last_sell_order_notice_broker_execution_time_raw"] = (
+            broker_execution_time_raw
+        )
+        changed = True
         if (
             str(target_stock.get("position_tag") or "").strip().upper()
             == OPENING_ROTATION_POSITION_TAG
@@ -4956,6 +4992,12 @@ def handle_order_notice(notice_data):
     exec_type = str(notice_data.get("type", "") or "").upper()
     order_no = str(notice_data.get("order_no", "") or "").strip()
     status = str(notice_data.get("status", "") or "").strip()
+    broker_reject_reason_raw = str(
+        notice_data.get("broker_reject_reason_raw", "") or ""
+    ).strip()
+    broker_execution_time_raw = str(
+        notice_data.get("broker_execution_time_raw", "") or ""
+    ).strip()
 
     if not code or exec_type not in {"BUY", "SELL"} or not order_no:
         return
@@ -4970,6 +5012,48 @@ def handle_order_notice(notice_data):
             exec_type=exec_type,
             order_no=order_no,
             status=status,
+            broker_reject_reason_raw=broker_reject_reason_raw,
+            broker_execution_time_raw=broker_execution_time_raw,
+        )
+
+    if status == "거부":
+        raw_fields = notice_data.get("broker_execution_raw_fields")
+        raw_fields = raw_fields if isinstance(raw_fields, dict) else {}
+        _log_holding_pipeline(
+            target_stock.get("name") or "-",
+            code,
+            target_stock.get("id"),
+            "broker_order_notice_rejected",
+            candidate_stock=target_stock,
+            observe_candidate_lifecycle=False,
+            order_side=exec_type,
+            broker_order_no=order_no,
+            broker_order_notice_status=status,
+            broker_reject_reason_raw=broker_reject_reason_raw or "-",
+            broker_reject_reason_source=(
+                "official_fid_919"
+                if broker_reject_reason_raw
+                else "official_fid_919_missing"
+            ),
+            broker_execution_time_raw=broker_execution_time_raw or "-",
+            **{
+                key: raw_fields.get(key)
+                for key in _BROKER_EXECUTION_RAW_FIELD_KEYS
+            },
+            metric_role="execution_quality_real_only",
+            decision_authority="broker_order_receipt_provenance_only",
+            window_policy="same_exact_broker_order_notice",
+            sample_floor="one_official_00_rejected_notice",
+            primary_decision_metric="broker_order_reject_reason_raw",
+            source_quality_gate="official_type_00_status_and_fid919_preserved_raw",
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+            forbidden_uses=(
+                "automatic_retry|quantity_change|route_change|threshold_change|"
+                "provider_change|broker_guard_bypass"
+            ),
         )
 
 
@@ -6345,6 +6429,24 @@ def _handle_add_buy_execution(
     split_leg_fields = _split_receipt_leg_meta_fields(
         split_leg_meta, filled_at_ts=fill_event_ts
     )
+    # The probe/entry provenance and the exact scale-in leg metadata both carry
+    # route fields.  Merge them before the pipeline call so a valid scale-in
+    # receipt cannot raise at call binding time on duplicate keyword names.
+    # Exact split-leg metadata is the final authority for the executed leg.
+    entry_route_fields = _probe_venue_provenance_fields(target_stock)
+    if (
+        split_leg_fields.get("broker_route") in {None, "", "-"}
+        and entry_route_fields.get("broker_route")
+    ):
+        split_leg_fields["broker_route"] = entry_route_fields["broker_route"]
+        split_leg_fields["broker_route_resolution"] = entry_route_fields.get(
+            "broker_route_resolution", "recorded_at_successful_entry_submit"
+        )
+    scale_in_execution_provenance = {
+        **entry_route_fields,
+        **_broker_execution_provenance_fields(target_stock),
+        **split_leg_fields,
+    }
     history_note = _split_receipt_history_note(split_leg_fields)
     _update_db_for_add(
         target_id,
@@ -6418,9 +6520,7 @@ def _handle_add_buy_execution(
             add_receipt.get("unit_fill_consistent", True)
         ),
         receipt_unit_qty_matches_delta=add_receipt.get("unit_qty_matches_delta"),
-        **_probe_venue_provenance_fields(target_stock),
-        **_broker_execution_provenance_fields(target_stock),
-        **split_leg_fields,
+        **scale_in_execution_provenance,
         scale_in_receipt_reconciled_before_ordno_bind=bool(
             reconciled_before_ordno_bind
             or target_stock.get("scale_in_receipt_reconciled_before_ordno_bind")

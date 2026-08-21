@@ -1205,6 +1205,12 @@ def _prune_ws_subscriptions_for_inactive_targets(targets):
         norm = str(code or "").strip()[:6]
         if not norm or norm in active_codes:
             continue
+        # A completed sell may still own exact-route 1/3/5/10-minute BBO
+        # attribution.  Preserve that frozen route before considering the
+        # normal micro-reversion demotion, which may replace plain/_NX/_AL and
+        # silently break the post-sell observer's executable route contract.
+        if should_retain_ws_subscription(norm, now_ts=now_ts):
+            continue
         if _ws_subscription_is_pinned_observation(norm):
             demote = getattr(
                 WS_MANAGER,
@@ -1215,8 +1221,6 @@ def _prune_ws_subscriptions_for_inactive_targets(targets):
                 demote(norm)
             continue
         if _is_scanner_promotion_pending_attach(norm, now_ts=now_ts):
-            continue
-        if should_retain_ws_subscription(norm, now_ts=now_ts):
             continue
         if sniper_state_handlers.should_retain_rising_missed_nxt_post_block_subscription(
             norm,

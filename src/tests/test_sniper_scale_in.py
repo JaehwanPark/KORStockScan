@@ -35176,6 +35176,7 @@ def test_order_execution_notice_parses_cancel_side_separately():
         "911": "2",
         "914": "10,010",
         "915": "2",
+        "919": "506550",
         "908": "090102",
         "2134": "2",
         "2135": "NXT",
@@ -35196,6 +35197,7 @@ def test_order_execution_notice_parses_cancel_side_separately():
     assert notice["exec_qty"] == 2
     assert notice["unit_exec_price"] == 10_010
     assert notice["unit_exec_qty"] == 2
+    assert notice["broker_reject_reason_raw"] == "506550"
     assert notice["broker_execution_time_raw"] == "090102"
     assert notice["actual_execution_venue"] == "NXT"
     assert notice["actual_exchange_code"] == "2"
@@ -35230,11 +35232,60 @@ def test_order_execution_notice_preserves_missing_optional_fill_fields():
     assert notice["unit_exec_price"] is None
     assert notice["unit_exec_qty"] is None
     assert notice["broker_execution_time_raw"] == ""
+    assert notice["broker_reject_reason_raw"] == ""
     assert notice["actual_execution_venue"] == ""
     assert (
         "main_lifecycle_broker_raw_envelope_schema"
         not in notice["broker_execution_raw_fields"]
     )
+
+
+def test_rejected_sell_notice_preserves_official_reason_and_emits_provenance(
+    monkeypatch,
+):
+    emitted = []
+    stock = {
+        "id": 171,
+        "code": "123456",
+        "name": "TEST",
+        "status": "SELL_ORDERED",
+        "strategy": "SCALPING",
+        "sell_odno": "S-REJECT",
+    }
+    receipts.ACTIVE_TARGETS = [stock]
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    receipts.handle_order_notice(
+        {
+            "code": "123456",
+            "type": "SELL",
+            "order_no": "S-REJECT",
+            "status": "거부",
+            "broker_reject_reason_raw": "506550",
+            "broker_execution_time_raw": "104039",
+            "broker_execution_raw_fields": {
+                "913": "거부",
+                "919": "506550",
+            },
+        }
+    )
+
+    assert stock["last_sell_order_notice_status"] == "거부"
+    assert stock["last_sell_order_notice_broker_reject_reason_raw"] == "506550"
+    assert stock["last_sell_order_notice_broker_execution_time_raw"] == "104039"
+    assert len(emitted) == 1
+    args, fields = emitted[0]
+    assert args[3] == "broker_order_notice_rejected"
+    assert fields["broker_reject_reason_raw"] == "506550"
+    assert fields["broker_reject_reason_source"] == "official_fid_919"
+    assert fields["913"] == "거부"
+    assert fields["919"] == "506550"
+    assert fields["actual_order_submitted"] is True
+    assert fields["runtime_effect"] is False
 
 
 def test_fast_sell_receipts_apply_only_cumulative_quantity_and_amount_delta(
@@ -37381,6 +37432,8 @@ def test_add_receipt_with_order_no_matches_pending_add_before_ordno_bind(monkeyp
         "pending_add_reason": "late_loss_avg_down_retry",
         "pending_add_qty": 33,
         "pending_add_ord_no": "",
+        "entry_execution_broker_route": "SOR",
+        "entry_execution_broker_route_resolution": "successful_entry_submit",
         "add_count": 0,
         "avg_down_count": 0,
     }
@@ -37431,6 +37484,11 @@ def test_add_receipt_with_order_no_matches_pending_add_before_ordno_bind(monkeyp
     assert scale_in_events[-1]["order_requested_qty"] == 16
     assert scale_in_events[-1]["order_filled_qty"] == 16
     assert scale_in_events[-1]["scale_in_receipt_reconciled_before_ordno_bind"] is True
+    assert scale_in_events[-1]["broker_route"] == "SOR"
+    assert (
+        scale_in_events[-1]["broker_route_resolution"]
+        == "successful_entry_submit"
+    )
 
 
 def test_add_execution_caps_duplicate_split_leg_by_order_number(monkeypatch):

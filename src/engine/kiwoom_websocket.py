@@ -80,6 +80,7 @@ _ORDER_EXECUTION_RAW_FIDS = (
     "911",
     "914",
     "915",
+    "919",
     "2134",
     "2135",
     "2136",
@@ -928,6 +929,7 @@ class KiwoomWSManager:
             "exec_qty": exec_qty,
             "unit_exec_price": parsed_numeric["914"],
             "unit_exec_qty": parsed_numeric["915"],
+            "broker_reject_reason_raw": str(values.get("919", "") or "").strip(),
             "numeric_contract_errors": malformed_numeric_fids,
             "source_gap_reason": side_gap_reason,
             "broker_execution_time_raw": str(values.get("908", "") or "").strip(),
@@ -2961,9 +2963,15 @@ class KiwoomWSManager:
                         code = notice["code"]
                         order_no = notice["order_no"]
                         order_type_str = notice["order_type_str"]
+                        broker_reject_reason_raw = notice[
+                            "broker_reject_reason_raw"
+                        ]
 
                         print(
-                            f"📩 [WS 주문상태] {code} | 주문번호: '{order_no}' | 상태: '{status}' | 구분: '{order_type_str}'"
+                            f"📩 [WS 주문상태] {code} | 주문번호: '{order_no}' | "
+                            f"상태: '{status}' | 구분: '{order_type_str}' | "
+                            f"거부사유: '"
+                            f"{broker_reject_reason_raw if status == '거부' else '-'}'"
                         )
                         if not notice["exec_type"]:
                             log_error(
@@ -2992,6 +3000,12 @@ class KiwoomWSManager:
                                 "type": notice["exec_type"],
                                 "status": status,
                                 "order_type_str": order_type_str,
+                                "broker_reject_reason_raw": (
+                                    broker_reject_reason_raw
+                                ),
+                                "broker_execution_raw_fields": notice[
+                                    "broker_execution_raw_fields"
+                                ],
                                 "broker_execution_time_raw": notice[
                                     "broker_execution_time_raw"
                                 ],

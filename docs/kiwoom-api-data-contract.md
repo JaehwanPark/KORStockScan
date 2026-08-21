@@ -68,12 +68,14 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
-### 2026-08-21 Post-sell Executable-BBO Retention Gate
+### 2026-08-21 Post-sell Executable-BBO And Rejected-Order Provenance Gate
 
-- Re-verified at `2026-08-21T10:01:17+09:00` against current upstream commit
+- Re-verified at `2026-08-21T11:00:23+09:00` against current upstream commit
   `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`; inspected
   `kiwoom_docs/실시간시세.md`, `kiwoom/realtime/packets.py`,
-  `kiwoom/core/ws_client.py`, and Postman WebSocket requests.
+  `kiwoom/realtime/decoders.py`, `kiwoom/core/ws_client.py`, and Postman
+  WebSocket requests. The official type `00` order/execution notice defines
+  FID `919` as the raw broker rejection reason.
 - The official contract uses `REG` and `REMOVE`; `refresh=1` retains previous
   registrations, and one group accepts at most 100 items. KRX uses the raw
   symbol, NXT uses `_NX`, and the integrated SOR route uses `_AL`. The local
@@ -82,14 +84,24 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   route before accepting a `0D` BBO.
 - A confirmed real sell may retain the existing WS subscription for the
   bounded 1/3/5/10-minute horizons plus a 15-second final receipt grace. At
-  most eight sell episodes are active. A receipt is valid only while the base
-  symbol remains in the manager subscription set and a same-symbol,
-  same-session, exact-route `0D` BBO is at most one second old. Missing route,
-  route conflict, unsubscribe, stale quote, or missing BBO produces an
-  explicit source-quality result rather than mark-price substitution.
-- This path is observation-only. It never sends `REG`/`REMOVE`, submits or
-  cancels an order, changes entry/exit logic, thresholds, quantity, provider,
-  bot state, or bypasses broker/account/cooldown/stale/hard-safety guards.
+  most eight sell episodes are active. A receipt is valid only while the exact
+  route item remains in the manager registration inventory and a same-symbol,
+  same-session, exact-route `0D` BBO is at most one second old. Base-symbol
+  membership alone is insufficient because plain, `_NX`, and `_AL` are
+  separate registrations. While this bounded retention is active, inactive
+  target pruning must not demote the route to the micro-reversion source-only
+  item. Missing route, route conflict, unsubscribe, stale quote, or missing BBO
+  produces an explicit source-quality result rather than mark-price
+  substitution.
+- Type `00` status `거부` preserves FID `919` without interpreting an
+  undocumented numeric meaning and emits an exact-order execution-quality
+  provenance receipt. It does not automatically retry, cancel, reroute, resize,
+  or change an order; broker/account reconciliation remains the runtime owner.
+- The post-sell retention path is observation-only. The rejected-order path is
+  receipt-only for an already submitted real order. Neither path sends
+  `REG`/`REMOVE`, submits or cancels an order, changes entry/exit logic,
+  thresholds, quantity, provider, bot state, or bypasses
+  broker/account/cooldown/stale/hard-safety guards.
 
 ### 2026-08-20 Episode Realized-PnL Account Gate
 
