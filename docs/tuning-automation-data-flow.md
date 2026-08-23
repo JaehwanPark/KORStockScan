@@ -116,7 +116,6 @@ Swing lifecycle의 parent flow는 scalping flow bucket 계약을 축소 이식�
 | --- | --- | --- | --- | --- |
 | Auto bounded family | `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe` | deterministic guard, AI/source-quality guard, same-stage conflict 없음 | 다음 PREOPEN | env 자동 생성 |
 | Runtime bridge live-auto | `scale_in_bucket_runtime_policy_v1`, complete greenfield lifecycle bundle | discovery `live_auto_apply_ready`, Tier2 parsed, env mapping, runtime hook, post-apply attribution | 다음 PREOPEN | targeted live auto env 후보 |
-| Entry-only bridge metadata | `entry_wait6579_score66_69_recovery_gate_v1` | entry dimension/provenance only | 없음 | PREOPEN live env 후보 아님 |
 | Sim-auto bucket | scalping/swing `sim_auto_approved` | source-quality pass, sim policy contract, forbidden-use 유지 | 다음 PREOPEN | sim policy input. real order 권한 없음 |
 | Swing dry-run auto apply | swing dry-run env candidate | parsed Tier2, hard floors, source-quality gates | 다음 PREOPEN | dry-run env 후보 |
 | Swing phase0 real canary | one-share initial/scale-in canary | parsed Tier2, source hard floors, allowlist, caps, source-quality gates | 다음 PREOPEN | bounded one-share scope |

@@ -16,10 +16,8 @@ from src.engine.approval_contracts import annotate_approval_request
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.runtime_apply_bridge import (
     ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES,
-    ENTRY_BRIDGE_FAMILY,
     GREENFIELD_REAL_ENV_FAMILY,
     SCALE_IN_BRIDGE_FAMILY,
-    ldm_entry_runtime_bridge_artifact_path,
     ldm_scale_in_runtime_bridge_artifact_path,
     runtime_apply_bridge_report_path,
     validate_greenfield_policy_file,
@@ -700,8 +698,6 @@ def scalp_sim_scale_in_window_artifact_path(source_date: str) -> Path:
 
 
 def _bridge_artifact_path_for_family(family: str, source_date: str) -> Path | None:
-    if family == ENTRY_BRIDGE_FAMILY:
-        return ldm_entry_runtime_bridge_artifact_path(source_date)
     if family == SCALE_IN_BRIDGE_FAMILY:
         return ldm_scale_in_runtime_bridge_artifact_path(source_date)
     return None
@@ -2071,7 +2067,6 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
     force_emit = policy_or_family in {
         "latency_classifier_runtime_profile",
         "lifecycle_decision_matrix_runtime",
-        ENTRY_BRIDGE_FAMILY,
         SCALE_IN_BRIDGE_FAMILY,
         *DETERMINISTIC_POLICY_HANDOFF_FAMILIES,
         "lifecycle_bucket_discovery_sim_auto_approval",
@@ -2496,9 +2491,7 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
     artifact_payloads: dict[str, dict[str, Any]] = {}
     approved_requests: list[dict[str, Any]] = []
     blocked: list[str] = []
-    metadata: list[dict[str, Any]] = []
     bridge_families = {
-        ENTRY_BRIDGE_FAMILY,
         SCALE_IN_BRIDGE_FAMILY,
         GREENFIELD_REAL_ENV_FAMILY,
     }
@@ -2521,28 +2514,6 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
         )
         artifact_payloads[family] = artifact
         candidate_id = str(item.get("candidate_id") or "")
-        if (
-            family == ENTRY_BRIDGE_FAMILY
-            or bool(item.get("metadata_only"))
-            or str(item.get("bridge_candidate_state") or "")
-            == "entry_only_bridge_metadata"
-        ):
-            legacy_source_state = str(item.get("bridge_candidate_state") or "").strip()
-            metadata.append(
-                {
-                    "family": family,
-                    "candidate_id": candidate_id,
-                    "state": "entry_only_bridge_metadata",
-                    "legacy_source_state": legacy_source_state
-                    or "entry_only_bridge_metadata",
-                    "reason": item.get("bridge_exclusion_reason")
-                    or "entry_only_bridge_metadata_not_live_candidate",
-                    "allowed_runtime_apply": False,
-                    "target_env_keys": [],
-                    "runtime_effect": False,
-                }
-            )
-            continue
         contract = annotate_approval_request({"family": family}, source_date)
         item_blocked: list[str] = []
         auto_live = (
@@ -2630,7 +2601,6 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
         "artifacts": artifacts,
         "artifact_payloads": artifact_payloads,
         "candidates": candidates,
-        "metadata": metadata,
         "approved_requests": approved_requests,
         "blocked": blocked,
     }
@@ -6877,7 +6847,6 @@ def build_preopen_apply_manifest(
                 "candidate_count": len(runtime_bridge_bundle.get("candidates") or []),
                 "approved": len(runtime_bridge_bundle.get("approved_requests") or []),
                 "blocked": runtime_bridge_bundle.get("blocked") or [],
-                "metadata": runtime_bridge_bundle.get("metadata") or [],
                 "approved_requests": runtime_bridge_bundle.get("approved_requests")
                 or [],
                 "selected": runtime_bridge_selected,

@@ -409,7 +409,6 @@ def _candidate_from_runtime_gap(row: dict[str, Any]) -> dict[str, Any]:
     explicit_source_only_exclusion = (
         derived == "source_only_explicit_exclusion"
         or str(row.get("final_disposition") or "") == "source_only_explicit_exclusion"
-        or str(row.get("producer_state") or "") == "entry_only_bridge_metadata"
     )
     return {
         "candidate_id": candidate_id,

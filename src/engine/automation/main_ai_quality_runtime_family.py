@@ -1072,8 +1072,10 @@ def _preopen(
         and approval._candidate_runtime_family(row.get("candidate") or {})
         == approval.MAIN_AI_QUALITY_RUNTIME_FAMILY
     ]
-    if len(matches) != 1:
-        raise ValueError("preopen_exact_family_candidate_not_unique")
+    if not matches:
+        raise ValueError("preopen_exact_family_candidate_missing")
+    if len(matches) > 1:
+        raise ValueError("preopen_exact_family_candidate_multiple")
     entry = matches[0]
     handoff_path = Path(str(entry.get("preopen_handoff") or ""))
     handoff = _load_json(handoff_path)

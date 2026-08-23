@@ -14,7 +14,7 @@
 - AI reviewer는 제안과 감리 계층이다. 최종 state/value는 deterministic guard, source-quality gate, approval contract가 결정한다.
 - broker submit guard, stale quote, price freshness, hard/protect/emergency stop, account/order/cooldown/quantity guard는 항상 최상위 safety다. ADM, LDM, bridge, approval artifact는 이 guard를 우회할 수 없다.
 - `lifecycle_decision_matrix_runtime`은 ADM 확장 owner다. selected PREOPEN env가 있을 때만 기존 ADM adapter를 감싸며, 기본 산출물은 `runtime_effect=false`인 report/provenance다.
-- `lifecycle_bucket_discovery`와 `runtime_apply_bridge`는 complete lifecycle bucket이 실제 runtime 후보가 될 수 있는지 확인하는 계약 계층이다. entry-only bridge metadata, source-only 후보, blocked contract gap은 live env로 해석하지 않는다.
+- `lifecycle_bucket_discovery`와 `runtime_apply_bridge`는 complete lifecycle bucket이 실제 runtime 후보가 될 수 있는지 확인하는 계약 계층이다. entry-only source dimension, source-only 후보, blocked contract gap은 live env로 해석하지 않는다.
 - Swing postclose가 operator OFF이면 `runtime_approval_summary`, `runtime_apply_gap_audit`, `key_lineage_ledger`, `conversion_lane`에도 `--exclude-swing` scope를 동일하게 전달한다. OFF/retired/cooldown source의 부재를 runtime defect나 conversion blocker로 세지 않는다. `producer_gap_discovery` 기본 OFF도 runtime approval warning에서 `disabled_by_default`로 구분한다.
 - 자정 이후 완료된 scalping pattern lab은 `run_date=target_date+1`과 `history_coverage_end=target_date`가 일치하면 timing-fresh다. `history_coverage_ok=false`이면 timing과 별개로 findings 소비는 source-quality blocked다.
 - `producer_gap_discovery`, `time_window_regime_counterfactual`, pattern lab, sentinel류 report는 source-only 또는 report-only다. workorder와 후속 분석을 만들 수 있지만 실주문, threshold, provider, bot, cap을 직접 바꾸지 않는다.
@@ -69,7 +69,7 @@
 별도 축:
 
 - `entry_cancel_wait_runtime`은 독립 operational family다. ADM/LDM, lifecycle bucket, 일반 threshold EV, runtime apply bridge 입력에서 제외한다.
-- `entry_wait6579_score66_69_recovery_gate_v1`는 entry-only bridge metadata다. complete lifecycle bucket이나 PREOPEN live env 후보로 보지 않는다.
+- `wait6579_ev_cohort`는 LDM entry provenance/source-quality 입력으로만 유지한다. 별도 entry-only runtime bridge family는 제거됐으며 PREOPEN live env 후보나 재활성화 경로가 없다.
 - counterfactual-only, missed-entry, source-only 후보는 provenance로 보존하고 live 적용 근거로 쓰지 않는다.
 
 확인 순서:
@@ -82,7 +82,6 @@
 | --- | --- | --- |
 | `live_auto_apply_ready` | contract, env key, runtime hook, post-apply attribution, parsed AI review가 닫힘 | 다음 PREOPEN live auto apply 후보로 소비 가능 |
 | `sim_auto_approved` | sim policy 적용 조건이 닫힘 | 다음 PREOPEN sim policy 후보로 소비 |
-| `entry_only_bridge_metadata` | entry dimension/provenance 전용 | live 후보나 blocked live 후보로 보지 않음 |
 | `bootstrap_pending` | 표본/rolling 확인 부족 | 승인하지 않고 관찰 지속 |
 | `blocked_source_quality` | join/provenance/source-quality 결함 | 데이터 또는 instrumentation workorder로 닫음 |
 | `blocked_rolling_conflict` | rolling/cumulative 결론 충돌 | 후보 축소 또는 추가 확인 |
@@ -394,7 +393,7 @@ Post-probe P1 capability가 활성화되면 rising-missed를 포함한 모든 pr
 5. `src/run_bot.sh` 기동 로그에서 당일 runtime env 파일 source 여부를 확인한다. 봇 기동 시각이 env 생성 시각보다 빠르면 `pre_env_boot_gap=true`로 보고, env 생성 후 재기동 또는 `run_bot.sh` 대기 동작이 있었는지 확인한다. PREOPEN artifact는 local `data/threshold_cycle/**`의 apply/env/runtime manifest만 기동 authority로 사용한다.
 6. apply plan의 `swing_runtime_approval` 섹션에서 `requested`, `approved`, `blocked`, `selected`, `dry_run_forced`를 확인한다. `dry_run_auto_apply_ready`는 parsed AI Tier2 contract가 있어야 통과하며, `approval_required`는 final-stage 사용자 승인 artifact 없으면 정상 차단이다. Final full-live approval 밖의 과거 실주문 요청/산출물은 env override를 생성하지 않아야 한다.
 7. 스윙 approved env가 있더라도 `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`가 runtime env에 포함되어야 한다. 장전에는 주문 guard를 완화하거나 `SWING_LIVE_ORDER_DRY_RUN_ENABLED`를 임의로 끄지 않는다.
-8. apply plan의 `runtime_apply_bridge` 또는 blocked reason에서 bridge 후보 상태를 확인한다. entry/scale bridge는 `bridge_candidate_state=live_auto_apply_ready`, `allowed_runtime_apply=true`, target env mapping, runtime hook/provenance mapping, parsed AI Tier2 review가 모두 맞는 후보만 selected될 수 있다. `ai_two_pass_review_status`가 `parsed`가 아니면 pre-final live-auto는 fail-closed 차단하고 다음 postclose review로 넘긴다. `bootstrap_pending`, `blocked_source_quality`, `blocked_rolling_conflict`, `runtime_blocked_contract_gap`, `code_patch_required`, 명시적 AI contract/safety block은 env 미생성이 정상이다.
+8. apply plan의 `runtime_apply_bridge` 또는 blocked reason에서 bridge 후보 상태를 확인한다. scale-in 또는 complete-lifecycle bridge는 `bridge_candidate_state=live_auto_apply_ready`, `allowed_runtime_apply=true`, target env mapping, runtime hook/provenance mapping, parsed AI Tier2 review가 모두 맞는 후보만 selected될 수 있다. `ai_two_pass_review_status`가 `parsed`가 아니면 pre-final live-auto는 fail-closed 차단하고 다음 postclose review로 넘긴다. `bootstrap_pending`, `blocked_source_quality`, `blocked_rolling_conflict`, `runtime_blocked_contract_gap`, `code_patch_required`, 명시적 AI contract/safety block은 env 미생성이 정상이다.
 9. bridge selected env가 있으면 `runtime_apply_bridge_family`, `bridge_candidate_id`, `source_bucket_key`, `discovery_ai_review_id` 또는 `ai_two_pass_review_status`, `actual_runtime_effect` provenance가 runtime env JSON 또는 post-apply attribution 입력에 남는지 확인한다. discovery 범위 밖 approval-required 후보는 기존 `approval_id`도 함께 확인한다. provenance가 없으면 적용 성공이 아니라 `warning`으로 닫는다.
 10. 실패 시 수동 approve가 아니라 `safety_revert_required`, `hold_sample`, `hold_no_edge`, `AI instrumentation_gap/incident`, same-stage owner 충돌 중 어느 차단인지 판정한다.
 

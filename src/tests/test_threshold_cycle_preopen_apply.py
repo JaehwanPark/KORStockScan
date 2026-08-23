@@ -7716,11 +7716,11 @@ def _install_runtime_bridge_test_dirs(tmp_path, monkeypatch):
     return runtime_dir, bridge_dir, approval_dir
 
 
-def test_runtime_apply_bridge_entry_metadata_is_not_live_blocker(tmp_path, monkeypatch):
+def test_runtime_apply_bridge_ignores_retired_entry_family(tmp_path, monkeypatch):
     runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(
         tmp_path, monkeypatch
     )
-    family = bridge_mod.ENTRY_BRIDGE_FAMILY
+    family = "entry_wait6579_score66_69_recovery_gate_v1"
     candidate_id = f"{family}:2026-05-30"
     (bridge_dir / "runtime_apply_bridge_2026-05-30.json").write_text(
         json.dumps(
@@ -7761,24 +7761,21 @@ def test_runtime_apply_bridge_entry_metadata_is_not_live_blocker(tmp_path, monke
 
     assert manifest["runtime_change"] is False
     assert manifest["runtime_apply_bridge"]["blocked"] == []
-    assert manifest["runtime_apply_bridge"]["metadata"][0]["family"] == family
-    assert (
-        manifest["runtime_apply_bridge"]["metadata"][0]["reason"]
-        == "entry_only_bridge_metadata_not_live_candidate"
-    )
+    assert "metadata" not in manifest["runtime_apply_bridge"]
+    assert manifest["runtime_apply_bridge"]["selected"] == []
     env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(
         encoding="utf-8"
     )
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
 
 
-def test_runtime_apply_bridge_entry_wait6579_live_auto_is_kept_as_metadata(
+def test_runtime_apply_bridge_does_not_reactivate_retired_entry_live_candidate(
     tmp_path, monkeypatch
 ):
     runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(
         tmp_path, monkeypatch
     )
-    family = bridge_mod.ENTRY_BRIDGE_FAMILY
+    family = "entry_wait6579_score66_69_recovery_gate_v1"
     candidate_id = f"{family}:2026-05-30"
     (bridge_dir / "runtime_apply_bridge_2026-05-30.json").write_text(
         json.dumps(
@@ -7813,7 +7810,9 @@ def test_runtime_apply_bridge_entry_wait6579_live_auto_is_kept_as_metadata(
                             "max_score": 74,
                             "threshold_version": "runtime_default",
                         },
-                        "source_bucket_keys": [bridge_mod.ENTRY_TARGET_BUCKET_KEY],
+                        "source_bucket_keys": [
+                            "score=score_66_69|source=wait6579_ev_cohort"
+                        ],
                     }
                 ],
             }
@@ -7833,19 +7832,7 @@ def test_runtime_apply_bridge_entry_wait6579_live_auto_is_kept_as_metadata(
     assert manifest["runtime_change"] is False
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env
     assert manifest["runtime_apply_bridge"]["selected"] == []
-    assert manifest["runtime_apply_bridge"]["metadata"][0]["family"] == family
-    assert (
-        manifest["runtime_apply_bridge"]["metadata"][0]["state"]
-        == "entry_only_bridge_metadata"
-    )
-    assert (
-        manifest["runtime_apply_bridge"]["metadata"][0]["legacy_source_state"]
-        == "live_auto_apply_ready"
-    )
-    assert (
-        manifest["runtime_apply_bridge"]["metadata"][0]["reason"]
-        == "entry_only_bridge_metadata_not_live_candidate"
-    )
+    assert "metadata" not in manifest["runtime_apply_bridge"]
     env_manifest = json.loads(
         (runtime_dir / "threshold_runtime_env_2026-06-01.json").read_text(
             encoding="utf-8"
@@ -7872,7 +7859,7 @@ def test_runtime_apply_bridge_greenfield_live_auto_writes_full_lifecycle_env(
                 "allowlist": [
                     {
                         "bucket_id": "entry:score_66_69",
-                        "family": bridge_mod.ENTRY_BRIDGE_FAMILY,
+                        "family": "entry_bucket_runtime_policy_v1",
                         "stage": "entry",
                         "action": "BUY",
                         "source_quality_gate": "pass",
@@ -8049,13 +8036,13 @@ def test_runtime_apply_bridge_greenfield_blocks_missing_policy_file(
     )
 
 
-def test_runtime_apply_bridge_legacy_ready_for_approval_is_metadata(
+def test_runtime_apply_bridge_ignores_retired_entry_approval_artifact(
     tmp_path, monkeypatch
 ):
     runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(
         tmp_path, monkeypatch
     )
-    family = bridge_mod.ENTRY_BRIDGE_FAMILY
+    family = "entry_wait6579_score66_69_recovery_gate_v1"
     candidate_id = f"{family}:2026-05-30"
     (bridge_dir / "runtime_apply_bridge_2026-05-30.json").write_text(
         json.dumps(
@@ -8100,19 +8087,8 @@ def test_runtime_apply_bridge_legacy_ready_for_approval_is_metadata(
 
     assert manifest["runtime_change"] is False
     assert manifest["runtime_apply_bridge"]["blocked"] == []
-    assert manifest["runtime_apply_bridge"]["metadata"][0]["family"] == family
-    assert (
-        manifest["runtime_apply_bridge"]["metadata"][0]["state"]
-        == "entry_only_bridge_metadata"
-    )
-    assert (
-        manifest["runtime_apply_bridge"]["metadata"][0]["legacy_source_state"]
-        == "ready_for_approval"
-    )
-    assert (
-        manifest["runtime_apply_bridge"]["metadata"][0]["reason"]
-        == "entry_only_bridge_metadata_not_live_candidate"
-    )
+    assert "metadata" not in manifest["runtime_apply_bridge"]
+    assert manifest["runtime_apply_bridge"]["selected"] == []
     env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(
         encoding="utf-8"
     )

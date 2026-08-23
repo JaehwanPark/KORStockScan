@@ -13,7 +13,7 @@ def test_approval_contract_registry_marks_ready_swing_contract():
 
 
 def test_approval_contract_registry_marks_runtime_apply_bridge_contract_states():
-    entry = approval_contract_for(
+    retired_entry = approval_contract_for(
         "entry_wait6579_score66_69_recovery_gate_v1", "2026-05-21"
     )
     scale = approval_contract_for("scale_in_bucket_runtime_policy_v1", "2026-05-21")
@@ -21,21 +21,10 @@ def test_approval_contract_registry_marks_runtime_apply_bridge_contract_states()
         "greenfield_real_environment_authority", "2026-05-21"
     )
 
-    assert entry["approval_contract_status"] == "legacy_entry_bridge_metadata"
-    assert entry["approval_mode"] == "entry_only_bridge_metadata"
-    assert entry["approval_live_ready"] is False
-    assert entry["approval_artifact_path"].endswith(
-        "ldm_entry_runtime_bridge_2026-05-21.json"
-    )
-    assert (
-        entry["approval_artifact_consumer"]
-        == "threshold_cycle_preopen_apply.runtime_apply_bridge_metadata"
-    )
-    assert entry["runtime_scope"] == "entry_dimension_provenance_only"
-    assert entry["missing_components"] == [
-        "not_complete_lifecycle_bucket",
-        "not_live_apply_candidate",
-    ]
+    assert retired_entry["approval_contract_status"] == "contract_missing"
+    assert retired_entry["approval_live_ready"] is False
+    assert "approval_contract_registry_entry" in retired_entry["missing_components"]
+    assert retired_entry["approval_artifact_consumer"] is None
     assert scale["approval_contract_status"] == "ready"
     assert scale["approval_live_ready"] is True
     assert scale["approval_artifact_path"].endswith(
@@ -50,24 +39,20 @@ def test_approval_contract_registry_marks_runtime_apply_bridge_contract_states()
     assert greenfield["missing_components"] == []
 
 
-def test_annotate_approval_request_keeps_entry_bridge_metadata_not_live_ready():
+def test_annotate_approval_request_does_not_restore_retired_entry_bridge():
     request = annotate_approval_request(
         {"family": "entry_wait6579_score66_69_recovery_gate_v1"},
         "2026-05-21",
     )
 
-    assert request["approval_contract_status"] == "legacy_entry_bridge_metadata"
-    assert request["approval_mode"] == "entry_only_bridge_metadata"
+    assert request["approval_contract_status"] == "contract_missing"
+    assert request["approval_mode"] == "artifact_required"
     assert request["approval_live_ready"] is False
     assert (
-        request["approval_artifact_consumer"]
-        == "threshold_cycle_preopen_apply.runtime_apply_bridge_metadata"
+        "approval_contract_registry_entry"
+        in request["approval_contract_missing_components"]
     )
-    assert request["approval_runtime_scope"] == "entry_dimension_provenance_only"
-    assert request["approval_contract_missing_components"] == [
-        "not_complete_lifecycle_bucket",
-        "not_live_apply_candidate",
-    ]
+    assert request["approval_artifact_consumer"] is None
 
 
 def test_approval_contract_registry_marks_dynamic_formula_as_not_runtime_reflected():

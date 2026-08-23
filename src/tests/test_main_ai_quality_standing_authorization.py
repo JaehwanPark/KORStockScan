@@ -169,7 +169,7 @@ def test_multiple_exact_candidates_and_unknown_prompt_fail_closed() -> None:
         runtime_registry={"main_ai_quality_prompt_contract_v1": _registry_entry()},
         now=datetime(2026, 8, 31, 20, 0, tzinfo=KST),
     )
-    assert "multiple_or_tied_candidates" in tied["blocker_codes"]
+    assert "r3_exact_candidate_multiple" in tied["blocker_codes"]
     assert tied["candidate_binding"] is None
 
     unknown = _candidate()
@@ -189,7 +189,22 @@ def test_multiple_exact_candidates_and_unknown_prompt_fail_closed() -> None:
         now=datetime(2026, 8, 31, 20, 0, tzinfo=KST),
     )
     assert "unreviewed_prompt_contract" in rejected["blocker_codes"]
+    assert "r3_exact_candidate_missing" in rejected["blocker_codes"]
     assert rejected["candidate_binding"] is None
+
+
+def test_missing_exact_candidate_is_distinct_from_duplicate_candidate() -> None:
+    result = mod.resolve_standing_authorization(
+        _authorization(),
+        _manifest([]),
+        approval_queue={"candidates": []},
+        runtime_registry={"main_ai_quality_prompt_contract_v1": _registry_entry()},
+        now=datetime(2026, 8, 31, 20, 0, tzinfo=KST),
+    )
+
+    assert "r3_exact_candidate_missing" in result["blocker_codes"]
+    assert "r3_exact_candidate_multiple" not in result["blocker_codes"]
+    assert result["candidate_binding"] is None
 
 
 def test_prior_candidate_requires_post_apply_attribution() -> None:

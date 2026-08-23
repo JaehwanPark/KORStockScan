@@ -46,10 +46,9 @@ CATALOG_DIR = DATA_DIR / "threshold_cycle" / "lifecycle_bucket_catalog"
 SIM_AUTO_APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "sim_auto_approvals"
 CONTAMINATION_WINDOW_DIR = DATA_DIR / "threshold_cycle" / "contamination_windows"
 
-ENTRY_LIVE_AUTO_FAMILY = "entry_wait6579_score66_69_recovery_gate_v1"
 SCALE_IN_LIVE_AUTO_FAMILY = "scale_in_bucket_runtime_policy_v1"
 GREENFIELD_REAL_ENV_FAMILY = "greenfield_real_environment_authority"
-ENTRY_LIVE_AUTO_BUCKET_KEY = (
+WAIT6579_ENTRY_BUCKET_KEY = (
     "score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|"
     "liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_unknown"
 )
@@ -71,7 +70,6 @@ SIM_APPROVAL_STATES = {
     "entry_only_sim_auto_approved",
     LIFECYCLE_FLOW_SIM_PROBE_STATE,
 }
-ENTRY_ONLY_BRIDGE_METADATA_STATE = "entry_only_bridge_metadata"
 EVIDENCE_GRADE_1_COMPLETED_SIM = "grade_1_completed_sim"
 EVIDENCE_GRADE_2_COUNTERFACTUAL = "grade_2_counterfactual"
 EVIDENCE_GRADE_MIXED_SOURCE = "mixed_source"
@@ -152,7 +150,6 @@ AUTO_SURFACE_STATES = {
     "entry_only_sim_auto_approved",
     LIFECYCLE_FLOW_SIM_PROBE_STATE,
     "entry_only_source_candidate",
-    ENTRY_ONLY_BRIDGE_METADATA_STATE,
     "live_auto_apply_ready",
     "runtime_blocked_contract_gap",
     "code_patch_required",
@@ -165,7 +162,6 @@ FINAL_CLASSIFICATION_STATES = {
     "entry_only_sim_auto_approved",
     LIFECYCLE_FLOW_SIM_PROBE_STATE,
     "entry_only_source_candidate",
-    ENTRY_ONLY_BRIDGE_METADATA_STATE,
     "live_auto_apply_ready",
     "runtime_blocked_contract_gap",
     "code_patch_required",
@@ -970,8 +966,6 @@ def _source_bucket_kind(candidate_state: str, bucket: dict[str, Any]) -> str:
         return "lifecycle_flow_sim_probe_policy"
     if candidate_state == "entry_only_source_candidate":
         return "entry_only_source_candidate"
-    if candidate_state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
-        return "entry_only_bridge_metadata"
     if bucket.get("unknown_dimension_counts") or "unknown" in str(
         bucket.get("bucket_key") or ""
     ):
@@ -1106,8 +1100,6 @@ def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str
         return "next_preopen_lifecycle_flow_sim_probe_policy_input"
     if candidate_state == "entry_only_source_candidate":
         return "entry_only_keep_collecting_no_greenfield_live"
-    if candidate_state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
-        return "entry_only_bridge_metadata_no_live_candidate"
     if str(bucket.get("source_quality_gate") or "") != "pass":
         return "keep_collecting_until_sample_floor"
     return "keep_collecting"
@@ -1264,8 +1256,6 @@ def _decision_authority_for_state(state: str) -> str:
         return "lifecycle_bucket_discovery_entry_only_sim_auto"
     if state == "entry_only_source_candidate":
         return "lifecycle_bucket_discovery_entry_only_source_quality"
-    if state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
-        return "lifecycle_bucket_discovery_entry_only_bridge_metadata"
     if state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
         return "lifecycle_bucket_discovery_lifecycle_flow_sim_probe"
     if state == "sim_auto_approved":
@@ -1282,8 +1272,6 @@ def _runtime_effect_after_approval_for_state(state: str) -> str:
         return "lifecycle_flow_sim_probe_policy"
     if state == "entry_only_source_candidate":
         return "none_entry_only_source_candidate"
-    if state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
-        return "none_entry_only_bridge_metadata"
     if state == "sim_auto_approved":
         return "sim_only_bucket_policy"
     return "none"
@@ -1296,8 +1284,6 @@ def _auto_promotion_contract_state_for_state(state: str) -> str:
         return "entry_only_sim_auto_approved"
     if state == "entry_only_source_candidate":
         return "entry_only_source_candidate"
-    if state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
-        return "entry_only_bridge_metadata"
     if state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
         return "lifecycle_flow_sim_probe_candidate"
     if state == "sim_auto_approved":
@@ -1312,8 +1298,6 @@ def _review_category_for_state(state: str) -> tuple[str, str]:
         return "sim_auto_approved", "lifecycle_flow_sim_probe_candidate"
     if state == "entry_only_source_candidate":
         return "source_only_keep_collecting", "entry_only_source_candidate"
-    if state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
-        return "source_only_keep_collecting", "entry_only_bridge_metadata"
     if state in {
         "live_auto_apply_ready",
         "sim_auto_approved",
@@ -4441,6 +4425,21 @@ def _classify_bucket(
     quality = str(bucket.get("source_quality_gate") or "")
     grade = _evidence_grade_for_bucket(stage, bucket)
     live_family = _live_family_for(stage, bucket_type, bucket_key)
+    if (
+        stage == "entry"
+        and bucket_type == "combo_entry_spot"
+        and _source_dimensions(bucket_type, bucket_key).get("source")
+        == "wait6579_ev_cohort"
+    ):
+        return (
+            "entry_only_source_candidate",
+            None,
+            {
+                **grade,
+                "transition_target": "entry_dimension_provenance_only",
+                "grade_reason": "wait6579_cohort_is_ldm_source_dimension_only",
+            },
+        )
     if stage == "scale_in" and live_family:
         coverage_state = str(bucket.get("scale_in_ev_coverage_state") or "")
         label_version = str(bucket.get("scale_in_ev_label_version") or "")
@@ -4512,20 +4511,6 @@ def _classify_bucket(
         if _sim_handoff_allowed(bucket, grade):
             return "sim_auto_approved", None, grade
         return "source_only_keep_collecting", None, grade
-    if (
-        stage == "entry"
-        and bucket_type == "combo_entry_spot"
-        and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
-    ):
-        return (
-            ENTRY_ONLY_BRIDGE_METADATA_STATE,
-            None,
-            {
-                **grade,
-                "transition_target": "entry_dimension_provenance_only",
-                "grade_reason": "entry_wait6579_bridge_metadata_not_complete_lifecycle_bucket",
-            },
-        )
     if str(grade.get("evidence_grade") or "") in {
         EVIDENCE_GRADE_2_COUNTERFACTUAL,
         EVIDENCE_GRADE_MIXED_SOURCE,
@@ -4610,14 +4595,6 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
     source_dimension_gap = ""
     if lifecycle_flow_source_only_blocker:
         source_dimension_gap = "lifecycle_flow_incomplete_stage_contract"
-    elif (
-        state == "live_auto_apply_ready"
-        and stage == "entry"
-        and bucket_type == "combo_entry_spot"
-        and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
-        and "unknown" in bucket_key
-    ):
-        source_dimension_gap = "legacy_contract_known_unknown"
     elif _scale_in_ai_score_source_missing(
         {
             **bucket,
@@ -4687,13 +4664,7 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "bounded_live_canary_allowed": runtime_apply_allowed,
         "source_stage_split_required": bool(grade.get("source_stage_split_required")),
         "archived_live_exception_reason": None,
-        "legacy_contract_known_unknown": (
-            state == "live_auto_apply_ready"
-            and stage == "entry"
-            and bucket_type == "combo_entry_spot"
-            and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
-            and "unknown" in bucket_key
-        ),
+        "legacy_contract_known_unknown": False,
         "source_dimension_gap": source_dimension_gap,
         "source_dimension_gap_provenance": (
             _scale_in_ai_score_source_missing_provenance(bucket)

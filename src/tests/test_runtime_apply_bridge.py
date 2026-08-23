@@ -12,7 +12,7 @@ def _write_discovery(path, *, live=True, tier2_status="parsed", with_windows=Tru
             {
                 "bucket_id": "entry:combo_entry_spot:score_66_69",
                 "classification_state": "live_auto_apply_ready",
-                "live_auto_apply_family": mod.ENTRY_BRIDGE_FAMILY,
+                "live_auto_apply_family": "entry_bucket_runtime_policy_v1",
                 "allowed_runtime_apply": True,
                 "broker_order_forbidden": False,
                 "source_quality_gate": "pass",
@@ -109,7 +109,11 @@ def _write_ldm(
                     "buckets": [
                         {
                             "bucket_type": "combo_entry_spot",
-                            "bucket_key": mod.ENTRY_TARGET_BUCKET_KEY,
+                            "bucket_key": (
+                                "score=score_66_69|source=wait6579_ev_cohort|"
+                                "stale=fresh_or_unflagged|liquidity=liquidity_unknown|"
+                                "overbought=overbought_unknown|time=time_unknown"
+                            ),
                             "joined_sample": 44,
                             "source_quality_adjusted_ev_pct": entry_ev,
                             "source_quality_gate": "pass",
@@ -399,16 +403,6 @@ def test_scale_confirmation_reports_do_not_fallback_past_invalid_latest(
     assert mod._scale_confirmation_reports("2026-06-12") == []
 
 
-def test_history_reports_exclude_pre_clean_baseline(tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "LDM_REPORT_DIR", tmp_path)
-    _write_ldm(tmp_path / "lifecycle_decision_matrix_2026-06-03.json")
-    _write_ldm(tmp_path / "lifecycle_decision_matrix_2026-06-05.json")
-
-    reports = mod._history_reports("2026-06-12")
-
-    assert [item["date"] for item in reports] == ["2026-06-05"]
-
-
 def test_scale_in_arm_conflict_does_not_block_other_ready_arm():
     pyramid = {
         "bucket_type": "arm",
@@ -515,7 +509,6 @@ def test_runtime_apply_bridge_blocks_daily_only_bucket_without_cumulative_confir
     states = {
         item["family"]: item["bridge_candidate_state"] for item in report["candidates"]
     }
-    assert states[mod.ENTRY_BRIDGE_FAMILY] == "entry_only_bridge_metadata"
     assert (
         states[mod.SCALE_IN_BRIDGE_FAMILY]
         == "blocked_legacy_v1_label_missing_incremental_ev"
@@ -523,18 +516,7 @@ def test_runtime_apply_bridge_blocks_daily_only_bucket_without_cumulative_confir
     assert report["summary"]["live_auto_apply_ready_count"] == 0
     assert "promotion_lifecycle_bucket_discovery_missing" in report["warnings"]
     assert report["summary"]["lifecycle_bucket_discovery_live_followup_count"] == 0
-    entry = {item["family"]: item for item in report["candidates"]}[
-        mod.ENTRY_BRIDGE_FAMILY
-    ]
-    assert entry["allowed_runtime_apply"] is False
-    assert entry["target_env_keys"] == []
-    assert entry["evidence_grade"] == "grade_2_counterfactual"
-    assert entry["metadata_only"] is True
-    assert (
-        entry["bridge_exclusion_reason"]
-        == "entry_only_bridge_metadata_not_live_candidate"
-    )
-    assert entry["legacy_family_archived"] is False
+    assert set(states) == {mod.SCALE_IN_BRIDGE_FAMILY}
     assert report["summary"]["approval_required_count"] == 0
     assert report["summary"]["runtime_mutation_performed"] is False
     assert (report_dir / "runtime_apply_bridge_2026-05-21.json").exists()
@@ -610,7 +592,7 @@ def test_runtime_apply_bridge_ignores_lifecycle_flow_sim_probe_candidate(
     assert report["summary"]["greenfield_live_auto_ready_lifecycle_flow_count"] == 0
 
 
-def test_runtime_apply_bridge_keeps_entry_as_metadata_and_scale_candidates_live_auto(
+def test_runtime_apply_bridge_emits_only_scale_candidate_for_stage_local_policy(
     tmp_path, monkeypatch
 ):
     ldm_dir = tmp_path / "ldm"
@@ -628,15 +610,9 @@ def test_runtime_apply_bridge_keeps_entry_as_metadata_and_scale_candidates_live_
 
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
     by_family = {item["family"]: item for item in report["candidates"]}
-    entry = by_family[mod.ENTRY_BRIDGE_FAMILY]
     scale = by_family[mod.SCALE_IN_BRIDGE_FAMILY]
 
-    assert entry["bridge_candidate_state"] == "entry_only_bridge_metadata"
-    assert entry["approval_required"] is False
-    assert entry["allowed_runtime_apply"] is False
-    assert entry["target_env_keys"] == []
-    assert entry["metadata_only"] is True
-    assert entry["transition_target"] == "entry_dimension_provenance_only"
+    assert set(by_family) == {mod.SCALE_IN_BRIDGE_FAMILY}
     assert (
         scale["bridge_candidate_state"]
         == "blocked_legacy_v1_label_missing_incremental_ev"
@@ -670,11 +646,11 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_does_not_confirm(
         item["family"]: item["bridge_candidate_state"] for item in report["candidates"]
     }
 
-    assert states[mod.ENTRY_BRIDGE_FAMILY] == "entry_only_bridge_metadata"
     assert (
         states[mod.SCALE_IN_BRIDGE_FAMILY]
         == "blocked_legacy_v1_label_missing_incremental_ev"
     )
+    assert set(states) == {mod.SCALE_IN_BRIDGE_FAMILY}
     assert report["summary"]["live_auto_apply_ready_count"] == 0
 
 
@@ -698,14 +674,14 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_tier2_not_parsed(
         item["family"]: item["bridge_candidate_state"] for item in report["candidates"]
     }
 
-    assert states[mod.ENTRY_BRIDGE_FAMILY] == "entry_only_bridge_metadata"
     assert (
         states[mod.SCALE_IN_BRIDGE_FAMILY]
         == "blocked_legacy_v1_label_missing_incremental_ev"
     )
+    assert set(states) == {mod.SCALE_IN_BRIDGE_FAMILY}
 
 
-def test_runtime_apply_bridge_keeps_wait6579_discovery_candidate_as_entry_metadata(
+def test_runtime_apply_bridge_does_not_emit_wait6579_stage_local_candidate(
     tmp_path, monkeypatch
 ):
     ldm_dir = tmp_path / "ldm"
@@ -721,16 +697,8 @@ def test_runtime_apply_bridge_keeps_wait6579_discovery_candidate_as_entry_metada
     _write_discovery(discovery_path, live=True, tier2_status="parsed")
 
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
-    entry = {item["family"]: item for item in report["candidates"]}[
-        mod.ENTRY_BRIDGE_FAMILY
-    ]
-
-    assert entry["bridge_candidate_state"] == "entry_only_bridge_metadata"
-    assert entry["live_auto_apply"] is False
-    assert entry["allowed_runtime_apply"] is False
-    assert entry["target_env_keys"] == []
-    assert entry["runtime_effect_after_approval"] == "none"
-    assert entry["metadata_only"] is True
+    families = {item["family"] for item in report["candidates"]}
+    assert families == {mod.SCALE_IN_BRIDGE_FAMILY}
 
 
 def test_runtime_apply_bridge_writes_greenfield_real_env_policy(tmp_path, monkeypatch):
@@ -765,7 +733,7 @@ def test_runtime_apply_bridge_writes_greenfield_real_env_policy(tmp_path, monkey
                         "stage": "entry",
                         "recommended_action": "relax_or_recover",
                         "classification_state": "live_auto_apply_ready",
-                        "live_auto_apply_family": mod.ENTRY_BRIDGE_FAMILY,
+                        "live_auto_apply_family": "entry_bucket_runtime_policy_v1",
                         "allowed_runtime_apply": True,
                         "broker_order_forbidden": False,
                         "source_quality_gate": "pass",
@@ -1001,7 +969,7 @@ def test_runtime_apply_bridge_blocks_entry_only_greenfield_bundle(
                         "stage": "entry",
                         "recommended_action": "relax_or_recover",
                         "classification_state": "live_auto_apply_ready",
-                        "live_auto_apply_family": mod.ENTRY_BRIDGE_FAMILY,
+                        "live_auto_apply_family": "entry_bucket_runtime_policy_v1",
                         "allowed_runtime_apply": True,
                         "broker_order_forbidden": False,
                         "source_quality_gate": "pass",
@@ -1211,7 +1179,7 @@ def test_runtime_apply_bridge_rejects_malformed_discovery_live_candidate(
                     {
                         "bucket_id": "entry:combo_entry_spot:score_66_69",
                         "classification_state": "sim_auto_approved",
-                        "live_auto_apply_family": mod.ENTRY_BRIDGE_FAMILY,
+                        "live_auto_apply_family": "entry_bucket_runtime_policy_v1",
                         "allowed_runtime_apply": True,
                         "broker_order_forbidden": False,
                         "source_quality_gate": "pass",
@@ -1224,9 +1192,5 @@ def test_runtime_apply_bridge_rejects_malformed_discovery_live_candidate(
     )
 
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
-    entry = {item["family"]: item for item in report["candidates"]}[
-        mod.ENTRY_BRIDGE_FAMILY
-    ]
-
-    assert entry["bridge_candidate_state"] == "entry_only_bridge_metadata"
-    assert entry["allowed_runtime_apply"] is False
+    families = {item["family"] for item in report["candidates"]}
+    assert families == {mod.SCALE_IN_BRIDGE_FAMILY}

@@ -726,6 +726,46 @@ def test_preopen_activation_and_live_selector_require_exact_binding(
     assert rejected["runtime_effect"] is False
 
 
+@pytest.mark.parametrize(
+    ("candidate_count", "expected_reason"),
+    [
+        (0, "preopen_exact_family_candidate_missing"),
+        (2, "preopen_exact_family_candidate_multiple"),
+    ],
+)
+def test_preopen_reports_exact_candidate_cardinality_reason(
+    candidate_count: int,
+    expected_reason: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    candidate = {
+        "runtime_design": {
+            "runtime_family": approval.MAIN_AI_QUALITY_RUNTIME_FAMILY,
+        }
+    }
+    row = {
+        "state": approval.STATE_PREOPEN_SCHEDULED,
+        "preopen_target_date": "2026-08-18",
+        "candidate": candidate,
+    }
+    monkeypatch.setattr(
+        approval,
+        "load_queue",
+        lambda *_args, **_kwargs: {
+            "candidates": [dict(row) for _ in range(candidate_count)]
+        },
+    )
+
+    with pytest.raises(ValueError, match=expected_reason):
+        mod._preopen(
+            target_date="2026-08-18",
+            write=False,
+            now=datetime(2026, 8, 18, 7, 40, tzinfo=KST),
+            queue_path=tmp_path / "queue.json",
+        )
+
+
 def test_cli_preopen_cannot_synthesize_a_different_runtime_date() -> None:
     with pytest.raises(
         ValueError, match="preopen_runtime_target_date_not_current_kst_date"

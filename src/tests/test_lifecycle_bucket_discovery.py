@@ -1448,7 +1448,7 @@ def _write_ldm(path):
                     "buckets": [
                         {
                             "bucket_type": "combo_entry_spot",
-                            "bucket_key": mod.ENTRY_LIVE_AUTO_BUCKET_KEY,
+                            "bucket_key": mod.WAIT6579_ENTRY_BUCKET_KEY,
                             "sample": 44,
                             "joined_sample": 44,
                             "join_rate": 1.0,
@@ -1845,9 +1845,9 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(
     wait6579 = states[
         "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"
     ]
-    assert wait6579["classification_state"] == mod.ENTRY_ONLY_BRIDGE_METADATA_STATE
+    assert wait6579["classification_state"] == "entry_only_source_candidate"
     assert wait6579["review_category"] == "source_only_keep_collecting"
-    assert wait6579["review_sub_state"] == "entry_only_bridge_metadata"
+    assert wait6579["review_sub_state"] == "entry_only_source_candidate"
     assert wait6579["evidence_grade"] == mod.EVIDENCE_GRADE_2_COUNTERFACTUAL
     assert wait6579["transition_target"] == "entry_dimension_provenance_only"
     assert wait6579["full_real_conversion_allowed"] is False
@@ -2017,6 +2017,29 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(
         == 0
     )
     assert auto["source_quality_status"] == "pass"
+
+
+def test_wait6579_enriched_entry_dimension_remains_source_only() -> None:
+    state, family, grade = mod._classify_bucket(
+        "entry",
+        {
+            "bucket_type": "combo_entry_spot",
+            "bucket_key": (
+                "score=score_66_69|source=wait6579_ev_cohort|"
+                "stale=fresh|liquidity=normal|overbought=not_overbought|"
+                "time=morning"
+            ),
+            "sample": 50,
+            "joined_sample": 50,
+            "source_quality_gate": "pass",
+            "source_quality_adjusted_ev_pct": 2.0,
+            "recommended_route": "candidate_recovery_or_relax",
+        },
+    )
+
+    assert state == "entry_only_source_candidate"
+    assert family is None
+    assert grade["transition_target"] == "entry_dimension_provenance_only"
 
 
 def test_lifecycle_bucket_discovery_assigns_live_family_to_avg_down_arm(
@@ -2671,7 +2694,7 @@ def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(
     wait6579 = by_id[
         "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"
     ]
-    assert wait6579["classification_state"] == mod.ENTRY_ONLY_BRIDGE_METADATA_STATE
+    assert wait6579["classification_state"] == "entry_only_source_candidate"
     assert wait6579["bounded_live_canary_allowed"] is False
     assert report["summary"]["live_auto_apply_ready_count"] == 0
     assert "contamination_quarantine_live_auto_blocked:1" in report["warnings"]
@@ -3219,7 +3242,7 @@ def test_lifecycle_bucket_discovery_shard_failures_only_block_live_targets():
         {
             "bucket_id": "live-1",
             "classification_state": "live_auto_apply_ready",
-            "live_auto_apply_family": mod.ENTRY_LIVE_AUTO_FAMILY,
+            "live_auto_apply_family": "entry_bucket_runtime_policy_v1",
             "deterministic_proposal": {},
         },
         {

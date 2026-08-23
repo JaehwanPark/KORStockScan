@@ -223,7 +223,7 @@ from src.engine.lifecycle.greenfield_authority import (
     greenfield_stage_telegram_enabled,
 )
 from src.engine.lifecycle.bucket_taxonomy import normalize_entry_source_parent
-from src.engine.lifecycle_bucket_discovery import ENTRY_LIVE_AUTO_BUCKET_KEY
+from src.engine.lifecycle_bucket_discovery import WAIT6579_ENTRY_BUCKET_KEY
 from src.engine.sniper_dynamic_thresholds import (
     estimate_turnover_hint,
     get_dynamic_scalp_thresholds,
@@ -11825,12 +11825,12 @@ def _observed_greenfield_entry_bucket_id(stock) -> str | None:
         or stock.get("score")
     )
     if _entry_score_band_for_greenfield(score_value) != "score_66_69":
-        bucket_key = ENTRY_LIVE_AUTO_BUCKET_KEY.replace(
+        bucket_key = WAIT6579_ENTRY_BUCKET_KEY.replace(
             "score=score_66_69",
             f"score={_entry_score_band_for_greenfield(score_value)}",
         )
     else:
-        bucket_key = ENTRY_LIVE_AUTO_BUCKET_KEY
+        bucket_key = WAIT6579_ENTRY_BUCKET_KEY
     return f"entry:combo_entry_spot:{_greenfield_bucket_slug(bucket_key)}"
 
 

@@ -459,12 +459,12 @@ def resolve_standing_authorization(
     )
     if len(exact_matches) != 1 or not control_gates_pass:
         blocker_codes.append(
-            "matching_candidate_not_unique"
+            "r3_exact_candidate_missing"
             if not exact_matches
             else (
-                "multiple_or_tied_candidates"
+                "r3_exact_candidate_multiple"
                 if len(exact_matches) > 1
-                else "candidate_binding_blocked_by_control_gate"
+                else "r3_exact_candidate_binding_blocked_by_control_gate"
             )
         )
 

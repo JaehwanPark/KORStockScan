@@ -1,7 +1,8 @@
 """Build runtime-apply bridge candidates from LDM bucket attribution.
 
-The bridge now consumes lifecycle bucket discovery policy: entry/scale-in bridge
-families are auto-applied when source-quality and safety contracts are closed.
+The bridge consumes lifecycle bucket discovery policy for scale-in and complete
+greenfield lifecycle families. Entry-only WAIT6579 evidence remains an LDM
+dimension and is never emitted as a standalone runtime family.
 """
 
 from __future__ import annotations
@@ -24,9 +25,6 @@ from src.engine.automation.source_quality_clean_baseline import (
 )
 from src.utils.constants import DATA_DIR
 from src.engine.lifecycle_bucket_discovery import (
-    ENTRY_LIVE_AUTO_FAMILY,
-    ENTRY_LIVE_AUTO_BUCKET_KEY,
-    EVIDENCE_GRADE_2_COUNTERFACTUAL,
     SCALE_IN_LIVE_AUTO_FAMILY,
     discovery_report_path,
 )
@@ -39,11 +37,9 @@ LDM_REPORT_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
 APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 GREENFIELD_POLICY_DIR = DATA_DIR / "threshold_cycle" / "greenfield_real_env_policies"
 
-ENTRY_BRIDGE_FAMILY = ENTRY_LIVE_AUTO_FAMILY
 SCALE_IN_BRIDGE_FAMILY = SCALE_IN_LIVE_AUTO_FAMILY
 GREENFIELD_REAL_ENV_FAMILY = "greenfield_real_environment_authority"
 
-ENTRY_TARGET_BUCKET_KEY = ENTRY_LIVE_AUTO_BUCKET_KEY
 SCALE_IN_PYRAMID_BUCKET_TYPE = "arm"
 SCALE_IN_PYRAMID_BUCKET_KEY = "PYRAMID"
 SCALE_IN_AVG_DOWN_BUCKET_TYPE = "arm"
@@ -59,8 +55,6 @@ SCALE_IN_REOPEN_CONDITIONS = [
     "target_env_keys_mapped",
     "hard_broker_stale_quantity_cooldown_provider_cap_guards_preserved",
 ]
-ENTRY_BRIDGE_METADATA_STATE = "entry_only_bridge_metadata"
-ENTRY_BRIDGE_METADATA_REASON = "entry_only_bridge_metadata_not_live_candidate"
 ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES: set[str] = set()
 
 
@@ -70,10 +64,6 @@ def runtime_apply_bridge_report_path(target_date: str) -> Path:
 
 def runtime_apply_bridge_markdown_path(target_date: str) -> Path:
     return REPORT_DIR / f"runtime_apply_bridge_{target_date}.md"
-
-
-def ldm_entry_runtime_bridge_artifact_path(source_date: str) -> Path:
-    return APPROVAL_DIR / f"ldm_entry_runtime_bridge_{source_date}.json"
 
 
 def ldm_scale_in_runtime_bridge_artifact_path(source_date: str) -> Path:
@@ -170,25 +160,6 @@ def _discovery_report_path(target_date: str, *, suffix: str | None = None) -> Pa
         base.parent
         / f"lifecycle_bucket_discovery_{target_date}_{_safe_slug(suffix)}.json"
     )
-
-
-def _history_reports(target_date: str) -> list[dict[str, Any]]:
-    reports: list[dict[str, Any]] = []
-    policy = clean_baseline_policy()
-    for path in sorted(LDM_REPORT_DIR.glob("lifecycle_decision_matrix_*.json")):
-        report_date = path.stem.removeprefix("lifecycle_decision_matrix_")
-        if "_" in report_date:
-            continue
-        if report_date >= target_date:
-            continue
-        if not is_date_allowed(report_date, policy):
-            continue
-        if report_generated_before_clean_baseline(path, policy):
-            continue
-        payload = _load_json(path)
-        if payload:
-            reports.append(payload)
-    return reports[-5:]
 
 
 def _scale_confirmation_reports(target_date: str) -> list[dict[str, Any]]:
@@ -1111,141 +1082,6 @@ def _greenfield_flow_discovery_counts(discovery: dict[str, Any]) -> dict[str, in
     }
 
 
-def _align_with_discovery(
-    state: str,
-    rolling: dict[str, Any],
-    *,
-    family: str,
-    discovery_live_families: set[str],
-    discovery_available: bool,
-) -> tuple[str, dict[str, Any]]:
-    aligned = dict(rolling)
-    if state != "live_auto_apply_ready":
-        return state, aligned
-    if family in discovery_live_families:
-        aligned["lifecycle_bucket_discovery_gate"] = "pass"
-        return state, aligned
-    aligned["lifecycle_bucket_discovery_gate"] = "blocked"
-    aligned["lifecycle_bucket_discovery_available"] = bool(discovery_available)
-    return "runtime_blocked_contract_gap", aligned
-
-
-def _entry_candidate(
-    payload: dict[str, Any],
-    history: list[dict[str, Any]],
-    target_date: str,
-    *,
-    discovery_live_families: set[str],
-    discovery_live_by_family: dict[str, dict[str, Any]],
-    discovery: dict[str, Any],
-    discovery_available: bool,
-) -> dict[str, Any]:
-    bucket = _find_bucket(
-        payload, "entry_bucket_attribution", "combo_entry_spot", ENTRY_TARGET_BUCKET_KEY
-    )
-    source_state, rolling = _state_for_bucket(
-        bucket,
-        history,
-        section="entry_bucket_attribution",
-        bucket_type="combo_entry_spot",
-        bucket_key=ENTRY_TARGET_BUCKET_KEY,
-        positive_edge=True,
-    )
-    source_state, rolling = _align_with_discovery(
-        source_state,
-        rolling,
-        family=ENTRY_BRIDGE_FAMILY,
-        discovery_live_families=discovery_live_families,
-        discovery_available=discovery_available,
-    )
-    state = ENTRY_BRIDGE_METADATA_STATE
-    discovery_meta = _discovery_candidate_meta(
-        family=ENTRY_BRIDGE_FAMILY,
-        discovery=discovery,
-        discovery_live_by_family=discovery_live_by_family,
-    )
-    target_env_keys = []
-    missing_fields = _missing_source_fields(bucket)
-    explicit_exclusion = True
-    exclusion_reason = (
-        "counterfactual_source_field_gap"
-        if missing_fields
-        else ENTRY_BRIDGE_METADATA_REASON
-    )
-    return {
-        "candidate_id": f"{ENTRY_BRIDGE_FAMILY}:{target_date}",
-        "family": ENTRY_BRIDGE_FAMILY,
-        "stage": "entry",
-        "priority": 9,
-        "bridge_candidate_state": state,
-        "approval_required": False,
-        "human_approval_required": False,
-        "live_auto_apply": state == "live_auto_apply_ready",
-        "allowed_runtime_apply": state == "live_auto_apply_ready",
-        "runtime_effect": False,
-        "runtime_effect_after_approval": (
-            "bounded_entry_probe_recovery_live_auto"
-            if state == "live_auto_apply_ready"
-            else "none"
-        ),
-        "target_env_keys": target_env_keys,
-        "recommended_values": {
-            "enabled": state == "live_auto_apply_ready",
-            "min_score": 66,
-            "max_score": 69,
-            "min_buy_pressure": 0.0,
-            "min_tick_accel": 0.0,
-            "min_micro_vwap_bp": -999.0,
-            "max_budget_krw": 0,
-            "max_qty": 0,
-            "threshold_version": f"{ENTRY_BRIDGE_FAMILY}:{target_date}",
-            "calibration_state": f"runtime_apply_bridge:{state}",
-        },
-        "current_values": {
-            "enabled": False,
-            "min_score": 65,
-            "max_score": 74,
-            "max_budget_krw": 0,
-            "max_qty": 0,
-            "threshold_version": "runtime_default",
-            "calibration_state": "runtime_default",
-        },
-        "source_bucket_keys": [ENTRY_TARGET_BUCKET_KEY],
-        "source_bucket": bucket,
-        "rolling_confirmation": {
-            **rolling,
-            "entry_bridge_source_state": source_state,
-            "metadata_only": True,
-        },
-        **discovery_meta,
-        "evidence_grade": EVIDENCE_GRADE_2_COUNTERFACTUAL,
-        "transition_target": "entry_dimension_provenance_only",
-        "metadata_only": True,
-        "legacy_bridge_metadata": True,
-        "explicit_runtime_exclusion": explicit_exclusion,
-        "bridge_exclusion_reason": exclusion_reason,
-        "runtime_exclusion_reason": exclusion_reason,
-        "missing_runtime_source_fields": missing_fields,
-        "counterfactual_contract": {
-            "evidence_grade": EVIDENCE_GRADE_2_COUNTERFACTUAL,
-            "transition_target": "entry_dimension_provenance_only",
-            "source_field_gap_fields": missing_fields,
-        },
-        "grade_reason": "entry_wait6579_bridge_metadata_not_complete_lifecycle_bucket",
-        "full_real_conversion_allowed": False,
-        "legacy_family_archived": False,
-        "archived_live_exception_reason": None,
-        "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "decision_authority": "runtime_apply_bridge_entry_only_metadata",
-        "forbidden_uses": [
-            "intraday_threshold_mutation",
-            "broker_guard_bypass",
-            "provider_route_change",
-            "bot_restart_trigger",
-        ],
-    }
-
-
 def _scale_source(bucket: dict[str, Any], *, role: str) -> dict[str, Any]:
     return {
         "role": role,
@@ -1754,21 +1590,9 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
     if not payload:
         warnings.append("lifecycle_decision_matrix_missing")
     else:
-        history = _history_reports(target_date)
         scale_confirmation_reports = _scale_confirmation_reports(target_date)
         if not discovery:
             warnings.append("lifecycle_bucket_discovery_missing")
-        candidates.append(
-            _entry_candidate(
-                payload,
-                history,
-                target_date,
-                discovery_live_families=discovery_live_families,
-                discovery_live_by_family=discovery_live_by_family,
-                discovery=discovery,
-                discovery_available=bool(discovery),
-            )
-        )
         candidates.append(
             _scale_candidate(
                 payload,
@@ -2037,7 +1861,6 @@ def _write_markdown(report: dict[str, Any]) -> None:
                 f"allowed_runtime_apply=`{item.get('allowed_runtime_apply')}`, "
                 f"approval_required=`{item.get('approval_required')}`, "
                 f"live_auto_apply=`{item.get('live_auto_apply')}`, "
-                f"metadata_only=`{item.get('metadata_only', False)}`, "
                 f"ai_followup=`{item.get('lifecycle_bucket_discovery_ai_followup_required') or '-'}`",
             ]
         )
@@ -2047,7 +1870,7 @@ def _write_markdown(report: dict[str, Any]) -> None:
             "## 다음 액션",
             "",
             "- `live_auto_apply_ready` complete lifecycle/scale-in 후보는 별도 approval artifact 없이 다음 PREOPEN env 후보로 소비한다.",
-            "- `entry_only_bridge_metadata` 후보는 entry dimension/provenance로만 보존하며 PREOPEN live env 후보로 소비하지 않는다.",
+            "- entry-only source dimensions remain in LDM/source-quality reports and are not runtime-bridge candidates.",
             "- `blocked_*` 후보는 source-quality/rolling conflict가 해소될 때까지 env로 소비하지 않는다.",
         ]
     )
