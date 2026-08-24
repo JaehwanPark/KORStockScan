@@ -124,6 +124,11 @@ class RecommendationHistory(Base):
     entry_execution_broker_route = Column(Text)
     entry_execution_broker_route_resolution = Column(Text)
     entry_execution_route_recorded_at = Column(Float)
+    # Broker-fill-confirmed lineage for the current position cycle. Candidate
+    # flags are transient and cannot own holding behavior after a target reload.
+    rising_missed_scout_position_cycle_active = Column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
     buy_price = Column(Float)
     buy_qty = Column(Integer, server_default=text("0"))

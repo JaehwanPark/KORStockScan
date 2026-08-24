@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 from src.engine import sniper_execution_receipts as receipts
 from src.engine import sniper_state_handlers as handlers
@@ -126,6 +127,27 @@ def test_non_scout_has_no_execution_attribution() -> None:
     )
 
 
+def test_receipt_confirmed_position_marker_preserves_scout_attribution() -> None:
+    stock = _entry_ai_stock()
+    stock.update(freeze_scout_ai_parent_fields(stock))
+    stock.update(
+        {
+            "rising_missed_scout_position_cycle_active": True,
+            "entry_split_probe_bundle_id": "probe-bundle-restored",
+        }
+    )
+
+    fields = scout_ai_execution_attribution_fields(
+        stock,
+        stage="holding_started_after_reload",
+        actual_order_submitted=True,
+    )
+
+    assert fields["scout_ai_attribution_status"] == "linked_frozen_parent"
+    assert fields["scout_probe_bundle_id"] == "probe-bundle-restored"
+    assert fields["scout_execution_stage"] == "holding_started_after_reload"
+
+
 def test_entry_pipeline_emits_scout_parent_link(monkeypatch) -> None:
     emitted = []
     monkeypatch.setattr(
@@ -154,6 +176,66 @@ def test_receipt_snapshot_preserves_frozen_scout_parent() -> None:
     for key in freeze_scout_ai_parent_fields(_entry_ai_stock()):
         assert key in receipts._SELL_RECEIPT_SNAPSHOT_KEYS
     assert "entry_split_probe_bundle_id" in receipts._SELL_RECEIPT_SNAPSHOT_KEYS
+    assert (
+        "rising_missed_scout_position_cycle_active"
+        in receipts._BUY_RECEIPT_SNAPSHOT_KEYS
+    )
+    assert (
+        "rising_missed_scout_position_cycle_active"
+        in receipts._SELL_COMPLETE_RESET_KEYS
+    )
+    assert (
+        "rising_missed_scout_position_cycle_active"
+        in receipts._SELL_REVIVE_RESET_KEYS
+    )
+
+
+def test_buy_receipt_persists_position_cycle_marker(monkeypatch) -> None:
+    class _CaptureSession:
+        def __init__(self):
+            self.updated = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def query(self, *args, **kwargs):
+            return self
+
+        def filter_by(self, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def update(self, values, synchronize_session=False):
+            self.updated = dict(values)
+            return 1
+
+    session = _CaptureSession()
+    monkeypatch.setattr(
+        receipts,
+        "DB",
+        type("_DB", (), {"get_session": lambda self: session})(),
+    )
+
+    receipts._update_db_for_buy(
+        7,
+        10000,
+        datetime(2026, 8, 24, 13, 0, 0),
+        {
+            "code": "123456",
+            "buy_price": 10000,
+            "buy_qty": 1,
+            "buy_execution_notified": True,
+            "rising_missed_scout_position_cycle_active": True,
+        },
+    )
+
+    assert session.updated["status"] == "HOLDING"
+    assert session.updated["rising_missed_scout_position_cycle_active"] is True
 
 
 def test_feedback_consumer_joins_scout_attribution_across_lifecycle() -> None:

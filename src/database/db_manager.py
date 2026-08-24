@@ -269,6 +269,13 @@ class DBManager:
                 )
                 conn.execute(
                     text(
+                        "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS "
+                        "rising_missed_scout_position_cycle_active BOOLEAN NOT NULL "
+                        "DEFAULT false;"
+                    )
+                )
+                conn.execute(
+                    text(
                         "ALTER TABLE recommendation_history "
                         "ALTER COLUMN buy_price TYPE DOUBLE PRECISION USING buy_price::double precision;"
                     )
@@ -844,6 +851,7 @@ class DBManager:
                         entry_execution_broker_route,
                         entry_execution_broker_route_resolution,
                         entry_execution_route_recorded_at,
+                        rising_missed_scout_position_cycle_active,
                         (
                             SELECT dsq.marcap
                             FROM daily_stock_quotes dsq
@@ -1011,6 +1019,9 @@ class DBManager:
                     t["shallow_volatility_avg_down_last_at"] = 0.0
                 t["scale_in_locked"] = _safe_bool(
                     t.get("scale_in_locked"), default=False
+                )
+                t["rising_missed_scout_position_cycle_active"] = _safe_bool(
+                    t.get("rising_missed_scout_position_cycle_active"), default=False
                 )
                 t["hard_stop_price"] = _safe_float(t.get("hard_stop_price"))
                 t["trailing_stop_price"] = _safe_float(t.get("trailing_stop_price"))

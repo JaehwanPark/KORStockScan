@@ -48,6 +48,13 @@ from src.engine.scalping.rising_missed_one_share_entry import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_post_sell_artifacts(monkeypatch):
+    """Keep receipt tests from appending synthetic rows to live-day data."""
+
+    monkeypatch.setattr(receipts, "record_post_sell_candidate", lambda **kwargs: None)
+
+
 def _mock_exact_order_terminal(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
@@ -12706,6 +12713,17 @@ def test_rising_missed_same_day_reentry_blocks_after_loss_exit(monkeypatch):
     )
 
 
+def test_rising_missed_position_cycle_marker_restores_holding_and_exit_lineage():
+    stock = {
+        "strategy": "SCALPING",
+        "rising_missed_scout_position_cycle_active": True,
+    }
+
+    assert scale_in._is_rising_missed_scout_lineage(stock) is True
+    assert state_handlers._has_rising_missed_entry_lineage(stock) is True
+    assert state_handlers._is_rising_missed_scout_exit_context(stock) is True
+
+
 def test_rising_missed_same_day_reentry_low_priority_after_avgdown_recovery(
     monkeypatch,
 ):
@@ -15463,6 +15481,7 @@ def test_entry_receipt_seeds_holding_ai_score_from_submit_order(monkeypatch):
     assert stock["rt_ai_prob"] == pytest.approx(0.82)
     assert stock["entry_submit_ai_score"] == pytest.approx(82.0)
     assert stock["holding_entry_ai_score"] == pytest.approx(82.0)
+    assert "rising_missed_scout_position_cycle_active" not in stock
     holding_started = [fields for stage, fields in events if stage == "holding_started"]
     assert holding_started
     assert holding_started[-1]["entry_submit_ai_score"] == "82.0"
@@ -15531,6 +15550,7 @@ def test_rising_missed_scout_upgrade_receipt_keeps_partial_entry_pending(monkeyp
     assert stock["initial_buy_qty"] == 5
     assert stock["pending_entry_orders"][0]["ord_no"] == "UP1"
     assert stock["rising_missed_scout_upgrade_order_pending"] is True
+    assert stock["rising_missed_scout_position_cycle_active"] is True
     position_events = [
         fields for stage, fields in events if stage == "position_rebased_after_fill"
     ]
@@ -15552,6 +15572,7 @@ def test_rising_missed_scout_upgrade_receipt_keeps_partial_entry_pending(monkeyp
     assert "pending_entry_orders" not in stock
     assert "rising_missed_scout_upgrade_order_pending" not in stock
     assert stock["rising_missed_scout_upgraded"] is True
+    assert stock["rising_missed_scout_position_cycle_active"] is True
 
 
 def test_real_weak_pullback_entry_block_blocks_caution_weak_without_micro(monkeypatch):
@@ -16263,6 +16284,39 @@ def test_rising_missed_scout_pyramid_bridge_allows_fresh_scout_lineage():
         result["rising_missed_scout_pyramid_bridge_operator_override_reason"]
         == "operator_intraday_test"
     )
+
+
+def test_rising_missed_scout_pyramid_bridge_recovers_receipt_cycle_lineage():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED=True,
+        RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT=0.70,
+        RISING_MISSED_SCOUT_PYRAMID_MAX_AVG_DOWN_COUNT=1,
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5,
+        SCALPING_PYRAMID_MIN_AI_SCORE=70,
+        SCALPING_PYRAMID_MIN_BUY_PRESSURE=60.0,
+        SCALPING_PYRAMID_MIN_TICK_ACCEL=0.5,
+        SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS=60.0,
+    )
+    stock = _rising_missed_scout_pyramid_stock(
+        rising_missed_one_share_scout=False,
+        rising_missed_scout_position_cycle_active=True,
+    )
+    try:
+        result = scale_in.evaluate_scalping_pyramid(
+            stock,
+            profit_rate=0.71,
+            peak_profit=0.71,
+            is_new_high=True,
+            current_ai_score=70,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is True
+    assert result["reason"] == "rising_missed_scout_pyramid_bridge_ok"
+    assert result["rising_missed_scout_pyramid_bridge_lineage"] is True
 
 
 def test_rising_missed_scout_pyramid_bridge_blocks_avg_down_over_scope():
@@ -37436,9 +37490,10 @@ def test_s15_fast_track_ai_score_75_passes_ai_gate(monkeypatch):
     assert events[-1]["fields"]["s15_block_reason"] == "latency_block"
 
 
-def test_s15_fast_track_submitted_logs_score_prior_fields(monkeypatch):
+def test_s15_fast_track_submitted_logs_score_prior_fields(tmp_path, monkeypatch):
     import src.engine.sniper_s15_fast_track as s15
 
+    monkeypatch.setattr(s15, "S15_CUSTODY_DIR", tmp_path / "s15_fast_custody")
     updates = []
     events = []
     state = {
@@ -37454,6 +37509,7 @@ def test_s15_fast_track_submitted_logs_score_prior_fields(monkeypatch):
     }
     clock = {"now": 1_000.0}
     cancel_calls = []
+    recovery_calls = []
 
     def _fast_now():
         clock["now"] += 25.0
@@ -37461,6 +37517,12 @@ def test_s15_fast_track_submitted_logs_score_prior_fields(monkeypatch):
 
     monkeypatch.setattr(s15, "_now_ts", _fast_now)
     monkeypatch.setattr(s15, "_get_fast_state", lambda code: state)
+    monkeypatch.setattr(
+        s15,
+        "_start_s15_recovery_thread",
+        lambda code, recovery_state: recovery_calls.append((code, recovery_state))
+        or True,
+    )
     monkeypatch.setattr(
         s15,
         "update_s15_shadow_record",
@@ -37561,6 +37623,7 @@ def test_s15_fast_track_submitted_logs_score_prior_fields(monkeypatch):
     assert cancelled["fields"]["s15_score_gate_converted_to_prior"] is True
     assert cancel_calls
     assert cancel_calls[0]["dmst_stex_tp"] == "NXT"
+    assert recovery_calls == [("123456", state)]
 
 
 def test_add_receipt_without_order_no_matches_single_pending_target(monkeypatch):

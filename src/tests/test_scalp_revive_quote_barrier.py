@@ -11,6 +11,7 @@ def test_scalp_revive_sets_quote_barrier_before_rewatch(monkeypatch):
         "buy_price": 10000,
         "buy_qty": 3,
         "rising_missed_scout_upgraded": True,
+        "rising_missed_scout_position_cycle_active": True,
     }
 
     receipts._apply_scalp_revive_memory_state(
@@ -24,6 +25,7 @@ def test_scalp_revive_sets_quote_barrier_before_rewatch(monkeypatch):
     assert stock["status"] == "WATCHING"
     assert stock["_scalp_revive_min_quote_ts"] == 1000.0
     assert "rising_missed_scout_upgraded" not in stock
+    assert "rising_missed_scout_position_cycle_active" not in stock
 
 
 def test_revive_barrier_discards_pre_sell_ws_then_accepts_new_ws_snapshot():

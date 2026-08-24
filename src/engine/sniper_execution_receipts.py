@@ -36,6 +36,7 @@ from src.engine.scalping.main_lifecycle_journal import (
     pipeline_lifecycle_stage_mapped,
 )
 from src.engine.scalping.rising_missed_one_share_entry import (
+    FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
     scout_ai_execution_attribution_fields,
 )
 from src.engine.sniper_entry_state import (
@@ -366,6 +367,7 @@ def _probe_observation_contract_fields(stock: dict[str, Any]) -> dict[str, Any]:
 _SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS = (
     "rising_missed_one_share_entry_forced",
     "rising_missed_one_share_scout",
+    "rising_missed_scout_position_cycle_active",
     "forced_entry_reason",
     "entry_split_probe_bundle_id",
     "entry_split_probe_exit_bundle_id",
@@ -438,6 +440,7 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "last_entry_receipt_economics_complete",
     "last_entry_receipt_execution_no",
     "scale_in_filled_qty",
+    "rising_missed_scout_position_cycle_active",
     "code",
     "actual_order_submitted",
     *_GENERAL_ENTRY_MARGIN_POSITION_KEYS,
@@ -662,6 +665,7 @@ _SELL_EXECUTION_RECEIPT_STATE_KEY = "_sell_execution_receipt_state"
 _SELL_REVIVE_RESET_KEYS = (
     *_NXT_TP1_PARTIAL_RESET_KEYS,
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
+    *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
     "odno",
     "order_time",
     "order_price",
@@ -5480,6 +5484,11 @@ def _update_db_for_buy(target_id, exec_price, now, receipt_snapshot):
                 "buy_qty": buy_qty,
                 "status": "HOLDING",
                 "buy_time": now,
+                "rising_missed_scout_position_cycle_active": bool(
+                    receipt_snapshot.get(
+                        "rising_missed_scout_position_cycle_active", False
+                    )
+                ),
             }
             initial_buy_qty = _safe_int(receipt_snapshot.get("initial_buy_qty"), 0)
             if initial_buy_qty > 0:
@@ -6782,6 +6791,16 @@ def _handle_entry_buy_execution(
     target_stock["status"] = "HOLDING"
     target_stock["buy_price"] = new_avg
     target_stock["buy_qty"] = new_qty
+    if bool(
+        target_stock.get("rising_missed_one_share_scout")
+        or str(target_stock.get("forced_entry_reason") or "").strip()
+        == RISING_MISSED_FORCED_ENTRY_REASON
+    ):
+        # Receipt-confirmed lifecycle marker: unlike candidate-time flags this
+        # cannot be left behind by a rejected scout submission.  It survives
+        # holding-side transient cleanup and is cleared by terminal/revive
+        # resets through _SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS.
+        target_stock["rising_missed_scout_position_cycle_active"] = True
     target_stock["entry_filled_qty"] = (
         int(target_stock.get("entry_filled_qty", 0) or 0) + effective_exec_qty
     )

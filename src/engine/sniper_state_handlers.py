@@ -20951,6 +20951,8 @@ def _rising_missed_clean_profit_reentry_confirm_sec() -> int:
 def _is_rising_missed_scout_exit_context(stock: dict | None) -> bool:
     if not isinstance(stock, dict):
         return False
+    if bool(stock.get("rising_missed_scout_position_cycle_active")):
+        return True
     if bool(stock.get("rising_missed_one_share_scout")):
         return True
     if bool(stock.get("rising_missed_one_share_entry_forced")):
@@ -71145,6 +71147,7 @@ def _has_rising_missed_entry_lineage(
     for key in (
         "rising_missed_one_share_entry_forced",
         "rising_missed_one_share_scout",
+        "rising_missed_scout_position_cycle_active",
         "rising_missed_scout_upgrade_pending",
         "rising_missed_scout_upgrade_order_pending",
     ):

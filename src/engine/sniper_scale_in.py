@@ -847,10 +847,13 @@ def _unique_reasons(reasons):
 def _is_rising_missed_scout_lineage(stock):
     if not isinstance(stock, dict):
         return False
-    return bool(
+    if bool(
         stock.get("rising_missed_one_share_scout")
         or stock.get("rising_missed_scout_upgraded")
-    )
+        or stock.get("rising_missed_scout_position_cycle_active")
+    ):
+        return True
+    return False
 
 
 def _apply_rising_missed_scout_pyramid_bridge(

@@ -1172,6 +1172,7 @@ def scout_ai_execution_attribution_fields(
     forced = bool(
         source.get("rising_missed_one_share_entry_forced")
         or source.get("rising_missed_one_share_scout")
+        or source.get("rising_missed_scout_position_cycle_active")
         or str(source.get("forced_entry_reason") or "").strip() == FORCED_ENTRY_REASON
     )
     if not forced:

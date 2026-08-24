@@ -107,6 +107,7 @@ def test_get_active_targets_excludes_s15_fast_track_owned_rows(monkeypatch):
         assert "recommendation_history" in query
         assert "effective_venue" in query
         assert "scanner_promotion_id" in query
+        assert "rising_missed_scout_position_cycle_active" in query
         assert "scanner_source_signature as source_signature" in query
         assert "status IN ('HOLDING', 'BUY_ORDERED', 'SELL_ORDERED')" in query
         return pd.DataFrame(
@@ -171,7 +172,7 @@ def test_get_active_targets_excludes_s15_fast_track_owned_rows(monkeypatch):
                     "code": "005930",
                     "name": "삼성전자",
                     "type": "SCALP",
-                    "status": "WATCHING",
+                    "status": "HOLDING",
                     "strategy": "SCALPING",
                     "position_tag": "SCANNER",
                     "prob": 0.8,
@@ -190,6 +191,7 @@ def test_get_active_targets_excludes_s15_fast_track_owned_rows(monkeypatch):
                     "scale_in_locked": False,
                     "hard_stop_price": 0,
                     "trailing_stop_price": 0,
+                    "rising_missed_scout_position_cycle_active": True,
                     "marcap": 0,
                 },
             ]
@@ -201,6 +203,7 @@ def test_get_active_targets_excludes_s15_fast_track_owned_rows(monkeypatch):
 
     assert [target["code"] for target in targets] == ["005930"]
     assert targets[0]["strategy"] == "SCALPING"
+    assert targets[0]["rising_missed_scout_position_cycle_active"] is True
 
 
 def test_save_recommendation_does_not_reuse_completed_trade_row():
