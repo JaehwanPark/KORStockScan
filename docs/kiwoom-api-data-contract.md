@@ -985,6 +985,29 @@ reactivate it.
   It has no account, order, advisory, entry/exit event, quantity, policy apply,
   provider, bot, cap, broker-guard, or hard-safety authority.
 
+### 2026-08-24 Holding-route recovery revalidation
+
+- Rechecked at `2026-08-24T17:06:38+09:00` from upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/실시간시세.md`, `kiwoom/realtime/packets.py`,
+  `kiwoom/specs.py`, and the local WebSocket REG/market-route parser. The
+  official item contract remains plain six-digit code for KRX, `_NX` for the
+  NXT-only route, and `_AL` for the integrated SOR route; REG uses
+  `refresh=1` and each data item's `type` list.
+- Holding freshness repair now follows the executable sell-session owner.
+  KRX regular-session recovery retains the plain/SOR registration, while a
+  confirmed NXT-enabled holding in the NXT execution session requests the
+  exact `_NX` item required by the fresh executable-bid consumer. `_AL` is not
+  accepted as proof of an NXT-only quote. A KRX-only holding outside the KRX
+  regular session, or unconfirmed NXT eligibility, records a suppressed repair
+  state instead of repeatedly issuing an unusable registration. Both successful
+  registration and suppressed route decisions use the bounded repair cooldown,
+  so the holding loop does not repeatedly query route metadata or emit the same
+  recovery decision on every tick.
+- The change is source recovery and provenance only. It grants no sell, entry,
+  scale-in, quantity, provider, threshold, cap, broker-guard, or hard-safety
+  authority.
+
 ## String And Sign Parsing
 
 - Price and quantity fields are normalized as unsigned magnitude unless a

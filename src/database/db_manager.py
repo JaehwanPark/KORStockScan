@@ -513,6 +513,31 @@ class DBManager:
             log_error(f"🚨 get_latest_is_nxt 실패 [{norm_code}]: {e}")
             return False
 
+    def get_latest_is_nxt_optional(self, code: str) -> bool | None:
+        """Return tri-state NXT eligibility without folding missing rows into false.
+
+        ``False`` is authoritative only when a latest quote row explicitly says
+        the symbol is not NXT-enabled. ``None`` preserves missing/error source
+        provenance for route-sensitive runtime consumers.
+        """
+        norm_code = str(code or "").replace("_AL", "").replace("_NX", "").zfill(6)
+        query = text("""
+            SELECT is_nxt
+            FROM daily_stock_quotes
+            WHERE stock_code = :code
+            ORDER BY quote_date DESC
+            LIMIT 1
+        """)
+        try:
+            with self.engine.connect() as conn:
+                row = conn.execute(query, {"code": norm_code}).first()
+            if row is None or row[0] is None:
+                return None
+            return bool(row[0])
+        except Exception as e:
+            log_error(f"🚨 get_latest_is_nxt_optional 실패 [{norm_code}]: {e}")
+            return None
+
     def get_latest_is_nxt_map(self, codes: list[str]) -> dict:
         """복수 종목에 대해 최신 거래일 기준 NXT 대상 여부를 dict로 반환합니다."""
         normalized = [str(c).replace("_AL", "").zfill(6) for c in (codes or []) if c]

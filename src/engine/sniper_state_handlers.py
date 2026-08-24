@@ -44087,40 +44087,113 @@ def _scalp_nxt_trailing_bid_guard_context(
     }
 
 
-def _maybe_publish_holding_ws_repair(state, code, fields, *, now_ts):
+def _holding_ws_repair_session_bucket(now_ts: float) -> str:
+    observed_t = datetime.fromtimestamp(float(now_ts), tz=_KST).time()
+    if datetime_time(hour=8) <= observed_t < datetime_time(hour=8, minute=50):
+        return "nxt_premarket"
+    if datetime_time(hour=9) <= observed_t < TIME_15_30:
+        return "krx_regular"
+    if datetime_time(hour=15, minute=45) <= observed_t < TIME_20_00:
+        return "nxt_aftermarket"
+    return "closed_or_transition"
+
+
+def _maybe_publish_holding_ws_repair(state, stock, code, fields, *, now_ts):
     min_interval_sec = _holding_ws_repair_min_interval_sec()
     last_reg_ts = _safe_float((state or {}).get("last_ws_repair_reg_ts"), 0.0)
-    next_after = last_reg_ts + min_interval_sec
+    last_decision_ts = _safe_float(
+        (state or {}).get("last_ws_repair_decision_ts"), 0.0
+    )
+    current_session_bucket = _holding_ws_repair_session_bucket(now_ts)
+    last_session_bucket = str(
+        (state or {}).get("last_ws_repair_session_bucket") or ""
+    ).strip()
+    next_after = max(last_reg_ts, last_decision_ts) + min_interval_sec
     fields["holding_ws_repair_min_interval_sec"] = round(min_interval_sec, 3)
-    if last_reg_ts > 0 and float(now_ts) < next_after:
+    fields["holding_ws_repair_session_bucket"] = current_session_bucket
+    if (
+        max(last_reg_ts, last_decision_ts) > 0
+        and float(now_ts) < next_after
+        and (not last_session_bucket or last_session_bucket == current_session_bucket)
+    ):
         fields["holding_ws_reg_reissued"] = False
         fields["holding_ws_repair_cycle_state"] = "holding_ws_repair_interval_active"
         fields["holding_ws_repair_next_after_epoch"] = f"{next_after:.3f}"
         return
     if EVENT_BUS is None:
+        if isinstance(state, dict):
+            state["last_ws_repair_decision_ts"] = float(now_ts)
+            state["last_ws_repair_session_bucket"] = current_session_bucket
         fields["holding_ws_reg_reissued"] = False
         fields["holding_ws_repair_cycle_state"] = (
             "holding_ws_repair_event_bus_unavailable"
         )
         return
+
+    observed_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
+    route_resolution = _resolve_holding_sell_dmst_stex_tp(
+        stock, code, now_t=observed_dt.time()
+    )
+    route = str(route_resolution.get("dmst_stex_tp") or "").strip().upper()
+    nxt_enabled = route_resolution.get("nxt_enabled")
+    fields.update(
+        {
+            "holding_ws_repair_route": route or "unknown",
+            "holding_ws_repair_route_reason": str(
+                route_resolution.get("reason") or "unknown"
+            ),
+            "holding_ws_repair_nxt_enabled": nxt_enabled,
+            "holding_ws_repair_nxt_flag_source": str(
+                route_resolution.get("nxt_flag_source") or "unknown"
+            ),
+        }
+    )
+    if route_resolution.get("blocked"):
+        if isinstance(state, dict):
+            state["last_ws_repair_decision_ts"] = float(now_ts)
+            state["last_ws_repair_session_bucket"] = current_session_bucket
+        fields["holding_ws_reg_reissued"] = False
+        fields["holding_ws_repair_cycle_state"] = "holding_ws_repair_session_closed"
+        fields["holding_ws_repair_suppressed_reason"] = str(
+            route_resolution.get("reason") or "unsupported_execution_session"
+        )
+        return
+    if route == "NXT" and nxt_enabled is not True:
+        if isinstance(state, dict):
+            state["last_ws_repair_decision_ts"] = float(now_ts)
+            state["last_ws_repair_session_bucket"] = current_session_bucket
+        fields["holding_ws_reg_reissued"] = False
+        fields["holding_ws_repair_cycle_state"] = (
+            "holding_ws_repair_nxt_capability_unconfirmed"
+        )
+        fields["holding_ws_repair_suppressed_reason"] = (
+            "nxt_execution_capability_unconfirmed"
+        )
+        return
+
+    exact_nxt_route = route == "NXT"
+    registration_codes = (
+        [f"{str(code or '').strip()[:6]}_NX"] if exact_nxt_route else [code]
+    )
     try:
         EVENT_BUS.publish(
             "COMMAND_WS_REG",
             {
-                "codes": [code],
+                "codes": registration_codes,
                 "source": "holding_ws_freshness_repair",
                 "force": True,
                 "repair_cycle": "holding_ws_stale_or_missing",
-                # A held symbol can have entered through KRX while its only
-                # executable feed is now the integrated/NXT route.  Ask the
-                # WS owner to register both the effective base item and the
-                # official SOR `_AL` companion; this changes source recovery
-                # only and grants no order or exit authority.
-                "include_alternate_route": True,
+                # KRX regular-session recovery keeps the SOR companion.  NXT
+                # execution sessions request the exact official `_NX` item
+                # required by the executable-bid consumer; `_AL` is not proof
+                # of the NXT-only route.  This grants no order/exit authority.
+                "include_alternate_route": not exact_nxt_route,
             },
         )
         if isinstance(state, dict):
             state["last_ws_repair_reg_ts"] = float(now_ts)
+            state["last_ws_repair_decision_ts"] = float(now_ts)
+            state["last_ws_repair_session_bucket"] = current_session_bucket
         fields["holding_ws_reg_reissued"] = True
         fields["holding_ws_repair_cycle_state"] = "holding_ws_repair_reg_reissued"
     except Exception as exc:
@@ -44216,6 +44289,7 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
                 )
                 _maybe_publish_holding_ws_repair(
                     state,
+                    stock,
                     code,
                     fields,
                     now_ts=now_ts,
@@ -44269,7 +44343,9 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
                         ),
                     }
                 )
-                _maybe_publish_holding_ws_repair(state, code, fields, now_ts=now_ts)
+                _maybe_publish_holding_ws_repair(
+                    state, stock, code, fields, now_ts=now_ts
+                )
                 if isinstance(stock, dict):
                     stock.pop("holding_rest_quote_only_recovery", None)
                     stock.pop("holding_rest_quote_only_recovered_at", None)
@@ -44292,7 +44368,9 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
                     "holding_rest_quote_only_recovery": True,
                 }
             )
-            _maybe_publish_holding_ws_repair(state, code, fields, now_ts=now_ts)
+            _maybe_publish_holding_ws_repair(
+                state, stock, code, fields, now_ts=now_ts
+            )
             _log_holding_pipeline(
                 stock, code, "holding_ws_freshness_recovered", **fields
             )
@@ -44306,7 +44384,7 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
             f"{last_rest_ts + _holding_rest_quote_fallback_min_interval_sec():.3f}"
         )
 
-    _maybe_publish_holding_ws_repair(state, code, fields, now_ts=now_ts)
+    _maybe_publish_holding_ws_repair(state, stock, code, fields, now_ts=now_ts)
     if isinstance(stock, dict):
         stock.pop("holding_rest_quote_only_recovery", None)
         stock.pop("holding_rest_quote_only_recovered_at", None)
@@ -74024,7 +74102,13 @@ def _holding_sell_nxt_enabled_status(
     if DB is None:
         return None, "db_unavailable"
     try:
-        return bool(DB.get_latest_is_nxt(code)), "daily_stock_quotes.is_nxt"
+        optional_resolver = getattr(DB, "get_latest_is_nxt_optional", None)
+        if callable(optional_resolver):
+            value = optional_resolver(code)
+            if value is None:
+                return None, "daily_stock_quotes.is_nxt_missing"
+            return bool(value), "daily_stock_quotes.is_nxt"
+        return bool(DB.get_latest_is_nxt(code)), "daily_stock_quotes.is_nxt_legacy"
     except Exception as exc:
         log_error(
             f"🚨 [NXT_FLAG] {stock.get('name', code)}({code}) NXT flag lookup failed: {exc}"

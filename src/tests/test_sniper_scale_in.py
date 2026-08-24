@@ -1454,6 +1454,29 @@ def test_holding_sell_exchange_resolution_blocks_krx_only_during_nxt_time(monkey
     assert decision["reason"] == "krx_only_outside_krx_regular_session"
 
 
+def test_holding_sell_exchange_resolution_preserves_missing_nxt_provenance(
+    monkeypatch,
+):
+    class MissingNXTDB:
+        def get_latest_is_nxt_optional(self, code):
+            assert code == "237690"
+            return None
+
+    monkeypatch.setattr(state_handlers, "DB", MissingNXTDB())
+
+    decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
+        {"name": "에스티팜", "status": "HOLDING", "buy_qty": 1},
+        "237690",
+        now_t=dt_time(17, 0),
+    )
+
+    assert decision["blocked"] is False
+    assert decision["dmst_stex_tp"] == "NXT"
+    assert decision["nxt_enabled"] is None
+    assert decision["nxt_flag_source"] == "daily_stock_quotes.is_nxt_missing"
+    assert decision["reason"] == "nxt_session_nxt_capability_unconfirmed"
+
+
 def test_entry_opportunity_recheck_outcome_mark_updates_runtime_state(monkeypatch):
     state = state_handlers.EntryOpportunityRecheckState(trade_date="2026-07-02")
     monkeypatch.setattr(state_handlers, "_ENTRY_OPPORTUNITY_RECHECK_STATE", state)
@@ -41243,6 +41266,7 @@ def test_holding_stale_ws_blocks_exit_and_requests_repair(monkeypatch):
     )
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", None)
     stock = _dynamic_soft_stop_stock()
+    now_ts = datetime(2026, 8, 24, 10, 0, tzinfo=state_handlers._KST).timestamp()
 
     state_handlers.handle_holding_state(
         stock=stock,
@@ -41250,13 +41274,14 @@ def test_holding_stale_ws_blocks_exit_and_requests_repair(monkeypatch):
         ws_data={
             "curr": 9810,
             "quote_stale": True,
-            "last_ws_update_ts": state_handlers.time.time() - 120,
+            "last_ws_update_ts": now_ts - 120,
             "orderbook": {"bids": [{"price": 9810, "volume": 1000}]},
         },
         admin_id=1,
         market_regime="BULL",
         radar=None,
         ai_engine=None,
+        now_ts=now_ts,
     )
 
     blocked_logs = [
@@ -41303,15 +41328,17 @@ def test_holding_zero_ws_curr_blocks_exit_and_requests_repair(monkeypatch):
     )
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", None)
     stock = _dynamic_soft_stop_stock()
+    now_ts = datetime(2026, 8, 24, 10, 0, tzinfo=state_handlers._KST).timestamp()
 
     state_handlers.handle_holding_state(
         stock=stock,
         code="123456",
-        ws_data={"curr": 0, "last_ws_update_ts": state_handlers.time.time() - 120},
+        ws_data={"curr": 0, "last_ws_update_ts": now_ts - 120},
         admin_id=1,
         market_regime="BULL",
         radar=None,
         ai_engine=None,
+        now_ts=now_ts,
     )
 
     blocked_logs = [
@@ -41363,6 +41390,7 @@ def test_holding_stale_ws_rest_quote_recovery_allows_exit_evaluation(monkeypatch
         lambda *args, **kwargs: [{"cur_prc": "9,810"}],
     )
     stock = _dynamic_soft_stop_stock()
+    now_ts = datetime(2026, 8, 24, 10, 0, tzinfo=state_handlers._KST).timestamp()
 
     state_handlers.handle_holding_state(
         stock=stock,
@@ -41370,13 +41398,14 @@ def test_holding_stale_ws_rest_quote_recovery_allows_exit_evaluation(monkeypatch
         ws_data={
             "curr": 9810,
             "quote_stale": True,
-            "last_ws_update_ts": state_handlers.time.time() - 120,
+            "last_ws_update_ts": now_ts - 120,
             "orderbook": {"bids": [{"price": 9810, "volume": 1000}]},
         },
         admin_id=1,
         market_regime="BULL",
         radar=None,
         ai_engine=None,
+        now_ts=now_ts,
     )
 
     recovered_logs = [
@@ -41992,6 +42021,17 @@ def test_holding_recent_ws_blocks_divergent_rest_quote_recovery(monkeypatch):
         "fetch_kiwoom_api_continuous",
         lambda *args, **kwargs: [{"cur_prc": "8,800"}],
     )
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_holding_sell_dmst_stex_tp",
+        lambda *args, **kwargs: {
+            "blocked": False,
+            "dmst_stex_tp": "SOR",
+            "nxt_enabled": False,
+            "nxt_flag_source": "test_krx_regular",
+            "reason": "krx_regular_session_sor",
+        },
+    )
     now_ts = state_handlers.time.time()
     stock = _dynamic_soft_stop_stock()
 
@@ -42083,6 +42123,189 @@ def test_holding_ws_repair_is_throttled_after_recent_reissue(monkeypatch):
     )
     assert not published
     assert not exit_calls
+
+
+def test_holding_ws_repair_suppresses_krx_only_after_regular_session(monkeypatch):
+    class KRXOnlyDB:
+        def get_latest_is_nxt(self, code):
+            assert code == "091580"
+            return False
+
+    published = []
+    monkeypatch.setattr(state_handlers, "DB", KRXOnlyDB())
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+    state = {}
+    fields = {}
+    now_ts = datetime(2026, 8, 24, 17, 0, tzinfo=state_handlers._KST).timestamp()
+
+    state_handlers._maybe_publish_holding_ws_repair(
+        state,
+        {"status": "HOLDING", "buy_qty": 1},
+        "091580",
+        fields,
+        now_ts=now_ts,
+    )
+
+    assert published == []
+    assert fields["holding_ws_reg_reissued"] is False
+    assert fields["holding_ws_repair_cycle_state"] == (
+        "holding_ws_repair_session_closed"
+    )
+    assert fields["holding_ws_repair_suppressed_reason"] == (
+        "krx_only_outside_krx_regular_session"
+    )
+    assert "last_ws_repair_reg_ts" not in state
+    assert state["last_ws_repair_decision_ts"] == now_ts
+
+    cooldown_fields = {}
+    state_handlers._maybe_publish_holding_ws_repair(
+        state,
+        {"status": "HOLDING", "buy_qty": 1},
+        "091580",
+        cooldown_fields,
+        now_ts=now_ts + 1,
+    )
+
+    assert published == []
+    assert cooldown_fields["holding_ws_repair_cycle_state"] == (
+        "holding_ws_repair_interval_active"
+    )
+
+
+def test_holding_ws_repair_requests_exact_nxt_item_after_regular_session(monkeypatch):
+    class NXTEnabledDB:
+        def get_latest_is_nxt(self, code):
+            assert code == "237690"
+            return True
+
+    published = []
+    monkeypatch.setattr(state_handlers, "DB", NXTEnabledDB())
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+    state = {}
+    fields = {}
+    now_ts = datetime(2026, 8, 24, 17, 0, tzinfo=state_handlers._KST).timestamp()
+
+    state_handlers._maybe_publish_holding_ws_repair(
+        state,
+        {"status": "HOLDING", "buy_qty": 1},
+        "237690",
+        fields,
+        now_ts=now_ts,
+    )
+
+    assert published == [
+        (
+            "COMMAND_WS_REG",
+            {
+                "codes": ["237690_NX"],
+                "source": "holding_ws_freshness_repair",
+                "force": True,
+                "repair_cycle": "holding_ws_stale_or_missing",
+                "include_alternate_route": False,
+            },
+        )
+    ]
+    assert fields["holding_ws_repair_route"] == "NXT"
+    assert fields["holding_ws_reg_reissued"] is True
+    assert state["last_ws_repair_reg_ts"] == now_ts
+
+
+def test_holding_ws_repair_rechecks_immediately_at_nxt_session_boundary(monkeypatch):
+    class NXTEnabledDB:
+        def get_latest_is_nxt(self, code):
+            assert code == "237690"
+            return True
+
+    published = []
+    monkeypatch.setattr(state_handlers, "DB", NXTEnabledDB())
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+    state = {}
+    before_open_ts = datetime(
+        2026, 8, 24, 15, 44, 59, tzinfo=state_handlers._KST
+    ).timestamp()
+
+    before_open_fields = {}
+    state_handlers._maybe_publish_holding_ws_repair(
+        state,
+        {"status": "HOLDING", "buy_qty": 1},
+        "237690",
+        before_open_fields,
+        now_ts=before_open_ts,
+    )
+    assert published == []
+    assert before_open_fields["holding_ws_repair_cycle_state"] == (
+        "holding_ws_repair_session_closed"
+    )
+
+    after_open_fields = {}
+    state_handlers._maybe_publish_holding_ws_repair(
+        state,
+        {"status": "HOLDING", "buy_qty": 1},
+        "237690",
+        after_open_fields,
+        now_ts=before_open_ts + 1,
+    )
+
+    assert published[0][1]["codes"] == ["237690_NX"]
+    assert after_open_fields["holding_ws_repair_cycle_state"] == (
+        "holding_ws_repair_reg_reissued"
+    )
+    assert after_open_fields["holding_ws_repair_session_bucket"] == (
+        "nxt_aftermarket"
+    )
+
+
+def test_holding_ws_repair_suppresses_unconfirmed_nxt_capability(monkeypatch):
+    class MissingNXTDB:
+        def get_latest_is_nxt_optional(self, code):
+            assert code == "237690"
+            return None
+
+    published = []
+    monkeypatch.setattr(state_handlers, "DB", MissingNXTDB())
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+    fields = {}
+    now_ts = datetime(2026, 8, 24, 17, 0, tzinfo=state_handlers._KST).timestamp()
+
+    state_handlers._maybe_publish_holding_ws_repair(
+        {},
+        {"status": "HOLDING", "buy_qty": 1},
+        "237690",
+        fields,
+        now_ts=now_ts,
+    )
+
+    assert published == []
+    assert fields["holding_ws_repair_cycle_state"] == (
+        "holding_ws_repair_nxt_capability_unconfirmed"
+    )
+    assert fields["holding_ws_repair_nxt_flag_source"] == (
+        "daily_stock_quotes.is_nxt_missing"
+    )
 
 
 def test_never_green_defer_clamp_clamps_loss_position_after_repeated_defer(monkeypatch):

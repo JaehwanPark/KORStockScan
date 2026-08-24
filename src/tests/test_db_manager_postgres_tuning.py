@@ -34,6 +34,38 @@ class _FakeEngine:
         return self.connection
 
 
+class _FakeNXTResult:
+    def __init__(self, row):
+        self.row = row
+
+    def first(self):
+        return self.row
+
+
+class _FakeNXTConnection:
+    def __init__(self, row):
+        self.row = row
+        self.params = None
+
+    def execute(self, statement, params):
+        self.params = params
+        return _FakeNXTResult(self.row)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeNXTEngine:
+    def __init__(self, row):
+        self.connection = _FakeNXTConnection(row)
+
+    def connect(self):
+        return self.connection
+
+
 def test_ensure_performance_table_indexes_covers_db_tuning_hot_paths():
     db = object.__new__(DBManager)
     db.engine = _FakeEngine()
@@ -45,6 +77,20 @@ def test_ensure_performance_table_indexes_covers_db_tuning_hot_paths():
     assert "idx_rh_status_rec_date" in statements
     assert "idx_rh_rec_date_stock_strategy_status" in statements
     assert "idx_rh_reusable_watching_lookup" in statements
+
+
+def test_get_latest_is_nxt_optional_preserves_true_false_and_missing():
+    for row, expected in [
+        ((True,), True),
+        ((False,), False),
+        ((None,), None),
+        (None, None),
+    ]:
+        db = object.__new__(DBManager)
+        db.engine = _FakeNXTEngine(row)
+
+        assert db.get_latest_is_nxt_optional("237690_NX") is expected
+        assert db.engine.connection.params == {"code": "237690"}
 
 
 def test_analyze_performance_tables_includes_quote_and_history_tables():
