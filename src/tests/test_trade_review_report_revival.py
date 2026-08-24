@@ -383,3 +383,71 @@ def test_trade_review_restores_exit_rule_from_sell_order_sent(monkeypatch):
     assert trade["exit_signal"]["exit_rule"] == "scalp_scanner_fallback_never_green"
     assert trade["exit_signal"]["exit_decision_source"] == "MANUAL"
     assert trade["exit_signal"]["inferred"] is True
+
+
+def test_trade_review_reconciles_completed_economics_without_losing_raw_event(
+    monkeypatch,
+):
+    holding_lines = [
+        "[2026-08-24 09:40:42] [HOLDING_PIPELINE] 한화투자증권(003530) stage=holding_started id=2401 fill_price=5110 fill_qty=1 buy_price=5110 buy_qty=1 strategy=SCALPING position_tag=SCANNER",
+        "[2026-08-24 09:45:25] [HOLDING_PIPELINE] 한화투자증권(003530) stage=sell_order_sent id=2401 profit_rate=+0.40 qty=1 exit_rule=scalp_trailing_profit_protect",
+        "[2026-08-24 09:45:26] [HOLDING_PIPELINE] 한화투자증권(003530) stage=sell_completed id=2401 sell_price=5070 profit_rate=-1.02 realized_pnl_krw=-52 main_lifecycle_realized_net_pnl_krw=-52 exit_rule=scalp_trailing_profit_protect",
+    ]
+
+    def _fake_iter(log_paths, *, target_date):
+        return holding_lines
+
+    def _fake_fetch(target_date, code=None):
+        return (
+            [
+                {
+                    "id": 2401,
+                    "rec_date": target_date,
+                    "code": "003530",
+                    "name": "한화투자증권",
+                    "status": "COMPLETED",
+                    "strategy": "SCALPING",
+                    "position_tag": "SCANNER",
+                    "buy_price": 5040.0,
+                    "buy_qty": 1,
+                    "buy_time": "2026-08-24 09:40:42",
+                    "sell_price": 5070,
+                    "sell_time": "2026-08-24 09:45:26",
+                    "profit_rate": 0.36,
+                    "realized_pnl_krw": 18,
+                }
+            ],
+            [],
+        )
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None
+    )
+
+    report = report_mod.build_trade_review_report(target_date="2026-08-24")
+    trade = report["sections"]["completed_trades"][0]
+    sell_completed = next(
+        item for item in trade["timeline"] if item["stage"] == "sell_completed"
+    )
+    sell_order_sent = next(
+        item for item in trade["timeline"] if item["stage"] == "sell_order_sent"
+    )
+
+    assert report["metrics"]["realized_pnl_krw"] == 18
+    assert trade["profit_rate"] == 0.36
+    assert trade["exit_signal"]["fields"]["buy_price"] == "5040.0"
+    assert trade["exit_signal"]["fields"]["profit_rate"] == "0.36"
+    assert sell_completed["fields"]["realized_pnl_krw"] == "18"
+    assert sell_completed["fields"]["main_lifecycle_realized_net_pnl_krw"] == "18"
+    assert sell_completed["fields"]["trade_review_raw_event_profit_rate"] == "-1.02"
+    assert sell_completed["fields"]["trade_review_raw_event_realized_pnl_krw"] == "-52"
+    assert (
+        sell_completed["fields"]
+        ["trade_review_raw_event_main_lifecycle_realized_net_pnl_krw"]
+        == "-52"
+    )
+    assert sell_completed["fields"]["trade_review_economics_reconciled"] == "True"
+    assert sell_order_sent["fields"]["profit_rate"] == "+0.40"
+    assert "trade_review_economics_reconciled" not in sell_order_sent["fields"]

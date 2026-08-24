@@ -10,6 +10,8 @@ import src.engine.sniper_state_handlers as state_handlers
 import src.engine.kiwoom_sniper_v2 as sniper_runtime
 from src.engine.sniper_entry_latency import (
     _best_ask_bid_from_ws,
+    _latency_danger_provenance,
+    _latency_danger_remeasure_reasons,
     _latency_danger_reasons,
     clear_signal_reference,
     evaluate_live_buy_entry,
@@ -972,6 +974,148 @@ def test_post_sell_bbo_subscription_requires_exact_registered_route(monkeypatch)
     assert result["registered_items"] == ["005090"]
     assert result["registered_routes"] == ["krx_regular"]
     assert result["resolution"] == "base_subscribed_but_exact_route_missing"
+
+
+def test_post_sell_bbo_subscription_requests_missing_exact_route_once(monkeypatch):
+    class FakeWsManager:
+        subscribed_codes = {"005090"}
+
+        def __init__(self):
+            self.requests = []
+
+        def get_subscription_freshness_snapshot(self, codes, *, now_ts):
+            assert codes == ["005090"]
+            return {
+                "rows": [
+                    {
+                        "stock_code": "005090",
+                        "subscribed": True,
+                        "registered_items": ["005090"],
+                        "registered_market_routes": ["krx_regular"],
+                    }
+                ]
+            }
+
+        def execute_subscribe(self, codes, **kwargs):
+            self.requests.append((list(codes), kwargs))
+
+    manager = FakeWsManager()
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", manager)
+    state_handlers._POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE.clear()
+
+    first = state_handlers._ensure_post_sell_exact_route_subscription(
+        registration_key="post-sell-route-repair",
+        code="005090",
+        expected_market_route="krx_nxt_integrated",
+        observed_at=100.0,
+    )
+    second = state_handlers._ensure_post_sell_exact_route_subscription(
+        registration_key="post-sell-route-repair",
+        code="005090",
+        expected_market_route="krx_nxt_integrated",
+        observed_at=101.0,
+    )
+
+    assert first["repair_status"] == "exact_route_registration_requested"
+    assert first["repair_attempt_count"] == 1
+    assert first["repair_item"] == "005090_AL"
+    assert second["repair_status"] == "awaiting_exact_route_registration_receipt"
+    assert len(manager.requests) == 1
+    assert manager.requests[0][0] == ["005090", "005090_AL"]
+    assert manager.requests[0][1] == {
+        "force": True,
+        "source": "post_sell_exact_route_source_only_repair",
+        "remove_before_reg": False,
+        "realtime_types": ("0B", "0D"),
+        "observation_only": True,
+    }
+
+
+def test_post_sell_bbo_subscription_preserves_confirmed_repair_provenance(
+    monkeypatch,
+):
+    class FakeWsManager:
+        subscribed_codes = {"005090"}
+
+        def __init__(self):
+            self.integrated = False
+
+        def get_subscription_freshness_snapshot(self, codes, *, now_ts):
+            items = ["005090", "005090_AL"] if self.integrated else ["005090"]
+            routes = (
+                ["krx_regular", "krx_nxt_integrated"]
+                if self.integrated
+                else ["krx_regular"]
+            )
+            return {
+                "rows": [
+                    {
+                        "stock_code": "005090",
+                        "subscribed": True,
+                        "registered_items": items,
+                        "registered_market_routes": routes,
+                    }
+                ]
+            }
+
+        def execute_subscribe(self, codes, **kwargs):
+            self.integrated = True
+
+    manager = FakeWsManager()
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", manager)
+    state_handlers._POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE.clear()
+
+    first = state_handlers._ensure_post_sell_exact_route_subscription(
+        registration_key="post-sell-confirmed-repair",
+        code="005090",
+        expected_market_route="krx_nxt_integrated",
+        observed_at=100.0,
+    )
+    confirmed = state_handlers._ensure_post_sell_exact_route_subscription(
+        registration_key="post-sell-confirmed-repair",
+        code="005090",
+        expected_market_route="krx_nxt_integrated",
+        observed_at=101.0,
+    )
+
+    assert first["repair_status"] == "exact_route_registration_requested"
+    assert confirmed["exact_route_subscription_present"] is True
+    assert confirmed["repair_status"] == "exact_route_registration_confirmed"
+    assert confirmed["repair_attempt_count"] == 1
+
+
+def test_post_sell_bbo_subscription_request_failure_is_counted(monkeypatch):
+    class FakeWsManager:
+        subscribed_codes = {"005090"}
+
+        def get_subscription_freshness_snapshot(self, codes, *, now_ts):
+            return {
+                "rows": [
+                    {
+                        "stock_code": "005090",
+                        "subscribed": True,
+                        "registered_items": ["005090"],
+                        "registered_market_routes": ["krx_regular"],
+                    }
+                ]
+            }
+
+        def execute_subscribe(self, codes, **kwargs):
+            raise RuntimeError("test subscribe failure")
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    state_handlers._POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE.clear()
+
+    failed = state_handlers._ensure_post_sell_exact_route_subscription(
+        registration_key="post-sell-failed-repair",
+        code="005090",
+        expected_market_route="krx_nxt_integrated",
+        observed_at=100.0,
+    )
+
+    assert failed["repair_status"] == "exact_route_registration_request_failed"
+    assert failed["repair_attempt_count"] == 1
+    assert failed["repair_error_type"] == "RuntimeError"
 
 
 def test_post_sell_bbo_observer_accepts_quote_just_before_due_when_still_fresh(
@@ -8628,6 +8772,46 @@ def test_latency_danger_reason_helper_uses_thresholds(monkeypatch):
         "ws_jitter_too_high",
         "spread_too_wide",
     ]
+
+
+def test_latency_danger_remeasure_reasons_follow_classifier_thresholds(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_DANGER_MAX_WS_AGE_MS=450,
+            SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS=300,
+            SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO=0.0100,
+        ),
+    )
+    monkeypatch.setattr(
+        entry_latency_module,
+        "_CONFIG",
+        replace(
+            entry_latency_module._CONFIG,
+            max_ws_age_ms_for_caution=700,
+            max_ws_jitter_ms_for_caution=300,
+            max_spread_ratio_for_caution=0.005,
+        ),
+    )
+
+    status = SimpleNamespace(
+        state=SimpleNamespace(value="DANGER"),
+        quote_stale=False,
+        ws_age_ms=562,
+        ws_jitter_ms=0,
+        order_rtt_avg_ms=0,
+        spread_ratio=0.00545,
+    )
+
+    assert _latency_danger_reasons(status) == ["ws_age_too_high"]
+    assert _latency_danger_remeasure_reasons(status) == [
+        "spread_above_caution_below_guard_cap"
+    ]
+    provenance = _latency_danger_provenance(status)
+    assert provenance["latency_danger_reason_taxonomy_gap"] is True
+    assert provenance["latency_danger_source_quality_state"] == "fresh"
 
 
 def test_percent_bps_mode_normal_defensive_0025_pct(monkeypatch):

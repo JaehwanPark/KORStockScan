@@ -34737,6 +34737,167 @@ def _post_sell_exact_route_subscription_snapshot(
         }
 
 
+_POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE: dict[str, dict[str, Any]] = {}
+_POST_SELL_EXACT_ROUTE_REG_REPAIR_MAX_ATTEMPTS = 3
+_POST_SELL_EXACT_ROUTE_REG_REPAIR_INTERVAL_SEC = 5.0
+
+
+def _post_sell_exact_route_subscription_item(
+    code: str, expected_market_route: str
+) -> str:
+    """Map the frozen route contract to one official Kiwoom REG item."""
+
+    normalized = str(code or "").strip()[:6]
+    route = str(expected_market_route or "").strip().lower()
+    if len(normalized) != 6 or not normalized.isdigit():
+        return ""
+    return {
+        "krx_regular": normalized,
+        "nxt_only": f"{normalized}_NX",
+        "krx_nxt_integrated": f"{normalized}_AL",
+    }.get(route, "")
+
+
+def _ensure_post_sell_exact_route_subscription(
+    *,
+    registration_key: str,
+    code: str,
+    expected_market_route: str,
+    observed_at: float,
+) -> dict[str, Any]:
+    """Request a bounded source-only exact-route subscription when missing.
+
+    Official Kiwoom reference reverified 2026-08-24 10:59 KST:
+    Kiwoom-Securities/Kiwoom-REST-API@69642586f7d84ba9fd8a6faf1f1537c7fda6568b,
+    ``kiwoom_docs/실시간시세.md`` and ``kiwoom/realtime/packets.py``.
+    REG ``refresh=1`` retains existing registrations; KRX/NXT/SOR items are
+    ``039490``/``039490_NX``/``039490_AL`` and BBO observation uses 0B/0D.
+    This helper has market-data observation authority only.
+    """
+
+    snapshot = _post_sell_exact_route_subscription_snapshot(
+        code=code,
+        expected_market_route=expected_market_route,
+        observed_at=observed_at,
+    )
+    state = _POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE.get(registration_key) or {}
+    if snapshot.get("exact_route_subscription_present"):
+        attempts = int(state.get("attempt_count", 0) or 0)
+        if attempts > 0:
+            state = {
+                **state,
+                "confirmed_at": observed_at,
+                "repair_status": "exact_route_registration_confirmed",
+            }
+            _POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE[registration_key] = state
+        return {
+            **snapshot,
+            "repair_status": (
+                "exact_route_registration_confirmed"
+                if attempts > 0
+                else "not_needed_exact_route_present"
+            ),
+            "repair_attempt_count": attempts,
+            "repair_item": _post_sell_exact_route_subscription_item(
+                code, expected_market_route
+            )
+            or "-",
+        }
+
+    repair_item = _post_sell_exact_route_subscription_item(
+        code, expected_market_route
+    )
+    subscribe = getattr(WS_MANAGER, "execute_subscribe", None)
+    if not repair_item:
+        return {
+            **snapshot,
+            "repair_status": "blocked_unknown_route_contract",
+            "repair_attempt_count": int(state.get("attempt_count", 0) or 0),
+            "repair_item": "-",
+        }
+    if not callable(subscribe):
+        return {
+            **snapshot,
+            "repair_status": "blocked_subscribe_api_unavailable",
+            "repair_attempt_count": int(state.get("attempt_count", 0) or 0),
+            "repair_item": repair_item,
+        }
+
+    attempts = int(state.get("attempt_count", 0) or 0)
+    last_requested_at = _safe_float(state.get("last_requested_at"), 0.0)
+    if attempts >= _POST_SELL_EXACT_ROUTE_REG_REPAIR_MAX_ATTEMPTS:
+        return {
+            **snapshot,
+            "repair_status": "source_quality_gap_repair_attempts_exhausted",
+            "repair_attempt_count": attempts,
+            "repair_item": repair_item,
+        }
+    if (
+        last_requested_at > 0
+        and observed_at - last_requested_at
+        < _POST_SELL_EXACT_ROUTE_REG_REPAIR_INTERVAL_SEC
+    ):
+        return {
+            **snapshot,
+            "repair_status": "awaiting_exact_route_registration_receipt",
+            "repair_attempt_count": attempts,
+            "repair_item": repair_item,
+        }
+
+    existing_items = [
+        str(value or "").strip()
+        for value in (snapshot.get("registered_items") or [])
+        if str(value or "").strip()
+    ]
+    requested_items = list(dict.fromkeys([*existing_items, repair_item]))
+    attempts += 1
+    _POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE[registration_key] = {
+        "attempt_count": attempts,
+        "last_requested_at": observed_at,
+        "repair_item": repair_item,
+    }
+    try:
+        subscribe(
+            requested_items,
+            force=True,
+            source="post_sell_exact_route_source_only_repair",
+            remove_before_reg=False,
+            realtime_types=("0B", "0D"),
+            observation_only=True,
+        )
+    except Exception as exc:
+        _POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE[registration_key].update(
+            {
+                "repair_status": "exact_route_registration_request_failed",
+                "last_error_type": type(exc).__name__,
+            }
+        )
+        log_info(
+            "[POST_SELL_BBO_SUBSCRIPTION_REPAIR] request failed without "
+            f"trading effect code={code} registration={registration_key} "
+            f"item={repair_item} attempt={attempts} error={type(exc).__name__}"
+        )
+        return {
+            **snapshot,
+            "repair_status": "exact_route_registration_request_failed",
+            "repair_attempt_count": attempts,
+            "repair_item": repair_item,
+            "repair_error_type": type(exc).__name__,
+        }
+    log_info(
+        "[POST_SELL_BBO_SUBSCRIPTION_REPAIR] "
+        f"code={code} registration={registration_key} "
+        f"route={expected_market_route} item={repair_item} attempt={attempts} "
+        "authority=market_data_observation_only"
+    )
+    return {
+        **snapshot,
+        "repair_status": "exact_route_registration_requested",
+        "repair_attempt_count": attempts,
+        "repair_item": repair_item,
+    }
+
+
 def _post_sell_executable_bbo_gap_reason(
     *,
     subscription_snapshot: dict[str, Any],
@@ -34796,8 +34957,9 @@ def observe_post_sell_executable_bbo_horizons(
 ) -> dict[str, int]:
     """Emit exact-route 1/3/5/10-minute post-sell BBO receipts.
 
-    This observer reads the already-subscribed route retained by the post-sell
-    registry.  It never sends REG/REMOVE, orders, or runtime mutations.
+    This observer ensures and reads the exact source-only route retained by the
+    post-sell registry.  It may send a bounded additive REG request, but never
+    sends REMOVE, orders, or trading runtime mutations.
     """
 
     observed_at = float(time.time() if now_ts is None else now_ts)
@@ -34823,7 +34985,8 @@ def observe_post_sell_executable_bbo_horizons(
             expected_market_route = str(
                 registration.get("expected_market_route") or ""
             ).strip()
-            subscription_snapshot = _post_sell_exact_route_subscription_snapshot(
+            subscription_snapshot = _ensure_post_sell_exact_route_subscription(
+                registration_key=registration_key,
                 code=code,
                 expected_market_route=expected_market_route,
                 observed_at=observed_at,
@@ -34945,6 +35108,25 @@ def observe_post_sell_executable_bbo_horizons(
                     "post_sell_executable_bbo_subscription_resolution": str(
                         subscription_snapshot.get("resolution") or "unknown"
                     ),
+                    "post_sell_executable_bbo_subscription_repair_status": str(
+                        subscription_snapshot.get("repair_status") or "not_evaluated"
+                    ),
+                    "post_sell_executable_bbo_subscription_repair_attempt_count": (
+                        _safe_int(
+                            subscription_snapshot.get("repair_attempt_count"), 0
+                        )
+                    ),
+                    "post_sell_executable_bbo_subscription_repair_item": str(
+                        subscription_snapshot.get("repair_item") or "-"
+                    ),
+                    "post_sell_executable_bbo_market_data_subscription_effect": bool(
+                        _safe_int(
+                            subscription_snapshot.get("repair_attempt_count"), 0
+                        )
+                        > 0
+                    ),
+                    "post_sell_executable_bbo_trading_runtime_effect": False,
+                    "post_sell_executable_bbo_trading_decision_effect": False,
                     "post_sell_executable_bbo_sell_price": sell_price,
                     "post_sell_executable_bbo_bid_return_pct": return_pct,
                     "post_sell_executable_bbo_expected_market_route": (
@@ -35055,10 +35237,15 @@ def observe_post_sell_executable_bbo_horizons(
                 "[POST_SELL_BBO_OBSERVER] row failed without runtime effect "
                 f"code={code or '-'} registration={registration_key or '-'}: {exc}"
             )
+    active_after = active_post_sell_executable_bbo_observers(now_ts=observed_at)
+    active_keys = {
+        str(item.get("registration_key") or "") for item in active_after
+    }
+    for stale_key in list(_POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE):
+        if stale_key not in active_keys:
+            _POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE.pop(stale_key, None)
     return {
-        "active_registration_count": len(
-            active_post_sell_executable_bbo_observers(now_ts=observed_at)
-        ),
+        "active_registration_count": len(active_after),
         "emitted_horizon_count": emitted_count,
         "fresh_horizon_count": fresh_horizon_count,
         "missing_horizon_count": missing_horizon_count,

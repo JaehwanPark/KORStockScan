@@ -6222,6 +6222,39 @@ def test_openai_request_metadata_is_trimmed_to_provider_limit():
     assert "extra_11" not in metadata
 
 
+def test_openai_request_metadata_preserves_exact_market_route_join_keys():
+    engine = _build_engine()
+
+    metadata_extra = {
+        **{f"extra_{idx:02d}": str(idx) for idx in range(20)},
+        "session_bucket": "krx_regular",
+        "broker_route": "SOR",
+        "market_data_route": "krx_nxt_integrated",
+        "snapshot_id": "aims-exact-route",
+    }
+    request = engine._build_openai_response_request(
+        prompt="PROMPT",
+        user_input="payload",
+        require_json=True,
+        context_name="metadata-route-trim",
+        model_name="gpt-fast",
+        temperature=0.0,
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        symbol="005930",
+        cache_key="abc",
+        metadata_extra=metadata_extra,
+    )
+    metadata = request.build_provider_payload(use_schema_registry=False)["metadata"]
+
+    assert len(metadata) == openai_module.OPENAI_METADATA_MAX_PROPERTIES
+    assert metadata["session_bucket"] == "krx_regular"
+    assert metadata["broker_route"] == "SOR"
+    assert metadata["market_data_route"] == "krx_nxt_integrated"
+    assert metadata["snapshot_id"] == "aims-exact-route"
+    assert "extra_19" not in metadata
+
+
 def test_openai_request_metadata_normalizes_long_property_names():
     engine = _build_engine()
 

@@ -3845,9 +3845,17 @@ def _latency_danger_provenance(latency_status) -> dict[str, Any]:
         source_quality_state = "unknown"
 
     legacy_reasons = _normalized_reason_set(_latency_danger_reasons(latency_status))
-    taxonomy_gap = legacy_reasons == {"other_danger"} and detail_reasons != [
-        "unclassified_danger"
-    ]
+    classifier_reason_map = {
+        "ws_age_above_caution": "ws_age_too_high",
+        "ws_jitter_above_caution": "ws_jitter_too_high",
+        "order_rtt_avg_above_caution": "order_rtt_avg_too_high",
+    }
+    classifier_reasons = {
+        classifier_reason_map.get(reason, reason)
+        for reason in detail_reasons
+        if reason != "unclassified_danger"
+    }
+    taxonomy_gap = bool(classifier_reasons) and legacy_reasons != classifier_reasons
     return {
         "latency_danger_detail_reason": ",".join(detail_reasons),
         "latency_danger_source_quality_state": source_quality_state,
@@ -3859,6 +3867,36 @@ def _latency_danger_provenance(latency_status) -> dict[str, Any]:
         ),
         "latency_danger_guard_max_spread_ratio": round(float(guard_max_spread), 6),
     }
+
+
+def _latency_danger_remeasure_reasons(latency_status) -> list[str]:
+    """Return source-only remeasure reasons aligned with classifier thresholds.
+
+    ``_latency_danger_reasons`` is retained as legacy/audit provenance because its
+    thresholds are the older direct-danger guard values.  The source-only
+    remeasurement cohort must interpret the reason that actually made
+    ``EntryPolicy`` classify the snapshot as DANGER.  Otherwise a fresh,
+    spread-only DANGER can be mislabeled as a WS-age DANGER and disappear from
+    diagnostics.  Live relief canaries deliberately continue to consume the
+    legacy contract in this change set.
+    """
+
+    provenance = _latency_danger_provenance(latency_status)
+    detail = str(provenance.get("latency_danger_detail_reason") or "").strip()
+    if not detail or detail in {"not_applicable", "unclassified_danger"}:
+        return _latency_danger_reasons(latency_status)
+
+    reason_map = {
+        "ws_age_above_caution": "ws_age_too_high",
+        "ws_jitter_above_caution": "ws_jitter_too_high",
+        "order_rtt_avg_above_caution": "order_rtt_avg_too_high",
+    }
+    reasons = [
+        reason_map.get(token.strip(), token.strip())
+        for token in detail.split(",")
+        if token.strip()
+    ]
+    return reasons or _latency_danger_reasons(latency_status)
 
 
 def _danger_latency_relief_runtime_enabled() -> bool:
@@ -4998,6 +5036,9 @@ def evaluate_live_buy_entry(
     latency_wide_spread_passive_requote_reason = ""
     latency_wide_spread_passive_requote_context: dict[str, Any] = {}
     latency_danger_reasons = ",".join(_latency_danger_reasons(latency))
+    latency_danger_remeasure_reasons = ",".join(
+        _latency_danger_remeasure_reasons(latency)
+    )
     latency_danger_provenance = _latency_danger_provenance(latency)
     latency_buy_pressure = _latency_buy_pressure_value(ws_data, stock)
     latency_spread_relief_block_reason = ""
@@ -5334,7 +5375,7 @@ def evaluate_live_buy_entry(
             policy_decision=policy.decision,
             effective_decision=effective_decision,
             latency_status=latency,
-            danger_reasons=latency_danger_reasons.split(","),
+            danger_reasons=latency_danger_remeasure_reasons.split(","),
             spread_bps=_to_float(
                 spread_block_buckets.get("latency_spread_block_spread_bps"), 0.0
             ),
@@ -5400,6 +5441,7 @@ def evaluate_live_buy_entry(
         "spread_ratio": latency.spread_ratio,
         "quote_stale": latency.quote_stale,
         "latency_danger_reasons": latency_danger_reasons,
+        "latency_danger_remeasure_reasons": latency_danger_remeasure_reasons,
         **latency_danger_provenance,
         "target_buy_price": int(target_buy_price or 0),
         "order_price": 0,

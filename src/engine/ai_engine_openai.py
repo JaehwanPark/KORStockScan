@@ -429,6 +429,14 @@ OPENAI_METADATA_PRIORITY_KEYS = (
     "schema_name",
     "symbol",
     "cache_key",
+    # Preserve route/session identity before optional diagnostic dimensions.
+    # OpenAI accepts at most 16 metadata properties; dropping these fields
+    # made an otherwise successful call impossible to join back to its exact
+    # market-data snapshot and executable route.
+    "session_bucket",
+    "broker_route",
+    "market_data_route",
+    "snapshot_id",
     "invalid_prompt_retry",
     "original_endpoint_name",
 )

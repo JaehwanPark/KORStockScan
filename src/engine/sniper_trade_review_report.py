@@ -654,6 +654,92 @@ def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
     return None
 
 
+def _reconcile_completed_trade_event_economics(
+    events: list[HoldingEvent], trade: dict
+) -> list[HoldingEvent]:
+    """Use the canonical completed DB economics for report display.
+
+    A broker reconciliation can correct the recommendation row after the original
+    ``sell_completed`` event was emitted.  The raw event remains audit evidence,
+    but it must not reintroduce stale buy price, profit rate, or realized PnL into
+    the trade-review timeline.  Preserve every differing raw value explicitly and
+    overlay only the economics displayed by this report.
+    """
+
+    if str(trade.get("status") or "").upper() != "COMPLETED":
+        return events
+
+    canonical_values = {
+        "buy_price": _safe_float(trade.get("buy_price")),
+        "buy_qty": _safe_int(trade.get("buy_qty")),
+        "sell_price": _safe_int(trade.get("sell_price")),
+        "profit_rate": round(_safe_float(trade.get("profit_rate")), 2),
+        "realized_pnl_krw": _safe_int(trade.get("realized_pnl_krw")),
+        # Broker receipt events expose the same economics under the lifecycle
+        # attribution key.  Leaving it untouched would make one timeline item
+        # claim both the canonical realized PnL and the stale pre-reconcile PnL.
+        "main_lifecycle_realized_net_pnl_krw": _safe_int(
+            trade.get("realized_pnl_krw")
+        ),
+    }
+    if canonical_values["buy_price"] <= 0 or canonical_values["sell_price"] <= 0:
+        return events
+
+    reconciled: list[HoldingEvent] = []
+    for event in events:
+        # Decision-time ``exit_signal`` and ``sell_order_sent`` economics are
+        # valid point-in-time evidence.  Only the terminal fill event may be
+        # reconciled to the canonical completed row; inferred exit payloads are
+        # subsequently built from this reconciled terminal event.
+        if event.stage != "sell_completed":
+            reconciled.append(event)
+            continue
+
+        fields = dict(event.fields)
+        mismatch = False
+        for key, canonical_value in canonical_values.items():
+            raw_value = fields.get(key)
+            if raw_value not in (None, "", "-", "None"):
+                if key in {
+                    "buy_qty",
+                    "sell_price",
+                    "realized_pnl_krw",
+                    "main_lifecycle_realized_net_pnl_krw",
+                }:
+                    differs = _safe_int(raw_value) != _safe_int(canonical_value)
+                else:
+                    differs = abs(
+                        _safe_float(raw_value) - _safe_float(canonical_value)
+                    ) > 1e-9
+                if differs:
+                    fields[f"trade_review_raw_event_{key}"] = raw_value
+                    mismatch = True
+            fields[key] = str(canonical_value)
+
+        if mismatch:
+            fields.update(
+                {
+                    "trade_review_economics_reconciled": "True",
+                    "trade_review_economics_source": (
+                        "recommendation_history_canonical_completed"
+                    ),
+                    "trade_review_raw_event_preserved": "True",
+                }
+            )
+
+        reconciled.append(
+            HoldingEvent(
+                timestamp=event.timestamp,
+                name=event.name,
+                code=event.code,
+                stage=event.stage,
+                fields=fields,
+                raw_line=event.raw_line,
+            )
+        )
+    return reconciled
+
+
 def _first_non_empty_event_field(
     events: list[HoldingEvent],
     *,
@@ -889,6 +975,7 @@ def _summarize_ai_reviews(ai_reviews: list[dict[str, Any]]) -> dict[str, Any] | 
 
 def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
     trade = _normalize_trade_with_events(trade, events)
+    display_events = _reconcile_completed_trade_event_economics(events, trade)
     buy_dt = _parse_dt(trade.get("buy_time"))
     sell_dt = _parse_dt(trade.get("sell_time"))
     holding_sec = (
@@ -924,8 +1011,8 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
             ),
         }
     result_badge = _trade_result_badge(trade)
-    timeline = _build_timeline(events)
-    exit_signal = _build_exit_signal(events)
+    timeline = _build_timeline(display_events)
+    exit_signal = _build_exit_signal(display_events)
     if (
         exit_signal
         and exit_signal.get("inferred")

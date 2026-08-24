@@ -1739,6 +1739,79 @@ def test_execute_subscribe_preserves_source_only_route_item(monkeypatch):
     assert captured[0][1]["realtime_types"] == ("0B", "0D")
 
 
+def test_execute_subscribe_preserves_multiple_explicit_routes_for_same_symbol(
+    monkeypatch,
+):
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    captured = []
+
+    def fake_send_reg(codes, **kwargs):
+        captured.append((list(codes), kwargs))
+
+        async def complete():
+            return None
+
+        return complete()
+
+    def fake_schedule(coro, loop):
+        coro.close()
+        return type(
+            "FakeFuture", (), {"add_done_callback": lambda self, callback: None}
+        )()
+
+    monkeypatch.setattr(manager, "_send_reg", fake_send_reg)
+    monkeypatch.setattr(
+        kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule
+    )
+
+    manager.execute_subscribe(
+        ["222222_NX", "222222_AL"],
+        force=True,
+        source="post_sell_exact_route_source_only_repair",
+        remove_before_reg=False,
+        realtime_types=("0B", "0D"),
+        observation_only=True,
+    )
+
+    assert captured[0][0] == ["222222_NX", "222222_AL"]
+    assert captured[0][1]["remove_before_reg"] is False
+    assert captured[0][1]["realtime_types"] == ("0B", "0D")
+
+
+def test_send_reg_preserves_existing_plain_and_supplemental_integrated_route(
+    monkeypatch,
+):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    asyncio.run(
+        manager._send_reg(
+            ["222222", "222222_AL"],
+            replace_existing=False,
+            enforce_item_budget=True,
+            source="post_sell_exact_route_source_only_repair",
+            realtime_types=("0B", "0D"),
+        )
+    )
+
+    sent = [json.loads(payload) for payload in fake_ws.sent]
+    assert len(sent) == 1
+    assert sent[0]["trnm"] == "REG"
+    assert sent[0]["refresh"] == "1"
+    assert sent[0]["data"] == [
+        {"item": ["222222", "222222_AL"], "type": ["0B"]},
+        {"item": ["222222", "222222_AL"], "type": ["0D"]},
+    ]
+    assert manager._registered_items_by_code["222222"] == (
+        "222222",
+        "222222_AL",
+    )
+
+
 def test_real_subscription_requests_source_only_route_replacement(monkeypatch):
     manager = KiwoomWSManager("test-token")
     manager._started = True

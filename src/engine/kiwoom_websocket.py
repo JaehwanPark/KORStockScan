@@ -976,21 +976,28 @@ class KiwoomWSManager:
         )
 
         explicit_by_code = {}
+        plain_requested_codes = set()
         for raw_code in codes or []:
             canonical = self._normalize_code(raw_code)
             if canonical in normalized_codes:
                 explicit = self._explicit_ws_item(raw_code, canonical)
                 if explicit:
-                    explicit_by_code[canonical] = explicit
+                    explicit_items = explicit_by_code.setdefault(canonical, [])
+                    if explicit not in explicit_items:
+                        explicit_items.append(explicit)
+                else:
+                    plain_requested_codes.add(canonical)
 
         register_items = []
         try:
             from src.utils import kiwoom_utils
 
             for code in normalized_codes:
-                explicit = explicit_by_code.get(code)
-                if explicit:
-                    register_items.append(explicit)
+                explicit_items = explicit_by_code.get(code) or []
+                if explicit_items:
+                    if code in plain_requested_codes:
+                        register_items.append(code)
+                    register_items.extend(explicit_items)
                     continue
 
                 effective = kiwoom_utils.get_effective_kiwoom_code(code)
@@ -1008,9 +1015,11 @@ class KiwoomWSManager:
             )
             register_items = []
             for code in normalized_codes:
-                explicit = explicit_by_code.get(code)
-                if explicit:
-                    register_items.append(explicit)
+                explicit_items = explicit_by_code.get(code) or []
+                if explicit_items:
+                    if code in plain_requested_codes:
+                        register_items.append(code)
+                    register_items.extend(explicit_items)
                 else:
                     register_items.append(code)
                     if include_alternate_route and code in alternate_route_code_set:
@@ -4259,12 +4268,14 @@ class KiwoomWSManager:
         force = self._flag_enabled(force, default=False)
         observation_only = self._flag_enabled(observation_only, default=False)
         normalized_codes = self._normalize_subscribe_codes(codes)
-        requested_item_by_code = {}
+        requested_items_by_code = {}
         for raw_code in codes:
             normalized = self._normalize_code(raw_code)
-            explicit_item = self._explicit_ws_item(raw_code, normalized)
-            if normalized and explicit_item:
-                requested_item_by_code[normalized] = explicit_item
+            requested_item = self._explicit_ws_item(raw_code, normalized) or normalized
+            if normalized and requested_item:
+                requested_items = requested_items_by_code.setdefault(normalized, [])
+                if requested_item not in requested_items:
+                    requested_items.append(requested_item)
         with self.lock:
             existing_source_only = set(normalized_codes).intersection(
                 self._micro_reversion_observation_only_codes
@@ -4383,9 +4394,10 @@ class KiwoomWSManager:
                         f"max_codes={self._alternate_route_max_codes()} "
                         f"ttl_sec={self._alternate_route_ttl_sec():.1f}"
                     )
-            send_targets = [
-                requested_item_by_code.get(code, code) for code in new_targets
-            ]
+            send_targets = []
+            for code in new_targets:
+                explicit_items = requested_items_by_code.get(code) or []
+                send_targets.extend(explicit_items or [code])
             future = asyncio.run_coroutine_threadsafe(
                 self._send_reg(
                     send_targets,
