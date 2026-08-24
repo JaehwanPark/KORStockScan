@@ -725,8 +725,7 @@ def test_observation_source_quality_accepts_early_accel_pre_feature_skip(
     report = audit.build_observation_source_quality_audit("2026-05-15")
 
     assert (
-        report["stage_contracts"]["early_accel_recheck_evaluated"]["status"]
-        == "pass"
+        report["stage_contracts"]["early_accel_recheck_evaluated"]["status"] == "pass"
     )
     assert report["stage_contracts"]["early_accel_recheck_skipped"]["status"] == "pass"
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
@@ -5491,9 +5490,7 @@ def test_observation_source_quality_defers_raw_mutation_while_writer_is_active(
     )
     assert report["raw_row_exclusion"]["backup_path"] is None
     manifest = json.loads(
-        Path(report["raw_row_exclusion"]["manifest_path"]).read_text(
-            encoding="utf-8"
-        )
+        Path(report["raw_row_exclusion"]["manifest_path"]).read_text(encoding="utf-8")
     )
     assert manifest["raw_mutation_applied"] is False
     assert manifest["excluded_row_count"] == 1
@@ -8221,6 +8218,107 @@ def test_observation_source_quality_reviews_explicit_no_call_and_venue_provenanc
         "effective_venue": "reviewed_scanner_venue_fail_closed_provenance",
         "venue": "reviewed_scanner_venue_fail_closed_provenance",
     }
+
+
+def test_observation_source_quality_accepts_explicit_non_evaluated_source_rows():
+    order_forbidden = {
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
+    }
+    assert audit._blocked_observation_records_fail_closed_source_gap(
+        "early_accel_strong_bundle_recheck_skipped",
+        {
+            **order_forbidden,
+            "skip_reason": "tick_aggressor_pressure_unusable",
+        },
+        source="tick",
+    )
+    assert audit._blocked_observation_records_fail_closed_source_gap(
+        "score65_74_recovery_probe_blocked",
+        {
+            **order_forbidden,
+            "score65_74_recovery_probe_skip_reason": (
+                "ai_blocking_adverse_risk_observation_only"
+            ),
+        },
+        source="tick",
+    )
+    assert audit._blocked_observation_records_fail_closed_source_gap(
+        "scalp_entry_action_decision_snapshot",
+        {
+            **order_forbidden,
+            "source_stage": "ai_confirmed",
+            "provider_called": True,
+            "openai_transport_fail_closed_reason": "request timed out",
+            "ai_decision_evaluation_status": ("not_evaluated_provider_or_preflight"),
+            "minute_candle_evaluation_state": "unavailable_fail_closed",
+        },
+        source="minute_candle",
+    )
+
+
+def test_observation_source_quality_reviews_blocked_route_unknown_provenance():
+    holding = {
+        "ai_result_source": "input_preflight_blocked",
+        "holding_context_source_quality_status": "blocked",
+        "holding_context_blockers": ["ai_preflight:current_price_unknown_age"],
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    assert (
+        audit._reviewed_unknown_reason_for_stage_field(
+            "holding_flow_override_review",
+            "holding_context_ws_route",
+            "unknown",
+            holding,
+        )
+        == "reviewed_holding_input_preflight_blocked_provenance"
+    )
+    assert (
+        audit._reviewed_unknown_reason_for_stage_field(
+            "holding_flow_override_review",
+            "flow_evidence",
+            "bbo_missing|current_price_unknown_age",
+            holding,
+        )
+        == "reviewed_holding_input_preflight_blocked_provenance"
+    )
+
+    scale_in = {
+        "ai_market_snapshot_route_partition_used": False,
+        "ai_market_snapshot_route_partition_reason": ("candle_route_snapshot_missing"),
+        "holding_context_source_quality_status": "blocked",
+        "holding_context_blockers": ["candle_source_quality"],
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    assert (
+        audit._reviewed_unknown_reason_for_stage_field(
+            "scale_in_ai_authority_retry",
+            "ai_market_snapshot_route_partition_selected_key",
+            "KRX|unknown",
+            scale_in,
+        )
+        == "reviewed_holding_route_partition_not_available"
+    )
+
+    fast_exit = {
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "fast_exit_route_source_quality_blocked": True,
+        "fast_exit_route_guard_reason": "nxt_executable_quote_route_unproven",
+        "fast_exit_ws_0d_route_provenance_state": "not_available",
+    }
+    assert (
+        audit._reviewed_unknown_reason_for_stage_field(
+            "scalp_fast_exit_quote_blocked",
+            "fast_exit_ws_0d_route",
+            "unknown",
+            fast_exit,
+        )
+        == "reviewed_legacy_fast_exit_route_provenance"
+    )
 
 
 def test_observation_source_quality_reviews_probe_and_holding_not_available_provenance(

@@ -400,7 +400,12 @@ def _raw_venue_code(value: Any) -> str:
 
 def _raw_venue_text(value: Any) -> str:
     text = _raw_wire_text(value)
-    venue = {"KRX": "KRX", "NXT": "NXT", "통합": "SOR"}.get(text)
+    # The official type-00 contract documents the integrated value as
+    # ``통합``.  Production receipts have also emitted the route token
+    # ``SOR`` for the same field.  Accept that observed wire alias only as an
+    # integrated-route identity; it must never be promoted to an inferred KRX
+    # or NXT execution venue.
+    venue = {"KRX": "KRX", "NXT": "NXT", "통합": "SOR", "SOR": "SOR"}.get(text)
     if venue is None:
         raise ValueError("broker_execution_venue_text_invalid")
     return venue

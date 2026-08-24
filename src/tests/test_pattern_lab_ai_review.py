@@ -3990,3 +3990,106 @@ def test_pattern_lab_ai_review_marks_workorder_duplicate_warnings_as_source_only
     )
     assert provenance["duplicate_order_warning_count"] == 1
     assert provenance["runtime_effect"] is False
+
+
+def test_pattern_lab_ai_review_resolves_ldm_gap_after_final_source_revalidation():
+    audit_payload = {
+        "status": "warning",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "summary": {
+            "tuning_input_allowed": True,
+            "hard_blocking_contract_gap_count": 0,
+            "pre_exclusion_hard_blocking_excluded_row_count": 22,
+            "post_exclusion_hard_blocking_excluded_row_count": 0,
+            "raw_row_exclusion_revalidation_required": False,
+        },
+    }
+    context = {
+        "sources": {
+            "observation_source_quality_audit": {
+                "summary": mod._summary_for(audit_payload),
+                "path": "/tmp/observation_source_quality_audit.json",
+            }
+        }
+    }
+    item = {
+        "review_id": "lifecycle_decision_matrix_status",
+        "final_state": "source_quality_gap",
+        "final_decision": "block_runtime_use",
+    }
+
+    status, contract_id, details = mod._source_maturity_resolution(item, context)
+
+    assert status == "resolved_by_final_source_quality_revalidation"
+    assert contract_id == "observation_source_quality_audit_post_exclusion_gate"
+    assert details["pre_exclusion_hard_blocking_excluded_row_count"] == 22
+    assert details["post_exclusion_hard_blocking_excluded_row_count"] == 0
+    assert details["tuning_input_allowed"] is True
+    assert details["runtime_effect"] is False
+    assert details["allowed_runtime_apply"] is False
+
+
+def test_resolved_ldm_conclusion_appends_final_audit_source_path():
+    item = {
+        "review_id": "lifecycle_decision_matrix_status",
+        "domain": "scalping",
+        "final_state": "source_quality_gap",
+        "final_decision": "block_runtime_use",
+        "reason": "Provider reported a source-quality gap.",
+        "required_followup": ["repair_source_quality"],
+        "source_paths": ["/tmp/lifecycle_decision_matrix.json"],
+    }
+
+    conclusion = mod._resolved_source_context_conclusion(
+        item,
+        status="resolved_by_final_source_quality_revalidation",
+        contract_id="observation_source_quality_audit_post_exclusion_gate",
+        required_source_paths=["/tmp/observation_source_quality_audit.json"],
+    )
+
+    assert conclusion["source_paths"] == [
+        "/tmp/lifecycle_decision_matrix.json",
+        "/tmp/observation_source_quality_audit.json",
+    ]
+    assert conclusion["provider_asserted_reason"] == (
+        "Provider reported a source-quality gap."
+    )
+    assert conclusion["provider_required_followup"] == ["repair_source_quality"]
+    assert conclusion["required_followup"] == []
+    assert "resolved_by_final_source_quality_revalidation" in conclusion["reason"]
+
+
+def test_normalize_resolved_ldm_conclusion_is_idempotent():
+    item = {
+        "review_id": "lifecycle_decision_matrix_status",
+        "domain": "scalping",
+        "final_state": "source_only_keep_collecting",
+        "final_decision": "keep",
+        "reason": "Provider reported a source-quality gap.",
+        "required_followup": ["repair_source_quality"],
+        "source_paths": ["/tmp/lifecycle_decision_matrix.json"],
+        "source_context_resolution": {
+            "status": "resolved_by_final_source_quality_revalidation",
+            "contract_id": "observation_source_quality_audit_post_exclusion_gate",
+        },
+    }
+    context = {
+        "sources": {
+            "observation_source_quality_audit": {
+                "path": "/tmp/observation_source_quality_audit.json"
+            }
+        }
+    }
+
+    normalized = mod._normalize_final_conclusion(item, context)
+
+    assert normalized["provider_asserted_reason"] == (
+        "Provider reported a source-quality gap."
+    )
+    assert normalized["provider_required_followup"] == ["repair_source_quality"]
+    assert normalized["required_followup"] == []
+    assert normalized["source_paths"] == [
+        "/tmp/lifecycle_decision_matrix.json",
+        "/tmp/observation_source_quality_audit.json",
+    ]

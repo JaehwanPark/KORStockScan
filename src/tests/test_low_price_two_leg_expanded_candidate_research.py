@@ -18,7 +18,6 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
 )
 from src.trading.low_price_two_leg.profiles import PROFILES
 
-
 LEGACY_TEST_RESEARCH_PROFILES = {
     **expanded.RESEARCH_PROFILES,
     **expanded._new_symbol_profiles({"017670": "SK텔레콤", "007660": "이수페타시스"}),
@@ -65,7 +64,7 @@ def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions()
         f"logic_{profile_id}" for profile_id in PROFILES
     }
     existing_profile = expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES[
-        "existing_475150_late_morning"
+        "existing_006800_afternoon"
     ]
     assert existing_profile.discovery_lane == "existing_symbol_time_extension"
     assert (existing_profile.symbol, existing_profile.session) not in (
@@ -752,17 +751,17 @@ def test_logic_research_inventory_uses_target_date_applied_policy_as_baseline():
 
 def test_existing_symbol_time_extension_recommendation_preserves_active_profile_lineage():
     profiles = {
-        "existing_475150_late_morning": _profile_result(
-            symbol="475150",
-            name="SK이터닉스",
-            session="late_morning",
+        "existing_006800_afternoon": _profile_result(
+            symbol="006800",
+            name="미래에셋증권",
+            session="afternoon",
             candidate_ev=0.08,
             baseline_ev=0.01,
         )
     }
 
     rows = expanded._recommendation_rows(
-        profiles, {"475150": {"latest_close_price": 25_000}}
+        profiles, {"006800": {"latest_close_price": 25_000}}
     )
 
     assert len(rows) == 1
@@ -770,7 +769,7 @@ def test_existing_symbol_time_extension_recommendation_preserves_active_profile_
     assert rows[0]["active_profile_ids_for_symbol"] == sorted(
         profile_id
         for profile_id, profile in PROFILES.items()
-        if profile.symbol == "475150"
+        if profile.symbol == "006800"
     )
     assert (rows[0]["symbol"], rows[0]["session"]) not in (
         expanded.ACTIVE_SYMBOL_SESSIONS
@@ -778,6 +777,8 @@ def test_existing_symbol_time_extension_recommendation_preserves_active_profile_
 
 
 def _notification_report(recommendations: list[dict] | None = None) -> dict:
+    target_date = date(2026, 8, 24)
+    target_inventory = expanded._target_date_research_inventory(target_date)
     rows = recommendations or []
     new_rows = [row for row in rows if row.get("discovery_lane") == "new_symbol"]
     existing_rows = [
@@ -803,37 +804,35 @@ def _notification_report(recommendations: list[dict] | None = None) -> dict:
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
         }
-        for profile_id, profile in (
-            expanded.EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES.items()
-        )
+        for profile_id, profile in (target_inventory.logic_improvement_profiles.items())
     ]
     return {
         "schema": expanded.REPORT_SCHEMA,
         "report_type": expanded.REPORT_TYPE,
         "status": "recommendations_ready" if rows else "no_qualified_candidate",
         "authority": expanded.AUTHORITY,
-        "target_date": "2026-08-24",
+        "target_date": target_date.isoformat(),
         "clean_tuning_baseline_date": "2026-06-05",
         "start_date": "2026-06-05",
         "end_date": "2026-08-24",
         "trading_date_count": 55,
         "calibration_trading_day_count": 39,
         "holdout_trading_day_count": 16,
-        "candidate_universe_size": len(expanded.CANDIDATE_SYMBOLS),
-        "candidate_symbols": expanded.CANDIDATE_SYMBOLS,
-        "existing_symbol_universe_size": len(expanded.IMPLEMENTED_SYMBOLS),
-        "source_symbol_count": len(expanded.RESEARCH_SYMBOLS),
-        "new_symbol_profile_count": len(expanded.NEW_SYMBOL_PROFILES),
+        "candidate_universe_size": len(target_inventory.candidate_symbols),
+        "candidate_symbols": target_inventory.candidate_symbols,
+        "existing_symbol_universe_size": len(target_inventory.implemented_symbols),
+        "source_symbol_count": len(target_inventory.research_symbols),
+        "new_symbol_profile_count": len(target_inventory.new_symbol_profiles),
         "existing_symbol_time_extension_profile_count": len(
-            expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
+            target_inventory.time_extension_profiles
         ),
         "existing_symbol_logic_improvement_profile_count": len(
-            expanded.EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
+            target_inventory.logic_improvement_profiles
         ),
-        "eligible_source_symbol_count": len(expanded.RESEARCH_SYMBOLS),
+        "eligible_source_symbol_count": len(target_inventory.research_symbols),
         "quarantined_source_symbol_count": 0,
         "source_quarantine": {},
-        "source_meta": {symbol: {} for symbol in expanded.RESEARCH_SYMBOLS},
+        "source_meta": {symbol: {} for symbol in target_inventory.research_symbols},
         "research_profile_inventory": {
             profile_id: {
                 "symbol": profile.symbol,
@@ -842,21 +841,21 @@ def _notification_report(recommendations: list[dict] | None = None) -> dict:
                 "discovery_lane": profile.discovery_lane,
                 "fixed_observation": profile.fixed_observation,
             }
-            for profile_id, profile in expanded.RESEARCH_PROFILES.items()
+            for profile_id, profile in target_inventory.research_profiles.items()
         },
         "operator_observation_candidate_count": len(
-            expanded._operator_observation_inventory(expanded.RESEARCH_PROFILES)
+            expanded._operator_observation_inventory(target_inventory.research_profiles)
         ),
         "operator_observation_candidate_inventory": (
-            expanded._operator_observation_inventory(expanded.RESEARCH_PROFILES)
+            expanded._operator_observation_inventory(target_inventory.research_profiles)
         ),
         "profiles": {
             profile_id: {
                 "observation_candidate": expanded._operator_observation_inventory(
-                    expanded.RESEARCH_PROFILES
+                    target_inventory.research_profiles
                 ).get(profile_id)
             }
-            for profile_id in expanded.RESEARCH_PROFILES
+            for profile_id in target_inventory.research_profiles
         },
         "recommendation_count": len(rows),
         "recommendations": rows,
@@ -921,17 +920,17 @@ def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes
                 candidate_ev=0.08,
                 baseline_ev=0.01,
             ),
-            "existing_475150_late_morning": _profile_result(
-                symbol="475150",
-                name="SK이터닉스",
-                session="late_morning",
+            "existing_006800_afternoon": _profile_result(
+                symbol="006800",
+                name="미래에셋증권",
+                session="afternoon",
                 candidate_ev=0.07,
                 baseline_ev=0.01,
             ),
         },
         {
             "017670": {"latest_close_price": 65_000},
-            "475150": {"latest_close_price": 25_000},
+            "006800": {"latest_close_price": 25_000},
         },
         research_profiles=LEGACY_TEST_RESEARCH_PROFILES,
     )
@@ -941,7 +940,7 @@ def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes
     assert "[신규 종목]" in message
     assert "[기존 종목·신규 시간대]" in message
     assert "SK텔레콤(017670)" in message
-    assert "SK이터닉스(475150)" in message
+    assert "미래에셋증권(006800)" in message
 
 
 def test_admin_notifier_fails_closed_for_invalid_authority(tmp_path):

@@ -9235,9 +9235,7 @@ def _resolve_scalp_sim_panic_sell_price(
     quote_quality = (
         "BAD"
         if sell_price <= 0
-        else "DEGRADED"
-        if liquidity_state != "NORMAL" or spread_bps >= 80
-        else "OK"
+        else "DEGRADED" if liquidity_state != "NORMAL" or spread_bps >= 80 else "OK"
     )
     fill_quality = (
         "DEGRADED"
@@ -11413,19 +11411,9 @@ def bind_state_dependencies(
     scanner_generation_submit_guard=None,
     broker_snapshot_refresh_callback=None,
 ):
-    global \
-        KIWOOM_TOKEN, \
-        DB, \
-        EVENT_BUS, \
-        ACTIVE_TARGETS, \
-        COOLDOWNS, \
-        ALERTED_STOCKS, \
-        HIGHEST_PRICES
+    global KIWOOM_TOKEN, DB, EVENT_BUS, ACTIVE_TARGETS, COOLDOWNS, ALERTED_STOCKS, HIGHEST_PRICES
     global LAST_AI_CALL_TIMES, LAST_LOG_TIMES, TRADING_RULES, PUBLISH_GATEKEEPER_REPORT
-    global \
-        SHOULD_BLOCK_SWING_ENTRY, \
-        CONFIRM_CANCEL_OR_RELOAD_REMAINING, \
-        SEND_EXIT_BEST_IOC
+    global SHOULD_BLOCK_SWING_ENTRY, CONFIRM_CANCEL_OR_RELOAD_REMAINING, SEND_EXIT_BEST_IOC
     global DUAL_PERSONA_ENGINE, WS_MANAGER, SCANNER_GENERATION_SUBMIT_GUARD
     global BROKER_SNAPSHOT_REFRESH_CALLBACK
 
@@ -17437,9 +17425,7 @@ def _scanner_runtime_queue_lag_fields(
         "queue_lag_anchor_field": (
             "entry_armed_at_epoch"
             if armed_time > 0
-            else "added_time"
-            if added_time > 0
-            else "not_available"
+            else "added_time" if added_time > 0 else "not_available"
         ),
         "loop_started_epoch": f"{loop_epoch:.3f}",
         "queue_emit_epoch": f"{emit_epoch:.3f}",
@@ -24110,11 +24096,11 @@ def _post_probe_winner_recovery_runtime_config(
             else (
                 "non_rising_missed_scope"
                 if not rising_missed_scope
-                else "active_date_missing_or_mismatch"
-                if not date_active
-                else "venue_unproven"
-                if venue == "UNKNOWN"
-                else "cohort_disabled"
+                else (
+                    "active_date_missing_or_mismatch"
+                    if not date_active
+                    else "venue_unproven" if venue == "UNKNOWN" else "cohort_disabled"
+                )
             )
         )
     )
@@ -24196,9 +24182,7 @@ def _post_probe_ai_thesis_context(
 ) -> dict[str, Any]:
     """Resolve bounded AI thesis continuity without granting order authority."""
 
-    latest_confirmed_at = _safe_float(
-        stock.get("last_watching_ai_confirmed_at"), 0.0
-    )
+    latest_confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
     latest_max_age_sec = max(
         1.0,
         _safe_float(
@@ -24214,9 +24198,7 @@ def _post_probe_ai_thesis_context(
     latest_fresh = bool(
         latest_age_sec is not None and latest_age_sec <= latest_max_age_sec
     )
-    latest_trace_id = str(
-        stock.get("last_watching_ai_decision_trace_id") or ""
-    ).strip()
+    latest_trace_id = str(stock.get("last_watching_ai_decision_trace_id") or "").strip()
     latest_attempt_trace_id = str(
         stock.get("last_watching_ai_attempt_decision_trace_id") or ""
     ).strip()
@@ -24233,15 +24215,19 @@ def _post_probe_ai_thesis_context(
         "frozen_scout_parent" if frozen_parent_present else "latest_entry_fallback"
     )
     if frozen_parent_present:
-        parent_action = str(
-            stock.get("rising_missed_scout_parent_ai_action") or ""
-        ).strip().upper()
-        parent_source = str(
-            stock.get("rising_missed_scout_parent_ai_result_source") or ""
-        ).strip().lower()
-        parent_contract = str(
-            stock.get("rising_missed_scout_parent_ai_contract_status") or ""
-        ).strip().lower()
+        parent_action = (
+            str(stock.get("rising_missed_scout_parent_ai_action") or "").strip().upper()
+        )
+        parent_source = (
+            str(stock.get("rising_missed_scout_parent_ai_result_source") or "")
+            .strip()
+            .lower()
+        )
+        parent_contract = (
+            str(stock.get("rising_missed_scout_parent_ai_contract_status") or "")
+            .strip()
+            .lower()
+        )
         parent_trace_id = str(
             stock.get("rising_missed_scout_parent_ai_decision_trace_id") or ""
         ).strip()
@@ -24254,17 +24240,21 @@ def _post_probe_ai_thesis_context(
         probe_intent = _truthy_field(
             stock.get("rising_missed_scout_parent_ai_probe_intent")
         )
-        probe_intent_status = str(
-            stock.get("rising_missed_scout_parent_ai_probe_intent_status") or ""
-        ).strip().lower()
+        probe_intent_status = (
+            str(stock.get("rising_missed_scout_parent_ai_probe_intent_status") or "")
+            .strip()
+            .lower()
+        )
     else:
         parent_action = str(stock.get("last_watching_ai_action") or "").strip().upper()
-        parent_source = str(
-            stock.get("last_watching_ai_result_source") or ""
-        ).strip().lower()
-        parent_contract = str(
-            stock.get("last_watching_ai_attempt_contract_status") or ""
-        ).strip().lower()
+        parent_source = (
+            str(stock.get("last_watching_ai_result_source") or "").strip().lower()
+        )
+        parent_contract = (
+            str(stock.get("last_watching_ai_attempt_contract_status") or "")
+            .strip()
+            .lower()
+        )
         parent_trace_id = str(
             stock.get("last_watching_ai_decision_trace_id") or ""
         ).strip()
@@ -24275,9 +24265,9 @@ def _post_probe_ai_thesis_context(
             stock.get("last_watching_ai_probe_intent_prompt_version") or ""
         ).strip()
         probe_intent = _truthy_field(stock.get("last_watching_ai_probe_intent"))
-        probe_intent_status = str(
-            stock.get("last_watching_ai_probe_intent_status") or ""
-        ).strip().lower()
+        probe_intent_status = (
+            str(stock.get("last_watching_ai_probe_intent_status") or "").strip().lower()
+        )
     parent_trusted = bool(
         parent_action in {"BUY", "WAIT", "DROP"}
         and parent_source in {"live", "prior_valid"}
@@ -24302,13 +24292,15 @@ def _post_probe_ai_thesis_context(
         )
     )
     parent_negative = bool(parent_trusted and parent_action == "DROP")
-    latest_entry_action = str(stock.get("last_watching_ai_action") or "").strip().upper()
-    latest_entry_source = str(
-        stock.get("last_watching_ai_result_source") or ""
-    ).strip().lower()
-    latest_entry_contract = str(
-        stock.get("last_watching_ai_attempt_contract_status") or ""
-    ).strip().lower()
+    latest_entry_action = (
+        str(stock.get("last_watching_ai_action") or "").strip().upper()
+    )
+    latest_entry_source = (
+        str(stock.get("last_watching_ai_result_source") or "").strip().lower()
+    )
+    latest_entry_contract = (
+        str(stock.get("last_watching_ai_attempt_contract_status") or "").strip().lower()
+    )
     latest_entry_trace_id = latest_trace_id
     latest_entry_snapshot_id = str(
         stock.get("last_watching_ai_snapshot_id") or ""
@@ -24352,9 +24344,7 @@ def _post_probe_ai_thesis_context(
         "state": (
             "hard_negative"
             if negative
-            else "supportive"
-            if supportive
-            else "neutral_or_unproven"
+            else "supportive" if supportive else "neutral_or_unproven"
         ),
         "parent_action": parent_action or "NOT_EVALUATED",
         "parent_source": parent_source or "-",
@@ -24422,9 +24412,7 @@ def _observe_post_probe_hard_abort_recovery(
     recovery_abort_class = (
         "hard"
         if scale_in_forbidden and not scale_in_recheck_allowed
-        else "soft"
-        if soft_abort and scale_in_recheck_allowed
-        else "ineligible"
+        else "soft" if soft_abort and scale_in_recheck_allowed else "ineligible"
     )
     if terminal_outcome != "residual_not_submitted" or recovery_abort_class == (
         "ineligible"
@@ -24551,9 +24539,7 @@ def _observe_post_probe_hard_abort_recovery(
 
     quality_reason_tokens = {
         token.strip()
-        for token in str(
-            quality.get("reversal_feature_stale_reason") or ""
-        ).split(",")
+        for token in str(quality.get("reversal_feature_stale_reason") or "").split(",")
         if token.strip() and token.strip() != "-"
     }
     tape_only_quality_gap = bool(
@@ -24774,22 +24760,16 @@ def _observe_post_probe_hard_abort_recovery(
         recovery_ai_parent_contract_status=ai_thesis["parent_contract_status"],
         recovery_ai_parent_trusted=ai_thesis["parent_trusted"],
         recovery_ai_parent_probe_intent=ai_thesis["parent_probe_intent"],
-        recovery_ai_parent_probe_intent_status=ai_thesis[
-            "parent_probe_intent_status"
-        ],
+        recovery_ai_parent_probe_intent_status=ai_thesis["parent_probe_intent_status"],
         recovery_ai_parent_trace_id=ai_thesis["parent_trace_id"],
         recovery_ai_parent_snapshot_id=ai_thesis["parent_snapshot_id"],
         recovery_ai_parent_prompt_version=ai_thesis["parent_prompt_version"],
-        recovery_ai_parent_provenance_source=ai_thesis[
-            "parent_provenance_source"
-        ],
+        recovery_ai_parent_provenance_source=ai_thesis["parent_provenance_source"],
         recovery_ai_latest_entry_action=ai_thesis["latest_entry_action"],
         recovery_ai_latest_entry_negative=ai_thesis["latest_entry_negative"],
         recovery_ai_latest_entry_fresh=ai_thesis["latest_entry_fresh"],
         recovery_ai_latest_entry_age_sec=ai_thesis["latest_entry_age_sec"],
-        recovery_ai_latest_entry_max_age_sec=ai_thesis[
-            "latest_entry_max_age_sec"
-        ],
+        recovery_ai_latest_entry_max_age_sec=ai_thesis["latest_entry_max_age_sec"],
         recovery_ai_latest_entry_attempt_trusted=ai_thesis[
             "latest_entry_attempt_trusted"
         ],
@@ -26397,6 +26377,9 @@ def _fast_exit_execution_route_fields(
         "fast_exit_ws_0d_item": quote_item or "-",
         "fast_exit_ws_0d_suffix": quote_suffix or "-",
         "fast_exit_ws_0d_route": quote_route,
+        "fast_exit_ws_0d_route_provenance_state": (
+            "observed" if quote_route != "unknown" else "not_available"
+        ),
         "fast_exit_ws_nxt_route_ready": ws_nxt_route_ready,
         "fast_exit_rest_request_code": rest_request_code or "-",
         "fast_exit_rest_nxt_route_ready": rest_nxt_route_ready,
@@ -26615,13 +26598,11 @@ def _dispatch_scalp_preset_exit(
     )
     nxt_aftermarket_early_sell_passthrough = False
     if bool(sell_time_block_fields.get("sell_time_block_applied")):
-        early_sell_fields, early_sell_ws = (
-            _nxt_aftermarket_early_sell_quote_context(
-                stock,
-                code,
-                ws_data,
-                now_ts=float(now_ts),
-            )
+        early_sell_fields, early_sell_ws = _nxt_aftermarket_early_sell_quote_context(
+            stock,
+            code,
+            ws_data,
+            now_ts=float(now_ts),
         )
         sell_time_block_fields.update(
             {
@@ -27104,15 +27085,11 @@ def evaluate_and_dispatch_fast_scalp_exit(
         *,
         executable_sell: int | float,
     ) -> bool:
-        quote_reason_value = str(
-            fields.get("quote_consistency_reason") or ""
-        ).lower()
+        quote_reason_value = str(fields.get("quote_consistency_reason") or "").lower()
         quote_state_value = str(fields.get("quote_consistency_state") or "").lower()
         stale_quote = quote_reason_value in {"quote_stale", "stale_quote"}
         safety_exit_allowed = bool(
-            _truthy_log_value(
-                fields.get("quote_consistency_safety_exit_allowed")
-            )
+            _truthy_log_value(fields.get("quote_consistency_safety_exit_allowed"))
             and _safe_float(executable_sell, 0.0) > 0
         )
         if safety_exit_allowed:
@@ -28960,9 +28937,7 @@ def _refresh_scale_in_reversal_features_if_needed(
     fields["scale_in_feature_refresh_reason"] = (
         "post_probe_confirmation_refresh"
         if force_refresh
-        else "feature_context_stale"
-        if existing
-        else "feature_context_missing"
+        else "feature_context_stale" if existing else "feature_context_missing"
     )
     _mutate_stock_state(
         stock, set_fields={"last_scale_in_feature_refresh_attempt_ts": now_ts}
@@ -33240,9 +33215,7 @@ def _rising_missed_price_anchor(
     state = (
         "recovered_fallback"
         if selected_price > 0 and rejected
-        else "valid"
-        if selected_price > 0
-        else "unavailable"
+        else "valid" if selected_price > 0 else "unavailable"
     )
     if state == "recovered_fallback":
         stock["first_seen_price"] = selected_price
@@ -33727,21 +33700,15 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
         >= 10
     )
     tp1_tick_sample_count = _safe_int(
-        tp1_context.get(
-            "rising_missed_tp1_submit_context_tick_window_sample_count"
-        ),
+        tp1_context.get("rising_missed_tp1_submit_context_tick_window_sample_count"),
         0,
     )
     tp1_tick_age_sec = _safe_float(
-        tp1_context.get(
-            "rising_missed_tp1_submit_context_tick_acceleration_age_sec"
-        ),
+        tp1_context.get("rising_missed_tp1_submit_context_tick_acceleration_age_sec"),
         None,
     )
     tp1_tick_source = str(
-        tp1_context.get(
-            "rising_missed_tp1_submit_context_tick_acceleration_source"
-        )
+        tp1_context.get("rising_missed_tp1_submit_context_tick_acceleration_source")
         or ""
     ).strip()
     tick_context_source = "direct_entry_tick_context"
@@ -33753,9 +33720,7 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
                 tp1_context.get("rising_missed_tp1_submit_context_tick_acceleration"),
                 None,
             )
-            tp1_tick_acceleration_fallback_applied = (
-                tick_acceleration_ratio is not None
-            )
+            tp1_tick_acceleration_fallback_applied = tick_acceleration_ratio is not None
         if tick_window_span_sec is None:
             tick_window_span_sec = _safe_float(
                 tp1_context.get(
@@ -33764,15 +33729,9 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
                 None,
             )
             tp1_tick_window_fallback_applied = tick_window_span_sec is not None
-        if (
-            tp1_tick_acceleration_fallback_applied
-            and tp1_tick_window_fallback_applied
-        ):
+        if tp1_tick_acceleration_fallback_applied and tp1_tick_window_fallback_applied:
             tick_context_source = "trusted_tp1_ws_signed_0b_10tick_context"
-        elif (
-            tp1_tick_acceleration_fallback_applied
-            or tp1_tick_window_fallback_applied
-        ):
+        elif tp1_tick_acceleration_fallback_applied or tp1_tick_window_fallback_applied:
             tick_context_source = "direct_entry_tick_context_completed_by_trusted_tp1"
     tick_context_gap_reason = "none"
     if tick_acceleration_ratio is None or tick_window_span_sec is None:
@@ -33862,9 +33821,7 @@ def _evaluate_rising_missed_risky_micro_episode_source_only(
     result["risky_micro_episode_tick_window_fallback_applied"] = bool(
         tp1_tick_window_fallback_applied
     )
-    result["risky_micro_episode_tick_context_tp1_sample_count"] = (
-        tp1_tick_sample_count
-    )
+    result["risky_micro_episode_tick_context_tp1_sample_count"] = tp1_tick_sample_count
     result["risky_micro_episode_tick_context_tp1_age_sec"] = (
         round(tp1_tick_age_sec, 6) if tp1_tick_age_sec is not None else "-"
     )
@@ -33943,11 +33900,15 @@ def register_risky_micro_episode_executable_bbo_observer(
         or fields.get("market_session_bucket")
         or ""
     ).strip()
-    source_market_route = str(
-        fields.get("rising_missed_ws_0d_route")
-        or fields.get("rising_missed_ws_last_route")
-        or ""
-    ).strip().lower()
+    source_market_route = (
+        str(
+            fields.get("rising_missed_ws_0d_route")
+            or fields.get("rising_missed_ws_last_route")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     route_provenance = (
         "candidate_fields" if source_market_route else "candidate_fields_missing"
     )
@@ -34029,9 +33990,7 @@ def register_risky_micro_episode_executable_bbo_observer(
             route_provenance = "ws_0d_route_identity_or_freshness_gap"
     base.update(
         {
-            "risky_micro_episode_horizon_observer_route_provenance": (
-                route_provenance
-            ),
+            "risky_micro_episode_horizon_observer_route_provenance": (route_provenance),
             "risky_micro_episode_horizon_observer_route_age_ms": (
                 round(route_age_ms, 3) if route_age_ms is not None else "-"
             ),
@@ -34108,8 +34067,7 @@ def register_risky_micro_episode_executable_bbo_observer(
             1
             for item in _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.values()
             if str(
-                item.get("observer_purpose")
-                or "risky_micro_episode_executable_outcome"
+                item.get("observer_purpose") or "risky_micro_episode_executable_outcome"
             )
             == observer_purpose
         )
@@ -34165,8 +34123,7 @@ def register_risky_micro_episode_executable_bbo_observer(
             1
             for item in _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.values()
             if str(
-                item.get("observer_purpose")
-                or "risky_micro_episode_executable_outcome"
+                item.get("observer_purpose") or "risky_micro_episode_executable_outcome"
             )
             == observer_purpose
         )
@@ -34314,9 +34271,7 @@ def _risky_micro_route_scoped_0d_bbo(
     required_route = (
         "krx_regular"
         if venue == "KRX"
-        else "krx_nxt_integrated"
-        if premarket_cohort
-        else "nxt_only"
+        else "krx_nxt_integrated" if premarket_cohort else "nxt_only"
     )
     candidate_route = str(expected_market_route or required_route).strip().lower()
     matches: list[tuple[dict[str, Any], str, str, str, dict[str, Any]]] = []
@@ -34446,9 +34401,11 @@ def _risky_micro_route_scoped_0d_bbo(
     best_bid = _safe_int(bid.get("price"), 0)
     observed_epoch = _safe_float(snapshot.get("observed_epoch"), 0.0)
     scoped_ws = {
-        "curr": int(round((best_ask + best_bid) / 2.0))
-        if best_ask > 0 and best_bid > 0
-        else 0,
+        "curr": (
+            int(round((best_ask + best_bid) / 2.0))
+            if best_ask > 0 and best_bid > 0
+            else 0
+        ),
         "best_ask": best_ask,
         "best_bid": best_bid,
         "best_ask_qty": _safe_int(ask.get("volume") or ask.get("qty"), 0),
@@ -34813,9 +34770,7 @@ def _ensure_post_sell_exact_route_subscription(
             or "-",
         }
 
-    repair_item = _post_sell_exact_route_subscription_item(
-        code, expected_market_route
-    )
+    repair_item = _post_sell_exact_route_subscription_item(code, expected_market_route)
     subscribe = getattr(WS_MANAGER, "execute_subscribe", None)
     if not repair_item:
         return {
@@ -34920,9 +34875,7 @@ def _post_sell_executable_bbo_gap_reason(
 ) -> str:
     """Return one canonical source-gap owner for a post-sell horizon."""
 
-    subscription_resolution = str(
-        subscription_snapshot.get("resolution") or "unknown"
-    )
+    subscription_resolution = str(subscription_snapshot.get("resolution") or "unknown")
     if not subscription_snapshot.get("exact_route_subscription_present"):
         if subscription_resolution == "base_subscribed_but_exact_route_missing":
             return "exact_route_subscription_missing"
@@ -35033,9 +34986,7 @@ def observe_post_sell_executable_bbo_horizons(
                 sell_epoch=sell_epoch,
                 quote_age_ms=quote_age_ms,
             )
-            fresh = bool(
-                source_gap_reason == "none"
-            )
+            fresh = bool(source_gap_reason == "none")
             continuity = update_post_sell_executable_bbo_observer(
                 registration_key,
                 quote_epoch=quote_epoch if quote_epoch > 0 else None,
@@ -35121,17 +35072,13 @@ def observe_post_sell_executable_bbo_horizons(
                         subscription_snapshot.get("repair_status") or "not_evaluated"
                     ),
                     "post_sell_executable_bbo_subscription_repair_attempt_count": (
-                        _safe_int(
-                            subscription_snapshot.get("repair_attempt_count"), 0
-                        )
+                        _safe_int(subscription_snapshot.get("repair_attempt_count"), 0)
                     ),
                     "post_sell_executable_bbo_subscription_repair_item": str(
                         subscription_snapshot.get("repair_item") or "-"
                     ),
                     "post_sell_executable_bbo_market_data_subscription_effect": bool(
-                        _safe_int(
-                            subscription_snapshot.get("repair_attempt_count"), 0
-                        )
+                        _safe_int(subscription_snapshot.get("repair_attempt_count"), 0)
                         > 0
                     ),
                     "post_sell_executable_bbo_trading_runtime_effect": False,
@@ -35155,27 +35102,19 @@ def observe_post_sell_executable_bbo_horizons(
                     ),
                     "post_sell_executable_bbo_first_fresh_quote_epoch": (
                         round(
-                            _safe_float(
-                                continuity.get("first_fresh_quote_epoch"), 0.0
-                            ),
+                            _safe_float(continuity.get("first_fresh_quote_epoch"), 0.0),
                             3,
                         )
-                        if _safe_float(
-                            continuity.get("first_fresh_quote_epoch"), 0.0
-                        )
+                        if _safe_float(continuity.get("first_fresh_quote_epoch"), 0.0)
                         > 0
                         else "-"
                     ),
                     "post_sell_executable_bbo_last_fresh_quote_epoch": (
                         round(
-                            _safe_float(
-                                continuity.get("last_fresh_quote_epoch"), 0.0
-                            ),
+                            _safe_float(continuity.get("last_fresh_quote_epoch"), 0.0),
                             3,
                         )
-                        if _safe_float(
-                            continuity.get("last_fresh_quote_epoch"), 0.0
-                        )
+                        if _safe_float(continuity.get("last_fresh_quote_epoch"), 0.0)
                         > 0
                         else "-"
                     ),
@@ -35191,9 +35130,7 @@ def observe_post_sell_executable_bbo_horizons(
                             ),
                             3,
                         )
-                        if _safe_float(
-                            continuity.get("last_fresh_quote_epoch"), 0.0
-                        )
+                        if _safe_float(continuity.get("last_fresh_quote_epoch"), 0.0)
                         > 0
                         else "-"
                     ),
@@ -35247,9 +35184,7 @@ def observe_post_sell_executable_bbo_horizons(
                 f"code={code or '-'} registration={registration_key or '-'}: {exc}"
             )
     active_after = active_post_sell_executable_bbo_observers(now_ts=observed_at)
-    active_keys = {
-        str(item.get("registration_key") or "") for item in active_after
-    }
+    active_keys = {str(item.get("registration_key") or "") for item in active_after}
     for stale_key in list(_POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE):
         if stale_key not in active_keys:
             _POST_SELL_EXACT_ROUTE_REG_REPAIR_STATE.pop(stale_key, None)
@@ -35456,9 +35391,7 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     relief_path = (
         "fresh_tp1_micro"
         if fresh_tp1_micro_path
-        else "absolute_tick_throughput"
-        if absolute_throughput_path
-        else "none"
+        else "absolute_tick_throughput" if absolute_throughput_path else "none"
     )
     reasons = []
     if missing_window:
@@ -35473,9 +35406,7 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     block_reason = (
         "tick_speed_absolute_throughput_relief"
         if relief_applied
-        else "+".join(reasons)
-        if reasons
-        else "tick_speed_guard_pass"
+        else "+".join(reasons) if reasons else "tick_speed_guard_pass"
     )
     return {
         **_rising_missed_submit_safety_filter_fields(blocked=blocked),
@@ -35538,9 +35469,7 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         "metric_role": (
             "bounded_tunable"
             if relief_applied
-            else "safety_veto"
-            if blocked
-            else "diagnostic"
+            else "safety_veto" if blocked else "diagnostic"
         ),
         "decision_authority": (
             "operator_runtime_override_tick_absolute_throughput_relief"
@@ -35983,9 +35912,7 @@ def _merge_scanner_market_data_enrichment_into_ws_data(
             else (
                 "missing_stored_at"
                 if age_sec is None
-                else "expired"
-                if age_sec > ttl_sec
-                else "missing_or_unusable_state"
+                else "expired" if age_sec > ttl_sec else "missing_or_unusable_state"
             )
         ),
     }
@@ -41856,9 +41783,7 @@ def _post_probe_direction_fields(
             else (
                 "negative"
                 if orderbook_negative
-                else "mixed"
-                if orderbook_mixed
-                else "neutral"
+                else "mixed" if orderbook_mixed else "neutral"
             )
         ),
         "post_probe_direction_qi_state": (
@@ -41867,9 +41792,7 @@ def _post_probe_direction_fields(
         "post_probe_direction_ofi_state": (
             "positive"
             if ofi_positive
-            else "negative"
-            if ofi_negative
-            else "unavailable"
+            else "negative" if ofi_negative else "unavailable"
         ),
         "post_probe_direction_buy_pressure_10t": (
             f"{buy_pressure:.4f}" if pressure_available else "-"
@@ -42138,9 +42061,7 @@ def _abort_entry_split_probe_residual(
         "entry_split_probe_scale_in_recheck_origin": (
             "normal_winner_recovery"
             if rising_missed_normal_winner_recheck
-            else "source_quality_or_non_nxt_direction_recovery"
-            if soft_abort
-            else "-"
+            else "source_quality_or_non_nxt_direction_recovery" if soft_abort else "-"
         ),
         "entry_split_probe_scale_in_recheck_reason": (
             (f"{reason}:source_quality_recovery" if source_quality_timeout else reason)
@@ -44103,9 +44024,7 @@ def _holding_ws_repair_session_bucket(now_ts: float) -> str:
 def _maybe_publish_holding_ws_repair(state, stock, code, fields, *, now_ts):
     min_interval_sec = _holding_ws_repair_min_interval_sec()
     last_reg_ts = _safe_float((state or {}).get("last_ws_repair_reg_ts"), 0.0)
-    last_decision_ts = _safe_float(
-        (state or {}).get("last_ws_repair_decision_ts"), 0.0
-    )
+    last_decision_ts = _safe_float((state or {}).get("last_ws_repair_decision_ts"), 0.0)
     current_session_bucket = _holding_ws_repair_session_bucket(now_ts)
     last_session_bucket = str(
         (state or {}).get("last_ws_repair_session_bucket") or ""
@@ -44370,9 +44289,7 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
                     "holding_rest_quote_only_recovery": True,
                 }
             )
-            _maybe_publish_holding_ws_repair(
-                state, stock, code, fields, now_ts=now_ts
-            )
+            _maybe_publish_holding_ws_repair(state, stock, code, fields, now_ts=now_ts)
             _log_holding_pipeline(
                 stock, code, "holding_ws_freshness_recovered", **fields
             )
@@ -46570,16 +46487,12 @@ def _resolve_early_accel_strong_bundle_recheck(
             "score_prior_band": (
                 "supportive"
                 if float(min_score) <= numeric_score <= float(max_score)
-                else "low"
-                if numeric_score < float(min_score)
-                else "high"
+                else "low" if numeric_score < float(min_score) else "high"
             ),
             "ai_score_prior_weight": (
                 0.3
                 if float(min_score) <= numeric_score <= float(max_score)
-                else -0.2
-                if numeric_score < float(min_score)
-                else 0.0
+                else -0.2 if numeric_score < float(min_score) else 0.0
             ),
         }
     )
@@ -47155,16 +47068,12 @@ def _resolve_ai_numeric_consistency_recheck(
             "score_prior_band": (
                 "supportive"
                 if float(score_floor) <= numeric_score <= 74.0
-                else "low"
-                if numeric_score < float(score_floor)
-                else "high"
+                else "low" if numeric_score < float(score_floor) else "high"
             ),
             "ai_score_prior_weight": (
                 0.3
                 if float(score_floor) <= numeric_score <= 74.0
-                else -0.2
-                if numeric_score < float(score_floor)
-                else 0.0
+                else -0.2 if numeric_score < float(score_floor) else 0.0
             ),
         }
     )
@@ -47307,11 +47216,7 @@ def _build_ai_ops_log_fields(
         "bedrock_primary",
         "bedrock_fallback",
     }
-    if (
-        bedrock_primary_used
-        or bedrock_fallback_used
-        or bedrock_failback_response_used
-    ):
+    if bedrock_primary_used or bedrock_fallback_used or bedrock_failback_response_used:
         ai_provider_actual = "bedrock"
         ai_model_actual = str(
             payload.get("bedrock_model_family")
@@ -50545,9 +50450,7 @@ def _observe_post_sell_smoothing_source_only_paths(
             _rule_float("SCALP_STOP", -1.5),
             _rule_float("SCALP_HARD_STOP", -2.5),
         )
-        emergency_pct = _rule_float(
-            "SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT", -2.0
-        )
+        emergency_pct = _rule_float("SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT", -2.0)
         effective_price_quality = str(
             quote_fields.get("quote_consistency_state") or "unknown"
         )
@@ -50942,9 +50845,7 @@ def observe_smoothing_source_only_paths_cycle(
             and str(target.get("status") or "").strip().upper()
             in {"HOLDING", "SELL_ORDERED", "WATCHING"}
             and isinstance(target.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY), dict)
-            and bool(
-                target.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY, {}).get("arms")
-            )
+            and bool(target.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY, {}).get("arms"))
         ]
     active_target_attempt_count = 0
     failed_operation_count = 0
@@ -51139,9 +51040,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
     large_sell_state = (
         "confirmed_sell"
         if large_sell_print
-        else "confirmed_clear"
-        if feature_context_usable
-        else "unknown"
+        else "confirmed_clear" if feature_context_usable else "unknown"
     )
     micro_supported, micro_support_fields = _holding_flow_max_defer_micro_support(
         ws_data,
@@ -54521,9 +54420,7 @@ def _score65_74_recovery_probe_decision(
         "score_prior_band": (
             "supportive"
             if min_score <= score <= max_score
-            else "low"
-            if score < min_score
-            else "high"
+            else "low" if score < min_score else "high"
         ),
         "ai_score_prior_weight": 0.3 if min_score <= score <= max_score else 0.0,
     }
@@ -60494,7 +60391,9 @@ def _handle_watching_strategy_branch(
                                         "ai_numeric_consistency_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
                                         "ai_numeric_consistency_recheck_original_reason_excerpt": str(
                                             reason or ""
-                                        )[:120],
+                                        )[
+                                            :120
+                                        ],
                                         "ai_numeric_consistency_recheck_inconsistency_field": str(
                                             ai_decision.get(
                                                 "ai_reason_numeric_inconsistency_field"
@@ -60513,7 +60412,9 @@ def _handle_watching_strategy_branch(
                                             ),
                                             ensure_ascii=False,
                                             default=str,
-                                        )[:240],
+                                        )[
+                                            :240
+                                        ],
                                     },
                                     candle_context=candle_context,
                                 )
@@ -60735,7 +60636,9 @@ def _handle_watching_strategy_branch(
                                         "early_accel_strong_bundle_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
                                         "early_accel_strong_bundle_recheck_original_reason_excerpt": str(
                                             reason or ""
-                                        )[:120],
+                                        )[
+                                            :120
+                                        ],
                                         "early_accel_strong_bundle_recheck_scanner_promotion_reason": str(
                                             stock.get("scanner_promotion_reason") or "-"
                                         ),
@@ -61859,7 +61762,9 @@ def _handle_watching_strategy_branch(
                         _ENTRY_OPPORTUNITY_RECHECK_STATE.sync_exploration_probe_submit_count(
                             bounded_exploration_persisted_probe_count
                         )
-                        bounded_exploration_observed_probe_count = _ENTRY_OPPORTUNITY_RECHECK_STATE.daily_exploration_probe_submit_count
+                        bounded_exploration_observed_probe_count = (
+                            _ENTRY_OPPORTUNITY_RECHECK_STATE.daily_exploration_probe_submit_count
+                        )
                     bounded_exploration_micro_relief = (
                         _entry_setup_exploration_micro_relief(
                             recheck_feature_probe,
@@ -74132,9 +74037,7 @@ def _resolve_holding_sell_dmst_stex_tp(
     confirmed_nxt_position = bool(
         str(stock.get("status") or "").strip().upper() == "HOLDING"
         and _safe_int(stock.get("buy_qty"), 0) > 0
-        and str(stock.get("entry_execution_broker_route") or "")
-        .strip()
-        .upper()
+        and str(stock.get("entry_execution_broker_route") or "").strip().upper()
         == "NXT"
     )
     if confirmed_nxt_position:
@@ -74226,12 +74129,8 @@ def _nxt_aftermarket_early_sell_quote_context(
     )
     route_allowed = bool(
         not route_resolution.get("blocked")
-        and str(route_resolution.get("dmst_stex_tp") or "").strip().upper()
-        == "NXT"
-        and (
-            route_resolution.get("nxt_enabled") is True
-            or confirmed_nxt_position
-        )
+        and str(route_resolution.get("dmst_stex_tp") or "").strip().upper() == "NXT"
+        and (route_resolution.get("nxt_enabled") is True or confirmed_nxt_position)
     )
 
     exact_quote: dict[str, Any] = {}
@@ -74251,8 +74150,7 @@ def _nxt_aftermarket_early_sell_quote_context(
             item == f"{normalized_code}_NX"
             and suffix == "_NX"
             and route == "nxt_only"
-            and str(candidate.get("effective_venue") or "").strip().upper()
-            == "NXT"
+            and str(candidate.get("effective_venue") or "").strip().upper() == "NXT"
         ):
             exact_quote = candidate
             quote_source = "realtime_type_snapshots_by_route_exact_nxt_0d"
@@ -74268,8 +74166,7 @@ def _nxt_aftermarket_early_sell_quote_context(
         type_venues = snapshot.get("last_realtime_type_effective_venue")
         type_venues = type_venues if isinstance(type_venues, dict) else {}
         if (
-            str(type_items.get("0D") or "").strip().upper()
-            == f"{normalized_code}_NX"
+            str(type_items.get("0D") or "").strip().upper() == f"{normalized_code}_NX"
             and str(type_suffixes.get("0D") or "").strip().upper() == "_NX"
             and str(type_routes.get("0D") or "").strip().lower() == "nxt_only"
             and str(type_venues.get("0D") or "NXT").strip().upper() == "NXT"
@@ -74302,9 +74199,7 @@ def _nxt_aftermarket_early_sell_quote_context(
     bid_row = bids[0] if bids and isinstance(bids[0], dict) else {}
     ask_row = asks[0] if asks and isinstance(asks[0], dict) else {}
     executable_bid = _safe_int(bid_row.get("price"), 0)
-    executable_bid_qty = _safe_int(
-        bid_row.get("volume") or bid_row.get("quantity"), 0
-    )
+    executable_bid_qty = _safe_int(bid_row.get("volume") or bid_row.get("quantity"), 0)
     best_ask = _safe_int(ask_row.get("price"), 0)
     fresh = bool(
         quote_age_ms is not None
@@ -74339,9 +74234,7 @@ def _nxt_aftermarket_early_sell_quote_context(
         "nxt_aftermarket_early_sell_checked": True,
         "nxt_aftermarket_early_sell_allowed": allowed,
         "nxt_aftermarket_early_sell_reason": reason,
-        "nxt_aftermarket_early_sell_policy_version": (
-            "nxt_aftermarket_early_sell_v1"
-        ),
+        "nxt_aftermarket_early_sell_policy_version": ("nxt_aftermarket_early_sell_v1"),
         "nxt_aftermarket_early_sell_window": "15:45:00-19:59:59",
         "nxt_aftermarket_early_sell_route": (
             str(route_resolution.get("dmst_stex_tp") or "-").strip().upper()
@@ -74349,20 +74242,14 @@ def _nxt_aftermarket_early_sell_quote_context(
         "nxt_aftermarket_early_sell_route_reason": (
             route_resolution.get("reason") or "-"
         ),
-        "nxt_aftermarket_early_sell_nxt_enabled": route_resolution.get(
-            "nxt_enabled"
-        ),
+        "nxt_aftermarket_early_sell_nxt_enabled": route_resolution.get("nxt_enabled"),
         "nxt_aftermarket_early_sell_nxt_flag_source": route_resolution.get(
             "nxt_flag_source"
         )
         or "-",
-        "nxt_aftermarket_early_sell_confirmed_nxt_position": (
-            confirmed_nxt_position
-        ),
+        "nxt_aftermarket_early_sell_confirmed_nxt_position": (confirmed_nxt_position),
         "nxt_aftermarket_early_sell_quote_source": quote_source,
-        "nxt_aftermarket_early_sell_quote_item": (
-            exact_quote.get("item") or "-"
-        ),
+        "nxt_aftermarket_early_sell_quote_item": (exact_quote.get("item") or "-"),
         "nxt_aftermarket_early_sell_quote_suffix": (
             exact_quote.get("market_suffix") or "-"
         ),
@@ -84981,9 +84868,7 @@ def handle_holding_state(
                     **{
                         **early_sell_fields,
                         "sell_reason_type": sell_reason_type,
-                        "exit_rule": exit_rule
-                        or stock.get("last_exit_rule")
-                        or "-",
+                        "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
                         "actual_order_submitted": False,
                         "broker_order_forbidden": False,
                         "runtime_effect": True,
@@ -85068,7 +84953,9 @@ def handle_holding_state(
                 current_ai_score=current_ai_score,
                 held_sec=held_sec,
                 now_ts=now_ts,
-                context_fields={"sell_intercept_context": "standard_exit_before_submit"},
+                context_fields={
+                    "sell_intercept_context": "standard_exit_before_submit"
+                },
             )
             if _loss_recovery_intercepts_sell(late_loss_retry_result):
                 return
@@ -85462,9 +85349,7 @@ def handle_holding_state(
                     if key.startswith("nxt_aftermarket_early_sell_")
                 }
             )
-            if not final_early_sell_fields.get(
-                "nxt_aftermarket_early_sell_allowed"
-            ):
+            if not final_early_sell_fields.get("nxt_aftermarket_early_sell_allowed"):
                 _log_holding_pipeline(
                     stock,
                     code,
@@ -85472,9 +85357,7 @@ def handle_holding_state(
                     **{
                         **final_early_sell_fields,
                         "sell_reason_type": sell_reason_type,
-                        "exit_rule": exit_rule
-                        or stock.get("last_exit_rule")
-                        or "-",
+                        "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
                         "actual_order_submitted": False,
                         "broker_order_forbidden": True,
                         "runtime_effect": True,
@@ -87368,9 +87251,10 @@ def _evaluate_scale_in_signal(
             now_ts=now_ts,
             force_refresh=winner_recovery_confirmation_recheck,
         )
-        forced_feature_spacing_pending = str(
-            feature_refresh_fields.get("scale_in_feature_refresh_reason") or ""
-        ) == "forced_feature_refresh_spacing_pending"
+        forced_feature_spacing_pending = (
+            str(feature_refresh_fields.get("scale_in_feature_refresh_reason") or "")
+            == "forced_feature_refresh_spacing_pending"
+        )
         if winner_recovery_confirmation_recheck and not forced_feature_spacing_pending:
             # Consume this one lock bypass even if bounded refresh fails. A
             # later regular add cycle may retry, but a bad feed must not create
@@ -87953,8 +87837,7 @@ def _process_scale_in_action(stock, code, ws_data, action, admin_id):
         and result is not None
         and (
             (
-                str(stock.get("pending_add_reason") or "")
-                == winner_recovery_reason
+                str(stock.get("pending_add_reason") or "") == winner_recovery_reason
                 and _safe_float(stock.get("pending_add_requested_at"), 0.0)
                 >= order_attempt_started_at
             )
@@ -89566,9 +89449,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 "post_probe_winner_recovery_holding_ai_input_schema"
             ),
             "pending_add_winner_recovery_ai_tape_substitution_applied": bool(
-                action.get(
-                    "post_probe_winner_recovery_ai_tape_substitution_applied"
-                )
+                action.get("post_probe_winner_recovery_ai_tape_substitution_applied")
             ),
             "_add_receipt_requested_by_order_no": {},
             "_add_receipt_filled_by_order_no": {},
@@ -89914,16 +89795,14 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 action.get("post_probe_winner_recovery_decision_price") or "-"
             ),
             post_probe_winner_recovery_ai_thesis_state=(
-                action.get("post_probe_winner_recovery_ai_thesis_state")
-                or "unreported"
+                action.get("post_probe_winner_recovery_ai_thesis_state") or "unreported"
             ),
             post_probe_winner_recovery_ai_parent_action=(
                 action.get("post_probe_winner_recovery_ai_parent_action")
                 or "NOT_EVALUATED"
             ),
             post_probe_winner_recovery_ai_parent_prompt_version=(
-                action.get("post_probe_winner_recovery_ai_parent_prompt_version")
-                or "-"
+                action.get("post_probe_winner_recovery_ai_parent_prompt_version") or "-"
             ),
             post_probe_winner_recovery_ai_parent_trace_id=(
                 action.get("post_probe_winner_recovery_ai_parent_trace_id") or "-"
@@ -89940,13 +89819,10 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 or "insufficient"
             ),
             post_probe_winner_recovery_holding_ai_input_schema=(
-                action.get("post_probe_winner_recovery_holding_ai_input_schema")
-                or "-"
+                action.get("post_probe_winner_recovery_holding_ai_input_schema") or "-"
             ),
             post_probe_winner_recovery_ai_tape_substitution_applied=bool(
-                action.get(
-                    "post_probe_winner_recovery_ai_tape_substitution_applied"
-                )
+                action.get("post_probe_winner_recovery_ai_tape_substitution_applied")
             ),
             **scale_in_qty_budget_fields,
             **budget_authority_fields,
@@ -90077,7 +89953,9 @@ def handle_buy_ordered_state(stock, code):
             return
 
     if time_elapsed > timeout_sec:
-        log_info(f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입.")
+        log_info(
+            f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입."
+        )
         orig_ord_no = stock.get("odno")
 
         if not orig_ord_no:

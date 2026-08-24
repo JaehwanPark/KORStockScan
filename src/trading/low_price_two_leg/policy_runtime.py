@@ -17,9 +17,11 @@ from src.trading.low_price_two_leg.profiles import (
     PROFILE_REVISION_20260819_EFFECTIVE_DATE,
     PROFILE_REVISION_20260821_EFFECTIVE_DATE,
     PROFILE_REVISION_20260824_EFFECTIVE_DATE,
+    PROFILE_REVISION_20260825_EFFECTIVE_DATE,
     PROFILES,
     PROFILES_20260819,
     PROFILES_20260824_PRIOR,
+    PROFILES_20260825_PRIOR,
 )
 from src.utils.constants import DATA_DIR
 
@@ -162,6 +164,37 @@ PROFILE_REVISION_20260824_TRANSITION = {
     "decision_authority": "explicit_user_directed_profile_revision_2026_08_21",
     "existing_order_effect": "none_preserve_prior_policy_custody",
 }
+PROFILE_REVISION_20260825_TRANSITION = {
+    "effective_target_date": PROFILE_REVISION_20260825_EFFECTIVE_DATE.isoformat(),
+    "source_date": "2026-08-24",
+    "before_profile_count": 35,
+    "after_profile_count": 40,
+    "recommendation_count": 12,
+    "new_profile_count": 5,
+    "logic_revision_count": 7,
+    "approved_profile_ids": [
+        "cj_cgv_late_morning",
+        "hanse_afternoon",
+        "hanse_late_morning",
+        "hanse_midday",
+        "kepco_late_morning",
+        "kepco_morning",
+        "mirae_asset_late_morning",
+        "nhn_afternoon",
+        "nhn_late_morning",
+        "nhn_morning",
+        "sk_eternix_late_morning",
+        "youngone_afternoon",
+    ],
+    "evidence_path": (
+        "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-24.json"
+    ),
+    "evidence_canonical_sha256": (
+        "ce447fe0c6d55a5004f821fb450cbe5d6377fc9664f2bee9a5cd6a31ee12d82f"
+    ),
+    "decision_authority": "explicit_user_directed_profile_revision_2026_08_24",
+    "existing_order_effect": "none_preserve_prior_policy_custody",
+}
 KAKAO_MORNING_TARGET_TRANSITION = {
     "profile_id": "kakao_morning",
     "axis": "target_ticks",
@@ -202,6 +235,10 @@ PROFILE_20260821_BASELINE_POLICIES = {
     profile_id: _baseline_policy(profile_id, PROFILES_20260824_PRIOR)
     for profile_id in PROFILES_20260824_PRIOR
 }
+PROFILE_20260824_BASELINE_POLICIES = {
+    profile_id: _baseline_policy(profile_id, PROFILES_20260825_PRIOR)
+    for profile_id in PROFILES_20260825_PRIOR
+}
 PRE_RECOMMENDATION_BASELINE_POLICIES = {
     profile_id: _baseline_policy(profile_id, PRE_RECOMMENDATION_PROFILES)
     for profile_id in PRE_RECOMMENDATION_PROFILES
@@ -225,6 +262,7 @@ def _policy_bounds(policies: dict[str, dict[str, Any]]) -> dict[str, dict[str, f
 POLICY_BOUNDS = _policy_bounds(BASELINE_POLICIES)
 PROFILE_20260819_POLICY_BOUNDS = _policy_bounds(PROFILE_20260819_BASELINE_POLICIES)
 PROFILE_20260821_POLICY_BOUNDS = _policy_bounds(PROFILE_20260821_BASELINE_POLICIES)
+PROFILE_20260824_POLICY_BOUNDS = _policy_bounds(PROFILE_20260824_BASELINE_POLICIES)
 PRE_RECOMMENDATION_POLICY_BOUNDS = _policy_bounds(PRE_RECOMMENDATION_BASELINE_POLICIES)
 
 
@@ -237,6 +275,8 @@ def baseline_policies_for_target_date(
         return PROFILE_20260819_BASELINE_POLICIES
     if target_date < PROFILE_REVISION_20260824_EFFECTIVE_DATE:
         return PROFILE_20260821_BASELINE_POLICIES
+    if target_date < PROFILE_REVISION_20260825_EFFECTIVE_DATE:
+        return PROFILE_20260824_BASELINE_POLICIES
     return BASELINE_POLICIES
 
 
@@ -247,6 +287,8 @@ def policy_bounds_for_target_date(target_date: date) -> dict[str, dict[str, floa
         return PROFILE_20260819_POLICY_BOUNDS
     if target_date < PROFILE_REVISION_20260824_EFFECTIVE_DATE:
         return PROFILE_20260821_POLICY_BOUNDS
+    if target_date < PROFILE_REVISION_20260825_EFFECTIVE_DATE:
+        return PROFILE_20260824_POLICY_BOUNDS
     return POLICY_BOUNDS
 
 
@@ -257,7 +299,9 @@ def profile_revision_transition(target_date: date) -> dict[str, Any] | None:
         return dict(PROFILE_REVISION_20260819_TRANSITION)
     if target_date < PROFILE_REVISION_20260824_EFFECTIVE_DATE:
         return dict(PROFILE_REVISION_20260821_TRANSITION)
-    return dict(PROFILE_REVISION_20260824_TRANSITION)
+    if target_date < PROFILE_REVISION_20260825_EFFECTIVE_DATE:
+        return dict(PROFILE_REVISION_20260824_TRANSITION)
+    return dict(PROFILE_REVISION_20260825_TRANSITION)
 
 
 def operator_policy_transitions(target_date: date) -> list[dict[str, Any]]:

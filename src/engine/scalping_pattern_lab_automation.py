@@ -93,7 +93,18 @@ def _entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | None]:
             "decision_authority": payload.get("decision_authority"),
             "application_mode": payload.get("application_mode"),
             "total_candidates": _safe_int(summary.get("total_candidates"), 0),
-            "joined_sample": _safe_int(summary.get("joined_sample"), 0),
+            "joined_sample": _safe_int(
+                summary.get("joined_sample_cumulative", summary.get("joined_sample")),
+                0,
+            ),
+            "joined_sample_daily": _safe_int(
+                summary.get("joined_sample_daily", summary.get("joined_sample")), 0
+            ),
+            "joined_sample_window_policy": (
+                (summary.get("joined_sample_evidence") or {}).get("window_policy")
+                if isinstance(summary.get("joined_sample_evidence"), dict)
+                else None
+            ),
             "sample_floor": _safe_int(summary.get("sample_floor"), 0),
             "missing_actions": (
                 summary.get("missing_actions")
@@ -134,7 +145,10 @@ def _entry_adm_source_quality_contract(summary: dict[str, Any]) -> dict[str, Any
         ),
         "metric_role": "source_quality_gate",
         "decision_authority": DECISION_AUTHORITY,
-        "window_policy": "same_day_adm_report_plus_postclose_pattern_lab",
+        "window_policy": (
+            str(summary.get("joined_sample_window_policy") or "")
+            or "same_day_adm_report_plus_postclose_pattern_lab"
+        ),
         "sample_floor": sample_floor,
         "sample_count": joined_sample,
         "sample_floor_status": "ready" if sample_ready else "hold_sample",

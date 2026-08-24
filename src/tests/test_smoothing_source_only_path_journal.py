@@ -242,6 +242,39 @@ def test_source_only_journal_expires_late_horizon_instead_of_relabeling_it_exact
     assert horizon["fields"]["horizon_status"] == "expired_observation_gap"
 
 
+def test_source_only_journal_marks_missing_horizon_price_without_zero_ev():
+    state, _armed = _arm()
+
+    state, events = observe_source_only_paths(
+        state,
+        position_key="record:7",
+        now_ts=1010.0,
+        effective_price=0,
+        effective_profit_rate=0.0,
+        effective_price_source="none",
+        effective_price_quality="missing",
+        hard_breach=False,
+        emergency_breach=False,
+        observation_phase="post_sell_non_revive",
+    )
+
+    horizon = next(
+        event
+        for event in events
+        if event["stage"] == "smoothing_source_only_path_horizon"
+    )
+    assert horizon["fields"]["horizon_status"] == "expired_observation_gap"
+    assert horizon["fields"]["effective_price"] == "not_available"
+    assert horizon["fields"]["effective_profit_rate"] == "not_available"
+    assert horizon["fields"]["effective_price_source"] == (
+        "not_available:expired_observation_gap"
+    )
+    assert horizon["fields"]["effective_price_observation_state"] == (
+        "not_available:expired_observation_gap"
+    )
+    assert state["arms"]
+
+
 def test_source_only_journal_tolerates_transient_invalid_tick_with_fresh_cadence():
     state, _armed = _arm()
     for second in range(1, 11):

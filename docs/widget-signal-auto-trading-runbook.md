@@ -49,7 +49,7 @@
   요구한다. 다만 전일 exact-date 정책으로 이미 검증·가동된 세션은 누적 후보가
   계속 유효하고 당일 holdout이 무신호 또는 미청산(right-censored)으로 아직
   성숙하지 않은 경우에만 전일 파라미터를 그대로 carry-forward한다. 이 경로는
-  새 파라미터를 적용하지 않으며 source-quality 실패, 실주문 terminal failure,
+  새 파라미터를 적용하지 않으며 source-quality 실패, 실주문 submit 실패·broker-call ambiguity·terminal order/cancel failure,
   누적 후보 결함이 확인되면 사용하지 않고 해당 세션을 차단한다.
 - 장후 `machine_microstructure_attribution`은 당일 위젯 calibration, prospective
   signal research, 21:15 collector-expansion recommendation 종목 inventory를

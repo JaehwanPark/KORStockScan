@@ -77,6 +77,16 @@ TIMERS=(
   korstockscan-low-price-two-leg-youngone-morning.timer
   korstockscan-low-price-two-leg-youngone-afternoon-preflight.timer
   korstockscan-low-price-two-leg-youngone-afternoon.timer
+  korstockscan-low-price-two-leg-sk-eternix-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-sk-eternix-late-morning.timer
+  korstockscan-low-price-two-leg-mirae-asset-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-mirae-asset-late-morning.timer
+  korstockscan-low-price-two-leg-kepco-morning-preflight.timer
+  korstockscan-low-price-two-leg-kepco-morning.timer
+  korstockscan-low-price-two-leg-nhn-morning-preflight.timer
+  korstockscan-low-price-two-leg-nhn-morning.timer
+  korstockscan-low-price-two-leg-nhn-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-nhn-late-morning.timer
 )
 SERVICES=(
   korstockscan-low-price-two-leg@samsung_heavy_midday.service
@@ -153,6 +163,16 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@youngone_morning.service
   korstockscan-low-price-two-leg@youngone_afternoon.service
   korstockscan-low-price-two-leg-preflight@youngone_afternoon.service
+  korstockscan-low-price-two-leg@sk_eternix_late_morning.service
+  korstockscan-low-price-two-leg-preflight@sk_eternix_late_morning.service
+  korstockscan-low-price-two-leg@mirae_asset_late_morning.service
+  korstockscan-low-price-two-leg-preflight@mirae_asset_late_morning.service
+  korstockscan-low-price-two-leg@kepco_morning.service
+  korstockscan-low-price-two-leg-preflight@kepco_morning.service
+  korstockscan-low-price-two-leg@nhn_morning.service
+  korstockscan-low-price-two-leg-preflight@nhn_morning.service
+  korstockscan-low-price-two-leg@nhn_late_morning.service
+  korstockscan-low-price-two-leg-preflight@nhn_late_morning.service
 )
 FILES=(
   korstockscan-low-price-two-leg@.service

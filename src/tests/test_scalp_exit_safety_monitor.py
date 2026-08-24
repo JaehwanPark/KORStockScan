@@ -1413,6 +1413,8 @@ def test_fast_exit_route_guard_blocks_krx_only_and_unproven_nxt_quote():
     assert unproven["fast_exit_route_guard_reason"] == (
         "nxt_executable_quote_route_unproven"
     )
+    assert unproven["fast_exit_ws_0d_route"] == "unknown"
+    assert unproven["fast_exit_ws_0d_route_provenance_state"] == "not_available"
 
     rest_proven = handlers._fast_exit_execution_route_fields(
         {

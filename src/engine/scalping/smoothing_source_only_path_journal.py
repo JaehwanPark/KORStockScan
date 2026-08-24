@@ -19,6 +19,8 @@ MAX_OBSERVATION_LAG_SEC = 2.0
 MAX_ACTIVE_ARMS = 8
 STATE_KEY = "smoothing_source_only_path_journals"
 PATH_QUALITY_CONTRACT_VERSION = "fresh_observation_gap_v2"
+NOT_AVAILABLE_PRICE = "not_available"
+NOT_AVAILABLE_PROFIT_RATE = "not_available"
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -34,6 +36,42 @@ def _present(value: Any) -> bool:
 
 def _price_quality_usable(value: Any) -> bool:
     return str(value or "").strip().lower() in {"ok", "warning", "single_source"}
+
+
+def _price_observation_fields(
+    *,
+    effective_price: int,
+    effective_profit_rate: float,
+    effective_price_source: str,
+    effective_price_quality: str,
+    missing_reason: str,
+    prefix: str = "",
+) -> dict[str, Any]:
+    """Represent missing executable prices without fabricating zero-return EV."""
+
+    observed = effective_price > 0
+    name = f"{prefix}_" if prefix else ""
+    return {
+        f"{name}effective_price": (
+            int(effective_price) if observed else NOT_AVAILABLE_PRICE
+        ),
+        f"{name}effective_profit_rate": (
+            round(float(effective_profit_rate), 6)
+            if observed
+            else NOT_AVAILABLE_PROFIT_RATE
+        ),
+        f"{name}effective_price_source": (
+            str(effective_price_source or "unknown")
+            if observed
+            else f"not_available:{missing_reason}"
+        ),
+        f"{name}effective_price_quality": (
+            str(effective_price_quality or "unknown") if observed else "missing"
+        ),
+        f"{name}effective_price_observation_state": (
+            "observed" if observed else f"not_available:{missing_reason}"
+        ),
+    }
 
 
 def _contract_fields() -> dict[str, Any]:
@@ -233,10 +271,14 @@ def observe_source_only_paths(
                     arm,
                     close_reason="position_lineage_changed",
                     observation_phase=str(observation_phase or "unknown"),
-                    terminal_effective_price=0,
-                    terminal_effective_profit_rate=None,
-                    terminal_effective_price_source="not_applicable",
-                    terminal_effective_price_quality="not_applicable",
+                    **_price_observation_fields(
+                        effective_price=0,
+                        effective_profit_rate=0.0,
+                        effective_price_source="not_applicable",
+                        effective_price_quality="not_applicable",
+                        missing_reason="position_lineage_changed",
+                        prefix="terminal",
+                    ),
                     path_mfe_profit_rate=arm.get("path_mfe_profit_rate"),
                     path_mae_profit_rate=arm.get("path_mae_profit_rate"),
                     path_price_quality_valid_sample_count=int(
@@ -317,16 +359,13 @@ def observe_source_only_paths(
                     observation_lag_sec=round(lag, 3),
                     horizon_status=status,
                     observation_phase=str(observation_phase or "unknown"),
-                    effective_price=(
-                        int(effective_price) if effective_price > 0 else 0
+                    **_price_observation_fields(
+                        effective_price=effective_price,
+                        effective_profit_rate=effective_profit_rate,
+                        effective_price_source=effective_price_source,
+                        effective_price_quality=effective_price_quality,
+                        missing_reason=status,
                     ),
-                    effective_profit_rate=(
-                        round(float(effective_profit_rate), 6)
-                        if effective_price > 0
-                        else None
-                    ),
-                    effective_price_source=str(effective_price_source or "unknown"),
-                    effective_price_quality=str(effective_price_quality or "unknown"),
                     path_mfe_profit_rate=(
                         round(_safe_float(arm.get("path_mfe_profit_rate")), 6)
                         if valid_price_sample_count
@@ -375,19 +414,13 @@ def observe_source_only_paths(
                     arm,
                     close_reason=close_reason,
                     observation_phase=str(observation_phase or "unknown"),
-                    terminal_effective_price=(
-                        int(effective_price) if effective_price > 0 else 0
-                    ),
-                    terminal_effective_profit_rate=(
-                        round(float(effective_profit_rate), 6)
-                        if effective_price > 0
-                        else None
-                    ),
-                    terminal_effective_price_source=str(
-                        effective_price_source or "unknown"
-                    ),
-                    terminal_effective_price_quality=str(
-                        effective_price_quality or "unknown"
+                    **_price_observation_fields(
+                        effective_price=effective_price,
+                        effective_profit_rate=effective_profit_rate,
+                        effective_price_source=effective_price_source,
+                        effective_price_quality=effective_price_quality,
+                        missing_reason=close_reason,
+                        prefix="terminal",
                     ),
                     path_mfe_profit_rate=(
                         round(_safe_float(arm.get("path_mfe_profit_rate")), 6)

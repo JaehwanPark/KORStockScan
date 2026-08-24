@@ -1,0 +1,11 @@
+[Unit]
+Description=Start NHN Morning Two-Leg Machine
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:39:00 Asia/Seoul
+Persistent=false
+AccuracySec=1s
+Unit=korstockscan-low-price-two-leg@nhn_morning.service
+
+[Install]
+WantedBy=timers.target

@@ -197,6 +197,79 @@ def test_low_price_recommendations_without_approved_mapping_are_source_only(
     assert status["recommendation_profile_contract_pass_count"] == 0
 
 
+def test_low_price_20260824_recommendations_verify_20260825_mapping(monkeypatch):
+    from datetime import date
+    from types import SimpleNamespace
+
+    from src.engine.monitoring import low_price_two_leg_expanded_candidate_research
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
+        CandidateRecommendationNotifier,
+    )
+    from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
+    from src.trading.low_price_two_leg import policy_runtime, preflight
+    from src.trading.low_price_two_leg.profiles import profiles_for_target_date
+
+    target_date = "2026-08-24"
+    target_profiles = profiles_for_target_date(date.fromisoformat(target_date))
+    monkeypatch.setattr(policy_runtime, "validate_candidate", lambda _: (True, "ok"))
+    monkeypatch.setattr(
+        CandidateRecommendationNotifier,
+        "_valid_report",
+        staticmethod(lambda _: True),
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_research_evidence",
+        lambda *_args, **_kwargs: (True, "ready"),
+    )
+    monkeypatch.setattr(
+        low_price_two_leg_expanded_candidate_research,
+        "_target_date_research_inventory",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            research_profiles={},
+            time_extension_profiles={},
+            logic_improvement_profiles={},
+        ),
+    )
+    tuning = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "daily": {"profiles": {profile_id: {} for profile_id in target_profiles}},
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+    }
+    expanded = {
+        "target_date": target_date,
+        "status": "recommendations_ready",
+        "candidate_symbols": {},
+        "candidate_universe_size": 0,
+        "new_symbol_profile_count": 0,
+        "existing_symbol_time_extension_profile_count": 0,
+        "existing_symbol_logic_improvement_profile_count": 0,
+        "research_profile_inventory": {},
+        "profiles": {},
+        "recommendations": [
+            {"profile_id": report_profile_id}
+            for report_profile_id in preflight.RECOMMENDATION_20260824_PROFILE_MAP.values()
+        ],
+    }
+
+    status = mod._low_price_two_leg_postclose_contract_status(
+        tuning,
+        {"source_date": target_date},
+        expanded,
+        target_date=target_date,
+    )
+
+    assert status["status"] == "pass"
+    assert status["recommendation_implementation_status"] == "pass"
+    assert status["recommendation_effective_date"] == "2026-08-25"
+    assert status["recommendation_profile_mapping_count"] == 12
+    assert status["recommendation_profile_contract_pass_count"] == 12
+    assert status["recommendation_profile_contract_failures"] == {}
+
+
 def test_samsung_machine_entry_postclose_contract_validates_windows_and_candidate():
     from src.engine.monitoring.samsung_machine_entry_tuning import (
         MACHINE_FILES,
@@ -1000,6 +1073,79 @@ def test_raw_row_exclusion_handoff_passes_with_market_halt_review_only_context()
     assert status["status"] == "pass"
     assert status["workorder_handoff_present"] is True
     assert status["review_only_context_count"] == 1
+
+
+def test_raw_row_exclusion_handoff_passes_after_final_revalidation_closed():
+    status = mod._raw_row_exclusion_handoff_status(
+        {
+            "status": "pass",
+            "summary": {
+                "tuning_input_allowed": True,
+                "hard_blocking_contract_gap_count": 0,
+                "current_scan_hard_blocking_excluded_row_count": 0,
+                "post_exclusion_hard_blocking_excluded_row_count": 0,
+                "raw_row_exclusion_revalidation_required": False,
+            },
+            "raw_row_exclusion": {"excluded_row_count": 2},
+        },
+        workorder={
+            "orders": [
+                {
+                    "order_id": (
+                        "order_observation_source_quality_raw_row_exclusion_producer_gap"
+                    ),
+                    "improvement_type": (
+                        "source_quality_raw_row_exclusion_revalidated_closed"
+                    ),
+                    "route": "source_quality_raw_row_exclusion_revalidated_closed",
+                    "raw_row_exclusion_context_classification": (
+                        "post_exclusion_revalidation_closed"
+                    ),
+                    "decision": "attach_existing_family",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            ]
+        },
+    )
+
+    assert status["status"] == "pass"
+    assert status["workorder_handoff_present"] is True
+    assert status["revalidation_closed_count"] == 1
+
+
+def test_raw_row_exclusion_handoff_rejects_stale_revalidation_closed_order():
+    status = mod._raw_row_exclusion_handoff_status(
+        {
+            "status": "warning",
+            "summary": {
+                "tuning_input_allowed": True,
+                "current_scan_hard_blocking_excluded_row_count": 1,
+                "post_exclusion_hard_blocking_excluded_row_count": 1,
+                "raw_row_exclusion_revalidation_required": True,
+            },
+            "raw_row_exclusion": {"excluded_row_count": 2},
+        },
+        workorder={
+            "orders": [
+                {
+                    "order_id": (
+                        "order_observation_source_quality_raw_row_exclusion_producer_gap"
+                    ),
+                    "route": "source_quality_raw_row_exclusion_revalidated_closed",
+                    "decision": "attach_existing_family",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            ]
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert (
+        "raw_row_exclusion_revalidation_not_closed"
+        in status["invalid_contract_reasons"]
+    )
 
 
 def test_raw_row_exclusion_handoff_fails_when_order_is_non_selected_only():
@@ -2554,6 +2700,39 @@ def test_warning_followup_summary_breaks_down_postclose_warning_priorities():
     assert items["live_auto_ready_zero_breakdown"]["evidence"][
         "runtime_gap_categories"
     ] == {"source_quality_blocker": 536}
+
+
+def test_warning_followup_unknown_bucket_pass_has_no_stale_repair_instruction():
+    summary = mod._warning_followup_summary(
+        buy_funnel_submit_drought_handoff={"status": "pass", "critical": False},
+        scalp_entry_adm={
+            "summary": {
+                "status": "pass",
+                "warnings": [],
+                "unknown_bucket_summary": {
+                    "affected_rows": 3,
+                    "recommended_route": "classified_not_applicable_no_workorder",
+                    "unknown_root_cause_counts": {
+                        "risk_context_bucket:post_submit_or_exit_not_required": 3
+                    },
+                },
+            }
+        },
+        currentness_audit={"status": "pass", "summary": {}},
+        pattern_lab_ai_review={"status": "pass", "summary": {}},
+        discovery_report={"summary": {"live_auto_apply_ready_count": 1}},
+        runtime_apply_gap_audit={"summary": {}},
+        lifecycle_bucket_discovery_handoff={"warnings": []},
+    )
+
+    item = next(
+        row
+        for row in summary["items"]
+        if row["topic"] == "scalp_entry_adm_unknown_bucket_source_quality_gap"
+    )
+    assert item["decision"] == "pass_no_unknown_bucket_warning"
+    assert item["next_action"].startswith("No actionable unknown bucket remains")
+    assert "Prioritize source score" not in item["next_action"]
 
 
 def test_submit_bucket_handoff_status_detects_downstream_drops():

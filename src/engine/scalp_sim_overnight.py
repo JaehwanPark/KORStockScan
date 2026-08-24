@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.sniper_config import CONF
+from src.engine.sniper_post_sell_feedback import record_sim_post_sell_candidate
 from src.engine.trade_profit import (
     calculate_net_profit_rate,
     calculate_net_realized_pnl,
@@ -239,6 +240,7 @@ def _base_event_fields(
     return {
         "sim_record_id": row.get("sim_record_id"),
         "sim_parent_record_id": row.get("sim_parent_record_id"),
+        "entry_adm_candidate_id": row.get("entry_adm_candidate_id"),
         "simulation_book": SIM_BOOK,
         "scalp_live_simulator": True,
         "simulated_order": True,
@@ -299,8 +301,8 @@ def _lifecycle_bucket_contract_fields(row: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
-def _emit(row: dict[str, Any], stage: str, fields: dict[str, Any]) -> None:
-    emit_pipeline_event(
+def _emit(row: dict[str, Any], stage: str, fields: dict[str, Any]) -> dict[str, Any]:
+    return emit_pipeline_event(
         "HOLDING_PIPELINE",
         str(row.get("name") or row.get("stock_name") or row.get("code") or "-"),
         str(row.get("code") or row.get("stock_code") or "")[:6],
@@ -342,6 +344,7 @@ def _build_ai_context(row: dict[str, Any], price: dict[str, Any]) -> dict[str, A
         "simulation_book": SIM_BOOK,
         "sim_record_id": row.get("sim_record_id"),
         "sim_parent_record_id": row.get("sim_parent_record_id"),
+        "entry_adm_candidate_id": row.get("entry_adm_candidate_id"),
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "decision_authority": DECISION_AUTHORITY,
@@ -721,7 +724,7 @@ def _run_sim_overnight_locked(
                     "runtime_effect": "simulated_completed_only",
                 },
             )
-            _emit(
+            sell_event = _emit(
                 row,
                 "scalp_sim_sell_order_assumed_filled",
                 {
@@ -743,6 +746,36 @@ def _run_sim_overnight_locked(
                     "runtime_effect": "simulated_completed_only",
                 },
             )
+            recorded_candidate = record_sim_post_sell_candidate(
+                candidate_id=row.get("entry_adm_candidate_id"),
+                sim_record_id=sim_record_id,
+                sim_parent_record_id=row.get("sim_parent_record_id"),
+                stock={
+                    "name": row.get("name") or row.get("stock_name"),
+                    "code": row.get("code") or row.get("stock_code"),
+                    "strategy": "SCALPING",
+                    "position_tag": row.get("position_tag") or "",
+                },
+                code=row.get("code") or row.get("stock_code"),
+                sell_time=sell_event.get("emitted_at"),
+                buy_price=row.get("buy_price"),
+                sell_price=fill["assumed_fill_price"],
+                profit_rate=fill["profit_rate"],
+                buy_qty=fill["qty"],
+                exit_rule="scalp_sim_overnight_sell_today",
+                sell_reason_type="OVERNIGHT",
+                ai_action=action,
+                ai_result_source=decision.get("ai_result_source"),
+                ai_model=decision.get("ai_model") or decision.get("openai_model"),
+                ai_transport_mode=decision.get("openai_transport_mode"),
+            )
+            summary_counts[
+                (
+                    "sim_post_sell_candidate_recorded"
+                    if recorded_candidate is not None
+                    else "sim_post_sell_candidate_deduped"
+                )
+            ] += 1
         rows.append(
             {
                 "sim_record_id": sim_record_id,
@@ -1124,7 +1157,6 @@ def _openai_keys() -> list[str]:
 
 
 def _build_openai_engine():
-    from src.engine import ai_engine_openai as openai_module
     from src.engine.ai_engine_openai import GPTSniperEngine
 
     keys = _openai_keys()

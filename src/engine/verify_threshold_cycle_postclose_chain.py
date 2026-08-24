@@ -205,6 +205,7 @@ def _low_price_two_leg_postclose_contract_status(
     from src.trading.low_price_two_leg.policy_runtime import validate_candidate
     from src.trading.low_price_two_leg.preflight import (
         RECOMMENDATION_20260821_PROFILE_MAP,
+        RECOMMENDATION_20260824_PROFILE_MAP,
         validate_research_evidence,
     )
     from src.trading.low_price_two_leg.profiles import (
@@ -300,7 +301,11 @@ def _low_price_two_leg_postclose_contract_status(
         date(2026, 8, 21): (
             date(2026, 8, 24),
             RECOMMENDATION_20260821_PROFILE_MAP,
-        )
+        ),
+        date(2026, 8, 24): (
+            date(2026, 8, 25),
+            RECOMMENDATION_20260824_PROFILE_MAP,
+        ),
     }
     recommendation_contract = approved_recommendation_contracts.get(
         parsed_target_date if target_research_inventory is not None else None
@@ -583,12 +588,30 @@ def _raw_row_exclusion_handoff_status(
     *,
     workorder: dict[str, Any],
 ) -> dict[str, Any]:
+    preflight_summary = (
+        preflight.get("summary") if isinstance(preflight.get("summary"), dict) else {}
+    )
     raw_exclusion = (
         preflight.get("raw_row_exclusion")
         if isinstance(preflight.get("raw_row_exclusion"), dict)
         else {}
     )
     excluded_row_count = int(raw_exclusion.get("excluded_row_count") or 0)
+    revalidation_closed = (
+        preflight.get("status") == "pass"
+        and preflight_summary.get("tuning_input_allowed") is True
+        and int(preflight_summary.get("hard_blocking_contract_gap_count") or 0) == 0
+        and int(
+            preflight_summary.get("current_scan_hard_blocking_excluded_row_count") or 0
+        )
+        == 0
+        and int(
+            preflight_summary.get("post_exclusion_hard_blocking_excluded_row_count")
+            or 0
+        )
+        == 0
+        and preflight_summary.get("raw_row_exclusion_revalidation_required") is False
+    )
     if excluded_row_count <= 0:
         return {
             "status": "pass",
@@ -619,6 +642,10 @@ def _raw_row_exclusion_handoff_status(
             or item.get("route") == "source_quality_raw_row_exclusion_producer_fix"
             or item.get("route") == "review_required_limit_up_locked_context"
             or item.get("route") == "review_required_market_halt_context"
+            or item.get("improvement_type")
+            == "source_quality_raw_row_exclusion_revalidated_closed"
+            or item.get("route")
+            == "source_quality_raw_row_exclusion_revalidated_closed"
         )
     ]
     review_only_matching_orders = [
@@ -636,13 +663,55 @@ def _raw_row_exclusion_handoff_status(
             == "source_quality_raw_row_exclusion_market_halt_context"
             or item.get("route") == "review_required_limit_up_locked_context"
             or item.get("route") == "review_required_market_halt_context"
+            or item.get("raw_row_exclusion_context_classification")
+            == "post_exclusion_revalidation_closed"
+            or item.get("improvement_type")
+            == "source_quality_raw_row_exclusion_revalidated_closed"
+            or item.get("route")
+            == "source_quality_raw_row_exclusion_revalidated_closed"
         )
     ]
-    matching_orders = [
-        item for item in [*selected_matching_orders, *review_only_matching_orders]
-    ]
+    matching_orders: list[dict[str, Any]] = []
+    matching_keys: set[tuple[str, str, str]] = set()
+    for item in [*selected_matching_orders, *review_only_matching_orders]:
+        key = (
+            str(item.get("order_id") or ""),
+            str(item.get("improvement_type") or ""),
+            str(item.get("route") or ""),
+        )
+        if key in matching_keys:
+            continue
+        matching_keys.add(key)
+        matching_orders.append(item)
     invalid_contract_reasons: list[str] = []
     for item in matching_orders:
+        is_revalidation_closed_order = (
+            item.get("raw_row_exclusion_context_classification")
+            == "post_exclusion_revalidation_closed"
+            or item.get("improvement_type")
+            == "source_quality_raw_row_exclusion_revalidated_closed"
+            or item.get("route")
+            == "source_quality_raw_row_exclusion_revalidated_closed"
+        )
+        if is_revalidation_closed_order:
+            if not revalidation_closed:
+                invalid_contract_reasons.append(
+                    "raw_row_exclusion_revalidation_not_closed"
+                )
+                continue
+            if str(item.get("decision") or "") != "attach_existing_family":
+                invalid_contract_reasons.append(
+                    "revalidation_closed_decision_not_existing_family"
+                )
+                continue
+            if item.get("runtime_effect") is not False:
+                invalid_contract_reasons.append("runtime_effect_not_false")
+                continue
+            if item.get("allowed_runtime_apply") is not False:
+                invalid_contract_reasons.append("allowed_runtime_apply_not_false")
+                continue
+            invalid_contract_reasons = []
+            break
         if (
             item.get("raw_row_exclusion_context_classification")
             == "limit_up_locked_context"
@@ -712,6 +781,19 @@ def _raw_row_exclusion_handoff_status(
                 == "source_quality_raw_row_exclusion_market_halt_context"
                 or item.get("route") == "review_required_limit_up_locked_context"
                 or item.get("route") == "review_required_market_halt_context"
+            )
+        ),
+        "revalidation_closed_count": sum(
+            1
+            for item in matching_orders
+            if isinstance(item, dict)
+            and (
+                item.get("raw_row_exclusion_context_classification")
+                == "post_exclusion_revalidation_closed"
+                or item.get("improvement_type")
+                == "source_quality_raw_row_exclusion_revalidated_closed"
+                or item.get("route")
+                == "source_quality_raw_row_exclusion_revalidated_closed"
             )
         ),
         "runtime_effect": False,
@@ -3686,9 +3768,16 @@ def _warning_followup_summary(
                 or {},
             },
             "next_action": (
-                "Prioritize source score emission for score_bucket unknown rows, then risk_context/price_resolution "
-                "source fields; keep not_available buckets as explicit non-workorder context unless they become "
-                "required source fields."
+                (
+                    "Prioritize the actionable unknown root causes listed in evidence; keep not_available and "
+                    "post-submit/exit-not-required buckets as explicit non-workorder context."
+                )
+                if "unknown_bucket_source_quality_gap"
+                in (adm_summary.get("warnings") or [])
+                else (
+                    "No actionable unknown bucket remains. Preserve the classified non-actionable cohort and "
+                    "reopen only if a required entry-stage source field becomes unknown."
+                )
             ),
             "runtime_effect": False,
             "allowed_runtime_apply": False,

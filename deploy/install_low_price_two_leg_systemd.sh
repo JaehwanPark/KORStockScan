@@ -79,6 +79,16 @@ UNITS=(
   korstockscan-low-price-two-leg-youngone-morning.timer
   korstockscan-low-price-two-leg-youngone-afternoon-preflight.timer
   korstockscan-low-price-two-leg-youngone-afternoon.timer
+  korstockscan-low-price-two-leg-sk-eternix-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-sk-eternix-late-morning.timer
+  korstockscan-low-price-two-leg-mirae-asset-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-mirae-asset-late-morning.timer
+  korstockscan-low-price-two-leg-kepco-morning-preflight.timer
+  korstockscan-low-price-two-leg-kepco-morning.timer
+  korstockscan-low-price-two-leg-nhn-morning-preflight.timer
+  korstockscan-low-price-two-leg-nhn-morning.timer
+  korstockscan-low-price-two-leg-nhn-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-nhn-late-morning.timer
 )
 TIMERS=(
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
@@ -151,6 +161,16 @@ TIMERS=(
   korstockscan-low-price-two-leg-youngone-morning.timer
   korstockscan-low-price-two-leg-youngone-afternoon-preflight.timer
   korstockscan-low-price-two-leg-youngone-afternoon.timer
+  korstockscan-low-price-two-leg-sk-eternix-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-sk-eternix-late-morning.timer
+  korstockscan-low-price-two-leg-mirae-asset-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-mirae-asset-late-morning.timer
+  korstockscan-low-price-two-leg-kepco-morning-preflight.timer
+  korstockscan-low-price-two-leg-kepco-morning.timer
+  korstockscan-low-price-two-leg-nhn-morning-preflight.timer
+  korstockscan-low-price-two-leg-nhn-morning.timer
+  korstockscan-low-price-two-leg-nhn-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-nhn-late-morning.timer
 )
 RETIRED_DAEWOO_UNITS=(
   korstockscan-low-price-two-leg-daewoo-ec-midday-preflight.timer
@@ -189,6 +209,7 @@ from src.engine.risk.manual_control_exclusion import (
 )
 
 owners = {
+    "006800": "mirae_asset_low_price_two_leg_owner",
     "035720": "kakao_low_price_two_leg_owner",
     "015760": "kepco_low_price_two_leg_owner",
     "017670": "sk_telecom_low_price_two_leg_owner",
@@ -198,6 +219,7 @@ owners = {
     "002900": "tym_low_price_two_leg_owner",
     "111770": "youngone_low_price_two_leg_owner",
     "181710": "nhn_low_price_two_leg_owner",
+    "475150": "sk_eternix_low_price_two_leg_owner",
 }
 for code, owner in owners.items():
     add_manual_control_exclusion_code(code, comment=f"manual_operator {owner}")
@@ -207,4 +229,4 @@ PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed thirty-five lower-price profile timers; retired Daewoo units were removed"
+echo "installed forty lower-price profile timers; retired Daewoo units were removed"

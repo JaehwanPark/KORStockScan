@@ -70,7 +70,7 @@ are confirmed and the local producer-to-consumer contract is reviewed.
 
 ### 2026-08-24 Integrated-SOR Execution Identity Gate
 
-- Re-verified at `2026-08-24T15:43:59+09:00` against current upstream commit
+- Re-verified at `2026-08-24T23:42:45+09:00` against current upstream commit
   `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`; inspected
   `kiwoom_docs/실시간시세.md`, `kiwoom_docs/계좌.md`,
   `kiwoom_docs/주문.md`, `kiwoom/specs.py`, `kiwoom/realtime`, and Postman.
@@ -78,6 +78,11 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   value `통합` as the integrated execution scope, with FID `2136` carrying
   SOR usage. Those fields do not identify whether KRX or NXT ultimately
   executed an integrated-route order.
+- Production type-`00` receipts also contained the wire token `SOR` in FID
+  `2135`. The current upstream docs do not enumerate that spelling, so the
+  parser accepts it only when the native receipt still agrees on FID `2134=0`
+  and FID `2136=Y`. It is normalized to integrated-route scope, retained as
+  observed provenance, and never interpreted as an underlying KRX/NXT venue.
 - A complete integrated-SOR receipt may therefore preserve exact order and
   execution identity, quantity, price, time, and custody lineage as
   `identity_complete_venue_unresolved`. Its actual venue remains null and it

@@ -31,7 +31,7 @@ THRESHOLD_EVENT_DIR = DATA_DIR / "threshold_cycle"
 THRESHOLD_SNAPSHOT_DIR = THRESHOLD_EVENT_DIR / "snapshots"
 POST_SELL_DIR = DATA_DIR / "post_sell"
 
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 MATRIX_VERSION_PREFIX = "scalp_entry_adm_v1"
 SAMPLE_FLOOR = 20
 SKIP_FOLLOWUP_SAMPLE_FLOOR = 20
@@ -79,6 +79,7 @@ PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES = {
     "latency_block",
     "entry_submit_revalidation_warning",
     "entry_submit_revalidation_block",
+    "entry_price_canary_submit_block",
     "pre_submit_liquidity_guard_block",
     "pre_submit_entry_ai_authority_guard_block",
     "pre_submit_overbought_pullback_guard_block",
@@ -103,8 +104,16 @@ SCORE_CONTEXT_NOT_AVAILABLE_STAGES = {
     "scalp_sim_overnight_carry_restored",
 }
 
+# These rows prove that a simulator lifecycle reached a terminal/overnight
+# stage, but they are not entry decisions.  Keep them in report provenance and
+# post-sell production diagnostics while excluding them from entry ADM sample
+# floors and EV aggregates.
+NON_ENTRY_ADM_DIAGNOSTIC_STAGES = frozenset(SCORE_CONTEXT_NOT_AVAILABLE_STAGES)
+
 SCORE_CONTEXT_BACKFILL_ELIGIBLE_STAGES = {
     "order_bundle_submitted",
+    "entry_submit_revalidation_warning",
+    "entry_submit_revalidation_block",
     "pre_submit_liquidity_guard_block",
     "pre_submit_entry_ai_authority_guard_block",
     "pre_submit_overbought_pullback_guard_block",
@@ -796,6 +805,7 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
     )
     row = {
         "candidate_id": candidate_id,
+        "entry_adm_candidate_id": _nonempty(fields.get("entry_adm_candidate_id")),
         "record_id": _nonempty(event.get("record_id") or fields.get("record_id")),
         "sim_record_id": sim_record_id,
         "sim_parent_record_id": _nonempty(fields.get("sim_parent_record_id")),
@@ -1031,6 +1041,49 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _backfill_sim_lineage(rows: list[dict[str, Any]]) -> None:
+    """Join exact simulator IDs back to their entry ADM candidates.
+
+    The entry decision snapshot is emitted next to simulator entry events but
+    historically did not repeat ``sim_record_id``.  Later terminal rows can
+    therefore carry a valid post-sell outcome without joining the entry row.
+    Only exact candidate IDs observed with a simulator ID are used here; no
+    symbol/time heuristic is allowed.
+    """
+
+    sim_by_candidate: dict[str, str] = {}
+    candidate_by_sim: dict[str, str] = {}
+    for row in rows:
+        candidate_id = _nonempty(
+            row.get("entry_adm_candidate_id") or row.get("candidate_id")
+        )
+        sim_record_id = _nonempty(row.get("sim_record_id"))
+        if (
+            candidate_id
+            and sim_record_id
+            and candidate_id.startswith("ADM-")
+            and sim_record_id.startswith("SCALPSIM-")
+        ):
+            sim_by_candidate[candidate_id] = sim_record_id
+            candidate_by_sim[sim_record_id] = candidate_id
+
+    for row in rows:
+        candidate_id = _nonempty(
+            row.get("entry_adm_candidate_id") or row.get("candidate_id")
+        )
+        sim_record_id = _nonempty(row.get("sim_record_id"))
+        if not sim_record_id and candidate_id in sim_by_candidate:
+            row["sim_record_id"] = sim_by_candidate[candidate_id]
+            row["sim_lineage_backfill_applied"] = True
+            row["sim_lineage_backfill_source"] = "exact_entry_adm_candidate_id"
+        if not _nonempty(row.get("entry_adm_candidate_id")) and sim_record_id:
+            linked_candidate = candidate_by_sim.get(sim_record_id, "")
+            if linked_candidate:
+                row["entry_adm_candidate_id"] = linked_candidate
+                row["sim_lineage_backfill_applied"] = True
+                row["sim_lineage_backfill_source"] = "exact_sim_record_id"
+
+
 def _load_sim_evaluations(
     target_date: str,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
@@ -1044,6 +1097,14 @@ def _load_sim_evaluations(
         return by_key, {"artifact": None, "rows": 0, "join_keys": 0}
     for item in _iter_jsonl(path, filter_entry_tokens=False):
         total += 1
+        item = dict(item)
+        item["_post_sell_evaluation_id"] = (
+            _nonempty(item.get("post_sell_id"))
+            or _nonempty(item.get("sim_record_id"))
+            or _nonempty(item.get("entry_adm_candidate_id"))
+            or _nonempty(item.get("candidate_id"))
+            or f"evaluation-row-{total}"
+        )
         for key in (
             _nonempty(item.get("candidate_id")),
             _nonempty(item.get("entry_adm_candidate_id")),
@@ -1211,6 +1272,9 @@ def _apply_outcome(
     row["exit_rule"] = _nonempty(evaluation.get("exit_rule")) if evaluation else ""
     row["sim_post_sell_outcome"] = (
         _nonempty(evaluation.get("outcome")) if evaluation else ""
+    )
+    row["post_sell_evaluation_id"] = (
+        _nonempty(evaluation.get("_post_sell_evaluation_id")) if evaluation else ""
     )
     for horizon in (10, 30, 60):
         metrics = (
@@ -1513,6 +1577,13 @@ def _is_numeric_consistency_excluded_row(row: dict[str, Any]) -> bool:
     return (
         str(row.get("source_quality_gate") or "").strip()
         == "ai_numeric_consistency_review_required"
+    )
+
+
+def _is_entry_adm_aggregate_row(row: dict[str, Any]) -> bool:
+    return (
+        not _is_numeric_consistency_excluded_row(row)
+        and str(row.get("stage") or "") not in NON_ENTRY_ADM_DIAGNOSTIC_STAGES
     )
 
 
@@ -1932,6 +2003,161 @@ def _entry_price_skip_followup_cumulative_summary(
     }
 
 
+def _joined_sample_cumulative_summary(
+    target_date: str, current_rows: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Count mature ADM outcome joins across the clean-baseline window.
+
+    Daily rows remain the diagnostic owner for today's coverage.  Runtime and
+    pattern-lab sample-floor decisions use this exact-lineage cumulative view
+    so a quiet session cannot erase already mature clean-baseline evidence.
+    """
+
+    policy = clean_baseline_policy()
+    baseline_date = str(
+        policy.get("clean_tuning_baseline_date") or "2026-06-05"
+    ).strip()
+    try:
+        baseline_dt = date.fromisoformat(baseline_date)
+        target_dt = date.fromisoformat(target_date)
+    except ValueError:
+        return {
+            "status": "invalid_date_contract",
+            "window_policy": "clean_baseline_cumulative_through_target_date",
+            "sample_floor": SAMPLE_FLOOR,
+            "sample_count": 0,
+            "sample_floor_met": False,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "source_quality_gate": "invalid_date_contract",
+        }
+
+    selected_paths: dict[str, Path] = {}
+    excluded_artifacts: list[dict[str, str]] = []
+    for path in sorted(
+        ADM_REPORT_DIR.glob("scalp_entry_action_decision_matrix_*.json*")
+    ):
+        source_date = path.name[
+            len("scalp_entry_action_decision_matrix_") : len(
+                "scalp_entry_action_decision_matrix_"
+            )
+            + 10
+        ]
+        try:
+            source_dt = date.fromisoformat(source_date)
+        except ValueError:
+            excluded_artifacts.append(
+                {"artifact": str(path), "reason": "invalid_artifact_date"}
+            )
+            continue
+        if not (baseline_dt <= source_dt < target_dt):
+            continue
+        current = selected_paths.get(source_date)
+        if current is None or (current.suffix == ".gz" and path.suffix != ".gz"):
+            selected_paths[source_date] = path
+
+    rows_by_identity: dict[str, dict[str, Any]] = {}
+    source_artifacts: list[str] = []
+
+    def observe_rows(source_date: str, rows: Any) -> None:
+        if not isinstance(rows, list):
+            return
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict) or not row.get("outcome_joined"):
+                continue
+            if not _is_entry_adm_aggregate_row(row):
+                continue
+            profit = _safe_float(row.get("profit_rate"), None)
+            if profit is None or not math.isfinite(float(profit)):
+                continue
+            if _is_numeric_consistency_excluded_row(row):
+                continue
+            lineage = next(
+                (
+                    _nonempty(row.get(field))
+                    for field in (
+                        "post_sell_evaluation_id",
+                        "sim_record_id",
+                        "candidate_id",
+                        "record_id",
+                        "sim_parent_record_id",
+                    )
+                    if _nonempty(row.get(field))
+                ),
+                "",
+            )
+            identity = "|".join(
+                (
+                    source_date,
+                    _nonempty(row.get("stock_code")),
+                    lineage or f"row-{index}",
+                )
+            )
+            copied = dict(row)
+            copied["_cumulative_source_date"] = source_date
+            rows_by_identity[identity] = copied
+
+    for source_date, path in sorted(selected_paths.items()):
+        try:
+            with _open_text(path) as handle:
+                payload = json.loads(handle.read())
+        except Exception as exc:
+            excluded_artifacts.append(
+                {
+                    "artifact": str(path),
+                    "reason": f"unreadable_or_invalid_json:{type(exc).__name__}",
+                }
+            )
+            continue
+        if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+            excluded_artifacts.append(
+                {"artifact": str(path), "reason": "rows_missing_or_invalid"}
+            )
+            continue
+        source_artifacts.append(str(path))
+        observe_rows(source_date, payload.get("rows"))
+
+    if baseline_dt <= target_dt:
+        observe_rows(target_date, current_rows)
+
+    observed_dates = sorted(
+        {
+            str(row.get("_cumulative_source_date") or "")
+            for row in rows_by_identity.values()
+        }
+        - {""}
+    )
+    sample_count = len(rows_by_identity)
+    return {
+        "status": "ready" if sample_count >= SAMPLE_FLOOR else "collecting",
+        "metric_role": "entry_adm_joined_outcome_sample_floor",
+        "decision_authority": "report_and_pattern_lab_source_quality_only",
+        "window_policy": "clean_baseline_cumulative_through_target_date",
+        "clean_tuning_baseline_date": baseline_date,
+        "sample_floor": SAMPLE_FLOOR,
+        "sample_count": sample_count,
+        "sample_floor_met": sample_count >= SAMPLE_FLOOR,
+        "observed_dates": observed_dates,
+        "observed_date_count": len(observed_dates),
+        "source_artifacts": source_artifacts,
+        "source_artifact_count": len(source_artifacts),
+        "excluded_artifacts": excluded_artifacts,
+        "excluded_artifact_count": len(excluded_artifacts),
+        "source_quality_gate": (
+            "finite outcome_joined rows after numeric-consistency exclusion, "
+            "excluding terminal-only diagnostic stages and deduped by source "
+            "date plus exact post-sell/simulator/candidate lineage"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": [
+            "single_daily_sample_as_live_authority",
+            "direct_order_or_threshold_mutation",
+            "pre_clean_baseline_tuning",
+        ],
+    }
+
+
 def _is_not_available_bucket(value: str) -> bool:
     return "not_available" in str(value or "").lower()
 
@@ -2169,6 +2395,7 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
         for row in all_source_rows
         if str(row.get("stage") or "") != "entry_ai_price_canary_skip_followup"
     ]
+    _backfill_sim_lineage(raw_rows)
     deduped_rows = _dedupe_rows(raw_rows)
     _backfill_score_context(deduped_rows, source_rows=raw_rows)
     skip_followup_summary = _attach_entry_price_skip_followups(
@@ -2259,11 +2486,12 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     numeric_consistency_rows = [
         row for row in rows if _is_numeric_consistency_excluded_row(row)
     ]
-    aggregate_rows = [
-        row for row in rows if not _is_numeric_consistency_excluded_row(row)
-    ]
+    aggregate_rows = [row for row in rows if _is_entry_adm_aggregate_row(row)]
     aggregate_joined_sample = sum(
         1 for row in aggregate_rows if row.get("outcome_joined")
+    )
+    joined_sample_cumulative = _joined_sample_cumulative_summary(
+        target_date, aggregate_rows
     )
     outcome_join_diagnostic = _outcome_join_diagnostic(
         rows=rows,
@@ -2272,11 +2500,12 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
         eval_summary=eval_summary,
     )
     warnings = []
-    if aggregate_joined_sample < SAMPLE_FLOOR:
+    if not bool(joined_sample_cumulative.get("sample_floor_met")):
         warnings.append("joined_sample_below_sample_floor")
-    if (
-        outcome_join_diagnostic.get("coverage_state")
-        == "source_outcome_underproduction"
+    if outcome_join_diagnostic.get(
+        "coverage_state"
+    ) == "source_outcome_underproduction" and not bool(
+        joined_sample_cumulative.get("sample_floor_met")
     ):
         warnings.append("sim_post_sell_outcome_source_below_sample_floor")
     if outcome_join_diagnostic.get("coverage_state") == "join_contract_gap":
@@ -2316,7 +2545,10 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
         "decision_authority": "entry_advisory_prompt_context_only",
         "application_mode": "operator_override_advisory_prompt",
         "metric_role": "action_decision_matrix",
-        "window_policy": "same_day_intraday_events_plus_postclose_sim_post_sell_join",
+        "window_policy": (
+            "same_day_intraday_diagnostics_plus_clean_baseline_cumulative_"
+            "postclose_outcome_join_floor"
+        ),
         "sample_floor": SAMPLE_FLOOR,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": "entry pipeline event + post-sell sim evaluation join when available",
@@ -2334,6 +2566,14 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
         "summary": {
             "total_candidates": len(rows),
             "joined_sample": aggregate_joined_sample,
+            "joined_sample_daily": aggregate_joined_sample,
+            "joined_sample_cumulative": _safe_int(
+                joined_sample_cumulative.get("sample_count"), 0
+            ),
+            "joined_sample_floor_met": bool(
+                joined_sample_cumulative.get("sample_floor_met")
+            ),
+            "joined_sample_evidence": joined_sample_cumulative,
             "joined_sample_all_rows": joined_sample,
             "sample_floor": SAMPLE_FLOOR,
             "prompt_applied_count": prompt_applied,
@@ -2433,6 +2673,7 @@ def render_scalp_entry_action_decision_matrix_markdown(report: dict[str, Any]) -
         "## Summary",
         f"- total_candidates: `{summary.get('total_candidates')}`",
         f"- joined_sample/sample_floor: `{summary.get('joined_sample')}` / `{summary.get('sample_floor')}`",
+        f"- joined_sample_cumulative/floor_met: `{summary.get('joined_sample_cumulative')}` / `{summary.get('joined_sample_floor_met')}`",
         f"- prompt_applied_count: `{summary.get('prompt_applied_count')}`",
         f"- runtime_bias_applied_count: `{summary.get('runtime_bias_applied_count')}`",
         f"- runtime_effect_counts: `{summary.get('runtime_effect_counts') or {}}`",

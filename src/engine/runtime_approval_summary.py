@@ -1872,7 +1872,11 @@ def _entry_adm_summary(
         warnings.append("missing_action_bucket")
     if prompt_applied_count == 0:
         warnings.append("prompt_context_not_loaded")
-    if _as_int(unknown_bucket_summary.get("affected_rows")) > 0:
+    if (
+        _as_int(unknown_bucket_summary.get("affected_rows")) > 0
+        and str(unknown_bucket_summary.get("source_quality_gate") or "")
+        == "source_quality_blocker"
+    ):
         warnings.append("unknown_bucket_source_quality_gap")
 
     return {
@@ -1889,6 +1893,7 @@ def _entry_adm_summary(
         "joined_action_ev_pct": joined_action_ev_pct,
         "top_actions": top_actions,
         "joined_sample": joined,
+        "joined_sample_daily": _as_int(adm.get("joined_sample_daily")),
         "sample_floor": floor,
         "prompt_applied_count": prompt_applied_count,
         "unknown_bucket_summary": unknown_bucket_summary,

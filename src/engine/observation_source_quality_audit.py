@@ -3390,15 +3390,21 @@ def _reviewed_unknown_reason_for_stage_field(
         )
 
     def _is_reviewed_holding_preflight_unknown_provenance() -> bool:
-        if stage not in {"ai_holding_review", "scale_in_ai_authority_retry"}:
+        if stage not in {
+            "ai_holding_review",
+            "holding_flow_override_review",
+            "scale_in_ai_authority_retry",
+        }:
             return False
         if str(key or "") not in {
             "holding_context_ws_route",
             "holding_context_ai_market_snapshot",
             "holding_context_selected_route_partition",
             "ai_market_snapshot_market_data_route",
+            "ai_market_snapshot_route_partition_selected_key",
             "ai_input_preflight_blockers",
             "holding_context_blockers",
+            "flow_evidence",
             "holding_context_candle_route_partition_expected_key",
             "holding_context_tape_route_partition_expected_key",
         }:
@@ -3452,7 +3458,10 @@ def _reviewed_unknown_reason_for_stage_field(
             _field_text("ai_market_snapshot_route_partition_used").lower()
             in {"false", "0", "no"}
             and _field_text("ai_market_snapshot_route_partition_reason")
-            == "route_snapshots_unavailable"
+            in {
+                "route_snapshots_unavailable",
+                "candle_route_snapshot_missing",
+            }
             and _field_text("holding_context_source_quality_status") == "blocked"
             and bool(_field_text("holding_context_blockers"))
             and _is_falseish("actual_order_submitted")
@@ -3545,7 +3554,14 @@ def _reviewed_unknown_reason_for_stage_field(
                 _is_falseish("actual_order_submitted")
                 and _is_trueish("broker_order_forbidden")
                 and (
-                    _is_trueish("fast_exit_rest_nxt_route_ready")
+                    (
+                        _is_trueish("fast_exit_route_source_quality_blocked")
+                        and _field_text("fast_exit_route_guard_reason")
+                        == "nxt_executable_quote_route_unproven"
+                        and _field_text("fast_exit_ws_0d_route_provenance_state")
+                        in {"", "not_available"}
+                    )
+                    or _is_trueish("fast_exit_rest_nxt_route_ready")
                     or _field_text("fast_exit_route_guard_reason")
                     in {
                         "krx_only_outside_krx_regular_session",
@@ -4439,8 +4455,17 @@ def _blocked_observation_records_fail_closed_source_gap(
             and not _contract_bool(fields.get("ai_input_preflight_allowed"), True)
             and not _contract_bool(fields.get("provider_called"), True)
         )
+        provider_transport_failed_closed = (
+            bool(str(fields.get("openai_transport_fail_closed_reason") or "").strip())
+            and str(fields.get("ai_decision_evaluation_status") or "").strip().lower()
+            == "not_evaluated_provider_or_preflight"
+        )
         return (
-            (source_stage == "latency_block" or preflight_blocked)
+            (
+                source_stage == "latency_block"
+                or preflight_blocked
+                or provider_transport_failed_closed
+            )
             and str(fields.get("minute_candle_evaluation_state") or "").strip().lower()
             == "unavailable_fail_closed"
             and _contract_bool(fields.get("actual_order_submitted"), False)
@@ -4448,7 +4473,12 @@ def _blocked_observation_records_fail_closed_source_gap(
         )
     if stage == "score65_74_recovery_probe_blocked":
         reason = str(fields.get("score65_74_recovery_probe_skip_reason") or "").lower()
-        return any(
+        fail_closed = (
+            not _contract_bool(fields.get("actual_order_submitted"), True)
+            and _contract_bool(fields.get("broker_order_forbidden"), True)
+            and not _contract_bool(fields.get("allowed_runtime_apply"), True)
+        )
+        source_gap_or_upstream_veto = any(
             token in reason
             for token in (
                 "source_quality",
@@ -4456,11 +4486,17 @@ def _blocked_observation_records_fail_closed_source_gap(
                 "unavailable",
                 "missing",
                 "stale",
+                "ai_blocking_adverse_risk",
+                "ai_wait_negative_reason_veto",
+                "latency_state_danger",
             )
         )
+        return fail_closed and source_gap_or_upstream_veto
     if stage in {
         "early_accel_recheck_evaluated",
         "early_accel_recheck_skipped",
+        "early_accel_strong_bundle_recheck_evaluated",
+        "early_accel_strong_bundle_recheck_skipped",
     }:
         reason = str(fields.get("skip_reason") or "").lower()
         fail_closed = (
@@ -4471,6 +4507,8 @@ def _blocked_observation_records_fail_closed_source_gap(
         pre_feature_skip = reason in {
             "disabled",
             "scope_not_real_scalping_scanner",
+            "scope_not_real_scalping",
+            "scanner_promotion_reason_not_supported",
             "scanner_promotion_reason_not_early_accel",
             "normal_ai_path",
             "price_below_promotion_anchor",
@@ -6568,9 +6606,11 @@ def _raw_source_writer_active(target_date: str, raw_path: Path) -> bool:
     )
     grace_sec = max(
         1.0,
-        configured_grace
-        if configured_grace is not None
-        else RAW_ROW_EXCLUSION_ACTIVE_WRITER_GRACE_SEC,
+        (
+            configured_grace
+            if configured_grace is not None
+            else RAW_ROW_EXCLUSION_ACTIVE_WRITER_GRACE_SEC
+        ),
     )
     return is_today and age_sec <= grace_sec
 
@@ -6900,9 +6940,7 @@ def write_report(target_date: str) -> dict[str, Any]:
             target_date, report, raw_path
         )
     else:
-        exclusion_manifest = _exclude_hard_blocking_rows_from_raw(
-            target_date, report
-        )
+        exclusion_manifest = _exclude_hard_blocking_rows_from_raw(target_date, report)
         if exclusion_manifest is None and report.get("hard_blocking_row_exclusions"):
             writer_active = True
             exclusion_manifest = _pending_raw_row_exclusion_manifest(
@@ -6933,14 +6971,12 @@ def write_report(target_date: str) -> dict[str, Any]:
         and previous_applied_exclusion.get("audit_contract_version")
         != RAW_ROW_EXCLUSION_CONTRACT_VERSION
     )
-    report["summary"]["raw_row_exclusion_revalidation_required"] = (
-        legacy_applied_exclusion
-    )
+    report["summary"][
+        "raw_row_exclusion_revalidation_required"
+    ] = legacy_applied_exclusion
     if legacy_applied_exclusion:
         report["summary"]["tuning_input_allowed"] = False
-        report["summary"]["blocked_reason"] = (
-            "raw_row_exclusion_revalidation_required"
-        )
+        report["summary"]["blocked_reason"] = "raw_row_exclusion_revalidation_required"
         if report.get("status") == "pass":
             report["status"] = "warning"
     json_path, md_path = report_paths(target_date)

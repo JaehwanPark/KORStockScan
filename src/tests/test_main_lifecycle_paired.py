@@ -1017,12 +1017,11 @@ def test_integrated_sor_identity_is_preserved_but_remains_an_exact_window_gap(
         "complete": 1,
         "identity_complete_venue_unresolved": 1,
     }
-    assert row["broker_execution_provenance_gap_count"] == 1
-    assert row["broker_execution_provenance_gap_reasons"] == [
-        "broker_execution_underlying_venue_unresolved_from_integrated_sor"
-    ]
+    assert row["broker_execution_provenance_gap_count"] == 0
+    assert row["broker_execution_provenance_gap_reasons"] == []
+    assert row["broker_execution_underlying_venue_unresolved_count"] == 1
     assert row["promotion_evidence_eligible"] is False
-    assert "broker_execution_raw_provenance_gap" in row["promotion_blockers"]
+    assert "broker_execution_underlying_venue_unresolved" in row["promotion_blockers"]
     assert report["runtime_effect"] is False
     assert report["runtime_authority"] is False
     assert report["order_authority"] is False
@@ -1996,10 +1995,6 @@ def test_official_broker_execution_native_contract_is_strict_and_source_only() -
         ({"905": "++매 수"}, "broker_execution_side_text_invalid"),
         ({"2134": "K R X"}, "broker_execution_venue_code_invalid"),
         ({"2135": "한국거래소"}, "broker_execution_venue_text_invalid"),
-        (
-            {"2134": "0", "2135": "SOR", "2136": "Y"},
-            "broker_execution_venue_text_invalid",
-        ),
     ],
 )
 def test_official_execution_rejects_wrong_stock_side_status_or_execution_id(
@@ -2029,6 +2024,36 @@ def test_official_execution_rejects_wrong_stock_side_status_or_execution_id(
 
     assert proof["broker_execution_provenance_state"] == "invalid"
     assert proof["broker_execution_provenance_error"] == expected_error
+
+
+def test_official_execution_accepts_observed_sor_text_as_integrated_scope() -> None:
+    native = _broker_raw_fields(
+        order_no="0000901",
+        execution_no="0001901",
+        order_qty=5,
+        cumulative_qty=5,
+        cumulative_amount=50_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=5,
+        second=3,
+    )
+    native.update({"2134": "0", "2135": "SOR", "2136": "Y"})
+
+    proof = build_broker_execution_provenance(
+        native,
+        expected_qty=5,
+        expected_price=10_000,
+        expected_stock_code="005930",
+        expected_side="BUY",
+        lifecycle_venue="KRX",
+    )
+
+    assert proof["broker_execution_provenance_state"] == (
+        "identity_complete_venue_unresolved"
+    )
+    assert proof["broker_execution_reported_venue_scope"] == "SOR"
+    assert proof["broker_execution_actual_venue"] is None
 
 
 @pytest.mark.parametrize("execution_no", ["7207", "53289", "0001901"])
@@ -2304,9 +2329,8 @@ def test_mapped_pipeline_row_without_id_is_gap_and_never_joined(
     assert report["pipeline_lifecycle_owner_scoped_gap_count"] == 1
     assert report["pipeline_lifecycle_unscoped_gap_count"] == 0
     assert report["pipeline_owner_exclusion_manifest"]["excluded_owner_count"] == 1
-    assert (
-        "pipeline_lifecycle_instrumentation_gap"
-        not in (report["global_source_quality_gate_blockers"])
+    assert "pipeline_lifecycle_instrumentation_gap" not in (
+        report["global_source_quality_gate_blockers"]
     )
     assert "no_explicit_lifecycle_rows" in report["global_source_quality_gate_blockers"]
     assert report["promotion_ready"] is False
@@ -2417,9 +2441,8 @@ def test_owner_scoped_identity_gap_quarantines_same_owner_attempt(
     assert report["pipeline_owner_exclusion_manifest"]["excluded_owner_count"] == 1
     assert report["pipeline_owner_exclusion_manifest"]["excluded_lifecycle_count"] == 1
     assert report["rows"][0]["promotion_evidence_eligible"] is False
-    assert (
-        "pipeline_owner_window_missing_explicit_lifecycle_identity"
-        in (report["rows"][0]["promotion_blockers"])
+    assert "pipeline_owner_window_missing_explicit_lifecycle_identity" in (
+        report["rows"][0]["promotion_blockers"]
     )
 
 
@@ -2469,9 +2492,8 @@ def test_high_volume_owner_scoped_identity_gap_remains_global_fail_closed(
         write=False,
     )
 
-    assert (
-        "pipeline_owner_scoped_gap_high_volume"
-        in (report["global_source_quality_gate_blockers"])
+    assert "pipeline_owner_scoped_gap_high_volume" in (
+        report["global_source_quality_gate_blockers"]
     )
     assert report["promotion_ready"] is False
 

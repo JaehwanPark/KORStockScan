@@ -1537,6 +1537,144 @@ def test_scalp_entry_adm_unknown_bucket_summary_splits_context_root_causes():
     )
 
 
+def test_entry_adm_clean_baseline_cumulative_join_floor_uses_exact_lineage(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", tmp_path)
+    monkeypatch.setattr(
+        mod,
+        "clean_baseline_policy",
+        lambda: {"clean_tuning_baseline_date": "2026-06-05"},
+    )
+    prior_rows = [
+        {
+            "candidate_id": f"ADM-{index}",
+            "stock_code": f"{index:06d}",
+            "outcome_joined": True,
+            "profit_rate": 0.1,
+        }
+        for index in range(20)
+    ]
+    (tmp_path / "scalp_entry_action_decision_matrix_2026-08-21.json").write_text(
+        json.dumps({"rows": prior_rows}), encoding="utf-8"
+    )
+
+    summary = mod._joined_sample_cumulative_summary("2026-08-24", [])
+
+    assert summary["sample_count"] == 20
+    assert summary["sample_floor_met"] is True
+    assert summary["observed_dates"] == ["2026-08-21"]
+    assert summary["runtime_effect"] is False
+
+
+def test_entry_adm_cumulative_join_floor_excludes_terminal_only_and_dedupes_outcome(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", tmp_path)
+    monkeypatch.setattr(
+        mod,
+        "clean_baseline_policy",
+        lambda: {"clean_tuning_baseline_date": "2026-06-05"},
+    )
+    current_rows = [
+        {
+            "stage": "scalp_sim_pre_submit_liquidity_guard_would_block",
+            "candidate_id": "ADM-1",
+            "sim_record_id": "SCALPSIM-1",
+            "post_sell_evaluation_id": "POST-1",
+            "stock_code": "005930",
+            "outcome_joined": True,
+            "profit_rate": 0.1,
+        },
+        {
+            "stage": "scalp_sim_sell_order_assumed_filled",
+            "candidate_id": "SCALPSIM-1",
+            "sim_record_id": "SCALPSIM-1",
+            "post_sell_evaluation_id": "POST-1",
+            "stock_code": "005930",
+            "outcome_joined": True,
+            "profit_rate": 0.1,
+        },
+    ]
+
+    summary = mod._joined_sample_cumulative_summary("2026-08-24", current_rows)
+
+    assert summary["sample_count"] == 1
+    assert summary["sample_floor_met"] is False
+
+
+def test_entry_adm_backfills_exact_sim_lineage_without_symbol_time_guess():
+    rows = [
+        {
+            "candidate_id": "ADM-005930-R1",
+            "entry_adm_candidate_id": "ADM-005930-R1",
+            "sim_record_id": "SCALPSIM-005930-1",
+        },
+        {
+            "candidate_id": "ADM-005930-R1",
+            "entry_adm_candidate_id": "ADM-005930-R1",
+            "sim_record_id": "",
+        },
+        {
+            "candidate_id": "SCALPSIM-005930-1",
+            "entry_adm_candidate_id": "",
+            "sim_record_id": "SCALPSIM-005930-1",
+        },
+        {
+            "candidate_id": "ADM-005930-OTHER",
+            "entry_adm_candidate_id": "ADM-005930-OTHER",
+            "sim_record_id": "",
+        },
+    ]
+
+    mod._backfill_sim_lineage(rows)
+
+    assert rows[1]["sim_record_id"] == "SCALPSIM-005930-1"
+    assert rows[1]["sim_lineage_backfill_source"] == "exact_entry_adm_candidate_id"
+    assert rows[2]["entry_adm_candidate_id"] == "ADM-005930-R1"
+    assert rows[3]["sim_record_id"] == ""
+
+
+def test_entry_adm_revalidation_block_backfills_score_and_canary_context_is_optional():
+    score_event = mod._base_row(
+        {
+            "stage": "blocked_ai_score",
+            "stock_code": "005930",
+            "record_id": "R1",
+            "emitted_at": "2026-08-24T09:00:00+09:00",
+            "fields": {"ai_score": 68},
+        }
+    )
+    block_event = mod._base_row(
+        {
+            "stage": "entry_submit_revalidation_block",
+            "stock_code": "005930",
+            "record_id": "R1",
+            "emitted_at": "2026-08-24T09:00:01+09:00",
+            "fields": {"entry_submit_revalidation_block": True},
+        }
+    )
+    canary_event = mod._base_row(
+        {
+            "stage": "scalp_entry_action_decision_snapshot",
+            "stock_code": "000660",
+            "record_id": "R2",
+            "emitted_at": "2026-08-24T09:01:00+09:00",
+            "fields": {
+                "source_stage": "entry_price_canary_submit_block",
+                "chosen_action": "SKIP_PRE_SUBMIT_SAFETY",
+            },
+        }
+    )
+
+    mod._backfill_score_context([block_event], source_rows=[score_event, block_event])
+
+    assert block_event["score_bucket"] == "score65_74"
+    assert block_event["score_backfill_match_type"] == "exact_key"
+    assert canary_event["risk_context_bucket"] == "risk_context_not_available"
+    assert canary_event["price_resolution_bucket"] == ("price_not_available_pre_submit")
+
+
 def test_scalp_entry_adm_non_actionable_context_unknown_does_not_create_source_quality_workorder():
     summary = mod._unknown_bucket_summary(
         [

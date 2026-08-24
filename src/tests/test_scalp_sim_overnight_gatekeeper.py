@@ -92,12 +92,25 @@ def test_emitted_events_include_metric_contract_and_openai_provenance(
     tmp_path, monkeypatch
 ):
     emitted = []
+    recorded = []
+
+    def fake_emit(pipeline, name, code, stage, fields):
+        emitted.append((stage, fields))
+        return {"emitted_at": "2026-05-19T15:10:00+09:00"}
+
     monkeypatch.setattr(
         overnight,
         "emit_pipeline_event",
-        lambda pipeline, name, code, stage, fields: emitted.append((stage, fields)),
+        fake_emit,
     )
-    path = _state_path(tmp_path, [_position()])
+    monkeypatch.setattr(
+        overnight,
+        "record_sim_post_sell_candidate",
+        lambda **kwargs: recorded.append(kwargs) or kwargs,
+    )
+    path = _state_path(
+        tmp_path, [_position(entry_adm_candidate_id="ADM-000001-PARENT-1")]
+    )
 
     overnight.run_sim_overnight(
         target_date="2026-05-19",
@@ -140,12 +153,18 @@ def test_emitted_events_include_metric_contract_and_openai_provenance(
     assert sell_fields["decision_authority"] == "sim_observation_only"
     assert sell_fields["runtime_effect"] == "simulated_completed_only"
     assert sell_fields["lifecycle_bucket_match_status"] == "candidate_context_only"
+    assert sell_fields["entry_adm_candidate_id"] == "ADM-000001-PARENT-1"
     for completed_fields in (sell_today_fields, sell_fields):
         assert completed_fields["sim_post_sell_outcome"] == "COMPLETED"
         assert (
             completed_fields["sim_post_sell_outcome_source"]
             == "simulated_sell_completion"
         )
+    assert len(recorded) == 1
+    assert recorded[0]["sim_record_id"] == "SIM-000001-1"
+    assert recorded[0]["candidate_id"] == "ADM-000001-PARENT-1"
+    assert recorded[0]["exit_rule"] == "scalp_sim_overnight_sell_today"
+    assert recorded[0]["sell_time"] == "2026-05-19T15:10:00+09:00"
 
 
 def test_hold_overnight_keeps_active_state_with_carry_fields(tmp_path):

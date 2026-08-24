@@ -1074,6 +1074,7 @@ def _scalp_entry_adm_summary(
                 "status": "missing",
                 "total_candidates": 0,
                 "joined_sample": 0,
+                "joined_sample_daily": 0,
                 "sample_floor": 20,
                 "missing_actions": [],
                 "zero_sample_actions": [],
@@ -1122,7 +1123,18 @@ def _scalp_entry_adm_summary(
             "application_mode": payload.get("application_mode"),
             "primary_decision_metric": payload.get("primary_decision_metric"),
             "total_candidates": _safe_int(summary.get("total_candidates"), 0),
-            "joined_sample": _safe_int(summary.get("joined_sample"), 0),
+            "joined_sample": _safe_int(
+                summary.get("joined_sample_cumulative", summary.get("joined_sample")),
+                0,
+            ),
+            "joined_sample_daily": _safe_int(
+                summary.get("joined_sample_daily", summary.get("joined_sample")), 0
+            ),
+            "joined_sample_evidence": (
+                summary.get("joined_sample_evidence")
+                if isinstance(summary.get("joined_sample_evidence"), dict)
+                else {}
+            ),
             "sample_floor": _safe_int(summary.get("sample_floor"), 20),
             "missing_actions": (
                 summary.get("missing_actions")

@@ -105,6 +105,11 @@ PROFILE_FIRST_OPERATIONAL_DATES = {
     "nhn_afternoon": date(2026, 8, 24),
     "youngone_morning": date(2026, 8, 24),
     "youngone_afternoon": date(2026, 8, 24),
+    "sk_eternix_late_morning": date(2026, 8, 25),
+    "mirae_asset_late_morning": date(2026, 8, 25),
+    "kepco_morning": date(2026, 8, 25),
+    "nhn_morning": date(2026, 8, 25),
+    "nhn_late_morning": date(2026, 8, 25),
 }
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {

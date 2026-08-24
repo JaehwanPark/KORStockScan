@@ -2,7 +2,7 @@
 
 ## Scope
 
-Thirty-five independent regular-session profiles implement the user-selected active
+Forty independent regular-session profiles implement the user-selected active
 scope. Every profile owns its process, lock, durable state,
 authority artifact, and exact broker-order ledger.
 
@@ -43,6 +43,11 @@ authority artifact, and exact broker-order ledger.
 | `nhn_afternoon` | NHN `181710` | SOR regular | 14:00 through 14:40 |
 | `youngone_morning` | 영원무역 `111770` | SOR regular | 09:20 through 09:39 |
 | `youngone_afternoon` | 영원무역 `111770` | SOR regular | 14:30 through 14:40 |
+| `sk_eternix_late_morning` | SK이터닉스 `475150` | SOR regular | 10:45 through 10:54 |
+| `mirae_asset_late_morning` | 미래에셋증권 `006800` | SOR regular | 10:00 through 10:59 |
+| `kepco_morning` | 한국전력 `015760` | SOR regular | 09:35 through 09:59 |
+| `nhn_morning` | NHN `181710` | SOR regular | 09:40 through 09:49 |
+| `nhn_late_morning` | NHN `181710` | SOR regular | 10:30 through 10:49 |
 
 The original 30-day calibration and 16-day untouched holdout selected independent entry
 contracts: Samsung Heavy midday uses 30 bars, drawdown at least 0.75%, and
@@ -262,6 +267,46 @@ The fixed Theborn Korea observation and non-passing profiles remain source-only.
 This source implementation adds timer definitions and ownership guards but does
 not install, enable, or start a service.
 
+## 2026-08-24 recommendation implementation
+
+The tracked `data/config/low_price_two_leg_expanded_profile_evidence_2026-08-24.json`
+is a compact immutable projection of the 55-trading-day clean-baseline report.
+It binds the source report canonical hash, positive calibration halves, full and
+holdout sample floors, all 12 final recommendations, and the explicit user
+approval. The exact-date transition keeps the 35-profile generation through
+2026-08-24 and selects the 40-profile generation only from 2026-08-25. Existing
+orders and held positions remain bound to their original policy snapshot.
+
+Seven existing profiles adopt the reviewed logic improvements:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---:|---|---:|---:|
+| `cj_cgv_late_morning` | 10:00~10:09 | 45 | 1.00% | 0.75% | close/-1 tick | 5 | +4 ticks |
+| `kepco_late_morning` | 10:00~10:59 | 20 | 0.75% | 0.50% | close/-1 tick | 5 | +4 ticks |
+| `nhn_afternoon` | 14:00~14:40 | 60 | 1.00% | 0.75% | close/-1 tick | 5 | +4 ticks |
+| `hanse_afternoon` | 14:20~14:29 | 15 | 0.50% | 0.75% | close/-1 tick | 5 | +4 ticks |
+| `youngone_afternoon` | 14:30~14:39 | 45 | 0.50% | 0.75% | close/-1 tick | 5 | +4 ticks |
+| `hanse_late_morning` | 10:00~10:59 | 20 | 0.75% | 0.35% | close/-1 tick | 5 | +4 ticks |
+| `hanse_midday` | 13:20~13:49 | 45 | 0.50% | 0.75% | close/-1 tick | 5 | +4 ticks |
+
+Five new independent profiles are added:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---:|---|---:|---:|
+| `sk_eternix_late_morning` | 10:45~10:54 | 15 | 1.50% | 0.20% | close/-1 tick | 5 | +2 ticks |
+| `mirae_asset_late_morning` | 10:00~10:59 | 20 | 0.75% | 0.75% | close/-1 tick | 5 | +2 ticks |
+| `kepco_morning` | 09:35~09:59 | 15 | 0.50% | 0.50% | close/-1 tick | 5 | +2 ticks |
+| `nhn_morning` | 09:40~09:49 | 20 | 0.50% | 0.50% | close/-1 tick | 5 | +2 ticks |
+| `nhn_late_morning` | 10:30~10:49 | 30 | 0.50% | 0.50% | close/-1 tick | 5 | +2 ticks |
+
+The implementation adds source definitions, wrappers, timers, manual-owner
+coverage, exact-date policy lineage, and preflight evidence validation. Source
+review alone does not activate the timers: installation is a separate operator
+action through `deploy/install_low_price_two_leg_systemd.sh`, and each trading
+service still requires its same-day preflight authority before it can start.
+Quantity, no-stop custody, SOR routing, broker guards, provider, and another
+machine's order ledger are unchanged.
+
 ## Runtime authority and isolation
 
 The live service is fail-closed unless all of the following are true for the
@@ -278,9 +323,9 @@ exact profile and date:
   leg is exactly 10 shares. Legacy owned one-share orders remain valid custody
   state and are never resized retroactively.
 
-Activation requires protected `manual_operator` markers for all fifteen symbols.
-The reviewed installer adds the Youngone and NHN markers together with the
-previously installed markers immediately before enabling the new timers, so
+Activation requires protected `manual_operator` markers for every profile symbol.
+The reviewed installer adds the Youngone, NHN, SK Eternix, and Mirae Asset
+markers together with the previously installed markers immediately before enabling the new timers, so
 source implementation alone does not partially transfer their runtime owner.
 This excludes the symbols from
 the primary bot while leaving the Doosan/Hanwha widget owners and episode

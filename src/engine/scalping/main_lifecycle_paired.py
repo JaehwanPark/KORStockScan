@@ -460,9 +460,11 @@ def _pipeline_transition_data(
         data["broker_order_no"] = broker_order_numbers[0]
         data["broker_order_no_list"] = ",".join(broker_order_numbers)
         requested_qty = _finite_number(
-            fields.get("submitted_qty")
-            if "submitted_qty" in fields
-            else fields.get("requested_qty"),
+            (
+                fields.get("submitted_qty")
+                if "submitted_qty" in fields
+                else fields.get("requested_qty")
+            ),
             positive=True,
         )
         if requested_qty is None:
@@ -507,9 +509,11 @@ def _pipeline_transition_data(
             if broker_order_numbers is None:
                 return None, order_error or "pipeline_scale_in_order_no_missing"
             requested_qty = _finite_number(
-                fields.get("submitted_qty")
-                if "submitted_qty" in fields
-                else fields.get("qty"),
+                (
+                    fields.get("submitted_qty")
+                    if "submitted_qty" in fields
+                    else fields.get("qty")
+                ),
                 positive=True,
             )
             if requested_qty is None:
@@ -884,6 +888,7 @@ class _LifecycleAccumulator:
     broker_submission_replay_duplicate_count: int = 0
     broker_execution_provenance_gap_count: int = 0
     broker_execution_provenance_gap_reasons: list[str] = field(default_factory=list)
+    broker_execution_underlying_venue_unresolved_count: int = 0
     broker_execution_entry_covered_qty: float = 0.0
     broker_execution_exit_covered_qty: float = 0.0
     broker_execution_partial_count: int = 0
@@ -1091,10 +1096,13 @@ class _LifecycleAccumulator:
     def _existing_broker_execution_state(
         self, stage: str, data: Mapping[str, Any]
     ) -> str:
-        if (
-            not self._execution_bearing_data(stage, data)
-            or data.get("broker_execution_provenance_state") != "complete"
-        ):
+        provenance_state = str(
+            data.get("broker_execution_provenance_state") or ""
+        ).strip()
+        if not self._execution_bearing_data(stage, data) or provenance_state not in {
+            "complete",
+            "identity_complete_venue_unresolved",
+        }:
             return "new"
         identity = str(data.get("broker_execution_identity") or "").strip()
         previous = self.broker_execution_content_by_identity.get(identity)
@@ -1127,7 +1135,11 @@ class _LifecycleAccumulator:
             "invalid",
         }:
             state = "invalid"
-        if state != "complete":
+        identity_complete = state in {
+            "complete",
+            "identity_complete_venue_unresolved",
+        }
+        if not identity_complete:
             self.broker_execution_provenance_state_counts[state] = (
                 self.broker_execution_provenance_state_counts.get(state, 0) + 1
             )
@@ -1260,9 +1272,11 @@ class _LifecycleAccumulator:
             return "submission_conflict"
         phase_orders[order_no] = order_qty
         self.broker_execution_unique_count += 1
-        self.broker_execution_provenance_state_counts["complete"] = (
-            self.broker_execution_provenance_state_counts.get("complete", 0) + 1
+        self.broker_execution_provenance_state_counts[state] = (
+            self.broker_execution_provenance_state_counts.get(state, 0) + 1
         )
+        if state == "identity_complete_venue_unresolved":
+            self.broker_execution_underlying_venue_unresolved_count += 1
         fill_state = str(data.get("broker_execution_fill_state") or "")
         if fill_state == "partial":
             self.broker_execution_partial_count += 1
@@ -1773,6 +1787,8 @@ class _LifecycleAccumulator:
                 submitted_order_qty_mismatch_phases.append(phase)
         if self.broker_execution_provenance_gap_count:
             blockers.append("broker_execution_raw_provenance_gap")
+        if self.broker_execution_underlying_venue_unresolved_count:
+            blockers.append("broker_execution_underlying_venue_unresolved")
         if self.broker_execution_conflict_count:
             blockers.append("broker_execution_identity_content_conflict")
         if self.broker_execution_order_progress_conflict_count:
@@ -1913,6 +1929,9 @@ class _LifecycleAccumulator:
             ),
             "broker_execution_provenance_gap_reasons": (
                 self.broker_execution_provenance_gap_reasons
+            ),
+            "broker_execution_underlying_venue_unresolved_count": (
+                self.broker_execution_underlying_venue_unresolved_count
             ),
             "broker_execution_entry_covered_qty": (
                 self.broker_execution_entry_covered_qty
@@ -2548,6 +2567,10 @@ def build_daily_report(
     broker_execution_unique_count = sum(
         int(row["broker_execution_unique_count"]) for row in rows
     )
+    broker_execution_underlying_venue_unresolved_count = sum(
+        int(row.get("broker_execution_underlying_venue_unresolved_count") or 0)
+        for row in rows
+    )
     candidate_row_gate_failure_count = sum(
         1
         for row in rows
@@ -2738,6 +2761,9 @@ def build_daily_report(
             broker_execution_replay_duplicate_count
         ),
         "broker_execution_unique_count": broker_execution_unique_count,
+        "broker_execution_underlying_venue_unresolved_count": (
+            broker_execution_underlying_venue_unresolved_count
+        ),
         "candidate_row_gate_failure_count": candidate_row_gate_failure_count,
         "lifecycle_window_exclusion_manifest": (lifecycle_window_exclusion_manifest),
         "lifecycle_count": len(rows),

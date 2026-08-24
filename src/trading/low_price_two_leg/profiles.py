@@ -46,9 +46,16 @@ HANSE_MIDDAY_WINDOW = (time(13, 20), time(13, 49))
 NHN_AFTERNOON_WINDOW = (time(14, 0), time(14, 40))
 YOUNGONE_MORNING_WINDOW = (time(9, 20), time(9, 39))
 YOUNGONE_AFTERNOON_WINDOW = (time(14, 30), time(14, 40))
+YOUNGONE_AFTERNOON_REVISED_WINDOW = (time(14, 30), time(14, 39))
+SK_ETERNIX_LATE_MORNING_WINDOW = (time(10, 45), time(10, 54))
+MIRAE_ASSET_LATE_MORNING_WINDOW = (time(10, 0), time(10, 59))
+KEPCO_MORNING_WINDOW = (time(9, 35), time(9, 59))
+NHN_MORNING_WINDOW = (time(9, 40), time(9, 49))
+NHN_LATE_MORNING_WINDOW = (time(10, 30), time(10, 49))
 PROFILE_REVISION_20260819_EFFECTIVE_DATE = date(2026, 8, 19)
 PROFILE_REVISION_20260821_EFFECTIVE_DATE = date(2026, 8, 21)
 PROFILE_REVISION_20260824_EFFECTIVE_DATE = date(2026, 8, 24)
+PROFILE_REVISION_20260825_EFFECTIVE_DATE = date(2026, 8, 25)
 # Compatibility alias for consumers that own the first recommendation transition.
 PROFILE_REVISION_EFFECTIVE_DATE = PROFILE_REVISION_20260819_EFFECTIVE_DATE
 ALLOWED_SYMBOLS = frozenset(
@@ -110,6 +117,12 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         NHN_AFTERNOON_WINDOW,
         YOUNGONE_MORNING_WINDOW,
         YOUNGONE_AFTERNOON_WINDOW,
+        YOUNGONE_AFTERNOON_REVISED_WINDOW,
+        SK_ETERNIX_LATE_MORNING_WINDOW,
+        MIRAE_ASSET_LATE_MORNING_WINDOW,
+        KEPCO_MORNING_WINDOW,
+        NHN_MORNING_WINDOW,
+        NHN_LATE_MORNING_WINDOW,
     }
 )
 
@@ -1180,6 +1193,169 @@ PROFILES.update(
 PROFILES_20260824_PRIOR = dict(PROFILES)
 PROFILES.update(_PROFILE_REVISION_20260824_OVERLAY)
 
+# The 2026-08-24 postclose recommendations become a separate 2026-08-25
+# generation. Prior target dates retain their exact profile inventory so open
+# orders and held-position custody are never reinterpreted by a later policy.
+PROFILES_20260825_PRIOR = dict(PROFILES)
+_REVISION_20260825_SOURCE = (
+    "clean_baseline_39d_calibration_16d_holdout_user_approved_v5"
+)
+
+
+def _revise_20260825(
+    profile_id: str,
+    *,
+    window: tuple[time, time] | None = None,
+    lookback_bars: int,
+    drawdown_pct: float,
+    near_low_pct: float,
+    entry_offsets_ticks: tuple[int, int] = (0, -1),
+    entry_valid_completed_bars: int = 5,
+    target_ticks: int,
+) -> MachineProfile:
+    prior = PROFILES_20260825_PRIOR[profile_id]
+    selected_window = window or (prior.policy.scan_start, prior.policy.scan_last_bar)
+    return replace(
+        prior,
+        policy=replace(
+            prior.policy,
+            scan_start=selected_window[0],
+            scan_last_bar=selected_window[1],
+            lookback_bars=lookback_bars,
+            rolling_high_drawdown_pct=drawdown_pct,
+            rolling_low_proximity_pct=near_low_pct,
+            entry_offsets_ticks=entry_offsets_ticks,
+            entry_valid_completed_bars=entry_valid_completed_bars,
+            target_ticks=target_ticks,
+            runtime_policy_source=_REVISION_20260825_SOURCE,
+            runtime_policy_hash="",
+        ),
+    )
+
+
+PROFILES = dict(PROFILES_20260825_PRIOR)
+PROFILES.update(
+    {
+        "cj_cgv_late_morning": _revise_20260825(
+            "cj_cgv_late_morning",
+            lookback_bars=45,
+            drawdown_pct=1.00,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "kepco_late_morning": _revise_20260825(
+            "kepco_late_morning",
+            lookback_bars=20,
+            drawdown_pct=0.75,
+            near_low_pct=0.50,
+            target_ticks=4,
+        ),
+        "nhn_afternoon": _revise_20260825(
+            "nhn_afternoon",
+            lookback_bars=60,
+            drawdown_pct=1.00,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "hanse_afternoon": _revise_20260825(
+            "hanse_afternoon",
+            lookback_bars=15,
+            drawdown_pct=0.50,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "youngone_afternoon": _revise_20260825(
+            "youngone_afternoon",
+            window=YOUNGONE_AFTERNOON_REVISED_WINDOW,
+            lookback_bars=45,
+            drawdown_pct=0.50,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "hanse_late_morning": _revise_20260825(
+            "hanse_late_morning",
+            lookback_bars=20,
+            drawdown_pct=0.75,
+            near_low_pct=0.35,
+            target_ticks=4,
+        ),
+        "hanse_midday": _revise_20260825(
+            "hanse_midday",
+            lookback_bars=45,
+            drawdown_pct=0.50,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+    }
+)
+PROFILES.update(
+    {
+        profile.profile_id: profile
+        for profile in (
+            _profile(
+                "sk_eternix_late_morning",
+                "475150",
+                "SK이터닉스",
+                "late_morning",
+                window=SK_ETERNIX_LATE_MORNING_WINDOW,
+                lookback_bars=15,
+                drawdown_pct=1.50,
+                near_low_pct=0.20,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260825_SOURCE,
+            ),
+            _profile(
+                "mirae_asset_late_morning",
+                "006800",
+                "미래에셋증권",
+                "late_morning",
+                window=MIRAE_ASSET_LATE_MORNING_WINDOW,
+                lookback_bars=20,
+                drawdown_pct=0.75,
+                near_low_pct=0.75,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260825_SOURCE,
+            ),
+            _profile(
+                "kepco_morning",
+                "015760",
+                "한국전력",
+                "morning",
+                window=KEPCO_MORNING_WINDOW,
+                lookback_bars=15,
+                drawdown_pct=0.50,
+                near_low_pct=0.50,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260825_SOURCE,
+            ),
+            _profile(
+                "nhn_morning",
+                "181710",
+                "NHN",
+                "morning",
+                window=NHN_MORNING_WINDOW,
+                lookback_bars=20,
+                drawdown_pct=0.50,
+                near_low_pct=0.50,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260825_SOURCE,
+            ),
+            _profile(
+                "nhn_late_morning",
+                "181710",
+                "NHN",
+                "late_morning",
+                window=NHN_LATE_MORNING_WINDOW,
+                lookback_bars=30,
+                drawdown_pct=0.50,
+                near_low_pct=0.50,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260825_SOURCE,
+            ),
+        )
+    }
+)
+
 
 def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
     if target_date < PROFILE_REVISION_20260819_EFFECTIVE_DATE:
@@ -1188,6 +1364,8 @@ def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
         return PROFILES_20260819
     if target_date < PROFILE_REVISION_20260824_EFFECTIVE_DATE:
         return PROFILES_20260824_PRIOR
+    if target_date < PROFILE_REVISION_20260825_EFFECTIVE_DATE:
+        return PROFILES_20260825_PRIOR
     return PROFILES
 
 

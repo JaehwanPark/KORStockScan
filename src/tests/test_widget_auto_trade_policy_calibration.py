@@ -525,6 +525,52 @@ def test_execution_quality_counts_actual_engine_terminal_failure_names(
     assert quality["terminal_sell_failure_count"] == 3
 
 
+def test_execution_quality_vetoes_broker_submit_failure_without_acceptance(
+    tmp_path,
+) -> None:
+    target_date = date(2026, 8, 24)
+    path = tmp_path / "widget_signal_auto_trade_events_20260824.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "symbol": "005930",
+                        "event_type": "order_submit_failed",
+                        "actual_order_submitted": False,
+                        "return_code": "20",
+                        "execution_policy_session": "KRX_REGULAR",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "symbol": "005930",
+                        "event_type": "entry_episode_closed_submit_rejected",
+                        "actual_order_submitted": False,
+                        "execution_policy_session": "KRX_REGULAR",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    quality = _load_execution_quality(
+        "005930",
+        target_date=target_date,
+        event_dir=tmp_path,
+        session="KRX_REGULAR",
+    )
+
+    assert quality["status"] == "SAFETY_VETO"
+    assert quality["accepted_order_count"] == 0
+    assert quality["order_submit_failed_count"] == 1
+    assert quality["execution_failure_count"] == 1
+    assert quality["failure_reason_codes"] == ["broker_order_submit_failed"]
+    assert quality["runtime_apply_allowed"] is False
+
+
 def test_execution_quality_is_attributed_per_widget_session(tmp_path) -> None:
     target_date = date(2026, 8, 11)
     path = tmp_path / "widget_signal_auto_trade_events_20260811.jsonl"
@@ -589,6 +635,56 @@ def test_unattributed_terminal_failure_vetoes_every_widget_session(tmp_path) -> 
 
     assert quality["runtime_apply_allowed"] is False
     assert quality["unattributed_terminal_failure_count"] == 1
+
+
+def test_unattributed_submit_failure_vetoes_every_widget_session(tmp_path) -> None:
+    target_date = date(2026, 8, 11)
+    path = tmp_path / "widget_signal_auto_trade_events_20260811.jsonl"
+    path.write_text(
+        '{"symbol":"005930","event_type":"order_submit_failed"}\n',
+        encoding="utf-8",
+    )
+
+    quality = _load_execution_quality(
+        "005930",
+        target_date=target_date,
+        event_dir=tmp_path,
+        session="NXT_PREMARKET",
+    )
+
+    assert quality["runtime_apply_allowed"] is False
+    assert quality["execution_sample_observed"] is True
+    assert quality["unattributed_execution_failure_count"] == 1
+    assert quality["failure_reason_codes"] == ["broker_order_submit_failed"]
+
+
+def test_ambiguous_submit_exception_is_execution_quality_safety_veto(tmp_path) -> None:
+    target_date = date(2026, 8, 11)
+    path = tmp_path / "widget_signal_auto_trade_events_20260811.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "symbol": "005930",
+                "event_type": "order_submit_ambiguous",
+                "execution_policy_session": "KRX_REGULAR",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    quality = _load_execution_quality(
+        "005930",
+        target_date=target_date,
+        event_dir=tmp_path,
+        session="KRX_REGULAR",
+    )
+
+    assert quality["status"] == "SAFETY_VETO"
+    assert quality["runtime_apply_allowed"] is False
+    assert quality["order_submit_failed_count"] == 1
+    assert quality["order_submit_ambiguous_count"] == 1
+    assert quality["failure_reason_codes"] == ["broker_order_submit_ambiguous"]
 
 
 def test_write_outputs_requires_report_before_policy_can_load(tmp_path) -> None:

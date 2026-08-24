@@ -116,6 +116,9 @@ def _source_paths(target_date: str, *, include_swing: bool = True) -> dict[str, 
         "pattern_lab_currentness_audit": REPORT_DIR
         / "pattern_lab_currentness_audit"
         / f"pattern_lab_currentness_audit_{target_date}.json",
+        "observation_source_quality_audit": REPORT_DIR
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json",
         "threshold_cycle_ev": REPORT_DIR
         / "threshold_cycle_ev"
         / f"threshold_cycle_ev_{target_date}.json",
@@ -943,13 +946,40 @@ def _resolved_source_context_conclusion(
     status: str,
     contract_id: str,
     details: dict[str, Any] | None = None,
+    required_source_paths: list[str] | None = None,
 ) -> dict[str, Any]:
+    source_paths = [
+        str(path)
+        for path in (
+            item.get("source_paths")
+            if isinstance(item.get("source_paths"), list)
+            else []
+        )
+        if str(path).strip()
+    ]
+    for path in required_source_paths or []:
+        normalized_path = str(path).strip()
+        if normalized_path and normalized_path not in source_paths:
+            source_paths.append(normalized_path)
     return {
         **item,
         "final_state": "source_only_keep_collecting",
         "final_decision": "keep",
+        "provider_asserted_reason": item.get("provider_asserted_reason")
+        or item.get("reason"),
+        "provider_required_followup": list(
+            item.get("provider_required_followup")
+            if isinstance(item.get("provider_required_followup"), list)
+            else item.get("required_followup") or []
+        ),
+        "reason": (
+            "Deterministic source-context reconciliation superseded the "
+            f"provider gap assertion ({status})."
+        ),
+        "required_followup": [],
         "explicit_gap_type": None,
         "auditor_pass": True,
+        "source_paths": source_paths[:12],
         "source_context_resolution": {
             "status": status,
             "contract_id": contract_id,
@@ -1118,6 +1148,38 @@ def _source_maturity_resolution(
     )
     if lifecycle_bucket_resolution:
         return lifecycle_bucket_resolution
+
+    if review_id in {
+        "lifecycle_decision_matrix_status",
+        "lifecycle_decision_matrix_source_quality_blocked",
+    }:
+        audit_source = _source_summary(context, "observation_source_quality_audit")
+        audit_summary = _nested_report_summary(audit_source)
+        if (
+            audit_summary.get("tuning_input_allowed") is True
+            and _safe_int(audit_summary.get("hard_blocking_contract_gap_count")) == 0
+            and _safe_int(
+                audit_summary.get("post_exclusion_hard_blocking_excluded_row_count")
+            )
+            == 0
+            and audit_summary.get("raw_row_exclusion_revalidation_required") is False
+        ):
+            return (
+                "resolved_by_final_source_quality_revalidation",
+                "observation_source_quality_audit_post_exclusion_gate",
+                {
+                    "pre_exclusion_hard_blocking_excluded_row_count": _safe_int(
+                        audit_summary.get(
+                            "pre_exclusion_hard_blocking_excluded_row_count"
+                        )
+                    ),
+                    "post_exclusion_hard_blocking_excluded_row_count": 0,
+                    "hard_blocking_contract_gap_count": 0,
+                    "tuning_input_allowed": True,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                },
+            )
 
     if review_id == "lifecycle_decision_matrix_scale_in_guard_block":
         source = _source_summary(context, "lifecycle_decision_matrix")
@@ -1510,6 +1572,14 @@ def _apply_source_contract_resolutions(
         elif maturity_resolution := _source_maturity_resolution(item, context):
             status, contract_id, details = maturity_resolution
             review_id = str(item.get("review_id") or "unknown")
+            required_source_paths: list[str] = []
+            if contract_id == "observation_source_quality_audit_post_exclusion_gate":
+                audit_source = _source_wrapper(
+                    context, "observation_source_quality_audit"
+                )
+                audit_path = str(audit_source.get("path") or "").strip()
+                if audit_path:
+                    required_source_paths.append(audit_path)
             resolved_ids.append(review_id)
             source_context_resolution_ids.append(review_id)
             resolved_conclusions.append(
@@ -1518,6 +1588,7 @@ def _apply_source_contract_resolutions(
                     status=status,
                     contract_id=contract_id,
                     details=details,
+                    required_source_paths=required_source_paths,
                 )
             )
         elif _is_resolved_classified_source_quality_warning_gap(item, context):
@@ -2042,6 +2113,7 @@ def _source_path_labels_for_domain(context: dict[str, Any], domain: str) -> list
         labels = [
             "scalping_pattern_lab_automation",
             "pattern_lab_currentness_audit",
+            "observation_source_quality_audit",
             "threshold_cycle_ev",
             "code_improvement_workorder",
             "lifecycle_decision_matrix",
@@ -2073,6 +2145,45 @@ def _source_path_labels_for_domain(context: dict[str, Any], domain: str) -> list
 def _normalize_final_conclusion(
     item: dict[str, Any], context: dict[str, Any]
 ) -> dict[str, Any]:
+    source_context_resolution = (
+        item.get("source_context_resolution")
+        if isinstance(item.get("source_context_resolution"), dict)
+        else {}
+    )
+    source_context_status = str(source_context_resolution.get("status") or "").strip()
+    if source_context_status.startswith("resolved_"):
+        provider_asserted_reason = item.get("provider_asserted_reason") or item.get(
+            "reason"
+        )
+        provider_required_followup = item.get("provider_required_followup")
+        if not isinstance(provider_required_followup, list):
+            provider_required_followup = list(item.get("required_followup") or [])
+        source_paths = (
+            list(item.get("source_paths"))
+            if isinstance(item.get("source_paths"), list)
+            else []
+        )
+        if (
+            source_context_resolution.get("contract_id")
+            == "observation_source_quality_audit_post_exclusion_gate"
+        ):
+            audit_path = str(
+                _source_wrapper(context, "observation_source_quality_audit").get("path")
+                or ""
+            ).strip()
+            if audit_path and audit_path not in source_paths:
+                source_paths.append(audit_path)
+        item = {
+            **item,
+            "provider_asserted_reason": provider_asserted_reason,
+            "provider_required_followup": provider_required_followup,
+            "reason": (
+                "Deterministic source-context reconciliation superseded the "
+                f"provider gap assertion ({source_context_status})."
+            ),
+            "required_followup": [],
+            "source_paths": source_paths[:12],
+        }
     feedback_resolution = (
         item.get("feedback_handoff_resolution")
         if isinstance(item.get("feedback_handoff_resolution"), dict)
@@ -3562,6 +3673,7 @@ def refresh_pattern_lab_ai_review_source_provenance(
         "original_generated_at": original_generated_at,
         "refreshed_at": refreshed_at,
         "late_bound_sources": [
+            "observation_source_quality_audit",
             "threshold_cycle_ev",
             "code_improvement_workorder",
             "pattern_lab_propagation_audit",

@@ -3111,6 +3111,26 @@ def _classify_order(
 
     if (
         order.get("improvement_type")
+        == "source_quality_raw_row_exclusion_revalidated_closed"
+    ):
+        return ClassifiedOrder(
+            order=order,
+            decision="attach_existing_family",
+            reason=(
+                "the preserved exclusion manifest is audit evidence from the first scan; "
+                "the current scan has no hard-blocking excluded rows and final revalidation passed"
+            ),
+            mapped_family=mapped_family or "observation_source_quality_audit",
+            route=route or "source_quality_raw_row_exclusion_revalidated_closed",
+            confidence=confidence or "audit",
+            automation_reentry=(
+                "Keep the manifest as audit provenance. Reopen a producer-fix implement_now only if a later "
+                "current scan again finds hard-blocking rows or raw-row exclusion revalidation fails."
+            ),
+        )
+
+    if (
+        order.get("improvement_type")
         == "source_quality_raw_row_exclusion_limit_up_locked_context"
     ):
         return ClassifiedOrder(
@@ -3520,7 +3540,7 @@ def _entry_adm_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]
     )
     if not adm:
         return []
-    joined = _safe_int(adm.get("joined_sample"), 0)
+    joined = _safe_int(adm.get("joined_sample_cumulative", adm.get("joined_sample")), 0)
     floor = _safe_int(adm.get("sample_floor"), 20)
     missing_actions = (
         adm.get("missing_actions")
@@ -5388,6 +5408,16 @@ def _observation_source_quality_followup_orders(
         )
     excluded_row_count = int(raw_row_exclusion.get("excluded_row_count") or 0)
     if excluded_row_count > 0:
+        revalidation_closed = (
+            report.get("status") == "pass"
+            and summary.get("tuning_input_allowed") is True
+            and int(summary.get("hard_blocking_contract_gap_count") or 0) == 0
+            and int(summary.get("current_scan_hard_blocking_excluded_row_count") or 0)
+            == 0
+            and int(summary.get("post_exclusion_hard_blocking_excluded_row_count") or 0)
+            == 0
+            and summary.get("raw_row_exclusion_revalidation_required") is False
+        )
         context_review = _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion)
         market_halt_context_review = (
             None
@@ -5395,7 +5425,9 @@ def _observation_source_quality_followup_orders(
             else _raw_row_exclusion_market_halt_context(raw_row_exclusion)
         )
         context_classification = None
-        if context_review:
+        if revalidation_closed:
+            context_classification = "post_exclusion_revalidation_closed"
+        elif context_review:
             context_classification = "limit_up_locked_context"
         elif market_halt_context_review:
             context_classification = "market_halt_or_circuit_window_overlap"
@@ -5436,6 +5468,15 @@ def _observation_source_quality_followup_orders(
             "forbidden_uses=EV/rolling/MTD/cumulative tuning/live-auto promotion/runtime approval for excluded rows",
             "required_action=fix producer provenance/source-quality cause or mark reviewed_not_available/waiting_sample_only explicitly",
         ]
+        if revalidation_closed:
+            raw_exclusion_evidence.extend(
+                [
+                    "current_scan_hard_blocking_excluded_row_count=0",
+                    "post_exclusion_hard_blocking_excluded_row_count=0",
+                    "raw_row_exclusion_revalidation_required=false",
+                    "revalidation_disposition=closed_preserved_manifest_audit_evidence",
+                ]
+            )
         for hint in producer_hint[:12]:
             if isinstance(hint, dict):
                 raw_exclusion_evidence.append(
@@ -5483,49 +5524,66 @@ def _observation_source_quality_followup_orders(
                 **base,
                 "order_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
                 "title": (
-                    "Observation source-quality raw row exclusion limit-up locked context"
-                    if context_review
+                    "Observation source-quality raw row exclusion revalidation closed"
+                    if revalidation_closed
                     else (
-                        "Observation source-quality raw row exclusion market halt context"
-                        if market_halt_context_review
-                        else "Observation source-quality raw row exclusion producer gap"
+                        "Observation source-quality raw row exclusion limit-up locked context"
+                        if context_review
+                        else (
+                            "Observation source-quality raw row exclusion market halt context"
+                            if market_halt_context_review
+                            else "Observation source-quality raw row exclusion producer gap"
+                        )
                     )
                 ),
                 "priority": 0,
                 "route": (
-                    "review_required_limit_up_locked_context"
-                    if context_review
+                    "source_quality_raw_row_exclusion_revalidated_closed"
+                    if revalidation_closed
                     else (
-                        "review_required_market_halt_context"
-                        if market_halt_context_review
-                        else "source_quality_raw_row_exclusion_producer_fix"
+                        "review_required_limit_up_locked_context"
+                        if context_review
+                        else (
+                            "review_required_market_halt_context"
+                            if market_halt_context_review
+                            else "source_quality_raw_row_exclusion_producer_fix"
+                        )
                     )
                 ),
                 "mapped_family": "observation_source_quality_audit",
                 "threshold_family": "observation_source_quality_audit",
                 "improvement_type": (
-                    "source_quality_raw_row_exclusion_limit_up_locked_context"
-                    if context_review
+                    "source_quality_raw_row_exclusion_revalidated_closed"
+                    if revalidation_closed
                     else (
-                        "source_quality_raw_row_exclusion_market_halt_context"
-                        if market_halt_context_review
-                        else "source_quality_raw_row_exclusion_producer_gap"
+                        "source_quality_raw_row_exclusion_limit_up_locked_context"
+                        if context_review
+                        else (
+                            "source_quality_raw_row_exclusion_market_halt_context"
+                            if market_halt_context_review
+                            else "source_quality_raw_row_exclusion_producer_gap"
+                        )
                     )
                 ),
                 "intent": (
-                    "Keep the excluded rows out of tuning inputs, but treat the current cluster as a reviewed "
-                    "limit-up locked market context until non-limit-up evidence proves a producer gap."
-                    if context_review
+                    "Preserve the excluded rows as audit evidence after the current scan and final "
+                    "post-exclusion revalidation closed the producer gap."
+                    if revalidation_closed
                     else (
-                        (
-                            "Keep the excluded rows out of tuning inputs, but treat the current cluster as a reviewed "
-                            "market halt/circuit-breaker recovery context until post-resume evidence proves a producer gap."
-                        )
-                        if market_halt_context_review
+                        "Keep the excluded rows out of tuning inputs, but treat the current cluster as a reviewed "
+                        "limit-up locked market context until non-limit-up evidence proves a producer gap."
+                        if context_review
                         else (
-                            "Analyze all excluded raw rows by stage/field/reason and fix producer-side source-quality "
-                            "or provenance causes so the postclose chain does not repeatedly need to exclude the same "
-                            "class of rows from tuning inputs."
+                            (
+                                "Keep the excluded rows out of tuning inputs, but treat the current cluster as a reviewed "
+                                "market halt/circuit-breaker recovery context until post-resume evidence proves a producer gap."
+                            )
+                            if market_halt_context_review
+                            else (
+                                "Analyze all excluded raw rows by stage/field/reason and fix producer-side source-quality "
+                                "or provenance causes so the postclose chain does not repeatedly need to exclude the same "
+                                "class of rows from tuning inputs."
+                            )
                         )
                     )
                 ),
@@ -5544,9 +5602,13 @@ def _observation_source_quality_followup_orders(
                 "raw_row_exclusion_context": context_review
                 or market_halt_context_review,
                 "terminal_disposition": (
-                    "no_code_required_pending_policy_classification"
-                    if context_classification
-                    else None
+                    "implemented_revalidation_closed"
+                    if revalidation_closed
+                    else (
+                        "no_code_required_pending_policy_classification"
+                        if context_classification
+                        else None
+                    )
                 ),
             }
         )

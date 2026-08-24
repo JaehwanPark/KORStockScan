@@ -16,7 +16,7 @@ from pathlib import Path
 from src.engine.log_archive_service import load_monitor_snapshot, save_monitor_snapshot
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.utils.constants import DATA_DIR, TRADING_RULES
-from src.utils.jsonl_io import read_jsonl
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl, read_jsonl
 from src.utils.logger import log_error, log_info
 
 _WRITE_LOCK = threading.RLock()
@@ -543,34 +543,41 @@ def _post_sell_execution_route_contract(
     sell_time = sell_dt.time()
     if not session:
         configured_cutoff = str(
-            getattr(TRADING_RULES, "SCALPING_NEW_BUY_CUTOFF", "19:45:00")
-            or "19:45:00"
+            getattr(TRADING_RULES, "SCALPING_NEW_BUY_CUTOFF", "19:45:00") or "19:45:00"
         ).strip()
         try:
-            new_buy_cutoff = datetime.strptime(
-                configured_cutoff, "%H:%M:%S"
-            ).time()
+            new_buy_cutoff = datetime.strptime(configured_cutoff, "%H:%M:%S").time()
         except ValueError:
             new_buy_cutoff = datetime.strptime("19:45:00", "%H:%M:%S").time()
-        if datetime.strptime("08:00:00", "%H:%M:%S").time() <= sell_time < (
-            datetime.strptime("08:50:00", "%H:%M:%S").time()
+        if (
+            datetime.strptime("08:00:00", "%H:%M:%S").time()
+            <= sell_time
+            < (datetime.strptime("08:50:00", "%H:%M:%S").time())
         ):
             session = "krx_like_premarket"
-        elif datetime.strptime("09:00:00", "%H:%M:%S").time() <= sell_time <= (
-            datetime.strptime("15:30:00", "%H:%M:%S").time()
+        elif (
+            datetime.strptime("09:00:00", "%H:%M:%S").time()
+            <= sell_time
+            <= (datetime.strptime("15:30:00", "%H:%M:%S").time())
         ):
             session = "nxt_regular_overlap" if broker_route == "NXT" else "krx_regular"
-        elif datetime.strptime("16:00:00", "%H:%M:%S").time() <= sell_time < (
-            datetime.strptime("16:10:00", "%H:%M:%S").time()
+        elif (
+            datetime.strptime("16:00:00", "%H:%M:%S").time()
+            <= sell_time
+            < (datetime.strptime("16:10:00", "%H:%M:%S").time())
         ):
             session = "nxt_open_observe"
-        elif datetime.strptime("16:10:00", "%H:%M:%S").time() <= sell_time < (
-            new_buy_cutoff
+        elif (
+            datetime.strptime("16:10:00", "%H:%M:%S").time()
+            <= sell_time
+            < (new_buy_cutoff)
         ):
             session = "nxt_entry_window"
-        elif new_buy_cutoff <= sell_time < datetime.strptime(
-            "20:00:00", "%H:%M:%S"
-        ).time():
+        elif (
+            new_buy_cutoff
+            <= sell_time
+            < datetime.strptime("20:00:00", "%H:%M:%S").time()
+        ):
             session = "nxt_close_only"
         else:
             session = "outside_krx_nxt_window"
@@ -602,10 +609,9 @@ def _post_sell_execution_route_contract(
             "nxt_premarket",
         },
     }
-    if (
-        expected_market_route not in allowed_routes.get(venue, set())
-        or session not in allowed_sessions.get(venue, set())
-    ):
+    if expected_market_route not in allowed_routes.get(
+        venue, set()
+    ) or session not in allowed_sessions.get(venue, set()):
         return {
             "status": "route_source_quality_blocked",
             "reason": "venue_session_route_contract_mismatch",
@@ -1809,8 +1815,10 @@ def evaluate_sim_post_sell_candidates(
 
 
 def backfill_sim_post_sell_candidates_from_threshold_events(target_date: str) -> dict:
-    path = DATA_DIR / "threshold_cycle" / f"threshold_events_{target_date}.jsonl"
-    rows = _load_jsonl(path)
+    source_paths = [
+        DATA_DIR / "threshold_cycle" / f"threshold_events_{target_date}.jsonl",
+        DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl",
+    ]
     existing_candidates = _load_jsonl(_sim_candidate_path(target_date))
     existing_keys = {
         (
@@ -1825,64 +1833,87 @@ def backfill_sim_post_sell_candidates_from_threshold_events(target_date: str) ->
     }
     seen = 0
     created = 0
-    for event in rows:
-        if str(event.get("stage") or "") != "scalp_sim_sell_order_assumed_filled":
+    duplicate_source_events = 0
+    source_event_counts: dict[str, int] = {}
+    source_event_keys: set[tuple[str, str]] = set()
+    resolved_source_paths: list[str] = []
+    for source_path in source_paths:
+        actual_path = existing_or_gzip_path(source_path)
+        if not actual_path.exists():
             continue
-        seen += 1
-        fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
-        norm_code = str(event.get("stock_code") or "").strip()[:6]
-        sim_marker = str(
-            fields.get("sim_record_id")
-            or event.get("record_id")
-            or fields.get("sim_parent_record_id")
-            or ""
-        ).strip()
-        if not sim_marker:
-            sell_dt = (
-                _parse_datetime(event.get("emitted_at"), default=datetime.now())
-                or datetime.now()
+        resolved_source_paths.append(str(actual_path))
+        source_seen = 0
+        for event in iter_jsonl(actual_path):
+            if str(event.get("stage") or "") != "scalp_sim_sell_order_assumed_filled":
+                continue
+            fields = (
+                event.get("fields") if isinstance(event.get("fields"), dict) else {}
             )
-            sim_marker = f"{_minute_bucket(sell_dt)}:{fields.get('assumed_fill_price')}"
-        existing_key = (norm_code, sim_marker)
-        if existing_key in existing_keys:
-            continue
-        candidate = record_sim_post_sell_candidate(
-            candidate_id=fields.get("entry_adm_candidate_id")
-            or fields.get("candidate_id"),
-            sim_record_id=fields.get("sim_record_id") or event.get("record_id"),
-            sim_parent_record_id=fields.get("sim_parent_record_id"),
-            stock={
-                "name": event.get("stock_name") or "",
-                "code": event.get("stock_code") or "",
-                "strategy": "SCALPING",
-                "position_tag": fields.get("position_tag") or "",
-            },
-            code=event.get("stock_code"),
-            sell_time=event.get("emitted_at"),
-            buy_price=fields.get("buy_price"),
-            sell_price=fields.get("assumed_fill_price"),
-            profit_rate=fields.get("profit_rate"),
-            buy_qty=fields.get("qty"),
-            exit_rule=fields.get("exit_rule"),
-            sell_reason_type=fields.get("sell_reason_type"),
-            trigger_profit_rate=fields.get("trigger_profit_rate"),
-            current_ai_score=fields.get("current_ai_score")
-            or fields.get("ai_score_smoothed"),
-            ai_score_raw=fields.get("ai_score_raw"),
-            ai_action=fields.get("ai_action"),
-            ai_result_source=fields.get("ai_result_source"),
-            ai_model=fields.get("ai_model"),
-            ai_model_tier=fields.get("ai_model_tier"),
-            ai_transport_mode=fields.get("ai_transport_mode")
-            or fields.get("openai_transport_mode"),
-        )
-        if candidate:
-            created += 1
-            existing_keys.add(existing_key)
+            norm_code = str(event.get("stock_code") or "").strip()[:6]
+            sim_marker = str(
+                fields.get("sim_record_id")
+                or event.get("record_id")
+                or fields.get("sim_parent_record_id")
+                or ""
+            ).strip()
+            if not sim_marker:
+                sell_dt = (
+                    _parse_datetime(event.get("emitted_at"), default=datetime.now())
+                    or datetime.now()
+                )
+                sim_marker = (
+                    f"{_minute_bucket(sell_dt)}:{fields.get('assumed_fill_price')}"
+                )
+            source_key = (norm_code, sim_marker)
+            if source_key in source_event_keys:
+                duplicate_source_events += 1
+                continue
+            source_event_keys.add(source_key)
+            seen += 1
+            source_seen += 1
+            if source_key in existing_keys:
+                continue
+            candidate = record_sim_post_sell_candidate(
+                candidate_id=fields.get("entry_adm_candidate_id")
+                or fields.get("candidate_id"),
+                sim_record_id=fields.get("sim_record_id") or event.get("record_id"),
+                sim_parent_record_id=fields.get("sim_parent_record_id"),
+                stock={
+                    "name": event.get("stock_name") or "",
+                    "code": event.get("stock_code") or "",
+                    "strategy": "SCALPING",
+                    "position_tag": fields.get("position_tag") or "",
+                },
+                code=event.get("stock_code"),
+                sell_time=event.get("emitted_at"),
+                buy_price=fields.get("buy_price"),
+                sell_price=fields.get("assumed_fill_price"),
+                profit_rate=fields.get("profit_rate"),
+                buy_qty=fields.get("qty"),
+                exit_rule=fields.get("exit_rule"),
+                sell_reason_type=fields.get("sell_reason_type"),
+                trigger_profit_rate=fields.get("trigger_profit_rate"),
+                current_ai_score=fields.get("current_ai_score")
+                or fields.get("ai_score_smoothed"),
+                ai_score_raw=fields.get("ai_score_raw"),
+                ai_action=fields.get("ai_action"),
+                ai_result_source=fields.get("ai_result_source"),
+                ai_model=fields.get("ai_model"),
+                ai_model_tier=fields.get("ai_model_tier"),
+                ai_transport_mode=fields.get("ai_transport_mode")
+                or fields.get("openai_transport_mode"),
+            )
+            if candidate:
+                created += 1
+                existing_keys.add(source_key)
+        source_event_counts[str(actual_path)] = source_seen
     return {
         "date": target_date,
-        "source_path": str(path),
+        "source_path": resolved_source_paths[0] if resolved_source_paths else None,
+        "source_paths": resolved_source_paths,
+        "source_event_counts": source_event_counts,
         "events_seen": seen,
+        "duplicate_source_events": duplicate_source_events,
         "candidates_created": created,
         "candidate_path": str(_sim_candidate_path(target_date)),
         "runtime_effect": False,

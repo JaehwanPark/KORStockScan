@@ -18,6 +18,7 @@ from src.trading.low_price_two_leg.profiles import (
     PROFILE_REVISION_20260819_EFFECTIVE_DATE,
     PROFILE_REVISION_20260821_EFFECTIVE_DATE,
     PROFILE_REVISION_20260824_EFFECTIVE_DATE,
+    PROFILE_REVISION_20260825_EFFECTIVE_DATE,
     PROFILES,
     MachineProfile,
     get_profile,
@@ -171,11 +172,53 @@ RECOMMENDATION_20260821_PROFILE_MAP = {
     "hanse_late_morning": "existing_105630_late_morning",
     "hanse_midday": "existing_105630_midday",
 }
+RECOMMENDATION_20260824_EVIDENCE_PATH = (
+    DATA_DIR / "config" / "low_price_two_leg_expanded_profile_evidence_2026-08-24.json"
+)
+# Updated only when the immutable evidence projection changes.
+RECOMMENDATION_20260824_EVIDENCE_SHA256 = (
+    "ce447fe0c6d55a5004f821fb450cbe5d6377fc9664f2bee9a5cd6a31ee12d82f"
+)
+RECOMMENDATION_20260824_SOURCE_SHA256 = (
+    "3d72f239f5d26cad6ffde71ff2fbde622df69a7b8258243e910368e824fb7480"
+)
+RECOMMENDATION_20260824_PROFILE_MAP = {
+    "cj_cgv_late_morning": "logic_cj_cgv_late_morning",
+    "kepco_late_morning": "logic_kepco_late_morning",
+    "nhn_afternoon": "logic_nhn_afternoon",
+    "hanse_afternoon": "logic_hanse_afternoon",
+    "youngone_afternoon": "logic_youngone_afternoon",
+    "hanse_late_morning": "logic_hanse_late_morning",
+    "hanse_midday": "logic_hanse_midday",
+    "sk_eternix_late_morning": "existing_475150_late_morning",
+    "mirae_asset_late_morning": "existing_006800_late_morning",
+    "kepco_morning": "existing_015760_morning",
+    "nhn_morning": "existing_181710_morning",
+    "nhn_late_morning": "existing_181710_late_morning",
+}
 
 
 def _research_evidence_contract(
     profile: MachineProfile, *, target_date: date | None = None
 ) -> dict:
+    recommendation_20260824_profile_id = (
+        RECOMMENDATION_20260824_PROFILE_MAP.get(profile.profile_id)
+        if target_date is None
+        or target_date >= PROFILE_REVISION_20260825_EFFECTIVE_DATE
+        else None
+    )
+    if recommendation_20260824_profile_id:
+        return {
+            "path": RECOMMENDATION_20260824_EVIDENCE_PATH,
+            "sha256": RECOMMENDATION_20260824_EVIDENCE_SHA256,
+            "schema": "low_price_two_leg_user_approved_profile_evidence_v6",
+            "start_date": "2026-06-05",
+            "end_date": "2026-08-24",
+            "trading_date_count": 55,
+            "window": "2026-06-05_through_2026-08-24_55_trading_days",
+            "report_profile_id": recommendation_20260824_profile_id,
+            "source_report_sha256": RECOMMENDATION_20260824_SOURCE_SHA256,
+        }
     recommendation_20260821_profile_id = (
         RECOMMENDATION_20260821_PROFILE_MAP.get(profile.profile_id)
         if target_date is None
@@ -356,12 +399,13 @@ def validate_research_evidence(
         "low_price_two_leg_user_approved_profile_evidence_v3",
         "low_price_two_leg_user_approved_profile_evidence_v4",
         "low_price_two_leg_user_approved_profile_evidence_v5",
+        "low_price_two_leg_user_approved_profile_evidence_v6",
     }:
         return False, "research_report_schema_invalid"
     source = (payload.get("source_meta") or {}).get(evidence_profile.symbol)
     report_profile_id = str(contract["report_profile_id"])
     result = (payload.get("profiles") or {}).get(report_profile_id)
-    if not isinstance(source, dict) or not isinstance(result, dict):
+    if not isinstance(source, dict):
         return False, "research_profile_result_missing"
     policy = evidence_profile.policy
     expected_spot = {
@@ -371,7 +415,61 @@ def validate_research_evidence(
         "rolling_high_drawdown_pct": policy.rolling_high_drawdown_pct,
         "rolling_low_proximity_pct": policy.rolling_low_proximity_pct,
     }
-    if schema == "low_price_two_leg_entry_spot_research_v1":
+    if schema == "low_price_two_leg_user_approved_profile_evidence_v6":
+        source_report = payload.get("source_report")
+        if (
+            not isinstance(source_report, dict)
+            or source_report.get("schema")
+            != "low_price_two_leg_expanded_candidate_research_v5"
+            or source_report.get("canonical_sha256")
+            != contract.get("source_report_sha256")
+        ):
+            return False, "research_source_report_provenance_invalid"
+        recommendations = {
+            str(row.get("profile_id") or ""): row
+            for row in payload.get("recommendations") or []
+            if isinstance(row, dict)
+        }
+        recommendation = recommendations.get(report_profile_id)
+        expected_policy = {
+            **expected_spot,
+            "entry_offsets_ticks": list(policy.entry_offsets_ticks),
+            "entry_valid_completed_bars": policy.entry_valid_completed_bars,
+            "target_ticks": policy.target_ticks,
+        }
+        if not isinstance(recommendation, dict):
+            return False, "research_profile_result_missing"
+        calibration = recommendation.get("calibration")
+        full = recommendation.get("full")
+        holdout = recommendation.get("holdout")
+        result_policy_matches = (
+            recommendation.get("recommended_spot") == expected_policy
+        )
+        decision_ready = bool(
+            recommendation.get("symbol") == evidence_profile.symbol
+            and recommendation.get("session") == evidence_profile.session
+            and recommendation.get("implementation_status")
+            == "source_only_requires_review_and_user_approval"
+            and recommendation.get("runtime_effect") is False
+            and float(recommendation.get("calibration_first_half_ev_pct", 0.0) or 0.0)
+            > 0.0
+            and float(recommendation.get("calibration_second_half_ev_pct", 0.0) or 0.0)
+            > 0.0
+            and isinstance(calibration, dict)
+            and int(calibration.get("signal_episodes", 0) or 0) >= 6
+            and int(calibration.get("completed_legs", 0) or 0) >= 8
+            and float(calibration.get("notional_weighted_ev_pct", 0.0) or 0.0) > 0.0
+            and isinstance(full, dict)
+            and int(full.get("completed_legs", 0) or 0) >= 10
+            and float(full.get("notional_weighted_ev_pct", 0.0) or 0.0) > 0.0
+            and isinstance(holdout, dict)
+            and int(holdout.get("signal_episodes", 0) or 0) >= 3
+            and int(holdout.get("completed_legs", 0) or 0) >= 4
+            and float(holdout.get("notional_weighted_ev_pct", 0.0) or 0.0) > 0.0
+        )
+    elif schema == "low_price_two_leg_entry_spot_research_v1":
+        if not isinstance(result, dict):
+            return False, "research_profile_result_missing"
         holdout = (result.get("selected") or {}).get("holdout")
         result_policy_matches = result.get("recommended_spot") == expected_spot
         decision_ready = result.get("decision") in {
@@ -379,6 +477,8 @@ def validate_research_evidence(
             "holdout_positive_not_better_keep_baseline",
         }
     elif schema == "low_price_two_leg_episode_policy_research_v1":
+        if not isinstance(result, dict):
+            return False, "research_profile_result_missing"
         expected_policy = {
             **expected_spot,
             "entry_offsets_ticks": list(policy.entry_offsets_ticks),
@@ -414,6 +514,8 @@ def validate_research_evidence(
             and all(float(value) > 0.0 for value in third_ev)
         )
     else:
+        if not isinstance(result, dict):
+            return False, "research_profile_result_missing"
         source_report = payload.get("source_report")
         if (
             not isinstance(source_report, dict)
@@ -497,6 +599,7 @@ def validate_research_evidence(
                 "low_price_two_leg_user_approved_profile_evidence_v3",
                 "low_price_two_leg_user_approved_profile_evidence_v4",
                 "low_price_two_leg_user_approved_profile_evidence_v5",
+                "low_price_two_leg_user_approved_profile_evidence_v6",
             }
             and int(holdout.get("held_legs", 0) or 0) != 0
         )

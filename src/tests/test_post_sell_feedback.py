@@ -386,6 +386,37 @@ def test_backfill_sim_post_sell_candidates_is_idempotent(monkeypatch, tmp_path):
         + "\n",
         encoding="utf-8",
     )
+    pipeline_dir = tmp_path / "pipeline_events"
+    pipeline_dir.mkdir(parents=True)
+    duplicate_event = json.loads(
+        (threshold_dir / "threshold_events_2026-05-18.jsonl").read_text(
+            encoding="utf-8"
+        )
+    )
+    overnight_event = {
+        "stage": "scalp_sim_sell_order_assumed_filled",
+        "stock_name": "솔브레인홀딩스",
+        "stock_code": "036830",
+        "emitted_at": "2026-05-18T15:10:09",
+        "fields": {
+            "sim_record_id": "SCALPSIM-OVERNIGHT-1",
+            "sim_parent_record_id": "7001",
+            "profit_rate": "-1.68",
+            "buy_price": "44750",
+            "assumed_fill_price": "44100",
+            "qty": "2",
+            "exit_rule": "scalp_sim_overnight_sell_today",
+            "sell_reason_type": "OVERNIGHT",
+        },
+    }
+    (pipeline_dir / "pipeline_events_2026-05-18.jsonl").write_text(
+        "\n".join(
+            json.dumps(row, ensure_ascii=False)
+            for row in (duplicate_event, overnight_event)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     first = feedback_mod.backfill_sim_post_sell_candidates_from_threshold_events(
         "2026-05-18"
@@ -394,14 +425,15 @@ def test_backfill_sim_post_sell_candidates_is_idempotent(monkeypatch, tmp_path):
         "2026-05-18"
     )
 
-    assert first["events_seen"] == 1
-    assert first["candidates_created"] == 1
-    assert second["events_seen"] == 1
+    assert first["events_seen"] == 2
+    assert first["duplicate_source_events"] == 1
+    assert first["candidates_created"] == 2
+    assert second["events_seen"] == 2
     assert second["candidates_created"] == 0
     candidates = feedback_mod._load_jsonl(
         feedback_mod._sim_candidate_path("2026-05-18")
     )
-    assert len(candidates) == 1
+    assert len(candidates) == 2
     assert candidates[0]["high_ai_hard_stop_conflict"] is True
     assert candidates[0]["ai_score_at_exit"] == 74
     assert candidates[0]["ai_model_at_exit"] == "bedrock-nova-lite-v2"
@@ -719,6 +751,7 @@ def test_real_post_sell_registers_bounded_exact_route_bbo_observer(
             "name": "경로유지테스트",
             "last_sell_execution_broker_route": "SOR",
             "last_sell_execution_cohort": "KRX",
+            "last_sell_execution_session_bucket": "krx_regular",
         },
         code="444445",
         sell_time=sell_dt,

@@ -123,7 +123,7 @@ METRIC_CONTRACT = {
     "source_quality_gate": (
         "completed_prior_dates;fresh_actionable_source_rows;valid_completed_bar_ohlc;"
         "venue_and_session_provenance;chronological_holdout_not_used_for_selection;"
-        "real_execution_terminal_sell_failure_veto"
+        "real_execution_submit_or_terminal_failure_veto"
     ),
     "forbidden_uses": [
         "same_day_outcome_to_same_day_policy",
@@ -796,13 +796,18 @@ def _load_execution_quality(
     counts: dict[str, int] = {}
     accepted_order_count = 0
     attributed_event_count = 0
-    unattributed_terminal_failure_count = 0
+    unattributed_execution_failure_count = 0
     terminal_failure_types = {
         "buy_cancel_terminal_failure",
         "sell_terminal_failure",
         "take_profit_cancel_terminal_failure",
         "take_profit_terminal_failure",
     }
+    submit_failure_types = {
+        "order_submit_failed",
+        "order_submit_ambiguous",
+    }
+    execution_failure_types = terminal_failure_types | submit_failure_types
 
     def event_session(row: dict[str, Any]) -> str | None:
         for key in (
@@ -848,15 +853,17 @@ def _load_execution_quality(
                     continue
                 row_session = event_session(row)
                 if session is not None and row_session != session:
-                    # An unscoped terminal failure remains a global safety
-                    # veto.  Ordinary unscoped observations are diagnostics,
-                    # not evidence for a different session.
+                    # Any unscoped execution failure remains a global safety
+                    # veto. Ordinary unscoped observations are diagnostics,
+                    # not evidence for a different session. Submit rejects and
+                    # broker-call ambiguity must not disappear merely because
+                    # their failing producer omitted session provenance.
                     if (
-                        event_type not in terminal_failure_types
+                        event_type not in execution_failure_types
                         or row_session is not None
                     ):
                         continue
-                    unattributed_terminal_failure_count += 1
+                    unattributed_execution_failure_count += 1
                 else:
                     attributed_event_count += 1
                 counts[event_type] = counts.get(event_type, 0) + 1
@@ -870,20 +877,51 @@ def _load_execution_quality(
         for event_type, count in counts.items()
         if event_type in terminal_failure_types
     )
+    submit_failures = sum(
+        counts.get(event_type, 0) for event_type in submit_failure_types
+    )
+    ambiguous_submit_failures = counts.get("order_submit_ambiguous", 0)
+    execution_failures = terminal_failures + submit_failures
     return {
-        "status": "SAFETY_VETO" if terminal_failures else "PASS",
+        "status": "SAFETY_VETO" if execution_failures else "PASS",
         "source_path": str(path) if path.exists() else None,
         "accepted_order_count": accepted_order_count,
-        "order_submit_failed_count": counts.get("order_submit_failed", 0),
+        "order_submit_failed_count": submit_failures,
+        "order_submit_ambiguous_count": ambiguous_submit_failures,
+        "execution_failure_count": execution_failures,
+        "failure_reason_codes": sorted(
+            reason
+            for reason, active in (
+                (
+                    "broker_order_submit_ambiguous",
+                    ambiguous_submit_failures > 0,
+                ),
+                (
+                    "broker_order_submit_failed",
+                    submit_failures > ambiguous_submit_failures,
+                ),
+                ("terminal_order_or_cancel_failed", terminal_failures > 0),
+            )
+            if active
+        ),
         "terminal_execution_failure_count": terminal_failures,
         "terminal_sell_failure_count": terminal_failures,
         "event_counts": dict(sorted(counts.items())),
-        "runtime_apply_allowed": terminal_failures == 0,
+        # A broker-rejected entry means the policy had an eligible live sample
+        # but could not execute it.  Treating that path as an empty/healthy
+        # sample lets the same policy be selected again without repairing the
+        # producer or broker contract.  Keep naturally empty sessions eligible,
+        # but fail closed when an actual submit attempt was rejected.
+        "runtime_apply_allowed": execution_failures == 0,
         "decision_authority": "execution_quality_real_only_safety_veto",
         "execution_event_scope": session or "symbol_all_sessions",
         "session_attributed_event_count": attributed_event_count,
-        "unattributed_terminal_failure_count": (unattributed_terminal_failure_count),
-        "execution_sample_observed": accepted_order_count > 0,
+        "unattributed_execution_failure_count": (unattributed_execution_failure_count),
+        # Compatibility field retained for consumers of the previous report
+        # schema. It now reflects every unattributed execution failure rather
+        # than silently excluding submit failures.
+        "unattributed_terminal_failure_count": (unattributed_execution_failure_count),
+        "execution_sample_observed": accepted_order_count > 0 or execution_failures > 0,
     }
 
 

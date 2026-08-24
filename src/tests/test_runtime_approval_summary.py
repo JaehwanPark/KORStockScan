@@ -819,6 +819,63 @@ def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(
     assert "BUY_DEFENSIVE" in markdown
 
 
+def test_runtime_approval_summary_does_not_promote_classified_unknown_rows_to_gap(
+    tmp_path, monkeypatch
+):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    adm_dir = tmp_path / "scalp_entry_action_decision_matrix"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    for directory in (ev_dir, adm_dir, swing_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+    adm_path = adm_dir / "scalp_entry_action_decision_matrix_2026-08-24.json"
+    adm_path.write_text(json.dumps({"status": "pass"}), encoding="utf-8")
+    (ev_dir / "threshold_cycle_ev_2026-08-24.json").write_text(
+        json.dumps(
+            {
+                "sources": {"scalp_entry_action_decision_matrix": str(adm_path)},
+                "scalp_entry_action_decision_matrix": {
+                    "available": True,
+                    "status": "pass",
+                    "joined_sample": 25,
+                    "joined_sample_daily": 4,
+                    "sample_floor": 20,
+                    "prompt_applied_count": 1,
+                    "missing_actions": [],
+                    "unknown_bucket_summary": {
+                        "affected_rows": 3,
+                        "source_quality_gate": "classified_non_actionable",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-08-24.json").write_text(
+        json.dumps(
+            {"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-08-24")
+
+    adm_summary = report["scalp_entry_action_decision_matrix"]
+    assert "unknown_bucket_source_quality_gap" not in adm_summary["warnings"]
+    assert adm_summary["joined_sample"] == 25
+    assert adm_summary["joined_sample_daily"] == 4
+
+
 def test_runtime_approval_summary_dedupes_lifecycle_matrix_decision_row(
     tmp_path, monkeypatch
 ):
