@@ -35779,7 +35779,7 @@ def test_post_submit_db_persistence_does_not_downgrade_early_fill(monkeypatch):
     )
     assert "SELL_ORDERED" in compiled_criterion
     assert "COMPLETED" in compiled_criterion
-    assert "EXPIRED" in compiled_criterion
+    assert "EXPIRED" not in compiled_criterion
     assert captured["values"] == {
         "status": "HOLDING",
         "buy_price": 19100,
@@ -36115,6 +36115,103 @@ def test_buy_db_receipt_update_is_monotonic_and_terminal_safe(monkeypatch):
         assert record.buy_qty == 33
         assert record.buy_price == 10_010
 
+
+def test_buy_db_receipt_revives_scanner_expiry_and_corrects_anchor_price(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.database.models import RecommendationHistory
+
+    engine = create_engine("sqlite:///:memory:")
+    RecommendationHistory.__table__.create(engine)
+    session_factory = sessionmaker(bind=engine)
+
+    class DB:
+        def get_session(self):
+            return session_factory.begin()
+
+    monkeypatch.setattr(receipts, "DB", DB())
+    monkeypatch.setattr(receipts, "event_bus", None)
+    with session_factory.begin() as session:
+        session.add(
+            RecommendationHistory(
+                id=92,
+                rec_date=date(2026, 8, 24),
+                stock_code="003530",
+                stock_name="TEST",
+                status="EXPIRED",
+                buy_price=5_110,
+                buy_qty=1,
+            )
+        )
+
+    snapshot = {
+        "code": "003530",
+        "name": "TEST",
+        "buy_qty": 1,
+        "buy_price": 5_040,
+        "buy_execution_notified": True,
+    }
+    filled_at = datetime(2026, 8, 24, 9, 40, 42)
+    receipts._update_db_for_buy(92, 5_040, filled_at, snapshot)
+
+    with session_factory() as session:
+        record = session.get(RecommendationHistory, 92)
+        assert record.status == "HOLDING"
+        assert record.buy_qty == 1
+        assert record.buy_price == 5_040
+        assert record.buy_time == filled_at
+
+
+def test_post_submit_db_persistence_revives_expired_db_row(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.database.models import RecommendationHistory
+
+    engine = create_engine("sqlite:///:memory:")
+    RecommendationHistory.__table__.create(engine)
+    session_factory = sessionmaker(bind=engine)
+
+    class DB:
+        def get_session(self):
+            return session_factory.begin()
+
+    monkeypatch.setattr(state_handlers, "DB", DB())
+    with session_factory.begin() as session:
+        session.add(
+            RecommendationHistory(
+                id=93,
+                rec_date=date(2026, 8, 24),
+                stock_code="003530",
+                stock_name="TEST",
+                status="EXPIRED",
+                buy_price=5_110,
+                buy_qty=0,
+            )
+        )
+
+    updated_rows = state_handlers._persist_post_submit_db_state(
+        {
+            "id": 93,
+            "code": "003530",
+            "name": "TEST",
+            "status": "BUY_ORDERED",
+            "buy_price": 0,
+            "buy_qty": 0,
+            "entry_filled_qty": 0,
+        },
+        code="003530",
+        curr_price=5_040,
+        requested_qty=1,
+    )
+
+    assert updated_rows == 1
+    with session_factory() as session:
+        record = session.get(RecommendationHistory, 93)
+        assert record.status == "BUY_ORDERED"
+        assert record.buy_price == 5_040
+        assert record.buy_qty == 1
 
 def test_split_entry_partial_fill_defers_buy_execution_telegram_until_bundle_full(
     monkeypatch,

@@ -422,6 +422,60 @@ def test_rising_missed_backoff_uses_bounded_low_frequency_bbo_retention(monkeypa
     state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.clear()
 
 
+def test_rising_missed_backoff_recovers_fresh_exact_ws_route(monkeypatch):
+    started_at = datetime(2026, 8, 24, 9, 31, tzinfo=state_handlers._KST).timestamp()
+    state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "retain_ws_subscription_until",
+        lambda _code, _until_ts: True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        type(
+            "Manager",
+            (),
+            {
+                "get_latest_data": lambda _self, _code: {
+                    "last_realtime_type_market_route": {
+                        "0D": "krx_nxt_integrated"
+                    },
+                    "last_realtime_type_ts": {"0D": started_at - 0.25},
+                    "last_realtime_type_item": {"0D": "005930_AL"},
+                    "last_realtime_type_effective_venue": {"0D": "SOR"},
+                }
+            },
+        )(),
+    )
+
+    registration = state_handlers.register_risky_micro_episode_executable_bbo_observer(
+        {"id": 8, "name": "BACKOFF", "code": "005930"},
+        "005930",
+        candidate_fields={
+            "risky_micro_episode_status": "recheck_required",
+            "risky_micro_episode_horizon_observer_purpose": (
+                "rising_missed_backoff_executable_outcome"
+            ),
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+        now_ts=started_at,
+    )
+
+    assert registration["risky_micro_episode_horizon_observer_registered"] is True
+    assert registration["risky_micro_episode_horizon_observer_status"] == "registered"
+    assert registration[
+        "risky_micro_episode_horizon_observer_route_provenance"
+    ] == "fresh_exact_ws_0d_snapshot"
+    assert registration["risky_micro_episode_horizon_observer_route_item"] == (
+        "005930_AL"
+    )
+    stored = next(iter(state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.values()))
+    assert stored["source_market_route"] == "krx_nxt_integrated"
+    state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.clear()
+
+
 def test_entry_pipeline_registers_backoff_executable_observer(monkeypatch):
     registrations = []
     logs = []

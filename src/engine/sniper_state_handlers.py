@@ -33939,6 +33939,97 @@ def register_risky_micro_episode_executable_bbo_observer(
         or fields.get("rising_missed_ws_last_route")
         or ""
     ).strip().lower()
+    route_provenance = (
+        "candidate_fields" if source_market_route else "candidate_fields_missing"
+    )
+    route_age_ms: float | None = None
+    route_item = ""
+    route_venue = ""
+    if not source_market_route and backoff_observer and WS_MANAGER is not None:
+        try:
+            latest = WS_MANAGER.get_latest_data(normalized_code) or {}
+        except Exception:
+            latest = {}
+            route_provenance = "ws_manager_lookup_error"
+        latest = latest if isinstance(latest, dict) else {}
+        type_routes = latest.get("last_realtime_type_market_route")
+        type_routes = type_routes if isinstance(type_routes, dict) else {}
+        type_ts = latest.get("last_realtime_type_ts")
+        type_ts = type_ts if isinstance(type_ts, dict) else {}
+        type_items = latest.get("last_realtime_type_item")
+        type_items = type_items if isinstance(type_items, dict) else {}
+        type_venues = latest.get("last_realtime_type_effective_venue")
+        type_venues = type_venues if isinstance(type_venues, dict) else {}
+        candidate_route = str(type_routes.get("0D") or "").strip().lower()
+        route_observed_epoch = _safe_float(type_ts.get("0D"), 0.0)
+        route_age_ms = (
+            max(0.0, (observed_at - route_observed_epoch) * 1000.0)
+            if route_observed_epoch > 0
+            else None
+        )
+        route_item = str(type_items.get("0D") or "").strip().upper()
+        route_venue = str(type_venues.get("0D") or "").strip().upper()
+        route_code = route_item.split("_", 1)[0][-6:]
+        exact_route_identity = bool(
+            (
+                venue == "KRX"
+                and (
+                    (
+                        candidate_route == "krx_regular"
+                        and route_item == normalized_code
+                        and route_venue == "KRX"
+                    )
+                    or (
+                        candidate_route == "krx_nxt_integrated"
+                        and route_item == f"{normalized_code}_AL"
+                        and route_venue in {"", "SOR"}
+                    )
+                )
+            )
+            or (
+                venue == "NXT"
+                and candidate_route == "nxt_only"
+                and route_item == f"{normalized_code}_NX"
+                and route_venue == "NXT"
+            )
+            or (
+                venue == "PREMARKET_KRX_LIKE"
+                and (
+                    (
+                        candidate_route == "nxt_only"
+                        and route_item == f"{normalized_code}_NX"
+                        and route_venue == "NXT"
+                    )
+                    or (
+                        candidate_route == "krx_nxt_integrated"
+                        and route_item == f"{normalized_code}_AL"
+                        and route_venue in {"", "SOR"}
+                    )
+                )
+            )
+        )
+        if (
+            route_code == normalized_code
+            and route_age_ms is not None
+            and route_age_ms <= 3_000.0
+            and exact_route_identity
+        ):
+            source_market_route = candidate_route
+            route_provenance = "fresh_exact_ws_0d_snapshot"
+        elif route_provenance != "ws_manager_lookup_error":
+            route_provenance = "ws_0d_route_identity_or_freshness_gap"
+    base.update(
+        {
+            "risky_micro_episode_horizon_observer_route_provenance": (
+                route_provenance
+            ),
+            "risky_micro_episode_horizon_observer_route_age_ms": (
+                round(route_age_ms, 3) if route_age_ms is not None else "-"
+            ),
+            "risky_micro_episode_horizon_observer_route_item": route_item or "-",
+            "risky_micro_episode_horizon_observer_route_venue": route_venue or "-",
+        }
+    )
     normalized_session = session.strip().lower()
     allowed_sessions_by_venue = {
         "KRX": {"krx_regular"},
@@ -76634,13 +76725,17 @@ def _persist_post_submit_db_state(
                 "scale_in_locked": True,
             }
         )
-    terminal_statuses = {"SELL_ORDERED", "COMPLETED", "EXPIRED"}
-    protected_statuses = set(terminal_statuses)
+    runtime_terminal_statuses = {"SELL_ORDERED", "COMPLETED", "EXPIRED"}
+    # EXPIRED belongs to the watch/scanner lifecycle.  Once this exact target
+    # has a broker-accepted BUY, the submit receipt is authoritative and must
+    # revive an asynchronously expired DB row to BUY_ORDERED/HOLDING.  Only a
+    # sell lifecycle or a completed trade is irreversible at this boundary.
+    protected_statuses = {"SELL_ORDERED", "COMPLETED"}
     if db_status == "BUY_ORDERED":
         protected_statuses.add("HOLDING")
 
     with DB.get_session() as session:
-        if current_entry_status in terminal_statuses:
+        if current_entry_status in runtime_terminal_statuses:
             updated_rows = 0
         else:
             buy_order_query = session.query(RecommendationHistory).filter_by(

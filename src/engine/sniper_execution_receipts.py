@@ -5420,8 +5420,12 @@ def _update_db_for_buy(target_id, exec_price, now, receipt_snapshot):
                 or_(
                     RecommendationHistory.status.is_(None),
                     and_(
+                        # EXPIRED is a scanner/watch lifecycle terminal state,
+                        # not broker custody evidence.  An exact BUY receipt
+                        # for the still-bound target must revive it to HOLDING.
+                        # SELL_ORDERED/COMPLETED remain irreversible here.
                         ~RecommendationHistory.status.in_(
-                            ("SELL_ORDERED", "COMPLETED", "EXPIRED")
+                            ("SELL_ORDERED", "COMPLETED")
                         ),
                         or_(
                             RecommendationHistory.status != "HOLDING",
@@ -5436,9 +5440,28 @@ def _update_db_for_buy(target_id, exec_price, now, receipt_snapshot):
             )
 
         if not updated_rows:
+            persisted_state = "unavailable"
+            try:
+                with DB.get_session() as session:
+                    persisted = (
+                        session.query(RecommendationHistory)
+                        .filter_by(id=target_id)
+                        .first()
+                    )
+                    if persisted is None:
+                        persisted_state = "missing"
+                    else:
+                        persisted_state = (
+                            f"status={str(persisted.status or '-').upper()} "
+                            f"qty={_safe_int(persisted.buy_qty, 0)} "
+                            f"price={_safe_float(persisted.buy_price, 0.0):.2f}"
+                        )
+            except Exception as state_exc:
+                persisted_state = f"lookup_failed:{state_exc}"
             log_info(
                 f"[BUY_DB_RECEIPT_STALE_SKIPPED] ID {target_id} "
-                f"snapshot_qty={buy_qty} reason=terminal_or_newer_db_state"
+                f"snapshot_qty={buy_qty} reason=irreversible_or_newer_db_state "
+                f"persisted={persisted_state}"
             )
             return
 
