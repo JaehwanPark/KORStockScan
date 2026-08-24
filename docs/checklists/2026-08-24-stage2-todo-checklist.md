@@ -72,6 +72,12 @@
   - 금지: source-quality preflight missing/stale, row exclusion 실패, hard block candidate 생성, unknown-token workorder handoff 누락을 정상 postclose 완료로 처리하지 않는다. sim/combined EV, live-auto promotion, runtime approval, LDM, threshold apply candidate에 결손 row/window가 섞이면 fail로 닫는다.
   - 다음 액션: `source_quality_gate_pass`, `defective_rows_excluded_and_ev_allowed`, `source_quality_blocked`, `unknown_warning_workorder_created`, `handoff_missing_fix_automation_first` 중 하나로 닫는다.
 
+- [ ] `[RawRowExclusionRevalidation0824] 장중 구 계약으로 제외된 198행 백업 재검증 및 유효 행 복원` (`Due: 2026-08-24`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~20:20`, `Track: RuntimeStability`)
+  - Source: [manifest.json](/home/ubuntu/KORStockScan/data/source_quality/raw_row_exclusion/2026-08-24_20260824T140658689313+0900/manifest.json), [pipeline_events_2026-08-24.jsonl.gz](/home/ubuntu/KORStockScan/data/source_quality/raw_row_exclusion/2026-08-24_20260824T140658689313+0900/pipeline_events_2026-08-24.jsonl.gz), [observation_source_quality_audit_2026-08-24.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-08-24.json)
+  - 판정 기준: live writer 종료를 확인한 뒤 백업의 제외 198행을 현재 audit contract로 재판정하고, 새 계약에서 유효한 행만 원래 lineage로 복원한다. 복원 후 전체 raw를 재감사해 `raw_row_exclusion_revalidation_required=false`, `tuning_input_allowed=true` 또는 결손 행만 명시적으로 재제외된 `defective_rows_excluded_and_ev_allowed`를 확인한다.
+  - 금지: writer 활동 중 raw 교체, 백업 삭제, 결손 행의 정상 보간, 재검증 전 EV/rolling/MTD/cumulative tuning·live-auto promotion·runtime approval 소비를 금지한다.
+  - 다음 액션: `valid_rows_restored_and_reaudit_pass`, `only_defective_rows_reexcluded`, `writer_active_deferred`, `restoration_conflict_blocked` 중 하나로 닫는다.
+
 - [ ] `[ThresholdDailyEVReport0824] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-08-24`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [tuning_performance_control_tower_2026-08-21.json](/home/ubuntu/KORStockScan/data/report/tuning_performance_control_tower/tuning_performance_control_tower_2026-08-21.json), [threshold_cycle_ev_2026-08-21.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-08-21.json)
   - 판정 기준: tuning performance control tower를 먼저 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다.

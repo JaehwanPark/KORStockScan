@@ -304,8 +304,19 @@ def _real_entry_lifecycle_record(
     row: dict[str, Any],
 ) -> dict[str, Any]:
     fields = _fields(row)
+    record_key = _record_key(row, fields)
+    attempt_id = str(
+        fields.get("main_lifecycle_attempt_id")
+        or fields.get("attempt_id")
+        or fields.get("scanner_promotion_id")
+        or ""
+    ).strip()
     item = {
         "record_id": str(row.get("record_id") or fields.get("record_id") or "").strip(),
+        "record_key": record_key,
+        "attempt_id": attempt_id or None,
+        "main_lifecycle_id": str(fields.get("main_lifecycle_id") or "").strip()
+        or None,
         "stock_code": row.get("stock_code") or fields.get("stock_code"),
         "stock_name": row.get("stock_name") or fields.get("stock_name"),
         "strategy": fields.get("strategy") or "SCALPING",
@@ -320,6 +331,32 @@ def _real_entry_lifecycle_record(
     }
     _update_venue_provenance(item, row)
     return item
+
+
+def _real_entry_lifecycle_key(
+    row: dict[str, Any], fields: dict[str, Any]
+) -> str:
+    """Return the narrowest stable identity for one real entry attempt.
+
+    Scanner records can be recycled for a later promotion of the same symbol.  A
+    record-id-only key therefore merges a canceled order with a later fill and
+    corrupts submitted/fill/cancel attribution.  New journal rows carry an exact
+    attempt identity; legacy rows retain the previous record key fallback.
+    """
+
+    for field_name in (
+        "main_lifecycle_attempt_id",
+        "attempt_id",
+        "scanner_promotion_id",
+    ):
+        value = str(fields.get(field_name) or "").strip()
+        if value:
+            return f"attempt:{value}"
+    main_lifecycle_id = str(fields.get("main_lifecycle_id") or "").strip()
+    if main_lifecycle_id:
+        return f"main_lifecycle:{main_lifecycle_id}"
+    record_key = _record_key(row, fields)
+    return f"record:{record_key}" if record_key else ""
 
 
 def _earlier_event_time(current: Any, candidate: Any) -> Any:
@@ -347,6 +384,17 @@ def _update_real_entry_lifecycle(item: dict[str, Any], row: dict[str, Any]) -> N
     if stage not in _REAL_ENTRY_LIFECYCLE_STAGES:
         return
     fields = _fields(row)
+    attempt_id = str(
+        fields.get("main_lifecycle_attempt_id")
+        or fields.get("attempt_id")
+        or fields.get("scanner_promotion_id")
+        or ""
+    ).strip()
+    if attempt_id and not item.get("attempt_id"):
+        item["attempt_id"] = attempt_id
+    main_lifecycle_id = str(fields.get("main_lifecycle_id") or "").strip()
+    if main_lifecycle_id and not item.get("main_lifecycle_id"):
+        item["main_lifecycle_id"] = main_lifecycle_id
     _update_scout_ai_execution_attribution(item, row)
     _update_venue_provenance(item, row)
     item["first_observed_ts"] = _earlier_event_time(
@@ -3608,8 +3656,9 @@ def build_report(
                     }
                 )
         if str(row.get("stage") or "") in _REAL_ENTRY_LIFECYCLE_STAGES:
+            lifecycle_key = _real_entry_lifecycle_key(row, fields)
             lifecycle_item = real_entry_lifecycle_records.setdefault(
-                key, _real_entry_lifecycle_record(row)
+                lifecycle_key, _real_entry_lifecycle_record(row)
             )
             _update_real_entry_lifecycle(lifecycle_item, row)
         if _is_one_share_plan_event(row):
@@ -3806,10 +3855,12 @@ def build_report(
         )
     )
     real_entry_lifecycle_rows = []
-    for key, item in real_entry_lifecycle_records.items():
+    for item in real_entry_lifecycle_records.values():
         if not item.get("actual_entry_order_submitted"):
             continue
-        _finalize_real_entry_lifecycle(item, one_share_records.get(key))
+        _finalize_real_entry_lifecycle(
+            item, one_share_records.get(str(item.get("record_key") or ""))
+        )
         real_entry_lifecycle_rows.append(item)
     real_entry_lifecycle_rows.sort(
         key=lambda item: (

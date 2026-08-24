@@ -695,6 +695,43 @@ def test_observation_source_quality_audit_accepts_fail_closed_early_accel_gap(
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
 
 
+def test_observation_source_quality_accepts_early_accel_pre_feature_skip(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    fields = _early_accel_contract_fields()
+    fields.update(
+        {
+            "skip_reason": "scanner_promotion_reason_not_early_accel",
+            "tick_accel_source": "unknown",
+            "tick_context_quality": "unknown",
+            "tick_accel_usable": False,
+            "micro_vwap_available": False,
+            "minute_candle_context_quality": "unknown",
+            "minute_candle_window_fresh": False,
+            "minute_candle_latest_age_ms": 0,
+            "micro_vwap_usable": False,
+        }
+    )
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event("early_accel_recheck_evaluated", fields),
+            _event("early_accel_recheck_skipped", fields),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert (
+        report["stage_contracts"]["early_accel_recheck_evaluated"]["status"]
+        == "pass"
+    )
+    assert report["stage_contracts"]["early_accel_recheck_skipped"]["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+
+
 def test_ai_confirmed_terminal_no_budget_contract_passes(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
@@ -926,6 +963,31 @@ def test_entry_latency_block_accepts_explicit_fail_closed_candle_gap(
     contract = report["stage_contracts"]["scalp_entry_action_decision_snapshot"]
     assert contract["status"] == "pass"
     assert contract["invalid_label_violations"] == {}
+
+
+def test_entry_preflight_block_accepts_explicit_fail_closed_candle_gap():
+    fields = {
+        "source_stage": "ai_confirmed",
+        "ai_input_preflight_status": "blocked",
+        "ai_input_preflight_allowed": False,
+        "provider_called": False,
+        "minute_candle_evaluation_state": "unavailable_fail_closed",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+    assert audit._blocked_observation_records_fail_closed_source_gap(
+        "scalp_entry_action_decision_snapshot",
+        fields,
+        source="minute_candle",
+    )
+
+    fields["provider_called"] = True
+    assert not audit._blocked_observation_records_fail_closed_source_gap(
+        "scalp_entry_action_decision_snapshot",
+        fields,
+        source="minute_candle",
+    )
 
 
 @pytest.mark.parametrize(
@@ -5297,8 +5359,15 @@ def test_observation_source_quality_write_excludes_bad_rows_instead_of_blocking_
 
     assert report["summary"]["tuning_input_allowed"] is True
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["hard_blocking_excluded_row_count"] == 1
+    assert report["summary"]["pre_exclusion_hard_blocking_excluded_row_count"] == 1
+    assert report["summary"]["current_scan_hard_blocking_excluded_row_count"] == 0
+    assert report["summary"]["post_exclusion_hard_blocking_excluded_row_count"] == 0
     assert report["summary"]["raw_row_exclusion_applied"] is True
+    assert report["summary"]["raw_row_exclusion_deferred_writer_active"] is False
+    assert report["summary"]["raw_row_exclusion_revalidation_required"] is False
     assert report["raw_row_exclusion"]["excluded_row_count"] == 1
+    assert report["raw_row_exclusion"]["application_state"] == "applied"
     assert len(rows) == 1
     assert rows[0]["record_id"] == 2
     manifest = Path(report["raw_row_exclusion"]["manifest_path"])
@@ -5326,6 +5395,219 @@ def test_observation_source_quality_write_excludes_bad_rows_instead_of_blocking_
     with gzip.open(backup_path, "rt", encoding="utf-8") as handle:
         backup_rows = [json.loads(line) for line in handle if line.strip()]
     assert [row["record_id"] for row in backup_rows] == [1, 2]
+
+    repeated = audit.write_report("2026-06-04")
+    assert repeated["summary"]["tuning_input_allowed"] is True
+    assert repeated["summary"]["hard_blocking_excluded_row_count"] == 1
+    assert repeated["summary"]["raw_row_exclusion_applied"] is True
+    assert repeated["raw_row_exclusion"]["manifest_path"] == str(manifest)
+
+
+def test_legacy_applied_exclusion_blocks_tuning_until_revalidated(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    target_date = "2026-06-04"
+    _write_events(
+        tmp_path,
+        target_date,
+        [
+            _event(
+                "swing_same_symbol_loss_reentry_cooldown",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "source_book": "swing_dry_run",
+                    "source_probe_id": "-",
+                    "source_record_id": "-",
+                    "source_stage": "exit",
+                },
+                record_id=1,
+            )
+        ],
+    )
+    applied = audit.write_report(target_date)
+    report_path, _ = audit.report_paths(target_date)
+    manifest_path = Path(applied["raw_row_exclusion"]["manifest_path"])
+    prior_report = json.loads(report_path.read_text(encoding="utf-8"))
+    prior_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    prior_report["raw_row_exclusion"].pop("audit_contract_version", None)
+    prior_manifest.pop("audit_contract_version", None)
+    report_path.write_text(
+        json.dumps(prior_report, ensure_ascii=False), encoding="utf-8"
+    )
+    manifest_path.write_text(
+        json.dumps(prior_manifest, ensure_ascii=False), encoding="utf-8"
+    )
+
+    repeated = audit.write_report(target_date)
+
+    assert repeated["summary"]["raw_row_exclusion_revalidation_required"] is True
+    assert repeated["summary"]["tuning_input_allowed"] is False
+    assert repeated["summary"]["blocked_reason"] == (
+        "raw_row_exclusion_revalidation_required"
+    )
+
+
+def test_observation_source_quality_defers_raw_mutation_while_writer_is_active(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(audit, "_raw_source_writer_active", lambda *_args: True)
+    _write_events(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event(
+                "swing_same_symbol_loss_reentry_cooldown",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "source_book": "swing_dry_run",
+                    "source_probe_id": "-",
+                    "source_record_id": "-",
+                    "source_stage": "exit",
+                },
+                record_id=1,
+            )
+        ],
+    )
+    raw_path = tmp_path / "pipeline_events" / "pipeline_events_2026-06-04.jsonl"
+    before = raw_path.read_bytes()
+
+    report = audit.write_report("2026-06-04")
+
+    assert raw_path.read_bytes() == before
+    assert report["status"] == "warning"
+    assert report["summary"]["tuning_input_allowed"] is False
+    assert report["summary"]["hard_blocking_excluded_row_count"] == 1
+    assert report["summary"]["pre_exclusion_hard_blocking_excluded_row_count"] == 1
+    assert report["summary"]["current_scan_hard_blocking_excluded_row_count"] == 1
+    assert report["summary"]["post_exclusion_hard_blocking_excluded_row_count"] == 1
+    assert report["summary"]["raw_row_exclusion_applied"] is False
+    assert report["summary"]["raw_row_exclusion_deferred_writer_active"] is True
+    assert report["raw_row_exclusion"]["application_state"] == (
+        "deferred_writer_active"
+    )
+    assert report["raw_row_exclusion"]["backup_path"] is None
+    manifest = json.loads(
+        Path(report["raw_row_exclusion"]["manifest_path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["raw_mutation_applied"] is False
+    assert manifest["excluded_row_count"] == 1
+
+
+def test_raw_exclusion_aborts_when_source_changes_during_backup(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    target_date = "2026-06-04"
+    invalid_event = _event(
+        "swing_same_symbol_loss_reentry_cooldown",
+        {
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "source_book": "swing_dry_run",
+            "source_probe_id": "-",
+            "source_record_id": "-",
+            "source_stage": "exit",
+        },
+        record_id=1,
+    )
+    appended_event = _event(
+        "swing_same_symbol_loss_reentry_cooldown",
+        {
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "source_book": "swing_dry_run",
+            "source_probe_id": "append-race",
+            "source_record_id": "append-race",
+            "source_stage": "exit",
+        },
+        record_id=2,
+    )
+    _write_events(tmp_path, target_date, [invalid_event])
+    report = audit.build_observation_source_quality_audit(target_date)
+    raw_path = tmp_path / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    original_copyfileobj = audit.shutil.copyfileobj
+
+    def copy_and_append(source, target, *args, **kwargs):
+        result = original_copyfileobj(source, target, *args, **kwargs)
+        with raw_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(appended_event, ensure_ascii=False) + "\n")
+        return result
+
+    monkeypatch.setattr(audit.shutil, "copyfileobj", copy_and_append)
+
+    manifest = audit._exclude_hard_blocking_rows_from_raw(target_date, report)
+
+    rows = [
+        json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert manifest is None
+    assert [row["record_id"] for row in rows] == [1, 2]
+    assert not raw_path.with_suffix(".jsonl.tmp_row_exclusion").exists()
+    assert not list(
+        (tmp_path / "source_quality" / audit.RAW_ROW_EXCLUSION_DIRNAME).glob(
+            f"{target_date}_*/*.gz"
+        )
+    )
+
+
+def test_repeated_writer_defer_preserves_prior_applied_exclusion_history(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    target_date = "2026-06-04"
+    valid_id = "swing_dry_run:2026-06-04:KOSPI_ML:004710:exit:1780556300"
+    valid_event = _event(
+        "swing_same_symbol_loss_reentry_cooldown",
+        {
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "source_book": "swing_dry_run",
+            "source_probe_id": valid_id,
+            "source_record_id": valid_id,
+            "source_stage": "exit",
+        },
+        record_id=2,
+    )
+    invalid_event = _event(
+        "swing_same_symbol_loss_reentry_cooldown",
+        {
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "source_book": "swing_dry_run",
+            "source_probe_id": "-",
+            "source_record_id": "-",
+            "source_stage": "exit",
+        },
+        record_id=1,
+    )
+    _write_events(tmp_path, target_date, [invalid_event, valid_event])
+
+    applied = audit.write_report(target_date)
+    applied_manifest = applied["raw_row_exclusion"]["manifest_path"]
+    raw_path = tmp_path / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    with raw_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(invalid_event, ensure_ascii=False) + "\n")
+
+    monkeypatch.setattr(audit, "_raw_source_writer_active", lambda *_args: True)
+    first_deferred = audit.write_report(target_date)
+    second_deferred = audit.write_report(target_date)
+
+    assert first_deferred["raw_row_exclusion"]["application_state"] == (
+        "deferred_writer_active"
+    )
+    assert first_deferred["raw_row_exclusion_history"][0]["manifest_path"] == (
+        applied_manifest
+    )
+    assert second_deferred["raw_row_exclusion"]["application_state"] == (
+        "deferred_writer_active"
+    )
+    assert second_deferred["raw_row_exclusion_history"][0]["manifest_path"] == (
+        applied_manifest
+    )
 
 
 def test_observation_source_quality_excludes_raw_rows_from_gzip_source(

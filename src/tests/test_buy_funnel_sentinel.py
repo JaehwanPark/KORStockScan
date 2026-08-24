@@ -1091,6 +1091,179 @@ def test_cached_economic_participation_keeps_probe_bundle_lifecycle(
     assert economic["submitted_notional_to_requested_notional_pct"] == 10.0
 
 
+def test_economic_participation_counts_bounded_single_share_order_bundle(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-06"
+    _write_events(
+        tmp_path,
+        target_date,
+        [
+            _event(
+                target_date,
+                "12:25:05",
+                "order_bundle_submitted",
+                record_id=1,
+                fields={
+                    "requested_qty": 1,
+                    "submitted_qty": 1,
+                    "order_price": 15_410,
+                    "order_no": "0039766",
+                    "actual_order_submitted": True,
+                    "forced_entry_reason": "rising_missed_one_share_entry",
+                    "rising_missed_effective_venue": "KRX",
+                },
+            )
+        ],
+    )
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "12:30:00"),
+        dry_run=True,
+    )
+    economic = report["current"]["session"]["economic_participation"]
+
+    assert economic["observed_bundle_count"] == 1
+    assert economic["source_quality_valid_bundle_count"] == 1
+    assert economic["probe_only_bundle_count"] == 1
+    assert economic["full_submitted_bundle_count"] == 0
+    assert economic["requested_qty"] == 1
+    assert economic["submitted_qty"] == 1
+    assert economic["submitted_notional_krw"] == 15_410
+    assert economic["submitted_notional_to_requested_notional_pct"] == 100.0
+    assert economic["rows"][0]["probe_submission_source"] == (
+        "single_share_order_bundle"
+    )
+    axis = report["entry_submit_drought_contract"]["observation_breakdown"]["axes"][
+        "ECONOMIC_PARTICIPATION"
+    ]
+    assert axis["status"] == "observed"
+    assert (
+        "submission participation alone is not execution EV"
+        in axis["next_repair_action"]
+    )
+
+
+def test_economic_participation_excludes_unapproved_or_sim_single_share_bundles(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-06"
+    _write_events(
+        tmp_path,
+        target_date,
+        [
+            _event(
+                target_date,
+                "12:25:05",
+                "order_bundle_submitted",
+                record_id=1,
+                fields={
+                    "requested_qty": 1,
+                    "submitted_qty": 1,
+                    "order_price": 15_410,
+                    "order_no": "0039766",
+                    "actual_order_submitted": True,
+                    "forced_entry_reason": "normal_entry",
+                    "rising_missed_effective_venue": "KRX",
+                },
+            ),
+            _event(
+                target_date,
+                "12:25:06",
+                "order_bundle_submitted",
+                record_id=2,
+                fields={
+                    "requested_qty": 1,
+                    "submitted_qty": 1,
+                    "order_price": 15_410,
+                    "order_no": "SIM-0039767",
+                    "actual_order_submitted": False,
+                    "forced_entry_reason": "rising_missed_one_share_entry",
+                    "rising_missed_effective_venue": "KRX",
+                },
+            ),
+        ],
+    )
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "12:30:00"),
+        dry_run=True,
+    )
+    economic = report["current"]["session"]["economic_participation"]
+
+    assert economic["observed_bundle_count"] == 0
+    assert economic["source_quality_valid_bundle_count"] == 0
+    assert economic["submitted_qty"] == 0
+    assert economic["rows"] == []
+
+
+def test_economic_participation_separates_reused_record_id_by_attempt(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-06"
+    first_attempt = "SCANPROM-003350-first"
+    second_attempt = "SCANPROM-003350-second"
+    _write_events(
+        tmp_path,
+        target_date,
+        [
+            _event(
+                target_date,
+                "12:25:05",
+                "order_bundle_submitted",
+                record_id=34702,
+                fields={
+                    "requested_qty": 1,
+                    "submitted_qty": 1,
+                    "order_price": 11_630,
+                    "order_no": "0043176",
+                    "actual_order_submitted": True,
+                    "forced_entry_reason": "rising_missed_one_share_entry",
+                    "main_lifecycle_attempt_id": first_attempt,
+                    "rising_missed_effective_venue": "KRX",
+                },
+            ),
+            _event(
+                target_date,
+                "12:26:05",
+                "order_bundle_submitted",
+                record_id=34702,
+                fields={
+                    "requested_qty": 1,
+                    "submitted_qty": 1,
+                    "order_price": 11_750,
+                    "order_no": "0045294",
+                    "actual_order_submitted": True,
+                    "forced_entry_reason": "rising_missed_one_share_entry",
+                    "scanner_promotion_id": second_attempt,
+                    "rising_missed_effective_venue": "KRX",
+                },
+            ),
+        ],
+    )
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "12:30:00"),
+        dry_run=True,
+    )
+    economic = report["current"]["session"]["economic_participation"]
+
+    assert economic["observed_bundle_count"] == 2
+    assert economic["requested_qty"] == 2
+    assert economic["submitted_qty"] == 2
+    assert economic["submitted_qty_to_requested_qty_pct"] == 100.0
+    assert {row["attempt_key"] for row in economic["rows"]} == {
+        f"attempt:{first_attempt}",
+        f"attempt:{second_attempt}",
+    }
+
+
 def test_latency_drought_uses_latency_danger_reason_breakdown(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     rows = []

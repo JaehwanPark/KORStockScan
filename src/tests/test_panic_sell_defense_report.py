@@ -437,6 +437,50 @@ def test_unproven_exit_signal_is_not_real_panic_basis(monkeypatch, tmp_path):
     assert report["panic_metrics"]["panic_detected"] is False
 
 
+def test_exit_signal_inherits_real_provenance_from_broker_sell_receipt(
+    monkeypatch, tmp_path
+):
+    events = []
+    for index in range(3):
+        attempt_id = f"SCANPROM-real-{index}"
+        events.extend(
+            [
+                _event(
+                    f"10:{index:02d}:00",
+                    record_id=100 + index,
+                    fields={
+                        "main_lifecycle_attempt_id": attempt_id,
+                        "exit_rule": "scalp_hard_stop_pct",
+                        "reason": "hard stop loss",
+                        "profit_rate": -1.0,
+                    },
+                ),
+                _event(
+                    f"10:{index:02d}:01",
+                    record_id=100 + index,
+                    stage="sell_completed",
+                    fields={
+                        "main_lifecycle_attempt_id": attempt_id,
+                        "order_no": f"SELL-{index}",
+                        "profit_rate": -1.0,
+                    },
+                ),
+            ]
+        )
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(tmp_path, events)
+
+    report = report_mod.build_panic_sell_defense_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:29:00"),
+    )
+
+    assert report["panic_metrics"]["real_exit_count"] == 3
+    assert report["panic_metrics"]["non_real_exit_count"] == 0
+    assert report["panic_metrics"]["stop_loss_exit_count"] == 3
+    assert report["panic_metrics"]["unproven_exit_count"] == 0
+
+
 def test_non_real_assumed_fill_marks_sparse_exit_signal_as_non_real(
     monkeypatch, tmp_path
 ):

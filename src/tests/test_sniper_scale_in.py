@@ -34134,6 +34134,40 @@ def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
     assert "latency_block" in pipeline_stages
 
 
+def test_entry_arm_preserves_ratio_provenance(monkeypatch):
+    emitted = {}
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda _stock, _code, stage, **fields: emitted.update(
+            {"stage": stage, **fields}
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_rule",
+        lambda _name, default=None: default,
+    )
+    stock = {}
+
+    state_handlers._activate_entry_arm(
+        stock,
+        "123456",
+        ai_score=72,
+        ratio=0.25,
+        target_buy_price=10_000,
+        current_vpw=123.4,
+        reason="qualification_passed",
+        dynamic_reason="strong_window",
+    )
+
+    assert stock["entry_armed_ratio"] == 0.25
+    assert emitted["stage"] == "entry_armed"
+    assert emitted["ratio"] == "0.2500"
+    assert state_handlers._get_live_entry_arm(stock, "123456")["ratio"] == 0.25
+
+
 def test_publish_buy_signal_submission_notice_enqueues_once(monkeypatch):
     published = []
     pipeline_stages = []

@@ -268,6 +268,15 @@ def _has_real_exit_provenance(row: dict[str, Any]) -> bool:
 
 def _attempt_key(row: dict[str, Any]) -> str:
     fields = _event_fields(row)
+    for field_name in (
+        "main_lifecycle_attempt_id",
+        "attempt_id",
+        "scanner_promotion_id",
+        "main_lifecycle_id",
+    ):
+        value = _safe_str(fields.get(field_name))
+        if value and value not in {"-", "unknown", "not_available"}:
+            return f"attempt:{value}"
     record_id = row.get("record_id")
     if record_id in (None, "", 0):
         record_id = fields.get("id")
@@ -285,6 +294,19 @@ def _non_real_attempt_keys(events: list[dict[str, Any]]) -> set[str]:
         _attempt_key(row)
         for row in events
         if _attempt_key(row) and _is_non_real_observation(row)
+    }
+
+
+def _broker_confirmed_exit_attempt_keys(events: list[dict[str, Any]]) -> set[str]:
+    """Link a decision-time exit signal to its later broker fill receipt."""
+
+    return {
+        _attempt_key(row)
+        for row in events
+        if _safe_str(row.get("stage")) == "sell_completed"
+        and _attempt_key(row)
+        and _has_real_exit_provenance(row)
+        and not _is_non_real_observation(row)
     }
 
 
@@ -368,10 +390,14 @@ def _summarize_exit_metrics(
         row for row in events if _safe_str(row.get("pipeline")) == "HOLDING_PIPELINE"
     ]
     non_real_keys = _non_real_attempt_keys(holding_events)
+    broker_confirmed_exit_keys = _broker_confirmed_exit_attempt_keys(holding_events)
     real_exits = [
         row
         for row in exit_events
-        if _has_real_exit_provenance(row)
+        if (
+            _has_real_exit_provenance(row)
+            or _attempt_key(row) in broker_confirmed_exit_keys
+        )
         and _attempt_key(row) not in non_real_keys
         and not _is_non_real_observation(row)
     ]
@@ -379,7 +405,9 @@ def _summarize_exit_metrics(
     unproven_exits = [
         row
         for row in exit_events
-        if not _has_real_exit_provenance(row) and not _is_non_real_observation(row)
+        if row not in real_exits
+        and not _has_real_exit_provenance(row)
+        and not _is_non_real_observation(row)
     ]
     stop_loss_real = [row for row in real_exits if _is_stop_loss_exit(row)]
     profits = [
@@ -539,10 +567,12 @@ def _stream_pipeline_inputs(
     latest_dt: datetime | None = None
     scanned_row_count = 0
     retained_non_real_provenance_count = 0
+    retained_broker_exit_receipt_count = 0
 
     def observed_rows():
         nonlocal latest_dt
         nonlocal retained_non_real_provenance_count
+        nonlocal retained_broker_exit_receipt_count
         nonlocal scanned_row_count
         for row in iter_jsonl(path):
             scanned_row_count += 1
@@ -553,10 +583,18 @@ def _stream_pipeline_inputs(
             is_non_real_provenance = _safe_str(
                 row.get("pipeline")
             ) == "HOLDING_PIPELINE" and _is_non_real_observation(row)
-            if is_exit or is_non_real_provenance:
+            is_broker_exit_receipt = (
+                _safe_str(row.get("pipeline")) == "HOLDING_PIPELINE"
+                and _safe_str(row.get("stage")) == "sell_completed"
+                and _has_real_exit_provenance(row)
+                and not _is_non_real_observation(row)
+            )
+            if is_exit or is_non_real_provenance or is_broker_exit_receipt:
                 retained_exit_events.append(row)
                 if is_non_real_provenance and not is_exit:
                     retained_non_real_provenance_count += 1
+                if is_broker_exit_receipt:
+                    retained_broker_exit_receipt_count += 1
             yield row
 
     microstructure_detector = summarize_microstructure_detector_from_events(
@@ -580,6 +618,7 @@ def _stream_pipeline_inputs(
         "scanned_row_count": scanned_row_count,
         "retained_exit_event_count": len(retained_exit_events),
         "retained_non_real_provenance_count": retained_non_real_provenance_count,
+        "retained_broker_exit_receipt_count": retained_broker_exit_receipt_count,
         "full_event_list_materialized": False,
     }
     return (

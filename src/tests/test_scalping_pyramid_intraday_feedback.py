@@ -1252,6 +1252,101 @@ def test_whole_day_real_entry_lifecycle_reconciles_all_venues_and_entry_states(
     assert "state=holding" in markdown
 
 
+def test_real_entry_lifecycle_separates_reused_record_id_by_scanner_attempt(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-24.jsonl"
+    first_attempt = "SCANPROM-003350-1787544456554"
+    second_attempt = "SCANPROM-003350-1787546124680"
+    rows = [
+        _event(
+            34702,
+            "003350",
+            "한국화장품제조",
+            "order_bundle_submitted",
+            {
+                "actual_order_submitted": True,
+                "requested_qty": 1,
+                "order_no": "0043176",
+                "scanner_promotion_id": first_attempt,
+                "main_lifecycle_attempt_id": first_attempt,
+                "main_lifecycle_id": "mlc-first",
+                "effective_venue": "KRX",
+            },
+            emitted_at="2026-08-24T13:10:24+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            34702,
+            "003350",
+            "한국화장품제조",
+            "entry_order_cancel_confirmed",
+            {
+                "filled_qty": 0,
+                "unfilled_qty": 1,
+                "scanner_promotion_id": first_attempt,
+                "effective_venue": "KRX",
+            },
+            emitted_at="2026-08-24T13:11:52+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        # Runtime fill can be journaled before the order bundle receipt.
+        _event(
+            34702,
+            "003350",
+            "한국화장품제조",
+            "holding_started",
+            {
+                "actual_order_submitted": True,
+                "buy_qty": 1,
+                "buy_price": 11750,
+                "main_lifecycle_attempt_id": second_attempt,
+                "main_lifecycle_id": "mlc-second",
+                "effective_venue": "KRX",
+            },
+            emitted_at="2026-08-24T13:36:06+09:00",
+        ),
+        _event(
+            34702,
+            "003350",
+            "한국화장품제조",
+            "order_bundle_submitted",
+            {
+                "actual_order_submitted": True,
+                "requested_qty": 1,
+                "order_no": "0045294",
+                "main_lifecycle_attempt_id": second_attempt,
+                "main_lifecycle_id": "mlc-second",
+                "effective_venue": "KRX",
+            },
+            emitted_at="2026-08-24T13:36:09+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-24", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    summary = report["summary"]["whole_day_real_entry_lifecycle"]
+    lifecycle_rows = report["whole_day_real_entry_lifecycle_rows"]
+
+    assert summary["submitted_cycle_count"] == 2
+    assert summary["filled_cycle_count"] == 1
+    assert summary["canceled_unfilled_cycle_count"] == 1
+    assert summary["holding_cycle_count"] == 1
+    assert {item["attempt_id"] for item in lifecycle_rows} == {
+        first_attempt,
+        second_attempt,
+    }
+    assert {tuple(item["entry_submit_order_nos"]) for item in lifecycle_rows} == {
+        ("0043176",),
+        ("0045294",),
+    }
+
+
 def test_real_entry_lifecycle_reconstructs_legacy_full_close_realized_pnl(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-29.jsonl"
     rows = [

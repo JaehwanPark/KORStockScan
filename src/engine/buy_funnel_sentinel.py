@@ -941,13 +941,30 @@ def _count_unique(events: list[PipelineEvent], stage: str) -> int:
     return len({_attempt_key(event) for event in events if event.stage == stage})
 
 
+def _economic_participation_attempt_key(event: PipelineEvent) -> str:
+    """Keep economically distinct submit attempts separate on recycled records."""
+
+    for field_name in (
+        "main_lifecycle_attempt_id",
+        "attempt_id",
+        "scanner_promotion_id",
+        "main_lifecycle_id",
+    ):
+        value = _safe_str(event.fields.get(field_name))
+        if value and value not in {"-", "unknown", "not_available"}:
+            return f"attempt:{value}"
+    return _attempt_key(event)
+
+
 def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any]:
     """Measure submitted quantity/notional for probe bundles, not just symbol count."""
 
     events_by_attempt: dict[str, list[PipelineEvent]] = {}
     for event in events:
         if event.stage in PROBE_BUNDLE_LIFECYCLE_STAGES:
-            events_by_attempt.setdefault(_attempt_key(event), []).append(event)
+            events_by_attempt.setdefault(
+                _economic_participation_attempt_key(event), []
+            ).append(event)
 
     rows: list[dict[str, Any]] = []
     for attempt_key, attempt_events in events_by_attempt.items():
@@ -957,7 +974,18 @@ def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any
         probe_events = [
             event for event in attempt_events if event.stage == "probe_submitted"
         ]
-        if not order_events or not probe_events:
+        single_share_probe_events = [
+            event
+            for event in order_events
+            if _is_truthy_text(event.fields.get("actual_order_submitted"))
+            and int(_safe_float(event.fields.get("submitted_qty")) or 0) == 1
+            and _safe_str(event.fields.get("forced_entry_reason"))
+            in {
+                "rising_missed_one_share_entry",
+                "entry_setup_exploration_one_share_probe",
+            }
+        ]
+        if not order_events or (not probe_events and not single_share_probe_events):
             continue
 
         requested_qty = max(
@@ -1049,6 +1077,44 @@ def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any
             submitted_notional += qty * max(0, price)
             if event.stage == "residual_submitted":
                 residual_submitted_qty += qty
+        # Rising-missed bounded exploration is intentionally a complete
+        # one-share order, so it has no split-probe lifecycle event.  Preserve
+        # it as probe-only economic participation from the authoritative
+        # order_bundle_submitted receipt rather than silently reporting zero.
+        if not probe_events:
+            for event in single_share_probe_events:
+                order_identity = _safe_str(event.fields.get("order_no"))
+                if not order_identity:
+                    order_identity = (
+                        f"single_share_probe:{event.fields.get('submit_attempt_id')}:"
+                        f"{event.emitted_at.isoformat()}"
+                    )
+                if order_identity in seen_orders:
+                    continue
+                seen_orders.add(order_identity)
+                qty = max(
+                    0,
+                    int(
+                        _safe_float(
+                            event.fields.get("submitted_qty")
+                            or event.fields.get("effective_qty")
+                            or event.fields.get("forced_entry_qty")
+                        )
+                        or 0
+                    ),
+                )
+                price = int(
+                    _safe_float(
+                        event.fields.get("order_price")
+                        or event.fields.get("submitted_order_price")
+                        or event.fields.get("latest_price")
+                    )
+                    or 0
+                )
+                if qty <= 0 or price <= 0:
+                    continue
+                submitted_qty += qty
+                submitted_notional += qty * price
 
         authoritative_venue_values = {
             value
@@ -1098,13 +1164,22 @@ def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any
                 "requested_notional_krw": requested_notional,
                 "submitted_notional_krw": submitted_notional,
                 "residual_submitted_qty": residual_submitted_qty,
+                "probe_submission_source": (
+                    "split_probe_lifecycle"
+                    if probe_events
+                    else "single_share_order_bundle"
+                ),
                 "bundle_state": (
-                    "full_submitted"
-                    if requested_qty > 0 and submitted_qty >= requested_qty
+                    "probe_only"
+                    if single_share_probe_events and not probe_events
                     else (
-                        "partial_residual_submitted"
-                        if residual_submitted_qty > 0
-                        else "probe_only"
+                        "full_submitted"
+                        if requested_qty > 0 and submitted_qty >= requested_qty
+                        else (
+                            "partial_residual_submitted"
+                            if residual_submitted_qty > 0
+                            else "probe_only"
+                        )
                     )
                 ),
             }
@@ -1157,8 +1232,10 @@ def _economic_submit_participation(events: list[PipelineEvent]) -> dict[str, Any
         "rows": rows,
         "metric_role": "funnel_count",
         "decision_authority": "submit_drought_attribution_only",
-        "window_policy": "same_session_probe_bundle_lifecycle",
-        "sample_floor": "1_explicit_venue_probe_bundle",
+        "window_policy": ("same_session_split_probe_or_bounded_single_share_lifecycle"),
+        "sample_floor": (
+            "1_explicit_venue_split_probe_or_bounded_single_share_order_bundle"
+        ),
         "primary_decision_metric": "submitted_notional_to_requested_notional_pct",
         "source_quality_gate": (
             "explicit_conflict_free_venue_and_positive_requested_submitted_qty_price"
@@ -2339,8 +2416,19 @@ def _entry_submit_drought_observation_breakdown(
             ),
             "evidence": economic_participation,
             "next_repair_action": (
-                "attribute probe-only and residual-submitted quantity/notional by "
-                "explicit venue before interpreting submit conversion"
+                (
+                    "join venue-proven submitted probe receipts to fill and terminal "
+                    "outcomes; submission participation alone is not execution EV"
+                )
+                if int(
+                    economic_participation.get("source_quality_valid_bundle_count", 0)
+                    or 0
+                )
+                > 0
+                else (
+                    "attribute probe-only and residual-submitted quantity/notional by "
+                    "explicit venue before interpreting submit conversion"
+                )
             ),
         },
         "SIM_REAL_AUTHORITY": {

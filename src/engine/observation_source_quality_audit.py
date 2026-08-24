@@ -96,6 +96,8 @@ BACKFILL_PREFILTER_PATTERN = (
     "lifecycle_matrix_|holding|overbought|assumed_filled|virtual_fill"
 )
 RAW_ROW_EXCLUSION_DIRNAME = "raw_row_exclusion"
+RAW_ROW_EXCLUSION_ACTIVE_WRITER_GRACE_SEC = 120.0
+RAW_ROW_EXCLUSION_CONTRACT_VERSION = "writer_safe_revalidation_v2"
 ORDERBOOK_MICRO_LEGACY_UNKNOWN_BUCKET_REVIEW_CUTOFF = "2026-06-08"
 SCANNER_RANK_CHANGE_SIGN_STAGES = {
     "scalping_scanner_real_source_guard_block",
@@ -4430,8 +4432,15 @@ def _blocked_observation_records_fail_closed_source_gap(
 ) -> bool:
     """Accept explicit fail-closed source gaps on non-authoritative block rows."""
     if stage == "scalp_entry_action_decision_snapshot" and source == "minute_candle":
+        source_stage = str(fields.get("source_stage") or "").strip().lower()
+        preflight_blocked = (
+            str(fields.get("ai_input_preflight_status") or "").strip().lower()
+            == "blocked"
+            and not _contract_bool(fields.get("ai_input_preflight_allowed"), True)
+            and not _contract_bool(fields.get("provider_called"), True)
+        )
         return (
-            str(fields.get("source_stage") or "").strip().lower() == "latency_block"
+            (source_stage == "latency_block" or preflight_blocked)
             and str(fields.get("minute_candle_evaluation_state") or "").strip().lower()
             == "unavailable_fail_closed"
             and _contract_bool(fields.get("actual_order_submitted"), False)
@@ -4454,7 +4463,22 @@ def _blocked_observation_records_fail_closed_source_gap(
         "early_accel_recheck_skipped",
     }:
         reason = str(fields.get("skip_reason") or "").lower()
-        return any(
+        fail_closed = (
+            not _contract_bool(fields.get("actual_order_submitted"), True)
+            and _contract_bool(fields.get("broker_order_forbidden"), True)
+            and not _contract_bool(fields.get("allowed_runtime_apply"), True)
+        )
+        pre_feature_skip = reason in {
+            "disabled",
+            "scope_not_real_scalping_scanner",
+            "scanner_promotion_reason_not_early_accel",
+            "normal_ai_path",
+            "price_below_promotion_anchor",
+            "promotion_age_expired",
+            "max_recheck_count_reached",
+            "min_interval_not_elapsed",
+        }
+        source_gap_skip = any(
             token in reason
             for token in (
                 "source_quality",
@@ -4464,6 +4488,7 @@ def _blocked_observation_records_fail_closed_source_gap(
                 "stale",
             )
         )
+        return fail_closed and (pre_feature_skip or source_gap_skip)
     if stage == "adverse_fill_observed":
         return not _contract_bool(fields.get("feature_valid"), True)
     if stage not in {
@@ -6421,6 +6446,12 @@ def _write_markdown(report: dict[str, Any], path: Path) -> None:
         f"- event_count: `{report.get('summary', {}).get('event_count')}`",
         f"- tuning_input_policy: `{report.get('summary', {}).get('tuning_input_policy')}`",
         f"- hard_blocking_excluded_row_count: `{report.get('summary', {}).get('hard_blocking_excluded_row_count')}`",
+        f"- pre_exclusion_hard_blocking_excluded_row_count: `{report.get('summary', {}).get('pre_exclusion_hard_blocking_excluded_row_count')}`",
+        f"- current_scan_hard_blocking_excluded_row_count: `{report.get('summary', {}).get('current_scan_hard_blocking_excluded_row_count')}`",
+        f"- post_exclusion_hard_blocking_excluded_row_count: `{report.get('summary', {}).get('post_exclusion_hard_blocking_excluded_row_count')}`",
+        f"- raw_row_exclusion_applied: `{report.get('summary', {}).get('raw_row_exclusion_applied')}`",
+        f"- raw_row_exclusion_deferred_writer_active: `{report.get('summary', {}).get('raw_row_exclusion_deferred_writer_active')}`",
+        f"- raw_row_exclusion_revalidation_required: `{report.get('summary', {}).get('raw_row_exclusion_revalidation_required')}`",
         f"- tuning_input_allowed: `{report.get('summary', {}).get('tuning_input_allowed')}`",
         f"- decision_authority: `{report.get('policy', {}).get('decision_authority')}`",
         f"- runtime_effect: `{report.get('policy', {}).get('runtime_effect')}`",
@@ -6515,6 +6546,136 @@ def _raw_row_exclusion_paths(
     )
 
 
+def _raw_source_writer_active(target_date: str, raw_path: Path) -> bool:
+    """Conservatively detect a live same-day append target.
+
+    The pipeline writer opens the JSONL for each append and does not share the
+    audit process lock. Replacing a recently written same-day file can race an
+    append and silently discard an event, so physical row exclusion is deferred
+    until the source has been quiet beyond the grace period.
+    """
+
+    try:
+        is_today = date.fromisoformat(target_date) == datetime.now().astimezone().date()
+        age_sec = max(0.0, datetime.now().timestamp() - raw_path.stat().st_mtime)
+    except (OSError, ValueError):
+        return False
+    configured_grace = _safe_float(
+        os.getenv(
+            "KORSTOCKSCAN_RAW_ROW_EXCLUSION_WRITER_GRACE_SEC",
+            str(RAW_ROW_EXCLUSION_ACTIVE_WRITER_GRACE_SEC),
+        )
+    )
+    grace_sec = max(
+        1.0,
+        configured_grace
+        if configured_grace is not None
+        else RAW_ROW_EXCLUSION_ACTIVE_WRITER_GRACE_SEC,
+    )
+    return is_today and age_sec <= grace_sec
+
+
+def _pending_raw_row_exclusion_manifest(
+    target_date: str,
+    report: dict[str, Any],
+    raw_path: Path,
+) -> dict[str, Any]:
+    exclusions = [
+        item
+        for item in (report.get("hard_blocking_row_exclusions") or [])
+        if isinstance(item, dict)
+    ]
+    manifest_path, _ = _raw_row_exclusion_paths(target_date)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    stage_counts: Counter[str] = Counter()
+    field_gap_counts: Counter[str] = Counter()
+    reason_counts: Counter[str] = Counter()
+    timestamps: list[str] = []
+    producer_hints: dict[str, dict[str, Any]] = {}
+    sample_rows: list[dict[str, Any]] = []
+    excluded_lines: list[int] = []
+    for exclusion in exclusions:
+        stage = str(exclusion.get("stage") or "-")
+        stage_counts[stage] += 1
+        line_no = int(exclusion.get("line_no") or 0)
+        if line_no > 0:
+            excluded_lines.append(line_no)
+        emitted_at = str(exclusion.get("emitted_at") or "").strip()
+        if emitted_at:
+            timestamps.append(emitted_at)
+        reasons = list(exclusion.get("exclusion_reasons") or ["row_contract_gap"])
+        reason_counts.update(str(reason) for reason in reasons)
+        for category in ("missing_fields", "zero_fields", "invalid_fields"):
+            for field in exclusion.get(category) or []:
+                field_gap_counts[f"{category}:{field}"] += 1
+        hint = exclusion.get("producer_hint")
+        if not isinstance(hint, dict):
+            hint = {"stage": stage, "subsystem": "unknown_producer"}
+        aggregate = producer_hints.setdefault(stage, {**hint, "count": 0})
+        aggregate["count"] = int(aggregate.get("count") or 0) + 1
+        if len(sample_rows) < 10:
+            sample_rows.append(
+                {
+                    "line_no": line_no,
+                    "stage": stage,
+                    "emitted_at": emitted_at or None,
+                    "record_id": exclusion.get("record_id"),
+                    "stock_code": exclusion.get("stock_code"),
+                    "reasons": reasons,
+                    "gap_fields": {
+                        key: list(exclusion.get(key) or [])
+                        for key in (
+                            "missing_fields",
+                            "zero_fields",
+                            "invalid_fields",
+                        )
+                        if exclusion.get(key)
+                    },
+                }
+            )
+    halt_context = _market_halt_context_for_exclusion_timestamps(
+        target_date, timestamps
+    )
+    manifest = {
+        "report_type": "raw_row_exclusion",
+        "target_date": target_date,
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "policy": "exclude_defective_rows_not_full_day_raw",
+        "audit_contract_version": RAW_ROW_EXCLUSION_CONTRACT_VERSION,
+        "application_state": "deferred_writer_active",
+        "raw_mutation_applied": False,
+        "deferred_writer_active": True,
+        "manifest_path": str(manifest_path),
+        "source_path": str(raw_path),
+        "backup_path": None,
+        "excluded_row_count": len(exclusions),
+        "stage_counts": dict(sorted(stage_counts.items())),
+        "field_gap_counts": dict(sorted(field_gap_counts.items())),
+        "exclusion_reasons": dict(sorted(reason_counts.items())),
+        "first_timestamp": min(timestamps) if timestamps else None,
+        "last_timestamp": max(timestamps) if timestamps else None,
+        **halt_context,
+        "sample_rows": sample_rows,
+        "producer_hint": sorted(
+            producer_hints.values(),
+            key=lambda item: (-int(item.get("count") or 0), str(item.get("stage"))),
+        ),
+        "excluded_lines": sorted(excluded_lines),
+        "forbidden_uses": [
+            "EV",
+            "rolling_tuning",
+            "MTD_tuning",
+            "cumulative_tuning",
+            "live_auto_promotion",
+            "runtime_approval",
+        ],
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return manifest
+
+
 def _exclude_hard_blocking_rows_from_raw(
     target_date: str, report: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -6523,6 +6684,10 @@ def _exclude_hard_blocking_rows_from_raw(
         return None
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
     if not raw_path.exists():
+        return None
+    try:
+        source_stat = raw_path.stat()
+    except OSError:
         return None
     excluded_lines = {
         int(item.get("line_no"))
@@ -6572,6 +6737,18 @@ def _exclude_hard_blocking_rows_from_raw(
             except json.JSONDecodeError:
                 payload = {"raw": line.rstrip("\n")}
             excluded_payloads.append({"line_no": line_no, "payload": payload})
+    try:
+        current_stat = raw_path.stat()
+    except OSError:
+        current_stat = None
+    if current_stat is None or (
+        current_stat.st_ino != source_stat.st_ino
+        or current_stat.st_size != source_stat.st_size
+        or current_stat.st_mtime_ns != source_stat.st_mtime_ns
+    ):
+        tmp_path.unlink(missing_ok=True)
+        backup_path.unlink(missing_ok=True)
+        return None
     exclusion_summary = _summarize_raw_row_exclusions(
         excluded_payloads,
         exclusions_by_line,
@@ -6583,6 +6760,10 @@ def _exclude_hard_blocking_rows_from_raw(
         "target_date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "policy": "exclude_defective_rows_not_full_day_raw",
+        "audit_contract_version": RAW_ROW_EXCLUSION_CONTRACT_VERSION,
+        "application_state": "applied",
+        "raw_mutation_applied": True,
+        "deferred_writer_active": False,
         "manifest_path": str(manifest_path),
         "source_path": str(raw_path),
         "backup_path": str(backup_path),
@@ -6605,36 +6786,163 @@ def _exclude_hard_blocking_rows_from_raw(
     return manifest
 
 
+def _existing_applied_raw_row_exclusion(target_date: str) -> dict[str, Any] | None:
+    json_path, _ = report_paths(target_date)
+    candidates: list[dict[str, Any]] = []
+    if json_path.exists():
+        try:
+            previous = json.loads(json_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+        exclusion = previous.get("raw_row_exclusion")
+        if isinstance(exclusion, dict):
+            candidates.append(exclusion)
+        candidates.extend(
+            item
+            for item in (previous.get("raw_row_exclusion_history") or [])
+            if isinstance(item, dict)
+        )
+
+    # A deferred manifest can replace the daily report more than once while the
+    # writer remains active. Recover the last applied provenance from its
+    # immutable run directory instead of relying only on the immediately prior
+    # daily JSON.
+    exclusion_root = DATA_DIR / "source_quality" / RAW_ROW_EXCLUSION_DIRNAME
+    for manifest_path in exclusion_root.glob(f"{target_date}_*/manifest.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if str(manifest.get("target_date") or "") != target_date:
+            continue
+        manifest.setdefault("manifest_path", str(manifest_path))
+        candidates.append(manifest)
+
+    applied_candidates: list[dict[str, Any]] = []
+    for candidate in candidates:
+        applied = candidate.get("raw_mutation_applied") is True or (
+            candidate.get("application_state") in {None, "applied"}
+            and candidate.get("backup_path")
+        )
+        manifest_path = Path(str(candidate.get("manifest_path") or ""))
+        if applied and manifest_path.is_file():
+            applied_candidates.append(candidate)
+    if not applied_candidates:
+        return None
+    latest = max(
+        applied_candidates,
+        key=lambda item: (
+            str(item.get("generated_at") or ""),
+            str(item.get("manifest_path") or ""),
+        ),
+    )
+    return dict(latest)
+
+
+def _attach_raw_row_exclusion(
+    report: dict[str, Any],
+    manifest: dict[str, Any],
+    *,
+    applied: bool,
+) -> None:
+    excluded_row_count = int(manifest.get("excluded_row_count") or 0)
+    report["raw_row_exclusion"] = {
+        "manifest_path": manifest.get("manifest_path"),
+        "backup_path": manifest.get("backup_path"),
+        "excluded_row_count": excluded_row_count,
+        "stage_counts": manifest.get("stage_counts") or {},
+        "field_gap_counts": manifest.get("field_gap_counts") or {},
+        "exclusion_reasons": manifest.get("exclusion_reasons") or {},
+        "first_timestamp": manifest.get("first_timestamp"),
+        "last_timestamp": manifest.get("last_timestamp"),
+        "market_halt_or_circuit_window_overlap": manifest.get(
+            "market_halt_or_circuit_window_overlap"
+        ),
+        "market_halt_or_circuit_context": manifest.get(
+            "market_halt_or_circuit_context"
+        ),
+        "sample_rows": manifest.get("sample_rows") or [],
+        "producer_hint": manifest.get("producer_hint") or [],
+        "policy": manifest.get("policy"),
+        "audit_contract_version": manifest.get("audit_contract_version"),
+        "application_state": "applied" if applied else "deferred_writer_active",
+        "raw_mutation_applied": applied,
+        "deferred_writer_active": not applied,
+    }
+    summary = report["summary"]
+    summary["current_scan_hard_blocking_excluded_row_count"] = int(
+        summary.get("hard_blocking_excluded_row_count") or 0
+    )
+    summary["pre_exclusion_hard_blocking_excluded_row_count"] = excluded_row_count
+    summary["hard_blocking_excluded_row_count"] = excluded_row_count
+    summary["post_exclusion_hard_blocking_excluded_row_count"] = (
+        int(summary.get("current_scan_hard_blocking_excluded_row_count") or 0)
+        if not applied
+        else 0
+    )
+    summary["raw_row_exclusion_applied"] = applied
+    summary["raw_row_exclusion_deferred_writer_active"] = not applied
+    summary["raw_row_exclusion_manifest"] = manifest.get("manifest_path")
+
+
 def write_report(target_date: str) -> dict[str, Any]:
+    previous_applied_exclusion = _existing_applied_raw_row_exclusion(target_date)
     report = build_observation_source_quality_audit(target_date)
-    exclusion_manifest = _exclude_hard_blocking_rows_from_raw(target_date, report)
-    if exclusion_manifest:
-        report = build_observation_source_quality_audit(target_date)
-        report["raw_row_exclusion"] = {
-            "manifest_path": exclusion_manifest.get("manifest_path"),
-            "backup_path": exclusion_manifest.get("backup_path"),
-            "excluded_row_count": exclusion_manifest.get("excluded_row_count"),
-            "stage_counts": exclusion_manifest.get("stage_counts") or {},
-            "field_gap_counts": exclusion_manifest.get("field_gap_counts") or {},
-            "exclusion_reasons": exclusion_manifest.get("exclusion_reasons") or {},
-            "first_timestamp": exclusion_manifest.get("first_timestamp"),
-            "last_timestamp": exclusion_manifest.get("last_timestamp"),
-            "market_halt_or_circuit_window_overlap": exclusion_manifest.get(
-                "market_halt_or_circuit_window_overlap"
-            ),
-            "market_halt_or_circuit_context": exclusion_manifest.get(
-                "market_halt_or_circuit_context"
-            ),
-            "sample_rows": exclusion_manifest.get("sample_rows") or [],
-            "producer_hint": exclusion_manifest.get("producer_hint") or [],
-            "policy": exclusion_manifest.get("policy"),
-        }
-        report["summary"]["raw_row_exclusion_applied"] = True
-        report["summary"]["raw_row_exclusion_manifest"] = exclusion_manifest.get(
-            "manifest_path"
+    raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
+    writer_active = bool(
+        report.get("hard_blocking_row_exclusions")
+        and raw_path.exists()
+        and _raw_source_writer_active(target_date, raw_path)
+    )
+    exclusion_manifest = None
+    if writer_active:
+        exclusion_manifest = _pending_raw_row_exclusion_manifest(
+            target_date, report, raw_path
         )
     else:
-        report["summary"]["raw_row_exclusion_applied"] = False
+        exclusion_manifest = _exclude_hard_blocking_rows_from_raw(
+            target_date, report
+        )
+        if exclusion_manifest is None and report.get("hard_blocking_row_exclusions"):
+            writer_active = True
+            exclusion_manifest = _pending_raw_row_exclusion_manifest(
+                target_date, report, raw_path
+            )
+    if exclusion_manifest:
+        if not writer_active:
+            report = build_observation_source_quality_audit(target_date)
+        _attach_raw_row_exclusion(
+            report,
+            exclusion_manifest,
+            applied=not writer_active,
+        )
+        if previous_applied_exclusion:
+            report["raw_row_exclusion_history"] = [previous_applied_exclusion]
+    else:
+        if previous_applied_exclusion:
+            _attach_raw_row_exclusion(
+                report,
+                previous_applied_exclusion,
+                applied=True,
+            )
+        else:
+            report["summary"]["raw_row_exclusion_applied"] = False
+            report["summary"]["raw_row_exclusion_deferred_writer_active"] = False
+    legacy_applied_exclusion = bool(
+        previous_applied_exclusion
+        and previous_applied_exclusion.get("audit_contract_version")
+        != RAW_ROW_EXCLUSION_CONTRACT_VERSION
+    )
+    report["summary"]["raw_row_exclusion_revalidation_required"] = (
+        legacy_applied_exclusion
+    )
+    if legacy_applied_exclusion:
+        report["summary"]["tuning_input_allowed"] = False
+        report["summary"]["blocked_reason"] = (
+            "raw_row_exclusion_revalidation_required"
+        )
+        if report.get("status") == "pass":
+            report["status"] = "warning"
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(

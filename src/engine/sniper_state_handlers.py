@@ -69614,6 +69614,7 @@ def _clear_entry_arm(stock):
             "entry_armed_ai_score",
             "entry_armed_target_buy_price",
             "entry_armed_vpw",
+            "entry_armed_ratio",
             "entry_armed_dynamic_reason",
             "entry_armed_resume_count",
         ),
@@ -69633,6 +69634,7 @@ def _activate_entry_arm(
 ):
     ttl_sec = int(_rule("SCALP_ENTRY_ARM_TTL_SEC", 20) or 20)
     now_ts = time.time()
+    entry_ratio = _safe_float(ratio, 0.0)
     _mutate_stock_state(
         stock,
         set_fields={
@@ -69643,6 +69645,7 @@ def _activate_entry_arm(
             "entry_armed_ai_score": float(ai_score),
             "entry_armed_target_buy_price": int(target_buy_price or 0),
             "entry_armed_vpw": float(current_vpw),
+            "entry_armed_ratio": entry_ratio,
             "entry_armed_dynamic_reason": dynamic_reason,
             "entry_armed_resume_count": 0,
         },
@@ -69656,6 +69659,7 @@ def _activate_entry_arm(
         runtime_effect=False,
         forbidden_uses="runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
         ai_score=f"{float(ai_score):.1f}",
+        ratio=f"{entry_ratio:.4f}",
         ratio_authority=SCALPING_SIZING_FORMULA_VERSION,
         target_buy_price=int(target_buy_price or 0),
         current_vpw=f"{float(current_vpw):.1f}",
@@ -69701,6 +69705,7 @@ def _get_live_entry_arm(stock, code):
         "ai_score": float(stock.get("entry_armed_ai_score", 50.0) or 50.0),
         "target_buy_price": int(stock.get("entry_armed_target_buy_price", 0) or 0),
         "current_vpw": float(stock.get("entry_armed_vpw", 0.0) or 0.0),
+        "ratio": float(stock.get("entry_armed_ratio", 0.0) or 0.0),
         "reason": stock.get("entry_armed_reason"),
         "dynamic_reason": stock.get("entry_armed_dynamic_reason"),
     }
