@@ -4253,6 +4253,7 @@ class KiwoomWSManager:
         force=False,
         source="",
         repair_cycle="",
+        include_alternate_route=False,
         remove_before_reg=None,
         required_realtime_types=None,
         realtime_types=None,
@@ -4267,6 +4268,9 @@ class KiwoomWSManager:
 
         force = self._flag_enabled(force, default=False)
         observation_only = self._flag_enabled(observation_only, default=False)
+        explicit_alternate_route = self._flag_enabled(
+            include_alternate_route, default=False
+        )
         normalized_codes = self._normalize_subscribe_codes(codes)
         requested_items_by_code = {}
         for raw_code in codes:
@@ -4381,7 +4385,7 @@ class KiwoomWSManager:
                     new_targets = rebuild_targets
                     replace_existing = True
             enforce_item_budget = True
-            include_alternate_route = persistent_repair
+            include_alternate_route = persistent_repair or explicit_alternate_route
             alternate_route_codes = None
             if include_alternate_route:
                 alternate_route_codes, alternate_skipped = (
@@ -4655,6 +4659,10 @@ class KiwoomWSManager:
             "source": source,
             "repair_cycle": repair_cycle,
         }
+        if "include_alternate_route" in payload:
+            kwargs["include_alternate_route"] = payload.get(
+                "include_alternate_route"
+            )
         required_realtime_types = payload.get("required_realtime_types")
         if required_realtime_types is None and source.startswith("scanner_"):
             required_realtime_types = ("0B",)

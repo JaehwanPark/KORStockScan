@@ -41284,6 +41284,7 @@ def test_holding_stale_ws_blocks_exit_and_requests_repair(monkeypatch):
                 "source": "holding_ws_freshness_repair",
                 "force": True,
                 "repair_cycle": "holding_ws_stale_or_missing",
+                "include_alternate_route": True,
             },
         )
     ]
@@ -41333,6 +41334,7 @@ def test_holding_zero_ws_curr_blocks_exit_and_requests_repair(monkeypatch):
                 "source": "holding_ws_freshness_repair",
                 "force": True,
                 "repair_cycle": "holding_ws_stale_or_missing",
+                "include_alternate_route": True,
             },
         )
     ]
@@ -41403,6 +41405,7 @@ def test_holding_stale_ws_rest_quote_recovery_allows_exit_evaluation(monkeypatch
                 "source": "holding_ws_freshness_repair",
                 "force": True,
                 "repair_cycle": "holding_ws_stale_or_missing",
+                "include_alternate_route": True,
             },
         )
     ]
@@ -42028,6 +42031,7 @@ def test_holding_recent_ws_blocks_divergent_rest_quote_recovery(monkeypatch):
                 "source": "holding_ws_freshness_repair",
                 "force": True,
                 "repair_cycle": "holding_ws_stale_or_missing",
+                "include_alternate_route": True,
             },
         )
     ]

@@ -1780,6 +1780,82 @@ def test_execute_subscribe_preserves_multiple_explicit_routes_for_same_symbol(
     assert captured[0][1]["realtime_types"] == ("0B", "0D")
 
 
+def test_holding_repair_explicitly_requests_alternate_route(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    captured = []
+
+    def fake_send_reg(codes, **kwargs):
+        captured.append((list(codes), kwargs))
+
+        async def complete():
+            return None
+
+        return complete()
+
+    def fake_schedule(coro, loop):
+        coro.close()
+        return type(
+            "FakeFuture", (), {"add_done_callback": lambda self, callback: None}
+        )()
+
+    monkeypatch.setattr(manager, "_send_reg", fake_send_reg)
+    monkeypatch.setattr(
+        manager,
+        "_filter_alternate_route_targets",
+        lambda codes: (list(codes), []),
+    )
+    monkeypatch.setattr(
+        kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule
+    )
+
+    manager.execute_subscribe(
+        ["237690"],
+        force=True,
+        source="holding_ws_freshness_repair",
+        repair_cycle="holding_ws_stale_or_missing",
+        include_alternate_route=True,
+    )
+
+    assert captured[0][0] == ["237690"]
+    assert captured[0][1]["include_alternate_route"] is True
+    assert captured[0][1]["alternate_route_codes"] == ["237690"]
+
+
+def test_reg_event_forwards_explicit_alternate_route_request(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    subscribed = []
+    monkeypatch.setattr(
+        manager,
+        "execute_subscribe",
+        lambda codes, **kwargs: subscribed.append((list(codes), kwargs)),
+    )
+
+    manager._handle_reg_event(
+        {
+            "codes": ["237690"],
+            "source": "holding_ws_freshness_repair",
+            "force": True,
+            "repair_cycle": "holding_ws_stale_or_missing",
+            "include_alternate_route": True,
+        }
+    )
+
+    assert subscribed == [
+        (
+            ["237690"],
+            {
+                "force": True,
+                "source": "holding_ws_freshness_repair",
+                "repair_cycle": "holding_ws_stale_or_missing",
+                "include_alternate_route": True,
+            },
+        )
+    ]
+
+
 def test_send_reg_preserves_existing_plain_and_supplemental_integrated_route(
     monkeypatch,
 ):

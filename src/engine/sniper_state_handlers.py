@@ -44111,6 +44111,12 @@ def _maybe_publish_holding_ws_repair(state, code, fields, *, now_ts):
                 "source": "holding_ws_freshness_repair",
                 "force": True,
                 "repair_cycle": "holding_ws_stale_or_missing",
+                # A held symbol can have entered through KRX while its only
+                # executable feed is now the integrated/NXT route.  Ask the
+                # WS owner to register both the effective base item and the
+                # official SOR `_AL` companion; this changes source recovery
+                # only and grants no order or exit authority.
+                "include_alternate_route": True,
             },
         )
         if isinstance(state, dict):

@@ -7,7 +7,7 @@ import os
 import time
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, time as datetime_time
+from datetime import datetime, time as datetime_time, timedelta
 from functools import lru_cache
 from inspect import Parameter, signature
 from pathlib import Path
@@ -60,6 +60,8 @@ MAX_CANCEL_ATTEMPTS = 3
 MAX_SELL_ATTEMPTS = 3
 SELL_RETRY_SEC = 5
 TAKE_PROFIT_BPS = 100
+DEFAULT_ENTRY_REJECT_COOLDOWN_SEC = 60
+MAX_ENTRY_REJECT_COOLDOWN_SEC = 1800
 CUMULATIVE_RESEARCH_BLOCK_REASONS = frozenset(
     {
         "research_accumulation_incomplete",
@@ -225,6 +227,28 @@ def _timestamp(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         return None
     return parsed.astimezone(KST)
+
+
+def _entry_reject_cooldown_sec() -> int:
+    """Return bounded retry suppression after a definitive broker rejection.
+
+    Zero explicitly disables the operational guard for rollback.  The guard
+    never changes quantity or interprets a rejection as broker authorization;
+    it only prevents a stream of distinct widget snapshots from repeating the
+    same rejected order every few seconds.
+    """
+
+    raw = os.getenv(
+        "KORSTOCKSCAN_WIDGET_ENTRY_REJECT_COOLDOWN_SEC",
+        str(DEFAULT_ENTRY_REJECT_COOLDOWN_SEC),
+    )
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = DEFAULT_ENTRY_REJECT_COOLDOWN_SEC
+    if value <= 0:
+        return 0
+    return min(value, MAX_ENTRY_REJECT_COOLDOWN_SEC)
 
 
 @lru_cache(maxsize=32)
@@ -1527,6 +1551,12 @@ class WidgetSignalAutoTrader:
         ):
             return False
         latest = entry_orders[-1]
+        cooldown_sec = _entry_reject_cooldown_sec()
+        rejection_fingerprint = self._entry_rejection_fingerprint(
+            spec.code,
+            latest.get("return_code"),
+            latest.get("return_msg"),
+        )
         symbol_state.update(
             {
                 "entry_episode_open": False,
@@ -1534,6 +1564,13 @@ class WidgetSignalAutoTrader:
                 "entry_submit_rejected_signal_id": entry_signal_id,
                 "entry_submit_rejected_return_code": latest.get("return_code"),
                 "entry_submit_rejected_return_msg": latest.get("return_msg"),
+                "entry_submit_rejected_fingerprint": rejection_fingerprint,
+                "entry_submit_rejected_cooldown_sec": cooldown_sec,
+                "entry_submit_rejected_cooldown_until": (
+                    (now + timedelta(seconds=cooldown_sec)).isoformat()
+                    if cooldown_sec > 0
+                    else None
+                ),
             }
         )
         self._save()
@@ -1544,8 +1581,69 @@ class WidgetSignalAutoTrader:
             signal_id=entry_signal_id,
             return_code=latest.get("return_code"),
             return_msg=latest.get("return_msg"),
+            rejection_fingerprint=rejection_fingerprint,
+            retry_cooldown_sec=cooldown_sec,
             actual_order_submitted=False,
             execution_policy_id=symbol_state.get("execution_policy_id"),
+        )
+        return True
+
+    @staticmethod
+    def _entry_rejection_fingerprint(
+        code: str, return_code: object, return_msg: object
+    ) -> str:
+        normalized_msg = " ".join(str(return_msg or "").strip().lower().split())
+        return "|".join(
+            (
+                str(code or "").strip(),
+                str(return_code or "").strip(),
+                normalized_msg[:160],
+            )
+        )
+
+    def _block_recent_definitive_entry_rejection(
+        self,
+        *,
+        spec: WidgetSpec,
+        symbol_state: dict[str, Any],
+        source_signal_id: str,
+        now: datetime,
+    ) -> bool:
+        cooldown_until = _timestamp(
+            symbol_state.get("entry_submit_rejected_cooldown_until")
+        )
+        if cooldown_until is None or now >= cooldown_until:
+            return False
+        fingerprint = str(
+            symbol_state.get("entry_submit_rejected_fingerprint") or "unknown"
+        )
+        remaining_sec = max(0, int((cooldown_until - now).total_seconds()))
+        stable_block_id = ":".join(
+            (
+                spec.code,
+                now.date().isoformat(),
+                "BROKER_REJECT_COOLDOWN",
+                fingerprint,
+                cooldown_until.isoformat(),
+            )
+        )
+        self._record_entry_block_once(
+            spec=spec,
+            symbol_state=symbol_state,
+            signal_id=stable_block_id,
+            reason="entry_blocked_recent_broker_rejection",
+            now=now,
+            source_signal_id=source_signal_id,
+            rejection_fingerprint=fingerprint,
+            rejected_return_code=symbol_state.get(
+                "entry_submit_rejected_return_code"
+            ),
+            rejected_return_msg=symbol_state.get(
+                "entry_submit_rejected_return_msg"
+            ),
+            retry_cooldown_until=cooldown_until.isoformat(),
+            retry_cooldown_remaining_sec=remaining_sec,
+            actual_order_submitted=False,
         )
         return True
 
@@ -2192,6 +2290,13 @@ class WidgetSignalAutoTrader:
             return
         if signal_id == symbol_state.get("entry_signal_id"):
             return
+        if self._block_recent_definitive_entry_rejection(
+            spec=spec,
+            symbol_state=symbol_state,
+            source_signal_id=signal_id,
+            now=now,
+        ):
+            return
         if entry_policy is not None:
             cutoff_text = str(entry_policy.get("new_entry_cutoff_time") or "")
             try:
@@ -2288,6 +2393,9 @@ class WidgetSignalAutoTrader:
             "entry_submit_rejected_signal_id",
             "entry_submit_rejected_return_code",
             "entry_submit_rejected_return_msg",
+            "entry_submit_rejected_fingerprint",
+            "entry_submit_rejected_cooldown_sec",
+            "entry_submit_rejected_cooldown_until",
             "take_profit_basis_block_signal_id",
             "take_profit_basis_blocked_at",
             "take_profit_terminal_failure_at",
@@ -2337,10 +2445,17 @@ class WidgetSignalAutoTrader:
             and entry_order.get("broker_accepted") is False
         ):
             # A definitive broker rejection creates no custody and must not
-            # leave the source episode open.  Keep the consumed signal id so
-            # the same snapshot cannot submit repeatedly; a later distinct
-            # source-qualified signal may open a new episode.  Ambiguous
-            # transport outcomes remain open for broker reconciliation.
+            # leave the source episode open. Keep the consumed signal id so
+            # the same snapshot cannot submit repeatedly, and retain a short
+            # rejection cooldown so timestamp-varying snapshots cannot create
+            # a broker rejection storm. Ambiguous transport outcomes remain
+            # open for broker reconciliation.
+            cooldown_sec = _entry_reject_cooldown_sec()
+            rejection_fingerprint = self._entry_rejection_fingerprint(
+                spec.code,
+                entry_order.get("return_code"),
+                entry_order.get("return_msg"),
+            )
             symbol_state.update(
                 {
                     "entry_episode_open": False,
@@ -2352,6 +2467,13 @@ class WidgetSignalAutoTrader:
                     "entry_submit_rejected_return_msg": entry_order.get(
                         "return_msg"
                     ),
+                    "entry_submit_rejected_fingerprint": rejection_fingerprint,
+                    "entry_submit_rejected_cooldown_sec": cooldown_sec,
+                    "entry_submit_rejected_cooldown_until": (
+                        (now + timedelta(seconds=cooldown_sec)).isoformat()
+                        if cooldown_sec > 0
+                        else None
+                    ),
                 }
             )
             self._save()
@@ -2362,6 +2484,8 @@ class WidgetSignalAutoTrader:
                 signal_id=signal_id,
                 return_code=entry_order.get("return_code"),
                 return_msg=entry_order.get("return_msg"),
+                rejection_fingerprint=rejection_fingerprint,
+                retry_cooldown_sec=cooldown_sec,
                 actual_order_submitted=False,
                 execution_policy_id=symbol_state.get("execution_policy_id"),
             )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -343,7 +343,7 @@ def test_samsung_entry_telegram_follows_accepted_machine_action_only(
     assert recorder.events[-1]["execution_policy_session"] == "KRX_REGULAR"
 
 
-def test_definitive_entry_rejection_closes_episode_and_allows_new_signal(
+def test_definitive_entry_rejection_cools_down_distinct_signal_before_retry(
     tmp_path, monkeypatch
 ):
     now = _at(10)
@@ -357,6 +357,7 @@ def test_definitive_entry_rejection_closes_episode_and_allows_new_signal(
     assert symbol_state["entry_episode_open"] is False
     assert symbol_state["entry_signal_id"] == "ENTRY-1"
     assert symbol_state["entry_submit_rejected_return_code"] == "20"
+    assert symbol_state["entry_submit_rejected_cooldown_sec"] == 60
     assert recorder.events[-1]["event_type"] == (
         "entry_episode_closed_submit_rejected"
     )
@@ -365,9 +366,20 @@ def test_definitive_entry_rejection_closes_episode_and_allows_new_signal(
     trader.run_once(now.replace(second=1))
     assert gateway.buy_calls == [("999999", 1, "SOR")]
 
-    # A later distinct source-qualified event may try again.
+    # A distinct signal inside the bounded cooldown must not hit the broker.
     box["payload"] = _payload(now.replace(second=2), entry_id="ENTRY-2")
-    accepted = trader.run_once(now.replace(second=2))
+    cooled_down = trader.run_once(now.replace(second=2))
+    assert gateway.buy_calls == [("999999", 1, "SOR")]
+    assert cooled_down["symbols"]["999999"]["entry_episode_open"] is False
+    assert recorder.events[-1]["event_type"] == (
+        "entry_blocked_recent_broker_rejection"
+    )
+    assert recorder.events[-1]["actual_order_submitted"] is False
+
+    # A fresh source-qualified signal may retry after the cooldown expires.
+    retry_at = now + timedelta(seconds=61)
+    box["payload"] = _payload(retry_at, entry_id="ENTRY-3")
+    accepted = trader.run_once(retry_at)
     assert gateway.buy_calls == [
         ("999999", 1, "SOR"),
         ("999999", 1, "SOR"),
@@ -378,6 +390,7 @@ def test_definitive_entry_rejection_closes_episode_and_allows_new_signal(
     assert "entry_submit_rejected_signal_id" not in accepted["symbols"]["999999"]
     assert "entry_submit_rejected_return_code" not in accepted["symbols"]["999999"]
     assert "entry_submit_rejected_return_msg" not in accepted["symbols"]["999999"]
+    assert "entry_submit_rejected_cooldown_until" not in accepted["symbols"]["999999"]
 
 
 def test_persisted_definitive_entry_rejection_is_recovered_on_next_cycle(
@@ -415,9 +428,40 @@ def test_persisted_definitive_entry_rejection_is_recovered_on_next_cycle(
 
     assert gateway.buy_calls == []
     assert recovered["symbols"]["999999"]["entry_episode_open"] is False
+    assert (
+        recovered["symbols"]["999999"]["entry_submit_rejected_cooldown_sec"]
+        == 60
+    )
     assert recorder.events[-1]["event_type"] == (
         "entry_episode_recovered_submit_rejected"
     )
+
+
+def test_definitive_entry_rejection_cooldown_has_zero_second_rollback(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_ENTRY_REJECT_COOLDOWN_SEC", "0")
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, _, _ = _trader(tmp_path, monkeypatch, box)
+    gateway = RejectFirstBuyGateway()
+    trader.gateway = gateway
+
+    rejected = trader.run_once(now)
+    assert (
+        rejected["symbols"]["999999"]["entry_submit_rejected_cooldown_sec"]
+        == 0
+    )
+
+    retry_at = now.replace(second=2)
+    box["payload"] = _payload(retry_at, entry_id="ENTRY-2")
+    accepted = trader.run_once(retry_at)
+
+    assert gateway.buy_calls == [
+        ("999999", 1, "SOR"),
+        ("999999", 1, "SOR"),
+    ]
+    assert accepted["symbols"]["999999"]["entry_episode_open"] is True
 
 
 def test_ambiguous_entry_submit_keeps_episode_open_for_reconciliation(

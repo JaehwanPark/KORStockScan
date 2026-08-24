@@ -115,6 +115,13 @@
 - 주문가능현금·예수금 조회를 선행하지 않는다. 이 실행기는 국내주식 일반주문
   `kt10000`/`kt10001`을 제출하며, 미수 허용 여부와 최종 접수는 계좌 설정과
   증권사 응답이 결정한다. 신용주문 `kt10006`으로 바꾸지 않는다.
+- broker가 신규 매수를 명시적으로 거절하면 해당 episode는 custody 없이 닫고,
+  기본 60초 동안 뒤이어 오는 timestamp-varying 위젯 진입 신호의 broker 재제출을
+  차단한다. 거절 code/message fingerprint, cooldown 종료시각과 차단 event를 원장에
+  남기며, 수량 축소나 broker 승인 추정은 하지 않는다. 운영 롤백은
+  `KORSTOCKSCAN_WIDGET_ENTRY_REJECT_COOLDOWN_SEC=0`이고 양수 설정은 최대 1,800초로
+  제한된다. cooldown 만료 후에도 새 source-qualified 신호와 기존 guard를 모두
+  다시 통과해야 재시도한다.
 - 전역 BUY 일시정지, 신호 freshness/venue 계약, 단일 실행기 lock, 수량 상한,
   미체결 중복 방지는 우회하지 않는다.
 
