@@ -30,6 +30,7 @@
   - 판정 기준: workorder `main-ai-gap-9255430e31f5ce8afdedd9dd`의 owner=`MicroReversionForwardCollectorContinuity`, reason_codes=`stop_required, past_market_row_missing=167`를 source-only producer 보완으로 닫는다. 장전 free bytes가 writer low-disk watermark를 충분히 상회하는지 확인하고, 부족하면 실주문과 무관한 closed-date verified compression만 실행한 뒤 observer canary를 재검증한다.
   - 완료 조건: exact-date canary remains pass or row-exclusion-only through close; later clean windows continue collecting; provider replay remains held until queue-loss scope
   - 권한 경계: 이 항목은 source-quality/instrumentation 복구 전용이며 runtime env, 실주문·취소, threshold, provider/bot, quantity/cap, hard safety 또는 broker guard 변경 권한이 없다.
+  - 2026-08-24 수동 보완 증적: [exact exclusion purge](/home/ubuntu/KORStockScan/docs/audit-reports/2026-08-24-scalp-micro-reversion-source-exclusion-purge.md). 기존 manifest가 차단한 stream `196,935`행과 reference `5,689`행만 물리 제거했고, 정상 epoch/depth/current-date는 보존했다. 8월 21일 정상 raw `2,200,184,707 bytes`는 verified gzip으로 보존 압축했으며 observer canary와 권한 경계는 변하지 않았다.
 
 - [ ] `[ThresholdEnvAutoApplyPreopen0824] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-08-24`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-08-21.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-08-21.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)

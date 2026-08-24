@@ -26,6 +26,7 @@ from .path_journal import PathStoragePolicy, partition_maintenance_lock
 
 MAINTENANCE_SCHEMA = "scalp_micro_reversion_storage_maintenance_v1"
 MAINTENANCE_AUTHORITY = "post_session_storage_only_no_trading_authority"
+SOURCE_EXCLUSION_PURGE_SCHEMA = "scalp_micro_reversion_source_exclusion_purge_v1"
 KST = ZoneInfo("Asia/Seoul")
 MAINTENANCE_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_storage_retention",
@@ -52,6 +53,466 @@ class StorageMaintenanceAction:
     trade_date: str
     source_bytes: int
     applied: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SourceExclusionPurgeAction:
+    trade_date: str
+    venue: str
+    session_bucket: str
+    sequence_epochs: tuple[int, ...]
+    stream_rows_removed: int
+    event_reference_rows_removed: int
+    source_bytes_before: int
+    source_bytes_after: int
+    applied: bool
+
+
+def purge_excluded_forward_scopes(
+    root: Path,
+    *,
+    source_exclusion_manifest_path: Path,
+    apply: bool = False,
+    runtime_trade_date: date | None = None,
+) -> dict[str, object]:
+    """Physically remove only exact scopes already barred from P2 consumption.
+
+    This is storage cleanup, not a new source-quality decision. The existing
+    exclusion manifest remains the authority and whole-date deletion is never
+    inferred from a failed process epoch.
+    """
+
+    from .p2_replay import load_source_exclusion_manifest
+
+    if not isinstance(apply, bool):
+        raise TypeError("source exclusion purge authority must be a native boolean")
+    root_path = Path(root).resolve()
+    manifest_path = Path(source_exclusion_manifest_path).resolve()
+    manifest = load_source_exclusion_manifest(manifest_path)
+    today = runtime_trade_date or datetime.now(KST).date()
+    grouped: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+    for raw_entry in manifest["exclusions"]:
+        entry = dict(raw_entry)
+        key = (
+            str(entry["trade_date"]),
+            str(entry["venue"]),
+            str(entry["session_bucket"]),
+        )
+        grouped.setdefault(key, []).append(entry)
+
+    actions: list[SourceExclusionPurgeAction] = []
+    failures: list[dict[str, str]] = []
+    if apply:
+        for (trade_date_text, venue, session_bucket), entries in sorted(
+            grouped.items()
+        ):
+            leaf = (
+                root_path
+                / f"trade_date={trade_date_text}"
+                / f"venue={venue}"
+                / f"session={session_bucket}"
+            )
+            try:
+                trade_date = date.fromisoformat(trade_date_text)
+                if trade_date >= today:
+                    raise ValueError("current_or_future_trade_date_purge_forbidden")
+                leaf = _validated_descendant(root_path, leaf)
+                if not leaf.is_dir() or leaf.is_symlink():
+                    raise ValueError("source exclusion leaf must be a real directory")
+                _assert_tree_stable_and_closed(
+                    leaf,
+                    phase="source_exclusion_global_preflight",
+                )
+                _purge_one_excluded_leaf(leaf, entries=entries, apply=False)
+            except Exception as exc:
+                failures.append(
+                    {
+                        "trade_date": trade_date_text,
+                        "venue": venue,
+                        "session_bucket": session_bucket,
+                        "path": str(leaf),
+                        "error_type": type(exc).__name__,
+                        "reason": str(exc),
+                    }
+                )
+        if failures:
+            return _source_exclusion_purge_result(
+                root_path=root_path,
+                manifest_path=manifest_path,
+                manifest=manifest,
+                today=today,
+                apply=apply,
+                actions=actions,
+                failures=failures,
+            )
+    for (trade_date_text, venue, session_bucket), entries in sorted(grouped.items()):
+        leaf = (
+            root_path
+            / f"trade_date={trade_date_text}"
+            / f"venue={venue}"
+            / f"session={session_bucket}"
+        )
+        try:
+            trade_date = date.fromisoformat(trade_date_text)
+            if trade_date >= today:
+                raise ValueError("current_or_future_trade_date_purge_forbidden")
+            leaf = _validated_descendant(root_path, leaf)
+            if not leaf.is_dir() or leaf.is_symlink():
+                raise ValueError("source exclusion leaf must be a real directory")
+            if apply:
+                trade_dir = _validated_descendant(
+                    root_path, root_path / f"trade_date={trade_date_text}"
+                )
+                with partition_maintenance_lock(
+                    trade_dir,
+                    blocking=False,
+                    exclusive=True,
+                ):
+                    action = _purge_one_excluded_leaf(
+                        leaf,
+                        entries=entries,
+                        apply=True,
+                    )
+            else:
+                action = _purge_one_excluded_leaf(
+                    leaf,
+                    entries=entries,
+                    apply=False,
+                )
+            actions.append(action)
+        except Exception as exc:
+            failures.append(
+                {
+                    "trade_date": trade_date_text,
+                    "venue": venue,
+                    "session_bucket": session_bucket,
+                    "path": str(leaf),
+                    "error_type": type(exc).__name__,
+                    "reason": str(exc),
+                }
+            )
+
+    return _source_exclusion_purge_result(
+        root_path=root_path,
+        manifest_path=manifest_path,
+        manifest=manifest,
+        today=today,
+        apply=apply,
+        actions=actions,
+        failures=failures,
+    )
+
+
+def _source_exclusion_purge_result(
+    *,
+    root_path: Path,
+    manifest_path: Path,
+    manifest: dict[str, object],
+    today: date,
+    apply: bool,
+    actions: list[SourceExclusionPurgeAction],
+    failures: list[dict[str, str]],
+) -> dict[str, object]:
+    return {
+        "schema": SOURCE_EXCLUSION_PURGE_SCHEMA,
+        "generated_at": datetime.now(KST).isoformat(timespec="milliseconds"),
+        "root": str(root_path),
+        "source_exclusion_manifest": str(manifest_path),
+        "source_exclusion_manifest_schema": manifest["schema"],
+        "scope_policy": manifest["scope_policy"],
+        "runtime_trade_date": today.isoformat(),
+        "mode": "apply" if apply else "dry_run",
+        "status": "partial_failure" if failures else "pass",
+        "failure_count": len(failures),
+        "failures": failures,
+        "action_count": len(actions),
+        "stream_rows_removed": sum(row.stream_rows_removed for row in actions),
+        "event_reference_rows_removed": sum(
+            row.event_reference_rows_removed for row in actions
+        ),
+        "source_bytes_before": sum(row.source_bytes_before for row in actions),
+        "source_bytes_after": sum(row.source_bytes_after for row in actions),
+        "reclaimed_bytes": sum(
+            max(0, row.source_bytes_before - row.source_bytes_after) for row in actions
+        ),
+        "deletion_performed": any(row.applied for row in actions),
+        "actions": [asdict(row) for row in actions],
+        "metric_role": "source_quality_excluded_raw_storage_cleanup",
+        "decision_authority": MAINTENANCE_AUTHORITY,
+        "window_policy": "exact_closed_trade_date_venue_session_sequence_epoch",
+        "sample_floor": "not_applicable_exact_manifest_scope_cleanup",
+        "primary_decision_metric": "stream_rows_removed",
+        "source_quality_gate": (
+            "validated_existing_exclusion_manifest_and_exact_expected_row_counts"
+        ),
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+        "forbidden_uses": [
+            "whole_trade_date_deletion_when_exact_scope_is_available",
+            "current_trade_date_mutation",
+            "new_source_quality_exclusion_decision",
+            "broker_order_submission_or_cancel",
+            "threshold_provider_bot_quantity_or_cap_mutation",
+        ],
+    }
+
+
+def _purge_one_excluded_leaf(
+    leaf: Path,
+    *,
+    entries: list[dict[str, object]],
+    apply: bool,
+) -> SourceExclusionPurgeAction:
+    epochs = {int(entry["sequence_epoch"]) for entry in entries}
+    if len(epochs) != len(entries):
+        raise ValueError("duplicate source exclusion sequence epoch")
+    expected_stream = sum(int(entry["market_stream_row_count"]) for entry in entries)
+    expected_references = sum(int(entry["event_reference_count"]) for entry in entries)
+    stream_manifest = leaf / "market_stream.manifest.json"
+    stream_files = _manifest_available_sources(stream_manifest)
+    reference_files = _available_reference_sources(leaf)
+    files = [*stream_files, *reference_files]
+    if not files:
+        raise FileNotFoundError("source exclusion purge inputs are unavailable")
+    source_bytes_before = sum(path.stat().st_size for path in files)
+    removed_stream = _count_matching_epoch_rows(stream_files, epochs)
+    removed_references = _count_matching_epoch_rows(reference_files, epochs)
+    if removed_stream != expected_stream:
+        raise ValueError(
+            f"excluded stream row count mismatch:{removed_stream}!={expected_stream}"
+        )
+    if removed_references != expected_references:
+        raise ValueError(
+            "excluded event reference row count mismatch:"
+            f"{removed_references}!={expected_references}"
+        )
+    if not apply:
+        return SourceExclusionPurgeAction(
+            trade_date=str(entries[0]["trade_date"]),
+            venue=str(entries[0]["venue"]),
+            session_bucket=str(entries[0]["session_bucket"]),
+            sequence_epochs=tuple(sorted(epochs)),
+            stream_rows_removed=removed_stream,
+            event_reference_rows_removed=removed_references,
+            source_bytes_before=source_bytes_before,
+            source_bytes_after=source_bytes_before,
+            applied=False,
+        )
+
+    _assert_tree_stable_and_closed(leaf, phase="before_source_exclusion_purge")
+    snapshots = {path: _capture_stable_file(path) for path in files}
+    replacements: dict[Path, Path] = {}
+    backups: dict[Path, Path] = {}
+    manifest_before = stream_manifest.read_bytes()
+    publish_succeeded = False
+    try:
+        for source in files:
+            replacements[source] = _prepare_filtered_epoch_source(source, epochs)
+        for source, snapshot in snapshots.items():
+            _assert_source_unchanged_and_closed(
+                source,
+                snapshot,
+                phase="before_source_exclusion_publish",
+            )
+        for source in files:
+            backup = source.with_name(f".{source.name}.source-exclusion-backup")
+            if backup.exists() or backup.is_symlink():
+                raise FileExistsError(f"source exclusion backup exists:{backup}")
+            os.link(source, backup)
+            backups[source] = backup
+        _fsync_directory(leaf)
+        for source in files:
+            os.replace(replacements[source], source)
+            _fsync_directory(leaf)
+        _refresh_manifest_current_bytes(
+            stream_manifest,
+            as_of_date=datetime.now(KST).date(),
+        )
+        if _count_matching_epoch_rows(stream_files, epochs) != 0:
+            raise OSError("excluded stream rows remain after purge")
+        if _count_matching_epoch_rows(reference_files, epochs) != 0:
+            raise OSError("excluded reference rows remain after purge")
+        publish_succeeded = True
+    except Exception as publish_error:
+        rollback_errors: list[str] = []
+        for source, backup in backups.items():
+            if backup.exists():
+                try:
+                    os.replace(backup, source)
+                except Exception as exc:
+                    rollback_errors.append(
+                        f"source={source}:error={type(exc).__name__}:{exc}"
+                    )
+        if stream_manifest.exists() and stream_manifest.read_bytes() != manifest_before:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{stream_manifest.name}.",
+                suffix=".rollback",
+                dir=stream_manifest.parent,
+            )
+            try:
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(manifest_before)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                try:
+                    os.replace(temporary_name, stream_manifest)
+                except Exception as exc:
+                    rollback_errors.append(
+                        f"manifest={stream_manifest}:error={type(exc).__name__}:{exc}"
+                    )
+            finally:
+                Path(temporary_name).unlink(missing_ok=True)
+        _fsync_directory(leaf)
+        if rollback_errors:
+            raise RuntimeError(
+                "source_exclusion_rollback_failed:" + "|".join(rollback_errors)
+            ) from publish_error
+        raise
+    finally:
+        for temporary in replacements.values():
+            temporary.unlink(missing_ok=True)
+        if publish_succeeded:
+            for backup in backups.values():
+                backup.unlink(missing_ok=True)
+            _fsync_directory(leaf)
+
+    source_bytes_after = sum(path.stat().st_size for path in files)
+    return SourceExclusionPurgeAction(
+        trade_date=str(entries[0]["trade_date"]),
+        venue=str(entries[0]["venue"]),
+        session_bucket=str(entries[0]["session_bucket"]),
+        sequence_epochs=tuple(sorted(epochs)),
+        stream_rows_removed=removed_stream,
+        event_reference_rows_removed=removed_references,
+        source_bytes_before=source_bytes_before,
+        source_bytes_after=source_bytes_after,
+        applied=True,
+    )
+
+
+def _manifest_available_sources(manifest_path: Path) -> list[Path]:
+    sources: list[Path] = []
+    for logical in _manifest_logical_sources(manifest_path):
+        compressed = logical.with_suffix(f"{logical.suffix}.gz")
+        available = logical if logical.exists() else compressed
+        if not available.exists():
+            raise FileNotFoundError(f"manifest source is unavailable:{logical}")
+        sources.append(available)
+    return sources
+
+
+def _refresh_manifest_current_bytes(
+    manifest_path: Path,
+    *,
+    as_of_date: date,
+) -> None:
+    payload = _validated_manifest_payload(manifest_path)
+    for shard in payload["shards"]:
+        declared = manifest_path.parent / str(shard["file"])
+        logical = declared.with_suffix("") if declared.suffix == ".gz" else declared
+        compressed = logical.with_suffix(f"{logical.suffix}.gz")
+        available = logical if logical.exists() else compressed
+        if not available.exists():
+            raise FileNotFoundError(f"manifest shard is unavailable:{logical}")
+        shard["file"] = available.name
+        shard["bytes"] = available.stat().st_size
+        shard["compressed"] = available.suffix == ".gz"
+    payload["storage_maintenance_schema"] = MAINTENANCE_SCHEMA
+    payload["storage_maintenance_as_of_date"] = as_of_date.isoformat()
+    payload["source_exclusion_purge_schema"] = SOURCE_EXCLUSION_PURGE_SCHEMA
+    _write_json_atomic(manifest_path, payload)
+
+
+def _available_reference_sources(leaf: Path) -> list[Path]:
+    plain = leaf / "market_stream_event_references.jsonl"
+    compressed = plain.with_suffix(f"{plain.suffix}.gz")
+    available = [path for path in (plain, compressed) if path.exists()]
+    if len(available) != 1:
+        raise ValueError("exactly one event reference source is required")
+    if available[0].is_symlink() or not available[0].is_file():
+        raise OSError("event reference source must be a regular file")
+    return available
+
+
+def _open_jsonl_text(path: Path):
+    if path.suffix == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8")
+    return path.open("r", encoding="utf-8")
+
+
+def _count_matching_epoch_rows(paths: list[Path], epochs: set[int]) -> int:
+    count = 0
+    for path in paths:
+        with _open_jsonl_text(path) as handle:
+            for line_number, line in enumerate(handle, start=1):
+                try:
+                    row = json.loads(line)
+                except Exception as exc:
+                    raise ValueError(f"invalid JSONL:{path}:{line_number}") from exc
+                if not isinstance(row, dict):
+                    raise ValueError(
+                        f"JSONL row must be an object:{path}:{line_number}"
+                    )
+                if int(row.get("sequence_epoch") or -1) in epochs:
+                    count += 1
+    return count
+
+
+def _prepare_filtered_epoch_source(source: Path, epochs: set[int]) -> Path:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{source.name}.", suffix=".source-exclusion.tmp", dir=source.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        opener = gzip.open if source.suffix == ".gz" else open
+        kept_row_count = 0
+        with (
+            _open_jsonl_text(source) as input_handle,
+            opener(temporary, "wt", encoding="utf-8") as output_handle,
+        ):
+            for line_number, line in enumerate(input_handle, start=1):
+                try:
+                    row = json.loads(line)
+                except Exception as exc:
+                    raise ValueError(f"invalid JSONL:{source}:{line_number}") from exc
+                if not isinstance(row, dict):
+                    raise ValueError(
+                        f"JSONL row must be an object:{source}:{line_number}"
+                    )
+                if int(row.get("sequence_epoch") or -1) not in epochs:
+                    output_handle.write(line)
+                    kept_row_count += 1
+        verified_row_count = 0
+        with opener(temporary, "rt", encoding="utf-8") as verify_handle:
+            for line_number, line in enumerate(verify_handle, start=1):
+                try:
+                    row = json.loads(line)
+                except Exception as exc:
+                    raise ValueError(
+                        f"invalid filtered JSONL:{source}:{line_number}"
+                    ) from exc
+                if not isinstance(row, dict):
+                    raise ValueError(
+                        f"filtered JSONL row must be an object:{source}:{line_number}"
+                    )
+                if int(row.get("sequence_epoch") or -1) in epochs:
+                    raise ValueError(
+                        f"excluded epoch remains in filtered source:{source}"
+                    )
+                verified_row_count += 1
+        if verified_row_count != kept_row_count:
+            raise OSError(
+                f"filtered row count mismatch:{verified_row_count}!={kept_row_count}"
+            )
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o640)
+        return temporary
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def maintain_forward_storage(
@@ -1190,15 +1651,36 @@ def main() -> int:
             "older than the configured retention window. Disabled by default."
         ),
     )
-    args = parser.parse_args()
-    result = maintain_forward_storage(
-        args.root,
-        as_of_date=args.as_of_date,
-        apply=args.apply,
-        purge_expired=args.purge_expired,
+    parser.add_argument(
+        "--purge-source-exclusions",
+        type=Path,
+        help=(
+            "Remove only exact sequence-epoch scopes already present in the "
+            "validated source exclusion manifest. Dry-run unless --apply is set."
+        ),
     )
+    args = parser.parse_args()
+    if args.purge_source_exclusions is not None:
+        if args.purge_expired:
+            parser.error(
+                "--purge-expired and --purge-source-exclusions are separate authorities"
+            )
+        result = purge_excluded_forward_scopes(
+            args.root,
+            source_exclusion_manifest_path=args.purge_source_exclusions,
+            apply=args.apply,
+        )
+        exit_code = 0 if result["status"] == "pass" else 1
+    else:
+        result = maintain_forward_storage(
+            args.root,
+            as_of_date=args.as_of_date,
+            apply=args.apply,
+            purge_expired=args.purge_expired,
+        )
+        exit_code = 0
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

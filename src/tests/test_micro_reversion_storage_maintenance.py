@@ -14,7 +14,105 @@ from src.engine.scalping.micro_reversion import (
 from src.engine.scalping.micro_reversion.path_journal import PathStoragePolicy
 from src.engine.scalping.micro_reversion.storage_maintenance import (
     maintain_forward_storage,
+    purge_excluded_forward_scopes,
 )
+
+
+def _write_source_exclusion_fixture(
+    path: Path,
+    *,
+    trade_date: str,
+    venue: str = "SOR",
+    session_bucket: str = "SOR_REGULAR",
+    sequence_epoch: int = 123,
+    stream_rows: int = 1,
+    reference_rows: int = 1,
+) -> None:
+    payload = {
+        "schema": "scalp_micro_reversion_source_exclusion_manifest_v1",
+        "generated_at": f"{trade_date}T20:00:00+09:00",
+        "source_base_commit": "a" * 40,
+        "scope_policy": "exact_trade_date_venue_session_sequence_epoch",
+        "summary": {
+            "trade_date_count": 1,
+            "excluded_scope_count": 1,
+            "excluded_market_stream_row_count": stream_rows,
+            "excluded_event_reference_count": reference_rows,
+        },
+        "exclusions": [
+            {
+                "trade_date": trade_date,
+                "venue": venue,
+                "session_bucket": session_bucket,
+                "sequence_epoch": sequence_epoch,
+                "reason_code": "test_source_quality_failure",
+                "market_stream_row_count": stream_rows,
+                "event_reference_count": reference_rows,
+                "exchange_window_start": f"{trade_date}T09:00:00+09:00",
+                "exchange_window_end": f"{trade_date}T09:00:01+09:00",
+                "evidence": "test",
+            }
+        ],
+        "metric_role": "source_quality_exclusion_and_gate_b_input_filter",
+        "decision_authority": "p2_source_filter_only_no_policy_selection_authority",
+        "window_policy": "exact_trade_date_venue_session_sequence_epoch_only",
+        "sample_floor": "not_applicable_exact_failed_process_scope_exclusion",
+        "primary_decision_metric": "excluded_market_stream_row_count",
+        "source_quality_gate": "documented_exact_process_scope_failure",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+        "selection_authority": False,
+        "forbidden_uses": ["whole_trade_date_exclusion"],
+    }
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+
+def _write_exclusion_partition(
+    root: Path,
+    *,
+    trade_date: str,
+    excluded_epoch: int = 123,
+    valid_epoch: int = 456,
+) -> tuple[Path, Path, Path, Path]:
+    leaf = root / f"trade_date={trade_date}" / "venue=SOR" / "session=SOR_REGULAR"
+    leaf.mkdir(parents=True)
+    stream = leaf / "market_stream.jsonl.gz"
+    references = leaf / "market_stream_event_references.jsonl.gz"
+    depth = leaf / "market_depth_stream.jsonl.gz"
+    with gzip.open(stream, "wt", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps({"sequence_epoch": excluded_epoch, "row": "bad"}) + "\n"
+        )
+        handle.write(json.dumps({"sequence_epoch": valid_epoch, "row": "good"}) + "\n")
+    with gzip.open(references, "wt", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps({"sequence_epoch": excluded_epoch, "ref": "bad"}) + "\n"
+        )
+        handle.write(json.dumps({"sequence_epoch": valid_epoch, "ref": "good"}) + "\n")
+    with gzip.open(depth, "wt", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps({"sequence_epoch": excluded_epoch, "depth": "kept"}) + "\n"
+        )
+    manifest = leaf / "market_stream.manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "scalp_micro_reversion_market_path_manifest_v1",
+                "shards": [
+                    {
+                        "index": 0,
+                        "file": stream.name,
+                        "bytes": stream.stat().st_size,
+                        "compressed": True,
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return stream, references, depth, manifest
 
 
 def test_storage_maintenance_dry_run_does_not_mutate(tmp_path: Path) -> None:
@@ -919,3 +1017,148 @@ def test_storage_maintenance_rejects_overlapping_manifest_ownership_before_mutat
     assert second["status"] == "partial_failure"
     assert {path: path.read_bytes() for path in (source, *manifests)} == original
     assert not source.with_suffix(".jsonl.gz").exists()
+
+
+def test_source_exclusion_purge_dry_run_preserves_exact_scope(tmp_path: Path) -> None:
+    stream, references, depth, _ = _write_exclusion_partition(
+        tmp_path,
+        trade_date="2026-08-10",
+    )
+    exclusion = tmp_path / "exclusions.json"
+    _write_source_exclusion_fixture(exclusion, trade_date="2026-08-10")
+    original = {path: path.read_bytes() for path in (stream, references, depth)}
+
+    result = purge_excluded_forward_scopes(
+        tmp_path,
+        source_exclusion_manifest_path=exclusion,
+        runtime_trade_date=date(2026, 8, 11),
+    )
+
+    assert result["status"] == "pass"
+    assert result["mode"] == "dry_run"
+    assert result["stream_rows_removed"] == 1
+    assert result["event_reference_rows_removed"] == 1
+    assert result["deletion_performed"] is False
+    assert {path: path.read_bytes() for path in original} == original
+
+
+def test_source_exclusion_purge_removes_only_manifest_epoch(tmp_path: Path) -> None:
+    stream, references, depth, manifest = _write_exclusion_partition(
+        tmp_path,
+        trade_date="2026-08-10",
+    )
+    exclusion = tmp_path / "exclusions.json"
+    _write_source_exclusion_fixture(exclusion, trade_date="2026-08-10")
+    depth_before = depth.read_bytes()
+
+    result = purge_excluded_forward_scopes(
+        tmp_path,
+        source_exclusion_manifest_path=exclusion,
+        apply=True,
+        runtime_trade_date=date(2026, 8, 11),
+    )
+
+    assert result["status"] == "pass"
+    assert result["deletion_performed"] is True
+    with gzip.open(stream, "rt", encoding="utf-8") as handle:
+        assert [json.loads(line)["sequence_epoch"] for line in handle] == [456]
+    with gzip.open(references, "rt", encoding="utf-8") as handle:
+        assert [json.loads(line)["sequence_epoch"] for line in handle] == [456]
+    assert depth.read_bytes() == depth_before
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["shards"][0]["file"] == stream.name
+    assert payload["shards"][0]["bytes"] == stream.stat().st_size
+    assert not list(stream.parent.glob("*.source-exclusion-backup"))
+    assert not list(stream.parent.glob("*.source-exclusion.tmp"))
+
+
+def test_source_exclusion_purge_count_mismatch_is_fail_closed(tmp_path: Path) -> None:
+    stream, references, depth, manifest = _write_exclusion_partition(
+        tmp_path,
+        trade_date="2026-08-10",
+    )
+    exclusion = tmp_path / "exclusions.json"
+    _write_source_exclusion_fixture(
+        exclusion,
+        trade_date="2026-08-10",
+        stream_rows=2,
+    )
+    original = {
+        path: path.read_bytes() for path in (stream, references, depth, manifest)
+    }
+
+    result = purge_excluded_forward_scopes(
+        tmp_path,
+        source_exclusion_manifest_path=exclusion,
+        apply=True,
+        runtime_trade_date=date(2026, 8, 11),
+    )
+
+    assert result["status"] == "partial_failure"
+    assert result["deletion_performed"] is False
+    assert "excluded stream row count mismatch" in result["failures"][0]["reason"]
+    assert {path: path.read_bytes() for path in original} == original
+
+
+def test_source_exclusion_purge_rejects_current_trade_date(tmp_path: Path) -> None:
+    stream, references, depth, manifest = _write_exclusion_partition(
+        tmp_path,
+        trade_date="2026-08-10",
+    )
+    exclusion = tmp_path / "exclusions.json"
+    _write_source_exclusion_fixture(exclusion, trade_date="2026-08-10")
+    original = {
+        path: path.read_bytes() for path in (stream, references, depth, manifest)
+    }
+
+    result = purge_excluded_forward_scopes(
+        tmp_path,
+        source_exclusion_manifest_path=exclusion,
+        apply=True,
+        runtime_trade_date=date(2026, 8, 10),
+    )
+
+    assert result["status"] == "partial_failure"
+    assert result["deletion_performed"] is False
+    assert (
+        "current_or_future_trade_date_purge_forbidden"
+        in result["failures"][0]["reason"]
+    )
+    assert {path: path.read_bytes() for path in original} == original
+
+
+def test_source_exclusion_purge_rolls_back_files_when_manifest_refresh_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream, references, depth, manifest = _write_exclusion_partition(
+        tmp_path,
+        trade_date="2026-08-10",
+    )
+    exclusion = tmp_path / "exclusions.json"
+    _write_source_exclusion_fixture(exclusion, trade_date="2026-08-10")
+    original = {
+        path: path.read_bytes() for path in (stream, references, depth, manifest)
+    }
+
+    def fail_manifest_refresh(*args: object, **kwargs: object) -> None:
+        raise OSError("injected_manifest_refresh_failure")
+
+    monkeypatch.setattr(
+        storage_maintenance_module,
+        "_refresh_manifest_current_bytes",
+        fail_manifest_refresh,
+    )
+    result = purge_excluded_forward_scopes(
+        tmp_path,
+        source_exclusion_manifest_path=exclusion,
+        apply=True,
+        runtime_trade_date=date(2026, 8, 11),
+    )
+
+    assert result["status"] == "partial_failure"
+    assert result["deletion_performed"] is False
+    assert "injected_manifest_refresh_failure" in result["failures"][0]["reason"]
+    assert {path: path.read_bytes() for path in original} == original
+    assert not list(stream.parent.glob("*.source-exclusion-backup"))
+    assert not list(stream.parent.glob("*.source-exclusion.tmp"))

@@ -1,4 +1,3 @@
-950160 # auto_open_loss KRX_OPEN profit=-29.72% stop=-5.00%
 005930 # manual_operator samsung_electronics
 034020 # manual_operator doosan_widget_and_episode_independent_owners
 042660 # manual_operator hanwha_widget_and_episode_independent_owners
@@ -8,9 +7,10 @@
 080220 # manual_operator jeju_semiconductor_low_price_two_leg_owner
 035720 # manual_operator kakao_low_price_two_leg_owner
 015760 # manual_operator kepco_low_price_two_leg_owner
-476060 # auto_open_loss KRX_OPEN profit=-2.16% stop=-1.40%
 017670 # manual_operator sk_telecom_low_price_two_leg_owner
 028050 # manual_operator samsung_ea_low_price_two_leg_owner
 105630 # manual_operator hanse_low_price_two_leg_owner
 079160 # manual_operator cj_cgv_low_price_two_leg_owner
 002900 # manual_operator tym_low_price_two_leg_owner
+111770 # manual_operator youngone_low_price_two_leg_owner
+181710 # manual_operator nhn_low_price_two_leg_owner
