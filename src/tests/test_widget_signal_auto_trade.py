@@ -108,6 +108,19 @@ class FakeGateway:
         return self.snapshots.get(order_no, ExecutionSnapshot(True, False, 0, 0, 0))
 
 
+class RejectFirstBuyGateway(FakeGateway):
+    def __init__(self):
+        super().__init__()
+        self.reject_next_buy = True
+
+    def submit_buy(self, *, code, qty, route):
+        self.buy_calls.append((code, qty, route))
+        if self.reject_next_buy:
+            self.reject_next_buy = False
+            return SubmitResult(False, "", "20", "insufficient margin")
+        return self._accepted("B")
+
+
 class FakeEntryActionNotifier:
     def __init__(self, result="sent"):
         self.result = result
@@ -328,6 +341,106 @@ def test_samsung_entry_telegram_follows_accepted_machine_action_only(
     assert recorder.events[-1]["event_type"] == "entry_action_telegram_delivery"
     assert recorder.events[-1]["actual_order_submitted"] is True
     assert recorder.events[-1]["execution_policy_session"] == "KRX_REGULAR"
+
+
+def test_definitive_entry_rejection_closes_episode_and_allows_new_signal(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, _, recorder = _trader(tmp_path, monkeypatch, box)
+    gateway = RejectFirstBuyGateway()
+    trader.gateway = gateway
+
+    rejected = trader.run_once(now)
+    symbol_state = rejected["symbols"]["999999"]
+    assert symbol_state["entry_episode_open"] is False
+    assert symbol_state["entry_signal_id"] == "ENTRY-1"
+    assert symbol_state["entry_submit_rejected_return_code"] == "20"
+    assert recorder.events[-1]["event_type"] == (
+        "entry_episode_closed_submit_rejected"
+    )
+
+    # The same source event remains consumed, preventing rejection storms.
+    trader.run_once(now.replace(second=1))
+    assert gateway.buy_calls == [("999999", 1, "SOR")]
+
+    # A later distinct source-qualified event may try again.
+    box["payload"] = _payload(now.replace(second=2), entry_id="ENTRY-2")
+    accepted = trader.run_once(now.replace(second=2))
+    assert gateway.buy_calls == [
+        ("999999", 1, "SOR"),
+        ("999999", 1, "SOR"),
+    ]
+    assert accepted["symbols"]["999999"]["entry_episode_open"] is True
+    assert accepted["symbols"]["999999"]["orders"][-1]["broker_accepted"] is True
+    assert "entry_submit_rejected_at" not in accepted["symbols"]["999999"]
+    assert "entry_submit_rejected_signal_id" not in accepted["symbols"]["999999"]
+    assert "entry_submit_rejected_return_code" not in accepted["symbols"]["999999"]
+    assert "entry_submit_rejected_return_msg" not in accepted["symbols"]["999999"]
+
+
+def test_persisted_definitive_entry_rejection_is_recovered_on_next_cycle(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now)}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    box["payload"] = _payload(now, entry_id="ENTRY-1")
+    symbol_state = trader._state["symbols"]["999999"]
+    symbol_state.update(
+        {
+            "entry_episode_open": True,
+            "entry_signal_id": "ENTRY-1",
+            "entry_consumed_at": now.isoformat(),
+            "orders": [
+                {
+                    "side": "BUY",
+                    "order_role": engine.ORDER_ROLE_ENTRY_BUY,
+                    "signal_id": "ENTRY-1",
+                    "status": "FAILED",
+                    "broker_accepted": False,
+                    "filled_qty": 0,
+                    "remaining_qty": 1,
+                    "return_code": "20",
+                    "return_msg": "insufficient margin",
+                }
+            ],
+        }
+    )
+    trader._save()
+
+    recovered = trader.run_once(now.replace(second=1))
+
+    assert gateway.buy_calls == []
+    assert recovered["symbols"]["999999"]["entry_episode_open"] is False
+    assert recorder.events[-1]["event_type"] == (
+        "entry_episode_recovered_submit_rejected"
+    )
+
+
+def test_ambiguous_entry_submit_keeps_episode_open_for_reconciliation(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box)
+    gateway.submit_buy = lambda **kwargs: SubmitResult(
+        False,
+        "",
+        "ReadTimeout",
+        "transport outcome unknown",
+        ambiguous=True,
+    )
+
+    state = trader.run_once(now)
+    symbol_state = state["symbols"]["999999"]
+
+    assert symbol_state["entry_episode_open"] is True
+    assert symbol_state["orders"][-1]["status"] == "AMBIGUOUS"
+    assert symbol_state["orders"][-1]["broker_accepted"] is False
+    assert "entry_submit_rejected_at" not in symbol_state
 
 
 def test_episode_terminal_event_keeps_entry_session_after_session_transition(

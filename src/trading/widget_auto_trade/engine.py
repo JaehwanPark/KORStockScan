@@ -1497,6 +1497,58 @@ class WidgetSignalAutoTrader:
         )
         return True
 
+    def _recover_definitive_rejected_entry_episode(
+        self,
+        spec: WidgetSpec,
+        symbol_state: dict[str, Any],
+        now: datetime,
+    ) -> bool:
+        """Close persisted entry intent after a definitive broker rejection."""
+        entry_signal_id = str(symbol_state.get("entry_signal_id") or "")
+        if (
+            not entry_signal_id
+            or not symbol_state.get("entry_episode_open")
+            or self._open_qty(symbol_state) > 0
+            or self._has_pending(symbol_state, "BUY")
+            or self._has_pending(symbol_state, "SELL")
+        ):
+            return False
+        entry_orders = [
+            order
+            for order in symbol_state.get("orders") or []
+            if order.get("side") == "BUY"
+            and order.get("order_role") in {None, "", ORDER_ROLE_ENTRY_BUY}
+            and order.get("signal_id") == entry_signal_id
+        ]
+        if not entry_orders or not all(
+            order.get("status") == "FAILED"
+            and order.get("broker_accepted") is False
+            for order in entry_orders
+        ):
+            return False
+        latest = entry_orders[-1]
+        symbol_state.update(
+            {
+                "entry_episode_open": False,
+                "entry_submit_rejected_at": now.isoformat(),
+                "entry_submit_rejected_signal_id": entry_signal_id,
+                "entry_submit_rejected_return_code": latest.get("return_code"),
+                "entry_submit_rejected_return_msg": latest.get("return_msg"),
+            }
+        )
+        self._save()
+        self._event(
+            "entry_episode_recovered_submit_rejected",
+            spec,
+            now,
+            signal_id=entry_signal_id,
+            return_code=latest.get("return_code"),
+            return_msg=latest.get("return_msg"),
+            actual_order_submitted=False,
+            execution_policy_id=symbol_state.get("execution_policy_id"),
+        )
+        return True
+
     def _maybe_submit_scale_in(
         self,
         spec: WidgetSpec,
@@ -1977,6 +2029,7 @@ class WidgetSignalAutoTrader:
     ) -> None:
         symbol_state = self._state["symbols"][spec.code]
         self._reconcile(spec, symbol_state, now)
+        self._recover_definitive_rejected_entry_episode(spec, symbol_state, now)
         if self._close_completed_take_profit_episode(spec, symbol_state, now):
             return
 
@@ -2231,6 +2284,10 @@ class WidgetSignalAutoTrader:
             )
             return
         for key in (
+            "entry_submit_rejected_at",
+            "entry_submit_rejected_signal_id",
+            "entry_submit_rejected_return_code",
+            "entry_submit_rejected_return_msg",
             "take_profit_basis_block_signal_id",
             "take_profit_basis_blocked_at",
             "take_profit_terminal_failure_at",
@@ -2261,7 +2318,7 @@ class WidgetSignalAutoTrader:
             }
         )
         self._save()
-        self._submit(
+        entry_order = self._submit(
             spec=spec,
             symbol_state=symbol_state,
             side="BUY",
@@ -2275,6 +2332,39 @@ class WidgetSignalAutoTrader:
             now=now,
             order_role=ORDER_ROLE_ENTRY_BUY,
         )
+        if (
+            entry_order.get("status") == "FAILED"
+            and entry_order.get("broker_accepted") is False
+        ):
+            # A definitive broker rejection creates no custody and must not
+            # leave the source episode open.  Keep the consumed signal id so
+            # the same snapshot cannot submit repeatedly; a later distinct
+            # source-qualified signal may open a new episode.  Ambiguous
+            # transport outcomes remain open for broker reconciliation.
+            symbol_state.update(
+                {
+                    "entry_episode_open": False,
+                    "entry_submit_rejected_at": now.isoformat(),
+                    "entry_submit_rejected_signal_id": signal_id,
+                    "entry_submit_rejected_return_code": entry_order.get(
+                        "return_code"
+                    ),
+                    "entry_submit_rejected_return_msg": entry_order.get(
+                        "return_msg"
+                    ),
+                }
+            )
+            self._save()
+            self._event(
+                "entry_episode_closed_submit_rejected",
+                spec,
+                now,
+                signal_id=signal_id,
+                return_code=entry_order.get("return_code"),
+                return_msg=entry_order.get("return_msg"),
+                actual_order_submitted=False,
+                execution_policy_id=symbol_state.get("execution_policy_id"),
+            )
 
     def run_once(self, observed_at: datetime | None = None) -> dict[str, Any]:
         now = (observed_at or _now_kst()).astimezone(KST)
