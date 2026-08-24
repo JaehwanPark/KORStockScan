@@ -481,6 +481,11 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "broker_order_forbidden",
     "buy_price",
     "buy_qty",
+    "last_entry_receipt_economics_complete",
+    "last_entry_receipt_execution_no",
+    "sell_buy_price_reconciled_from_entry_receipt",
+    "sell_buy_price_reconcile_db_price",
+    "sell_buy_price_reconcile_reason",
     "code",
     "fast_exit_decision_mark_price",
     "fast_exit_decision_executable_sell_price",
@@ -3592,17 +3597,61 @@ def _resolve_sell_execution_context(
             )
             if not record:
                 return None
-            safe_buy_price = (
+            db_buy_price = (
                 float(record.buy_price) if record.buy_price is not None else 0.0
             )
+            safe_buy_price = db_buy_price
             profit_rate = 0.0
+            strategy = normalize_strategy(
+                record.strategy or target_stock.get("strategy") or "KOSPI_ML"
+            )
+            runtime_buy_price = _safe_float(target_stock.get("buy_price"), 0.0)
+            record_buy_qty = _safe_int(getattr(record, "buy_qty", 0), 0)
+            runtime_buy_qty = _safe_int(target_stock.get("buy_qty"), 0)
+            entry_execution_no = str(
+                target_stock.get("last_entry_receipt_execution_no") or ""
+            ).strip()
+            exact_one_share_entry_receipt = bool(
+                strategy == "SCALPING"
+                and runtime_buy_price > 0
+                and record_buy_qty == runtime_buy_qty == 1
+                and bool(
+                    target_stock.get("last_entry_receipt_economics_complete", False)
+                )
+                and entry_execution_no not in {"", "-"}
+                and _safe_int(target_stock.get("scale_in_filled_qty"), 0) == 0
+            )
+            if (
+                exact_one_share_entry_receipt
+                and abs(runtime_buy_price - db_buy_price) > 1e-9
+            ):
+                # The BUY receipt mutates in-memory custody synchronously and
+                # persists the DB row asynchronously.  A very fast SELL can
+                # therefore observe the old planned DB price.  Prefer the
+                # exact one-share broker receipt only when quantity and
+                # no-scale-in lineage are unambiguous; all other positions
+                # retain durable DB authority.
+                safe_buy_price = runtime_buy_price
+                target_stock["sell_buy_price_reconciled_from_entry_receipt"] = True
+                target_stock["sell_buy_price_reconcile_db_price"] = db_buy_price
+                target_stock["sell_buy_price_reconcile_reason"] = (
+                    "exact_one_share_entry_receipt_precedes_async_db_buy_update"
+                )
+                log_info(
+                    f"[SELL_BUY_PRICE_RECEIPT_RECONCILED] ID {target_id} "
+                    f"db={db_buy_price:.2f} receipt={runtime_buy_price:.2f} "
+                    f"entry_execution_no={entry_execution_no}"
+                )
+            else:
+                target_stock.pop(
+                    "sell_buy_price_reconciled_from_entry_receipt", None
+                )
+                target_stock.pop("sell_buy_price_reconcile_db_price", None)
+                target_stock.pop("sell_buy_price_reconcile_reason", None)
             if safe_buy_price <= 0:
                 log_error(
                     f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다."
                 )
-            strategy = normalize_strategy(
-                record.strategy or target_stock.get("strategy") or "KOSPI_ML"
-            )
             position_tag = normalize_position_tag(
                 strategy,
                 getattr(record, "position_tag", None)
@@ -4300,6 +4349,13 @@ def _handle_scalp_revive_sell_execution(
                     f"filled={completed_sell_qty} position={position_buy_qty}"
                 )
                 return False
+            entry_receipt_buy_price_reconciled = bool(
+                target_stock.get(
+                    "sell_buy_price_reconciled_from_entry_receipt", False
+                )
+                and position_buy_qty == completed_sell_qty == 1
+                and safe_buy_price > 0
+            )
             completed_sell_amount = int(sell_receipt.get("cumulative_amount") or 0)
             position_weighted_sell_price = int(
                 round(completed_sell_amount / completed_sell_qty)
@@ -4311,6 +4367,8 @@ def _handle_scalp_revive_sell_execution(
                 else 0.0
             )
             record.status = "COMPLETED"
+            if entry_receipt_buy_price_reconciled:
+                record.buy_price = safe_buy_price
             record.sell_price = position_weighted_sell_price
             record.sell_time = now
             record.profit_rate = profit_rate
@@ -4392,6 +4450,19 @@ def _handle_scalp_revive_sell_execution(
                 main_lifecycle_reconciled_final_exit=True,
                 buy_price=f"{safe_buy_price:.2f}",
                 buy_qty=position_buy_qty,
+                sell_buy_price_reconciled_from_entry_receipt=(
+                    entry_receipt_buy_price_reconciled
+                ),
+                sell_buy_price_reconcile_db_price=(
+                    target_stock.get("sell_buy_price_reconcile_db_price")
+                    if entry_receipt_buy_price_reconciled
+                    else "-"
+                ),
+                sell_buy_price_reconcile_reason=(
+                    target_stock.get("sell_buy_price_reconcile_reason")
+                    if entry_receipt_buy_price_reconciled
+                    else "not_reconciled"
+                ),
                 realized_pnl_krw=realized_pnl_krw,
                 realized_pnl_krw_source="broker_fill_prices_fee_aware",
                 profit_rate=f"{profit_rate:+.2f}",
@@ -5853,9 +5924,29 @@ def _update_db_for_sell(
                 )
                 return False
 
-            safe_buy_price = (
+            db_buy_price = (
                 float(record.buy_price) if record.buy_price is not None else 0.0
             )
+            receipt_buy_price = _safe_float(receipt_snapshot.get("buy_price"), 0.0)
+            receipt_buy_qty = _safe_int(receipt_snapshot.get("buy_qty"), 0)
+            receipt_reconciled = bool(
+                receipt_snapshot.get(
+                    "sell_buy_price_reconciled_from_entry_receipt", False
+                )
+                and receipt_buy_price > 0
+                and receipt_buy_qty == 1
+                and _safe_int(getattr(record, "buy_qty", 0), 0) == 1
+                and bool(
+                    receipt_snapshot.get(
+                        "last_entry_receipt_economics_complete", False
+                    )
+                )
+                and str(
+                    receipt_snapshot.get("last_entry_receipt_execution_no") or ""
+                ).strip()
+                not in {"", "-"}
+            )
+            safe_buy_price = receipt_buy_price if receipt_reconciled else db_buy_price
             nxt_partial_qty = _safe_int(
                 receipt_snapshot.get("nxt_rising_missed_tp1_partial_filled_qty"), 0
             )
@@ -5898,6 +5989,8 @@ def _update_db_for_sell(
                 return False
             runner_weighted_sell_price = runner_sell_amount / completed_runner_qty
             record.status = "COMPLETED"
+            if receipt_reconciled:
+                record.buy_price = safe_buy_price
             record.sell_time = now
             cumulative_includes_partial = bool(
                 partial_qty > 0 and completed_runner_qty == position_runner_qty
@@ -6089,6 +6182,17 @@ def _update_db_for_sell(
                 position_tag=completed_position_tag,
                 buy_price=f"{safe_buy_price:.2f}",
                 buy_qty=completed_buy_qty,
+                sell_buy_price_reconciled_from_entry_receipt=receipt_reconciled,
+                sell_buy_price_reconcile_db_price=(
+                    receipt_snapshot.get("sell_buy_price_reconcile_db_price")
+                    if receipt_reconciled
+                    else "-"
+                ),
+                sell_buy_price_reconcile_reason=(
+                    receipt_snapshot.get("sell_buy_price_reconcile_reason")
+                    if receipt_reconciled
+                    else "not_reconciled"
+                ),
                 realized_pnl_krw=realized_pnl_krw,
                 partial_realized_pnl_krw=partial_realized_pnl_krw,
                 runner_realized_pnl_krw=runner_realized_pnl_krw,

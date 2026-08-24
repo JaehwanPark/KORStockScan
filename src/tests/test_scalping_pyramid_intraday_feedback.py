@@ -1307,6 +1307,171 @@ def test_real_entry_lifecycle_reconstructs_legacy_full_close_realized_pnl(tmp_pa
     ]
 
 
+def test_real_entry_lifecycle_reconciles_stale_sell_buy_price_to_holding_fill(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-24.jsonl"
+    rows = [
+        _event(
+            34620,
+            "003530",
+            "한화투자증권",
+            "order_bundle_submitted",
+            {
+                "actual_order_submitted": True,
+                "requested_qty": 1,
+                "order_no": "0020775",
+                "effective_venue": "KRX",
+            },
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            34620,
+            "003530",
+            "한화투자증권",
+            "holding_started",
+            {"buy_qty": 1, "buy_price": 5_040, "effective_venue": "KRX"},
+        ),
+        _event(
+            34620,
+            "003530",
+            "한화투자증권",
+            "sell_completed",
+            {
+                "buy_price": 5_110,
+                "sell_qty": 1,
+                "sell_price": 5_070,
+                "profit_rate": -1.02,
+                "realized_pnl_krw": -52,
+                "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+            },
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-24", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    lifecycle = report["whole_day_real_entry_lifecycle_rows"][0]
+    summary = report["summary"]["whole_day_real_entry_lifecycle"]
+
+    assert lifecycle["final_profit_rate"] == 0.36
+    assert lifecycle["realized_pnl_krw"] == 18
+    assert lifecycle["realized_pnl_krw_source"] == (
+        "reconciled_same_cycle_broker_fill_prices_fee_aware"
+    )
+    assert lifecycle["lifecycle_economics_reconciled"] is True
+    assert lifecycle["raw_sell_completed_buy_price"] == 5_110
+    assert lifecycle["raw_sell_completed_profit_rate"] == -1.02
+    assert lifecycle["raw_sell_completed_realized_pnl_krw"] == -52
+    assert summary["winner_count"] == 1
+    assert summary["loss_count"] == 0
+    assert summary["realized_pnl_krw_known_sum"] == 18
+
+
+def test_real_entry_lifecycle_does_not_reconcile_multi_share_average_change(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-24.jsonl"
+    rows = [
+        _event(
+            900,
+            "900900",
+            "multi-share",
+            "order_bundle_submitted",
+            {
+                "actual_order_submitted": True,
+                "requested_qty": 2,
+                "order_no": "K900",
+                "effective_venue": "KRX",
+            },
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            900,
+            "900900",
+            "multi-share",
+            "holding_started",
+            {"buy_qty": 2, "buy_price": 5_040, "effective_venue": "KRX"},
+        ),
+        _event(
+            900,
+            "900900",
+            "multi-share",
+            "sell_completed",
+            {
+                "buy_price": 5_110,
+                "sell_qty": 2,
+                "sell_price": 5_070,
+                "profit_rate": -1.02,
+                "realized_pnl_krw": -104,
+            },
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-24", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    lifecycle = report["whole_day_real_entry_lifecycle_rows"][0]
+
+    assert lifecycle["final_profit_rate"] == -1.02
+    assert lifecycle["realized_pnl_krw"] == -104
+    assert "lifecycle_economics_reconciled" not in lifecycle
+
+
+def test_real_entry_lifecycle_does_not_reconcile_code_only_fallback_cycle(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-24.jsonl"
+    rows = [
+        _event(
+            "",
+            "003530",
+            "code-only",
+            "order_bundle_submitted",
+            {
+                "actual_order_submitted": True,
+                "requested_qty": 1,
+                "order_no": "0020775",
+            },
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            "",
+            "003530",
+            "code-only",
+            "holding_started",
+            {"buy_qty": 1, "buy_price": 5_040},
+        ),
+        _event(
+            "",
+            "003530",
+            "code-only",
+            "sell_completed",
+            {
+                "buy_price": 5_110,
+                "sell_qty": 1,
+                "sell_price": 5_070,
+                "profit_rate": -1.02,
+                "realized_pnl_krw": -52,
+            },
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-24", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    lifecycle = report["whole_day_real_entry_lifecycle_rows"][0]
+
+    assert lifecycle["final_profit_rate"] == -1.02
+    assert lifecycle["realized_pnl_krw"] == -52
+    assert "lifecycle_economics_reconciled" not in lifecycle
+
+
 def test_real_entry_lifecycle_does_not_reconstruct_partial_sell_pnl(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-29.jsonl"
     rows = [

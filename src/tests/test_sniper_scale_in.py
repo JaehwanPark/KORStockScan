@@ -25077,6 +25077,39 @@ def test_final_order_price_revalidation_reduces_qty_and_position_cap():
     assert fields["final_price_sizing_effective_qty"] == 16
 
 
+def test_final_order_price_revalidation_preserves_broker_confirmed_margin_share():
+    context = state_handlers.ScalpingSizingContext(
+        allocation_stage="initial_entry",
+        reference_time=datetime(2026, 8, 24, 11, 11, tzinfo=state_handlers._KST),
+        source_signature="A,B,C",
+        effective_venue="KRX",
+        budget_base_krw=982_885,
+        price_krw=224_500,
+        max_position_qty_cap=0,
+        cash_orderable_qty_cap=None,
+        stage_qty_cap=1,
+        broker_qty_cap=4,
+        broker_confirmed_one_share_floor=True,
+    )
+    decision = state_handlers.resolve_scalping_allocation(context)
+
+    final_context, final_decision, orders, fields = (
+        state_handlers._revalidate_scalping_sizing_for_final_order_price(
+            context,
+            decision,
+            [{"tag": "normal", "qty": 1, "price": 224_500}],
+            curr_price=224_500,
+            best_ask=225_000,
+        )
+    )
+
+    assert decision.effective_qty == 1
+    assert final_context.max_position_qty_cap == 1
+    assert final_decision.effective_qty == 1
+    assert orders[0]["qty"] == 1
+    assert fields["final_price_sizing_effective_qty"] == 1
+
+
 def test_final_order_price_revalidation_never_expands_original_qty():
     context = state_handlers.ScalpingSizingContext(
         allocation_stage="initial_entry",

@@ -249,6 +249,64 @@ def test_min_one_share_floor_never_bypasses_cash_qty_cap():
     assert blocked.binding_caps == ("cash_orderable_qty_cap",)
 
 
+def test_broker_confirmed_margin_floor_survives_max_position_rounding():
+    decision = allocator.resolve_scalping_allocation(
+        _context(
+            "2026-08-24T11:11:41",
+            "A,B,C",
+            budget=982_885,
+            price=224_500,
+            max_position_qty_cap=0,
+            cash_orderable_qty_cap=None,
+            stage_qty_cap=1,
+            broker_qty_cap=4,
+            broker_confirmed_one_share_floor=True,
+        )
+    )
+
+    assert decision.pre_cap_qty == 1
+    assert decision.effective_qty == 1
+    assert "max_position_qty_cap" not in decision.binding_caps
+
+
+def test_broker_confirmed_margin_floor_does_not_apply_without_authority():
+    decision = allocator.resolve_scalping_allocation(
+        _context(
+            "2026-08-24T11:11:41",
+            "A,B,C",
+            budget=982_885,
+            price=224_500,
+            max_position_qty_cap=0,
+            cash_orderable_qty_cap=0,
+            stage_qty_cap=1,
+            broker_qty_cap=4,
+            broker_confirmed_one_share_floor=False,
+        )
+    )
+
+    assert decision.effective_qty == 0
+    assert decision.binding_caps == ("cash_orderable_qty_cap",)
+
+
+def test_broker_confirmed_margin_floor_never_expands_existing_position():
+    decision = allocator.resolve_scalping_allocation(
+        _context(
+            "2026-08-24T11:11:41",
+            "A,B,C",
+            budget=982_885,
+            price=224_500,
+            current_position_qty=1,
+            max_position_qty_cap=1,
+            stage_qty_cap=1,
+            broker_qty_cap=4,
+            broker_confirmed_one_share_floor=True,
+        )
+    )
+
+    assert decision.effective_qty == 0
+    assert decision.binding_caps == ("max_position_qty_cap",)
+
+
 def test_min_one_share_floor_never_bypasses_absolute_budget_cap():
     decision = allocator.resolve_scalping_allocation(
         _context(

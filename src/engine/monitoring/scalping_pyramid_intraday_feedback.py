@@ -10,7 +10,11 @@ from typing import Any
 from src.engine.scalping.rising_missed_one_share_entry import (
     SCOUT_AI_ATTRIBUTION_SCHEMA,
 )
-from src.engine.trade_profit import calculate_net_realized_pnl, get_trade_cost_rate
+from src.engine.trade_profit import (
+    calculate_net_profit_rate,
+    calculate_net_realized_pnl,
+    get_trade_cost_rate,
+)
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
@@ -457,7 +461,33 @@ def _update_real_entry_lifecycle(item: dict[str, Any], row: dict[str, Any]) -> N
         return
 
     if stage == "sell_completed":
-        final_profit = _safe_float(fields.get("profit_rate"), None)
+        raw_final_profit = _safe_float(fields.get("profit_rate"), None)
+        raw_buy_price = _safe_float(fields.get("buy_price"), None)
+        average_fill_price = _safe_float(item.get("average_fill_price"), None)
+        sell_price = _safe_float(fields.get("sell_price"), None)
+        filled_qty = max(0, int(item.get("filled_qty") or 0))
+        sell_qty = int(_safe_float(fields.get("sell_qty"), 0.0) or 0)
+        same_cycle_fill_reconciled = bool(
+            str(item.get("record_id") or "").strip()
+            and raw_buy_price is not None
+            and average_fill_price is not None
+            and raw_buy_price > 0
+            and average_fill_price > 0
+            and abs(raw_buy_price - average_fill_price) > 1e-9
+            and sell_price is not None
+            and sell_price > 0
+            # Keep this repair to an unambiguous one-share lifecycle. A
+            # multi-share or scale-in position may legitimately have a later
+            # average price that differs from the initial holding receipt.
+            and filled_qty == 1
+            and sell_qty == filled_qty
+            and int(item.get("broker_submitted_qty") or 0) == 1
+        )
+        final_profit = (
+            calculate_net_profit_rate(average_fill_price, sell_price)
+            if same_cycle_fill_reconciled
+            else raw_final_profit
+        )
         if final_profit is None:
             return
         item["sell_completed_at"] = _later_event_time(
@@ -465,24 +495,37 @@ def _update_real_entry_lifecycle(item: dict[str, Any], row: dict[str, Any]) -> N
         )
         item["final_profit_rate"] = final_profit
         realized_pnl = _safe_float(fields.get("realized_pnl_krw"), None)
-        if realized_pnl is not None:
+        if same_cycle_fill_reconciled:
+            item["raw_sell_completed_buy_price"] = raw_buy_price
+            item["raw_sell_completed_profit_rate"] = raw_final_profit
+            item["raw_sell_completed_realized_pnl_krw"] = realized_pnl
+            item["realized_pnl_krw"] = calculate_net_realized_pnl(
+                average_fill_price,
+                sell_price,
+                filled_qty,
+            )
+            item["realized_pnl_krw_source"] = (
+                "reconciled_same_cycle_broker_fill_prices_fee_aware"
+            )
+            item["lifecycle_economics_reconciled"] = True
+            item["lifecycle_economics_reconcile_reason"] = (
+                "sell_event_buy_price_differs_from_holding_broker_fill"
+            )
+        elif realized_pnl is not None:
             item["realized_pnl_krw"] = int(round(realized_pnl))
             item["realized_pnl_krw_source"] = str(
                 fields.get("realized_pnl_krw_source") or "sell_completed_event"
             )
-        sell_price = _safe_float(fields.get("sell_price"), None)
         if sell_price is not None:
             item["sell_price"] = sell_price
         # Older scalp-revive receipts carried the exact broker sell fill and
         # net profit rate but omitted KRW PnL. Reconstruct only when the same
         # position cycle proves a full-quantity close; never infer from a
         # partial fill, mark price, or unmatched quantity.
-        if realized_pnl is None:
+        if realized_pnl is None and not same_cycle_fill_reconciled:
             buy_price = _safe_float(
                 fields.get("buy_price") or item.get("average_fill_price"), None
             )
-            filled_qty = max(0, int(item.get("filled_qty") or 0))
-            sell_qty = int(_safe_float(fields.get("sell_qty"), 0.0) or 0)
             if (
                 buy_price is not None
                 and buy_price > 0

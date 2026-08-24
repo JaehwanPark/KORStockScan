@@ -169,6 +169,7 @@ class ScalpingSizingContext:
     remaining_position_qty_cap: int | None = None
     stage_qty_cap: int | None = None
     broker_qty_cap: int | None = None
+    broker_confirmed_one_share_floor: bool = False
     min_one_share_floor_enabled: bool = True
     simulation: bool = False
     initial_tier: int | None = None
@@ -378,6 +379,17 @@ def resolve_scalping_allocation(
             0,
             _safe_int(context.max_position_qty_cap, 0) - current_position_qty,
         )
+        # An exact-price broker margin response may authorize one opening
+        # share even when the portfolio-percentage budget rounds below one.
+        # Keep this exception bounded to a new position and the existing
+        # one-share stage/broker caps; it must never expand an owned position.
+        if (
+            context.broker_confirmed_one_share_floor
+            and current_position_qty == 0
+            and _safe_int(context.stage_qty_cap, 0) == 1
+            and _safe_int(context.broker_qty_cap, 0) >= 1
+        ):
+            max_position_remaining_cap = max(1, max_position_remaining_cap)
     for name, raw_cap in (
         ("cash_orderable_qty_cap", context.cash_orderable_qty_cap),
         ("max_position_qty_cap", max_position_remaining_cap),

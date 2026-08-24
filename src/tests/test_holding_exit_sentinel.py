@@ -89,6 +89,47 @@ def test_hold_defer_danger_is_classified(monkeypatch, tmp_path):
     )
 
     assert report["classification"]["primary"] == "HOLD_DEFER_DANGER"
+    assert report["current"]["session"]["holding_flow_scope"][
+        "real_defer_exit"
+    ] == 3
+
+
+def test_non_real_force_exit_does_not_trigger_hold_defer_danger(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:00:00",
+                "holding_flow_override_force_exit",
+                fields={
+                    "simulation_book": "scalp_ai_buy_all",
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "True",
+                },
+            )
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+    )
+
+    assert report["classification"]["primary"] == "NORMAL"
+    assert "HOLD_DEFER_DANGER" not in report["classification"]["matches"]
+    assert report["current"]["session"]["holding_flow_scope"] == {
+        "real_defer_exit": 0,
+        "real_force_exit": 0,
+        "real_exit_confirmed": 0,
+        "non_real_defer_exit": 0,
+        "non_real_force_exit": 1,
+        "non_real_exit_confirmed": 0,
+    }
 
 
 def test_observation_flags_soft_stop_and_trailing(monkeypatch, tmp_path):

@@ -134,6 +134,130 @@ def test_sell_execution_notification_failure_never_reopens_committed_custody(
     assert "SELL_COMPLETION_NOTIFICATION_FAILED" in errors[0]
 
 
+def test_sell_context_uses_exact_one_share_entry_receipt_when_db_price_is_stale():
+    record = type(
+        "Record",
+        (),
+        {
+            "buy_price": 5_110.0,
+            "buy_qty": 1,
+            "strategy": "SCALPING",
+            "position_tag": "DEFAULT",
+        },
+    )()
+    receipts.DB = _ReceiptDB(record)
+    stock = {
+        "buy_price": 5_040.0,
+        "buy_qty": 1,
+        "last_entry_receipt_economics_complete": True,
+        "last_entry_receipt_execution_no": "0000042",
+        "scale_in_filled_qty": 0,
+    }
+
+    context = receipts._resolve_sell_execution_context(
+        34620,
+        stock,
+        5_070,
+        datetime(2026, 8, 24, 10, 30).time(),
+    )
+
+    assert context is not None
+    assert context[1] == 5_040.0
+    assert stock["sell_buy_price_reconciled_from_entry_receipt"] is True
+    assert stock["sell_buy_price_reconcile_db_price"] == 5_110.0
+
+
+def test_sell_context_keeps_db_price_without_exact_entry_receipt_contract():
+    record = type(
+        "Record",
+        (),
+        {
+            "buy_price": 5_110.0,
+            "buy_qty": 1,
+            "strategy": "SCALPING",
+            "position_tag": "DEFAULT",
+        },
+    )()
+    receipts.DB = _ReceiptDB(record)
+    stock = {
+        "buy_price": 5_040.0,
+        "buy_qty": 1,
+        "last_entry_receipt_economics_complete": False,
+        "last_entry_receipt_execution_no": "0000042",
+        "scale_in_filled_qty": 0,
+    }
+
+    context = receipts._resolve_sell_execution_context(
+        34620,
+        stock,
+        5_070,
+        datetime(2026, 8, 24, 10, 30).time(),
+    )
+
+    assert context is not None
+    assert context[1] == 5_110.0
+    assert "sell_buy_price_reconciled_from_entry_receipt" not in stock
+
+
+def test_sell_commit_reconciles_stale_db_price_from_exact_entry_receipt(monkeypatch):
+    record = type(
+        "Record",
+        (),
+        {
+            "buy_price": 5_110.0,
+            "buy_qty": 1,
+            "status": "SELL_ORDERED",
+            "sell_price": 0,
+            "sell_time": None,
+            "profit_rate": 0.0,
+            "position_tag": "DEFAULT",
+        },
+    )()
+    receipts.DB = _ReceiptDB(record)
+    receipts.event_bus = _Bus()
+    logged = {}
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: logged.update(kwargs),
+    )
+    monkeypatch.setattr(receipts, "record_post_sell_candidate", lambda **kwargs: {})
+    monkeypatch.setattr(
+        receipts, "_scalp_exit_completed_callback", lambda *args, **kwargs: True
+    )
+    snapshot = {
+        "code": "003530",
+        "name": "한화투자증권",
+        "buy_price": 5_040.0,
+        "buy_qty": 1,
+        "last_entry_receipt_economics_complete": True,
+        "last_entry_receipt_execution_no": "0000042",
+        "sell_buy_price_reconciled_from_entry_receipt": True,
+        "sell_buy_price_reconcile_db_price": 5_110.0,
+        "sell_buy_price_reconcile_reason": (
+            "exact_one_share_entry_receipt_precedes_async_db_buy_update"
+        ),
+        **_completed_sell_receipt_fields(
+            buy_price=5_040.0, sell_price=5_070.0, qty=1
+        ),
+    }
+
+    committed = receipts._update_db_for_sell(
+        34620,
+        5_070,
+        datetime(2026, 8, 24, 10, 30),
+        snapshot,
+        "SCALPING",
+        False,
+    )
+
+    assert committed is True
+    assert record.buy_price == 5_040.0
+    assert record.profit_rate == pytest.approx(18 / 5_040 * 100)
+    assert logged["buy_price"] == "5040.00"
+    assert logged["sell_buy_price_reconciled_from_entry_receipt"] is True
+
+
 def test_broker_execution_time_requires_exact_hhmmss_and_preserves_timezone():
     received_at = datetime(2026, 8, 18, 9, 10, tzinfo=timezone(timedelta(hours=9)))
 

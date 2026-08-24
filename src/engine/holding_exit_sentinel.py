@@ -527,6 +527,38 @@ def _summarize_events(
     )
     flow_defer = int(stage_events.get("holding_flow_override_defer_exit", 0) or 0)
     flow_review = int(stage_events.get("holding_flow_override_review", 0) or 0)
+    holding_flow_scope = {
+        "real_defer_exit": sum(
+            1
+            for event in real_scoped
+            if event.stage == "holding_flow_override_defer_exit"
+        ),
+        "real_force_exit": sum(
+            1
+            for event in real_scoped
+            if event.stage == "holding_flow_override_force_exit"
+        ),
+        "real_exit_confirmed": sum(
+            1
+            for event in real_scoped
+            if event.stage == "holding_flow_override_exit_confirmed"
+        ),
+        "non_real_defer_exit": sum(
+            1
+            for event in non_real_scoped
+            if event.stage == "holding_flow_override_defer_exit"
+        ),
+        "non_real_force_exit": sum(
+            1
+            for event in non_real_scoped
+            if event.stage == "holding_flow_override_force_exit"
+        ),
+        "non_real_exit_confirmed": sum(
+            1
+            for event in non_real_scoped
+            if event.stage == "holding_flow_override_exit_confirmed"
+        ),
+    }
     ai_review = int(stage_events.get("ai_holding_review", 0) or 0)
     cache_miss = _count_cache_miss(scoped)
     score50_origin_counts = _score50_origin_counts(scoped)
@@ -542,6 +574,7 @@ def _summarize_events(
         "stage_events": dict(sorted(stage_events.items())),
         "stage_unique": stage_unique,
         "reason_top": _stage_reason_top(scoped),
+        "holding_flow_scope": holding_flow_scope,
         "score50_origin_counts": score50_origin_counts,
         "holding_score_preflight_blocked_events": (
             _count_holding_score_preflight_blocked(scoped)
@@ -636,11 +669,10 @@ def _classify(
     real_sell_sent = int(unique.get("real_sell_order_sent", 0) or 0)
     non_real_exit_signal = int(unique.get("non_real_exit_signal", 0) or 0)
     non_real_sell_sent = int(unique.get("non_real_sell_order_sent", 0) or 0)
-    flow_defer = int(stage_events.get("holding_flow_override_defer_exit", 0) or 0)
-    force_exit = int(stage_events.get("holding_flow_override_force_exit", 0) or 0)
-    exit_confirmed = int(
-        stage_events.get("holding_flow_override_exit_confirmed", 0) or 0
-    )
+    holding_flow_scope = summary.get("holding_flow_scope") or {}
+    flow_defer = int(holding_flow_scope.get("real_defer_exit", 0) or 0)
+    force_exit = int(holding_flow_scope.get("real_force_exit", 0) or 0)
+    exit_confirmed = int(holding_flow_scope.get("real_exit_confirmed", 0) or 0)
     ai_review = int(stage_events.get("ai_holding_review", 0) or 0)
     active_holding = int(
         summary.get("unique_symbols", {}).get("active_holding", 0) or 0
@@ -674,7 +706,21 @@ def _classify(
 
     if flow_defer >= 3 or force_exit >= 1 or exit_confirmed >= 2:
         matches.append("HOLD_DEFER_DANGER")
-        reasons.append("holding_flow_override defer/force/confirm events are elevated")
+        reasons.append(
+            "real holding_flow_override defer/force/confirm events are elevated"
+        )
+    elif any(
+        int(holding_flow_scope.get(key, 0) or 0) > 0
+        for key in (
+            "non_real_defer_exit",
+            "non_real_force_exit",
+            "non_real_exit_confirmed",
+        )
+    ):
+        reasons.append(
+            "non-real holding_flow_override events are diagnostic-only and excluded "
+            "from HOLD_DEFER_DANGER"
+        )
 
     if ai_review >= 5 and (
         ratios.get("ai_cache_miss_pct", 0.0) >= 90.0
@@ -902,6 +948,7 @@ def build_markdown(report: dict[str, Any]) -> str:
     session = report["current"]["session"]
     unique = session["stage_unique"]
     ratios = session["ratios"]
+    holding_flow_scope = session.get("holding_flow_scope") or {}
     classification = report["classification"]
     obs = report["observation"]["metrics"]
     lines = [
@@ -932,6 +979,12 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- real sell_sent/exit_signal: `{ratios.get('real_sell_sent_to_exit_signal_unique_pct', 0.0)}%`",
         f"- non-real sell_sent/exit_signal: `{ratios.get('non_real_sell_sent_to_exit_signal_unique_pct', 0.0)}%`",
         f"- flow defer events: `{session['stage_events'].get('holding_flow_override_defer_exit', 0)}`",
+        f"- real flow defer/force/confirm: `{holding_flow_scope.get('real_defer_exit', 0)}` / "
+        f"`{holding_flow_scope.get('real_force_exit', 0)}` / "
+        f"`{holding_flow_scope.get('real_exit_confirmed', 0)}`",
+        f"- non-real flow defer/force/confirm: `{holding_flow_scope.get('non_real_defer_exit', 0)}` / "
+        f"`{holding_flow_scope.get('non_real_force_exit', 0)}` / "
+        f"`{holding_flow_scope.get('non_real_exit_confirmed', 0)}`",
         f"- AI holding cache MISS: `{ratios.get('ai_cache_miss_pct', 0.0)}%`",
         f"- score50 origins: `{session.get('score50_origin_counts') or {}}`",
         f"- score50 preflight/source-quality blocked: `{session.get('holding_score_preflight_blocked_events', 0)}`",

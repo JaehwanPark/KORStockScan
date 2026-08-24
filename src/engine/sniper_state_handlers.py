@@ -25764,6 +25764,13 @@ def _revalidate_scalping_sizing_for_final_order_price(
             repriced_max_position_qty_cap,
             max(0, _safe_int(sizing_context.max_position_qty_cap, 0)),
         )
+    if (
+        sizing_context.broker_confirmed_one_share_floor
+        and max(0, _safe_int(sizing_context.current_position_qty, 0)) == 0
+        and _safe_int(sizing_context.stage_qty_cap, 0) == 1
+        and _safe_int(sizing_context.broker_qty_cap, 0) >= 1
+    ):
+        repriced_max_position_qty_cap = max(1, repriced_max_position_qty_cap)
     final_context = dataclass_replace(
         sizing_context,
         price_krw=final_price,
@@ -63666,6 +63673,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 or general_entry_margin_authorized
                 else None
             ),
+            broker_confirmed_one_share_floor=bool(
+                budget_context.get(
+                    "opening_rotation_margin_one_share_authorized", False
+                )
+                or general_entry_margin_authorized
+            ),
             min_one_share_floor_enabled=min_one_share_floor_enabled,
             stage_qty_cap=1 if general_entry_margin_authorized else None,
             initial_tier=initial_tier,
@@ -67002,6 +67015,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     _rule_float("MAX_POSITION_PCT", 0.20),
                 ),
                 stage_qty_cap=1,
+                broker_confirmed_one_share_floor=True,
             )
         elif refreshed_cash_authorized and sizing_context is not None:
             # A recognized margin tier may become cash-only at the final
@@ -67023,6 +67037,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     _rule_float("MAX_POSITION_PCT", 0.20),
                 ),
                 stage_qty_cap=1,
+                broker_confirmed_one_share_floor=False,
             )
         elif sizing_context is not None:
             # Neither a prior margin snapshot nor a prior cash snapshot may
@@ -67036,6 +67051,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 broker_qty_cap=0,
                 max_position_qty_cap=0,
                 stage_qty_cap=0,
+                broker_confirmed_one_share_floor=False,
             )
         _log_entry_pipeline(
             stock,
@@ -67108,6 +67124,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     _rule_float("MAX_POSITION_PCT", 0.20),
                 ),
                 stage_qty_cap=1,
+                broker_confirmed_one_share_floor=True,
             )
         elif refreshed_general_cash_authorized and sizing_context is not None:
             budget_base = max(0, _safe_int(budget_context.get("budget_base"), 0))
@@ -67125,6 +67142,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     _rule_float("MAX_POSITION_PCT", 0.20),
                 ),
                 stage_qty_cap=1,
+                broker_confirmed_one_share_floor=False,
             )
         elif sizing_context is not None:
             sizing_context = dataclass_replace(
@@ -67134,6 +67152,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 broker_qty_cap=0,
                 max_position_qty_cap=0,
                 stage_qty_cap=0,
+                broker_confirmed_one_share_floor=False,
             )
         general_margin_log_fields = _general_entry_margin_budget_log_fields(
             general_margin_pre_submit_context
