@@ -4958,6 +4958,76 @@ def _first_risky_micro_float(fields: dict[str, Any], *keys: str) -> float | None
     return None
 
 
+def _first_risky_micro_text(fields: dict[str, Any], *keys: str) -> str:
+    """Return the first meaningful producer token without masking fallbacks.
+
+    Older TP1 rows often carry ``"missing"`` in the direct source field while
+    preserving the real diagnosis in the WS or submit-context source field.
+    Treating that placeholder as authoritative erased the actual gap owner in
+    the postclose adapter.
+    """
+
+    placeholders = {"", "-", "missing", "none", "null", "not_evaluated"}
+    for key in keys:
+        value = str(fields.get(key) or "").strip()
+        if value.lower() not in placeholders:
+            return value
+    return ""
+
+
+def _risky_micro_tp1_tick_diagnostics(fields: dict[str, Any]) -> dict[str, Any]:
+    """Preserve same-event TP1 tick source quality without synthetic backfill."""
+
+    sample_count = _first_risky_micro_float(
+        fields,
+        "rising_missed_tp1_submit_context_tick_window_sample_count",
+        "rising_missed_tp1_tick_window_sample_count",
+        "rising_missed_tp1_ws_tick_window_sample_count",
+    )
+    age_sec = _first_risky_micro_float(
+        fields,
+        "rising_missed_tp1_submit_context_tick_acceleration_age_sec",
+        "rising_missed_tp1_tick_acceleration_age_sec",
+        "rising_missed_tp1_ws_tick_acceleration_age_sec",
+    )
+    source = _first_risky_micro_text(
+        fields,
+        "rising_missed_tp1_submit_context_tick_acceleration_source",
+        "rising_missed_tp1_tick_acceleration_source",
+        "rising_missed_tp1_ws_tick_acceleration_source",
+        "tick_context_source",
+    )
+    fresh = any(
+        _boolish(fields.get(key))
+        for key in (
+            "rising_missed_tp1_tick_acceleration_fresh",
+            "rising_missed_tp1_submit_context_tick_acceleration_fresh",
+            "rising_missed_tp1_ws_tick_acceleration_fresh",
+        )
+    )
+    gap_reason = "none"
+    if not fresh:
+        if (
+            sample_count is not None and sample_count < 10
+        ) or "insufficient_10tick_window" in source.lower():
+            gap_reason = "tp1_signed_tick_sample_floor_not_met"
+        elif source != "trusted_ws_signed_0b_10tick_received_ts":
+            gap_reason = "tp1_tick_source_untrusted_or_missing"
+        elif age_sec is None:
+            gap_reason = "tp1_tick_context_age_missing"
+        elif age_sec > 3.0:
+            gap_reason = "tp1_tick_context_stale"
+        else:
+            gap_reason = "tp1_submit_context_freshness_unconfirmed"
+    return {
+        "fresh": fresh,
+        "gap_reason": gap_reason,
+        "sample_count": (int(sample_count) if sample_count is not None else "-"),
+        "age_sec": round(age_sec, 6) if age_sec is not None else "-",
+        "source": source or "-",
+    }
+
+
 def _risky_micro_quote_age_ms(fields: dict[str, Any]) -> float | None:
     return _first_risky_micro_float(
         fields,
@@ -5017,22 +5087,25 @@ def _risky_micro_projection_from_block_event(
         "rising_missed_tick_window_span_sec",
         "tick_window_span_sec",
     )
-    if source_category == "tp1" and not any(
-        _boolish(fields.get(key))
-        for key in (
-            "rising_missed_tp1_tick_acceleration_fresh",
-            "rising_missed_tp1_submit_context_tick_acceleration_fresh",
-            "rising_missed_tp1_ws_tick_acceleration_fresh",
-        )
-    ):
+    tp1_tick_diagnostics = _risky_micro_tp1_tick_diagnostics(fields)
+    if source_category == "tp1" and not tp1_tick_diagnostics["fresh"]:
         tick_acceleration_ratio = None
         tick_window_span_sec = None
-    tick_context_source = str(
-        fields.get("rising_missed_tp1_tick_acceleration_source")
-        or fields.get("rising_missed_tp1_submit_context_tick_acceleration_source")
-        or fields.get("rising_missed_tp1_ws_tick_acceleration_source")
-        or fields.get("tick_context_source")
-        or "missing"
+    elif source_category == "tp1" and (
+        tick_acceleration_ratio is None or tick_window_span_sec is None
+    ):
+        if tick_acceleration_ratio is None and tick_window_span_sec is None:
+            tp1_tick_diagnostics["gap_reason"] = (
+                "tick_acceleration_and_window_span_missing"
+            )
+        elif tick_acceleration_ratio is None:
+            tp1_tick_diagnostics["gap_reason"] = "tick_acceleration_missing"
+        else:
+            tp1_tick_diagnostics["gap_reason"] = "tick_window_span_missing"
+    tick_context_source = (
+        str(tp1_tick_diagnostics["source"])
+        if source_category == "tp1"
+        else _first_risky_micro_text(fields, "tick_context_source") or "missing"
     )
     true_ofi = _first_risky_micro_float(
         fields,
@@ -5112,6 +5185,11 @@ def _risky_micro_projection_from_block_event(
         quote_age_ms=quote_age_ms,
         tick_acceleration_ratio=tick_acceleration_ratio,
         tick_window_span_sec=tick_window_span_sec,
+        tick_context_gap_reason=(
+            str(tp1_tick_diagnostics["gap_reason"])
+            if source_category == "tp1"
+            else None
+        ),
         positive_micro_support=positive_micro_support,
         adverse_micro_detected=adverse_micro_detected,
         large_sell_detected=large_sell_detected,
@@ -5136,6 +5214,17 @@ def _risky_micro_projection_from_block_event(
             ),
             "risky_micro_episode_source_bbo_provenance": bbo_source,
             "risky_micro_episode_tick_context_source": tick_context_source,
+            "risky_micro_episode_tick_context_tp1_sample_count": (
+                tp1_tick_diagnostics["sample_count"]
+                if source_category == "tp1"
+                else "-"
+            ),
+            "risky_micro_episode_tick_context_tp1_age_sec": (
+                tp1_tick_diagnostics["age_sec"] if source_category == "tp1" else "-"
+            ),
+            "risky_micro_episode_tick_context_tp1_source": (
+                tp1_tick_diagnostics["source"] if source_category == "tp1" else "-"
+            ),
             "risky_micro_episode_source_observation_id": str(
                 fields.get("rising_missed_tp1_evaluation_id")
                 or fields.get("entry_price_ai_decision_trace_id")

@@ -651,6 +651,121 @@ def test_risky_micro_episode_derives_tp1_block_source_without_runtime_authority(
     assert "tp1" not in summary["risky_micro_episode_natural_sample_absent_categories"]
 
 
+def test_risky_micro_tp1_adapter_preserves_insufficient_window_gap_owner(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    tp1_block = _event(
+        "tp1-insufficient-window",
+        "475560",
+        "THEBORN",
+        "rising_missed_tp1_candidate_blocked",
+        {
+            "forced_entry_reason": "rising_missed_one_share_entry",
+            "rising_missed_tp1_evaluation_id": "tp1-eval-insufficient",
+            "rising_missed_tp1_candidate_reason": "tp1_tick_window_pending",
+            "rising_missed_tp1_tick_acceleration": 0.0,
+            "rising_missed_tp1_tick_acceleration_fresh": False,
+            "rising_missed_tp1_tick_acceleration_source": "missing",
+            "rising_missed_tp1_ws_tick_acceleration_source": (
+                "trusted_ws_signed_0b_insufficient_10tick_window"
+            ),
+            "market_data_effective_best_bid": 10_000,
+            "market_data_effective_best_ask": 10_020,
+            "market_data_effective_quote_age_ms": 20,
+            "rising_missed_effective_venue": "KRX",
+            "rising_missed_market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:00:00+09:00",
+    )
+    pipeline_path.write_text(json.dumps(tp1_block) + "\n", encoding="utf-8")
+
+    summary, outcomes = mod._build_risky_micro_episode_source_candidates(pipeline_path)
+
+    derived = outcomes[0]
+    assert derived["tick_context_gap_reason"] == (
+        "tp1_signed_tick_sample_floor_not_met"
+    )
+    assert derived["tick_context_tp1_source"] == (
+        "trusted_ws_signed_0b_insufficient_10tick_window"
+    )
+    assert derived["tick_context_tp1_sample_count"] == "-"
+    assert summary["risky_micro_episode_tick_context_gap_reason_counts"] == [
+        {"reason": "tp1_signed_tick_sample_floor_not_met", "count": 1}
+    ]
+
+
+def test_risky_micro_tp1_adapter_preserves_submit_context_sample_floor(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    tp1_block = _event(
+        "tp1-submit-context-floor",
+        "475560",
+        "THEBORN",
+        "rising_missed_tp1_candidate_deferred",
+        {
+            "forced_entry_reason": "rising_missed_one_share_entry",
+            "rising_missed_tp1_evaluation_id": "tp1-eval-submit-floor",
+            "rising_missed_tp1_candidate_reason": "tp1_tick_window_pending",
+            "rising_missed_tp1_submit_context_tick_acceleration": 0.5,
+            "rising_missed_tp1_submit_context_tick_window_span_sec": 1.2,
+            "rising_missed_tp1_submit_context_tick_acceleration_fresh": False,
+            "rising_missed_tp1_submit_context_tick_window_sample_count": 4,
+            "rising_missed_tp1_submit_context_tick_acceleration_age_sec": 0.2,
+            "rising_missed_tp1_submit_context_tick_acceleration_source": (
+                "trusted_ws_signed_0b_10tick_received_ts"
+            ),
+            "market_data_effective_best_bid": 10_000,
+            "market_data_effective_best_ask": 10_020,
+            "market_data_effective_quote_age_ms": 20,
+            "rising_missed_effective_venue": "KRX",
+            "rising_missed_market_session_bucket": "krx_regular",
+        },
+        emitted_at="2026-08-14T09:00:00+09:00",
+    )
+    pipeline_path.write_text(json.dumps(tp1_block) + "\n", encoding="utf-8")
+
+    _, outcomes = mod._build_risky_micro_episode_source_candidates(pipeline_path)
+
+    derived = outcomes[0]
+    assert derived["tick_context_gap_reason"] == (
+        "tp1_signed_tick_sample_floor_not_met"
+    )
+    assert derived["tick_context_tp1_sample_count"] == 4
+    assert derived["tick_context_tp1_age_sec"] == 0.2
+    assert derived["tick_context_tp1_source"] == (
+        "trusted_ws_signed_0b_10tick_received_ts"
+    )
+
+
+def test_risky_micro_tp1_adapter_does_not_label_partial_fresh_context_none():
+    row = _event(
+        "tp1-partial-fresh",
+        "475560",
+        "THEBORN",
+        "rising_missed_tp1_candidate_blocked",
+        {
+            "forced_entry_reason": "rising_missed_one_share_entry",
+            "rising_missed_tp1_evaluation_id": "tp1-eval-partial-fresh",
+            "rising_missed_tp1_tick_acceleration": 1.2,
+            "rising_missed_tp1_tick_acceleration_fresh": True,
+            "rising_missed_tp1_tick_acceleration_source": (
+                "trusted_ws_signed_0b_10tick_received_ts"
+            ),
+            "market_data_effective_best_bid": 10_000,
+            "market_data_effective_best_ask": 10_020,
+            "market_data_effective_quote_age_ms": 20,
+            "rising_missed_effective_venue": "KRX",
+            "rising_missed_market_session_bucket": "krx_regular",
+        },
+    )
+
+    projected = mod._risky_micro_projection_from_block_event(row)
+
+    assert projected is not None
+    assert projected["risky_micro_episode_reason"] == "tick_context_missing"
+    assert projected["risky_micro_episode_tick_context_gap_reason"] == (
+        "tick_window_span_missing"
+    )
+
+
 def test_risky_micro_projection_uses_entry_price_executable_snapshot_provenance():
     row = _event(
         "entry-price-derived",
