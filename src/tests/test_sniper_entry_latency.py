@@ -385,6 +385,142 @@ def test_risky_micro_episode_observer_retains_and_emits_fresh_executable_bbo(
     assert state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY == {}
 
 
+def test_rising_missed_backoff_uses_bounded_low_frequency_bbo_retention(monkeypatch):
+    started_at = 10_000.0
+    retained = []
+    state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "retain_ws_subscription_until",
+        lambda code, until_ts: retained.append((code, until_ts)) or True,
+    )
+
+    registration = state_handlers.register_risky_micro_episode_executable_bbo_observer(
+        {"id": 8, "name": "BACKOFF", "code": "005930", "strategy": "SCALPING"},
+        "005930",
+        candidate_fields={
+            "risky_micro_episode_status": "recheck_required",
+            "risky_micro_episode_horizon_observer_purpose": (
+                "rising_missed_backoff_executable_outcome"
+            ),
+            "effective_venue": "PREMARKET_KRX_LIKE",
+            "market_session_bucket": "krx_like_premarket",
+            "rising_missed_ws_0d_route": "krx_nxt_integrated",
+        },
+        now_ts=started_at,
+    )
+
+    assert registration["risky_micro_episode_horizon_observer_registered"] is True
+    assert registration["risky_micro_episode_horizon_observer_duration_sec"] == 600.0
+    assert (
+        registration["risky_micro_episode_horizon_observer_emit_interval_sec"] == 15.0
+    )
+    assert retained == [("005930", started_at + 600.0)]
+    stored = next(iter(state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.values()))
+    assert stored["observer_purpose"] == "rising_missed_backoff_executable_outcome"
+    assert stored["emit_interval_sec"] == 15.0
+    state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.clear()
+
+
+def test_entry_pipeline_registers_backoff_executable_observer(monkeypatch):
+    registrations = []
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "register_risky_micro_episode_executable_bbo_observer",
+        lambda stock, code, *, candidate_fields, now_ts=None: registrations.append(
+            (stock, code, candidate_fields)
+        )
+        or {"risky_micro_episode_horizon_observer_registered": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda _pipeline, _name, _code, stage, **kwargs: logs.append(
+            (stage, kwargs["fields"])
+        ),
+    )
+    stock = {
+        "id": 9,
+        "name": "BACKOFF",
+        "code": "005930",
+        "strategy": "SCALPING",
+        "rising_missed_effective_venue": "PREMARKET_KRX_LIKE",
+        "rising_missed_market_session_bucket": "krx_like_premarket",
+        "rising_missed_ws_0d_route": "krx_nxt_integrated",
+    }
+
+    state_handlers._log_entry_pipeline(
+        stock,
+        "005930",
+        "scalping_scanner_fast_precheck",
+        fast_precheck_result="budget_reallocated",
+        fast_precheck_reason="submit_safety_backoff_active",
+        rising_missed_budget_reallocation_source="submit_safety_feedback",
+    )
+
+    assert len(registrations) == 1
+    assert registrations[0][2]["risky_micro_episode_status"] == "recheck_required"
+    assert registrations[0][2]["risky_micro_episode_horizon_observer_purpose"] == (
+        "rising_missed_backoff_executable_outcome"
+    )
+    assert logs[0][1]["risky_micro_episode_horizon_observer_registered"] is True
+
+
+def test_backoff_observer_capacity_does_not_starve_risky_micro_purpose(monkeypatch):
+    started_at = 10_000.0
+    state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "retain_ws_subscription_until",
+        lambda _code, _until_ts: True,
+    )
+    for index in range(
+        state_handlers._RISKY_MICRO_EXECUTABLE_BBO_MAX_ACTIVE_PER_PURPOSE
+    ):
+        state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY[f"backoff-{index}"] = {
+            "observer_purpose": "rising_missed_backoff_executable_outcome",
+            "expires_at_epoch": started_at + 600.0,
+        }
+
+    risky_registration = (
+        state_handlers.register_risky_micro_episode_executable_bbo_observer(
+            {"id": 10, "name": "RISKY", "code": "005930"},
+            "005930",
+            candidate_fields={
+                "risky_micro_episode_status": "source_only_candidate",
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+                "rising_missed_ws_0d_route": "krx_regular",
+            },
+            now_ts=started_at,
+        )
+    )
+    backoff_registration = (
+        state_handlers.register_risky_micro_episode_executable_bbo_observer(
+            {"id": 11, "name": "BACKOFF", "code": "000660"},
+            "000660",
+            candidate_fields={
+                "risky_micro_episode_status": "recheck_required",
+                "risky_micro_episode_horizon_observer_purpose": (
+                    "rising_missed_backoff_executable_outcome"
+                ),
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+                "rising_missed_ws_0d_route": "krx_regular",
+            },
+            now_ts=started_at,
+        )
+    )
+
+    assert risky_registration["risky_micro_episode_horizon_observer_registered"] is True
+    assert backoff_registration["risky_micro_episode_horizon_observer_registered"] is False
+    assert backoff_registration["risky_micro_episode_horizon_observer_status"] == (
+        "purpose_capacity_rejected"
+    )
+    state_handlers._RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.clear()
+
+
 def test_risky_micro_episode_observer_does_not_relabel_cross_venue_bbo(monkeypatch):
     started_at = 11_000.0
     logs = []

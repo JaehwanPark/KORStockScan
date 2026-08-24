@@ -3403,7 +3403,9 @@ def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(
     )
 
     assert report["summary"]["submit_safety_block_count"] == 3
-    assert report["summary"]["potential_backoff_opportunity_loss_count"] == 1
+    assert report["summary"]["potential_backoff_opportunity_loss_count"] == 0
+    assert report["summary"]["backoff_mark_price_opportunity_candidate_count"] == 1
+    assert report["summary"]["backoff_executable_source_quality_gap_count"] == 1
     bucket_counts = {
         item["blocker_bucket"]: item["count"]
         for item in report["summary"]["submit_safety_bucket_counts"]
@@ -3430,7 +3432,12 @@ def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(
         item["stock_code"]: item for item in report["backoff_opportunity_audit_rows"]
     }
     assert backoff_rows["000704"]["recovered_eval_after_last_backoff"] is True
-    assert backoff_rows["000705"]["potential_backoff_opportunity_loss"] is True
+    assert backoff_rows["000705"]["potential_backoff_opportunity_loss"] is False
+    assert backoff_rows["000705"]["mark_price_opportunity_candidate"] is True
+    assert (
+        backoff_rows["000705"]["backoff_opportunity_classification"]
+        == "mark_price_only_unconfirmed"
+    )
     assert backoff_rows["000705"]["backoff_observation_state"] == "mature_unrecovered"
     assert report["summary"]["backoff_active_positive_delta_symbol_count"] == 0
     assert (
@@ -3438,6 +3445,87 @@ def test_submit_safety_breakdown_and_backoff_opportunity_audit_are_source_only(
             "decision_authority"
         ]
         == "source_only_submit_safety_blocker_attribution"
+    )
+
+
+def test_backoff_opportunity_requires_executable_target_first_path(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-24.jsonl"
+    rows = [
+        _event(
+            705,
+            "000705",
+            "executable-backoff",
+            "scalping_scanner_fast_precheck",
+            {
+                "fast_precheck_result": "budget_reallocated",
+                "fast_precheck_reason": "submit_safety_backoff_active",
+                "rising_missed_budget_reallocation_source": "submit_safety_feedback",
+                "price_delta_since_first_seen_pct": "1.10",
+                "effective_venue": "KRX",
+                "market_data_effective_best_bid": 995,
+                "market_data_effective_best_ask": 1000,
+                "risky_micro_episode_horizon_observer_registered": True,
+                "risky_micro_episode_horizon_observer_status": "registered",
+            },
+            emitted_at="2026-08-24T09:05:00+09:00",
+        ),
+        _event(
+            705,
+            "000705",
+            "executable-backoff",
+            "risky_micro_episode_executable_bbo_observed",
+            {
+                "effective_venue": "KRX",
+                "market_data_effective_best_bid": 998,
+                "market_data_effective_best_ask": 1000,
+                "risky_micro_episode_horizon_observer_quote_fresh": True,
+                "risky_micro_episode_horizon_observer_purpose": (
+                    "rising_missed_backoff_executable_outcome"
+                ),
+            },
+            emitted_at="2026-08-24T09:05:15+09:00",
+        ),
+        _event(
+            705,
+            "000705",
+            "executable-backoff",
+            "risky_micro_episode_executable_bbo_observed",
+            {
+                "effective_venue": "KRX",
+                "market_data_effective_best_bid": 1015,
+                "market_data_effective_best_ask": 1020,
+                "risky_micro_episode_horizon_observer_quote_fresh": True,
+                "risky_micro_episode_horizon_observer_purpose": (
+                    "rising_missed_backoff_executable_outcome"
+                ),
+            },
+            emitted_at="2026-08-24T09:06:00+09:00",
+        ),
+        _event(
+            799,
+            "000799",
+            "clock-anchor",
+            "scalping_scanner_runtime_target_attach",
+            {"price_delta_since_first_seen_pct": "0.00"},
+            emitted_at="2026-08-24T09:09:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-24", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    assert report["summary"]["potential_backoff_opportunity_loss_count"] == 1
+    assert report["summary"]["backoff_executable_source_quality_pass_count"] == 1
+    row = report["backoff_opportunity_audit_rows"][0]
+    assert row["potential_backoff_opportunity_loss"] is True
+    assert row["executable_sampled_first_hit"] == "sampled_gross_target_first"
+    assert row["max_executable_bid_move_pct"] == 1.5
+    assert row["backoff_opportunity_classification"] == (
+        "executable_confirmed_opportunity_loss"
     )
 
 

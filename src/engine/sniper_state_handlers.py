@@ -341,9 +341,12 @@ _SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY: dict[str, dict[str, Any]] = {}
 _SMOOTHING_NON_REVIVE_POST_SELL_MAX_ACTIVE_ARMS = 8
 _SMOOTHING_NON_REVIVE_POST_SELL_OBSERVER_LOCK = threading.RLock()
 _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY: dict[str, dict[str, Any]] = {}
-_RISKY_MICRO_EXECUTABLE_BBO_MAX_ACTIVE_SYMBOLS = 16
+_RISKY_MICRO_EXECUTABLE_BBO_MAX_ACTIVE_SYMBOLS = 32
+_RISKY_MICRO_EXECUTABLE_BBO_MAX_ACTIVE_PER_PURPOSE = 16
 _RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC = 45.0
 _RISKY_MICRO_EXECUTABLE_BBO_EMIT_INTERVAL_SEC = 1.0
+_RISING_MISSED_BACKOFF_EXECUTABLE_BBO_OBSERVER_SEC = 10.0 * 60.0
+_RISING_MISSED_BACKOFF_EXECUTABLE_BBO_EMIT_INTERVAL_SEC = 15.0
 _RISKY_MICRO_EXECUTABLE_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 _GREENFIELD_TELEGRAM_KEYS: set[str] = set()
 _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
@@ -12748,6 +12751,49 @@ def _log_entry_pipeline(stock, code, stage, **fields):
             log_info(
                 "[RISKY_MICRO_BBO_OBSERVER] registration failed open without "
                 f"runtime effect code={code or '-'}: {exc}"
+            )
+    backoff_source = str(
+        merged_fields.get("rising_missed_budget_reallocation_source") or ""
+    ).strip()
+    backoff_reason = str(merged_fields.get("fast_precheck_reason") or "").strip()
+    if (
+        stage == "scalping_scanner_fast_precheck"
+        and backoff_source
+        and backoff_reason
+        in {"candidate_gate_backoff_active", "submit_safety_backoff_active"}
+    ):
+        try:
+            merged_fields.update(
+                register_risky_micro_episode_executable_bbo_observer(
+                    stock,
+                    code,
+                    candidate_fields={
+                        **merged_fields,
+                        "risky_micro_episode_status": "recheck_required",
+                        "risky_micro_episode_horizon_observer_purpose": (
+                            "rising_missed_backoff_executable_outcome"
+                        ),
+                    },
+                    now_ts=time.time(),
+                )
+            )
+        except Exception as exc:
+            merged_fields.update(
+                {
+                    "risky_micro_episode_horizon_observer_registered": False,
+                    "risky_micro_episode_horizon_observer_status": (
+                        "backoff_registration_exception_fail_open"
+                    ),
+                    "risky_micro_episode_horizon_observer_error": str(exc)[:160],
+                    "risky_micro_episode_horizon_observer_runtime_effect": False,
+                    "risky_micro_episode_horizon_observer_allowed_runtime_apply": False,
+                    "risky_micro_episode_horizon_observer_actual_order_submitted": False,
+                    "risky_micro_episode_horizon_observer_broker_order_forbidden": True,
+                }
+            )
+            log_info(
+                "[RISING_MISSED_BACKOFF_BBO_OBSERVER] registration failed open "
+                f"without runtime effect code={code or '-'}: {exc}"
             )
     merged_fields["pipeline_lifecycle_population_scope"] = (
         "sim_observation_only"
@@ -33835,6 +33881,21 @@ def register_risky_micro_episode_executable_bbo_observer(
     fields = candidate_fields if isinstance(candidate_fields, dict) else {}
     status = str(fields.get("risky_micro_episode_status") or "").strip()
     eligible = status in {"source_only_candidate", "recheck_required"}
+    observer_purpose = str(
+        fields.get("risky_micro_episode_horizon_observer_purpose")
+        or "risky_micro_episode_executable_outcome"
+    ).strip()
+    backoff_observer = observer_purpose == "rising_missed_backoff_executable_outcome"
+    observer_duration_sec = (
+        _RISING_MISSED_BACKOFF_EXECUTABLE_BBO_OBSERVER_SEC
+        if backoff_observer
+        else _RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC
+    )
+    observer_emit_interval_sec = (
+        _RISING_MISSED_BACKOFF_EXECUTABLE_BBO_EMIT_INTERVAL_SEC
+        if backoff_observer
+        else _RISKY_MICRO_EXECUTABLE_BBO_EMIT_INTERVAL_SEC
+    )
     base = {
         "risky_micro_episode_horizon_observer_registered": False,
         "risky_micro_episode_horizon_observer_status": (
@@ -33844,11 +33905,10 @@ def register_risky_micro_episode_executable_bbo_observer(
         "risky_micro_episode_horizon_observer_allowed_runtime_apply": False,
         "risky_micro_episode_horizon_observer_actual_order_submitted": False,
         "risky_micro_episode_horizon_observer_broker_order_forbidden": True,
-        "risky_micro_episode_horizon_observer_duration_sec": (
-            _RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC
-        ),
+        "risky_micro_episode_horizon_observer_purpose": observer_purpose,
+        "risky_micro_episode_horizon_observer_duration_sec": observer_duration_sec,
         "risky_micro_episode_horizon_observer_emit_interval_sec": (
-            _RISKY_MICRO_EXECUTABLE_BBO_EMIT_INTERVAL_SEC
+            observer_emit_interval_sec
         ),
     }
     if not eligible:
@@ -33935,14 +33995,38 @@ def register_risky_micro_episode_executable_bbo_observer(
             ),
         }
     registration_key = (
-        f"{normalized_code}|{venue}|{session.upper()}|{source_market_route.upper()}"
+        f"{normalized_code}|{venue}|{session.upper()}|{source_market_route.upper()}|"
+        f"{observer_purpose}"
     )
-    expires_at = observed_at + _RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC
+    expires_at = observed_at + observer_duration_sec
     with ENTRY_LOCK:
         for stale_key, stale in list(_RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.items()):
             if _safe_float(stale.get("expires_at_epoch"), 0.0) <= observed_at:
                 _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.pop(stale_key, None)
         existing = _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.get(registration_key)
+        purpose_active_count = sum(
+            1
+            for item in _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.values()
+            if str(
+                item.get("observer_purpose")
+                or "risky_micro_episode_executable_outcome"
+            )
+            == observer_purpose
+        )
+        if (
+            existing is None
+            and purpose_active_count
+            >= _RISKY_MICRO_EXECUTABLE_BBO_MAX_ACTIVE_PER_PURPOSE
+        ):
+            return {
+                **base,
+                "risky_micro_episode_horizon_observer_status": (
+                    "purpose_capacity_rejected"
+                ),
+                "risky_micro_episode_horizon_observer_registration_key": (
+                    registration_key
+                ),
+            }
         if (
             existing is None
             and len(_RISKY_MICRO_EXECUTABLE_BBO_REGISTRY)
@@ -33977,6 +34061,29 @@ def register_risky_micro_episode_executable_bbo_observer(
     }
     with ENTRY_LOCK:
         existing = _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.get(registration_key)
+        purpose_active_count = sum(
+            1
+            for item in _RISKY_MICRO_EXECUTABLE_BBO_REGISTRY.values()
+            if str(
+                item.get("observer_purpose")
+                or "risky_micro_episode_executable_outcome"
+            )
+            == observer_purpose
+        )
+        if (
+            existing is None
+            and purpose_active_count
+            >= _RISKY_MICRO_EXECUTABLE_BBO_MAX_ACTIVE_PER_PURPOSE
+        ):
+            return {
+                **base,
+                "risky_micro_episode_horizon_observer_status": (
+                    "purpose_capacity_rejected_after_retention"
+                ),
+                "risky_micro_episode_horizon_observer_registration_key": (
+                    registration_key
+                ),
+            }
         if (
             existing is None
             and len(_RISKY_MICRO_EXECUTABLE_BBO_REGISTRY)
@@ -33998,6 +34105,8 @@ def register_risky_micro_episode_executable_bbo_observer(
                 "venue": venue,
                 "session": session,
                 "source_market_route": source_market_route,
+                "observer_purpose": observer_purpose,
+                "emit_interval_sec": observer_emit_interval_sec,
                 "registered_at_epoch": observed_at,
                 "expires_at_epoch": expires_at,
                 "last_emit_epoch": 0.0,
@@ -34299,6 +34408,13 @@ def observe_risky_micro_episode_executable_bbo_paths(
         code = str(registration.get("code") or "").strip()[:6]
         expires_at = _safe_float(registration.get("expires_at_epoch"), 0.0)
         last_emit = _safe_float(registration.get("last_emit_epoch"), 0.0)
+        emit_interval_sec = max(
+            0.1,
+            _safe_float(
+                registration.get("emit_interval_sec"),
+                _RISKY_MICRO_EXECUTABLE_BBO_EMIT_INTERVAL_SEC,
+            ),
+        )
         if observed_at > expires_at:
             with ENTRY_LOCK:
                 if (
@@ -34307,10 +34423,7 @@ def observe_risky_micro_episode_executable_bbo_paths(
                 ):
                     closed_count += 1
             continue
-        if (
-            last_emit > 0
-            and observed_at - last_emit < _RISKY_MICRO_EXECUTABLE_BBO_EMIT_INTERVAL_SEC
-        ):
+        if last_emit > 0 and observed_at - last_emit < emit_interval_sec:
             continue
 
         ws_data: dict[str, Any] = {}
@@ -34369,6 +34482,13 @@ def observe_risky_micro_episode_executable_bbo_paths(
                     ),
                     "risky_micro_episode_horizon_observer_expected_market_route": (
                         registration.get("source_market_route") or "-"
+                    ),
+                    "risky_micro_episode_horizon_observer_purpose": (
+                        registration.get("observer_purpose")
+                        or "risky_micro_episode_executable_outcome"
+                    ),
+                    "risky_micro_episode_horizon_observer_emit_interval_sec": (
+                        emit_interval_sec
                     ),
                     "metric_role": "source_quality_instrumentation",
                     "decision_authority": (

@@ -82,6 +82,7 @@ TP1_COST_RESERVE_PCT = 0.30
 TP1_NET_TARGET_PCT = 1.00
 TP1_LABEL_HORIZON_SEC = 20 * 60
 TP1_POST_BLOCK_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
+BACKOFF_EXECUTABLE_HORIZONS_MIN = (1, 3, 5, 10)
 TP1_POST_BLOCK_MIN_FRESH_PRICE_SAMPLES = 2
 FORBIDDEN_USES = [
     "runtime_threshold_mutation",
@@ -1688,6 +1689,101 @@ def _is_backoff_event(row: dict[str, Any]) -> bool:
     return str(fields.get("fast_precheck_result") or "") == "budget_reallocated"
 
 
+def _update_backoff_executable_outcome(
+    item: dict[str, Any],
+    row: dict[str, Any],
+    *,
+    observation_ts: datetime | None,
+    executable_bid: float | None,
+    executable_ask: float | None,
+    executable_source: str,
+) -> None:
+    fields = _fields(row)
+    if str(row.get("stage") or "") != "risky_micro_episode_executable_bbo_observed":
+        return
+    if (
+        str(fields.get("risky_micro_episode_horizon_observer_purpose") or "")
+        != "rising_missed_backoff_executable_outcome"
+    ):
+        return
+    item["backoff_executable_observer_event_count"] = (
+        _safe_int(item.get("backoff_executable_observer_event_count")) + 1
+    )
+    if not _boolish(fields.get("risky_micro_episode_horizon_observer_quote_fresh")):
+        item["backoff_executable_source_gap_count"] = (
+            _safe_int(item.get("backoff_executable_source_gap_count")) + 1
+        )
+        return
+    observed_venue = str(_tp1_effective_venue(fields) or "").upper()
+    expected_venue = str(item.get("effective_venue") or "").upper()
+    if expected_venue and observed_venue != expected_venue:
+        item["backoff_executable_venue_mismatch_count"] = (
+            _safe_int(item.get("backoff_executable_venue_mismatch_count")) + 1
+        )
+        return
+    source_ts = _parse_ts(item.get("last_backoff_ts"))
+    elapsed_sec = _compatible_elapsed_seconds(observation_ts, source_ts)
+    if (
+        elapsed_sec is None
+        or elapsed_sec < 0
+        or elapsed_sec > max(BACKOFF_EXECUTABLE_HORIZONS_MIN) * 60.0
+    ):
+        item["backoff_executable_out_of_window_count"] = (
+            _safe_int(item.get("backoff_executable_out_of_window_count")) + 1
+        )
+        return
+    if (
+        executable_bid is None
+        or executable_bid <= 0
+        or executable_ask is None
+        or executable_ask < executable_bid
+    ):
+        item["backoff_executable_source_gap_count"] = (
+            _safe_int(item.get("backoff_executable_source_gap_count")) + 1
+        )
+        return
+    entry_ask = _safe_float(item.get("entry_executable_best_ask"))
+    if entry_ask is None or entry_ask <= 0:
+        entry_ask = executable_ask
+        item["entry_executable_best_bid"] = executable_bid
+        item["entry_executable_best_ask"] = executable_ask
+        item["entry_executable_bbo_source"] = executable_source
+        item["entry_executable_bbo_ts"] = _event_ts(row)
+    move_pct = ((executable_bid - entry_ask) / entry_ask) * 100.0
+    item["backoff_executable_fresh_event_count"] = (
+        _safe_int(item.get("backoff_executable_fresh_event_count")) + 1
+    )
+    current_max = _safe_float(item.get("max_executable_bid_move_pct"))
+    current_min = _safe_float(item.get("min_executable_bid_move_pct"))
+    item["max_executable_bid_move_pct"] = round(
+        move_pct if current_max is None else max(current_max, move_pct), 6
+    )
+    item["min_executable_bid_move_pct"] = round(
+        move_pct if current_min is None else min(current_min, move_pct), 6
+    )
+    for minutes in BACKOFF_EXECUTABLE_HORIZONS_MIN:
+        if elapsed_sec > minutes * 60.0:
+            continue
+        horizon = item["executable_horizons"][f"{minutes}m"]
+        horizon["event_count"] += 1
+        horizon_max = _safe_float(horizon.get("mfe_pct"))
+        horizon_min = _safe_float(horizon.get("mae_pct"))
+        horizon["mfe_pct"] = round(
+            move_pct if horizon_max is None else max(horizon_max, move_pct), 6
+        )
+        horizon["mae_pct"] = round(
+            move_pct if horizon_min is None else min(horizon_min, move_pct), 6
+        )
+    if not item.get("executable_sampled_first_hit"):
+        if move_pct >= TP1_GROSS_TARGET_PCT:
+            item["executable_sampled_first_hit"] = "sampled_gross_target_first"
+        elif move_pct <= TP1_ADVERSE_STOP_PCT:
+            item["executable_sampled_first_hit"] = "sampled_adverse_stop_first"
+        if item.get("executable_sampled_first_hit"):
+            item["executable_sampled_first_hit_ts"] = _event_ts(row)
+            item["executable_sampled_first_hit_elapsed_sec"] = round(elapsed_sec, 3)
+
+
 def _dynamic_age_post_apply_source_row(row: dict[str, Any]) -> dict[str, Any] | None:
     fields = _fields(row)
     if str(row.get("stage") or "") != "scalp_entry_action_decision_snapshot":
@@ -1918,6 +2014,14 @@ def _build_submit_safety_and_backoff_audit(
 
         if code in backoff_by_code:
             backoff = backoff_by_code[code]
+            _update_backoff_executable_outcome(
+                backoff,
+                row,
+                observation_ts=parsed_ts,
+                executable_bid=executable_bid,
+                executable_ask=_executable_ask,
+                executable_source=_executable_bbo_source,
+            )
             if delta is not None:
                 current = backoff.get("max_delta_after_last_backoff_pct")
                 backoff["max_delta_after_last_backoff_pct"] = (
@@ -2022,6 +2126,10 @@ def _build_submit_safety_and_backoff_audit(
                 or fields.get("rising_missed_submit_safety_backoff_reason")
             )
             source_counts[str(source or "unknown")] += 1
+            effective_venue = str(_tp1_effective_venue(fields) or "").upper()
+            observer_registered = _boolish(
+                fields.get("risky_micro_episode_horizon_observer_registered")
+            )
             backoff_by_code[code] = {
                 "stock_code": code,
                 "stock_name": _event_name(row),
@@ -2031,6 +2139,37 @@ def _build_submit_safety_and_backoff_audit(
                 "last_backoff_delta_pct": delta,
                 "max_delta_after_last_backoff_pct": delta,
                 "max_delta_after_last_backoff_ts": ts if delta is not None else None,
+                "effective_venue": effective_venue or "UNKNOWN",
+                "decision_event_executable_best_bid": executable_bid,
+                "decision_event_executable_best_ask": _executable_ask,
+                "decision_event_executable_bbo_source": _executable_bbo_source,
+                "entry_executable_best_bid": None,
+                "entry_executable_best_ask": None,
+                "entry_executable_bbo_source": "first_fresh_post_backoff_observer",
+                "entry_executable_bbo_ts": None,
+                "backoff_executable_observer_registered": observer_registered,
+                "backoff_executable_observer_status": fields.get(
+                    "risky_micro_episode_horizon_observer_status"
+                )
+                or "not_registered",
+                "backoff_executable_observer_event_count": 0,
+                "backoff_executable_fresh_event_count": 0,
+                "backoff_executable_source_gap_count": 0,
+                "backoff_executable_venue_mismatch_count": 0,
+                "backoff_executable_out_of_window_count": 0,
+                "max_executable_bid_move_pct": None,
+                "min_executable_bid_move_pct": None,
+                "executable_sampled_first_hit": None,
+                "executable_sampled_first_hit_ts": None,
+                "executable_sampled_first_hit_elapsed_sec": None,
+                "executable_horizons": {
+                    f"{minutes}m": {
+                        "event_count": 0,
+                        "mfe_pct": None,
+                        "mae_pct": None,
+                    }
+                    for minutes in BACKOFF_EXECUTABLE_HORIZONS_MIN
+                },
                 "fast_pass_after_last_backoff_count": 0,
                 "promoted_after_last_backoff_count": 0,
                 "heavy_eval_after_last_backoff_count": 0,
@@ -2072,12 +2211,42 @@ def _build_submit_safety_and_backoff_audit(
             else "active_or_recovered"
         )
         item["recovered_eval_after_last_backoff"] = recovered
-        item["potential_backoff_opportunity_loss"] = bool(
+        mark_price_candidate = bool(
             max_delta is not None
             and max_delta >= 1.0
             and not recovered
             and age_sec is not None
             and age_sec >= 180.0
+        )
+        executable_source_quality_pass = bool(
+            item.get("effective_venue") in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+            and _safe_float(item.get("entry_executable_best_ask")) is not None
+            and _safe_int(item.get("backoff_executable_fresh_event_count"))
+            >= TP1_POST_BLOCK_MIN_FRESH_PRICE_SAMPLES
+        )
+        item["mark_price_opportunity_candidate"] = mark_price_candidate
+        item["backoff_executable_source_quality_pass"] = executable_source_quality_pass
+        item["potential_backoff_opportunity_loss"] = bool(
+            executable_source_quality_pass
+            and (_safe_float(item.get("max_executable_bid_move_pct")) or -999.0)
+            >= TP1_GROSS_TARGET_PCT
+            and item.get("executable_sampled_first_hit") == "sampled_gross_target_first"
+            and not recovered
+            and age_sec is not None
+            and age_sec >= 180.0
+        )
+        item["backoff_opportunity_classification"] = (
+            "executable_confirmed_opportunity_loss"
+            if item["potential_backoff_opportunity_loss"]
+            else (
+                "executable_observed_no_target"
+                if executable_source_quality_pass
+                else (
+                    "mark_price_only_unconfirmed"
+                    if mark_price_candidate
+                    else "no_opportunity_signal"
+                )
+            )
         )
 
     dynamic_age_rows = sorted(
@@ -2179,6 +2348,18 @@ def _build_submit_safety_and_backoff_audit(
         ),
         "potential_backoff_opportunity_loss_count": sum(
             1 for item in audit_rows if item["potential_backoff_opportunity_loss"]
+        ),
+        "backoff_mark_price_opportunity_candidate_count": sum(
+            1 for item in audit_rows if item["mark_price_opportunity_candidate"]
+        ),
+        "backoff_executable_source_quality_pass_count": sum(
+            1 for item in audit_rows if item["backoff_executable_source_quality_pass"]
+        ),
+        "backoff_executable_source_quality_gap_count": sum(
+            1
+            for item in audit_rows
+            if item["mark_price_opportunity_candidate"]
+            and not item["backoff_executable_source_quality_pass"]
         ),
         "dynamic_age_post_apply_episode_count": len(dynamic_age_rows),
         "dynamic_age_post_apply_latency_pass_count": sum(
@@ -6520,10 +6701,21 @@ def build_report(
             "rising_missed_backoff_opportunity_audit": {
                 "metric_role": "source_only_backoff_opportunity_audit",
                 "decision_authority": "source_only_backoff_opportunity_audit",
-                "window_policy": "same_day_intraday_pipeline_events_continuously_updated",
-                "sample_floor": "1_fast_precheck_budget_reallocated_event",
+                "window_policy": (
+                    "same_day_fast_precheck_backoff_plus_exact_route_executable_"
+                    "bbo_1_3_5_10m"
+                ),
+                "sample_floor": (
+                    "1_fast_precheck_budget_reallocated_event_plus_entry_ask_and_"
+                    "2_fresh_post_backoff_executable_bid_samples"
+                ),
                 "primary_decision_metric": "potential_backoff_opportunity_loss_count",
-                "source_quality_gate": "code_joined_fast_precheck_backoff_and_later_runtime_observation_events",
+                "source_quality_gate": (
+                    "same_code_venue_session_exact_route_entry_ask_and_post_backoff_"
+                    "fresh_executable_bid_with_15s_sampled_gross_target_1_3pct_"
+                    "before_sampled_adverse_stop_and_mark_price_candidates_kept_"
+                    "diagnostic_only"
+                ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
             "rising_missed_latency_false_negative_review": {
@@ -7338,8 +7530,15 @@ def write_outputs(
             "- code={stock_code} name={stock_name} last_backoff={last_backoff_ts} "
             "reason={last_backoff_reason} source={last_backoff_source} "
             "max_delta_after={max_delta_after_last_backoff_pct} "
+            "mark_candidate={mark_price_opportunity_candidate} "
+            "entry_ask={entry_executable_best_ask} "
+            "executable_mfe={max_executable_bid_move_pct} "
+            "executable_mae={min_executable_bid_move_pct} "
+            "executable_sampled_first_hit={executable_sampled_first_hit} "
+            "executable_source_quality={backoff_executable_source_quality_pass} "
             "recovered_eval={recovered_eval_after_last_backoff} "
             "potential_loss={potential_backoff_opportunity_loss} "
+            "classification={backoff_opportunity_classification} "
             "state={backoff_observation_state} age_sec={last_backoff_observation_age_sec} "
             "pass_after={fast_pass_after_last_backoff_count} "
             "promoted_after={promoted_after_last_backoff_count} "
