@@ -325,31 +325,41 @@ class ObserverRuntimeMetrics:
         *,
         observer_runtime_loaded: bool = False,
     ) -> ObserverRuntimeSnapshot:
+        # Keep the producer-facing metrics lock limited to bounded copies.
+        # Percentile sorting can take milliseconds once the rolling reservoirs
+        # are full and must not stall Kiwoom's realtime callback while the
+        # canary monitor builds its periodic health snapshot.
         with self._lock:
             callback = tuple(self._callback_latency_ms)
             enqueue = tuple(self._enqueue_latency_ms)
             exchange_to_receive = tuple(self._exchange_to_receive_latency_ms)
             quote_age = tuple(self._quote_age_ms)
-            return ObserverRuntimeSnapshot(
-                producer_callback_count=self._callback_count,
-                producer_callback_latency_p50_ms=_percentile(callback, 50),
-                producer_callback_latency_p95_ms=_percentile(callback, 95),
-                producer_callback_latency_p99_ms=_percentile(callback, 99),
-                enqueue_latency_p50_ms=_percentile(enqueue, 50),
-                enqueue_latency_p95_ms=_percentile(enqueue, 95),
-                enqueue_latency_p99_ms=_percentile(enqueue, 99),
-                exchange_to_receive_latency_p95_ms=_percentile(exchange_to_receive, 95),
-                quote_age_p95_ms=_percentile(quote_age, 95),
-                queue_high_water=self._queue_high_water,
-                queue_full_count=self._queue_full,
-                dropped_envelope_count=self._dropped,
-                invalid_envelope_count=self._invalid,
-                isolated_error_count=self._isolated_error,
-                observer_runtime_loaded=observer_runtime_loaded,
-                observation_capture_active=(
-                    observer_runtime_loaded and flags.observation_capture_active
-                ),
-            )
+            callback_count = self._callback_count
+            queue_high_water = self._queue_high_water
+            queue_full_count = self._queue_full
+            dropped_envelope_count = self._dropped
+            invalid_envelope_count = self._invalid
+            isolated_error_count = self._isolated_error
+        return ObserverRuntimeSnapshot(
+            producer_callback_count=callback_count,
+            producer_callback_latency_p50_ms=_percentile(callback, 50),
+            producer_callback_latency_p95_ms=_percentile(callback, 95),
+            producer_callback_latency_p99_ms=_percentile(callback, 99),
+            enqueue_latency_p50_ms=_percentile(enqueue, 50),
+            enqueue_latency_p95_ms=_percentile(enqueue, 95),
+            enqueue_latency_p99_ms=_percentile(enqueue, 99),
+            exchange_to_receive_latency_p95_ms=_percentile(exchange_to_receive, 95),
+            quote_age_p95_ms=_percentile(quote_age, 95),
+            queue_high_water=queue_high_water,
+            queue_full_count=queue_full_count,
+            dropped_envelope_count=dropped_envelope_count,
+            invalid_envelope_count=invalid_envelope_count,
+            isolated_error_count=isolated_error_count,
+            observer_runtime_loaded=observer_runtime_loaded,
+            observation_capture_active=(
+                observer_runtime_loaded and flags.observation_capture_active
+            ),
+        )
 
 
 class ObservationAdapter:

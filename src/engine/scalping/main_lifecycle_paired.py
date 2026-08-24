@@ -1119,7 +1119,13 @@ class _LifecycleAccumulator:
             .strip()
             .lower()
         )
-        if state not in {"complete", "missing", "incomplete", "invalid"}:
+        if state not in {
+            "complete",
+            "identity_complete_venue_unresolved",
+            "missing",
+            "incomplete",
+            "invalid",
+        }:
             state = "invalid"
         if state != "complete":
             self.broker_execution_provenance_state_counts[state] = (

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.engine.kiwoom_websocket import KiwoomWSManager
+from src.engine.scalping.micro_reversion import forward_collector as collector_module
 from src.engine.scalping.micro_reversion.detector import DetectorConfig
 from src.engine.scalping.micro_reversion.forward_collector import (
     CollectorLifecycle,
@@ -364,6 +365,46 @@ def test_0d_callback_latency_does_not_poison_frozen_0b_canary_metric(
     )
     assert runtime.writer_low_disk_watermark_breach_count >= 0
     assert runtime.depth_writer_low_disk_watermark_breach_count >= 0
+
+
+def test_runtime_snapshot_percentiles_do_not_hold_producer_metrics_lock(
+    tmp_path, monkeypatch
+) -> None:
+    collector = _collector(tmp_path)
+    collector._record_producer_callback_latency("0B", 0.2)
+    percentile_started = threading.Event()
+    release_percentile = threading.Event()
+    increment_completed = threading.Event()
+    original_percentile = collector_module._percentile
+
+    def slow_percentile(values, percentile):
+        percentile_started.set()
+        assert release_percentile.wait(timeout=1.0)
+        return original_percentile(values, percentile)
+
+    monkeypatch.setattr(collector_module, "_percentile", slow_percentile)
+    snapshot_thread = threading.Thread(target=collector.runtime_snapshot)
+    snapshot_thread.start()
+    assert percentile_started.wait(timeout=1.0)
+
+    increment_thread = threading.Thread(
+        target=lambda: (
+            collector._increment("_producer_0b_callbacks"),
+            increment_completed.set(),
+        )
+    )
+    increment_thread.start()
+    try:
+        assert increment_completed.wait(timeout=0.5)
+    finally:
+        release_percentile.set()
+        snapshot_thread.join(timeout=1.0)
+        increment_thread.join(timeout=1.0)
+    try:
+        assert not snapshot_thread.is_alive()
+        assert not increment_thread.is_alive()
+    finally:
+        collector.close()
 
 
 def test_0d_depth_capture_is_independently_default_off(tmp_path) -> None:

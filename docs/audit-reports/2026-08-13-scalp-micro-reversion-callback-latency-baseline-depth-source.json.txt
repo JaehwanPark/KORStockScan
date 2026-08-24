@@ -121,13 +121,14 @@
     "snapshot_stale_after_sec": 30.0
   },
   "benchmark_module_sha256": "ef55251de07c9880447ad3e9426f6ada9a8d6ffb2ca6ca149899cc383b4052e1",
-  "forward_collector_sha256": "ca003db9e53160ea6c16e488ee3efb95d9f40b938edabe297c4859c5e43480e4",
+  "forward_collector_sha256": "8c12b1260a4a3bb6b9657631df156b80c5d2437c82a3030f89165c31072e34bf",
+  "observation_adapter_sha256": "86e834cf6685f039f2e4c3ce292df43c3cb52106acf13dbde6929f97e8d78618",
   "path_journal_sha256": "5377939f3eafe29ab4c4a1ce4ab12d3b72dd57eff279ac2156035584cf436e28",
   "path_capture_sha256": "f2614a55a4532e79e5142e988164ef41e80b7a269f8383f41eecdc6407419d34",
   "p2_replay_sha256": "2cc8cb78aa4c827afa9c894022bc130e10daaf596ae9f3d963a589fa89904b96",
   "onset_quality_sha256": "595658610c7ba829f8f274c8ff56b64e0c1209c395724b1845c78d99640e8974",
   "storage_maintenance_sha256": "26af8e30a3999587a38c4a3977d3bd359e34649d6524b0561348a21bd43c4a7e",
-  "kiwoom_websocket_sha256": "6fd75d45f7edfeb53dabe881617ecefe620686f53fef21750b0fb74fef247172",
+  "kiwoom_websocket_sha256": "91c63789551bfa5c4106209813f6f4df0b812cb72a0e14310d66b6afc7572294",
   "canary_guard_config_sha256": "28a1b8355003d979fd02a4d43a7e8144bc252d14698fa934068b8d56b7daabd5",
   "source_exclusion_manifest_sha256": "f9e9c0b9cad91c9b300e818b91921f4cfae850ab0fe3666ba9e49bd686fac0f8",
   "source_base_commit": "d692a4f5e1c5ff53dfbb0e132724d8272ef37f27",
@@ -187,9 +188,17 @@
       "current": "ef55251de07c9880447ad3e9426f6ada9a8d6ffb2ca6ca149899cc383b4052e1,ca003db9e53160ea6c16e488ee3efb95d9f40b938edabe297c4859c5e43480e4,5377939f3eafe29ab4c4a1ce4ab12d3b72dd57eff279ac2156035584cf436e28,6fd75d45f7edfeb53dabe881617ecefe620686f53fef21750b0fb74fef247172",
       "reason": "successful_path_or_depth_write_below_preventive_low_disk_watermark_reclassified_as_operational_capacity_warning_while_actual_drop_error_self_disable_manifest_and_projection_failures_remain_capture_degraded;_current_exact_execution_provenance_websocket_source_rebound;_same_5000x5_0b_callback_preflight_zero_drop_zero_worker_error_p95_0.023827ms_p99_0.030824ms_frozen_limits_unchanged",
       "runtime_effect": false
+    },
+    {
+      "updated_at_kst": "2026-08-24T15:39:00+09:00",
+      "field": "forward_collector_sha256,observation_adapter_sha256,kiwoom_websocket_sha256",
+      "previous": "ca003db9e53160ea6c16e488ee3efb95d9f40b938edabe297c4859c5e43480e4,not_previously_pinned,6fd75d45f7edfeb53dabe881617ecefe620686f53fef21750b0fb74fef247172",
+      "current": "8c12b1260a4a3bb6b9657631df156b80c5d2437c82a3030f89165c31072e34bf,86e834cf6685f039f2e4c3ce292df43c3cb52106acf13dbde6929f97e8d78618,91c63789551bfa5c4106209813f6f4df0b812cb72a0e14310d66b6afc7572294",
+      "reason": "periodic_snapshot_percentile_sorting_moved_outside_producer_metrics_locks_and_current_explicit_multi_route_registration_inventory_source_rebound;_final_5000x5_0b_callback_preflight_zero_drop_zero_worker_error_p95_0.028150ms_p99_0.058006ms_frozen_limits_unchanged",
+      "runtime_effect": false
     }
   ],
-  "interpretation": "Exact-source synthetic 0B callback and separate 0D persistence preflights after the Samsung WebSocket observation integration and P2 exact-epoch source exclusion. The 2026-08-22 5000x5 callback rerun used the current callback/path/storage/WebSocket sources after successful writes below the preventive low-disk watermark were separated from actual capture loss. Frozen 1/2ms limits remain unchanged. The rerun had zero queue drop and worker errors. This artifact does not activate discovery, approve Gate B, rank P2 policies, create simulation positions, change trading runtime, or grant order authority.",
+  "interpretation": "Exact-source synthetic 0B callback and separate 0D persistence preflights after the Samsung WebSocket observation integration and P2 exact-epoch source exclusion. The 2026-08-24 5000x5 callback rerun used the current callback/path/storage/WebSocket sources after periodic health-snapshot percentile sorting was removed from producer metrics-lock critical sections. Frozen 1/2ms limits remain unchanged. The rerun had zero queue drop and worker errors. This artifact does not activate discovery, approve Gate B, rank P2 policies, create simulation positions, change trading runtime, or grant order authority.",
   "metric_role": "source_quality_gate_and_observer_canary_safety_veto",
   "decision_authority": "observer_canary_stop_only_no_trading_authority",
   "window_policy": "current_process_cumulative_with_periodic_snapshot",

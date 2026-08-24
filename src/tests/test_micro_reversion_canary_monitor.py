@@ -418,6 +418,10 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
         "forward_collector_sha256": (
             repository_root / "src/engine/scalping/micro_reversion/forward_collector.py"
         ),
+        "observation_adapter_sha256": (
+            repository_root
+            / "src/engine/scalping/micro_reversion/observation_adapter.py"
+        ),
         "path_journal_sha256": (
             repository_root / "src/engine/scalping/micro_reversion/path_journal.py"
         ),

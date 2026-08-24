@@ -1,8 +1,12 @@
+import threading
+
+from src.engine.scalping.micro_reversion import observation_adapter as adapter_module
 from src.engine.scalping.micro_reversion.observation_adapter import (
     AdapterResult,
     BoundedObservationQueue,
     ObservationAdapter,
     ObserverFeatureFlags,
+    ObserverRuntimeMetrics,
 )
 
 
@@ -92,3 +96,43 @@ def test_adapter_isolates_sink_failure() -> None:
 
     assert adapter.observe(**_fields()) is AdapterResult.ISOLATED_ERROR
     assert adapter.runtime_snapshot().isolated_error_count == 1
+
+
+def test_metrics_snapshot_percentiles_do_not_hold_producer_record_lock(
+    monkeypatch,
+) -> None:
+    metrics = ObserverRuntimeMetrics()
+    metrics.record(AdapterResult.ENQUEUED, callback_latency_ms=0.1)
+    percentile_started = threading.Event()
+    release_percentile = threading.Event()
+    record_completed = threading.Event()
+    original_percentile = adapter_module._percentile
+
+    def slow_percentile(values, percentile):
+        percentile_started.set()
+        assert release_percentile.wait(timeout=1.0)
+        return original_percentile(values, percentile)
+
+    monkeypatch.setattr(adapter_module, "_percentile", slow_percentile)
+    snapshot_thread = threading.Thread(
+        target=metrics.snapshot,
+        args=(ObserverFeatureFlags(observer_enabled=True),),
+    )
+    snapshot_thread.start()
+    assert percentile_started.wait(timeout=1.0)
+
+    record_thread = threading.Thread(
+        target=lambda: (
+            metrics.record(AdapterResult.ENQUEUED, callback_latency_ms=0.2),
+            record_completed.set(),
+        )
+    )
+    record_thread.start()
+    try:
+        assert record_completed.wait(timeout=0.5)
+    finally:
+        release_percentile.set()
+        snapshot_thread.join(timeout=1.0)
+        record_thread.join(timeout=1.0)
+    assert not snapshot_thread.is_alive()
+    assert not record_thread.is_alive()

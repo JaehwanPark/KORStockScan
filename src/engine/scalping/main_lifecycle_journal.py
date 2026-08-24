@@ -33,10 +33,20 @@ KST = ZoneInfo("Asia/Seoul")
 MAX_TRANSITION_BYTES = 16 * 1024
 MAX_DATA_STRING_LENGTH = 2_048
 PIPELINE_IDENTITY_SCHEMA = "main_scalping_lifecycle_pipeline_identity_v1"
-BROKER_EXECUTION_PROVENANCE_SCHEMA = "kiwoom_ws_order_execution_provenance_v1"
+BROKER_EXECUTION_PROVENANCE_SCHEMA = "kiwoom_ws_order_execution_provenance_v2"
+BROKER_EXECUTION_PROVENANCE_LEGACY_SCHEMA = "kiwoom_ws_order_execution_provenance_v1"
 BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA = "kiwoom_websocket_order_execution_00_values_v1"
 KIWOOM_OFFICIAL_REFERENCE_SHA = "69642586f7d84ba9fd8a6faf1f1537c7fda6568b"
 BROKER_EXECUTION_SOURCE_TYPE = "00"
+_BROKER_EXECUTION_V2_ONLY_FIELDS = frozenset(
+    {
+        "broker_execution_reported_venue_scope",
+        "broker_execution_actual_venue",
+        "broker_execution_venue_resolution_state",
+        "broker_execution_identity_complete",
+        "broker_execution_actual_venue_complete",
+    }
+)
 
 # Official WebSocket type ``00`` is the reviewed per-event order/execution
 # source.  Promotion proof requires the explicit raw-envelope marker and the
@@ -165,6 +175,11 @@ _ALLOWED_DATA_FIELDS = frozenset(
         "broker_execution_unit_fill_qty",
         "broker_execution_time_hhmmss",
         "broker_execution_venue",
+        "broker_execution_reported_venue_scope",
+        "broker_execution_actual_venue",
+        "broker_execution_venue_resolution_state",
+        "broker_execution_identity_complete",
+        "broker_execution_actual_venue_complete",
         "broker_execution_sor_yn",
         "broker_execution_fill_state",
         "broker_execution_identity",
@@ -432,6 +447,21 @@ def _execution_venue_matches(*, lifecycle_venue: Any, raw_venue: str) -> bool:
     return lifecycle == raw_venue
 
 
+def _execution_venue_resolution_state(*, lifecycle_venue: Any, raw_venue: str) -> str:
+    if raw_venue == "SOR":
+        # Official FIDs 2134/2135 define this as the integrated execution
+        # scope.  They do not identify which underlying KRX/NXT venue filled
+        # the order, so retain the route-scoped receipt identity while keeping
+        # venue-specific evidence fail-closed.
+        return "integrated_sor_underlying_venue_unresolved"
+    if _execution_venue_matches(
+        lifecycle_venue=lifecycle_venue,
+        raw_venue=raw_venue,
+    ):
+        return "exact_underlying_venue"
+    raise ValueError("broker_execution_venue_mismatch")
+
+
 def build_broker_execution_provenance(
     source_fields: Mapping[str, Any] | None,
     *,
@@ -623,11 +653,10 @@ def build_broker_execution_provenance(
             raise ValueError("broker_execution_unit_qty_mismatch")
         if expected_execution_price != unit_execution_price:
             raise ValueError("broker_execution_price_mismatch")
-        if not _execution_venue_matches(
+        venue_resolution_state = _execution_venue_resolution_state(
             lifecycle_venue=lifecycle_venue,
             raw_venue=execution_venue_code,
-        ):
-            raise ValueError("broker_execution_venue_ambiguous_or_mismatch")
+        )
         derived_fill_state = "full" if remaining_qty == 0 else "partial"
         normalized_expected_state = str(expected_fill_state or "").strip().lower()
         if normalized_expected_state and normalized_expected_state not in {
@@ -674,9 +703,18 @@ def build_broker_execution_provenance(
         "order_no": order_no,
         "execution_no": execution_no,
     }
+    venue_resolved = venue_resolution_state == "exact_underlying_venue"
+    provenance_state = (
+        "complete" if venue_resolved else "identity_complete_venue_unresolved"
+    )
     result.update(
         {
-            "broker_execution_provenance_state": "complete",
+            "broker_execution_provenance_state": provenance_state,
+            "broker_execution_provenance_error": (
+                None
+                if venue_resolved
+                else "broker_execution_underlying_venue_unresolved_from_integrated_sor"
+            ),
             "broker_execution_raw_envelope_schema": raw_envelope_schema,
             "broker_execution_source_type": source_type,
             "broker_execution_order_no": order_no,
@@ -693,6 +731,13 @@ def build_broker_execution_provenance(
             "broker_execution_unit_fill_qty": unit_fill_qty,
             "broker_execution_time_hhmmss": execution_time,
             "broker_execution_venue": execution_venue_code,
+            "broker_execution_reported_venue_scope": execution_venue_code,
+            "broker_execution_actual_venue": (
+                execution_venue_code if venue_resolved else None
+            ),
+            "broker_execution_venue_resolution_state": venue_resolution_state,
+            "broker_execution_identity_complete": True,
+            "broker_execution_actual_venue_complete": venue_resolved,
             "broker_execution_sor_yn": sor_yn,
             "broker_execution_fill_state": derived_fill_state,
             "broker_execution_identity": (
@@ -716,6 +761,16 @@ def validate_broker_execution_provenance(
 ) -> str | None:
     """Return a stable validation error for a canonical complete proof."""
 
+    source_schema = str(data.get("broker_execution_provenance_schema") or "")
+    if source_schema not in {
+        BROKER_EXECUTION_PROVENANCE_SCHEMA,
+        BROKER_EXECUTION_PROVENANCE_LEGACY_SCHEMA,
+    }:
+        return "broker_execution_provenance_schema_invalid"
+    if source_schema == BROKER_EXECUTION_PROVENANCE_LEGACY_SCHEMA and any(
+        key in data for key in _BROKER_EXECUTION_V2_ONLY_FIELDS
+    ):
+        return "broker_execution_legacy_schema_semantic_drift"
     if data.get("broker_execution_provenance_state") != "complete":
         return "broker_execution_provenance_not_complete"
     side = str(data.get("broker_execution_side") or "").strip().upper()
@@ -755,7 +810,17 @@ def validate_broker_execution_provenance(
             rebuilt.get("broker_execution_provenance_error")
             or "broker_execution_provenance_rebuild_failed"
         )
+    legacy_ignored_fields = {
+        "broker_execution_provenance_schema",
+        "broker_execution_provenance_error",
+        *_BROKER_EXECUTION_V2_ONLY_FIELDS,
+    }
     for key, value in rebuilt.items():
+        if (
+            source_schema == BROKER_EXECUTION_PROVENANCE_LEGACY_SCHEMA
+            and key in legacy_ignored_fields
+        ):
+            continue
         if data.get(key) != value:
             return f"broker_execution_canonical_field_mismatch:{key}"
     return None
@@ -1362,16 +1427,31 @@ def build_transition(
                 }
             )
             state = "missing"
-        if event_data.get("broker_execution_provenance_schema") != (
-            BROKER_EXECUTION_PROVENANCE_SCHEMA
-        ):
+        provenance_schema = str(
+            event_data.get("broker_execution_provenance_schema") or ""
+        )
+        if provenance_schema not in {
+            BROKER_EXECUTION_PROVENANCE_SCHEMA,
+            BROKER_EXECUTION_PROVENANCE_LEGACY_SCHEMA,
+        }:
             raise ValueError("broker_execution_provenance_schema_invalid")
         if event_data.get("broker_execution_official_reference_sha") != (
             KIWOOM_OFFICIAL_REFERENCE_SHA
         ):
             raise ValueError("broker_execution_official_reference_sha_invalid")
-        if state not in {"complete", "missing", "incomplete", "invalid"}:
+        if state not in {
+            "complete",
+            "identity_complete_venue_unresolved",
+            "missing",
+            "incomplete",
+            "invalid",
+        }:
             raise ValueError("broker_execution_provenance_state_invalid")
+        if provenance_schema == BROKER_EXECUTION_PROVENANCE_LEGACY_SCHEMA:
+            if state == "identity_complete_venue_unresolved" or any(
+                key in event_data for key in _BROKER_EXECUTION_V2_ONLY_FIELDS
+            ):
+                raise ValueError("broker_execution_legacy_schema_semantic_drift")
         if state == "complete":
             if str(event_data.get("broker_execution_provenance_error") or "").strip():
                 raise ValueError("broker_execution_complete_with_error")

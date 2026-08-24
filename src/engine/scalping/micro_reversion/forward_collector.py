@@ -992,10 +992,24 @@ class ForwardObservationCollector:
                 bytes_by_trade_date.get(trade_date, 0) + metrics.bytes_written
             )
         path_quality = self._coalescer.quality_snapshot()
+        # The 0B callback records several counters through this lock.  Copy the
+        # rolling samples first, then perform percentile sorting outside the
+        # critical section so the 10-second canary snapshot cannot manufacture
+        # a callback-latency p99 breach through lock contention of its own.
         with self._metrics_lock:
             callback_latency = tuple(self._producer_0b_callback_latency_ms)
             depth_callback_latency = tuple(self._producer_0d_callback_latency_ms)
             reference_latency = tuple(self._reference_write_latency_ms)
+            producer_0b_callback_count = self._producer_0b_callbacks
+        callback_latency_p50_ms = _percentile(callback_latency, 50)
+        callback_latency_p95_ms = _percentile(callback_latency, 95)
+        callback_latency_p99_ms = _percentile(callback_latency, 99)
+        depth_callback_latency_p50_ms = _percentile(depth_callback_latency, 50)
+        depth_callback_latency_p95_ms = _percentile(depth_callback_latency, 95)
+        depth_callback_latency_p99_ms = _percentile(depth_callback_latency, 99)
+        reference_write_latency_p95_ms = _percentile(reference_latency, 95)
+        reference_write_latency_p99_ms = _percentile(reference_latency, 99)
+        with self._metrics_lock:
             return ForwardCollectorSnapshot(
                 schema=FORWARD_COLLECTOR_SCHEMA,
                 observer_runtime_loaded=True,
@@ -1010,23 +1024,17 @@ class ForwardObservationCollector:
                     and self.flags.depth_capture_active
                 ),
                 depth_capture_requested=self.flags.depth_capture_active,
-                producer_0b_callback_count=self._producer_0b_callbacks,
+                producer_0b_callback_count=producer_0b_callback_count,
                 producer_0d_callback_count=self._producer_0d_callbacks,
                 enqueued_count=self._enqueued,
                 depth_enqueued_count=self._depth_enqueued,
                 producer_callback_latency_scope=PRODUCER_CALLBACK_LATENCY_SCOPE,
-                producer_callback_latency_p50_ms=(_percentile(callback_latency, 50)),
-                producer_callback_latency_p95_ms=(_percentile(callback_latency, 95)),
-                producer_callback_latency_p99_ms=(_percentile(callback_latency, 99)),
-                producer_0d_callback_latency_p50_ms=(
-                    _percentile(depth_callback_latency, 50)
-                ),
-                producer_0d_callback_latency_p95_ms=(
-                    _percentile(depth_callback_latency, 95)
-                ),
-                producer_0d_callback_latency_p99_ms=(
-                    _percentile(depth_callback_latency, 99)
-                ),
+                producer_callback_latency_p50_ms=callback_latency_p50_ms,
+                producer_callback_latency_p95_ms=callback_latency_p95_ms,
+                producer_callback_latency_p99_ms=callback_latency_p99_ms,
+                producer_0d_callback_latency_p50_ms=(depth_callback_latency_p50_ms),
+                producer_0d_callback_latency_p95_ms=(depth_callback_latency_p95_ms),
+                producer_0d_callback_latency_p99_ms=(depth_callback_latency_p99_ms),
                 enqueue_latency_p50_ms=adapter.enqueue_latency_p50_ms,
                 enqueue_latency_p95_ms=adapter.enqueue_latency_p95_ms,
                 enqueue_latency_p99_ms=adapter.enqueue_latency_p99_ms,
@@ -1086,8 +1094,8 @@ class ForwardObservationCollector:
                 path_point_dropped_count=self._path_dropped,
                 event_reference_persisted_count=self._reference_persisted,
                 event_reference_error_count=self._reference_errors,
-                event_reference_write_latency_p95_ms=_percentile(reference_latency, 95),
-                event_reference_write_latency_p99_ms=_percentile(reference_latency, 99),
+                event_reference_write_latency_p95_ms=(reference_write_latency_p95_ms),
+                event_reference_write_latency_p99_ms=(reference_write_latency_p99_ms),
                 event_reference_coverage_pct=self._reference_coverage_pct,
                 orphan_reference_count=self._orphan_references,
                 unreferenced_segment_count=self._unreferenced_segments,

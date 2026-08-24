@@ -68,6 +68,29 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-08-24 Integrated-SOR Execution Identity Gate
+
+- Re-verified at `2026-08-24T15:43:59+09:00` against current upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`; inspected
+  `kiwoom_docs/실시간시세.md`, `kiwoom_docs/계좌.md`,
+  `kiwoom_docs/주문.md`, `kiwoom/specs.py`, `kiwoom/realtime`, and Postman.
+- Official realtime type `00` defines FID `2134` value `0` and FID `2135`
+  value `통합` as the integrated execution scope, with FID `2136` carrying
+  SOR usage. Those fields do not identify whether KRX or NXT ultimately
+  executed an integrated-route order.
+- A complete integrated-SOR receipt may therefore preserve exact order and
+  execution identity, quantity, price, time, and custody lineage as
+  `identity_complete_venue_unresolved`. Its actual venue remains null and it
+  is not `complete` execution provenance for venue-specific EV, promotion, or
+  runtime approval.
+- Same-date journal rows already emitted under provenance v1 remain readable
+  only through the frozen v1 state and field contract. V1 cannot emit the new
+  unresolved-SOR state or v2-only fields, preventing compatibility reads from
+  becoming a schema-drift bypass.
+- The bounded state is a source-quality classification only. It does not
+  infer an underlying venue, submit or reroute an order, change quantity,
+  thresholds, provider, bot state, or bypass any broker or hard-safety guard.
+
 ### 2026-08-21 Post-sell Executable-BBO And Rejected-Order Provenance Gate
 
 - Re-verified at `2026-08-21T11:00:23+09:00` against current upstream commit

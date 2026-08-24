@@ -959,6 +959,77 @@ def test_isolatable_broker_provenance_gap_excludes_only_exact_lifecycle(
     assert manifest["allowed_runtime_apply"] is False
 
 
+def test_integrated_sor_identity_is_preserved_but_remains_an_exact_window_gap(
+    tmp_path: Path,
+) -> None:
+    transitions = _complete_lifecycle("integrated-sor-gap")
+    fill_index = next(
+        index for index, row in enumerate(transitions) if row["stage"] == "fill"
+    )
+    original = transitions[fill_index]
+    original_data = original["data"]
+    sor_native = _broker_raw_fields(
+        order_no=original_data["broker_execution_order_no"],
+        execution_no=original_data["broker_execution_no"],
+        order_qty=original_data["broker_execution_order_qty"],
+        cumulative_qty=original_data["broker_execution_cumulative_fill_qty"],
+        cumulative_amount=original_data["broker_execution_cumulative_fill_amount_krw"],
+        remaining_qty=original_data["broker_execution_remaining_qty"],
+        execution_price=original_data["broker_execution_price"],
+        unit_qty=original_data["broker_execution_unit_fill_qty"],
+        second=3,
+    )
+    sor_native.update({"2134": "0", "2135": "통합", "2136": "Y"})
+    sor_proof = build_broker_execution_provenance(
+        sor_native,
+        expected_qty=original_data["fill_qty"],
+        expected_price=original_data["fill_price"],
+        expected_stock_code=original["stock_code"],
+        expected_side="BUY",
+        lifecycle_venue=original["venue"],
+        expected_fill_state=original_data["fill_state"],
+    )
+    replacement_data = {
+        key: value
+        for key, value in original_data.items()
+        if not key.startswith("broker_execution_")
+    }
+    replacement_data.update(sor_proof)
+    transitions[fill_index] = build_transition(
+        main_lifecycle_id=original["main_lifecycle_id"],
+        record_id=original["record_id"],
+        stock_code=original["stock_code"],
+        attempt_id=original["attempt_id"],
+        trade_date=original["trade_date"],
+        stage=original["stage"],
+        observed_at=original["observed_at"],
+        venue=original["venue"],
+        session_bucket=original["session_bucket"],
+        data=replacement_data,
+    )
+    source = tmp_path / "integrated_sor_gap.jsonl"
+    _write_jsonl(source, transitions)
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    row = report["rows"][0]
+
+    assert row["broker_execution_provenance_state_counts"] == {
+        "complete": 1,
+        "identity_complete_venue_unresolved": 1,
+    }
+    assert row["broker_execution_provenance_gap_count"] == 1
+    assert row["broker_execution_provenance_gap_reasons"] == [
+        "broker_execution_underlying_venue_unresolved_from_integrated_sor"
+    ]
+    assert row["promotion_evidence_eligible"] is False
+    assert "broker_execution_raw_provenance_gap" in row["promotion_blockers"]
+    assert report["runtime_effect"] is False
+    assert report["runtime_authority"] is False
+    assert report["order_authority"] is False
+    assert report["provider_authority"] is False
+    assert report["allowed_runtime_apply"] is False
+
+
 def test_partial_and_full_fill_cohorts_are_not_merged(tmp_path: Path) -> None:
     source = tmp_path / "journal.jsonl"
     _write_jsonl(
@@ -1626,6 +1697,49 @@ def test_official_broker_execution_native_contract_is_strict_and_source_only() -
     assert complete["broker_execution_provenance_state"] == "complete"
     assert complete["broker_execution_fill_state"] == "full"
 
+    legacy_complete = {
+        key: value
+        for key, value in complete.items()
+        if key
+        not in {
+            "broker_execution_provenance_error",
+            "broker_execution_reported_venue_scope",
+            "broker_execution_actual_venue",
+            "broker_execution_venue_resolution_state",
+            "broker_execution_identity_complete",
+            "broker_execution_actual_venue_complete",
+        }
+    }
+    legacy_complete["broker_execution_provenance_schema"] = (
+        "kiwoom_ws_order_execution_provenance_v1"
+    )
+    assert (
+        journal.validate_broker_execution_provenance(
+            legacy_complete,
+            expected_qty=5,
+            expected_price=10_000,
+            expected_stock_code="005930",
+            expected_side="BUY",
+            lifecycle_venue="KRX",
+            expected_fill_state="full",
+        )
+        is None
+    )
+    legacy_transition = _event(
+        _identity("legacy-v1-receipt"),
+        "fill",
+        3,
+        data={
+            "fill_state": "full",
+            "fill_qty": 5,
+            "fill_price": 10_000,
+            **legacy_complete,
+        },
+    )
+    assert legacy_transition["data"]["broker_execution_provenance_schema"] == (
+        "kiwoom_ws_order_execution_provenance_v1"
+    )
+
     incomplete_native = _broker_raw_fields(
         order_no="0000901",
         execution_no="0001901",
@@ -1695,10 +1809,75 @@ def test_official_broker_execution_native_contract_is_strict_and_source_only() -
         expected_side="BUY",
         lifecycle_venue="KRX",
     )
-    assert sor["broker_execution_provenance_state"] == "invalid"
-    assert sor["broker_execution_provenance_error"] == (
-        "broker_execution_venue_ambiguous_or_mismatch"
+    assert sor["broker_execution_provenance_state"] == (
+        "identity_complete_venue_unresolved"
     )
+    assert sor["broker_execution_provenance_error"] == (
+        "broker_execution_underlying_venue_unresolved_from_integrated_sor"
+    )
+    assert sor["broker_execution_identity_complete"] is True
+    assert sor["broker_execution_actual_venue_complete"] is False
+    assert sor["broker_execution_reported_venue_scope"] == "SOR"
+    assert sor["broker_execution_actual_venue"] is None
+    assert sor["broker_execution_venue_resolution_state"] == (
+        "integrated_sor_underlying_venue_unresolved"
+    )
+    assert sor["broker_execution_identity"].startswith("bex-")
+    assert (
+        journal.validate_broker_execution_provenance(
+            sor,
+            expected_qty=5,
+            expected_price=10_000,
+            expected_stock_code="005930",
+            expected_side="BUY",
+            lifecycle_venue="KRX",
+        )
+        == "broker_execution_provenance_not_complete"
+    )
+    sor_transition = _event(
+        _identity("sor-receipt"),
+        "fill",
+        3,
+        data={
+            "fill_state": "full",
+            "fill_qty": 5,
+            "fill_price": 10_000,
+            **sor,
+        },
+    )
+    assert sor_transition["data"]["broker_execution_provenance_state"] == (
+        "identity_complete_venue_unresolved"
+    )
+    legacy_sor = dict(sor)
+    legacy_sor["broker_execution_provenance_schema"] = (
+        "kiwoom_ws_order_execution_provenance_v1"
+    )
+    assert (
+        journal.validate_broker_execution_provenance(
+            legacy_sor,
+            expected_qty=5,
+            expected_price=10_000,
+            expected_stock_code="005930",
+            expected_side="BUY",
+            lifecycle_venue="KRX",
+        )
+        == "broker_execution_legacy_schema_semantic_drift"
+    )
+    with pytest.raises(
+        ValueError,
+        match="broker_execution_legacy_schema_semantic_drift",
+    ):
+        _event(
+            _identity("legacy-v1-sor-drift"),
+            "fill",
+            3,
+            data={
+                "fill_state": "full",
+                "fill_qty": 5,
+                "fill_price": 10_000,
+                **legacy_sor,
+            },
+        )
 
     malformed_native = _broker_raw_fields(
         order_no="0000901",
