@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import atexit
+import fcntl
+import hashlib
 import json
 import os
+import re
+import stat
 import threading
-import atexit
-import hashlib
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
@@ -183,6 +186,7 @@ _HIGH_VOLUME_COMPACT_FIELD_PRIORITY = HIGH_VOLUME_SUMMARY_FIELD_PRIORITY + (
     "market_data_rest_signed_tape_pressure_usable",
 )
 _HIGH_VOLUME_COMPACT_FIELD_LIMIT = 96
+_MAIN_LIFECYCLE_IDENTITY_SCHEMA = "main_scalping_lifecycle_pipeline_identity_v1"
 
 
 def _event_dir() -> Path:
@@ -193,6 +197,36 @@ def _event_dir() -> Path:
 
 def _event_path(target_date: str) -> Path:
     return _event_dir() / f"pipeline_events_{target_date}.jsonl"
+
+
+def _event_storage_partition_date(fields: dict[str, str], *, emitted_date: str) -> str:
+    """Route exact lifecycle rows by their official logical trade date.
+
+    Packet ingress can cross midnight after a FID 908 execution.  Only an
+    explicit lifecycle identity may move by one adjacent calendar day; all
+    other events retain the wall-clock emission partition.
+    """
+
+    if (
+        fields.get("main_lifecycle_identity_schema") != _MAIN_LIFECYCLE_IDENTITY_SCHEMA
+        or re.fullmatch(r"mlc-[0-9a-f]{32}", fields.get("main_lifecycle_id") or "")
+        is None
+        or fields.get("main_lifecycle_decision_authority")
+        != "source_only_lifecycle_observation"
+        or fields.get("main_lifecycle_runtime_effect") != "False"
+        or fields.get("main_lifecycle_order_authority") != "False"
+        or fields.get("main_lifecycle_provider_authority") != "False"
+    ):
+        return emitted_date
+    candidate = str(fields.get("main_lifecycle_trade_date") or "").strip()
+    try:
+        emitted_day = date.fromisoformat(emitted_date)
+        candidate_day = date.fromisoformat(candidate)
+    except ValueError:
+        return emitted_date
+    if abs((candidate_day - emitted_day).days) > 1:
+        return emitted_date
+    return candidate_day.isoformat()
 
 
 def _summary_dir() -> Path:
@@ -414,9 +448,165 @@ def _project_fields_for_text(stage: str, fields: dict[str, str]) -> dict[str, st
     return selected
 
 
+def _late_pipeline_event_path(path: Path) -> Path:
+    if path.suffix != ".jsonl":
+        raise ValueError("pipeline event logical path must end in .jsonl")
+    return path.with_name(f"{path.stem}.late.jsonl")
+
+
+def _pipeline_event_partition_lock_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.partition.lock")
+
+
+def _prepare_jsonl_parent(path: Path) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        parent_metadata = path.parent.lstat()
+    except OSError as exc:
+        raise OSError(f"pipeline event parent is unavailable: {path.parent}") from exc
+    if not stat.S_ISDIR(parent_metadata.st_mode):
+        raise OSError(f"pipeline event parent is not a real directory: {path.parent}")
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_CLOEXEC", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path.parent, directory_flags)
+    opened_metadata = os.fstat(descriptor)
+    if not stat.S_ISDIR(opened_metadata.st_mode) or (
+        opened_metadata.st_dev,
+        opened_metadata.st_ino,
+    ) != (parent_metadata.st_dev, parent_metadata.st_ino):
+        os.close(descriptor)
+        raise OSError(f"pipeline event parent changed before open: {path.parent}")
+    return descriptor
+
+
+def _write_all(descriptor: int, payload: bytes, *, target: Path) -> None:
+    offset = 0
+    while offset < len(payload):
+        written = os.write(descriptor, payload[offset:])
+        if written <= 0:
+            raise OSError(f"pipeline event append made no progress: {target}")
+        offset += written
+
+
+def _fsync_parent_directory(directory_descriptor: int, *, target: Path) -> None:
+    if not stat.S_ISDIR(os.fstat(directory_descriptor).st_mode):
+        raise OSError(f"pipeline event parent is not a directory: {target.parent}")
+    os.fsync(directory_descriptor)
+
+
+def _append_partition_jsonl(
+    logical_path: Path,
+    physical_path: Path,
+    line: str,
+    *,
+    durable_every_append: bool,
+) -> None:
+    """Append one row under the logical partition lock.
+
+    Base and late physical parts share this exact exclusive lock namespace.
+    The no-follow regular-file checks keep a replaced path from redirecting
+    event custody, while the complete write closes short-write gaps.  The
+    high-volume base/threshold path fsyncs only its first physical-file row;
+    exact-lifecycle late sidecars retain per-append durable custody.
+    """
+
+    payload = line.encode("utf-8")
+    if physical_path.parent != logical_path.parent:
+        raise ValueError("pipeline event physical part must share logical parent")
+    parent_descriptor = _prepare_jsonl_parent(logical_path)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    nonblocking = getattr(os, "O_NONBLOCK", 0)
+    try:
+        lock_descriptor = os.open(
+            _pipeline_event_partition_lock_path(logical_path).name,
+            os.O_RDWR | os.O_CREAT | nofollow | close_on_exec | nonblocking,
+            0o640,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            if not stat.S_ISREG(os.fstat(lock_descriptor).st_mode):
+                raise OSError("pipeline event partition lock is not a regular file")
+            # The logical path-level lock closes discovery/open races with readers
+            # and the storage compactor for both the base and late physical parts.
+            fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+            append_flags = (
+                os.O_WRONLY | os.O_APPEND | nofollow | close_on_exec | nonblocking
+            )
+            created = False
+            try:
+                descriptor = os.open(
+                    physical_path.name,
+                    append_flags | os.O_CREAT | os.O_EXCL,
+                    0o640,
+                    dir_fd=parent_descriptor,
+                )
+                created = True
+            except FileExistsError:
+                descriptor = os.open(
+                    physical_path.name,
+                    append_flags,
+                    dir_fd=parent_descriptor,
+                )
+            try:
+                metadata = os.fstat(descriptor)
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise OSError("pipeline event physical part is not a regular file")
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                _write_all(descriptor, payload, target=physical_path)
+                if created or durable_every_append:
+                    os.fsync(descriptor)
+                    _fsync_parent_directory(parent_descriptor, target=physical_path)
+            finally:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+        finally:
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_descriptor)
+    finally:
+        os.close(parent_descriptor)
+
+
 def _append_jsonl(path: Path, line: str) -> None:
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(line)
+    _append_partition_jsonl(
+        path,
+        path,
+        line,
+        durable_every_append=False,
+    )
+
+
+def _append_late_pipeline_event_jsonl(path: Path, line: str) -> None:
+    """Append a cross-midnight row without mutating a verified base archive.
+
+    The late sidecar is a separate append-only physical part of the logical
+    trade-date partition. ``main_lifecycle_paired`` consumes the immutable base
+    first and this late part second under the shared logical partition lock.
+    """
+
+    _append_partition_jsonl(
+        path,
+        _late_pipeline_event_path(path),
+        line,
+        durable_every_append=True,
+    )
+
+
+def _append_pipeline_event_jsonl(
+    path: Path,
+    line: str,
+    *,
+    late_partition: bool,
+) -> None:
+    if late_partition:
+        _append_late_pipeline_event_jsonl(path, line)
+        return
+    _append_jsonl(path, line)
 
 
 def emit_pipeline_event(
@@ -428,7 +618,13 @@ def emit_pipeline_event(
     record_id=None,
     fields: dict | None = None,
 ) -> dict:
-    """Emit legacy text log + structured JSONL event with a shared schema."""
+    """Emit legacy text plus a structured event and return persistence outcome.
+
+    ``structured_append_succeeded`` means the lossless raw JSONL row reached
+    its physical append boundary.  JSONL-disabled and compaction-suppressed
+    calls return distinct non-success statuses; call-local outcome fields are
+    not embedded back into the canonical event row.
+    """
     safe_pipeline = str(pipeline or "").strip() or "PIPELINE"
     safe_name = str(name or "").strip() or "-"
     safe_code = str(code or "").strip()[:6] or "-"
@@ -452,6 +648,11 @@ def emit_pipeline_event(
         log_info(text_payload)
 
     emitted_dt = datetime.now()
+    emitted_date = emitted_dt.strftime("%Y-%m-%d")
+    storage_partition_date = _event_storage_partition_date(
+        normalized_fields,
+        emitted_date=emitted_date,
+    )
     event_payload = {
         "schema_version": int(
             getattr(TRADING_RULES, "PIPELINE_EVENT_SCHEMA_VERSION", 1) or 1
@@ -464,11 +665,23 @@ def emit_pipeline_event(
         "record_id": int(record_id) if record_id not in (None, "", 0) else None,
         "fields": normalized_fields,
         "emitted_at": emitted_dt.isoformat(),
-        "emitted_date": emitted_dt.strftime("%Y-%m-%d"),
+        "emitted_date": emitted_date,
+        "storage_partition_date": storage_partition_date,
         "text_payload": text_payload,
     }
 
     if not bool(getattr(TRADING_RULES, "PIPELINE_EVENT_JSONL_ENABLED", True)):
+        event_payload.update(
+            {
+                "structured_append_attempted": False,
+                "structured_append_succeeded": False,
+                "structured_raw_append_attempted": False,
+                "structured_compaction_suppressed": False,
+                "structured_compact_append_succeeded": None,
+                "structured_append_status": "jsonl_disabled",
+                "structured_append_error_type": None,
+            }
+        )
         return event_payload
 
     threshold_family = threshold_family_for_stage(safe_stage, event_payload["fields"])
@@ -505,6 +718,12 @@ def emit_pipeline_event(
         )
 
     compaction_result = {"suppress_raw": False}
+    raw_append_attempted = False
+    raw_append_succeeded = False
+    compact_append_attempted = False
+    compact_append_succeeded = compact_line is None
+    compaction_suppressed = False
+    append_error: Exception | None = None
     try:
         with _WRITE_LOCK:
             compactor = _get_producer_compactor()
@@ -512,14 +731,54 @@ def emit_pipeline_event(
                 compaction_result = compactor.submit(
                     event_payload, threshold_family=threshold_family
                 )
-            if not compaction_result.get("suppress_raw"):
-                _append_jsonl(_event_path(event_payload["emitted_date"]), raw_line)
+            compaction_suppressed = bool(compaction_result.get("suppress_raw"))
+            if not compaction_suppressed:
+                raw_append_attempted = True
+                _append_pipeline_event_jsonl(
+                    _event_path(storage_partition_date),
+                    raw_line,
+                    late_partition=storage_partition_date != emitted_date,
+                )
+                raw_append_succeeded = True
             if compact_line is not None:
+                compact_append_attempted = True
                 _append_jsonl(
                     _threshold_cycle_event_path(event_payload["emitted_date"]),
                     compact_line,
                 )
+                compact_append_succeeded = True
     except Exception as exc:
+        append_error = exc
         log_error(f"[PIPELINE_EVENT] structured append failed: {exc}")
+
+    if raw_append_succeeded:
+        append_status = (
+            "raw_appended" if append_error is None else "raw_appended_companion_failed"
+        )
+    elif compaction_suppressed:
+        append_status = (
+            "raw_suppressed_by_compaction"
+            if append_error is None
+            else "raw_suppressed_companion_failed"
+        )
+    elif raw_append_attempted:
+        append_status = "raw_append_failed"
+    else:
+        append_status = "structured_append_failed"
+    event_payload.update(
+        {
+            "structured_append_attempted": True,
+            "structured_append_succeeded": raw_append_succeeded,
+            "structured_raw_append_attempted": raw_append_attempted,
+            "structured_compaction_suppressed": compaction_suppressed,
+            "structured_compact_append_succeeded": (
+                compact_append_succeeded if compact_append_attempted else None
+            ),
+            "structured_append_status": append_status,
+            "structured_append_error_type": (
+                type(append_error).__name__ if append_error is not None else None
+            ),
+        }
+    )
 
     return event_payload

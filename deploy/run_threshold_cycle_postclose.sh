@@ -1099,6 +1099,7 @@ threshold_cycle_ev_refresh_decision() {
 automation_trigger_decision() {
   local step_id="$1"
   local decision="run"
+  local output_temp="${AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP:-${TMPDIR:-/tmp}/korstockscan_automation_trigger_${TARGET_DATE}_$$.out}"
   AUTOMATION_TRIGGER_DECISION_RESULT="run"
   if [ ! -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER" ]; then
     if run_postclose_cmd env \
@@ -1149,7 +1150,7 @@ PY
       fi
     fi
   fi
-  rm -f -- "$AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP"
+  rm -f -- "$output_temp"
   if run_postclose_cmd env \
     THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
     THRESHOLD_CYCLE_FORCE_DEEP_AUDITS="$FORCE_DEEP_AUDITS" \
@@ -1167,13 +1168,13 @@ PY
     PYTHONPATH=. "$VENV_PY" -m src.engine.automation.automation_chain_trigger_decision \
       --date "$TARGET_DATE" \
       --scope all \
-      --step "$step_id" >"$AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP" 2>/dev/null; then
-    decision="$(<"$AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP")"
+      --step "$step_id" >"$output_temp" 2>/dev/null; then
+    decision="$(<"$output_temp")"
     if [ "$decision" = "skip" ] || [ "$decision" = "disabled_success" ]; then
       AUTOMATION_TRIGGER_DECISION_RESULT="skip"
     fi
   fi
-  rm -f -- "$AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP"
+  rm -f -- "$output_temp"
   return 0
 }
 
@@ -2413,7 +2414,6 @@ fi
 wait_for_postclose_resources "build_next_stage2_checklist"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"
-wait_for_postclose_resources "verify_threshold_cycle_postclose_chain"
 VERIFY_DISABLED_STAGE_ARGS=()
 if [[ "$RUN_SWING_LIFECYCLE_AUDIT" != "true" && "$RUN_SWING_LIFECYCLE_AUDIT" != "1" ]]; then
   VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage swing_lifecycle)
@@ -2430,14 +2430,6 @@ fi
 if [[ "$RUN_DEEPSEEK_SWING_LAB" != "true" && "$RUN_DEEPSEEK_SWING_LAB" != "1" ]]; then
   VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage deepseek_swing_lab)
 fi
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
-  --date "$TARGET_DATE" \
-  --allow-pending-done-marker \
-  "${VERIFY_DISABLED_STAGE_ARGS[@]}"
-wait_for_report_artifact \
-  "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
-  "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
-  "threshold_cycle_postclose_verification"
 run_threshold_cycle_ev_and_wait "final_consumer_refresh"   "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json"   "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md"   "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"
 if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
   wait_for_postclose_resources "code_improvement_workorder_final_source_refresh"
@@ -2457,6 +2449,15 @@ wait_for_report_artifact   "$PROJECT_DIR/data/report/runtime_approval_summary/ru
 wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"
+wait_for_postclose_resources "verify_threshold_cycle_postclose_chain"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
+  --date "$TARGET_DATE" \
+  --allow-pending-done-marker \
+  "${VERIFY_DISABLED_STAGE_ARGS[@]}"
+wait_for_report_artifact \
+  "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
+  "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
+  "threshold_cycle_postclose_verification"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status succeeded completed 0 1

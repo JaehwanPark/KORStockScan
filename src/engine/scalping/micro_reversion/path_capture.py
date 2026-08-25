@@ -373,6 +373,17 @@ class PreEventRingBuffer:
                 self._last_receive_timestamp_ms.pop(key, None)
             return removed
 
+    def reset_transport_epoch(self) -> int:
+        """Discard all pre-reconnect history and ordering watermarks."""
+
+        with self._lock:
+            removed = sum(len(points) for points in self._points.values())
+            self._points.clear()
+            self._last_sequence.clear()
+            self._last_timestamp_ms.clear()
+            self._last_receive_timestamp_ms.clear()
+            return removed
+
 
 @dataclass(slots=True)
 class _SegmentState:
@@ -637,6 +648,14 @@ class ParentWavePathCoalescer:
             for wave_id in wave_ids:
                 del self._segments[wave_id]
             return len(wave_ids)
+
+    def reset_transport_epoch(self) -> int:
+        """Abort open paths so no parent wave spans a WS reconnect."""
+
+        with self._lock:
+            removed = len(self._segments)
+            self._segments.clear()
+            return removed
 
     def _expire_before(self, observed_at_ms: int) -> None:
         expired = [

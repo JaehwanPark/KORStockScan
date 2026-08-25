@@ -308,6 +308,34 @@ def test_manual_exclusion_drop_removes_ring_and_open_segment_state() -> None:
     assert coalescer.active_segments_for(_envelope(2, 2)) == ()
 
 
+def test_transport_epoch_reset_clears_ring_ordering_and_open_paths() -> None:
+    ring = PreEventRingBuffer(max_age_ms=30_000)
+    first = _envelope(1, 1)
+    assert ring.add(first) is True
+    coalescer = ParentWavePathCoalescer(ring)
+    coalescer.register_event(
+        _event("evt-reconnect", 1, 1_000),
+        sequence_epoch=1,
+        event_exchange_timestamp="2026-04-10T09:00:25+09:00",
+    )
+    assert len(coalescer.active_segments_for(_envelope(2, 30))) == 1
+
+    assert ring.reset_transport_epoch() == 1
+    assert coalescer.reset_transport_epoch() == 1
+
+    assert (
+        ring.snapshot_before(
+            symbol="000001",
+            venue="KRX",
+            session_bucket="KRX_REGULAR",
+            event_detected_at_ms=BASE_MS + 30_000,
+        )
+        == ()
+    )
+    assert coalescer.active_segments_for(_envelope(2, 30)) == ()
+    assert ring.add(replace(first, sequence_epoch=2)) is True
+
+
 def test_reference_loader_supports_post_session_gzip(tmp_path: Path) -> None:
     target = tmp_path / "market_stream_event_references.jsonl"
     compressed = target.with_suffix(".jsonl.gz")

@@ -96,6 +96,10 @@ data/runtime/build_next_stage2_checklist/*.lock
 data/runtime/episode_manual_exit_receipts.lock
 data/offline_provider_budget/*.lock
 data/observations/scalp_micro_reversion_forward/.partition_maintenance_locks/*.lock
+*.generation.lock
+*.custody.lock
+data/pipeline_events/*.partition.lock
+data/cache/micro_reversion_relevant_source_index/
 
 # ==========================================
 # 💻 OS 및 IDE 설정

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import base64
+import hashlib
 import json
 from collections import Counter
 from datetime import datetime
@@ -29,6 +31,7 @@ from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine.bedrock_nova_provider import (
     BedrockNovaModelProfile,
     BedrockNovaProvider,
+    lite_v2_profile_from_env,
     qwen3_32b_profile_from_env,
 )
 from src.engine.scalping import ai_decision_quality as quality
@@ -321,13 +324,18 @@ def prepare_stage_requests(
                 "captured_action": trace.get("action"),
                 "captured_score": trace.get("score"),
                 "captured_reason": trace.get("reason"),
-                "captured_selected_price": (
-                    None
-                    if str(trace.get("action") or "").strip().upper() == "SKIP"
-                    else trace.get("reference_price")
+                "captured_edge_state": trace.get("decision_quality_model_edge_state"),
+                "captured_evidence": trace.get("decision_quality_model_evidence"),
+                "captured_entry_probe_intent": trace.get("entry_probe_intent"),
+                "captured_entry_probe_intent_status": trace.get(
+                    "entry_probe_intent_status"
                 ),
-                "captured_reference_price": trace.get("reference_price"),
-                "captured_selected_price_type": trace.get("reference_price_type"),
+                "captured_entry_probe_intent_eligibility_path": trace.get(
+                    "entry_probe_intent_eligibility_path"
+                ),
+                "captured_entry_probe_intent_after_cost_reward_risk": trace.get(
+                    "entry_probe_intent_after_cost_reward_risk"
+                ),
             },
             "candidate": request_candidate,
             "source_exactness": (
@@ -339,6 +347,18 @@ def prepare_stage_requests(
             "supplemental_semantic_replay": supplemental,
             **authority_contract,
         }
+        if normalized_stage == "entry_price":
+            request["control"].update(
+                {
+                    "captured_selected_price": (
+                        None
+                        if str(trace.get("action") or "").strip().upper() == "SKIP"
+                        else trace.get("reference_price")
+                    ),
+                    "captured_reference_price": trace.get("reference_price"),
+                    "captured_selected_price_type": trace.get("reference_price_type"),
+                }
+            )
         if normalized_stage == "entry":
             exact_analysis = quality.build_exact_payload_analysis_v1(
                 exact_payload,
@@ -574,6 +594,150 @@ def execute_bedrock_candidate(
     }
 
 
+def execute_bedrock_lifecycle_candidate(
+    request: dict[str, Any],
+    *,
+    provider: BedrockNovaProvider | None = None,
+    profile: BedrockNovaModelProfile | None = None,
+) -> dict[str, Any]:
+    """Run one source-only Nova lifecycle attempt with replayable raw output."""
+
+    if any(
+        (
+            request.get("runtime_effect") is not False,
+            request.get("allowed_runtime_apply") is not False,
+            request.get("actual_order_submitted") is not False,
+            request.get("broker_order_forbidden") is not True,
+        )
+    ):
+        raise ValueError("offline_authority_contract_invalid")
+    candidate = request.get("candidate")
+    candidate = candidate if isinstance(candidate, dict) else {}
+    stage = quality._stage(request.get("stage"), request.get("endpoint"))
+    if (
+        stage not in {"holding", "exit"}
+        or str(candidate.get("provider") or "").strip().lower() != "bedrock"
+        or str(candidate.get("model") or "").strip() != "nova_lite_v2"
+    ):
+        raise ValueError("bedrock_lifecycle_provider_model_stage_mismatch")
+    response_schema = candidate.get("response_schema")
+    if not isinstance(response_schema, dict) or candidate.get(
+        "response_schema_sha256"
+    ) != quality._sha256(response_schema):
+        raise ValueError("bedrock_lifecycle_response_schema_invalid")
+    schema_instance_sha256 = quality._sha256(response_schema)
+    expected_schema_instance_sha256 = str(
+        candidate.get("response_schema_instance_sha256") or ""
+    )
+    if (
+        expected_schema_instance_sha256
+        and expected_schema_instance_sha256 != schema_instance_sha256
+    ):
+        raise ValueError("bedrock_lifecycle_response_schema_instance_mismatch")
+    selected_profile = profile or lite_v2_profile_from_env()
+    reserved_max_output_tokens = candidate.get("max_output_tokens")
+    if (
+        isinstance(reserved_max_output_tokens, bool)
+        or not isinstance(reserved_max_output_tokens, int)
+        or reserved_max_output_tokens <= 0
+    ):
+        raise ValueError("bedrock_lifecycle_profile_output_tokens_invalid")
+    if selected_profile.max_output_tokens > reserved_max_output_tokens:
+        raise ValueError("bedrock_lifecycle_profile_exceeds_reserved_output_tokens")
+    if selected_profile.max_output_tokens < reserved_max_output_tokens:
+        raise ValueError("bedrock_lifecycle_profile_output_tokens_drift")
+    prompt, user_input, provider_request_projection = (
+        quality._current_bedrock_lifecycle_provider_request(
+            request,
+            selected_profile=selected_profile,
+        )
+    )
+    result = (provider or BedrockNovaProvider(key_rotation_enabled=False)).converse(
+        prompt=prompt,
+        user_input=user_input,
+        profile=selected_profile,
+    )
+    if result.attempted_key_count != 1:
+        raise ValueError("bedrock_lifecycle_single_network_attempt_violated")
+    if (
+        result.model_id != selected_profile.model_id
+        or result.region_name != selected_profile.region_name
+    ):
+        raise ValueError("bedrock_lifecycle_result_profile_drift")
+    payload = dict(result.payload)
+    raw_bytes = result.raw_text.encode("utf-8")
+    raw_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    response_id = str(result.response_id or "").strip() or None
+    receipt_content = {
+        "schema": quality.MICRO_REVERSION_BEDROCK_ATTEMPT_RECEIPT_SCHEMA,
+        "paired_replay_parent_id": request.get("paired_replay_parent_id"),
+        "paired_replay_id": request.get("paired_replay_id"),
+        "micro_reversion_replay_arm": request.get("micro_reversion_replay_arm"),
+        "candidate_input_sha256": request.get("candidate_input_sha256"),
+        "candidate_contract_sha256": (
+            candidate.get("contract_sha256")
+            or quality._candidate_contract_sha256(candidate)
+        ),
+        "offline_provider_attempt_number": request.get(
+            "offline_provider_attempt_number"
+        ),
+        "provider": "bedrock",
+        "model": candidate.get("model"),
+        "model_id": result.model_id,
+        "region_name": result.region_name,
+        "response_id": response_id,
+        "provider_output_projection": "bedrock_nova_result_raw_text",
+        "provider_output_encoding": "utf-8+base64",
+        "provider_output_bytes_b64": base64.b64encode(raw_bytes).decode("ascii"),
+        "provider_output_size_bytes": len(raw_bytes),
+        "provider_output_bytes_sha256": raw_sha256,
+        "parse_transform_version": (
+            quality.MICRO_REVERSION_BEDROCK_PARSE_TRANSFORM_VERSION
+        ),
+        "parse_status": "pass" if result.parse_ok else result.parse_error,
+        "parsed_candidate_payload": payload if result.parse_ok else None,
+        "parsed_candidate_payload_sha256": (
+            quality._sha256(payload) if result.parse_ok else None
+        ),
+        "response_schema_instance_sha256": schema_instance_sha256,
+        "provider_request_projection": provider_request_projection,
+        "provider_request_projection_sha256": quality._sha256(
+            provider_request_projection
+        ),
+    }
+    provenance = result.transport_meta()
+    provenance.update(
+        {
+            "provider": "bedrock",
+            "model": candidate.get("model"),
+            "model_id": result.model_id,
+            "transport": "bedrock_converse_offline",
+            "source_transport_contract": candidate.get("transport"),
+            "response_id": response_id,
+            "response_id_unavailable_reason": (
+                None if response_id else "bedrock_transport_response_id_not_exposed"
+            ),
+            "response_sha256": raw_sha256,
+            "provider_request_projection_sha256": quality._sha256(
+                provider_request_projection
+            ),
+            "canonical_response_sha256": quality._sha256(payload),
+            "provider_none": False,
+            "provider_call_attempted": True,
+            "provider_call_succeeded": True,
+            "failback_chain": [],
+        }
+    )
+    return {
+        "candidate_response": payload,
+        "provider_attempt_receipt": {
+            **receipt_content,
+            "attempt_receipt_content_sha256": quality._sha256(receipt_content),
+        },
+        "provider_provenance": provenance,
+    }
+
+
 def execute_bedrock_candidate_single_network_attempt(
     request: dict[str, Any],
 ) -> dict[str, Any]:
@@ -593,16 +757,35 @@ def execute_bedrock_candidate_single_network_attempt(
         or reserved_max_output_tokens <= 0
     ):
         raise ValueError("bedrock_budgeted_max_output_tokens_invalid")
-    profile = qwen3_32b_profile_from_env()
-    if profile.family != str(candidate.get("model") or ""):
+    stage = quality._stage(request.get("stage"), request.get("endpoint"))
+    candidate_model = str(candidate.get("model") or "")
+    profile = (
+        lite_v2_profile_from_env()
+        if stage in {"holding", "exit"} and candidate_model == "nova_lite_v2"
+        else qwen3_32b_profile_from_env()
+    )
+    expected_profile_family = (
+        "lite_v2" if candidate_model == "nova_lite_v2" else candidate_model
+    )
+    if profile.family != expected_profile_family:
         raise ValueError("bedrock_budgeted_profile_family_mismatch")
     if profile.max_output_tokens > reserved_max_output_tokens:
         raise ValueError("bedrock_budgeted_profile_exceeds_reserved_output_tokens")
-    return execute_bedrock_candidate(
-        request,
-        provider=BedrockNovaProvider(key_rotation_enabled=False),
-        profile=profile,
-    )
+    if (
+        request.get("ablation_design_version") == quality.CURRENT_DESIGN_VERSION
+        and stage in {"holding", "exit"}
+        and candidate_model == "nova_lite_v2"
+        and profile.max_output_tokens < reserved_max_output_tokens
+    ):
+        raise ValueError("bedrock_budgeted_profile_output_tokens_drift")
+    provider = BedrockNovaProvider(key_rotation_enabled=False)
+    if stage in {"holding", "exit"}:
+        return execute_bedrock_lifecycle_candidate(
+            request,
+            provider=provider,
+            profile=profile,
+        )
+    return execute_bedrock_candidate(request, provider=provider, profile=profile)
 
 
 def canonicalize_entry_price_economically_equivalent_action(

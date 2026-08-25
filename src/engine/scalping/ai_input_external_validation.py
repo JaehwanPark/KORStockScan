@@ -27,6 +27,7 @@ from src.engine.scalping.market_context_observation import (
     OBSERVATION_CONTRACT,
     build_market_context_observation,
 )
+from src.utils.jsonl_io import iter_jsonl_objects_strict
 
 KST = ZoneInfo("Asia/Seoul")
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -487,16 +488,13 @@ def _payload_symbol(row: dict[str, Any]) -> str:
 def load_ai_payloads(target_date: str) -> dict[str, list[dict[str, Any]]]:
     path = PAYLOAD_DIR / f"ai_decision_payloads_{target_date}.jsonl"
     output: dict[str, list[dict[str, Any]]] = {}
-    if not path.exists():
+    try:
+        for row in iter_jsonl_objects_strict(path):
+            symbol = _payload_symbol(row)
+            if symbol:
+                output.setdefault(symbol, []).append(row)
+    except FileNotFoundError:
         return output
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        symbol = _payload_symbol(row)
-        if symbol:
-            output.setdefault(symbol, []).append(row)
     return output
 
 
@@ -504,15 +502,13 @@ def enrich_payloads_with_response_provenance(
     target_date: str, payloads: dict[str, list[dict[str, Any]]]
 ) -> dict[str, list[dict[str, Any]]]:
     path = TRACE_DIR / f"ai_decision_trace_{target_date}.jsonl"
-    if not path.exists():
+    try:
+        rows = list(iter_jsonl_objects_strict(path))
+    except FileNotFoundError:
         return payloads
     by_request: dict[str, dict[str, Any]] = {}
     by_payload_hash: dict[str, list[dict[str, Any]]] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    for row in rows:
         request_id = str(
             row.get("request_id") or row.get("decision_trace_id") or ""
         ).strip()
@@ -547,25 +543,21 @@ def load_request_provenance(
     request_path = REQUEST_DIR / f"ai_decision_requests_{target_date}.jsonl"
     trace_path = TRACE_DIR / f"ai_decision_trace_{target_date}.jsonl"
     traces: dict[str, dict[str, Any]] = {}
-    if trace_path.exists():
-        for line in trace_path.read_text(encoding="utf-8").splitlines():
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+    try:
+        for row in iter_jsonl_objects_strict(trace_path):
             request_id = str(
                 row.get("request_id") or row.get("decision_trace_id") or ""
             ).strip()
             if request_id:
                 traces[request_id] = row
+    except FileNotFoundError:
+        pass
     output: dict[str, list[dict[str, Any]]] = {}
-    if not request_path.exists():
+    try:
+        request_rows = list(iter_jsonl_objects_strict(request_path))
+    except FileNotFoundError:
         return output
-    for line in request_path.read_text(encoding="utf-8").splitlines():
-        try:
-            request = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    for request in request_rows:
         request_id = str(request.get("request_id") or "").strip()
         response = traces.get(request_id, {})
         symbol = str(request.get("symbol") or "").strip()

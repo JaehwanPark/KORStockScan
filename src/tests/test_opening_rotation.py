@@ -3971,6 +3971,75 @@ def test_execution_receipt_does_not_seed_ai_score_for_rotation_tag():
     )
 
 
+class _OpeningSellQuery:
+    def __init__(self, record):
+        self.record = record
+        self.filters = {}
+
+    def filter_by(self, **kwargs):
+        self.filters.update(kwargs)
+        return self
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def update(self, values):
+        if any(
+            getattr(self.record, key, None) != value
+            for key, value in self.filters.items()
+        ):
+            return 0
+        if "status" not in self.filters and self.record.status != "HOLDING":
+            return 0
+        for key, value in values.items():
+            setattr(self.record, key, value)
+        return 1
+
+
+class _OpeningSellSession:
+    def __init__(self, record):
+        self.record = record
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def query(self, _model):
+        return _OpeningSellQuery(self.record)
+
+
+class _OpeningSellDB:
+    def __init__(self, *, target_id):
+        self.record = SimpleNamespace(
+            id=target_id,
+            stock_code="005930",
+            buy_qty=1,
+            status="HOLDING",
+            scale_in_locked=True,
+        )
+
+    def get_session(self):
+        return _OpeningSellSession(self.record)
+
+
+def _install_opening_sell_owner(monkeypatch, stock, *, target_id):
+    stock.update(
+        {
+            "id": target_id,
+            "code": "005930",
+            "status": "HOLDING",
+            "buy_qty": 1,
+        }
+    )
+    monkeypatch.setattr(
+        sniper_execution_receipts,
+        "DB",
+        _OpeningSellDB(target_id=target_id),
+    )
+
+
 def test_fill_receipt_places_exactly_one_cost_aware_target_order(monkeypatch):
     submitted = []
     logs = []
@@ -3995,6 +4064,7 @@ def test_fill_receipt_places_exactly_one_cost_aware_target_order(monkeypatch):
         "opening_rotation_margin_order_api": "kt10000",
         "opening_rotation_margin_credit_order_api_used": False,
     }
+    _install_opening_sell_owner(monkeypatch, stock, target_id=7)
     monkeypatch.setattr(
         sniper_execution_receipts.kiwoom_utils,
         "get_tick_size",
@@ -4008,7 +4078,7 @@ def test_fill_receipt_places_exactly_one_cost_aware_target_order(monkeypatch):
     monkeypatch.setattr(
         "src.engine.kiwoom_orders.send_sell_order_market",
         lambda **kwargs: submitted.append(kwargs)
-        or {"return_code": "0", "ord_no": "SELL-1"},
+        or {"return_code": "0", "ord_no": "0000001"},
     )
     monkeypatch.setattr(
         sniper_execution_receipts,
@@ -4045,8 +4115,8 @@ def test_fill_receipt_places_exactly_one_cost_aware_target_order(monkeypatch):
     assert target_log["opening_rotation_margin_cash_guard_bypassed"] is True
     assert target_log["opening_rotation_margin_order_api"] == "kt10000"
     assert target_log["opening_rotation_margin_credit_order_api_used"] is False
-    assert stock["opening_rotation_profit_target_order_no"] == "SELL-1"
-    assert stock["preset_tp_ord_no"] == "SELL-1"
+    assert stock["opening_rotation_profit_target_order_no"] == "0000001"
+    assert stock["preset_tp_ord_no"] == "0000001"
     assert logs[-1][0][3] == "opening_rotation_profit_target_ordered"
 
 
@@ -4060,6 +4130,7 @@ def test_concurrent_buy_receipts_claim_one_target_submission(monkeypatch):
         "position_tag": POSITION_TAG,
         "opening_rotation_episode_id": "OREP-CONCURRENT",
     }
+    _install_opening_sell_owner(monkeypatch, stock, target_id=8)
     monkeypatch.setattr(
         sniper_execution_receipts.kiwoom_utils,
         "get_tick_size",
@@ -4078,7 +4149,7 @@ def test_concurrent_buy_receipts_claim_one_target_submission(monkeypatch):
         submitted.append(kwargs)
         entered.set()
         assert release.wait(timeout=2.0)
-        return {"return_code": "0", "ord_no": "SELL-CONCURRENT"}
+        return {"return_code": "0", "ord_no": "0000002"}
 
     monkeypatch.setattr("src.engine.kiwoom_orders.send_sell_order_market", _submit)
 
@@ -4107,15 +4178,18 @@ def test_concurrent_buy_receipts_claim_one_target_submission(monkeypatch):
     assert results == [True]
     assert second_result is True
     assert len(submitted) == 1
-    assert stock["opening_rotation_profit_target_order_no"] == "SELL-CONCURRENT"
+    assert stock["opening_rotation_profit_target_order_no"] == "0000002"
 
 
-def test_target_order_notice_wins_response_race(monkeypatch):
+def test_target_order_notice_without_exact_receipt_never_wins_response_race(
+    monkeypatch,
+):
     stock = {
         "name": "테스트",
         "position_tag": POSITION_TAG,
         "opening_rotation_episode_id": "OREP-NOTICE-RACE",
     }
+    _install_opening_sell_owner(monkeypatch, stock, target_id=9)
     monkeypatch.setattr(
         sniper_execution_receipts.kiwoom_utils,
         "get_tick_size",
@@ -4131,23 +4205,25 @@ def test_target_order_notice_wins_response_race(monkeypatch):
     )
 
     def _submit(**_kwargs):
-        stock["opening_rotation_profit_target_order_no"] = "SELL-NOTICE"
+        stock["opening_rotation_profit_target_order_no"] = "0000003"
         return {"return_code": "-1", "return_msg": "response_late_after_notice"}
 
     monkeypatch.setattr("src.engine.kiwoom_orders.send_sell_order_market", _submit)
 
-    assert sniper_execution_receipts._submit_opening_rotation_profit_order(
+    assert not sniper_execution_receipts._submit_opening_rotation_profit_order(
         stock,
         code="005930",
         buy_fill_price=10_000,
         filled_qty=1,
     )
-    assert stock["opening_rotation_profit_target_order_no"] == "SELL-NOTICE"
-    assert stock["opening_rotation_profit_order_protection_failed"] is False
+    assert "opening_rotation_profit_target_order_no" not in stock
+    assert stock["opening_rotation_profit_order_protection_failed"] is True
+    assert stock["opening_rotation_episode_phase"] == "TARGET_SUBMIT_FAILED"
 
 
 def test_failed_target_submit_blocks_reentry_and_arms_protection_exit(monkeypatch):
     stock = {"name": "테스트", "position_tag": POSITION_TAG}
+    _install_opening_sell_owner(monkeypatch, stock, target_id=10)
     monkeypatch.setattr(
         sniper_execution_receipts.kiwoom_utils,
         "get_tick_size",

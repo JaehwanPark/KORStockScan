@@ -1,14 +1,16 @@
 """Order execution receipt handlers for the sniper engine."""
 
 import hashlib
+import fcntl
 import json
 import os
 import re
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, time as datetime_time, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, or_
@@ -32,6 +34,14 @@ from src.engine.scalping.entry_candidate_lifecycle_state import (
 )
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 from src.engine.scalping.main_lifecycle_journal import (
+    BROKER_EXECUTION_MAX_NEGATIVE_LAG_SEC,
+    BROKER_EXECUTION_MAX_RECEIVE_LAG_SEC,
+    BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA,
+    BROKER_EXECUTION_RECEIVE_TIME_SOURCE,
+    BROKER_EXECUTION_SOURCE_TYPE,
+    MAX_DATA_STRING_LENGTH as MAIN_LIFECYCLE_MAX_DATA_STRING_LENGTH,
+    PIPELINE_IDENTITY_SCHEMA,
+    mint_main_lifecycle_id,
     pipeline_lifecycle_fields_safe,
     pipeline_lifecycle_stage_mapped,
 )
@@ -59,7 +69,11 @@ from src.utils.constants import TRADING_RULES
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
-from src.engine.sniper_time import TIME_15_30
+from src.engine.sniper_time import (
+    TIME_15_30,
+    TIME_20_00,
+    TIME_SCALPING_NEW_BUY_CUTOFF,
+)
 from src.engine.sniper_post_sell_feedback import record_post_sell_candidate
 
 KIWOOM_TOKEN = None
@@ -112,12 +126,97 @@ SELL_RECEIPT_RECOVERY_DIR = Path(
     )
 )
 _SELL_RECEIPT_RECOVERY_SCHEMA = "sell_receipt_recovery_v1"
+_SELL_PENDING_SUBMIT_SCHEMA = "sell_pending_submit_custody_v1"
+_SELL_PENDING_SUBMIT_CONTEXT_SCHEMA = "sell_submit_pending_context_v1"
+_SELL_PENDING_SUBMIT_CONTEXT_KEYS = (
+    "sell_submit_pending",
+    "sell_submit_requested_qty",
+    "sell_submit_owner_position_qty",
+    "sell_submit_started_at",
+    "sell_submit_generation",
+    "sell_submit_target_id",
+    "sell_submit_code",
+    "sell_submit_intended_route",
+    "sell_submit_intended_effective_venue",
+    "sell_submit_intended_session_bucket",
+    "sell_submit_context_sha256",
+)
+_SELL_CANCEL_INTENT_SCHEMA = "sell_cancel_intent_v1"
+_SELL_CANCEL_INTENT_RUNTIME_KEYS = (
+    "sell_cancel_intent_schema",
+    "sell_cancel_intent_target_id",
+    "sell_cancel_intent_code",
+    "sell_cancel_intent_order_no",
+    "sell_cancel_intent_requested_at_epoch",
+    "sell_cancel_intent_broker_route",
+    "sell_cancel_intent_generation",
+    "sell_cancel_intent_context_sha256",
+)
+_SELL_CANCEL_ACK_SCHEMA = "sell_cancel_ack_v1"
+_SELL_CANCEL_ACK_RUNTIME_KEYS = (
+    "sell_cancel_ack_schema",
+    "sell_cancel_ack_target_id",
+    "sell_cancel_ack_code",
+    "sell_cancel_ack_order_no",
+    "sell_cancel_ack_cancel_order_no",
+    "sell_cancel_ack_base_original_order_no",
+    "sell_cancel_ack_cancelled_qty",
+    "sell_cancel_ack_broker_route",
+    "sell_cancel_acknowledged_at_epoch",
+    "sell_cancel_ack_generation",
+    "sell_cancel_ack_context_sha256",
+)
+_SELL_TERMINAL_OUTCOME_SCHEMA = "sell_submit_terminal_outcome_v1"
+_SELL_TERMINAL_OUTCOME_RUNTIME_KEYS = (
+    "sell_submit_terminal_outcome_schema",
+    "sell_submit_terminal_outcome_kind",
+    "sell_submit_terminal_outcome_target_id",
+    "sell_submit_terminal_outcome_code",
+    "sell_submit_terminal_outcome_recorded_at_epoch",
+    "sell_submit_terminal_outcome_generation",
+    "sell_submit_terminal_outcome_context_sha256",
+    "sell_submit_terminal_outcome_order_no",
+    "sell_submit_terminal_outcome_broker_remaining_qty",
+    "sell_submit_terminal_outcome_reconciliation_source",
+    "sell_submit_terminal_outcome_receipt_state_sha256",
+    "sell_reconciled_remaining_qty",
+)
+_SELL_PENDING_SUBMIT_RUNTIME_KEYS = (
+    *_SELL_PENDING_SUBMIT_CONTEXT_KEYS,
+    *_SELL_CANCEL_INTENT_RUNTIME_KEYS,
+    *_SELL_CANCEL_ACK_RUNTIME_KEYS,
+    *_SELL_TERMINAL_OUTCOME_RUNTIME_KEYS,
+)
+_SELL_SUBMIT_CUSTODY_RETRY_SNAPSHOT_KEY = "pending_submit_custody_retry_snapshot"
 _SELL_RECEIPT_RECOVERY_MAX_AGE_SEC = 36 * 60 * 60
 _SELL_RECEIPT_RECOVERY_ORPHAN_MAX_AGE_SEC = 180 * 24 * 60 * 60
 _SELL_RECEIPT_RECOVERY_MAX_BYTES = 1_000_000
 _SELL_RECEIPT_RECOVERY_PRUNE_INTERVAL_SEC = 60 * 60
 _SELL_RECEIPT_RECOVERY_LAST_PRUNE_AT = 0.0
 _EXECUTION_SIGNATURES_PER_ORDER_MAX = 512
+_SELL_PARTIAL_LIFECYCLE_OUTBOX_SCHEMA = "sell_partial_lifecycle_outbox_v1"
+_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY = "pending_partial_lifecycle_legs"
+_SELL_PARTIAL_LIFECYCLE_OUTBOX_MAX_LEGS = 512
+_NXT_TP1_COMPLETION_RELEASE_PENDING_KEY = "nxt_tp1_completion_runtime_release_pending"
+_NXT_TP1_COMPLETION_CONTEXT_KEY = "nxt_tp1_completion_runtime_release_context"
+_NXT_TP1_COMPLETION_CONTEXT_SCHEMA = "nxt_tp1_completion_runtime_release_v1"
+_REPLACEMENT_TERMINAL_RECONCILIATION_GENERATION_KEY = (
+    "replacement_terminal_reconciliation_generation_sha256"
+)
+_REPLACEMENT_TERMINAL_RECONCILIATION_GENERATION_SCHEMA = (
+    "sell_replacement_terminal_reconciliation_v1"
+)
+_SELL_PARTIAL_LIFECYCLE_IDENTITY_STOCK_KEYS = (
+    "id",
+    "name",
+    "code",
+    "scanner_promotion_id",
+    "scanner_generation_id",
+    "effective_venue",
+    "market_session_bucket",
+    "last_watching_ai_decision_trace_id",
+    "last_watching_ai_attempt_decision_trace_id",
+)
 
 _MAIN_LIFECYCLE_GENERATED_PIPELINE_FIELDS = frozenset(
     {
@@ -191,6 +290,26 @@ def _broker_execution_context(
 ) -> tuple[datetime, dict[str, Any]]:
     """Resolve FID 908 on the local trading date and retain venue provenance."""
 
+    receive_time_source = "handler_dispatch_fallback"
+    if str(exec_data.get("broker_execution_receive_time_source") or "").strip() == (
+        BROKER_EXECUTION_RECEIVE_TIME_SOURCE
+    ):
+        try:
+            packet_received_at = datetime.fromisoformat(
+                str(exec_data.get("broker_execution_received_at") or "")
+            )
+            if packet_received_at.tzinfo is None:
+                raise ValueError("packet_receive_time_timezone_missing")
+            received_at = packet_received_at.astimezone(_KST)
+            receive_time_source = BROKER_EXECUTION_RECEIVE_TIME_SOURCE
+        except (TypeError, ValueError):
+            # Custody remains fail-open on local handler time.  P0 evidence is
+            # fail-closed later because the explicit packet-ingress source is
+            # absent from the resulting lifecycle timing contract.
+            received_at = received_at.astimezone(_KST)
+    else:
+        received_at = received_at.astimezone(_KST)
+
     raw_time = str(exec_data.get("broker_execution_time_raw", "") or "").strip()
     observed_at = received_at
     time_source = "local_receive_time_fallback"
@@ -220,6 +339,7 @@ def _broker_execution_context(
         "broker_execution_time_raw": raw_time or "-",
         "broker_execution_time_source": time_source,
         "broker_execution_received_at": received_at.isoformat(),
+        "broker_execution_receive_time_source": receive_time_source,
         "broker_execution_observed_at": observed_at.isoformat(),
         "broker_actual_execution_venue": actual_venue or "UNKNOWN",
         "broker_actual_execution_venue_source": venue_source,
@@ -286,6 +406,143 @@ def _probe_venue_provenance_fields(stock: dict[str, Any]) -> dict[str, str]:
             or "recorded_at_successful_entry_submit"
         )
     return fields
+
+
+def _sell_execution_session_bucket(received_at: datetime) -> str:
+    """Classify an exit from its exact packet-ingress receive timestamp."""
+
+    received_t = received_at.astimezone(_KST).time().replace(tzinfo=None)
+    if datetime_time(hour=8) <= received_t < datetime_time(hour=8, minute=50):
+        return "krx_like_premarket"
+    if datetime_time(hour=9) <= received_t < TIME_15_30:
+        return "krx_regular"
+    if datetime_time(hour=15, minute=45) <= received_t < datetime_time(hour=16):
+        return "nxt_aftermarket_early_sell"
+    if datetime_time(hour=16) <= received_t < datetime_time(hour=16, minute=10):
+        return "nxt_open_observe"
+    if datetime_time(hour=16, minute=10) <= received_t < TIME_SCALPING_NEW_BUY_CUTOFF:
+        return "nxt_entry_window"
+    if TIME_SCALPING_NEW_BUY_CUTOFF <= received_t < TIME_20_00:
+        return "nxt_close_only"
+    return "outside_krx_nxt_window"
+
+
+def _sell_execution_provenance_fields(
+    target_stock: dict[str, Any],
+) -> dict[str, Any]:
+    """Carry the submit route while binding exit venue/session to the receipt."""
+
+    packet_received_at: datetime | None = None
+    if target_stock.get("broker_execution_receive_time_source") == (
+        BROKER_EXECUTION_RECEIVE_TIME_SOURCE
+    ):
+        try:
+            packet_received_at = datetime.fromisoformat(
+                str(target_stock.get("broker_execution_received_at") or "")
+            )
+            if packet_received_at.tzinfo is None:
+                raise ValueError("broker_execution_timestamp_timezone_missing")
+            packet_received_at = packet_received_at.astimezone(_KST)
+        except (TypeError, ValueError):
+            packet_received_at = None
+
+    actual_venue = (
+        str(target_stock.get("broker_actual_execution_venue") or "").strip().upper()
+    )
+    if actual_venue not in {"KRX", "NXT"}:
+        actual_venue = ""
+    submitted_cohort = (
+        str(
+            target_stock.get("last_sell_execution_cohort")
+            or target_stock.get("sell_submit_intended_effective_venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    effective_venue = actual_venue or (
+        submitted_cohort
+        if submitted_cohort in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+        else "UNKNOWN"
+    )
+    if actual_venue:
+        target_stock["last_sell_execution_cohort"] = actual_venue
+
+    session_bucket = ""
+    session_source = "missing_packet_ingress_receive_time"
+    if packet_received_at is not None:
+        session_bucket = _sell_execution_session_bucket(packet_received_at)
+        session_source = BROKER_EXECUTION_RECEIVE_TIME_SOURCE
+        target_stock["last_sell_execution_session_bucket"] = session_bucket
+    else:
+        preserved_session = str(
+            target_stock.get("last_sell_execution_session_bucket") or ""
+        ).strip()
+        if preserved_session:
+            session_bucket = preserved_session
+            session_source = "successful_sell_submit_response_received_at"
+
+    broker_route = (
+        str(target_stock.get("last_sell_execution_broker_route") or "").strip().upper()
+    )
+    if broker_route not in {"KRX", "NXT", "SOR"}:
+        broker_route = "-"
+    route_resolution = (
+        str(
+            target_stock.get("last_sell_execution_broker_route_resolution") or "-"
+        ).strip()
+        or "-"
+    )
+    fields: dict[str, Any] = {
+        "effective_venue": effective_venue,
+        "exit_effective_venue": effective_venue,
+        "market_session_bucket": session_bucket or "unknown",
+        "exit_market_session_bucket": session_bucket or "unknown",
+        "exit_market_session_time_source": session_source,
+        "broker_route": broker_route,
+        "broker_route_resolution": route_resolution,
+    }
+    if packet_received_at is not None:
+        fields["exit_execution_received_at"] = packet_received_at.isoformat(
+            timespec="microseconds"
+        )
+    return fields
+
+
+def _sell_lifecycle_ordering_observed_at(
+    receipt_source: dict[str, Any], fallback: datetime
+) -> datetime:
+    """Mirror the lifecycle emitter's receipt-ordering clock exactly.
+
+    The hot path remains fail-open when packet-ingress provenance is missing or
+    invalid: official type-00/FID-908 rows still order by the aware handler
+    receive timestamp, while postclose validation quarantines the non-canonical
+    receive-source label.  The durable outbox must make the same clock choice or
+    a successful raw append can never satisfy its exact acknowledgement.
+    """
+
+    source_type = str(
+        receipt_source.get("broker_raw_source_type")
+        or receipt_source.get("main_lifecycle_broker_raw_source_type")
+        or ""
+    ).strip()
+    raw_execution_time = str(receipt_source.get("908") or "").strip()
+    if source_type == BROKER_EXECUTION_SOURCE_TYPE and raw_execution_time:
+        try:
+            received_at = datetime.fromisoformat(
+                str(receipt_source.get("broker_execution_received_at") or "")
+            )
+            occurred_at = datetime.fromisoformat(
+                str(receipt_source.get("broker_execution_observed_at") or "")
+            )
+            if received_at.tzinfo is None or occurred_at.tzinfo is None:
+                raise ValueError("broker_execution_timestamp_timezone_missing")
+            return received_at.astimezone(_KST)
+        except (TypeError, ValueError):
+            pass
+    if fallback.tzinfo is None:
+        return fallback.replace(tzinfo=_KST)
+    return fallback.astimezone(_KST)
 
 
 def _probe_observation_contract_fields(stock: dict[str, Any]) -> dict[str, Any]:
@@ -401,6 +658,7 @@ _BROKER_EXECUTION_PROVENANCE_KEYS = (
     "broker_execution_time_raw",
     "broker_execution_time_source",
     "broker_execution_received_at",
+    "broker_execution_receive_time_source",
     "broker_execution_observed_at",
     "broker_actual_execution_venue",
     "broker_actual_execution_venue_source",
@@ -508,6 +766,16 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "last_exit_rule",
     "last_exit_same_symbol_soft_stop_cooldown_would_block",
     "last_exit_soft_stop_threshold_pct",
+    "last_sell_execution_broker_route",
+    "last_sell_execution_broker_route_resolution",
+    "last_sell_execution_cohort",
+    "last_sell_execution_session_bucket",
+    "exit_receipt_submission_custody_source_gap",
+    "exit_receipt_submission_custody_retry_required",
+    "_sell_submit_receipt_proof",
+    "sell_pending_submit_successor_persist_required",
+    "sell_pending_submit_durability_clear_required",
+    *_SELL_PENDING_SUBMIT_RUNTIME_KEYS,
     "mae_pct",
     "mfe_pct",
     "msg_audience",
@@ -607,6 +875,7 @@ _PENDING_ADD_META_KEYS = (
     "pending_add_initial_buy_price",
     "pending_add_initial_buy_qty",
     "pending_add_execution_notice_pending",
+    "pending_add_ai_decision_trace_id",
     "pending_add_winner_recovery_ai_thesis_state",
     "pending_add_winner_recovery_ai_parent_action",
     "pending_add_winner_recovery_ai_parent_prompt_version",
@@ -623,6 +892,7 @@ _PENDING_ADD_META_KEYS = (
     "_add_receipt_executions_by_order_no",
     "pending_add_notice_by_order_no",
     "scale_in_receipt_reconciled_before_ordno_bind",
+    "_scale_in_lifecycle_submit_telemetry_committed_by_order_no",
     "add_order_time",
     "add_odno",
 )
@@ -705,6 +975,7 @@ _SELL_REVIVE_RESET_KEYS = (
     "_entry_receipt_economics_complete_by_order_no",
     "_entry_receipt_executions_by_order_no",
     "entry_receipt_reconciled_before_ordno_bind",
+    "_entry_lifecycle_submit_telemetry_committed_by_order_no",
     "entry_partial_fill_notified_qty",
     "entry_partial_fill_deferred_notice",
     "entry_partial_fill_deferred_at",
@@ -792,6 +1063,9 @@ _SELL_REVIVE_RESET_KEYS = (
     *_EXIT_DECISION_RESET_KEYS,
     *_POSITION_PEAK_RESET_KEYS,
     "rising_missed_scout_upgraded",
+    "sell_cancel_reconciliation_required",
+    "sell_cancel_reconciliation_source",
+    "sell_cancel_reconciliation_retry_at",
 )
 _SELL_COMPLETE_RESET_KEYS = (
     *_NXT_TP1_PARTIAL_RESET_KEYS,
@@ -922,6 +1196,9 @@ _SELL_COMPLETE_RESET_KEYS = (
     "scalp_trailing_continuation_recheck_consumed_position_key",
     "scalp_trailing_continuation_recheck_second_extension_logged_position_key",
     "scalp_trailing_continuation_runtime_position_token",
+    "sell_cancel_reconciliation_required",
+    "sell_cancel_reconciliation_source",
+    "sell_cancel_reconciliation_retry_at",
 )
 _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY = "_entry_receipt_filled_by_order_no"
 _ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY = "_entry_receipt_requested_by_order_no"
@@ -1044,7 +1321,7 @@ def _log_holding_pipeline_impl(
         )
         if observe_candidate_lifecycle:
             observe_candidate_transition_safe(candidate_stock, code, stage, fields)
-    emit_pipeline_event(
+    return emit_pipeline_event(
         "HOLDING_PIPELINE",
         name,
         code,
@@ -1067,6 +1344,580 @@ def _log_holding_pipeline(*args, **kwargs):
             f"stage={stage or '-'}: {exc}"
         )
         return None
+
+
+def _emit_execution_receipt_submission_custody(
+    *,
+    target_stock: dict[str, Any],
+    target_id: Any,
+    code: str,
+    stage: str,
+    order_no: str,
+    execution_no: str,
+    requested_qty: int,
+    trace_fields: dict[str, Any] | None = None,
+    contract_validation: dict[str, bool] | None = None,
+) -> bool:
+    """Emit an exact submit predecessor when WS execution wins the bind race.
+
+    A type-00 execution receipt proves that this exact broker order existed.
+    FID 908 is the second-resolution execution occurrence clock, so it is only
+    a conservative upper bound for submission.  Transition ordering uses the
+    immutable packet-ingress receive clock, matching the execution transition
+    produced from the same envelope.  No order/runtime authority is granted.
+    """
+
+    if isinstance(contract_validation, dict):
+        contract_validation["valid"] = False
+    custody_side = {
+        "entry_execution_receipt_submission_custody": "BUY",
+        "scale_in_execution_receipt_submission_custody": "BUY",
+        "exit_execution_receipt_submission_custody": "SELL",
+    }.get(str(stage or "").strip())
+    normalized_order_no = str(order_no or "").strip()
+    normalized_execution_no = str(execution_no or "").strip()
+    normalized_qty = _safe_int(requested_qty, 0)
+    normalized_code = str(code or "").strip().upper()
+    raw_code = str(target_stock.get("9001") or "").strip().upper()
+    if raw_code.startswith("A"):
+        raw_code = raw_code[1:]
+    raw_order_no = str(target_stock.get("9203") or "").strip()
+    raw_execution_no = str(target_stock.get("909") or "").strip()
+    raw_order_side = str(target_stock.get("905") or "").strip()
+    raw_side_code = str(target_stock.get("907") or "").strip()
+    raw_status = str(target_stock.get("913") or "").strip()
+    raw_order_qty = _optional_abs_int(target_stock.get("900"))
+    raw_remaining_qty = _optional_abs_int(target_stock.get("902"))
+    raw_cumulative_qty = _optional_abs_int(target_stock.get("911"))
+    raw_unit_qty = _optional_abs_int(target_stock.get("915"))
+    raw_time = str(target_stock.get("908") or "").strip()
+
+    try:
+        receive_at = datetime.fromisoformat(
+            str(target_stock.get("broker_execution_received_at") or "")
+        )
+        occurrence_at = datetime.fromisoformat(
+            str(target_stock.get("broker_execution_observed_at") or "")
+        )
+        if receive_at.tzinfo is None or occurrence_at.tzinfo is None:
+            raise ValueError("broker_execution_timestamp_timezone_missing")
+        receive_at = receive_at.astimezone(_KST)
+        occurrence_at = occurrence_at.astimezone(_KST)
+    except (TypeError, ValueError):
+        return False
+
+    submit_generation = str(target_stock.get("sell_submit_generation") or "").strip()
+    submit_started_at = _safe_float(target_stock.get("sell_submit_started_at"), 0.0)
+    submit_route = (
+        str(target_stock.get("sell_submit_intended_route") or "").strip().upper()
+    )
+    submit_effective_venue = (
+        str(target_stock.get("sell_submit_intended_effective_venue") or "")
+        .strip()
+        .upper()
+    )
+    submit_session = str(
+        target_stock.get("sell_submit_intended_session_bucket") or ""
+    ).strip()
+    submit_context_payload = {
+        "schema": "sell_submit_pending_context_v1",
+        "generation": submit_generation,
+        "target_id": _safe_int(target_stock.get("sell_submit_target_id"), 0),
+        "code": str(target_stock.get("sell_submit_code") or "").strip()[:6],
+        "requested_qty": _safe_int(target_stock.get("sell_submit_requested_qty"), 0),
+        "owner_position_qty": _safe_int(
+            target_stock.get("sell_submit_owner_position_qty"), 0
+        ),
+        "started_at": round(submit_started_at, 6),
+        "intended_route": submit_route,
+        "intended_effective_venue": submit_effective_venue,
+        "intended_session_bucket": submit_session,
+    }
+    submit_context_sha256 = hashlib.sha256(
+        json.dumps(
+            submit_context_payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    submit_floor_at = (
+        datetime.fromtimestamp(submit_started_at, tz=_KST).replace(microsecond=0)
+        if submit_started_at > 0
+        else None
+    )
+    receipt_session = _sell_execution_session_bucket(receive_at)
+    occurrence_session = _sell_execution_session_bucket(occurrence_at)
+    actual_venue = (
+        str(target_stock.get("broker_actual_execution_venue") or "").strip().upper()
+    )
+    raw_sor_flag = str(target_stock.get("2136") or "").strip().upper()
+    raw_exchange_code = str(target_stock.get("2134") or "").strip()
+    raw_exchange_name = str(target_stock.get("2135") or "").strip().upper()
+    normalized_exchange_code = str(
+        target_stock.get("broker_actual_exchange_code") or ""
+    ).strip()
+    normalized_exchange_name = (
+        str(target_stock.get("broker_actual_exchange_name") or "").strip().upper()
+    )
+    normalized_sor_flag = str(target_stock.get("broker_sor_flag") or "").strip().upper()
+    integrated_sor_envelope = bool(
+        raw_exchange_code == "0"
+        and raw_exchange_name in {"SOR", "통합"}
+        and raw_sor_flag == "Y"
+        and normalized_exchange_code == raw_exchange_code
+        and normalized_exchange_name == raw_exchange_name
+        and normalized_sor_flag == raw_sor_flag
+    )
+    known_actual_venue_envelope = bool(
+        actual_venue in {"KRX", "NXT"}
+        and raw_sor_flag == "Y"
+        and normalized_sor_flag == raw_sor_flag
+        and normalized_exchange_code == raw_exchange_code
+        and normalized_exchange_name == raw_exchange_name
+        and (
+            (
+                actual_venue == "KRX"
+                and raw_exchange_code in {"", "1"}
+                and raw_exchange_name in {"", "KRX"}
+                and (raw_exchange_code == "1" or raw_exchange_name == "KRX")
+            )
+            or (
+                actual_venue == "NXT"
+                and raw_exchange_code in {"", "2"}
+                and raw_exchange_name in {"", "NXT"}
+                and (raw_exchange_code == "2" or raw_exchange_name == "NXT")
+            )
+        )
+    )
+    receive_lag_sec = (receive_at - occurrence_at).total_seconds()
+    boundary_session_matches = bool(
+        receipt_session != submit_session
+        and occurrence_session == submit_session
+        and 0.0 <= receive_lag_sec <= 2.0
+        and 0.0 <= receive_at.timestamp() - submit_started_at <= 2.0
+    )
+    route_matches = bool(
+        (
+            submit_route == "SOR"
+            and (
+                known_actual_venue_envelope
+                or (
+                    actual_venue not in {"KRX", "NXT"}
+                    and integrated_sor_envelope
+                    and submit_effective_venue in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+                )
+            )
+        )
+        or submit_route in {"KRX", "NXT"}
+        and actual_venue == submit_route
+    )
+
+    exit_pending_contract_valid = bool(
+        custody_side == "SELL"
+        and (
+            target_stock.get("sell_submit_pending") is True
+            or target_stock.get("exit_receipt_submission_custody_retry_required")
+            is True
+        )
+        and _safe_int(target_stock.get("sell_submit_requested_qty"), 0)
+        == normalized_qty
+        and submit_generation
+        and _safe_int(target_stock.get("sell_submit_target_id"), 0)
+        == _safe_int(target_id, 0)
+        and str(target_stock.get("sell_submit_code") or "").strip()[:6]
+        == normalized_code
+        and str(target_stock.get("sell_submit_context_sha256") or "").strip()
+        == submit_context_sha256
+        and submit_floor_at is not None
+        and receive_at.timestamp() >= submit_started_at
+        and occurrence_at >= submit_floor_at
+        and -BROKER_EXECUTION_MAX_NEGATIVE_LAG_SEC
+        <= receive_lag_sec
+        <= BROKER_EXECUTION_MAX_RECEIVE_LAG_SEC
+        and route_matches
+        and (receipt_session == submit_session or boundary_session_matches)
+    )
+    raw_side_valid = bool(
+        (
+            custody_side == "BUY"
+            and raw_side_code == "2"
+            and "매수" in raw_order_side
+            and "매도" not in raw_order_side
+        )
+        or (
+            custody_side == "SELL"
+            and raw_side_code == "1"
+            and "매도" in raw_order_side
+            and "매수" not in raw_order_side
+        )
+    )
+
+    if (
+        custody_side is None
+        or re.fullmatch(r"[0-9]{7}", normalized_order_no) is None
+        or int(normalized_order_no) == 0
+        or re.fullmatch(r"[0-9]{6}", normalized_code) is None
+        or re.fullmatch(r"[0-9]{1,20}", normalized_execution_no) is None
+        or int(normalized_execution_no) == 0
+        or normalized_qty <= 0
+        or target_stock.get("main_lifecycle_broker_raw_envelope_schema")
+        != BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA
+        or str(target_stock.get("main_lifecycle_broker_raw_source_type") or "")
+        != BROKER_EXECUTION_SOURCE_TYPE
+        or target_stock.get("broker_execution_receive_time_source")
+        != BROKER_EXECUTION_RECEIVE_TIME_SOURCE
+        or target_stock.get("broker_execution_time_source") != "official_fid_908"
+        or occurrence_at.microsecond != 0
+        or re.fullmatch(r"[0-9]{6}", raw_time) is None
+        or occurrence_at.strftime("%H%M%S") != raw_time
+        or raw_order_no != normalized_order_no
+        or raw_execution_no != normalized_execution_no
+        or raw_code != normalized_code
+        or raw_status != "체결"
+        or not raw_side_valid
+        or "취소" in raw_order_side
+        or raw_order_qty != normalized_qty
+        or raw_cumulative_qty is None
+        or raw_cumulative_qty <= 0
+        or raw_remaining_qty is None
+        or raw_remaining_qty < 0
+        or raw_cumulative_qty + raw_remaining_qty != normalized_qty
+        or raw_unit_qty is None
+        or raw_unit_qty <= 0
+        or raw_unit_qty > raw_cumulative_qty
+        or (custody_side == "SELL" and not exit_pending_contract_valid)
+    ):
+        return False
+    if isinstance(contract_validation, dict):
+        contract_validation["valid"] = True
+    venue_fields = (
+        _sell_execution_provenance_fields(target_stock)
+        if custody_side == "SELL"
+        else _probe_venue_provenance_fields(target_stock)
+    )
+    event_payload = _log_holding_pipeline(
+        target_stock.get("name"),
+        code,
+        target_id,
+        stage,
+        candidate_stock=target_stock,
+        observed_at=receive_at,
+        requested_qty=normalized_qty,
+        submitted_qty=normalized_qty,
+        qty=normalized_qty,
+        broker_order_no=normalized_order_no,
+        broker_order_no_list=normalized_order_no,
+        broker_order_qty_list=f"{normalized_order_no}:{normalized_qty}",
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        runtime_effect=False,
+        lifecycle_submission_leg_contract=(
+            "exact_broker_single_order_leg_v1"
+            if custody_side == "SELL"
+            else "exact_broker_order_leg_v1"
+        ),
+        lifecycle_submission_time_source=BROKER_EXECUTION_RECEIVE_TIME_SOURCE,
+        lifecycle_submission_ordering_clock="broker_execution_received_at",
+        submission_causal_upper_bound_at=occurrence_at.isoformat(
+            timespec="microseconds"
+        ),
+        submission_causal_upper_bound_source="official_fid_908",
+        submission_custody_binding_schema=(
+            "broker_execution_inferred_submission_binding_v1"
+        ),
+        submission_custody_broker_order_no=normalized_order_no,
+        submission_custody_broker_execution_no=normalized_execution_no,
+        submission_custody_broker_order_qty=normalized_qty,
+        submission_custody_broker_cumulative_qty=raw_cumulative_qty,
+        submission_custody_broker_remaining_qty=raw_remaining_qty,
+        submission_custody_broker_unit_qty=raw_unit_qty,
+        metric_role="main_scalping_lifecycle_source_quality",
+        decision_authority="broker_execution_receipt_custody_observation_only",
+        forbidden_uses=(
+            "runtime_or_order_change|provider_route_change|threshold_or_quantity_change"
+        ),
+        **venue_fields,
+        **(trace_fields or {}),
+    )
+    return bool(
+        isinstance(event_payload, dict)
+        and event_payload.get("structured_append_succeeded") is True
+        and event_payload.get("structured_append_status")
+        in {"raw_appended", "raw_appended_companion_failed"}
+    )
+
+
+def _lifecycle_submit_telemetry_committed(
+    target_stock: dict[str, Any],
+    *,
+    marker_key: str,
+    order_no: str,
+    requested_qty: int,
+) -> bool:
+    markers = target_stock.get(marker_key)
+    if not isinstance(markers, dict):
+        return False
+    marker = markers.get(str(order_no or "").strip())
+    return isinstance(marker, dict) and _safe_int(marker.get("qty"), 0) == _safe_int(
+        requested_qty,
+        0,
+    )
+
+
+def _bind_pending_sell_execution_receipt(
+    *,
+    target_stock: dict[str, Any],
+    target_id: Any,
+    code: str,
+    order_no: str,
+    execution_no: str,
+) -> bool:
+    """Bind an exact pre-response SELL receipt without granting order authority."""
+
+    normalized_order_no = str(order_no or "").strip()
+    normalized_execution_no = str(execution_no or "").strip()
+    requested_qty = _safe_int(target_stock.get("sell_submit_requested_qty"), 0)
+    generation = str(target_stock.get("sell_submit_generation") or "").strip()
+    retry_required = bool(
+        target_stock.get("exit_receipt_submission_custody_retry_required") is True
+    )
+    prior_proof = target_stock.get("_sell_submit_receipt_proof")
+    retry_identity_valid = bool(
+        retry_required
+        and isinstance(prior_proof, dict)
+        and prior_proof.get("schema") == "sell_submit_receipt_proof_v1"
+        and str(prior_proof.get("generation") or "").strip() == generation
+        and str(prior_proof.get("order_no") or "").strip() == normalized_order_no
+        and str(prior_proof.get("execution_no") or "").strip()
+        == normalized_execution_no
+        and _safe_int(prior_proof.get("requested_qty"), 0) == requested_qty
+        and str(prior_proof.get("submit_context_sha256") or "").strip()
+        == str(target_stock.get("sell_submit_context_sha256") or "").strip()
+    )
+    if (
+        target_stock.get("sell_submit_pending") is not True and not retry_identity_valid
+    ) or (
+        not generation
+        or requested_qty <= 0
+        or not normalized_order_no
+        or not normalized_execution_no
+    ):
+        return False
+
+    contract_validation: dict[str, bool] = {}
+    custody_emitted = _emit_execution_receipt_submission_custody(
+        target_stock=target_stock,
+        target_id=target_id,
+        code=code,
+        stage="exit_execution_receipt_submission_custody",
+        order_no=normalized_order_no,
+        execution_no=normalized_execution_no,
+        requested_qty=requested_qty,
+        contract_validation=contract_validation,
+    )
+    if contract_validation.get("valid") is not True:
+        log_error(
+            f"[EXIT_RECEIPT_SUBMISSION_CUSTODY_CONTRACT_BLOCKED] "
+            f"{target_stock.get('name')}({code}) ord_no={normalized_order_no}"
+        )
+        return False
+    if not custody_emitted:
+        log_error(
+            f"[EXIT_RECEIPT_SUBMISSION_CUSTODY_APPEND_FAILED] "
+            f"{target_stock.get('name')}({code}) ord_no={normalized_order_no}"
+        )
+        target_stock["exit_receipt_submission_custody_source_gap"] = True
+        target_stock["exit_receipt_submission_custody_retry_required"] = True
+    target_stock["_sell_submit_receipt_proof"] = {
+        "schema": "sell_submit_receipt_proof_v1",
+        "generation": generation,
+        "submit_context_sha256": str(
+            target_stock.get("sell_submit_context_sha256") or ""
+        ).strip(),
+        "target_id": _safe_int(target_id, 0),
+        "code": str(code or "").strip()[:6],
+        "order_no": normalized_order_no,
+        "requested_qty": requested_qty,
+        "intended_route": str(target_stock.get("sell_submit_intended_route") or "")
+        .strip()
+        .upper(),
+        "intended_effective_venue": str(
+            target_stock.get("sell_submit_intended_effective_venue") or ""
+        )
+        .strip()
+        .upper(),
+        "intended_session_bucket": str(
+            target_stock.get("sell_submit_intended_session_bucket") or ""
+        ).strip(),
+        "execution_no": normalized_execution_no,
+        "custody_emitted": custody_emitted,
+        "received_at": str(target_stock.get("broker_execution_received_at") or ""),
+    }
+    target_stock["sell_odno"] = normalized_order_no
+    # The pre-call generation is the only crash-surviving exact order intent at
+    # this point.  Do not unlink it until the corresponding partial receipt
+    # ledger or terminal lifecycle outbox has itself been fsynced.  The caller
+    # persists that successor and then invokes the generation-bound clear
+    # helper below.  Keeping the immutable context also lets a duplicate packet
+    # retry a failed custody append without authorizing a second order.
+    target_stock["sell_submit_pending"] = False
+    target_stock["sell_pending_submit_successor_persist_required"] = True
+    target_stock["sell_pending_submit_durability_clear_required"] = True
+    return custody_emitted
+
+
+def _clear_pending_sell_submit_after_successor_persisted(
+    target_stock: dict[str, Any],
+    *,
+    target_id: Any,
+    code: str,
+) -> bool:
+    """Clear one pre-call generation only after exact receipt state is durable."""
+
+    proof = target_stock.get("_sell_submit_receipt_proof")
+    if not isinstance(proof, dict):
+        return False
+    generation = str(proof.get("generation") or "").strip()
+    order_no = str(proof.get("order_no") or "").strip()
+    requested_qty = _safe_int(proof.get("requested_qty"), 0)
+    if not all(
+        (
+            proof.get("schema") == "sell_submit_receipt_proof_v1",
+            proof.get("custody_emitted") is True,
+            generation,
+            re.fullmatch(r"[0-9]{7}", order_no) is not None,
+            _safe_int(proof.get("target_id"), 0) == _safe_int(target_id, 0),
+            str(proof.get("code") or "").strip()[:6] == str(code or "").strip()[:6],
+            requested_qty > 0,
+            str(target_stock.get("sell_submit_generation") or "").strip() == generation,
+            str(target_stock.get("sell_submit_context_sha256") or "").strip()
+            == str(proof.get("submit_context_sha256") or "").strip(),
+        )
+    ):
+        return False
+    if not clear_pending_sell_submit_custody(target_id, generation=generation):
+        target_stock.update(
+            {
+                "sell_pending_submit_durability_clear_required": True,
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": (
+                    "official_sell_receipt_successor_persisted_clear_failed"
+                ),
+            }
+        )
+        return False
+    target_stock.pop("sell_pending_submit_successor_persist_required", None)
+    target_stock.pop("sell_pending_submit_durability_clear_required", None)
+    target_stock.pop("exit_receipt_submission_custody_retry_required", None)
+    for field_name in _SELL_PENDING_SUBMIT_RUNTIME_KEYS:
+        target_stock.pop(field_name, None)
+    return True
+
+
+def _pending_sell_submit_custody_retry_snapshot(
+    target_stock: dict[str, Any],
+) -> dict[str, Any]:
+    """Capture only the immutable receipt/context evidence needed for retry."""
+
+    return _receipt_snapshot(
+        target_stock,
+        (
+            "id",
+            "code",
+            "name",
+            *_BROKER_EXECUTION_PROVENANCE_KEYS,
+            *_SELL_PENDING_SUBMIT_RUNTIME_KEYS,
+            "_sell_submit_receipt_proof",
+            "exit_receipt_submission_custody_source_gap",
+            "exit_receipt_submission_custody_retry_required",
+            "sell_pending_submit_successor_persist_required",
+            "sell_pending_submit_durability_clear_required",
+        ),
+    )
+
+
+def _restore_pending_sell_submit_custody_retry_snapshot(
+    target_stock: dict[str, Any],
+) -> bool:
+    """Restore a checksum-covered retry anchor from the receipt journal."""
+
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    snapshot = (
+        state.get(_SELL_SUBMIT_CUSTODY_RETRY_SNAPSHOT_KEY)
+        if isinstance(state, dict)
+        else None
+    )
+    if not isinstance(snapshot, dict):
+        return False
+    normalized = _normalized_receipt_snapshot(snapshot)
+    if (
+        _safe_int(normalized.get("id"), 0) != _safe_int(target_stock.get("id"), 0)
+        or str(normalized.get("code") or "").strip()[:6]
+        != str(target_stock.get("code") or "").strip()[:6]
+    ):
+        return False
+    target_stock.update(normalized)
+    return True
+
+
+def retry_pending_sell_execution_receipt_custody(
+    target_stock: dict[str, Any],
+) -> bool:
+    """Retry one exact append gap without creating SELL submission authority."""
+
+    _restore_pending_sell_submit_custody_retry_snapshot(target_stock)
+    if target_stock.get("exit_receipt_submission_custody_retry_required") is not True:
+        return True
+    proof = target_stock.get("_sell_submit_receipt_proof")
+    if not isinstance(proof, dict):
+        return False
+    target_id = _safe_int(target_stock.get("id"), 0)
+    code = str(target_stock.get("code") or "").strip()[:6]
+    order_no = str(proof.get("order_no") or "").strip()
+    execution_no = str(proof.get("execution_no") or "").strip()
+    if target_id <= 0 or len(code) != 6:
+        return False
+    if not _bind_pending_sell_execution_receipt(
+        target_stock=target_stock,
+        target_id=target_id,
+        code=code,
+        order_no=order_no,
+        execution_no=execution_no,
+    ):
+        return False
+    # The receipt state was fsynced before this retry was attempted.  Rewrite
+    # that exact successor with custody_emitted=true, then generation-clear.
+    return (
+        _persist_sell_receipt_recovery_or_interlock(
+            target_stock,
+            code=code,
+            reason="sell_submit_custody_append_retry_successor_rewrite",
+        )
+        and target_stock.get("exit_receipt_submission_custody_retry_required")
+        is not True
+    )
+
+
+def _lifecycle_submit_trace_id(
+    target_stock: dict[str, Any], *, marker_key: str, order_no: str
+) -> str:
+    markers = target_stock.get(marker_key)
+    marker = (
+        markers.get(str(order_no or "").strip()) if isinstance(markers, dict) else None
+    )
+    value = (
+        str(marker.get("decision_trace_id") or "").strip()
+        if isinstance(marker, dict)
+        else ""
+    )
+    if (
+        value in {"", "-", "None", "none", "null"}
+        or "\x00" in value
+        or len(value) > MAIN_LIFECYCLE_MAX_DATA_STRING_LENGTH
+    ):
+        return ""
+    return value
 
 
 def _trailing_continuation_receipt_fields(stock: dict[str, Any]) -> dict[str, Any]:
@@ -1306,6 +2157,11 @@ def _resolve_sell_execution_receipt(
             and state_order_no != normalized_order_no
             and int(delayed.get("incremental_qty") or 0) > 0
         )
+        replacement_terminal_reconciliation_required = bool(
+            replacement_reconciliation_required
+            and aggregate_qty == position_qty
+            and delayed.get("final") is True
+        )
         final = bool(
             not state_order_no
             and aggregate_qty == position_qty
@@ -1338,6 +2194,9 @@ def _resolve_sell_execution_receipt(
                 "replacement_reconciliation_required": (
                     replacement_reconciliation_required
                 ),
+                "replacement_terminal_reconciliation_required": (
+                    replacement_terminal_reconciliation_required
+                ),
                 "replacement_order_no": (
                     state_order_no if replacement_reconciliation_required else ""
                 ),
@@ -1362,9 +2221,13 @@ def _resolve_sell_execution_receipt(
         )
         return {
             "status": (
-                "replacement_reconcile_required"
-                if replacement_reconciliation_required
-                else ("final" if final else "partial")
+                "replacement_terminal_reconcile_required"
+                if replacement_terminal_reconciliation_required
+                else (
+                    "replacement_reconcile_required"
+                    if replacement_reconciliation_required
+                    else ("final" if final else "partial")
+                )
             ),
             "reason": (
                 "sell_receipt_terminal_order_late_final"
@@ -1601,9 +2464,11 @@ def _resolve_sell_execution_receipt(
     target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = state
     return {
         "status": "final" if final else "partial",
-        "reason": "sell_receipt_full_position_reconciled"
-        if final
-        else "sell_receipt_partial_fill",
+        "reason": (
+            "sell_receipt_full_position_reconciled"
+            if final
+            else "sell_receipt_partial_fill"
+        ),
         "final": final,
         "order_no": normalized_order_no,
         "execution_no": str(execution_no or "").strip(),
@@ -1634,6 +2499,811 @@ def _resolve_sell_execution_receipt(
     }
 
 
+def _build_sell_lifecycle_outbox_leg(
+    target_stock: dict[str, Any],
+    *,
+    code: str,
+    target_id: int,
+    now: datetime,
+    stage: str,
+    event_fields: dict[str, Any],
+) -> dict[str, Any]:
+    candidate_stock = {
+        key: target_stock.get(key)
+        for key in _SELL_PARTIAL_LIFECYCLE_IDENTITY_STOCK_KEYS
+        if target_stock.get(key) is not None
+    }
+    candidate_stock.update(
+        {
+            "id": int(target_id),
+            "name": str(target_stock.get("name") or "-"),
+            "code": str(code or "").strip()[:6],
+        }
+    )
+    leg = {
+        "schema": _SELL_PARTIAL_LIFECYCLE_OUTBOX_SCHEMA,
+        "stage": stage,
+        "target_id": int(target_id),
+        "code": str(code or "").strip()[:6],
+        "name": str(target_stock.get("name") or "-"),
+        "observed_at": now.astimezone(_KST).isoformat(timespec="microseconds"),
+        "candidate_stock": candidate_stock,
+        "event_fields": event_fields,
+    }
+    canonical = json.dumps(
+        leg, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str
+    )
+    leg["leg_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return json.loads(json.dumps(leg, ensure_ascii=True, default=str))
+
+
+def _standard_sell_partial_lifecycle_outbox_leg(
+    target_stock: dict[str, Any],
+    *,
+    code: str,
+    target_id: int,
+    now: datetime,
+    receipt: dict[str, Any],
+    buy_price: float,
+) -> dict[str, Any]:
+    sell_execution_fields = _sell_execution_provenance_fields(target_stock)
+    economics_fields: dict[str, Any] = {}
+    if receipt.get("economics_complete") is True:
+        economics_fields = _main_lifecycle_exit_economics_fields(
+            target_stock,
+            buy_price=buy_price,
+            sell_price=float(receipt["incremental_price"]),
+            sell_qty=int(receipt["incremental_qty"]),
+            realized_net_pnl_krw=float(receipt["incremental_net_pnl_krw"]),
+        )
+    event_fields = {
+        "order_no": receipt.get("order_no") or "-",
+        "execution_no": receipt.get("execution_no") or "-",
+        "sell_price": round(float(receipt["incremental_price"]), 4),
+        "sell_qty": int(receipt["incremental_qty"]),
+        "cumulative_sell_qty": int(receipt["cumulative_qty"]),
+        "remaining_sell_qty": int(receipt["remaining_qty"]),
+        "main_lifecycle_exit_qty": int(receipt["incremental_qty"]),
+        "main_lifecycle_exit_price": round(float(receipt["incremental_price"]), 4),
+        "main_lifecycle_broker_reconciled": False,
+        "main_lifecycle_reconciled_final_exit": False,
+        "sell_receipt_economics_complete": bool(receipt.get("economics_complete")),
+        "sell_receipt_quantity_contract_complete": bool(
+            receipt.get("quantity_contract_complete")
+        ),
+        "sell_receipt_unit_fill_consistent": bool(
+            receipt.get("unit_fill_consistent", True)
+        ),
+        "sell_receipt_unit_qty_matches_delta": receipt.get("unit_qty_matches_delta"),
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "runtime_effect": True,
+        "exit_receipt_submission_custody_committed": bool(
+            (target_stock.get("_sell_submit_receipt_proof") or {}).get(
+                "custody_emitted"
+            )
+        ),
+        "exit_receipt_submission_custody_source_gap": bool(
+            target_stock.get("exit_receipt_submission_custody_source_gap")
+        ),
+        **_broker_execution_provenance_fields(target_stock),
+        **sell_execution_fields,
+        **economics_fields,
+    }
+    return _build_sell_lifecycle_outbox_leg(
+        target_stock,
+        code=code,
+        target_id=target_id,
+        now=_sell_lifecycle_ordering_observed_at(target_stock, now),
+        stage="sell_partial_fill_progress",
+        event_fields=event_fields,
+    )
+
+
+def _nxt_tp1_sell_lifecycle_outbox_leg(
+    target_stock: dict[str, Any],
+    *,
+    code: str,
+    target_id: int,
+    now: datetime,
+    order_no: str,
+    execution_no: str,
+    incremental_qty: int,
+    incremental_price: float,
+    filled_qty: int,
+    requested_qty: int,
+    runner_qty: int,
+    avg_sell_price: float,
+    realized_profit_pct: float,
+    realized_pnl_krw: float,
+    source_unit_contract_complete: bool,
+    partial_lifecycle_economics: dict[str, Any],
+    completed: bool,
+) -> dict[str, Any]:
+    """Build one immutable NXT TP1 partial-position execution transition."""
+
+    stage = (
+        "nxt_rising_missed_tp1_partial_sell_completed"
+        if completed
+        else "nxt_rising_missed_tp1_partial_fill_progress"
+    )
+    sell_execution_fields = _sell_execution_provenance_fields(target_stock)
+    event_fields: dict[str, Any] = {
+        "ord_no": order_no or "-",
+        "order_no": order_no or "-",
+        "execution_no": execution_no or "-",
+        "sell_price": round(avg_sell_price if completed else incremental_price, 4),
+        "sell_qty": filled_qty if completed else incremental_qty,
+        "cumulative_sell_qty": filled_qty,
+        "remaining_sell_qty": runner_qty,
+        "requested_qty": requested_qty,
+        "runner_qty": runner_qty,
+        "main_lifecycle_exit_qty": incremental_qty,
+        "main_lifecycle_exit_price": round(incremental_price, 4),
+        # TP1 completion closes the partial order, not the owned position.
+        "main_lifecycle_broker_reconciled": False,
+        "main_lifecycle_reconciled_final_exit": False,
+        "sell_receipt_economics_complete": True,
+        "sell_receipt_quantity_contract_complete": True,
+        "sell_receipt_unit_fill_consistent": source_unit_contract_complete,
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "runtime_effect": True,
+        "exit_receipt_submission_custody_committed": bool(
+            (target_stock.get("_sell_submit_receipt_proof") or {}).get(
+                "custody_emitted"
+            )
+        ),
+        "exit_receipt_submission_custody_source_gap": bool(
+            target_stock.get("exit_receipt_submission_custody_source_gap")
+        ),
+        **partial_lifecycle_economics,
+        **_broker_execution_provenance_fields(target_stock),
+        **sell_execution_fields,
+    }
+    if completed:
+        event_fields.update(
+            {
+                "sold_qty": filled_qty,
+                "realized_profit_pct": f"{realized_profit_pct:+.2f}",
+                "realized_pnl_krw": realized_pnl_krw,
+                "exit_rule": "nxt_rising_missed_tp1_partial_runner",
+                "decision_authority": ("nxt_rising_missed_tp1_partial_runner_canary"),
+            }
+        )
+    else:
+        event_fields.update(
+            {
+                "fill_qty": incremental_qty,
+                "filled_qty": filled_qty,
+                "fill_price": round(incremental_price, 4),
+            }
+        )
+    return _build_sell_lifecycle_outbox_leg(
+        target_stock,
+        code=code,
+        target_id=target_id,
+        now=_sell_lifecycle_ordering_observed_at(target_stock, now),
+        stage=stage,
+        event_fields=event_fields,
+    )
+
+
+def _standard_sell_final_lifecycle_outbox_leg(
+    receipt_snapshot: dict[str, Any],
+    *,
+    target_id: int,
+    now: datetime,
+) -> dict[str, Any]:
+    code = str(receipt_snapshot.get("code") or "").strip()[:6]
+    final_leg_qty = _safe_int(receipt_snapshot.get("sell_execution_final_leg_qty"), 0)
+    final_leg_price = _safe_float(
+        receipt_snapshot.get("sell_execution_final_leg_price"), 0.0
+    )
+    final_leg_net_pnl_krw = _safe_float(
+        receipt_snapshot.get("sell_execution_final_leg_net_pnl_krw"), 0.0
+    )
+    completed_qty = _safe_int(receipt_snapshot.get("sell_execution_cumulative_qty"), 0)
+    cumulative_amount = _safe_int(
+        receipt_snapshot.get("sell_execution_cumulative_amount"), 0
+    )
+    weighted_sell_price = (
+        cumulative_amount / completed_qty if completed_qty > 0 else final_leg_price
+    )
+    buy_price = _safe_float(receipt_snapshot.get("buy_price"), 0.0)
+    realized_pnl_krw = _safe_float(
+        receipt_snapshot.get("sell_execution_cumulative_net_pnl_krw"), 0.0
+    )
+    profit_rate = (
+        realized_pnl_krw / (buy_price * completed_qty) * 100.0
+        if buy_price > 0 and completed_qty > 0
+        else 0.0
+    )
+    strategy = str(receipt_snapshot.get("strategy") or "KOSPI_ML")
+    position_tag = normalize_position_tag(
+        strategy,
+        receipt_snapshot.get("position_tag"),
+    )
+    receipt_reconciled = bool(
+        receipt_snapshot.get("sell_buy_price_reconciled_from_entry_receipt")
+    )
+    partial_qty = _safe_int(
+        receipt_snapshot.get("nxt_rising_missed_tp1_partial_filled_qty"), 0
+    )
+    partial_amount = _safe_int(
+        receipt_snapshot.get("nxt_rising_missed_tp1_partial_fill_amount"), 0
+    )
+    cumulative_includes_partial = bool(
+        partial_qty > 0
+        and completed_qty
+        == _safe_int(receipt_snapshot.get("sell_execution_expected_qty"), completed_qty)
+    )
+    partial_realized_pnl_krw = 0.0
+    if (
+        not cumulative_includes_partial
+        and partial_qty > 0
+        and partial_amount > 0
+        and buy_price > 0
+    ):
+        partial_realized_pnl_krw = calculate_net_realized_pnl(
+            buy_price,
+            partial_amount / partial_qty,
+            partial_qty,
+        )
+    runner_realized_pnl_krw = realized_pnl_krw - partial_realized_pnl_krw
+    final_leg_economics = (
+        _main_lifecycle_exit_economics_fields(
+            receipt_snapshot,
+            buy_price=buy_price,
+            sell_price=final_leg_price,
+            sell_qty=final_leg_qty,
+            realized_net_pnl_krw=final_leg_net_pnl_krw,
+        )
+        if receipt_snapshot.get("sell_execution_receipt_economics_complete") is True
+        else {}
+    )
+    event_fields = {
+        "order_no": receipt_snapshot.get("sell_execution_order_no") or "-",
+        "execution_no": (receipt_snapshot.get("sell_execution_execution_no") or "-"),
+        "sell_price": round(weighted_sell_price, 4),
+        "last_sell_fill_price": round(final_leg_price, 4),
+        "sell_qty": completed_qty,
+        "cumulative_sell_qty": completed_qty,
+        "remaining_sell_qty": 0,
+        "main_lifecycle_exit_qty": final_leg_qty,
+        "main_lifecycle_exit_price": round(final_leg_price, 4),
+        "main_lifecycle_broker_reconciled": True,
+        "main_lifecycle_reconciled_final_exit": True,
+        "sell_execution_receipt_economics_complete": bool(
+            receipt_snapshot.get("sell_execution_receipt_economics_complete")
+        ),
+        "sell_execution_receipt_quantity_contract_complete": bool(
+            receipt_snapshot.get("sell_execution_receipt_quantity_contract_complete")
+        ),
+        "sell_execution_receipt_unit_fill_consistent": bool(
+            receipt_snapshot.get("sell_execution_receipt_unit_fill_consistent")
+        ),
+        "position_weighted_sell_price": round(weighted_sell_price, 4),
+        "profit_rate": f"{profit_rate:+.2f}",
+        "exit_rule": receipt_snapshot.get("last_exit_rule") or "-",
+        "exit_decision_source": (
+            receipt_snapshot.get("last_exit_decision_source") or "MANUAL"
+        ),
+        "revive": bool(receipt_snapshot.get("revive")),
+        "strategy": strategy,
+        "position_tag": position_tag,
+        "buy_price": buy_price,
+        "buy_qty": completed_qty,
+        "sell_buy_price_reconciled_from_entry_receipt": receipt_reconciled,
+        "sell_buy_price_reconcile_db_price": (
+            receipt_snapshot.get("sell_buy_price_reconcile_db_price")
+            if receipt_reconciled
+            else "-"
+        ),
+        "sell_buy_price_reconcile_reason": (
+            receipt_snapshot.get("sell_buy_price_reconcile_reason")
+            if receipt_reconciled
+            else "not_reconciled"
+        ),
+        "realized_pnl_krw": realized_pnl_krw,
+        "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+        "partial_realized_pnl_krw": partial_realized_pnl_krw,
+        "runner_realized_pnl_krw": runner_realized_pnl_krw,
+        "partial_realized_qty": partial_qty,
+        "runner_realized_qty": completed_qty,
+        "smoothing_non_revive_post_sell_registered": bool(
+            receipt_snapshot.get("smoothing_non_revive_post_sell_registered")
+        ),
+        "smoothing_non_revive_post_sell_registration_status": (
+            receipt_snapshot.get("smoothing_non_revive_post_sell_registration_status")
+            or "not_applicable"
+        ),
+        "smoothing_non_revive_post_sell_active_arm_count": _safe_int(
+            receipt_snapshot.get("smoothing_non_revive_post_sell_active_arm_count"),
+            0,
+        ),
+        "smoothing_non_revive_post_sell_expires_at_epoch": receipt_snapshot.get(
+            "smoothing_non_revive_post_sell_expires_at_epoch"
+        ),
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "runtime_effect": True,
+        "exit_receipt_submission_custody_committed": bool(
+            (receipt_snapshot.get("_sell_submit_receipt_proof") or {}).get(
+                "custody_emitted"
+            )
+        ),
+        "exit_receipt_submission_custody_source_gap": bool(
+            receipt_snapshot.get("exit_receipt_submission_custody_source_gap")
+        ),
+        "metric_role": "execution_quality_real_only",
+        "decision_authority": "broker_sell_fill_observation_only",
+        "window_policy": "same_position_cycle_broker_fill",
+        "sample_floor": "1_confirmed_broker_sell_fill",
+        "primary_decision_metric": "confirmed_sell_fill_price_and_profit_rate",
+        "source_quality_gate": (
+            "broker_execution_receipt_with_real_submission_provenance"
+        ),
+        "allowed_runtime_apply": False,
+        "forbidden_uses": (
+            "threshold_mutation|provider_route_change|quantity_cap_release|"
+            "broker_guard_bypass|bot_restart"
+        ),
+        "no_scale_in_counterfactual_profit_pct": receipt_snapshot.get(
+            "no_scale_in_counterfactual_profit_pct", "-"
+        ),
+        "scale_in_incremental_realized_delta_pct": receipt_snapshot.get(
+            "scale_in_incremental_realized_delta_pct", "-"
+        ),
+        "pre_add_avg_price": receipt_snapshot.get("pre_add_avg_price", "-"),
+        "post_add_avg_price": receipt_snapshot.get("post_add_avg_price", "-"),
+        "pre_add_qty": receipt_snapshot.get("pre_add_qty", "-"),
+        "post_add_qty": receipt_snapshot.get("post_add_qty", "-"),
+        "opening_rotation_entry_time_bucket": receipt_snapshot.get(
+            "opening_rotation_entry_time_bucket", "-"
+        ),
+        "opening_rotation_window_version": receipt_snapshot.get(
+            "opening_rotation_window_version", "-"
+        ),
+        "opening_rotation_episode_id": receipt_snapshot.get(
+            "opening_rotation_episode_id", "-"
+        ),
+        "opening_rotation_episode_promotion_id": receipt_snapshot.get(
+            "opening_rotation_episode_promotion_id", "-"
+        ),
+        "opening_rotation_profile_id": receipt_snapshot.get(
+            "opening_rotation_profile_id", "-"
+        ),
+        "opening_rotation_policy_hash": receipt_snapshot.get(
+            "opening_rotation_policy_hash", "-"
+        ),
+        "opening_rotation_policy_schema_version": receipt_snapshot.get(
+            "opening_rotation_policy_schema_version", "-"
+        ),
+        "mae_pct": receipt_snapshot.get("mae_pct", "-"),
+        "mfe_pct": receipt_snapshot.get("mfe_pct", "-"),
+        **_broker_execution_provenance_fields(receipt_snapshot),
+        **_sell_execution_provenance_fields(receipt_snapshot),
+        **_trailing_continuation_receipt_fields(receipt_snapshot),
+        **final_leg_economics,
+        **scout_ai_execution_attribution_fields(
+            receipt_snapshot,
+            stage="sell_completed",
+            actual_order_submitted=True,
+        ),
+        **_sell_completion_contract_fields(position_tag),
+    }
+    return _build_sell_lifecycle_outbox_leg(
+        receipt_snapshot,
+        code=code,
+        target_id=target_id,
+        now=_sell_lifecycle_ordering_observed_at(receipt_snapshot, now),
+        stage="sell_completed",
+        event_fields=event_fields,
+    )
+
+
+def _standard_sell_partial_lifecycle_outbox_leg_valid(
+    leg: Any,
+) -> bool:
+    if not isinstance(leg, dict):
+        return False
+    expected_hash = str(leg.get("leg_sha256") or "")
+    payload = {key: value for key, value in leg.items() if key != "leg_sha256"}
+    canonical = json.dumps(
+        payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str
+    )
+    candidate_stock = leg.get("candidate_stock")
+    event_fields = leg.get("event_fields")
+    try:
+        observed_at = datetime.fromisoformat(str(leg.get("observed_at") or ""))
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        leg.get("schema") == _SELL_PARTIAL_LIFECYCLE_OUTBOX_SCHEMA
+        and leg.get("stage")
+        in {
+            "sell_partial_fill_progress",
+            "nxt_rising_missed_tp1_partial_fill_progress",
+            "nxt_rising_missed_tp1_partial_sell_completed",
+            "sell_completed",
+        }
+        and re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+        and hashlib.sha256(canonical.encode("utf-8")).hexdigest() == expected_hash
+        and _safe_int(leg.get("target_id"), 0) > 0
+        and re.fullmatch(r"[0-9]{6}", str(leg.get("code") or ""))
+        and observed_at.tzinfo is not None
+        and isinstance(candidate_stock, dict)
+        and isinstance(event_fields, dict)
+        and not any(
+            str(field_name) in _MAIN_LIFECYCLE_GENERATED_PIPELINE_FIELDS
+            for field_name in event_fields
+        )
+        and _safe_int(candidate_stock.get("id"), 0)
+        == _safe_int(leg.get("target_id"), 0)
+        and str(candidate_stock.get("code") or "").strip()[:6]
+        == str(leg.get("code") or "")
+    )
+
+
+def _emit_standard_sell_partial_lifecycle_outbox_leg(
+    leg: dict[str, Any],
+) -> bool:
+    if not _standard_sell_partial_lifecycle_outbox_leg_valid(leg):
+        return False
+    observed_at = datetime.fromisoformat(str(leg["observed_at"]))
+    event_payload = _log_holding_pipeline(
+        leg.get("name") or "-",
+        str(leg["code"]),
+        int(leg["target_id"]),
+        str(leg["stage"]),
+        candidate_stock=dict(leg["candidate_stock"]),
+        observed_at=observed_at,
+        observe_candidate_lifecycle=False,
+        **dict(leg["event_fields"]),
+    )
+    return bool(
+        isinstance(event_payload, dict)
+        and event_payload.get("structured_append_succeeded") is True
+        and event_payload.get("structured_append_status")
+        in {"raw_appended", "raw_appended_companion_failed"}
+        and _sell_lifecycle_outbox_event_contract_valid(
+            leg=leg,
+            event_payload=event_payload,
+        )
+    )
+
+
+def _sell_lifecycle_outbox_event_contract_valid(
+    *,
+    leg: dict[str, Any],
+    event_payload: dict[str, Any],
+) -> bool:
+    """Verify that a successful raw append contains the exact lifecycle row."""
+
+    fields = event_payload.get("fields")
+    event_fields = leg.get("event_fields")
+    if not isinstance(fields, dict) or not isinstance(event_fields, dict):
+        return False
+    attempt_id = str(fields.get("attempt_id") or "").strip()
+    if not attempt_id:
+        return False
+    try:
+        expected_lifecycle_id = mint_main_lifecycle_id(
+            record_id=leg.get("target_id"),
+            stock_code=leg.get("code"),
+            attempt_id=attempt_id,
+        )
+    except (TypeError, ValueError):
+        return False
+    try:
+        emitted_observed_at = datetime.fromisoformat(
+            str(fields.get("main_lifecycle_observed_at") or "")
+        )
+        leg_observed_at = datetime.fromisoformat(str(leg.get("observed_at") or ""))
+    except (TypeError, ValueError):
+        return False
+    expected_final = leg.get("stage") == "sell_completed"
+    expected_exit_qty = _safe_int(event_fields.get("main_lifecycle_exit_qty"), 0)
+    expected_exit_price = _safe_float(
+        event_fields.get("main_lifecycle_exit_price"), 0.0
+    )
+    # ``emit_pipeline_event`` persists every supplied field after applying the
+    # single canonical conversion ``str(value)``.  Ack only when *all* durable
+    # outbox fields survived that boundary unchanged.  Checking a short list
+    # of identity fields is insufficient: a raw append with altered cumulative
+    # quantity, remaining quantity, economics, venue, or native Kiwoom FIDs
+    # would otherwise release the journal and permanently lose exact custody.
+    exact_event_fields = all(
+        fields.get(str(field_name)) == str(field_value)
+        for field_name, field_value in event_fields.items()
+    )
+    provenance_state = str(
+        event_fields.get("broker_execution_provenance_state") or ""
+    ).strip()
+    provenance_identity_exact = True
+    if provenance_state in {"complete", "identity_complete_venue_unresolved"}:
+        expected_execution_identity = str(
+            event_fields.get("broker_execution_identity") or ""
+        ).strip()
+        expected_execution_no = str(
+            event_fields.get("broker_execution_no") or ""
+        ).strip()
+        provenance_identity_exact = bool(
+            expected_execution_identity
+            and expected_execution_no
+            and fields.get("broker_execution_identity") == expected_execution_identity
+            and fields.get("broker_execution_no") == expected_execution_no
+        )
+    return bool(
+        event_payload.get("pipeline") == "HOLDING_PIPELINE"
+        and event_payload.get("stage") == leg.get("stage")
+        and _safe_int(event_payload.get("record_id"), 0)
+        == _safe_int(leg.get("target_id"), 0)
+        and str(event_payload.get("stock_code") or "").strip()[:6]
+        == str(leg.get("code") or "")
+        and attempt_id
+        and fields.get("main_lifecycle_identity_schema") == PIPELINE_IDENTITY_SCHEMA
+        and fields.get("main_lifecycle_id") == expected_lifecycle_id
+        and fields.get("main_lifecycle_record_id")
+        == str(_safe_int(leg.get("target_id"), 0))
+        and fields.get("main_lifecycle_stock_code") == str(leg.get("code") or "")
+        and fields.get("main_lifecycle_source_pipeline") == "HOLDING_PIPELINE"
+        and fields.get("main_lifecycle_source_stage") == leg.get("stage")
+        and fields.get("main_lifecycle_stage") == "exit"
+        and emitted_observed_at == leg_observed_at
+        and exact_event_fields
+        and _safe_int(fields.get("main_lifecycle_exit_qty"), 0) == expected_exit_qty
+        and abs(
+            _safe_float(fields.get("main_lifecycle_exit_price"), 0.0)
+            - expected_exit_price
+        )
+        <= 1e-9
+        and (str(fields.get("main_lifecycle_broker_reconciled") or "").lower())
+        == str(expected_final).lower()
+        and (str(fields.get("main_lifecycle_reconciled_final_exit") or "").lower())
+        == str(expected_final).lower()
+        and provenance_identity_exact
+    )
+
+
+def replay_pending_sell_partial_lifecycle_outbox(
+    target_stock: dict[str, Any],
+) -> bool:
+    """Replay durable partial lifecycle legs with canonical idempotency."""
+
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    if not isinstance(state, dict):
+        return True
+    raw_pending = state.get(_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY)
+    if raw_pending in (None, {}):
+        return True
+    if not isinstance(raw_pending, dict):
+        _mark_sell_lifecycle_outbox_invalid(
+            target_stock,
+            code=str(target_stock.get("code") or "").strip()[:6],
+            reason="pending_legs_not_mapping_on_replay",
+        )
+        return False
+    code = str(target_stock.get("code") or "").strip()[:6]
+    pending = dict(raw_pending)
+
+    def replay_order(item: tuple[str, Any]) -> tuple[int, float, int, str]:
+        leg_key, leg = item
+        try:
+            observed_epoch = datetime.fromisoformat(
+                str((leg or {}).get("observed_at") or "")
+            ).timestamp()
+        except (TypeError, ValueError):
+            observed_epoch = float("inf")
+        fields = (leg or {}).get("event_fields")
+        fields = fields if isinstance(fields, dict) else {}
+        stage_priority = {
+            "sell_partial_fill_progress": 0,
+            "nxt_rising_missed_tp1_partial_fill_progress": 0,
+            "nxt_rising_missed_tp1_partial_sell_completed": 1,
+            "sell_completed": 2,
+        }.get(str((leg or {}).get("stage") or ""), 3)
+        return (
+            _safe_int(
+                fields.get("cumulative_sell_qty", fields.get("sell_qty")),
+                0,
+            ),
+            observed_epoch,
+            stage_priority,
+            leg_key,
+        )
+
+    for leg_key, leg in sorted(pending.items(), key=replay_order):
+        if (
+            not _standard_sell_partial_lifecycle_outbox_leg_valid(leg)
+            or str((leg or {}).get("leg_sha256") or "") != leg_key
+        ):
+            _mark_sell_lifecycle_outbox_invalid(
+                target_stock,
+                code=code,
+                reason="pending_leg_content_invalid",
+            )
+            log_error(f"[SELL_PARTIAL_LIFECYCLE_OUTBOX_INVALID] {code} key={leg_key}")
+            return False
+        if not _emit_standard_sell_partial_lifecycle_outbox_leg(leg):
+            target_stock["sell_partial_lifecycle_outbox_pending"] = True
+            log_error(f"[SELL_PARTIAL_LIFECYCLE_OUTBOX_PENDING] {code} key={leg_key}")
+            return False
+        pending.pop(leg_key, None)
+        state = dict(state)
+        if pending:
+            state[_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY] = dict(pending)
+        else:
+            state.pop(_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY, None)
+        target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = state
+        if not _persist_sell_receipt_recovery_or_interlock(
+            target_stock,
+            code=code,
+            reason="standard_partial_lifecycle_outbox_ack",
+        ):
+            # The durable journal still contains the pending leg. Restore the
+            # in-memory copy so any later retry remains byte-identical.
+            pending[leg_key] = leg
+            state[_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY] = dict(pending)
+            target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = state
+            return False
+    target_stock.pop("sell_partial_lifecycle_outbox_pending", None)
+    target_stock.pop("sell_partial_lifecycle_outbox_invalid", None)
+    return True
+
+
+def _queue_sell_lifecycle_outbox_leg(
+    target_stock: dict[str, Any],
+    *,
+    leg: dict[str, Any],
+    code: str,
+    reason: str,
+) -> bool:
+    if not _standard_sell_partial_lifecycle_outbox_leg_valid(leg):
+        target_stock["sell_partial_lifecycle_outbox_invalid"] = True
+        return False
+    raw_state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    if raw_state is not None and not isinstance(raw_state, dict):
+        _mark_sell_lifecycle_outbox_invalid(
+            target_stock,
+            code=code,
+            reason="receipt_state_not_mapping",
+        )
+        return False
+    state = raw_state
+    if not isinstance(state, dict):
+        state = {}
+    raw_pending = state.get(_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY)
+    if raw_pending is not None and not isinstance(raw_pending, dict):
+        _mark_sell_lifecycle_outbox_invalid(
+            target_stock,
+            code=code,
+            reason="pending_legs_not_mapping",
+        )
+        return False
+    pending = dict(raw_pending) if isinstance(raw_pending, dict) else {}
+    leg_key = str(leg["leg_sha256"])
+    if leg_key not in pending:
+        if len(pending) >= _SELL_PARTIAL_LIFECYCLE_OUTBOX_MAX_LEGS:
+            target_stock["sell_partial_lifecycle_outbox_invalid"] = True
+            return False
+        pending[leg_key] = leg
+    state = dict(state)
+    state[_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY] = pending
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = state
+    return _persist_sell_receipt_recovery_or_interlock(
+        target_stock,
+        code=str(code or "").strip()[:6],
+        reason=reason,
+    )
+
+
+def _ack_sell_lifecycle_outbox_leg(
+    target_stock: dict[str, Any],
+    *,
+    leg_key: str,
+    code: str,
+) -> bool:
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    if not isinstance(state, dict):
+        return False
+    raw_pending = state.get(_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY)
+    if raw_pending is None:
+        return True
+    if not isinstance(raw_pending, dict):
+        _mark_sell_lifecycle_outbox_invalid(
+            target_stock,
+            code=code,
+            reason="pending_legs_not_mapping_on_ack",
+        )
+        return False
+    if leg_key not in raw_pending:
+        return True
+    pending = dict(raw_pending)
+    leg = pending.pop(leg_key)
+    updated_state = dict(state)
+    if pending:
+        updated_state[_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY] = pending
+    else:
+        updated_state.pop(_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY, None)
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = updated_state
+    if _persist_sell_receipt_recovery_or_interlock(
+        target_stock,
+        code=str(code or "").strip()[:6],
+        reason="sell_lifecycle_outbox_existing_append_ack",
+    ):
+        return True
+    pending[leg_key] = leg
+    updated_state[_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY] = pending
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = updated_state
+    return False
+
+
+def _sell_lifecycle_outbox_pending(target_stock: dict[str, Any]) -> bool:
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    if state is None:
+        return False
+    if not isinstance(state, dict):
+        _mark_sell_lifecycle_outbox_invalid(
+            target_stock,
+            code=str(target_stock.get("code") or "").strip()[:6],
+            reason="receipt_state_not_mapping_on_pending_check",
+        )
+        return True
+    raw_pending = state.get(_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY)
+    if raw_pending is None:
+        return False
+    if not isinstance(raw_pending, dict):
+        _mark_sell_lifecycle_outbox_invalid(
+            target_stock,
+            code=str(target_stock.get("code") or "").strip()[:6],
+            reason="pending_legs_not_mapping_on_pending_check",
+        )
+        return True
+    return bool(raw_pending)
+
+
+def _mark_sell_lifecycle_outbox_invalid(
+    target_stock: dict[str, Any],
+    *,
+    code: str,
+    reason: str,
+) -> None:
+    target_stock.update(
+        {
+            "sell_partial_lifecycle_outbox_invalid": True,
+            "sell_receipt_durability_blocked": True,
+            "sell_receipt_durability_reason": f"lifecycle_outbox:{reason}",
+            "scale_in_locked": True,
+            "sell_partial_exit_recovery_required": True,
+            "sell_cancel_reconciliation_required": True,
+            "sell_cancel_reconciliation_source": f"lifecycle_outbox:{reason}",
+        }
+    )
+    log_error(
+        f"[SELL_LIFECYCLE_OUTBOX_INVALID] {str(code or '').strip()[:6] or '-'} "
+        f"reason={reason}"
+    )
+
+
+def _carry_pending_sell_lifecycle_outbox(
+    source_state: Any,
+    destination_state: dict[str, Any],
+) -> dict[str, Any]:
+    """Carry every unacknowledged leg across receipt-state replacement."""
+
+    if not isinstance(source_state, dict):
+        return destination_state
+    if _SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY not in source_state:
+        return destination_state
+    raw_pending = source_state.get(_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY)
+    destination_state[_SELL_PARTIAL_LIFECYCLE_OUTBOX_KEY] = (
+        dict(raw_pending) if isinstance(raw_pending, dict) else raw_pending
+    )
+    return destination_state
+
+
 def _log_standard_sell_partial_execution(
     target_stock: dict[str, Any],
     *,
@@ -1642,7 +3312,7 @@ def _log_standard_sell_partial_execution(
     now: datetime,
     receipt: dict[str, Any],
     buy_price: float,
-) -> None:
+) -> bool:
     reconciled_remaining_qty = max(0, int(receipt.get("remaining_qty") or 0))
     target_stock["buy_qty"] = reconciled_remaining_qty
     target_stock["sell_reconciled_remaining_qty"] = reconciled_remaining_qty
@@ -1658,52 +3328,22 @@ def _log_standard_sell_partial_execution(
             f"[SELL_PARTIAL_GUARD_PERSIST_FAILED] "
             f"{target_stock.get('name')}({code}) id={target_id}: {exc}"
         )
-    _persist_sell_receipt_recovery_or_interlock(
+    leg = _standard_sell_partial_lifecycle_outbox_leg(
         target_stock,
         code=code,
-        reason="standard_partial_sell_receipt",
+        target_id=target_id,
+        now=now,
+        receipt=receipt,
+        buy_price=buy_price,
     )
-    economics_fields: dict[str, Any] = {}
-    if receipt.get("economics_complete") is True:
-        economics_fields = _main_lifecycle_exit_economics_fields(
-            target_stock,
-            buy_price=buy_price,
-            sell_price=float(receipt["incremental_price"]),
-            sell_qty=int(receipt["incremental_qty"]),
-            realized_net_pnl_krw=float(receipt["incremental_net_pnl_krw"]),
-        )
-    _log_holding_pipeline(
-        target_stock.get("name"),
-        code,
-        target_id,
-        "sell_partial_fill_progress",
-        candidate_stock=target_stock,
-        observed_at=now,
-        observe_candidate_lifecycle=False,
-        order_no=receipt.get("order_no") or "-",
-        execution_no=receipt.get("execution_no") or "-",
-        sell_price=round(float(receipt["incremental_price"]), 4),
-        sell_qty=int(receipt["incremental_qty"]),
-        cumulative_sell_qty=int(receipt["cumulative_qty"]),
-        remaining_sell_qty=int(receipt["remaining_qty"]),
-        main_lifecycle_exit_qty=int(receipt["incremental_qty"]),
-        main_lifecycle_exit_price=round(float(receipt["incremental_price"]), 4),
-        main_lifecycle_broker_reconciled=False,
-        main_lifecycle_reconciled_final_exit=False,
-        sell_receipt_economics_complete=bool(receipt.get("economics_complete")),
-        sell_receipt_quantity_contract_complete=bool(
-            receipt.get("quantity_contract_complete")
-        ),
-        sell_receipt_unit_fill_consistent=bool(
-            receipt.get("unit_fill_consistent", True)
-        ),
-        sell_receipt_unit_qty_matches_delta=receipt.get("unit_qty_matches_delta"),
-        actual_order_submitted=True,
-        broker_order_forbidden=False,
-        runtime_effect=True,
-        **_broker_execution_provenance_fields(target_stock),
-        **economics_fields,
-    )
+    if not _queue_sell_lifecycle_outbox_leg(
+        target_stock,
+        leg=leg,
+        code=code,
+        reason="standard_partial_sell_receipt_with_lifecycle_outbox",
+    ):
+        return False
+    return replay_pending_sell_partial_lifecycle_outbox(target_stock)
 
 
 def _run_probe_fill_continuation(target_stock: dict[str, Any], code: str) -> None:
@@ -1738,6 +3378,73 @@ def _receipt_snapshot(
     return {key: target_stock.get(key) for key in keys}
 
 
+def _normalized_receipt_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Return the exact JSON-safe representation used by durable journals."""
+
+    return json.loads(json.dumps(snapshot, ensure_ascii=True, default=str))
+
+
+def _receipt_snapshot_sha256(snapshot: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        snapshot,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _replacement_terminal_reconciliation_generation_sha256(
+    state: dict[str, Any],
+) -> str:
+    """Bind one replacement terminal proof to immutable receipt custody.
+
+    Absence confirmation is obtained after a blocking broker query. This
+    generation deliberately excludes the later confirmation fields so a
+    caller can prove that the receipt/order/context observed before that query
+    is still the same generation after reacquiring the runtime state lock.
+    """
+
+    payload = {
+        "schema": _REPLACEMENT_TERMINAL_RECONCILIATION_GENERATION_SCHEMA,
+        "replacement_order_no": str(state.get("replacement_order_no") or "").strip(),
+        "position_qty": _safe_int(state.get("position_qty"), 0),
+        "aggregate_cumulative_qty": _safe_int(state.get("aggregate_cumulative_qty"), 0),
+        "remaining_qty": _safe_int(state.get("remaining_qty"), -1),
+        "replacement_terminal_receipt": _normalized_receipt_snapshot(
+            state.get("replacement_terminal_receipt")
+            if isinstance(state.get("replacement_terminal_receipt"), dict)
+            else {}
+        ),
+        "replacement_terminal_finalize_context": _normalized_receipt_snapshot(
+            state.get("replacement_terminal_finalize_context")
+            if isinstance(state.get("replacement_terminal_finalize_context"), dict)
+            else {}
+        ),
+        "replacement_terminal_provenance_snapshot_sha256": str(
+            state.get("replacement_terminal_provenance_snapshot_sha256") or ""
+        ).strip(),
+    }
+    return _receipt_snapshot_sha256(payload)
+
+
+def replacement_terminal_reconciliation_generation_valid(
+    state: dict[str, Any],
+) -> bool:
+    """Return whether a terminal-replacement journal is one exact generation."""
+
+    if not isinstance(state, dict):
+        return False
+    expected = str(
+        state.get(_REPLACEMENT_TERMINAL_RECONCILIATION_GENERATION_KEY) or ""
+    ).strip()
+    return bool(
+        re.fullmatch(r"[0-9a-f]{64}", expected)
+        and _replacement_terminal_reconciliation_generation_sha256(state) == expected
+    )
+
+
 def _broker_execution_provenance_fields(
     target_stock: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1756,6 +3463,1745 @@ def _sell_receipt_recovery_path(target_id: Any) -> Path | None:
     if normalized_id <= 0:
         return None
     return SELL_RECEIPT_RECOVERY_DIR / f"{normalized_id}.json"
+
+
+def _sell_pending_submit_path(target_id: Any) -> Path | None:
+    """Return the crash-custody path without sharing receipt-ledger unlink scope."""
+
+    try:
+        normalized_id = int(target_id)
+    except (TypeError, ValueError):
+        return None
+    if normalized_id <= 0:
+        return None
+    return SELL_RECEIPT_RECOVERY_DIR / "pending_submit" / f"{normalized_id}.json"
+
+
+def _acquire_pending_submit_process_lock() -> int:
+    """Serialize pending-journal replace/unlink across overlapping bot processes."""
+
+    pending_dir = SELL_RECEIPT_RECOVERY_DIR / "pending_submit"
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    if SELL_RECEIPT_RECOVERY_DIR.is_symlink() or pending_dir.is_symlink():
+        raise RuntimeError("sell_pending_submit_lock_directory_symlink_forbidden")
+    lock_path = pending_dir / ".custody.lock"
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    lock_fd = os.open(lock_path, flags, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    except Exception:
+        os.close(lock_fd)
+        raise
+    return lock_fd
+
+
+def _release_pending_submit_process_lock(lock_fd: int | None) -> None:
+    if lock_fd is None:
+        return
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
+
+
+def _sell_pending_submit_context_payload(
+    target_stock: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema": _SELL_PENDING_SUBMIT_CONTEXT_SCHEMA,
+        "generation": str(target_stock.get("sell_submit_generation") or "").strip(),
+        "target_id": _safe_int(target_stock.get("sell_submit_target_id"), 0),
+        "code": str(target_stock.get("sell_submit_code") or "").strip()[:6],
+        "requested_qty": _safe_int(target_stock.get("sell_submit_requested_qty"), 0),
+        "owner_position_qty": _safe_int(
+            target_stock.get("sell_submit_owner_position_qty"), 0
+        ),
+        "started_at": round(
+            _safe_float(target_stock.get("sell_submit_started_at"), 0.0), 6
+        ),
+        "intended_route": str(target_stock.get("sell_submit_intended_route") or "")
+        .strip()
+        .upper(),
+        "intended_effective_venue": str(
+            target_stock.get("sell_submit_intended_effective_venue") or ""
+        )
+        .strip()
+        .upper(),
+        "intended_session_bucket": str(
+            target_stock.get("sell_submit_intended_session_bucket") or ""
+        ).strip(),
+    }
+
+
+def _sell_pending_submit_context_sha256(target_stock: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            _sell_pending_submit_context_payload(target_stock),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def build_pending_sell_submit_context_fields(
+    target_stock: dict[str, Any],
+    *,
+    code: str,
+    requested_qty: int,
+    started_at: float,
+    intended_route: str,
+    intended_effective_venue: str,
+    intended_session_bucket: str,
+) -> dict[str, Any]:
+    """Build, but do not persist or submit, one immutable SELL generation."""
+
+    receipt_state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    receipt_position_qty = (
+        _safe_int(receipt_state.get("position_qty"), 0)
+        if isinstance(receipt_state, dict)
+        else 0
+    )
+    owner_position_qty = max(
+        receipt_position_qty,
+        _safe_int(target_stock.get("sell_submit_owner_position_qty"), 0),
+        _safe_int(target_stock.get("buy_qty"), 0),
+        _safe_int(target_stock.get("cum_buy_qty"), 0),
+    )
+    fields = {
+        "sell_submit_pending": True,
+        "sell_submit_requested_qty": int(requested_qty),
+        "sell_submit_owner_position_qty": owner_position_qty,
+        "sell_submit_started_at": float(started_at),
+        "sell_submit_generation": uuid4().hex,
+        "sell_submit_target_id": _safe_int(target_stock.get("id"), 0),
+        "sell_submit_code": str(code or "").strip()[:6],
+        "sell_submit_intended_route": str(intended_route or "").strip().upper(),
+        "sell_submit_intended_effective_venue": str(intended_effective_venue or "")
+        .strip()
+        .upper(),
+        "sell_submit_intended_session_bucket": str(
+            intended_session_bucket or ""
+        ).strip(),
+    }
+    candidate = dict(target_stock)
+    candidate.update(fields)
+    fields["sell_submit_context_sha256"] = _sell_pending_submit_context_sha256(
+        candidate
+    )
+    return fields
+
+
+def _validated_sell_pending_submit_context(
+    target_stock: dict[str, Any],
+    *,
+    now_epoch: float | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Validate one immutable pre-call context without granting submit authority."""
+
+    if not isinstance(target_stock, dict):
+        return None, "pending_submit_target_invalid"
+    context = _sell_pending_submit_context_payload(target_stock)
+    generation = str(context.get("generation") or "")
+    code = str(context.get("code") or "")
+    requested_qty = _safe_int(context.get("requested_qty"), 0)
+    owner_position_qty = _safe_int(context.get("owner_position_qty"), 0)
+    started_at = _safe_float(context.get("started_at"), 0.0)
+    route = str(context.get("intended_route") or "")
+    effective_venue = str(context.get("intended_effective_venue") or "")
+    session_bucket = str(context.get("intended_session_bucket") or "")
+    expected_hash = _sell_pending_submit_context_sha256(target_stock)
+    supplied_hash = str(target_stock.get("sell_submit_context_sha256") or "").strip()
+    current_epoch = time.time() if now_epoch is None else float(now_epoch)
+    if target_stock.get("sell_submit_pending") is not True:
+        return None, "pending_submit_flag_missing"
+    if re.fullmatch(r"[0-9a-f]{32}", generation) is None:
+        return None, "pending_submit_generation_invalid"
+    if _safe_int(context.get("target_id"), 0) <= 0:
+        return None, "pending_submit_target_id_invalid"
+    if re.fullmatch(r"[0-9]{6}", code) is None:
+        return None, "pending_submit_code_invalid"
+    if requested_qty <= 0 or owner_position_qty < requested_qty:
+        return None, "pending_submit_quantity_invalid"
+    if started_at <= 0 or started_at - current_epoch > 5.0:
+        return None, "pending_submit_started_at_invalid"
+    if route not in {"KRX", "NXT", "SOR"}:
+        return None, "pending_submit_route_invalid"
+    if effective_venue not in {
+        "KRX",
+        "NXT",
+        "PREMARKET_KRX_LIKE",
+        "UNKNOWN",
+    }:
+        return None, "pending_submit_effective_venue_invalid"
+    if not session_bucket or len(session_bucket) > 128:
+        return None, "pending_submit_session_invalid"
+    if re.fullmatch(r"[0-9a-f]{64}", supplied_hash) is None:
+        return None, "pending_submit_context_hash_invalid"
+    if supplied_hash != expected_hash:
+        return None, "pending_submit_context_hash_mismatch"
+    return context, "pending_submit_context_exact"
+
+
+def _validated_sell_cancel_intent(
+    intent: Any,
+    *,
+    target_id: Any,
+    code: str,
+    context: dict[str, Any],
+    context_sha256: str,
+    now_epoch: float | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Validate one fsynced cancel request boundary without inferring an ACK."""
+
+    if not isinstance(intent, dict):
+        return None, "sell_cancel_intent_invalid"
+    order_no = str(intent.get("order_no") or "").strip()
+    broker_route = str(intent.get("broker_route") or "").strip().upper()
+    requested_at = _safe_float(intent.get("requested_at_epoch"), 0.0)
+    started_at = _safe_float(context.get("started_at"), 0.0)
+    current_epoch = time.time() if now_epoch is None else float(now_epoch)
+    if intent.get("schema") != _SELL_CANCEL_INTENT_SCHEMA:
+        return None, "sell_cancel_intent_schema_mismatch"
+    if _safe_int(intent.get("target_id"), 0) != _safe_int(target_id, 0):
+        return None, "sell_cancel_intent_target_id_mismatch"
+    if str(intent.get("code") or "").strip()[:6] != str(code or "").strip()[:6]:
+        return None, "sell_cancel_intent_code_mismatch"
+    if re.fullmatch(r"[0-9]{7}", order_no) is None or int(order_no) <= 0:
+        return None, "sell_cancel_intent_order_no_invalid"
+    if broker_route != str(context.get("intended_route") or "").strip().upper():
+        return None, "sell_cancel_intent_route_mismatch"
+    if (
+        str(intent.get("generation") or "").strip()
+        != str(context.get("generation") or "").strip()
+    ):
+        return None, "sell_cancel_intent_generation_mismatch"
+    if (
+        str(intent.get("pending_context_sha256") or "").strip()
+        != str(context_sha256 or "").strip()
+    ):
+        return None, "sell_cancel_intent_context_hash_mismatch"
+    if (
+        requested_at <= 0
+        or requested_at + 1e-6 < started_at
+        or requested_at - current_epoch > 300.0
+    ):
+        return None, "sell_cancel_intent_timestamp_invalid"
+    return dict(intent), "sell_cancel_intent_exact"
+
+
+def _sell_cancel_intent_runtime_fields(intent: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "sell_cancel_intent_schema": intent.get("schema"),
+        "sell_cancel_intent_target_id": intent.get("target_id"),
+        "sell_cancel_intent_code": intent.get("code"),
+        "sell_cancel_intent_order_no": intent.get("order_no"),
+        "sell_cancel_intent_requested_at_epoch": intent.get("requested_at_epoch"),
+        "sell_cancel_intent_broker_route": intent.get("broker_route"),
+        "sell_cancel_intent_generation": intent.get("generation"),
+        "sell_cancel_intent_context_sha256": intent.get("pending_context_sha256"),
+    }
+
+
+def _validated_sell_cancel_ack(
+    ack: Any,
+    *,
+    target_id: Any,
+    code: str,
+    context: dict[str, Any],
+    context_sha256: str,
+    now_epoch: float | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Validate an acknowledged cancel against one immutable SELL generation."""
+
+    if not isinstance(ack, dict):
+        return None, "sell_cancel_ack_invalid"
+    normalized_order_no = str(ack.get("order_no") or "").strip()
+    cancel_order_no = str(ack.get("cancel_order_no") or "").strip()
+    base_original_order_no = str(ack.get("base_original_order_no") or "").strip()
+    cancelled_qty = _safe_int(ack.get("cancelled_qty"), 0)
+    broker_route = str(ack.get("broker_route") or "").strip().upper()
+    acknowledged_at = _safe_float(ack.get("acknowledged_at_epoch"), 0.0)
+    started_at = _safe_float(context.get("started_at"), 0.0)
+    current_epoch = time.time() if now_epoch is None else float(now_epoch)
+    if ack.get("schema") != _SELL_CANCEL_ACK_SCHEMA:
+        return None, "sell_cancel_ack_schema_mismatch"
+    if _safe_int(ack.get("target_id"), 0) != _safe_int(target_id, 0):
+        return None, "sell_cancel_ack_target_id_mismatch"
+    if str(ack.get("code") or "").strip()[:6] != str(code or "").strip()[:6]:
+        return None, "sell_cancel_ack_code_mismatch"
+    if (
+        re.fullmatch(r"[0-9]{7}", normalized_order_no) is None
+        or int(normalized_order_no) <= 0
+    ):
+        return None, "sell_cancel_ack_order_no_invalid"
+    if re.fullmatch(r"[0-9]{7}", cancel_order_no) is None or int(cancel_order_no) <= 0:
+        return None, "sell_cancel_ack_cancel_order_no_invalid"
+    if (
+        re.fullmatch(r"[0-9]{7}", base_original_order_no) is None
+        or int(base_original_order_no) <= 0
+    ):
+        return None, "sell_cancel_ack_base_original_order_no_invalid"
+    if cancelled_qty <= 0 or cancelled_qty > _safe_int(context.get("requested_qty"), 0):
+        return None, "sell_cancel_ack_cancelled_qty_invalid"
+    intended_route = str(context.get("intended_route") or "").strip().upper()
+    if broker_route not in {"KRX", "NXT", "SOR"} or not (
+        broker_route == intended_route
+        or (intended_route == "SOR" and broker_route in {"KRX", "NXT", "SOR"})
+    ):
+        return None, "sell_cancel_ack_broker_route_mismatch"
+    if (
+        str(ack.get("generation") or "").strip()
+        != str(context.get("generation") or "").strip()
+    ):
+        return None, "sell_cancel_ack_generation_mismatch"
+    if (
+        str(ack.get("pending_context_sha256") or "").strip()
+        != str(context_sha256 or "").strip()
+    ):
+        return None, "sell_cancel_ack_context_hash_mismatch"
+    if (
+        acknowledged_at <= 0
+        or acknowledged_at + 1e-6 < started_at
+        or acknowledged_at - current_epoch > 300.0
+    ):
+        return None, "sell_cancel_ack_timestamp_invalid"
+    return dict(ack), "sell_cancel_ack_exact"
+
+
+def _sell_cancel_ack_runtime_fields(ack: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "sell_cancel_ack_schema": ack.get("schema"),
+        "sell_cancel_ack_target_id": ack.get("target_id"),
+        "sell_cancel_ack_code": ack.get("code"),
+        "sell_cancel_ack_order_no": ack.get("order_no"),
+        "sell_cancel_ack_cancel_order_no": ack.get("cancel_order_no"),
+        "sell_cancel_ack_base_original_order_no": ack.get("base_original_order_no"),
+        "sell_cancel_ack_cancelled_qty": ack.get("cancelled_qty"),
+        "sell_cancel_ack_broker_route": ack.get("broker_route"),
+        "sell_cancel_acknowledged_at_epoch": ack.get("acknowledged_at_epoch"),
+        "sell_cancel_ack_generation": ack.get("generation"),
+        "sell_cancel_ack_context_sha256": ack.get("pending_context_sha256"),
+    }
+
+
+def _validated_sell_terminal_outcome(
+    outcome: Any,
+    *,
+    target_id: Any,
+    code: str,
+    context: dict[str, Any],
+    context_sha256: str,
+    now_epoch: float | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    if not isinstance(outcome, dict):
+        return None, "sell_terminal_outcome_invalid"
+    recorded_at = _safe_float(outcome.get("recorded_at_epoch"), 0.0)
+    started_at = _safe_float(context.get("started_at"), 0.0)
+    current_epoch = time.time() if now_epoch is None else float(now_epoch)
+    if outcome.get("schema") != _SELL_TERMINAL_OUTCOME_SCHEMA:
+        return None, "sell_terminal_outcome_schema_mismatch"
+    outcome_kind = str(outcome.get("kind") or "")
+    if outcome_kind not in {
+        "definitive_reject_no_broker_order",
+        "cancel_ack_terminal_absence_reconciled",
+        "cancel_intent_terminal_absence_reconciled",
+    }:
+        return None, "sell_terminal_outcome_kind_invalid"
+    if _safe_int(outcome.get("target_id"), 0) != _safe_int(target_id, 0):
+        return None, "sell_terminal_outcome_target_id_mismatch"
+    if str(outcome.get("code") or "").strip()[:6] != str(code or "").strip()[:6]:
+        return None, "sell_terminal_outcome_code_mismatch"
+    if (
+        str(outcome.get("generation") or "").strip()
+        != str(context.get("generation") or "").strip()
+    ):
+        return None, "sell_terminal_outcome_generation_mismatch"
+    if (
+        str(outcome.get("pending_context_sha256") or "").strip()
+        != str(context_sha256 or "").strip()
+    ):
+        return None, "sell_terminal_outcome_context_hash_mismatch"
+    if (
+        recorded_at <= 0
+        or recorded_at + 1e-6 < started_at
+        or recorded_at - current_epoch > 300.0
+    ):
+        return None, "sell_terminal_outcome_timestamp_invalid"
+    if outcome_kind in {
+        "cancel_ack_terminal_absence_reconciled",
+        "cancel_intent_terminal_absence_reconciled",
+    }:
+        order_no = str(outcome.get("order_no") or "").strip()
+        evidence_order_no = str(
+            outcome.get("ack_order_no")
+            if outcome_kind == "cancel_ack_terminal_absence_reconciled"
+            else outcome.get("intent_order_no") or ""
+        ).strip()
+        broker_remaining_qty = _safe_int(outcome.get("broker_remaining_qty"), -1)
+        reconciliation_source = str(outcome.get("reconciliation_source") or "").strip()
+        receipt_state_sha256 = str(outcome.get("receipt_state_sha256") or "").strip()
+        if (
+            re.fullmatch(r"[0-9]{7}", order_no) is None
+            or int(order_no) <= 0
+            or order_no != evidence_order_no
+            or re.fullmatch(r"[0-9]{7}", evidence_order_no) is None
+            or broker_remaining_qty < 0
+            or broker_remaining_qty > _safe_int(context.get("owner_position_qty"), 0)
+            or reconciliation_source != "kt00018_position_found"
+            or re.fullmatch(r"[0-9a-f]{64}", receipt_state_sha256) is None
+        ):
+            return None, "sell_terminal_outcome_cancel_contract_invalid"
+    return dict(outcome), "sell_terminal_outcome_exact"
+
+
+def _sell_terminal_outcome_runtime_fields(
+    outcome: dict[str, Any],
+) -> dict[str, Any]:
+    fields = {
+        "sell_submit_terminal_outcome_schema": outcome.get("schema"),
+        "sell_submit_terminal_outcome_kind": outcome.get("kind"),
+        "sell_submit_terminal_outcome_target_id": outcome.get("target_id"),
+        "sell_submit_terminal_outcome_code": outcome.get("code"),
+        "sell_submit_terminal_outcome_recorded_at_epoch": outcome.get(
+            "recorded_at_epoch"
+        ),
+        "sell_submit_terminal_outcome_generation": outcome.get("generation"),
+        "sell_submit_terminal_outcome_context_sha256": outcome.get(
+            "pending_context_sha256"
+        ),
+    }
+    if outcome.get("kind") in {
+        "cancel_ack_terminal_absence_reconciled",
+        "cancel_intent_terminal_absence_reconciled",
+    }:
+        fields.update(
+            {
+                "sell_submit_terminal_outcome_order_no": outcome.get("order_no"),
+                "sell_submit_terminal_outcome_broker_remaining_qty": outcome.get(
+                    "broker_remaining_qty"
+                ),
+                "sell_submit_terminal_outcome_reconciliation_source": outcome.get(
+                    "reconciliation_source"
+                ),
+                "sell_submit_terminal_outcome_receipt_state_sha256": outcome.get(
+                    "receipt_state_sha256"
+                ),
+                "sell_reconciled_remaining_qty": outcome.get("broker_remaining_qty"),
+            }
+        )
+    return fields
+
+
+def persist_pending_sell_submit_custody(target_stock: dict[str, Any]) -> bool:
+    """Fsync one exact SELL pre-call generation before broker transport starts."""
+
+    context, reason = _validated_sell_pending_submit_context(target_stock)
+    target_id = _safe_int(target_stock.get("id"), 0)
+    path = _sell_pending_submit_path(target_id)
+    position_qty = _safe_int(target_stock.get("sell_submit_owner_position_qty"), 0)
+    if (
+        context is None
+        or path is None
+        or target_id != _safe_int(context.get("target_id"), 0)
+        or str(target_stock.get("code") or "").strip()[:6]
+        != str(context.get("code") or "")
+        or position_qty <= 0
+        or _safe_int(context.get("requested_qty"), 0) > position_qty
+    ):
+        log_error(
+            "[SELL_PENDING_SUBMIT_PERSIST_BLOCKED] "
+            f"id={target_id or '-'} code={target_stock.get('code') or '-'} "
+            f"reason={reason}"
+        )
+        return False
+    payload = {
+        "schema": _SELL_PENDING_SUBMIT_SCHEMA,
+        "target_id": target_id,
+        "code": str(context["code"]),
+        "position_qty": position_qty,
+        "updated_at_epoch": time.time(),
+        "updated_at_kst": datetime.now(_KST).isoformat(),
+        "pending_context": context,
+        "pending_context_sha256": str(
+            target_stock.get("sell_submit_context_sha256") or ""
+        ),
+    }
+    canonical = json.dumps(
+        payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    )
+    if len(canonical.encode("utf-8")) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+        return False
+    document = {
+        "payload": payload,
+        "payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+    encoded = json.dumps(
+        document, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    temp_path = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    process_lock_fd: int | None = None
+    try:
+        process_lock_fd = _acquire_pending_submit_process_lock()
+        with RECEIPT_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if (
+                SELL_RECEIPT_RECOVERY_DIR.is_symlink()
+                or path.parent.is_symlink()
+                or path.is_symlink()
+            ):
+                raise RuntimeError("sell_pending_submit_symlink_forbidden")
+            if path.exists():
+                existing_raw = path.read_bytes()
+                if len(existing_raw) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+                    raise RuntimeError("sell_pending_submit_existing_size_invalid")
+                existing_document = json.loads(existing_raw.decode("utf-8"))
+                existing_payload = (
+                    existing_document.get("payload")
+                    if isinstance(existing_document, dict)
+                    else None
+                )
+                existing_context = (
+                    existing_payload.get("pending_context")
+                    if isinstance(existing_payload, dict)
+                    else None
+                )
+                existing_generation = (
+                    str(existing_context.get("generation") or "").strip()
+                    if isinstance(existing_context, dict)
+                    else ""
+                )
+                if existing_generation != str(context.get("generation") or ""):
+                    raise RuntimeError("sell_pending_submit_generation_conflict")
+                existing_canonical = json.dumps(
+                    existing_payload,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if (
+                    not isinstance(existing_payload, dict)
+                    or existing_document.get("payload_sha256")
+                    != hashlib.sha256(existing_canonical.encode("utf-8")).hexdigest()
+                    or existing_payload.get("pending_context_sha256")
+                    != payload.get("pending_context_sha256")
+                    or existing_payload.get("target_id") != payload.get("target_id")
+                    or existing_payload.get("code") != payload.get("code")
+                    or existing_payload.get("position_qty")
+                    != payload.get("position_qty")
+                    or existing_context != context
+                ):
+                    raise RuntimeError("sell_pending_submit_existing_contract_invalid")
+                raise RuntimeError(
+                    "sell_pending_submit_existing_generation_reconciliation_only"
+                )
+            with temp_path.open("xb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, path)
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        return True
+    except Exception as exc:
+        log_error(
+            "[SELL_PENDING_SUBMIT_PERSIST_FAILED] "
+            f"id={target_id} code={context.get('code')}: {exc}"
+        )
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
+    finally:
+        _release_pending_submit_process_lock(process_lock_fd)
+
+
+def persist_pending_sell_cancel_intent_custody(
+    target_stock: dict[str, Any],
+    *,
+    order_no: str,
+    broker_route: str,
+    requested_at_epoch: float | None = None,
+) -> bool:
+    """Fsync an exact cancel intent before the first kt10003 instruction."""
+
+    context, reason = _validated_sell_pending_submit_context(target_stock)
+    target_id = _safe_int(target_stock.get("id"), 0)
+    path = _sell_pending_submit_path(target_id)
+    code = str(target_stock.get("code") or "").strip()[:6]
+    normalized_order_no = str(order_no or "").strip()
+    normalized_route = str(broker_route or "").strip().upper()
+    context_sha256 = str(target_stock.get("sell_submit_context_sha256") or "").strip()
+    requested_at = (
+        time.time() if requested_at_epoch is None else float(requested_at_epoch)
+    )
+    intent = {
+        "schema": _SELL_CANCEL_INTENT_SCHEMA,
+        "target_id": target_id,
+        "code": code,
+        "order_no": normalized_order_no,
+        "requested_at_epoch": requested_at,
+        "broker_route": normalized_route,
+        "generation": str(target_stock.get("sell_submit_generation") or "").strip(),
+        "pending_context_sha256": context_sha256,
+    }
+    validated_intent, intent_reason = _validated_sell_cancel_intent(
+        intent,
+        target_id=target_id,
+        code=code,
+        context=context or {},
+        context_sha256=context_sha256,
+        now_epoch=requested_at,
+    )
+    current_order_no = str(
+        target_stock.get("sell_odno") or target_stock.get("sell_ord_no") or ""
+    ).strip()
+    if (
+        context is None
+        or validated_intent is None
+        or path is None
+        or str(target_stock.get("status") or "").strip().upper() != "SELL_ORDERED"
+        or current_order_no != normalized_order_no
+    ):
+        log_error(
+            "[SELL_CANCEL_INTENT_PERSIST_BLOCKED] "
+            f"id={target_id or '-'} code={code or '-'} "
+            f"reason={reason if context is None else intent_reason}"
+        )
+        return False
+
+    process_lock_fd: int | None = None
+    temp_path = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.cancel-intent.tmp"
+    )
+    persisted_intent = validated_intent
+    try:
+        process_lock_fd = _acquire_pending_submit_process_lock()
+        with RECEIPT_LOCK:
+            if (
+                not path.exists()
+                or not path.is_file()
+                or path.is_symlink()
+                or path.parent.is_symlink()
+            ):
+                raise RuntimeError("sell_cancel_intent_pending_journal_missing")
+            document = json.loads(path.read_text(encoding="utf-8"))
+            payload = document.get("payload") if isinstance(document, dict) else None
+            if not isinstance(payload, dict):
+                raise RuntimeError("sell_cancel_intent_pending_payload_invalid")
+            canonical = json.dumps(
+                payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+            )
+            journal_context = payload.get("pending_context")
+            if (
+                document.get("payload_sha256")
+                != hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                or payload.get("schema") != _SELL_PENDING_SUBMIT_SCHEMA
+                or _safe_int(payload.get("target_id"), 0) != target_id
+                or str(payload.get("code") or "") != code
+                or _safe_int(payload.get("position_qty"), 0)
+                != _safe_int(target_stock.get("sell_submit_owner_position_qty"), 0)
+                or payload.get("pending_context_sha256") != context_sha256
+                or journal_context != context
+            ):
+                raise RuntimeError("sell_cancel_intent_pending_contract_mismatch")
+            existing_intent = payload.get("cancel_intent")
+            if existing_intent is not None:
+                validated_existing, existing_reason = _validated_sell_cancel_intent(
+                    existing_intent,
+                    target_id=target_id,
+                    code=code,
+                    context=context,
+                    context_sha256=context_sha256,
+                )
+                if (
+                    validated_existing is None
+                    or str(validated_existing.get("order_no") or "")
+                    != normalized_order_no
+                    or str(validated_existing.get("broker_route") or "")
+                    != normalized_route
+                ):
+                    raise RuntimeError(
+                        "sell_cancel_intent_existing_contract_invalid:"
+                        f"{existing_reason}"
+                    )
+                persisted_intent = validated_existing
+            else:
+                payload = dict(payload)
+                payload.update(
+                    {
+                        "cancel_intent": validated_intent,
+                        "updated_at_epoch": time.time(),
+                        "updated_at_kst": datetime.now(_KST).isoformat(),
+                    }
+                )
+                canonical = json.dumps(
+                    payload,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                encoded = json.dumps(
+                    {
+                        "payload": payload,
+                        "payload_sha256": hashlib.sha256(
+                            canonical.encode("utf-8")
+                        ).hexdigest(),
+                    },
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                if len(encoded) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+                    raise RuntimeError("sell_cancel_intent_journal_size_limit")
+                with temp_path.open("xb") as handle:
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp_path, path)
+                directory_fd = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+        if not (
+            str(target_stock.get("sell_submit_generation") or "").strip()
+            == str(context.get("generation") or "").strip()
+            and str(target_stock.get("sell_submit_context_sha256") or "").strip()
+            == context_sha256
+            and str(
+                target_stock.get("sell_odno") or target_stock.get("sell_ord_no") or ""
+            ).strip()
+            == normalized_order_no
+        ):
+            return False
+        target_stock.update(_sell_cancel_intent_runtime_fields(persisted_intent))
+        return True
+    except Exception as exc:
+        log_error(
+            "[SELL_CANCEL_INTENT_PERSIST_FAILED] "
+            f"id={target_id or '-'} code={code or '-'} "
+            f"order_no={normalized_order_no or '-'}: {exc}"
+        )
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
+    finally:
+        _release_pending_submit_process_lock(process_lock_fd)
+
+
+def persist_pending_sell_cancel_ack_custody(
+    target_stock: dict[str, Any],
+    *,
+    order_no: str,
+    cancel_response: dict[str, Any] | None = None,
+    acknowledged_at_epoch: float | None = None,
+) -> bool:
+    """Fsync one exact cancel ACK without releasing the pending generation."""
+
+    context, reason = _validated_sell_pending_submit_context(target_stock)
+    target_id = _safe_int(target_stock.get("id"), 0)
+    path = _sell_pending_submit_path(target_id)
+    normalized_code = str(target_stock.get("code") or "").strip()[:6]
+    normalized_order_no = str(order_no or "").strip()
+    current_order_no = str(
+        target_stock.get("sell_odno") or target_stock.get("sell_ord_no") or ""
+    ).strip()
+    context_sha256 = str(target_stock.get("sell_submit_context_sha256") or "").strip()
+    ack_epoch = (
+        time.time() if acknowledged_at_epoch is None else float(acknowledged_at_epoch)
+    )
+    response = cancel_response if isinstance(cancel_response, dict) else {}
+    raw_return_code = response.get("return_code", response.get("rt_cd"))
+    return_code = (
+        ""
+        if raw_return_code is None or isinstance(raw_return_code, bool)
+        else str(raw_return_code).strip()
+    )
+    cancel_order_no = str(response.get("ord_no") or "").strip()
+    base_original_order_no = str(response.get("base_orig_ord_no") or "").strip()
+    cancelled_qty_raw = response.get("cncl_qty")
+    cancelled_qty_text = str(
+        "" if cancelled_qty_raw is None else cancelled_qty_raw
+    ).strip()
+    cancelled_qty = (
+        int(cancelled_qty_text.replace(",", ""))
+        if re.fullmatch(r"[+]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)", cancelled_qty_text)
+        else 0
+    )
+    broker_route_attempted = response.get("broker_route_attempted") is True
+    broker_route = (
+        str(
+            response.get("effective_dmst_stex_tp") or response.get("broker_route") or ""
+        )
+        .strip()
+        .upper()
+    )
+    request_orig_order_no = str(
+        response.get("cancel_request_orig_ord_no") or ""
+    ).strip()
+    request_code = str(response.get("cancel_request_code") or "").strip()[:6]
+    request_route = str(response.get("cancel_request_route") or "").strip().upper()
+    ack = {
+        "schema": _SELL_CANCEL_ACK_SCHEMA,
+        "target_id": target_id,
+        "code": normalized_code,
+        "order_no": normalized_order_no,
+        "cancel_order_no": cancel_order_no,
+        "base_original_order_no": base_original_order_no,
+        "cancelled_qty": cancelled_qty,
+        "broker_route": broker_route,
+        "acknowledged_at_epoch": ack_epoch,
+        "generation": str(target_stock.get("sell_submit_generation") or "").strip(),
+        "pending_context_sha256": context_sha256,
+    }
+    validated_ack, ack_reason = _validated_sell_cancel_ack(
+        ack,
+        target_id=target_id,
+        code=normalized_code,
+        context=context or {},
+        context_sha256=context_sha256,
+        now_epoch=ack_epoch,
+    )
+    if (
+        context is None
+        or validated_ack is None
+        or path is None
+        or return_code != "0"
+        or not broker_route_attempted
+        or response.get("cancel_request_bound") is not True
+        or response.get("cancel_request_api_id") != "kt10003"
+        or request_orig_order_no != normalized_order_no
+        or request_code != normalized_code
+        or str(response.get("cancel_request_qty") or "").strip() != "0"
+        or request_route != broker_route
+        or str(target_stock.get("status") or "").strip().upper() != "SELL_ORDERED"
+        or current_order_no != normalized_order_no
+    ):
+        log_error(
+            "[SELL_CANCEL_ACK_PERSIST_BLOCKED] "
+            f"id={target_id or '-'} code={normalized_code or '-'} "
+            f"reason={reason if context is None else ack_reason}"
+        )
+        return False
+
+    process_lock_fd: int | None = None
+    temp_path = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.cancel.tmp"
+    )
+    persisted_ack = validated_ack
+    try:
+        process_lock_fd = _acquire_pending_submit_process_lock()
+        with RECEIPT_LOCK:
+            if (
+                not path.exists()
+                or not path.is_file()
+                or path.is_symlink()
+                or path.parent.is_symlink()
+            ):
+                raise RuntimeError("sell_cancel_ack_pending_journal_missing")
+            raw = path.read_bytes()
+            if len(raw) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+                raise RuntimeError("sell_cancel_ack_pending_journal_size_invalid")
+            document = json.loads(raw.decode("utf-8"))
+            payload = document.get("payload") if isinstance(document, dict) else None
+            if not isinstance(payload, dict):
+                raise RuntimeError("sell_cancel_ack_pending_payload_invalid")
+            canonical = json.dumps(
+                payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            journal_context = payload.get("pending_context")
+            if (
+                document.get("payload_sha256")
+                != hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                or payload.get("schema") != _SELL_PENDING_SUBMIT_SCHEMA
+                or _safe_int(payload.get("target_id"), 0) != target_id
+                or str(payload.get("code") or "") != normalized_code
+                or _safe_int(payload.get("position_qty"), 0)
+                != _safe_int(target_stock.get("sell_submit_owner_position_qty"), 0)
+                or payload.get("pending_context_sha256") != context_sha256
+                or journal_context != context
+            ):
+                raise RuntimeError("sell_cancel_ack_pending_contract_mismatch")
+            journal_intent, journal_intent_reason = _validated_sell_cancel_intent(
+                payload.get("cancel_intent"),
+                target_id=target_id,
+                code=normalized_code,
+                context=context,
+                context_sha256=context_sha256,
+            )
+            if (
+                journal_intent is None
+                or str(journal_intent.get("order_no") or "") != normalized_order_no
+            ):
+                raise RuntimeError(
+                    "sell_cancel_ack_intent_contract_invalid:"
+                    f"{journal_intent_reason}"
+                )
+            existing_ack = payload.get("cancel_ack")
+            if existing_ack is not None:
+                validated_existing, existing_reason = _validated_sell_cancel_ack(
+                    existing_ack,
+                    target_id=target_id,
+                    code=normalized_code,
+                    context=context,
+                    context_sha256=context_sha256,
+                )
+                if (
+                    validated_existing is None
+                    or str(validated_existing.get("order_no") or "")
+                    != normalized_order_no
+                ):
+                    raise RuntimeError(
+                        f"sell_cancel_ack_existing_contract_invalid:{existing_reason}"
+                    )
+                persisted_ack = validated_existing
+            else:
+                payload = dict(payload)
+                payload.update(
+                    {
+                        "cancel_ack": validated_ack,
+                        "updated_at_epoch": time.time(),
+                        "updated_at_kst": datetime.now(_KST).isoformat(),
+                    }
+                )
+                canonical = json.dumps(
+                    payload,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if len(canonical.encode("utf-8")) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+                    raise RuntimeError("sell_cancel_ack_pending_journal_size_limit")
+                encoded = json.dumps(
+                    {
+                        "payload": payload,
+                        "payload_sha256": hashlib.sha256(
+                            canonical.encode("utf-8")
+                        ).hexdigest(),
+                    },
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                with temp_path.open("xb") as handle:
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp_path, path)
+                directory_fd = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+        if not (
+            str(target_stock.get("sell_submit_generation") or "").strip()
+            == str(context.get("generation") or "").strip()
+            and str(target_stock.get("sell_submit_context_sha256") or "").strip()
+            == context_sha256
+            and str(
+                target_stock.get("sell_odno") or target_stock.get("sell_ord_no") or ""
+            ).strip()
+            == normalized_order_no
+        ):
+            return False
+        target_stock.update(_sell_cancel_ack_runtime_fields(persisted_ack))
+        return True
+    except Exception as exc:
+        log_error(
+            "[SELL_CANCEL_ACK_PERSIST_FAILED] "
+            f"id={target_id or '-'} code={normalized_code or '-'} "
+            f"order_no={normalized_order_no or '-'}: {exc}"
+        )
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
+    finally:
+        _release_pending_submit_process_lock(process_lock_fd)
+
+
+def persist_pending_sell_definitive_reject_outcome(
+    target_stock: dict[str, Any],
+    *,
+    generation: str,
+    recorded_at_epoch: float | None = None,
+    outcome_kind: str = "definitive_reject_no_broker_order",
+    order_no: str = "",
+    broker_remaining_qty: int | None = None,
+    reconciliation_source: str = "",
+) -> bool:
+    """Fsync a no-order terminal response before DB rollback can commit."""
+
+    context, reason = _validated_sell_pending_submit_context(target_stock)
+    target_id = _safe_int(target_stock.get("id"), 0)
+    path = _sell_pending_submit_path(target_id)
+    normalized_code = str(target_stock.get("code") or "").strip()[:6]
+    normalized_generation = str(generation or "").strip()
+    context_sha256 = str(target_stock.get("sell_submit_context_sha256") or "").strip()
+    outcome_epoch = (
+        time.time() if recorded_at_epoch is None else float(recorded_at_epoch)
+    )
+    outcome = {
+        "schema": _SELL_TERMINAL_OUTCOME_SCHEMA,
+        "kind": str(outcome_kind or ""),
+        "target_id": target_id,
+        "code": normalized_code,
+        "recorded_at_epoch": outcome_epoch,
+        "generation": normalized_generation,
+        "pending_context_sha256": context_sha256,
+    }
+    if outcome_kind in {
+        "cancel_ack_terminal_absence_reconciled",
+        "cancel_intent_terminal_absence_reconciled",
+    }:
+        outcome.update(
+            {
+                "order_no": str(order_no or "").strip(),
+                "broker_remaining_qty": _safe_int(broker_remaining_qty, -1),
+                "reconciliation_source": str(reconciliation_source or "").strip(),
+                "receipt_state_sha256": _receipt_snapshot_sha256(
+                    target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+                    if isinstance(
+                        target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY), dict
+                    )
+                    else {}
+                ),
+            }
+        )
+        if outcome_kind == "cancel_ack_terminal_absence_reconciled":
+            outcome["ack_order_no"] = str(
+                target_stock.get("sell_cancel_ack_order_no") or ""
+            ).strip()
+        else:
+            outcome["intent_order_no"] = str(
+                target_stock.get("sell_cancel_intent_order_no") or ""
+            ).strip()
+    validated_outcome, outcome_reason = _validated_sell_terminal_outcome(
+        outcome,
+        target_id=target_id,
+        code=normalized_code,
+        context=context or {},
+        context_sha256=context_sha256,
+        now_epoch=outcome_epoch,
+    )
+    if (
+        context is None
+        or validated_outcome is None
+        or path is None
+        or normalized_generation != str(context.get("generation") or "").strip()
+        or str(target_stock.get("status") or "").strip().upper() != "SELL_ORDERED"
+    ):
+        log_error(
+            "[SELL_TERMINAL_OUTCOME_PERSIST_BLOCKED] "
+            f"id={target_id or '-'} code={normalized_code or '-'} "
+            f"reason={reason if context is None else outcome_reason}"
+        )
+        return False
+
+    process_lock_fd: int | None = None
+    temp_path = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.terminal.tmp"
+    )
+    persisted_outcome = validated_outcome
+    try:
+        process_lock_fd = _acquire_pending_submit_process_lock()
+        with RECEIPT_LOCK:
+            if (
+                not path.exists()
+                or not path.is_file()
+                or path.is_symlink()
+                or path.parent.is_symlink()
+            ):
+                raise RuntimeError("sell_terminal_outcome_pending_journal_missing")
+            raw = path.read_bytes()
+            if len(raw) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+                raise RuntimeError("sell_terminal_outcome_journal_size_invalid")
+            document = json.loads(raw.decode("utf-8"))
+            payload = document.get("payload") if isinstance(document, dict) else None
+            if not isinstance(payload, dict):
+                raise RuntimeError("sell_terminal_outcome_payload_invalid")
+            canonical = json.dumps(
+                payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            journal_context = payload.get("pending_context")
+            if (
+                document.get("payload_sha256")
+                != hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                or payload.get("schema") != _SELL_PENDING_SUBMIT_SCHEMA
+                or _safe_int(payload.get("target_id"), 0) != target_id
+                or str(payload.get("code") or "") != normalized_code
+                or _safe_int(payload.get("position_qty"), 0)
+                != _safe_int(target_stock.get("sell_submit_owner_position_qty"), 0)
+                or payload.get("pending_context_sha256") != context_sha256
+                or journal_context != context
+            ):
+                raise RuntimeError("sell_terminal_outcome_pending_contract_mismatch")
+            if outcome_kind == "cancel_ack_terminal_absence_reconciled":
+                journal_ack, journal_ack_reason = _validated_sell_cancel_ack(
+                    payload.get("cancel_ack"),
+                    target_id=target_id,
+                    code=normalized_code,
+                    context=context,
+                    context_sha256=context_sha256,
+                )
+                if (
+                    journal_ack is None
+                    or str(journal_ack.get("order_no") or "").strip()
+                    != str(order_no or "").strip()
+                ):
+                    raise RuntimeError(
+                        "sell_terminal_outcome_cancel_ack_invalid:"
+                        f"{journal_ack_reason}"
+                    )
+            elif outcome_kind == "cancel_intent_terminal_absence_reconciled":
+                journal_intent, journal_intent_reason = _validated_sell_cancel_intent(
+                    payload.get("cancel_intent"),
+                    target_id=target_id,
+                    code=normalized_code,
+                    context=context,
+                    context_sha256=context_sha256,
+                )
+                if (
+                    journal_intent is None
+                    or str(journal_intent.get("order_no") or "").strip()
+                    != str(order_no or "").strip()
+                ):
+                    raise RuntimeError(
+                        "sell_terminal_outcome_cancel_intent_invalid:"
+                        f"{journal_intent_reason}"
+                    )
+            existing_outcome = payload.get("terminal_outcome")
+            if existing_outcome is not None:
+                validated_existing, existing_reason = _validated_sell_terminal_outcome(
+                    existing_outcome,
+                    target_id=target_id,
+                    code=normalized_code,
+                    context=context,
+                    context_sha256=context_sha256,
+                )
+                if validated_existing is None:
+                    raise RuntimeError(
+                        "sell_terminal_outcome_existing_contract_invalid:"
+                        f"{existing_reason}"
+                    )
+                persisted_outcome = validated_existing
+            else:
+                payload = dict(payload)
+                payload.update(
+                    {
+                        "terminal_outcome": validated_outcome,
+                        "updated_at_epoch": time.time(),
+                        "updated_at_kst": datetime.now(_KST).isoformat(),
+                    }
+                )
+                canonical = json.dumps(
+                    payload,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if len(canonical.encode("utf-8")) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+                    raise RuntimeError("sell_terminal_outcome_journal_size_limit")
+                encoded = json.dumps(
+                    {
+                        "payload": payload,
+                        "payload_sha256": hashlib.sha256(
+                            canonical.encode("utf-8")
+                        ).hexdigest(),
+                    },
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                with temp_path.open("xb") as handle:
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp_path, path)
+                directory_fd = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+        if not (
+            str(target_stock.get("sell_submit_generation") or "").strip()
+            == normalized_generation
+            and str(target_stock.get("sell_submit_context_sha256") or "").strip()
+            == context_sha256
+        ):
+            return False
+        target_stock.update(_sell_terminal_outcome_runtime_fields(persisted_outcome))
+        return True
+    except Exception as exc:
+        log_error(
+            "[SELL_TERMINAL_OUTCOME_PERSIST_FAILED] "
+            f"id={target_id or '-'} code={normalized_code or '-'}: {exc}"
+        )
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
+    finally:
+        _release_pending_submit_process_lock(process_lock_fd)
+
+
+def persist_pending_sell_cancel_terminal_outcome(
+    target_stock: dict[str, Any],
+    *,
+    generation: str,
+    order_no: str,
+    broker_remaining_qty: int,
+    reconciliation_source: str,
+) -> bool:
+    """Fsync exact cancel/inventory reconciliation before DB HOLDING CAS."""
+
+    normalized_order_no = str(order_no or "").strip()
+    ack_exact = pending_sell_cancel_ack_exact(
+        target_stock,
+        code=str(target_stock.get("code") or "").strip()[:6],
+        order_no=normalized_order_no,
+    )
+    intent_exact = pending_sell_cancel_intent_exact(
+        target_stock,
+        code=str(target_stock.get("code") or "").strip()[:6],
+        order_no=normalized_order_no,
+    )
+    if (
+        _safe_int(target_stock.get("sell_reconciled_remaining_qty"), -1)
+        != _safe_int(broker_remaining_qty, -2)
+        or str(reconciliation_source or "").strip() != "kt00018_position_found"
+        or not (ack_exact or intent_exact)
+    ):
+        return False
+    return persist_pending_sell_definitive_reject_outcome(
+        target_stock,
+        generation=generation,
+        outcome_kind=(
+            "cancel_ack_terminal_absence_reconciled"
+            if ack_exact
+            else "cancel_intent_terminal_absence_reconciled"
+        ),
+        order_no=normalized_order_no,
+        broker_remaining_qty=broker_remaining_qty,
+        reconciliation_source=reconciliation_source,
+    )
+
+
+def load_pending_sell_submit_custody(
+    *,
+    target_id: Any,
+    code: str,
+    position_qty: int,
+    now_epoch: float | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Load one checksum-bound pending generation for an exact active position."""
+
+    path = _sell_pending_submit_path(target_id)
+    if path is None or not path.exists() or not path.is_file() or path.is_symlink():
+        return None, "pending_submit_journal_missing"
+    process_lock_fd: int | None = None
+    try:
+        process_lock_fd = _acquire_pending_submit_process_lock()
+        with RECEIPT_LOCK:
+            raw = path.read_bytes()
+        if len(raw) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+            return None, "pending_submit_journal_size_limit_exceeded"
+        document = json.loads(raw.decode("utf-8"))
+        payload = document.get("payload") if isinstance(document, dict) else None
+        if not isinstance(payload, dict):
+            return None, "pending_submit_payload_invalid"
+        canonical = json.dumps(
+            payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        )
+        if (
+            str(document.get("payload_sha256") or "")
+            != hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        ):
+            return None, "pending_submit_checksum_mismatch"
+        if payload.get("schema") != _SELL_PENDING_SUBMIT_SCHEMA:
+            return None, "pending_submit_schema_mismatch"
+        if _safe_int(payload.get("target_id"), 0) != _safe_int(target_id, 0):
+            return None, "pending_submit_target_id_mismatch"
+        normalized_code = str(code or "").strip()[:6]
+        if str(payload.get("code") or "") != normalized_code:
+            return None, "pending_submit_code_mismatch"
+        if _safe_int(payload.get("position_qty"), 0) != _safe_int(position_qty, 0):
+            return None, "pending_submit_position_quantity_mismatch"
+        updated_at = _safe_float(payload.get("updated_at_epoch"), 0.0)
+        current_epoch = time.time() if now_epoch is None else float(now_epoch)
+        if updated_at <= 0 or updated_at - current_epoch > 300.0:
+            return None, "pending_submit_timestamp_invalid"
+        context = payload.get("pending_context")
+        if not isinstance(context, dict):
+            return None, "pending_submit_context_invalid"
+        candidate = {
+            "id": _safe_int(target_id, 0),
+            "code": normalized_code,
+            "buy_qty": _safe_int(position_qty, 0),
+            "sell_submit_pending": True,
+            "sell_submit_requested_qty": context.get("requested_qty"),
+            "sell_submit_owner_position_qty": context.get("owner_position_qty"),
+            "sell_submit_started_at": context.get("started_at"),
+            "sell_submit_generation": context.get("generation"),
+            "sell_submit_target_id": context.get("target_id"),
+            "sell_submit_code": context.get("code"),
+            "sell_submit_intended_route": context.get("intended_route"),
+            "sell_submit_intended_effective_venue": context.get(
+                "intended_effective_venue"
+            ),
+            "sell_submit_intended_session_bucket": context.get(
+                "intended_session_bucket"
+            ),
+            "sell_submit_context_sha256": payload.get("pending_context_sha256"),
+        }
+        validated, reason = _validated_sell_pending_submit_context(
+            candidate,
+            now_epoch=current_epoch,
+        )
+        if validated is None:
+            return None, reason
+        raw_cancel_intent = payload.get("cancel_intent")
+        if raw_cancel_intent is not None:
+            cancel_intent, cancel_intent_reason = _validated_sell_cancel_intent(
+                raw_cancel_intent,
+                target_id=target_id,
+                code=normalized_code,
+                context=validated,
+                context_sha256=str(payload.get("pending_context_sha256") or "").strip(),
+                now_epoch=current_epoch,
+            )
+            if cancel_intent is None:
+                return None, cancel_intent_reason
+            candidate.update(_sell_cancel_intent_runtime_fields(cancel_intent))
+        raw_cancel_ack = payload.get("cancel_ack")
+        if raw_cancel_ack is not None:
+            cancel_ack, cancel_ack_reason = _validated_sell_cancel_ack(
+                raw_cancel_ack,
+                target_id=target_id,
+                code=normalized_code,
+                context=validated,
+                context_sha256=str(payload.get("pending_context_sha256") or "").strip(),
+                now_epoch=current_epoch,
+            )
+            if cancel_ack is None:
+                return None, cancel_ack_reason
+            candidate.update(_sell_cancel_ack_runtime_fields(cancel_ack))
+        raw_terminal_outcome = payload.get("terminal_outcome")
+        if raw_terminal_outcome is not None:
+            terminal_outcome, terminal_reason = _validated_sell_terminal_outcome(
+                raw_terminal_outcome,
+                target_id=target_id,
+                code=normalized_code,
+                context=validated,
+                context_sha256=str(payload.get("pending_context_sha256") or "").strip(),
+                now_epoch=current_epoch,
+            )
+            if terminal_outcome is None:
+                return None, terminal_reason
+            candidate.update(_sell_terminal_outcome_runtime_fields(terminal_outcome))
+        return {
+            key: candidate[key]
+            for key in _SELL_PENDING_SUBMIT_RUNTIME_KEYS
+            if key in candidate
+        }, "pending_submit_journal_exact_match"
+    except Exception as exc:
+        return None, f"pending_submit_read_failed:{type(exc).__name__}"
+    finally:
+        _release_pending_submit_process_lock(process_lock_fd)
+
+
+def pending_sell_cancel_intent_exact(
+    target_stock: dict[str, Any] | None,
+    *,
+    code: str,
+    order_no: str,
+) -> bool:
+    """Return whether runtime and fsynced custody own one pre-call cancel intent."""
+
+    if not isinstance(target_stock, dict):
+        return False
+    target_id = _safe_int(target_stock.get("id"), 0)
+    owner_position_qty = _safe_int(
+        target_stock.get("sell_submit_owner_position_qty"), 0
+    )
+    normalized_code = str(code or "").strip()[:6]
+    normalized_order_no = str(order_no or "").strip()
+    if not all(
+        (
+            target_id > 0,
+            owner_position_qty > 0,
+            target_stock.get("sell_cancel_intent_schema") == _SELL_CANCEL_INTENT_SCHEMA,
+            _safe_int(target_stock.get("sell_cancel_intent_target_id"), 0) == target_id,
+            str(target_stock.get("sell_cancel_intent_code") or "").strip()[:6]
+            == normalized_code,
+            str(target_stock.get("sell_cancel_intent_order_no") or "").strip()
+            == normalized_order_no,
+            str(target_stock.get("sell_cancel_intent_generation") or "").strip()
+            == str(target_stock.get("sell_submit_generation") or "").strip(),
+            str(target_stock.get("sell_cancel_intent_context_sha256") or "").strip()
+            == str(target_stock.get("sell_submit_context_sha256") or "").strip(),
+        )
+    ):
+        return False
+    fields, _reason = load_pending_sell_submit_custody(
+        target_id=target_id,
+        code=normalized_code,
+        position_qty=owner_position_qty,
+    )
+    return bool(
+        isinstance(fields, dict)
+        and all(
+            fields.get(key) == target_stock.get(key)
+            for key in _SELL_CANCEL_INTENT_RUNTIME_KEYS
+        )
+    )
+
+
+def pending_sell_cancel_ack_exact(
+    target_stock: dict[str, Any] | None,
+    *,
+    code: str,
+    order_no: str,
+) -> bool:
+    """Return whether runtime and fsynced custody own the same cancel ACK."""
+
+    if not isinstance(target_stock, dict):
+        return False
+    normalized_code = str(code or "").strip()[:6]
+    normalized_order_no = str(order_no or "").strip()
+    target_id = _safe_int(target_stock.get("id"), 0)
+    owner_position_qty = _safe_int(
+        target_stock.get("sell_submit_owner_position_qty"), 0
+    )
+    current_order_no = str(
+        target_stock.get("sell_odno") or target_stock.get("sell_ord_no") or ""
+    ).strip()
+    if not all(
+        (
+            target_id > 0,
+            re.fullmatch(r"[0-9]{7}", normalized_order_no) is not None,
+            int(normalized_order_no) > 0,
+            str(target_stock.get("code") or "").strip()[:6] == normalized_code,
+            current_order_no == normalized_order_no,
+            owner_position_qty > 0,
+            target_stock.get("sell_cancel_ack_schema") == _SELL_CANCEL_ACK_SCHEMA,
+            _safe_int(target_stock.get("sell_cancel_ack_target_id"), 0) == target_id,
+            str(target_stock.get("sell_cancel_ack_code") or "").strip()[:6]
+            == normalized_code,
+            str(target_stock.get("sell_cancel_ack_order_no") or "").strip()
+            == normalized_order_no,
+            str(target_stock.get("sell_cancel_ack_generation") or "").strip()
+            == str(target_stock.get("sell_submit_generation") or "").strip(),
+            str(target_stock.get("sell_cancel_ack_context_sha256") or "").strip()
+            == str(target_stock.get("sell_submit_context_sha256") or "").strip(),
+        )
+    ):
+        return False
+    fields, _reason = load_pending_sell_submit_custody(
+        target_id=target_id,
+        code=normalized_code,
+        position_qty=owner_position_qty,
+    )
+    if not isinstance(fields, dict):
+        return False
+    return all(
+        fields.get(key) == target_stock.get(key)
+        for key in _SELL_CANCEL_ACK_RUNTIME_KEYS
+    )
+
+
+def _cancel_replacement_sell_once(
+    target_stock: dict[str, Any],
+    *,
+    code: str,
+    order_no: str,
+) -> bool:
+    """Cancel one oversized replacement only from a freshly fsynced intent.
+
+    Replayed late receipts observe the existing intent and remain
+    reconciliation-only.  They must not issue another kt10003 call.
+    """
+
+    normalized_code = str(code or "").strip()[:6]
+    normalized_order_no = str(order_no or "").strip()
+    intended_route = (
+        str(target_stock.get("sell_submit_intended_route") or "SOR").strip().upper()
+    )
+    if pending_sell_cancel_intent_exact(
+        target_stock,
+        code=normalized_code,
+        order_no=normalized_order_no,
+    ):
+        return pending_sell_cancel_ack_exact(
+            target_stock,
+            code=normalized_code,
+            order_no=normalized_order_no,
+        )
+    if not persist_pending_sell_cancel_intent_custody(
+        target_stock,
+        order_no=normalized_order_no,
+        broker_route=intended_route,
+    ):
+        return False
+    from src.engine import kiwoom_orders
+
+    cancel_result = kiwoom_orders.send_cancel_order(
+        code=normalized_code,
+        orig_ord_no=normalized_order_no,
+        token=KIWOOM_TOKEN,
+        qty=0,
+        dmst_stex_tp=intended_route,
+    )
+    return persist_pending_sell_cancel_ack_custody(
+        target_stock,
+        order_no=normalized_order_no,
+        cancel_response=cancel_result,
+    )
+
+
+def pending_sell_definitive_reject_outcome_exact(
+    target_stock: dict[str, Any] | None,
+) -> bool:
+    """Return whether a fsynced no-order outcome owns this exact generation."""
+
+    if not isinstance(target_stock, dict):
+        return False
+    target_id = _safe_int(target_stock.get("id"), 0)
+    code = str(target_stock.get("code") or "").strip()[:6]
+    owner_position_qty = _safe_int(
+        target_stock.get("sell_submit_owner_position_qty"), 0
+    )
+    if not all(
+        (
+            target_id > 0,
+            re.fullmatch(r"[0-9]{6}", code) is not None,
+            owner_position_qty > 0,
+            target_stock.get("sell_submit_terminal_outcome_schema")
+            == _SELL_TERMINAL_OUTCOME_SCHEMA,
+            target_stock.get("sell_submit_terminal_outcome_kind")
+            == "definitive_reject_no_broker_order",
+            _safe_int(target_stock.get("sell_submit_terminal_outcome_target_id"), 0)
+            == target_id,
+            str(target_stock.get("sell_submit_terminal_outcome_code") or "").strip()[:6]
+            == code,
+            str(
+                target_stock.get("sell_submit_terminal_outcome_generation") or ""
+            ).strip()
+            == str(target_stock.get("sell_submit_generation") or "").strip(),
+            str(
+                target_stock.get("sell_submit_terminal_outcome_context_sha256") or ""
+            ).strip()
+            == str(target_stock.get("sell_submit_context_sha256") or "").strip(),
+        )
+    ):
+        return False
+    fields, _reason = load_pending_sell_submit_custody(
+        target_id=target_id,
+        code=code,
+        position_qty=owner_position_qty,
+    )
+    if not isinstance(fields, dict):
+        return False
+    definitive_runtime_keys = _SELL_TERMINAL_OUTCOME_RUNTIME_KEYS[:7]
+    return all(
+        fields.get(key) == target_stock.get(key) for key in definitive_runtime_keys
+    )
+
+
+def pending_sell_cancel_terminal_outcome_exact(
+    target_stock: dict[str, Any] | None,
+) -> bool:
+    """Return whether cancel terminal proof and ACK own one fsynced generation."""
+
+    if not isinstance(target_stock, dict):
+        return False
+    outcome_kind = target_stock.get("sell_submit_terminal_outcome_kind")
+    if outcome_kind not in {
+        "cancel_ack_terminal_absence_reconciled",
+        "cancel_intent_terminal_absence_reconciled",
+    }:
+        return False
+    if (
+        _safe_int(
+            target_stock.get("sell_submit_terminal_outcome_broker_remaining_qty"),
+            -1,
+        )
+        != _safe_int(target_stock.get("sell_reconciled_remaining_qty"), -2)
+        or target_stock.get("sell_submit_terminal_outcome_reconciliation_source")
+        != "kt00018_position_found"
+        or str(
+            target_stock.get("sell_submit_terminal_outcome_receipt_state_sha256") or ""
+        ).strip()
+        != _receipt_snapshot_sha256(
+            target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+            if isinstance(target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY), dict)
+            else {}
+        )
+    ):
+        return False
+    order_no = str(
+        target_stock.get("sell_submit_terminal_outcome_order_no") or ""
+    ).strip()
+    evidence_exact = (
+        pending_sell_cancel_ack_exact(
+            target_stock,
+            code=str(target_stock.get("code") or "").strip()[:6],
+            order_no=order_no,
+        )
+        if outcome_kind == "cancel_ack_terminal_absence_reconciled"
+        else pending_sell_cancel_intent_exact(
+            target_stock,
+            code=str(target_stock.get("code") or "").strip()[:6],
+            order_no=order_no,
+        )
+    )
+    if not evidence_exact:
+        return False
+    fields, _reason = load_pending_sell_submit_custody(
+        target_id=target_stock.get("id"),
+        code=str(target_stock.get("code") or "").strip()[:6],
+        position_qty=_safe_int(target_stock.get("sell_submit_owner_position_qty"), 0),
+    )
+    return bool(
+        isinstance(fields, dict)
+        and all(
+            fields.get(key) == target_stock.get(key)
+            for key in _SELL_TERMINAL_OUTCOME_RUNTIME_KEYS
+        )
+    )
+
+
+def clear_pending_sell_submit_custody(
+    target_id: Any,
+    *,
+    generation: str,
+) -> bool:
+    """Unlink only the exact owned generation; never erase a replacement."""
+
+    path = _sell_pending_submit_path(target_id)
+    normalized_generation = str(generation or "").strip()
+    if path is None or re.fullmatch(r"[0-9a-f]{32}", normalized_generation) is None:
+        return False
+    process_lock_fd: int | None = None
+    try:
+        process_lock_fd = _acquire_pending_submit_process_lock()
+        with RECEIPT_LOCK:
+            if not path.exists():
+                return True
+            if path.is_symlink():
+                raise RuntimeError("sell_pending_submit_symlink_forbidden")
+            raw = path.read_bytes()
+            if len(raw) > _SELL_RECEIPT_RECOVERY_MAX_BYTES:
+                return False
+            document = json.loads(raw.decode("utf-8"))
+            payload = document.get("payload") if isinstance(document, dict) else None
+            context = (
+                payload.get("pending_context") if isinstance(payload, dict) else None
+            )
+            canonical = json.dumps(
+                payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            candidate = {
+                "id": _safe_int(target_id, 0),
+                "code": (
+                    str(payload.get("code") or "") if isinstance(payload, dict) else ""
+                ),
+                "buy_qty": (
+                    _safe_int(payload.get("position_qty"), 0)
+                    if isinstance(payload, dict)
+                    else 0
+                ),
+                "sell_submit_pending": True,
+                "sell_submit_requested_qty": (
+                    context.get("requested_qty") if isinstance(context, dict) else None
+                ),
+                "sell_submit_owner_position_qty": (
+                    context.get("owner_position_qty")
+                    if isinstance(context, dict)
+                    else None
+                ),
+                "sell_submit_started_at": (
+                    context.get("started_at") if isinstance(context, dict) else None
+                ),
+                "sell_submit_generation": (
+                    context.get("generation") if isinstance(context, dict) else None
+                ),
+                "sell_submit_target_id": (
+                    context.get("target_id") if isinstance(context, dict) else None
+                ),
+                "sell_submit_code": (
+                    context.get("code") if isinstance(context, dict) else None
+                ),
+                "sell_submit_intended_route": (
+                    context.get("intended_route") if isinstance(context, dict) else None
+                ),
+                "sell_submit_intended_effective_venue": (
+                    context.get("intended_effective_venue")
+                    if isinstance(context, dict)
+                    else None
+                ),
+                "sell_submit_intended_session_bucket": (
+                    context.get("intended_session_bucket")
+                    if isinstance(context, dict)
+                    else None
+                ),
+                "sell_submit_context_sha256": (
+                    payload.get("pending_context_sha256")
+                    if isinstance(payload, dict)
+                    else None
+                ),
+            }
+            validated_context, _reason = _validated_sell_pending_submit_context(
+                candidate
+            )
+            if (
+                not isinstance(context, dict)
+                or not isinstance(payload, dict)
+                or payload.get("schema") != _SELL_PENDING_SUBMIT_SCHEMA
+                or _safe_int(payload.get("target_id"), 0) != _safe_int(target_id, 0)
+                or document.get("payload_sha256")
+                != hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                or validated_context is None
+                or str(context.get("generation") or "").strip() != normalized_generation
+            ):
+                return False
+            path.unlink()
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        return True
+    except Exception as exc:
+        log_error(
+            f"[SELL_PENDING_SUBMIT_CLEAR_FAILED] id={target_id} "
+            f"generation={normalized_generation}: {exc}"
+        )
+        return False
+    finally:
+        _release_pending_submit_process_lock(process_lock_fd)
 
 
 def prune_sell_receipt_recovery_files(
@@ -1805,6 +5251,36 @@ def prune_sell_receipt_recovery_files(
             candidate.unlink(missing_ok=True)
         except Exception:
             continue
+    pending_dir = SELL_RECEIPT_RECOVERY_DIR / "pending_submit"
+    try:
+        if pending_dir.is_symlink() or not pending_dir.is_dir():
+            return
+        pending_candidates = list(pending_dir.iterdir())
+    except Exception:
+        return
+    for candidate in pending_candidates:
+        try:
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            name = candidate.name
+            is_journal = bool(re.fullmatch(r"[1-9]\d*\.json", name))
+            is_atomic_temp = bool(
+                re.fullmatch(r"\.[1-9]\d*\.json\.\d+\.\d+\.tmp", name)
+            )
+            if not (is_journal or is_atomic_temp):
+                continue
+            if is_journal:
+                journal_target_id = _safe_int(name.removesuffix(".json"), 0)
+                if journal_target_id in protected_target_ids:
+                    continue
+                retention_sec = _SELL_RECEIPT_RECOVERY_ORPHAN_MAX_AGE_SEC
+            else:
+                retention_sec = _SELL_RECEIPT_RECOVERY_MAX_AGE_SEC + 300
+            if current_epoch - candidate.stat().st_mtime <= retention_sec:
+                continue
+            candidate.unlink(missing_ok=True)
+        except Exception:
+            continue
 
 
 def persist_sell_receipt_recovery(target_stock: dict[str, Any]) -> bool:
@@ -1814,6 +5290,10 @@ def persist_sell_receipt_recovery(target_stock: dict[str, Any]) -> bool:
     state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
     final_pending_db_commit = bool(
         isinstance(state, dict) and state.get("final_pending_db_commit") is True
+    )
+    replacement_terminal_pending = bool(
+        isinstance(state, dict)
+        and state.get("replacement_terminal_reconciliation_required") is True
     )
     if (
         path is None
@@ -1833,7 +5313,7 @@ def persist_sell_receipt_recovery(target_stock: dict[str, Any]) -> bool:
     code = str(target_stock.get("code") or "").strip()[:6]
     aggregate_valid = (
         aggregate_qty == position_qty
-        if final_pending_db_commit
+        if final_pending_db_commit or replacement_terminal_pending
         else 0 < aggregate_qty < position_qty
     )
     if not code or position_qty <= 0 or not aggregate_valid:
@@ -1908,9 +5388,24 @@ def _persist_sell_receipt_recovery_or_interlock(
 ) -> bool:
     """Persist custody state or prevent every follow-up order mutation."""
 
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    if isinstance(state, dict):
+        proof = target_stock.get("_sell_submit_receipt_proof")
+        if isinstance(proof, dict) and proof.get("custody_emitted") is True:
+            state.pop(_SELL_SUBMIT_CUSTODY_RETRY_SNAPSHOT_KEY, None)
+        elif target_stock.get("exit_receipt_submission_custody_retry_required") is True:
+            state[_SELL_SUBMIT_CUSTODY_RETRY_SNAPSHOT_KEY] = (
+                _pending_sell_submit_custody_retry_snapshot(target_stock)
+            )
     if persist_sell_receipt_recovery(target_stock):
         target_stock.pop("sell_receipt_durability_blocked", None)
         target_stock.pop("sell_receipt_durability_reason", None)
+        if target_stock.get("sell_pending_submit_successor_persist_required") is True:
+            _clear_pending_sell_submit_after_successor_persisted(
+                target_stock,
+                target_id=target_stock.get("id"),
+                code=code,
+            )
         return True
     target_stock.update(
         {
@@ -2111,6 +5606,16 @@ def reconcile_committed_sell_receipt_recovery_files() -> dict[str, int]:
                 )
                 profit_rate = _safe_float(record.profit_rate, 0.0)
                 sell_price = _safe_int(record.sell_price, 0)
+            recovery_target = {
+                "id": target_id,
+                "code": code,
+                "name": snapshot.get("name") or code,
+                "buy_price": _safe_float(payload.get("buy_price"), 0.0),
+                _SELL_EXECUTION_RECEIPT_STATE_KEY: dict(state),
+            }
+            if not replay_pending_sell_partial_lifecycle_outbox(recovery_target):
+                result["deferred"] += 1
+                continue
             if strategy == "SCALPING":
                 if not callable(_scalp_exit_completed_callback):
                     result["deferred"] += 1
@@ -2259,8 +5764,7 @@ def _winner_recovery_ai_receipt_fields(
             target_stock.get("pending_add_winner_recovery_ai_parent_trace_id") or "-"
         ),
         "post_probe_winner_recovery_ai_parent_snapshot_id": (
-            target_stock.get("pending_add_winner_recovery_ai_parent_snapshot_id")
-            or "-"
+            target_stock.get("pending_add_winner_recovery_ai_parent_snapshot_id") or "-"
         ),
         "post_probe_winner_recovery_holding_ai_action": (
             target_stock.get("pending_add_winner_recovery_holding_ai_action")
@@ -2275,9 +5779,7 @@ def _winner_recovery_ai_receipt_fields(
             or "-"
         ),
         "post_probe_winner_recovery_ai_tape_substitution_applied": bool(
-            target_stock.get(
-                "pending_add_winner_recovery_ai_tape_substitution_applied"
-            )
+            target_stock.get("pending_add_winner_recovery_ai_tape_substitution_applied")
         ),
     }
 
@@ -3257,6 +6759,7 @@ def _resolve_entry_effective_fill_qty(
         )
     receipt["order_no"] = resolved_order_no
     receipt["terminal_entry_order_receipt"] = terminal_entry_receipt
+    receipt["reconciled_before_ordno_bind"] = bool(bind_after_validation)
     return receipt
 
 
@@ -3647,9 +7150,7 @@ def _resolve_sell_execution_context(
                     f"entry_execution_no={entry_execution_no}"
                 )
             else:
-                target_stock.pop(
-                    "sell_buy_price_reconciled_from_entry_receipt", None
-                )
+                target_stock.pop("sell_buy_price_reconciled_from_entry_receipt", None)
                 target_stock.pop("sell_buy_price_reconcile_db_price", None)
                 target_stock.pop("sell_buy_price_reconcile_reason", None)
             if safe_buy_price <= 0:
@@ -3683,6 +7184,8 @@ def _finalize_standard_sell_execution(
     code: str,
     sell_receipt: dict[str, Any],
     order_no: str = "",
+    safe_buy_price: float | None = None,
+    receipt_snapshot_override: dict[str, Any] | None = None,
 ) -> None:
     if sell_receipt.get("status") != "final" or sell_receipt.get("final") is not True:
         log_error(
@@ -3690,6 +7193,18 @@ def _finalize_standard_sell_execution(
             f"status={sell_receipt.get('status')} reason={sell_receipt.get('reason')}"
         )
         return
+    cumulative_qty = _safe_int(sell_receipt.get("cumulative_qty"), 0)
+    expected_qty = _safe_int(sell_receipt.get("expected_qty"), cumulative_qty)
+    if expected_qty <= 0 or cumulative_qty != expected_qty:
+        log_error(
+            f"[SELL_RECEIPT_FINALIZE_BLOCKED] {target_stock.get('name', code)}({code}) "
+            "reason=final_position_quantity_contract_invalid "
+            f"expected={expected_qty} cumulative={cumulative_qty}"
+        )
+        return
+    resolved_buy_price = _safe_float(safe_buy_price, 0.0)
+    if resolved_buy_price <= 0:
+        resolved_buy_price = _safe_float(target_stock.get("buy_price"), 0.0)
     target_stock["sell_execution_order_no"] = str(order_no or "").strip() or "-"
     smoothing_registration = {
         "registered": False,
@@ -3716,9 +7231,33 @@ def _finalize_standard_sell_execution(
                 "[SMOOTHING_POST_SELL] non-revive registration failed "
                 f"code={code}: {exc}"
             )
-    sell_receipt_snapshot = _receipt_snapshot(target_stock, _SELL_RECEIPT_SNAPSHOT_KEYS)
+    # Bind the terminal snapshot to the actual receipt venue and immutable
+    # packet-ingress session before ACTIVE_TARGETS is cleared.  A delayed
+    # prior-order terminal receipt may supply the checksummed snapshot captured
+    # at ingress; never re-read mutable target provenance for that path.
+    if receipt_snapshot_override is None:
+        _sell_execution_provenance_fields(target_stock)
+        sell_receipt_snapshot = _receipt_snapshot(
+            target_stock, _SELL_RECEIPT_SNAPSHOT_KEYS
+        )
+    else:
+        sell_receipt_snapshot = _normalized_receipt_snapshot(receipt_snapshot_override)
+        if (
+            _safe_int(sell_receipt_snapshot.get("id"), target_id) != target_id
+            or str(sell_receipt_snapshot.get("code") or "").strip()[:6] != code
+        ):
+            log_error(
+                f"[SELL_RECEIPT_FINALIZE_BLOCKED] {target_stock.get('name', code)}({code}) "
+                "reason=terminal_provenance_snapshot_lineage_mismatch"
+            )
+            return
     sell_receipt_snapshot.update(
         {
+            # The DB/entry-receipt context owns the exact position basis.  A
+            # stale ACTIVE_TARGETS price must not corrupt terminal fees/taxes
+            # or realized economics in the durable lifecycle row.
+            "buy_price": resolved_buy_price,
+            "revive": bool(is_scalp_revive),
             "smoothing_non_revive_post_sell_registered": bool(
                 smoothing_registration.get("registered")
             ),
@@ -3731,8 +7270,8 @@ def _finalize_standard_sell_execution(
             "smoothing_non_revive_post_sell_expires_at_epoch": (
                 smoothing_registration.get("expires_at_epoch")
             ),
-            "sell_execution_expected_qty": int(sell_receipt["expected_qty"]),
-            "sell_execution_cumulative_qty": int(sell_receipt["cumulative_qty"]),
+            "sell_execution_expected_qty": expected_qty,
+            "sell_execution_cumulative_qty": cumulative_qty,
             "sell_execution_cumulative_amount": int(sell_receipt["cumulative_amount"]),
             "sell_execution_cumulative_net_pnl_krw": float(
                 sell_receipt["cumulative_net_pnl_krw"]
@@ -3766,8 +7305,8 @@ def _finalize_standard_sell_execution(
         state = {}
     state.update(
         {
-            "position_qty": int(sell_receipt["expected_qty"]),
-            "aggregate_cumulative_qty": int(sell_receipt["cumulative_qty"]),
+            "position_qty": expected_qty,
+            "aggregate_cumulative_qty": cumulative_qty,
             "aggregate_cumulative_amount": int(sell_receipt["cumulative_amount"]),
             "cumulative_net_pnl_krw": float(sell_receipt["cumulative_net_pnl_krw"]),
             "remaining_qty": 0,
@@ -3795,14 +7334,27 @@ def _finalize_standard_sell_execution(
             "sell_cancel_reconciliation_source": "final_receipt_db_commit_pending",
         }
     )
-    if not _persist_sell_receipt_recovery_or_interlock(
+    final_lifecycle_leg = _standard_sell_final_lifecycle_outbox_leg(
+        sell_receipt_snapshot,
+        target_id=target_id,
+        now=now,
+    )
+    if not _queue_sell_lifecycle_outbox_leg(
         target_stock,
+        leg=final_lifecycle_leg,
         code=code,
-        reason="final_sell_receipt_before_db_commit",
+        reason="final_sell_receipt_with_lifecycle_outbox_before_db_commit",
     ):
         log_error(
             f"[SELL_FINAL_DURABILITY_BLOCKED] {target_stock.get('name', code)}({code}) "
             "final receipt journal could not be persisted; DB finalization withheld"
+        )
+        return
+    if target_stock.get("exit_receipt_submission_custody_retry_required") is True:
+        log_error(
+            f"[SELL_FINAL_SUBMISSION_CUSTODY_DEFERRED] "
+            f"{target_stock.get('name', code)}({code}) exact final receipt retained; "
+            "DB finalization withheld until submit custody append retry succeeds"
         )
         return
     if not _update_db_for_sell(
@@ -3816,6 +7368,12 @@ def _finalize_standard_sell_execution(
         log_error(
             f"[SELL_FINAL_DB_COMMIT_DEFERRED] {target_stock.get('name', code)}({code}) "
             "durable final receipt retained for startup/periodic recovery"
+        )
+        return
+    if not replay_pending_sell_partial_lifecycle_outbox(target_stock):
+        log_error(
+            f"[SELL_FINAL_LIFECYCLE_DEFERRED] {target_stock.get('name', code)}({code}) "
+            "DB completion committed; durable chronological lifecycle outbox retained"
         )
         return
     _complete_standard_sell_runtime_after_db(
@@ -3884,7 +7442,14 @@ def _complete_standard_sell_runtime_after_db(
             sold_at=now.astimezone().isoformat() if now.tzinfo else now.isoformat(),
         )
     move_orders_to_terminal(target_stock, reason="sell_completed_cleanup")
-    clear_sell_receipt_recovery(target_id)
+    if not _sell_lifecycle_outbox_pending(target_stock):
+        clear_sell_receipt_recovery(target_id)
+    else:
+        log_error(
+            f"[SELL_LIFECYCLE_OUTBOX_RETAINED] {code} id={target_id} "
+            "DB/runtime completion succeeded; exact lifecycle leg awaits retry"
+        )
+        return
     _clear_runtime_keys(target_stock, _SELL_COMPLETE_RESET_KEYS)
     target_stock.pop("pending_sell_msg", None)
 
@@ -3895,6 +7460,12 @@ def recover_final_sell_receipt(target_stock: dict[str, Any]) -> bool:
     state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
     if not isinstance(state, dict) or state.get("final_pending_db_commit") is not True:
         return False
+    if target_stock.get("exit_receipt_submission_custody_retry_required") is True:
+        if not retry_pending_sell_execution_receipt_custody(target_stock):
+            return False
+        state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+        if not isinstance(state, dict):
+            return False
     snapshot = state.get("finalization_receipt_snapshot")
     if not isinstance(snapshot, dict):
         return False
@@ -3909,14 +7480,146 @@ def recover_final_sell_receipt(target_stock: dict[str, Any]) -> bool:
     is_scalp_revive = bool(state.get("finalization_is_scalp_revive"))
     if target_id <= 0 or not code or exec_price <= 0:
         return False
+    if is_scalp_revive:
+        new_watch_id = _safe_int(state.get("finalization_new_watch_id"), 0)
+        if new_watch_id > 0:
+            try:
+                with DB.get_session() as session:
+                    completed_record = (
+                        session.query(RecommendationHistory)
+                        .filter_by(id=target_id)
+                        .first()
+                    )
+                    revived_record = (
+                        session.query(RecommendationHistory)
+                        .filter_by(id=new_watch_id)
+                        .first()
+                    )
+                    committed_pair = bool(
+                        completed_record
+                        and str(completed_record.status or "").strip().upper()
+                        == "COMPLETED"
+                        and revived_record
+                        and str(revived_record.status or "").strip().upper()
+                        == "WATCHING"
+                        and str(revived_record.stock_code or "").strip()[:6] == code
+                    )
+            except Exception:
+                return False
+            if committed_pair:
+                if not replay_pending_sell_partial_lifecycle_outbox(target_stock):
+                    return False
+                revived_position_tag = normalize_position_tag(
+                    "SCALPING",
+                    state.get("finalization_revived_position_tag")
+                    or snapshot.get("position_tag"),
+                )
+                _apply_scalp_revive_memory_state(
+                    target_stock=target_stock,
+                    code=code,
+                    new_watch_id=new_watch_id,
+                    revived_position_tag=revived_position_tag,
+                    revived_at_ts=now.timestamp(),
+                )
+                clear_sell_receipt_recovery(target_id)
+                return True
+            old_status = (
+                str(getattr(completed_record, "status", "") or "").strip().upper()
+            )
+            if (
+                completed_record is not None
+                and old_status in {"HOLDING", "SELL_ORDERED"}
+                and revived_record is None
+            ):
+                # Crash after the precommit journal fsync but before the atomic
+                # DB commit: the flushed replacement ID never became durable.
+                # Clear only that stale binding, fsync the repaired journal,
+                # and rerun the exact final receipt transaction below.
+                repaired_state = dict(state)
+                repaired_state.pop("finalization_new_watch_id", None)
+                target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = repaired_state
+                if not _persist_sell_receipt_recovery_or_interlock(
+                    target_stock,
+                    code=code,
+                    reason="revive_precommit_stale_watch_id_cleared",
+                ):
+                    return False
+                state = repaired_state
+            elif completed_record or revived_record:
+                # COMPLETED XOR WATCHING, or an unexpected surviving row, is a
+                # true atomic-custody inconsistency and remains fail-closed.
+                return False
+        recovered_receipt = {
+            "status": "final",
+            "final": True,
+            "expected_qty": _safe_int(snapshot.get("sell_execution_expected_qty"), 0),
+            "cumulative_qty": _safe_int(
+                snapshot.get("sell_execution_cumulative_qty"), 0
+            ),
+            "cumulative_amount": _safe_int(
+                snapshot.get("sell_execution_cumulative_amount"), 0
+            ),
+            "cumulative_net_pnl_krw": _safe_float(
+                snapshot.get("sell_execution_cumulative_net_pnl_krw"), 0.0
+            ),
+            "incremental_qty": _safe_int(
+                snapshot.get("sell_execution_final_leg_qty"), 0
+            ),
+            "incremental_price": _safe_float(
+                snapshot.get("sell_execution_final_leg_price"), 0.0
+            ),
+            "incremental_net_pnl_krw": _safe_float(
+                snapshot.get("sell_execution_final_leg_net_pnl_krw"), 0.0
+            ),
+            "execution_no": str(snapshot.get("sell_execution_execution_no") or ""),
+            "economics_complete": snapshot.get(
+                "sell_execution_receipt_economics_complete"
+            )
+            is True,
+            "quantity_contract_complete": snapshot.get(
+                "sell_execution_receipt_quantity_contract_complete"
+            )
+            is True,
+            "unit_fill_consistent": snapshot.get(
+                "sell_execution_receipt_unit_fill_consistent"
+            )
+            is True,
+        }
+        if not all(
+            (
+                recovered_receipt["expected_qty"] > 0,
+                recovered_receipt["cumulative_qty"]
+                == recovered_receipt["expected_qty"],
+                recovered_receipt["cumulative_amount"] > 0,
+                recovered_receipt["incremental_qty"] > 0,
+                recovered_receipt["incremental_price"] > 0,
+            )
+        ):
+            return False
+        return _handle_scalp_revive_sell_execution(
+            target_id=target_id,
+            target_stock=target_stock,
+            code=code,
+            exec_price=exec_price,
+            exec_qty=recovered_receipt["cumulative_qty"],
+            now=now,
+            profit_rate=0.0,
+            safe_buy_price=_safe_float(snapshot.get("buy_price"), 0.0),
+            strategy=strategy,
+            sell_receipt=recovered_receipt,
+            order_no=str(state.get("finalization_order_no") or ""),
+        )
+    retained_snapshot = dict(snapshot)
     if not _update_db_for_sell(
         target_id,
         exec_price,
         now,
-        dict(snapshot),
+        retained_snapshot,
         strategy,
         is_scalp_revive,
     ):
+        return False
+    if not replay_pending_sell_partial_lifecycle_outbox(target_stock):
         return False
     _complete_standard_sell_runtime_after_db(
         target_id=target_id,
@@ -3926,6 +7629,278 @@ def recover_final_sell_receipt(target_stock: dict[str, Any]) -> bool:
         order_no=str(state.get("finalization_order_no") or ""),
     )
     return True
+
+
+def finalize_replacement_terminal_sell_receipt(
+    target_stock: dict[str, Any],
+) -> bool:
+    """Promote a late prior-order terminal fill after exact replacement absence."""
+
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    if not isinstance(state, dict):
+        return False
+    receipt = state.get("replacement_terminal_receipt")
+    context = state.get("replacement_terminal_finalize_context")
+    provenance_snapshot = state.get("replacement_terminal_provenance_snapshot")
+    provenance_snapshot_sha256 = str(
+        state.get("replacement_terminal_provenance_snapshot_sha256") or ""
+    )
+    if (
+        not isinstance(receipt, dict)
+        or not isinstance(context, dict)
+        or not isinstance(provenance_snapshot, dict)
+        or not replacement_terminal_reconciliation_generation_valid(state)
+        or not re.fullmatch(r"[0-9a-f]{64}", provenance_snapshot_sha256)
+        or _receipt_snapshot_sha256(provenance_snapshot) != provenance_snapshot_sha256
+    ):
+        return False
+    position_qty = _safe_int(state.get("position_qty"), 0)
+    aggregate_qty = _safe_int(state.get("aggregate_cumulative_qty"), 0)
+    if not all(
+        (
+            state.get("replacement_terminal_reconciliation_required") is True,
+            state.get("replacement_terminal_absence_confirmed") is True,
+            position_qty > 0,
+            aggregate_qty == position_qty,
+            _safe_int(state.get("remaining_qty"), -1) == 0,
+            _safe_int(receipt.get("cumulative_qty"), 0) == position_qty,
+            receipt.get("economics_complete") is True,
+            receipt.get("quantity_contract_complete") is True,
+        )
+    ):
+        return False
+    try:
+        now = datetime.fromisoformat(str(context.get("now_iso") or ""))
+    except (TypeError, ValueError):
+        return False
+    target_id = _safe_int(context.get("target_id"), 0)
+    code = str(context.get("code") or target_stock.get("code") or "").strip()[:6]
+    exec_price = int(round(_safe_float(receipt.get("incremental_price"), 0.0)))
+    if target_id <= 0 or len(code) != 6 or exec_price <= 0:
+        return False
+    promoted_receipt = dict(receipt)
+    promoted_receipt.update(
+        {
+            "status": "final",
+            "final": True,
+            "remaining_qty": 0,
+            "reason": "late_prior_terminal_fill_replacement_absence_confirmed",
+        }
+    )
+    state = dict(state)
+    state.update(
+        {
+            "final": True,
+            "replacement_reconciliation_required": False,
+            "replacement_terminal_reconciliation_required": False,
+            "replacement_order_no": "",
+        }
+    )
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = state
+    strategy = str(context.get("strategy") or "KOSPI_ML")
+    if bool(context.get("is_scalp_revive")):
+        return _handle_scalp_revive_sell_execution(
+            target_id=target_id,
+            target_stock=target_stock,
+            code=code,
+            exec_price=exec_price,
+            exec_qty=position_qty,
+            now=now,
+            profit_rate=0.0,
+            safe_buy_price=_safe_float(context.get("safe_buy_price"), 0.0),
+            strategy=strategy,
+            sell_receipt=promoted_receipt,
+            order_no=str(context.get("order_no") or ""),
+            receipt_snapshot_override=provenance_snapshot,
+        )
+    _finalize_standard_sell_execution(
+        target_id=target_id,
+        exec_price=exec_price,
+        now=now,
+        target_stock=target_stock,
+        strategy=strategy,
+        is_scalp_revive=False,
+        code=code,
+        sell_receipt=promoted_receipt,
+        order_no=str(context.get("order_no") or ""),
+        safe_buy_price=_safe_float(context.get("safe_buy_price"), 0.0),
+        receipt_snapshot_override=provenance_snapshot,
+    )
+    return str(target_stock.get("status") or "").strip().upper() in {
+        "COMPLETED",
+        "WATCHING",
+    }
+
+
+def _release_nxt_tp1_completion_after_lifecycle_ack(
+    target_stock: dict[str, Any],
+) -> bool:
+    """Release the TP1 runner only after its durable transition is acknowledged."""
+
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    if state is None:
+        return True
+    if not isinstance(state, dict):
+        _mark_sell_lifecycle_outbox_invalid(
+            target_stock,
+            code=str(target_stock.get("code") or "").strip()[:6],
+            reason="nxt_tp1_completion_receipt_state_not_mapping",
+        )
+        return False
+    if state.get(_NXT_TP1_COMPLETION_RELEASE_PENDING_KEY) is not True:
+        return True
+    if _sell_lifecycle_outbox_pending(target_stock):
+        return False
+    context = state.get(_NXT_TP1_COMPLETION_CONTEXT_KEY)
+    if not isinstance(context, dict) or context.get("schema") != (
+        _NXT_TP1_COMPLETION_CONTEXT_SCHEMA
+    ):
+        _mark_sell_lifecycle_outbox_invalid(
+            target_stock,
+            code=str(target_stock.get("code") or "").strip()[:6],
+            reason="nxt_tp1_completion_context_invalid",
+        )
+        return False
+
+    target_id = _safe_int(target_stock.get("id"), 0)
+    code = str(target_stock.get("code") or "").strip()[:6]
+    filled_qty = _safe_int(context.get("filled_qty"), 0)
+    runner_qty = _safe_int(context.get("runner_qty"), -1)
+    position_qty = _safe_int(state.get("position_qty"), 0)
+    avg_sell_price = _safe_float(context.get("avg_sell_price"), 0.0)
+    realized_profit_pct = _safe_float(context.get("realized_profit_pct"), 0.0)
+    realized_pnl_krw = _safe_float(context.get("realized_pnl_krw"), 0.0)
+    try:
+        completed_at = datetime.fromisoformat(str(context.get("completed_at") or ""))
+        if completed_at.tzinfo is None:
+            raise ValueError("nxt_tp1_completion_timestamp_timezone_missing")
+        completed_at = completed_at.astimezone(_KST)
+    except (TypeError, ValueError):
+        completed_at = None
+    if (
+        target_id <= 0
+        or not re.fullmatch(r"[0-9]{6}", code)
+        or _safe_int(context.get("target_id"), 0) != target_id
+        or str(context.get("code") or "").strip()[:6] != code
+        or position_qty <= 0
+        or filled_qty <= 0
+        or runner_qty <= 0
+        or filled_qty + runner_qty != position_qty
+        or avg_sell_price <= 0
+        or completed_at is None
+    ):
+        _mark_sell_lifecycle_outbox_invalid(
+            target_stock,
+            code=code,
+            reason="nxt_tp1_completion_context_contract_invalid",
+        )
+        return False
+
+    try:
+        with DB.get_session() as session:
+            record = (
+                session.query(RecommendationHistory).filter_by(id=target_id).first()
+            )
+            if record is None:
+                raise RuntimeError("nxt_tp1_completion_record_missing")
+            record.status = "HOLDING"
+            record.scale_in_locked = True
+    except Exception as exc:
+        target_stock.update(
+            {
+                "status": "SELL_ORDERED",
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": (
+                    "nxt_tp1_carried_db_status_commit_failed"
+                ),
+            }
+        )
+        log_error(
+            f"[NXT_TP1_CARRY_DB_COMMIT_BLOCKED] "
+            f"{target_stock.get('name')}({code}) id={target_id}: {exc}"
+        )
+        return False
+
+    updated_state = dict(state)
+    updated_state.pop(_NXT_TP1_COMPLETION_RELEASE_PENDING_KEY, None)
+    updated_state.pop(_NXT_TP1_COMPLETION_CONTEXT_KEY, None)
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = updated_state
+    if not _persist_sell_receipt_recovery_or_interlock(
+        target_stock,
+        code=code,
+        reason="nxt_tp1_completion_runtime_release_ack",
+    ):
+        # DB HOLDING is idempotent.  Restore the durable release intent in
+        # memory so periodic recovery can retry the exact transition and so
+        # runtime cannot resume the runner on an unjournaled state mutation.
+        target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = state
+        target_stock["status"] = "SELL_ORDERED"
+        return False
+
+    target_stock.update(
+        {
+            "status": "HOLDING",
+            "nxt_rising_missed_tp1_partial_pending": False,
+            "nxt_rising_missed_tp1_partial_applied": True,
+            "nxt_rising_missed_tp1_partial_completed_at": completed_at.timestamp(),
+            "nxt_rising_missed_tp1_partial_realized_profit_pct": round(
+                realized_profit_pct, 6
+            ),
+            "nxt_rising_missed_tp1_partial_realized_pnl_krw": realized_pnl_krw,
+            "buy_qty": runner_qty,
+            "sell_reconciled_remaining_qty": runner_qty,
+            "scale_in_locked": True,
+            "sell_partial_exit_carry_active": True,
+        }
+    )
+    target_stock.pop("sell_odno", None)
+    target_stock.pop("sell_ord_no", None)
+    target_stock.pop("sell_order_time", None)
+    target_stock.pop("sell_target_price", None)
+    reconciliation_source = str(
+        target_stock.get("sell_cancel_reconciliation_source") or ""
+    ).strip()
+    if reconciliation_source in {
+        "nxt_tp1_lifecycle_outbox_pending",
+        "nxt_tp1_completion_runtime_release_ack",
+        "sell_lifecycle_outbox_recovery_pending",
+        "durable_sell_receipt_journal_exact_match",
+    } or reconciliation_source.startswith("sell_lifecycle_outbox_recovery_failed:"):
+        target_stock.pop("sell_cancel_reconciliation_required", None)
+        target_stock.pop("sell_cancel_reconciliation_source", None)
+        target_stock.pop("sell_cancel_reconciliation_retry_at", None)
+    target_stock.pop("sell_partial_exit_recovery_required", None)
+
+    log_info(
+        f"[NXT_TP1_PARTIAL_COMPLETED] {target_stock.get('name')}({code}) "
+        f"sold={filled_qty} runner={runner_qty} avg_sell={avg_sell_price} "
+        f"profit={realized_profit_pct:+.2f}%"
+    )
+    pending_msg = str(context.get("pending_message") or "")
+    target_stock.pop("pending_sell_msg", None)
+    if event_bus:
+        event_bus.publish(
+            "TELEGRAM_BROADCAST",
+            {
+                "message": (
+                    f"{pending_msg}\n"
+                    f"✅ **부분익절 체결:** `{avg_sell_price:,}원` "
+                    f"(`{realized_profit_pct:+.2f}%`)\n"
+                    f"🏃 runner: `{runner_qty}주`"
+                ),
+                "audience": _receipt_audience(target_stock),
+                "parse_mode": "HTML",
+            },
+        )
+    return True
+
+
+def recover_pending_sell_lifecycle_outbox(target_stock: dict[str, Any]) -> bool:
+    """Replay non-terminal SELL legs and finish any gated TP1 runner release."""
+
+    if not replay_pending_sell_partial_lifecycle_outbox(target_stock):
+        return False
+    return _release_nxt_tp1_completion_after_lifecycle_ack(target_stock)
 
 
 def _handle_nxt_rising_missed_tp1_partial_sell_execution(
@@ -3945,6 +7920,14 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
     unit_exec_price: int | None = None,
     unit_exec_qty: int | None = None,
 ) -> None:
+    if not recover_pending_sell_lifecycle_outbox(target_stock):
+        # Continue consuming exact broker truth even when telemetry append/ack
+        # is temporarily unavailable.  Every old leg is carried into the next
+        # receipt-state journal below and order/runtime mutation stays blocked.
+        log_error(
+            f"[NXT_TP1_LIFECYCLE_OUTBOX_PRE_RECEIPT_DEFERRED] "
+            f"{target_stock.get('name')}({code})"
+        )
     requested_qty = max(
         0,
         _safe_int(target_stock.get("nxt_rising_missed_tp1_partial_requested_qty"), 0),
@@ -4076,7 +8059,8 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
     # restart between cumulative packets must be able to reconstruct the
     # special partial-order consumer instead of leaving a locked DB position
     # with no replay target.
-    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = {
+    prior_receipt_state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    in_flight_state = {
         "order_no": str(order_no or "").strip(),
         "position_qty": original_qty,
         "expected_qty": requested_qty,
@@ -4104,55 +8088,82 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
         "partial_order_requested_qty": requested_qty,
         "receipt_updated_at_epoch": time.time(),
     }
-    target_stock["sell_reconciled_remaining_qty"] = runner_qty
-    journal_persisted = _persist_sell_receipt_recovery_or_interlock(
-        target_stock,
-        code=code,
-        reason="nxt_tp1_partial_fill_progress",
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = (
+        _carry_pending_sell_lifecycle_outbox(
+            prior_receipt_state,
+            in_flight_state,
+        )
     )
+    target_stock["sell_reconciled_remaining_qty"] = runner_qty
     partial_completed = filled_qty >= requested_qty
-    try:
-        with DB.get_session() as session:
-            record = (
-                session.query(RecommendationHistory).filter_by(id=target_id).first()
-            )
-            if record:
-                record.status = (
-                    "HOLDING"
-                    if partial_completed and journal_persisted
-                    else "SELL_ORDERED"
+
+    def _persist_runner_db_interlock_after_outbox() -> None:
+        """Keep DB custody behind the already-fsynced receipt/lifecycle leg."""
+
+        try:
+            with DB.get_session() as session:
+                record = (
+                    session.query(RecommendationHistory).filter_by(id=target_id).first()
                 )
-                record.scale_in_locked = True
-    except Exception as exc:
-        log_error(f"🚨 [DB 에러] ID {target_id} NXT TP1 체결수량 반영 실패: {exc}")
+                if record:
+                    # The runner remains unavailable until the exact TP1
+                    # completion transition is durably appended and acknowledged.
+                    record.status = "SELL_ORDERED"
+                    record.scale_in_locked = True
+        except Exception as exc:
+            log_error(f"🚨 [DB 에러] ID {target_id} NXT TP1 체결수량 반영 실패: {exc}")
 
     if not partial_completed:
-        _log_holding_pipeline(
-            target_stock.get("name"),
-            code,
-            target_id,
-            "nxt_rising_missed_tp1_partial_fill_progress",
-            candidate_stock=target_stock,
-            observed_at=now,
-            observe_candidate_lifecycle=False,
-            ord_no=order_no or "-",
-            fill_qty=effective_exec_qty,
+        progress_leg = _nxt_tp1_sell_lifecycle_outbox_leg(
+            target_stock,
+            code=code,
+            target_id=target_id,
+            now=now,
+            order_no=order_no,
+            execution_no=execution_no,
+            incremental_qty=effective_exec_qty,
+            incremental_price=effective_exec_price,
             filled_qty=filled_qty,
             requested_qty=requested_qty,
             runner_qty=runner_qty,
-            fill_price=round(effective_exec_price, 4),
-            execution_no=execution_no or "-",
-            sell_receipt_economics_complete=True,
-            sell_receipt_quantity_contract_complete=True,
-            sell_receipt_unit_fill_consistent=source_unit_contract_complete,
-            main_lifecycle_exit_qty=effective_exec_qty,
-            main_lifecycle_exit_price=round(effective_exec_price, 4),
-            **partial_lifecycle_economics,
-            actual_order_submitted=True,
-            broker_order_forbidden=False,
-            runtime_effect=True,
-            **_broker_execution_provenance_fields(target_stock),
+            avg_sell_price=_safe_float(
+                target_stock.get("nxt_rising_missed_tp1_partial_avg_sell_price"),
+                effective_exec_price,
+            ),
+            realized_profit_pct=0.0,
+            realized_pnl_krw=cumulative_realized_pnl_krw,
+            source_unit_contract_complete=source_unit_contract_complete,
+            partial_lifecycle_economics=partial_lifecycle_economics,
+            completed=False,
         )
+        queued = _queue_sell_lifecycle_outbox_leg(
+            target_stock,
+            leg=progress_leg,
+            code=code,
+            reason="nxt_tp1_partial_fill_progress_with_lifecycle_outbox",
+        )
+        if not queued:
+            target_stock.update(
+                {
+                    "status": "SELL_ORDERED",
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        "nxt_tp1_lifecycle_outbox_pending"
+                    ),
+                }
+            )
+            return
+        _persist_runner_db_interlock_after_outbox()
+        if not replay_pending_sell_partial_lifecycle_outbox(target_stock):
+            target_stock.update(
+                {
+                    "status": "SELL_ORDERED",
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        "nxt_tp1_lifecycle_outbox_pending"
+                    ),
+                }
+            )
         return
 
     avg_sell_price = _safe_float(
@@ -4178,7 +8189,11 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
         "execution_identity_complete": source_execution_identity_complete,
         "executions_by_no": holder[str(order_no or "").strip()],
     }
-    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = {
+    completion_now = (
+        now.replace(tzinfo=_KST) if now.tzinfo is None else now.astimezone(_KST)
+    )
+    pending_msg = str(target_stock.get("pending_sell_msg", "") or "")[:3000]
+    completion_state = {
         "order_no": "",
         "position_qty": original_qty,
         "expected_qty": 0,
@@ -4204,101 +8219,97 @@ def _handle_nxt_rising_missed_tp1_partial_sell_execution(
         "executions_by_no": {},
         "partial_order_kind": "nxt_rising_missed_tp1",
         "partial_order_requested_qty": requested_qty,
+        _NXT_TP1_COMPLETION_RELEASE_PENDING_KEY: True,
+        _NXT_TP1_COMPLETION_CONTEXT_KEY: {
+            "schema": _NXT_TP1_COMPLETION_CONTEXT_SCHEMA,
+            "target_id": target_id,
+            "code": code,
+            "order_no": str(order_no or "").strip(),
+            "execution_no": str(execution_no or "").strip(),
+            "completed_at": completion_now.isoformat(timespec="microseconds"),
+            "filled_qty": filled_qty,
+            "runner_qty": runner_qty,
+            "avg_sell_price": avg_sell_price,
+            "realized_profit_pct": realized_profit_pct,
+            "realized_pnl_krw": realized_pnl_krw,
+            "pending_message": pending_msg,
+        },
         "receipt_updated_at_epoch": time.time(),
     }
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = (
+        _carry_pending_sell_lifecycle_outbox(
+            target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY),
+            completion_state,
+        )
+    )
     target_stock["sell_reconciled_remaining_qty"] = runner_qty
-    carried_journal_persisted = _persist_sell_receipt_recovery_or_interlock(
+    completion_leg = _nxt_tp1_sell_lifecycle_outbox_leg(
         target_stock,
         code=code,
-        reason="nxt_tp1_partial_fill_completed",
+        target_id=target_id,
+        now=now,
+        order_no=order_no,
+        execution_no=execution_no,
+        incremental_qty=effective_exec_qty,
+        incremental_price=effective_exec_price,
+        filled_qty=filled_qty,
+        requested_qty=requested_qty,
+        runner_qty=runner_qty,
+        avg_sell_price=avg_sell_price,
+        realized_profit_pct=realized_profit_pct,
+        realized_pnl_krw=realized_pnl_krw,
+        source_unit_contract_complete=source_unit_contract_complete,
+        partial_lifecycle_economics=partial_lifecycle_economics,
+        completed=True,
     )
-    if not carried_journal_persisted:
-        target_stock["status"] = "SELL_ORDERED"
-        target_stock["nxt_rising_missed_tp1_partial_pending"] = False
-        target_stock["nxt_rising_missed_tp1_partial_applied"] = False
-        return
-    try:
-        with DB.get_session() as session:
-            record = (
-                session.query(RecommendationHistory).filter_by(id=target_id).first()
-            )
-            if record:
-                record.status = "HOLDING"
-                record.scale_in_locked = True
-    except Exception as exc:
+    queued = _queue_sell_lifecycle_outbox_leg(
+        target_stock,
+        leg=completion_leg,
+        code=code,
+        reason="nxt_tp1_partial_completion_with_lifecycle_outbox",
+    )
+    if not queued:
         target_stock.update(
             {
                 "status": "SELL_ORDERED",
+                "nxt_rising_missed_tp1_partial_pending": True,
+                "nxt_rising_missed_tp1_partial_applied": False,
                 "sell_cancel_reconciliation_required": True,
-                "sell_cancel_reconciliation_source": (
-                    "nxt_tp1_carried_db_status_commit_failed"
-                ),
+                "sell_cancel_reconciliation_source": "nxt_tp1_lifecycle_outbox_pending",
             }
         )
         log_error(
-            f"[NXT_TP1_CARRY_DB_COMMIT_BLOCKED] "
-            f"{target_stock.get('name')}({code}) id={target_id}: {exc}"
+            f"[NXT_TP1_COMPLETION_LIFECYCLE_DEFERRED] "
+            f"{target_stock.get('name')}({code}) id={target_id}"
         )
         return
-    target_stock["status"] = "HOLDING"
-    target_stock["nxt_rising_missed_tp1_partial_pending"] = False
-    target_stock["nxt_rising_missed_tp1_partial_applied"] = True
-    target_stock["nxt_rising_missed_tp1_partial_completed_at"] = now.timestamp()
-    target_stock["nxt_rising_missed_tp1_partial_realized_profit_pct"] = round(
-        realized_profit_pct,
-        6,
-    )
-    target_stock["nxt_rising_missed_tp1_partial_realized_pnl_krw"] = realized_pnl_krw
-    target_stock.pop("sell_odno", None)
-    target_stock.pop("sell_order_time", None)
-    target_stock.pop("sell_target_price", None)
-    pending_msg = str(target_stock.pop("pending_sell_msg", "") or "")
-
-    _log_holding_pipeline(
-        target_stock.get("name"),
-        code,
-        target_id,
-        "nxt_rising_missed_tp1_partial_sell_completed",
-        candidate_stock=target_stock,
-        observed_at=now,
-        observe_candidate_lifecycle=False,
-        ord_no=order_no or "-",
-        execution_no=execution_no or "-",
-        sell_price=avg_sell_price,
-        sold_qty=filled_qty,
-        main_lifecycle_exit_qty=effective_exec_qty,
-        main_lifecycle_exit_price=round(effective_exec_price, 4),
-        sell_receipt_economics_complete=True,
-        sell_receipt_quantity_contract_complete=True,
-        sell_receipt_unit_fill_consistent=source_unit_contract_complete,
-        **partial_lifecycle_economics,
-        runner_qty=runner_qty,
-        realized_profit_pct=f"{realized_profit_pct:+.2f}",
-        realized_pnl_krw=realized_pnl_krw,
-        exit_rule="nxt_rising_missed_tp1_partial_runner",
-        actual_order_submitted=True,
-        runtime_effect=True,
-        decision_authority="nxt_rising_missed_tp1_partial_runner_canary",
-        **_broker_execution_provenance_fields(target_stock),
-    )
-    log_info(
-        f"[NXT_TP1_PARTIAL_COMPLETED] {target_stock.get('name')}({code}) "
-        f"sold={filled_qty} runner={runner_qty} avg_sell={avg_sell_price} "
-        f"profit={realized_profit_pct:+.2f}%"
-    )
-    if event_bus:
-        event_bus.publish(
-            "TELEGRAM_BROADCAST",
+    _persist_runner_db_interlock_after_outbox()
+    if not replay_pending_sell_partial_lifecycle_outbox(target_stock):
+        target_stock.update(
             {
-                "message": (
-                    f"{pending_msg}\n"
-                    f"✅ **부분익절 체결:** `{avg_sell_price:,}원` "
-                    f"(`{realized_profit_pct:+.2f}%`)\n"
-                    f"🏃 runner: `{runner_qty}주`"
+                "status": "SELL_ORDERED",
+                "nxt_rising_missed_tp1_partial_pending": True,
+                "nxt_rising_missed_tp1_partial_applied": False,
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": "nxt_tp1_lifecycle_outbox_pending",
+            }
+        )
+        log_error(
+            f"[NXT_TP1_COMPLETION_LIFECYCLE_DEFERRED] "
+            f"{target_stock.get('name')}({code}) id={target_id}"
+        )
+        return
+    if not _release_nxt_tp1_completion_after_lifecycle_ack(target_stock):
+        target_stock.update(
+            {
+                "status": "SELL_ORDERED",
+                "nxt_rising_missed_tp1_partial_pending": True,
+                "nxt_rising_missed_tp1_partial_applied": False,
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": (
+                    "nxt_tp1_completion_runtime_release_ack"
                 ),
-                "audience": _receipt_audience(target_stock),
-                "parse_mode": "HTML",
-            },
+            }
         )
 
 
@@ -4315,14 +8326,123 @@ def _handle_scalp_revive_sell_execution(
     strategy: str,
     sell_receipt: dict[str, Any],
     order_no: str = "",
+    receipt_snapshot_override: dict[str, Any] | None = None,
 ) -> bool:
     if sell_receipt.get("status") != "final" or sell_receipt.get("final") is not True:
+        return False
+    cumulative_qty = _safe_int(sell_receipt.get("cumulative_qty"), 0)
+    expected_qty = _safe_int(sell_receipt.get("expected_qty"), cumulative_qty)
+    if expected_qty <= 0 or cumulative_qty != expected_qty:
+        log_error(
+            f"[SCALP_REVIVE_SELL_RECONCILE_BLOCKED] {code} "
+            "reason=final_position_quantity_contract_invalid "
+            f"expected={expected_qty} cumulative={cumulative_qty}"
+        )
         return False
     revived_position_tag = normalize_position_tag(
         "SCALPING",
         target_stock.get("position_tag")
         or default_position_tag_for_strategy("SCALPING"),
     )
+    if receipt_snapshot_override is None:
+        _sell_execution_provenance_fields(target_stock)
+        sell_receipt_snapshot = _receipt_snapshot(
+            target_stock, _SELL_RECEIPT_SNAPSHOT_KEYS
+        )
+    else:
+        sell_receipt_snapshot = _normalized_receipt_snapshot(receipt_snapshot_override)
+        if (
+            _safe_int(sell_receipt_snapshot.get("id"), target_id) != target_id
+            or str(sell_receipt_snapshot.get("code") or "").strip()[:6] != code
+        ):
+            return False
+    sell_receipt_snapshot.update(
+        {
+            "buy_price": safe_buy_price,
+            "revive": True,
+            "strategy": strategy,
+            "position_tag": revived_position_tag,
+            "sell_execution_order_no": str(order_no or "").strip() or "-",
+            "sell_execution_expected_qty": expected_qty,
+            "sell_execution_cumulative_qty": cumulative_qty,
+            "sell_execution_cumulative_amount": int(sell_receipt["cumulative_amount"]),
+            "sell_execution_cumulative_net_pnl_krw": float(
+                sell_receipt["cumulative_net_pnl_krw"]
+            ),
+            "sell_execution_final_leg_qty": int(sell_receipt["incremental_qty"]),
+            "sell_execution_final_leg_price": float(sell_receipt["incremental_price"]),
+            "sell_execution_final_leg_net_pnl_krw": float(
+                sell_receipt["incremental_net_pnl_krw"]
+            ),
+            "sell_execution_execution_no": str(
+                sell_receipt.get("execution_no") or ""
+            ).strip()
+            or "-",
+            "sell_execution_receipt_economics_complete": bool(
+                sell_receipt.get("economics_complete")
+            ),
+            "sell_execution_receipt_quantity_contract_complete": bool(
+                sell_receipt.get("quantity_contract_complete")
+            ),
+            "sell_execution_receipt_unit_fill_consistent": bool(
+                sell_receipt.get("unit_fill_consistent", True)
+            ),
+        }
+    )
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    state = dict(state) if isinstance(state, dict) else {}
+    existing_finalization_snapshot = state.get("finalization_receipt_snapshot")
+    if state.get("final_pending_db_commit") is True and isinstance(
+        existing_finalization_snapshot, dict
+    ):
+        # Restart recovery must reuse the byte-stable identity/provenance
+        # snapshot already bound into the journal; reconstructed runtime
+        # memory may not carry the original scanner promotion fields.
+        sell_receipt_snapshot = dict(existing_finalization_snapshot)
+    state.update(
+        {
+            "position_qty": expected_qty,
+            "aggregate_cumulative_qty": cumulative_qty,
+            "aggregate_cumulative_amount": int(sell_receipt["cumulative_amount"]),
+            "cumulative_net_pnl_krw": float(sell_receipt["cumulative_net_pnl_krw"]),
+            "remaining_qty": 0,
+            "final": True,
+            "final_pending_db_commit": True,
+            "finalization_exec_price": int(exec_price),
+            "finalization_now_iso": now.isoformat(),
+            "finalization_strategy": str(strategy),
+            "finalization_is_scalp_revive": True,
+            "finalization_order_no": str(order_no or "").strip(),
+            "finalization_revived_position_tag": revived_position_tag,
+            "finalization_receipt_snapshot": json.loads(
+                json.dumps(sell_receipt_snapshot, ensure_ascii=True, default=str)
+            ),
+            "receipt_updated_at_epoch": time.time(),
+        }
+    )
+    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = state
+    target_stock.update(
+        {
+            "status": "SELL_ORDERED",
+            "scale_in_locked": True,
+            "sell_partial_exit_carry_active": True,
+            "sell_partial_exit_recovery_required": True,
+            "sell_cancel_reconciliation_required": True,
+            "sell_cancel_reconciliation_source": "revive_final_receipt_db_commit_pending",
+        }
+    )
+    final_lifecycle_leg = _standard_sell_final_lifecycle_outbox_leg(
+        sell_receipt_snapshot,
+        target_id=target_id,
+        now=now,
+    )
+    if not _queue_sell_lifecycle_outbox_leg(
+        target_stock,
+        leg=final_lifecycle_leg,
+        code=code,
+        reason="revive_final_sell_receipt_with_lifecycle_outbox_before_db_commit",
+    ):
+        return False
     try:
         with DB.get_session() as session:
             record = (
@@ -4354,9 +8474,7 @@ def _handle_scalp_revive_sell_execution(
                 )
                 return False
             entry_receipt_buy_price_reconciled = bool(
-                target_stock.get(
-                    "sell_buy_price_reconciled_from_entry_receipt", False
-                )
+                target_stock.get("sell_buy_price_reconciled_from_entry_receipt", False)
                 and position_buy_qty == completed_sell_qty == 1
                 and safe_buy_price > 0
             )
@@ -4395,8 +8513,29 @@ def _handle_scalp_revive_sell_execution(
             session.add(new_record)
             session.flush()
             new_watch_id = new_record.id
-            # Persist both the completed position and its replacement WATCHING
-            # row before publishing any completion evidence.
+            state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+            if not isinstance(state, dict):
+                session.rollback()
+                return False
+            state = dict(state)
+            state.update(
+                {
+                    "finalization_new_watch_id": int(new_watch_id or 0),
+                    "finalization_revived_position_tag": revived_position_tag,
+                }
+            )
+            target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = state
+            if not _persist_sell_receipt_recovery_or_interlock(
+                target_stock,
+                code=code,
+                reason="revive_precommit_new_watch_binding",
+            ):
+                session.rollback()
+                return False
+            # The journal now binds the exact uncommitted replacement ID.  The
+            # old completion and new WATCHING row commit atomically; a crash
+            # before commit leaves no DB rows and recovery safely replaces the
+            # stale uncommitted ID, while a crash after commit can verify it.
             session.commit()
 
             _publish_sell_execution_message(
@@ -4406,84 +8545,8 @@ def _handle_scalp_revive_sell_execution(
                 exec_price=position_weighted_sell_price,
                 profit_rate=profit_rate,
             )
-            final_leg_qty = int(sell_receipt.get("incremental_qty") or 0)
-            final_leg_price = float(sell_receipt.get("incremental_price") or 0.0)
-            final_leg_net_pnl = float(
-                sell_receipt.get("incremental_net_pnl_krw") or 0.0
-            )
-            final_leg_economics = (
-                _main_lifecycle_exit_economics_fields(
-                    target_stock,
-                    buy_price=safe_buy_price,
-                    sell_price=final_leg_price,
-                    sell_qty=final_leg_qty,
-                    realized_net_pnl_krw=final_leg_net_pnl,
-                )
-                if sell_receipt.get("economics_complete") is True
-                else {}
-            )
-            _log_holding_pipeline(
-                target_stock.get("name"),
-                code,
-                target_id,
-                "sell_completed",
-                candidate_stock=target_stock,
-                observed_at=now,
-                order_no=str(order_no or "").strip() or "-",
-                execution_no=sell_receipt.get("execution_no") or "-",
-                metric_role="execution_quality_real_only",
-                decision_authority="broker_sell_fill_observation_only",
-                window_policy="same_position_cycle_broker_fill",
-                sample_floor="1_confirmed_broker_sell_fill",
-                primary_decision_metric="confirmed_sell_fill_price_and_profit_rate",
-                source_quality_gate=(
-                    "broker_execution_receipt_with_real_submission_provenance"
-                ),
-                runtime_effect=True,
-                actual_order_submitted=True,
-                broker_order_forbidden=False,
-                forbidden_uses=(
-                    "threshold_mutation|provider_route_change|quantity_cap_release|"
-                    "broker_guard_bypass|bot_restart"
-                ),
-                sell_price=position_weighted_sell_price,
-                sell_qty=completed_sell_qty,
-                main_lifecycle_exit_qty=final_leg_qty,
-                main_lifecycle_exit_price=round(final_leg_price, 4),
-                main_lifecycle_broker_reconciled=True,
-                main_lifecycle_reconciled_final_exit=True,
-                buy_price=f"{safe_buy_price:.2f}",
-                buy_qty=position_buy_qty,
-                sell_buy_price_reconciled_from_entry_receipt=(
-                    entry_receipt_buy_price_reconciled
-                ),
-                sell_buy_price_reconcile_db_price=(
-                    target_stock.get("sell_buy_price_reconcile_db_price")
-                    if entry_receipt_buy_price_reconciled
-                    else "-"
-                ),
-                sell_buy_price_reconcile_reason=(
-                    target_stock.get("sell_buy_price_reconcile_reason")
-                    if entry_receipt_buy_price_reconciled
-                    else "not_reconciled"
-                ),
-                realized_pnl_krw=realized_pnl_krw,
-                realized_pnl_krw_source="broker_fill_prices_fee_aware",
-                profit_rate=f"{profit_rate:+.2f}",
-                exit_rule=target_stock.get("last_exit_rule") or "-",
-                exit_decision_source=target_stock.get("last_exit_decision_source")
-                or "MANUAL",
-                revive=True,
-                new_watch_id=int(new_watch_id or 0),
-                **_broker_execution_provenance_fields(target_stock),
-                **_trailing_continuation_receipt_fields(target_stock),
-                **final_leg_economics,
-                **scout_ai_execution_attribution_fields(
-                    target_stock,
-                    stage="sell_completed",
-                    actual_order_submitted=True,
-                ),
-            )
+            # The durable outbox is the sole canonical lifecycle emitter for
+            # revive and non-revive completions alike.
             try:
                 record_post_sell_candidate(
                     recommendation_id=target_id,
@@ -4521,6 +8584,12 @@ def _handle_scalp_revive_sell_execution(
         log_error(f"🚨 [DB 에러] ID {target_id} SELL 처리 중 에러: {e}")
         return False
 
+    if not replay_pending_sell_partial_lifecycle_outbox(target_stock):
+        log_error(
+            f"[SCALP_REVIVE_LIFECYCLE_DEFERRED] {target_stock.get('name')}({code}) "
+            "completed DB rows retained behind durable lifecycle recovery"
+        )
+        return False
     _apply_scalp_revive_memory_state(
         target_stock=target_stock,
         code=code,
@@ -4994,12 +9063,8 @@ def _apply_order_notice_to_target(
         if target_order:
             target_order["notice_status"] = status
             target_order["notice_at"] = time.time()
-            target_order["notice_broker_reject_reason_raw"] = (
-                broker_reject_reason_raw
-            )
-            target_order["notice_broker_execution_time_raw"] = (
-                broker_execution_time_raw
-            )
+            target_order["notice_broker_reject_reason_raw"] = broker_reject_reason_raw
+            target_order["notice_broker_execution_time_raw"] = broker_execution_time_raw
             changed = True
 
         known_target_order_no = str(target_stock.get("odno", "") or "").strip()
@@ -5115,10 +9180,7 @@ def handle_order_notice(notice_data):
                 else "official_fid_919_missing"
             ),
             broker_execution_time_raw=broker_execution_time_raw or "-",
-            **{
-                key: raw_fields.get(key)
-                for key in _BROKER_EXECUTION_RAW_FIELD_KEYS
-            },
+            **{key: raw_fields.get(key) for key in _BROKER_EXECUTION_RAW_FIELD_KEYS},
             metric_role="execution_quality_real_only",
             decision_authority="broker_order_receipt_provenance_only",
             window_policy="same_exact_broker_order_notice",
@@ -5296,6 +9358,42 @@ def _submit_opening_rotation_profit_order(
             "scale_in_locked": True,
         }
     )
+    from src.engine import sniper_state_handlers as _state_handlers
+
+    submit_started_at = time.time()
+    submit_session = _sell_execution_session_bucket(
+        datetime.fromtimestamp(submit_started_at, tz=_KST)
+    )
+    submit_context_fields = build_pending_sell_submit_context_fields(
+        target_stock,
+        code=code,
+        requested_qty=1,
+        started_at=submit_started_at,
+        intended_route="KRX",
+        intended_effective_venue="KRX",
+        intended_session_bucket=submit_session,
+    )
+    submit_generation = str(submit_context_fields["sell_submit_generation"])
+    submit_context_sha256 = str(submit_context_fields["sell_submit_context_sha256"])
+    target_stock.update({"status": "SELL_ORDERED", **submit_context_fields})
+    if not _state_handlers._persist_sell_submit_pre_call_boundary(
+        target_stock,
+        code,
+        target_id=target_stock.get("id"),
+        db=DB,
+    ):
+        with _active_state_lock():
+            reconciliation_required = bool(
+                target_stock.get("sell_cancel_reconciliation_required")
+            )
+            target_stock["opening_rotation_profit_target_submit_pending"] = False
+            target_stock["opening_rotation_profit_order_protection_failed"] = True
+            target_stock["opening_rotation_episode_phase"] = (
+                "TARGET_PRE_CALL_CUSTODY_RECONCILING"
+                if reconciliation_required
+                else "TARGET_PRE_CALL_CUSTODY_BLOCKED"
+            )
+        return False
     try:
         response = kiwoom_orders.send_sell_order_market(
             code=code,
@@ -5314,16 +9412,55 @@ def _submit_opening_rotation_profit_order(
             f"{target_stock.get('name')}({code}) error={exc}"
         )
 
-    response_order_no = _extract_order_no(response)
+    response_contract = _state_handlers._classify_sell_submit_response(response)
+    response_order_no = response_contract["order_no"]
+    reject_boundary_required = False
     with _active_state_lock():
-        notice_order_no = str(
-            target_stock.get("opening_rotation_profit_target_order_no") or ""
-        ).strip()
-        order_no = response_order_no or notice_order_no
-        submit_succeeded = bool(
-            order_no and (_is_ok_response(response) or notice_order_no)
+        race_state = _state_handlers._sell_submit_response_race_state(
+            target_stock,
+            generation=submit_generation,
+            context_sha256=submit_context_sha256,
+            requested_qty=1,
+            response_order_no=response_order_no,
         )
-        if submit_succeeded:
+        receipt_proved = race_state in {
+            "receipt_proved",
+            "receipt_proved_custody_gap",
+        }
+        receipt_proof = target_stock.get("_sell_submit_receipt_proof")
+        receipt_order_no = (
+            str(receipt_proof.get("order_no") or "").strip()
+            if isinstance(receipt_proof, dict)
+            else ""
+        )
+        order_no = receipt_order_no or response_order_no
+        submit_succeeded = bool(
+            order_no
+            and (
+                receipt_proved
+                or (
+                    race_state == "current_pending"
+                    and response_contract["state"] == "success"
+                )
+            )
+        )
+        if race_state in {
+            "receipt_proof_response_order_conflict",
+            "stale_or_intervened",
+        }:
+            submit_succeeded = False
+            target_stock.update(
+                {
+                    "opening_rotation_episode_phase": "TARGET_SUBMIT_RECONCILING",
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        "opening_rotation_submit_response_order_conflict"
+                        if race_state == "receipt_proof_response_order_conflict"
+                        else "opening_rotation_submit_response_stale_or_intervened"
+                    ),
+                }
+            )
+        elif submit_succeeded:
             target_stock.update(
                 {
                     "exit_mode": "OPENING_ROTATION_PROTECTED_TP",
@@ -5340,19 +9477,77 @@ def _submit_opening_rotation_profit_order(
                     "preset_tp_broker_route": "KRX",
                 }
             )
+        elif response_contract["state"] == "ambiguous":
+            target_stock.update(
+                {
+                    "opening_rotation_episode_phase": "TARGET_SUBMIT_RECONCILING",
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        "opening_rotation_submit_response_ambiguous"
+                    ),
+                }
+            )
+        elif response_contract["state"] in {
+            "definitive_reject",
+            "local_no_call",
+        }:
+            reject_boundary_required = True
         else:
             target_stock.update(
                 {
-                    "opening_rotation_profit_target_submit_pending": False,
-                    "opening_rotation_profit_order_protection_failed": True,
-                    "opening_rotation_new_episode_blocked": True,
-                    "opening_rotation_episode_phase": "TARGET_SUBMIT_FAILED",
-                    "opening_rotation_profit_target_submit_error": str(
-                        (response or {}).get("return_msg")
-                        if isinstance(response, dict)
-                        else response
-                    )[:240],
-                    "scale_in_locked": True,
+                    "opening_rotation_episode_phase": "TARGET_SUBMIT_RECONCILING",
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        "opening_rotation_submit_response_unclassified"
+                    ),
+                }
+            )
+    if reject_boundary_required:
+        if _state_handlers._commit_definitive_sell_reject_boundary(
+            target_stock,
+            code,
+            target_id=target_stock.get("id"),
+            generation=submit_generation,
+            db=DB,
+        ):
+            with _active_state_lock():
+                _state_handlers._clear_sell_submit_context(target_stock)
+                # An asynchronous order notice is not generation/quantity
+                # proof.  If the exact HTTP acknowledgement rejected this
+                # generation, remove every notice-derived target alias so a
+                # duplicate BUY receipt cannot treat it as a protected exit.
+                for field_name in (
+                    "opening_rotation_profit_target_order_no",
+                    "preset_tp_ord_no",
+                    "preset_tp_qty",
+                    "preset_tp_price",
+                    "preset_tp_broker_route",
+                ):
+                    target_stock.pop(field_name, None)
+                target_stock.update(
+                    {
+                        "status": "HOLDING",
+                        "opening_rotation_profit_target_submit_pending": False,
+                        "opening_rotation_profit_order_protection_failed": True,
+                        "opening_rotation_new_episode_blocked": True,
+                        "opening_rotation_episode_phase": "TARGET_SUBMIT_FAILED",
+                        "opening_rotation_profit_target_submit_error": str(
+                            (response or {}).get("return_msg")
+                            if isinstance(response, dict)
+                            else response
+                        )[:240],
+                        "scale_in_locked": True,
+                    }
+                )
+        else:
+            target_stock.update(
+                {
+                    "status": "SELL_ORDERED",
+                    "opening_rotation_episode_phase": "TARGET_SUBMIT_RECONCILING",
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        "opening_rotation_reject_boundary_incomplete"
+                    ),
                 }
             )
     if not submit_succeeded:
@@ -5361,6 +9556,45 @@ def _submit_opening_rotation_profit_order(
             f"{target_stock.get('name')}({code}) target={target_price}"
         )
         return False
+    _log_holding_pipeline(
+        target_stock.get("name"),
+        code,
+        target_stock.get("id"),
+        "sell_order_sent",
+        candidate_stock=target_stock,
+        requested_qty=1,
+        submitted_qty=1,
+        qty=1,
+        broker_order_no=order_no,
+        broker_order_no_list=order_no,
+        broker_order_qty_list=f"{order_no}:1",
+        lifecycle_submission_leg_contract="exact_broker_single_order_leg_v1",
+        lifecycle_submission_time_source=(
+            BROKER_EXECUTION_RECEIVE_TIME_SOURCE
+            if receipt_proved
+            else "pipeline_emit_after_broker_success_response"
+        ),
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        runtime_effect=not receipt_proved,
+        broker_route="KRX",
+        effective_venue="KRX",
+        exit_effective_venue="KRX",
+        market_session_bucket=submit_session,
+        exit_market_session_bucket=submit_session,
+        metric_role="execution_quality_real_only",
+        decision_authority="broker_sell_submission_observation_only",
+        window_policy="same_position_cycle_broker_submission",
+        sample_floor="1_successful_broker_sell_submission",
+        primary_decision_metric="broker_sell_order_sent_qty",
+        source_quality_gate=(
+            "successful_broker_response_and_execution_route_provenance"
+        ),
+        forbidden_uses=(
+            "threshold_mutation|provider_route_change|quantity_cap_release|"
+            "broker_guard_bypass|bot_restart"
+        ),
+    )
     _log_holding_pipeline(
         target_stock.get("name"),
         code,
@@ -5431,37 +9665,23 @@ def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
     helper no longer places a +1.5% preset sell order; it only cancels an
     existing preset order if one is still tracked on the position.
     """
-    from src.engine import kiwoom_orders
-
     preset_ord_no = str(target_stock.get("preset_tp_ord_no", "") or "").strip()
 
     if preset_ord_no:
-        preset_broker_route = (
-            str(
-                target_stock.get("preset_tp_broker_route")
-                or target_stock.get("entry_execution_broker_route")
-                or ""
-            )
-            .strip()
-            .upper()
+        target_stock.update(
+            {
+                "status": "SELL_ORDERED",
+                "sell_cancel_reconciliation_required": True,
+                "sell_cancel_reconciliation_source": (
+                    "legacy_preset_tp_missing_exact_pending_generation"
+                ),
+            }
         )
-        cancel_res = kiwoom_orders.send_cancel_order(
-            code=code,
-            orig_ord_no=preset_ord_no,
-            token=KIWOOM_TOKEN,
-            qty=0,
-            dmst_stex_tp=(
-                preset_broker_route
-                if preset_broker_route in {"KRX", "NXT", "SOR"}
-                else None
-            ),
+        log_error(
+            f"[SCALP_TRAILING_UNIFIED_BLOCKED] {target_stock.get('name')}({code}) "
+            f"legacy preset TP {preset_ord_no} has no exact pending generation"
         )
-        if not _is_ok_response(cancel_res):
-            log_error(
-                f"⚠️ [SCALP_TRAILING_UNIFIED] {target_stock.get('name')}({code}) "
-                "legacy preset TP cancel failed; leaving tracked order number for retry."
-            )
-            return False
+        return False
     log_info(
         f"[SCALP_TRAILING_UNIFIED] {target_stock.get('name')}({code}) "
         "preset TP order disabled; exit will be evaluated by scalp_trailing_take_profit."
@@ -5946,9 +10166,7 @@ def _update_db_for_sell(
                 and receipt_buy_qty == 1
                 and _safe_int(getattr(record, "buy_qty", 0), 0) == 1
                 and bool(
-                    receipt_snapshot.get(
-                        "last_entry_receipt_economics_complete", False
-                    )
+                    receipt_snapshot.get("last_entry_receipt_economics_complete", False)
                 )
                 and str(
                     receipt_snapshot.get("last_entry_receipt_execution_no") or ""
@@ -6105,191 +10323,10 @@ def _update_db_for_sell(
                 exec_price=position_weighted_sell_price,
                 profit_rate=profit_rate,
             )
-            final_leg_qty = _safe_int(
-                receipt_snapshot.get("sell_execution_final_leg_qty"), 0
-            )
-            final_leg_price = _safe_float(
-                receipt_snapshot.get("sell_execution_final_leg_price"), 0.0
-            )
-            final_leg_net_pnl_krw = _safe_float(
-                receipt_snapshot.get("sell_execution_final_leg_net_pnl_krw"), 0.0
-            )
-            final_leg_economics = (
-                _main_lifecycle_exit_economics_fields(
-                    receipt_snapshot,
-                    buy_price=safe_buy_price,
-                    sell_price=final_leg_price,
-                    sell_qty=final_leg_qty,
-                    realized_net_pnl_krw=final_leg_net_pnl_krw,
-                )
-                if receipt_snapshot.get("sell_execution_receipt_economics_complete")
-                is True
-                else {}
-            )
-            _log_holding_pipeline(
-                receipt_snapshot.get("name"),
-                str(receipt_snapshot.get("code", "")).strip()[:6],
-                target_id,
-                "sell_completed",
-                candidate_stock=receipt_snapshot,
-                observed_at=now,
-                order_no=receipt_snapshot.get("sell_execution_order_no") or "-",
-                execution_no=(
-                    receipt_snapshot.get("sell_execution_execution_no") or "-"
-                ),
-                sell_price=position_weighted_sell_price,
-                last_sell_fill_price=round(final_leg_price, 4),
-                sell_qty=completed_buy_qty,
-                main_lifecycle_exit_qty=final_leg_qty,
-                main_lifecycle_exit_price=round(final_leg_price, 4),
-                main_lifecycle_broker_reconciled=True,
-                main_lifecycle_reconciled_final_exit=True,
-                sell_execution_receipt_economics_complete=bool(
-                    receipt_snapshot.get(
-                        "sell_execution_receipt_economics_complete", False
-                    )
-                ),
-                sell_execution_receipt_quantity_contract_complete=bool(
-                    receipt_snapshot.get(
-                        "sell_execution_receipt_quantity_contract_complete", False
-                    )
-                ),
-                sell_execution_receipt_unit_fill_consistent=bool(
-                    receipt_snapshot.get(
-                        "sell_execution_receipt_unit_fill_consistent", False
-                    )
-                ),
-                position_weighted_sell_price=position_weighted_sell_price,
-                profit_rate=f"{profit_rate:+.2f}",
-                exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
-                exit_decision_source=receipt_snapshot.get("last_exit_decision_source")
-                or "MANUAL",
-                revive=bool(is_scalp_revive),
-                smoothing_non_revive_post_sell_registered=bool(
-                    receipt_snapshot.get(
-                        "smoothing_non_revive_post_sell_registered", False
-                    )
-                ),
-                smoothing_non_revive_post_sell_registration_status=(
-                    receipt_snapshot.get(
-                        "smoothing_non_revive_post_sell_registration_status"
-                    )
-                    or "not_applicable"
-                ),
-                smoothing_non_revive_post_sell_active_arm_count=_safe_int(
-                    receipt_snapshot.get(
-                        "smoothing_non_revive_post_sell_active_arm_count"
-                    ),
-                    0,
-                ),
-                smoothing_non_revive_post_sell_expires_at_epoch=(
-                    receipt_snapshot.get(
-                        "smoothing_non_revive_post_sell_expires_at_epoch"
-                    )
-                ),
-                strategy=strategy,
-                position_tag=completed_position_tag,
-                buy_price=f"{safe_buy_price:.2f}",
-                buy_qty=completed_buy_qty,
-                sell_buy_price_reconciled_from_entry_receipt=receipt_reconciled,
-                sell_buy_price_reconcile_db_price=(
-                    receipt_snapshot.get("sell_buy_price_reconcile_db_price")
-                    if receipt_reconciled
-                    else "-"
-                ),
-                sell_buy_price_reconcile_reason=(
-                    receipt_snapshot.get("sell_buy_price_reconcile_reason")
-                    if receipt_reconciled
-                    else "not_reconciled"
-                ),
-                realized_pnl_krw=realized_pnl_krw,
-                partial_realized_pnl_krw=partial_realized_pnl_krw,
-                runner_realized_pnl_krw=runner_realized_pnl_krw,
-                partial_realized_qty=partial_qty,
-                runner_realized_qty=completed_runner_qty,
-                broker_route=receipt_snapshot.get(
-                    "last_sell_execution_broker_route", "-"
-                ),
-                broker_route_resolution=receipt_snapshot.get(
-                    "last_sell_execution_broker_route_resolution", "-"
-                ),
-                effective_venue=receipt_snapshot.get("last_sell_execution_cohort", "-"),
-                actual_order_submitted=True,
-                **_broker_execution_provenance_fields(receipt_snapshot),
-                **final_leg_economics,
-                **scout_ai_execution_attribution_fields(
-                    receipt_snapshot,
-                    stage="sell_completed",
-                    actual_order_submitted=True,
-                ),
-                broker_order_forbidden=False,
-                no_scale_in_counterfactual_profit_pct=receipt_snapshot.get(
-                    "no_scale_in_counterfactual_profit_pct", "-"
-                ),
-                scale_in_incremental_realized_delta_pct=receipt_snapshot.get(
-                    "scale_in_incremental_realized_delta_pct", "-"
-                ),
-                pre_add_avg_price=receipt_snapshot.get("pre_add_avg_price", "-"),
-                post_add_avg_price=receipt_snapshot.get("post_add_avg_price", "-"),
-                pre_add_qty=receipt_snapshot.get("pre_add_qty", "-"),
-                post_add_qty=receipt_snapshot.get("post_add_qty", "-"),
-                opening_rotation_entry_time_bucket=receipt_snapshot.get(
-                    "opening_rotation_entry_time_bucket", "-"
-                ),
-                opening_rotation_window_version=receipt_snapshot.get(
-                    "opening_rotation_window_version", "-"
-                ),
-                opening_rotation_episode_id=receipt_snapshot.get(
-                    "opening_rotation_episode_id", "-"
-                ),
-                opening_rotation_episode_promotion_id=receipt_snapshot.get(
-                    "opening_rotation_episode_promotion_id", "-"
-                ),
-                opening_rotation_profile_id=receipt_snapshot.get(
-                    "opening_rotation_profile_id", "-"
-                ),
-                opening_rotation_policy_hash=receipt_snapshot.get(
-                    "opening_rotation_policy_hash", "-"
-                ),
-                opening_rotation_policy_schema_version=receipt_snapshot.get(
-                    "opening_rotation_policy_schema_version", "-"
-                ),
-                opening_rotation_margin_one_share_authorized=bool(
-                    receipt_snapshot.get(
-                        "opening_rotation_margin_one_share_authorized", False
-                    )
-                ),
-                opening_rotation_margin_authority_reason=receipt_snapshot.get(
-                    "opening_rotation_margin_authority_reason", "not_evaluated"
-                ),
-                opening_rotation_margin_rate=receipt_snapshot.get(
-                    "opening_rotation_margin_rate", 0
-                ),
-                opening_rotation_margin_orderable_amount=receipt_snapshot.get(
-                    "opening_rotation_margin_orderable_amount", 0
-                ),
-                opening_rotation_margin_orderable_qty_cap=receipt_snapshot.get(
-                    "opening_rotation_margin_orderable_qty_cap", 0
-                ),
-                opening_rotation_margin_requested_unit_price=receipt_snapshot.get(
-                    "opening_rotation_margin_requested_unit_price", 0
-                ),
-                opening_rotation_margin_cash_guard_bypassed=bool(
-                    receipt_snapshot.get(
-                        "opening_rotation_margin_cash_guard_bypassed", False
-                    )
-                ),
-                opening_rotation_margin_order_api=receipt_snapshot.get(
-                    "opening_rotation_margin_order_api"
-                ),
-                opening_rotation_margin_credit_order_api_used=receipt_snapshot.get(
-                    "opening_rotation_margin_credit_order_api_used"
-                ),
-                mae_pct=receipt_snapshot.get("mae_pct", "-"),
-                mfe_pct=receipt_snapshot.get("mfe_pct", "-"),
-                **_trailing_continuation_receipt_fields(receipt_snapshot),
-                **_sell_completion_contract_fields(completed_position_tag),
-            )
+            # The exact sell lifecycle row is emitted only by the durable
+            # outbox after this DB commit.  Keeping a second direct emitter
+            # here created distinct content for the same broker execution and
+            # made append-success/ack-crash recovery non-idempotent.
             try:
                 record_post_sell_candidate(
                     recommendation_id=target_id,
@@ -6487,6 +10524,22 @@ def _handle_add_buy_execution(
     target_stock["post_add_qty"] = int(new_qty or 0)
     target_stock["last_add_type"] = add_type
     pending_add_reason = str(target_stock.get("pending_add_reason") or "").strip()
+    pending_add_ai_decision_trace_id = str(
+        target_stock.get("pending_add_ai_decision_trace_id") or ""
+    ).strip()
+    if (
+        pending_add_ai_decision_trace_id
+        in {
+            "",
+            "-",
+            "None",
+            "none",
+            "null",
+        }
+        or len(pending_add_ai_decision_trace_id) > MAIN_LIFECYCLE_MAX_DATA_STRING_LENGTH
+        or "\x00" in pending_add_ai_decision_trace_id
+    ):
+        pending_add_ai_decision_trace_id = ""
     winner_recovery_ai_fields = _winner_recovery_ai_receipt_fields(target_stock)
     target_stock["last_add_reason"] = pending_add_reason
     target_stock["last_add_economic_direction"] = add_economic_direction
@@ -6574,10 +10627,11 @@ def _handle_add_buy_execution(
     # receipt cannot raise at call binding time on duplicate keyword names.
     # Exact split-leg metadata is the final authority for the executed leg.
     entry_route_fields = _probe_venue_provenance_fields(target_stock)
-    if (
-        split_leg_fields.get("broker_route") in {None, "", "-"}
-        and entry_route_fields.get("broker_route")
-    ):
+    if split_leg_fields.get("broker_route") in {
+        None,
+        "",
+        "-",
+    } and entry_route_fields.get("broker_route"):
         split_leg_fields["broker_route"] = entry_route_fields["broker_route"]
         split_leg_fields["broker_route_resolution"] = entry_route_fields.get(
             "broker_route_resolution", "recorded_at_successful_entry_submit"
@@ -6618,6 +10672,12 @@ def _handle_add_buy_execution(
         reason="receipt_confirmed",
         note=history_note,
     )
+    scale_in_submit_telemetry_committed = _lifecycle_submit_telemetry_committed(
+        target_stock,
+        marker_key="_scale_in_lifecycle_submit_telemetry_committed_by_order_no",
+        order_no=order_no,
+        requested_qty=order_requested_qty,
+    )
     if publish_add_notification:
         target_stock.pop("pending_add_execution_notice_pending", None)
     if pending_qty > 0 and filled_qty >= pending_qty:
@@ -6628,6 +10688,29 @@ def _handle_add_buy_execution(
         f"type={add_type} exec={exec_price:,} "
         f"new_avg={new_avg} new_qty={new_qty} add_count={target_stock.get('add_count')}"
     )
+    scale_in_submission_custody_emitted = False
+    if reconciled_before_ordno_bind or not scale_in_submit_telemetry_committed:
+        scale_in_submission_custody_emitted = (
+            _emit_execution_receipt_submission_custody(
+                target_stock=target_stock,
+                target_id=target_id,
+                code=code,
+                stage="scale_in_execution_receipt_submission_custody",
+                order_no=order_no,
+                execution_no=execution_no,
+                requested_qty=order_requested_qty,
+                trace_fields=(
+                    {
+                        "ai_decision_trace_id": pending_add_ai_decision_trace_id,
+                        "scale_in_ai_decision_trace_id": (
+                            pending_add_ai_decision_trace_id
+                        ),
+                    }
+                    if pending_add_ai_decision_trace_id
+                    else None
+                ),
+            )
+        )
     _log_holding_pipeline(
         target_stock.get("name"),
         code,
@@ -6641,6 +10724,14 @@ def _handle_add_buy_execution(
         forbidden_uses="runtime_threshold_apply/provider_route_change/bot_restart/sim_execution_quality_claim",
         actual_order_submitted=True,
         broker_order_forbidden=False,
+        **(
+            {
+                "ai_decision_trace_id": pending_add_ai_decision_trace_id,
+                "scale_in_ai_decision_trace_id": pending_add_ai_decision_trace_id,
+            }
+            if pending_add_ai_decision_trace_id
+            else {}
+        ),
         add_type=add_type,
         order_no=order_no or "-",
         execution_no=execution_no or "-",
@@ -6664,6 +10755,9 @@ def _handle_add_buy_execution(
         scale_in_receipt_reconciled_before_ordno_bind=bool(
             reconciled_before_ordno_bind
             or target_stock.get("scale_in_receipt_reconciled_before_ordno_bind")
+        ),
+        scale_in_receipt_submission_custody_emitted=(
+            scale_in_submission_custody_emitted
         ),
         new_avg_price=f"{float(new_avg or 0):.2f}",
         new_buy_qty=int(new_qty or 0),
@@ -7265,6 +11359,35 @@ def _handle_entry_buy_execution(
             sync_reason=preset_sync_reason,
         )
 
+    entry_submit_trace_id = _lifecycle_submit_trace_id(
+        target_stock,
+        marker_key="_entry_lifecycle_submit_telemetry_committed_by_order_no",
+        order_no=order_no,
+    )
+    entry_submission_custody_emitted = False
+    if entry_receipt.get(
+        "reconciled_before_ordno_bind"
+    ) is True or not _lifecycle_submit_telemetry_committed(
+        target_stock,
+        marker_key="_entry_lifecycle_submit_telemetry_committed_by_order_no",
+        order_no=order_no,
+        requested_qty=order_requested_qty,
+    ):
+        entry_submission_custody_emitted = _emit_execution_receipt_submission_custody(
+            target_stock=target_stock,
+            target_id=target_id,
+            code=code,
+            stage="entry_execution_receipt_submission_custody",
+            order_no=order_no,
+            execution_no=execution_no,
+            requested_qty=order_requested_qty,
+            trace_fields=(
+                {"ai_decision_trace_id": entry_submit_trace_id}
+                if entry_submit_trace_id
+                else None
+            ),
+        )
+
     _log_holding_pipeline(
         target_stock.get("name"),
         code,
@@ -7299,6 +11422,12 @@ def _handle_entry_buy_execution(
         preset_tp_ord_no_before=preset_tp_ord_no_before or "-",
         preset_tp_ord_no_after=preset_tp_ord_no_after or "-",
         sync_status=preset_sync_status,
+        **(
+            {"ai_decision_trace_id": entry_submit_trace_id}
+            if entry_submit_trace_id
+            else {}
+        ),
+        entry_receipt_submission_custody_emitted=(entry_submission_custody_emitted),
         **_broker_execution_provenance_fields(target_stock),
         **_probe_venue_provenance_fields(target_stock),
     )
@@ -7614,6 +11743,31 @@ def handle_real_execution(exec_data):
                     matched = True
 
             elif exec_type == "SELL":
+                if (
+                    order_no
+                    and (
+                        state.get("sell_submit_pending") is True
+                        or state.get("exit_receipt_submission_custody_retry_required")
+                        is True
+                    )
+                    and _safe_int(state.get("sell_submit_requested_qty"), 0) > 0
+                    and _safe_int(order_qty, 0)
+                    == _safe_int(state.get("sell_submit_requested_qty"), 0)
+                    and remaining_qty is not None
+                    and _safe_int(exec_qty, 0) > 0
+                    and _safe_int(exec_qty, 0) + _safe_int(remaining_qty, -1)
+                    == _safe_int(order_qty, 0)
+                ):
+                    state.update(broker_execution_fields)
+                    _bind_pending_sell_execution_receipt(
+                        target_stock=state,
+                        target_id=state.get("shadow_id"),
+                        code=code,
+                        order_no=order_no,
+                        execution_no=execution_no,
+                    )
+                    if state.get("sell_submit_pending") is not True:
+                        state["sell_ord_no"] = order_no
                 valid_sell_ord_nos = {
                     str(state.get("sell_ord_no", "") or ""),
                     str(state.get("pending_cancel_ord_no", "") or ""),
@@ -7659,6 +11813,23 @@ def handle_real_execution(exec_data):
                     state["status"] = "RECOVERY_REQUIRED"
                     state["s15_recovery_reason"] = "receipt_persistence_failed"
                 return
+            if (
+                exec_type == "SELL"
+                and state.get("sell_pending_submit_successor_persist_required") is True
+            ):
+                cleared = _clear_pending_sell_submit_after_successor_persisted(
+                    state,
+                    target_id=state.get("shadow_id"),
+                    code=code,
+                )
+                if cleared and callable(_persist_fast_state_callback):
+                    if not _persist_fast_state_callback(code, state):
+                        with state["lock"]:
+                            state["status"] = "RECOVERY_REQUIRED"
+                            state["s15_recovery_reason"] = (
+                                "receipt_terminal_clear_state_persistence_failed"
+                            )
+                        return
             if exec_type == "SELL" and callable(_finalize_fast_state_callback):
                 _finalize_fast_state_callback(code, state)
             return
@@ -7759,6 +11930,27 @@ def handle_real_execution(exec_data):
                 sell_context
             )
 
+            if order_no and (
+                target_stock.get("sell_submit_pending")
+                or target_stock.get("exit_receipt_submission_custody_retry_required")
+            ):
+                # The websocket receipt can arrive while the broker HTTP call
+                # is still blocked.  Publish and bind its exact submit custody
+                # before either the TP1 or ordinary partial/final exit leg.
+                _bind_pending_sell_execution_receipt(
+                    target_stock=target_stock,
+                    target_id=target_id,
+                    code=code,
+                    order_no=order_no,
+                    execution_no=execution_no,
+                )
+                if target_stock.get("sell_submit_pending") is True:
+                    _request_broker_snapshot_refresh(
+                        code,
+                        reason="exit_receipt_submission_custody_contract_invalid",
+                    )
+                    return
+
             if target_stock.get("nxt_rising_missed_tp1_partial_pending"):
                 _handle_nxt_rising_missed_tp1_partial_sell_execution(
                     target_id=target_id,
@@ -7778,6 +11970,15 @@ def handle_real_execution(exec_data):
                 )
                 return
 
+            if not replay_pending_sell_partial_lifecycle_outbox(target_stock):
+                # Broker receipt truth must still advance even while the
+                # source journal is temporarily unavailable.  The durable
+                # pending leg remains interlocked and the final path will not
+                # clear runtime custody until chronological replay succeeds.
+                log_error(
+                    f"[SELL_LIFECYCLE_OUTBOX_PRE_RECEIPT_DEFERRED] "
+                    f"{target_stock.get('name')}({code})"
+                )
             sell_receipt = _resolve_sell_execution_receipt(
                 target_stock,
                 order_no=order_no,
@@ -7807,13 +12008,94 @@ def handle_real_execution(exec_data):
                 )
                 return
             if sell_receipt.get("status") == "duplicate":
+                if (
+                    target_stock.get("sell_pending_submit_successor_persist_required")
+                    is True
+                ):
+                    _persist_sell_receipt_recovery_or_interlock(
+                        target_stock,
+                        code=code,
+                        reason="duplicate_sell_receipt_custody_retry",
+                    )
                 return
-            if order_no and target_stock.get("sell_submit_pending"):
-                target_stock["sell_odno"] = order_no
-                target_stock.pop("sell_submit_pending", None)
-                target_stock.pop("sell_submit_requested_qty", None)
-                target_stock.pop("sell_submit_started_at", None)
-            if sell_receipt.get("status") == "replacement_reconcile_required":
+            if sell_receipt.get("status") in {
+                "replacement_reconcile_required",
+                "replacement_terminal_reconcile_required",
+            }:
+                # The late receipt has already advanced the exact aggregate
+                # ledger.  Materialize that incremental prior-order leg before
+                # cancelling the now-oversized replacement; otherwise runtime
+                # custody and lifecycle exit quantities diverge permanently.
+                replacement_terminal = (
+                    sell_receipt.get("status")
+                    == "replacement_terminal_reconcile_required"
+                )
+                if replacement_terminal:
+                    receipt_state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+                    if not isinstance(receipt_state, dict):
+                        return
+                    _sell_execution_provenance_fields(target_stock)
+                    provenance_snapshot = _receipt_snapshot(
+                        target_stock, _SELL_RECEIPT_SNAPSHOT_KEYS
+                    )
+                    provenance_snapshot.update(
+                        {
+                            "buy_price": float(safe_buy_price),
+                            "strategy": str(strategy),
+                            "position_tag": normalize_position_tag(
+                                strategy,
+                                target_stock.get("position_tag"),
+                            ),
+                            "revive": bool(is_scalp_revive),
+                            "sell_execution_order_no": str(order_no or "").strip()
+                            or "-",
+                        }
+                    )
+                    provenance_snapshot = _normalized_receipt_snapshot(
+                        provenance_snapshot
+                    )
+                    receipt_state = dict(receipt_state)
+                    receipt_state.update(
+                        {
+                            "replacement_terminal_receipt": json.loads(
+                                json.dumps(
+                                    sell_receipt,
+                                    ensure_ascii=True,
+                                    default=str,
+                                )
+                            ),
+                            "replacement_terminal_finalize_context": {
+                                "target_id": int(target_id),
+                                "code": code,
+                                "now_iso": now.isoformat(),
+                                "safe_buy_price": float(safe_buy_price),
+                                "strategy": str(strategy),
+                                "is_scalp_revive": bool(is_scalp_revive),
+                                "order_no": str(order_no or "").strip(),
+                            },
+                            "replacement_terminal_provenance_snapshot": (
+                                provenance_snapshot
+                            ),
+                            "replacement_terminal_provenance_snapshot_sha256": (
+                                _receipt_snapshot_sha256(provenance_snapshot)
+                            ),
+                        }
+                    )
+                    receipt_state[
+                        _REPLACEMENT_TERMINAL_RECONCILIATION_GENERATION_KEY
+                    ] = _replacement_terminal_reconciliation_generation_sha256(
+                        receipt_state
+                    )
+                    target_stock[_SELL_EXECUTION_RECEIPT_STATE_KEY] = receipt_state
+                else:
+                    _log_standard_sell_partial_execution(
+                        target_stock,
+                        code=code,
+                        target_id=target_id,
+                        now=now,
+                        receipt=sell_receipt,
+                        buy_price=safe_buy_price,
+                    )
                 replacement_order_no = str(
                     target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY, {}).get(
                         "replacement_order_no", ""
@@ -7823,17 +12105,11 @@ def handle_real_execution(exec_data):
                 cancel_confirmed = False
                 if replacement_order_no:
                     try:
-                        from src.engine import sniper_trade_utils
-
-                        cancel_result = (
-                            sniper_trade_utils.send_cancel_order_with_exchange_retry(
-                                code=code,
-                                orig_ord_no=replacement_order_no,
-                                token=KIWOOM_TOKEN,
-                                qty=0,
-                            )
+                        cancel_confirmed = _cancel_replacement_sell_once(
+                            target_stock,
+                            code=code,
+                            order_no=replacement_order_no,
                         )
-                        cancel_confirmed = _is_ok_response(cancel_result)
                     except Exception as exc:
                         log_error(
                             f"[SELL_REPLACEMENT_CANCEL_FAILED] {code} "
@@ -7855,7 +12131,11 @@ def handle_real_execution(exec_data):
                 _persist_sell_receipt_recovery_or_interlock(
                     target_stock,
                     code=code,
-                    reason="late_prior_fill_replacement_cancel",
+                    reason=(
+                        "late_prior_terminal_fill_replacement_cancel"
+                        if replacement_terminal
+                        else "late_prior_fill_replacement_cancel"
+                    ),
                 )
                 _request_broker_snapshot_refresh(
                     code,
@@ -7925,6 +12205,7 @@ def handle_real_execution(exec_data):
                     code=code,
                     sell_receipt=sell_receipt,
                     order_no=order_no,
+                    safe_buy_price=safe_buy_price,
                 )
 
     # 메모리 업데이트는 각 조건문 내에서 이미 수행됨

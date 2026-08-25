@@ -11,7 +11,6 @@ its apply/attribution receipts.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -35,6 +34,12 @@ from src.engine.monitoring.machine_microstructure_attribution import (
 )
 from src.engine.scalping.micro_reversion.contracts import CLEAN_BASELINE_DATE
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
+from src.utils.jsonl_io import (
+    ArtifactGenerationLease,
+    json_artifact_generation_lock,
+    read_json_object_strict_receipt,
+    write_json_object_generation_safe,
+)
 from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
@@ -461,19 +466,22 @@ def candidate_sha256(candidate: Mapping[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(payload)).hexdigest()
 
 
-def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-    finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
+def _atomic_write_json(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    generation: ArtifactGenerationLease | None = None,
+) -> None:
+    write_json_object_generation_safe(
+        path,
+        payload,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+        allow_nan=False,
+        trailing_newline=True,
+        generation=generation,
+    )
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -492,10 +500,10 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
 def _load_json(path: Path) -> dict[str, Any] | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        payload = read_json_object_strict_receipt(path).payload
+    except FileNotFoundError:
         return None
-    return payload if isinstance(payload, dict) else None
+    return payload
 
 
 def _archive_operator_decision_artifact(
@@ -766,14 +774,173 @@ def _empty_queue(*, now: datetime) -> dict[str, Any]:
     }
 
 
+_PERSISTED_CANDIDATE_STATES = {
+    STATE_DESIGN_REQUIRED,
+    STATE_REVIEW_READY,
+    STATE_USER_APPROVED,
+    STATE_PREOPEN_SCHEDULED,
+    STATE_PREOPEN_MISSED_REVIEW_REQUIRED,
+    STATE_REVALIDATION_REQUIRED,
+    STATE_APPLIED,
+    STATE_POST_APPLY_ATTRIBUTED,
+    STATE_AUTO_CHAIN_ELIGIBLE,
+    STATE_HOLD,
+    STATE_REJECTED,
+    STATE_EXPIRED,
+}
+
+
+def _persisted_candidate_errors(entry: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    candidate = entry.get("candidate")
+    if not isinstance(candidate, Mapping):
+        return ["candidate_not_object"]
+    recomputed = candidate_sha256(candidate)
+    candidate_id = str(candidate.get("candidate_id") or "")
+    declared = str(candidate.get("candidate_sha256") or "")
+    if not candidate_id:
+        errors.append("candidate_id_missing")
+    if declared != recomputed:
+        errors.append("nested_candidate_sha256_mismatch")
+    if str(entry.get("candidate_sha256") or "") != recomputed:
+        errors.append("entry_candidate_sha256_mismatch")
+    if str(entry.get("candidate_id") or "") != candidate_id:
+        errors.append("entry_candidate_id_mismatch")
+    if entry.get("source_date") != candidate.get("source_date"):
+        errors.append("entry_source_date_mismatch")
+    if entry.get("evidence_valid_through") != candidate.get("evidence_valid_through"):
+        errors.append("entry_evidence_valid_through_mismatch")
+    if entry.get("queue_key") != _queue_key(candidate_id, recomputed):
+        errors.append("queue_key_derivation_mismatch")
+    if entry.get("state") not in _PERSISTED_CANDIDATE_STATES:
+        errors.append("candidate_state_invalid")
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+    ):
+        if candidate.get(field) is not expected:
+            errors.append(f"candidate_authority_mismatch:{field}")
+    state = str(entry.get("state") or "")
+    authorization_mode = str(entry.get("authorization_mode") or "")
+    if (
+        state
+        in {
+            STATE_USER_APPROVED,
+            STATE_PREOPEN_SCHEDULED,
+            STATE_APPLIED,
+            STATE_POST_APPLY_ATTRIBUTED,
+        }
+        and authorization_mode != "enrolled_same_bounded_family_auto_chain"
+    ):
+        for field in (
+            "operator_decision_artifact",
+            "operator_authorization_id",
+            "operator_decision_at_kst",
+            "operator_registry_entry_sha256",
+        ):
+            if not str(entry.get(field) or "").strip():
+                errors.append(f"candidate_operator_binding_missing:{field}")
+    if state in {
+        STATE_PREOPEN_SCHEDULED,
+        STATE_APPLIED,
+        STATE_POST_APPLY_ATTRIBUTED,
+    }:
+        if not str(entry.get("preopen_handoff") or "").strip():
+            errors.append("candidate_preopen_handoff_missing")
+        try:
+            date.fromisoformat(str(entry.get("preopen_target_date") or ""))
+        except ValueError:
+            errors.append("candidate_preopen_target_date_invalid")
+        if authorization_mode not in {
+            "first_explicit_operator_approval",
+            "enrolled_same_bounded_family_auto_chain",
+        }:
+            errors.append("candidate_authorization_mode_invalid")
+    if (
+        state in {STATE_APPLIED, STATE_POST_APPLY_ATTRIBUTED}
+        and not str(entry.get("family_apply_receipt") or "").strip()
+    ):
+        errors.append("candidate_apply_receipt_missing")
+    if (
+        state == STATE_POST_APPLY_ATTRIBUTED
+        and not str(entry.get("post_apply_attribution_receipt") or "").strip()
+    ):
+        errors.append("candidate_attribution_receipt_missing")
+    return errors
+
+
+def _persisted_candidate_collection_errors(
+    candidates: Any,
+    family_enrollments: Mapping[str, Any],
+) -> list[str]:
+    if not isinstance(candidates, list):
+        return ["candidates_not_list"]
+    errors: list[str] = []
+    queue_keys: list[str] = []
+    identities: list[tuple[str, str]] = []
+    for index, raw in enumerate(candidates):
+        if not isinstance(raw, Mapping):
+            errors.append(f"candidate_row_not_object:{index}")
+            continue
+        row_errors = _persisted_candidate_errors(raw)
+        errors.extend(f"candidate:{index}:{error}" for error in row_errors)
+        queue_keys.append(str(raw.get("queue_key") or ""))
+        identities.append(
+            (
+                str(raw.get("candidate_id") or ""),
+                str(raw.get("candidate_sha256") or ""),
+            )
+        )
+        if raw.get("state") in {
+            STATE_AUTO_CHAIN_ELIGIBLE,
+            STATE_PREOPEN_SCHEDULED,
+        } and raw.get("authorization_mode") in {
+            None,
+            "enrolled_same_bounded_family_auto_chain",
+        }:
+            candidate = raw.get("candidate") or {}
+            design = candidate.get("runtime_design") or {}
+            family = str(design.get("runtime_family") or "")
+            enrollment = family_enrollments.get(family)
+            if (
+                not isinstance(enrollment, Mapping)
+                or enrollment.get("runtime_family") != family
+                or enrollment.get("stage") != design.get("stage")
+                or enrollment.get("axis") != design.get("axis")
+                or enrollment.get("bounded_contract_sha256")
+                != design.get("bounded_contract_sha256")
+                or enrollment.get("runtime_registry_entry_sha256")
+                != raw.get("runtime_registry_entry_sha256")
+                or enrollment.get("enrolled_after_guarded_apply") is not True
+            ):
+                errors.append(f"candidate:{index}:family_enrollment_mismatch")
+    if len(queue_keys) != len(set(queue_keys)):
+        errors.append("duplicate_queue_key")
+    if len(identities) != len(set(identities)):
+        errors.append("duplicate_candidate_identity")
+    return errors
+
+
 def load_queue(
-    path: Path = DEFAULT_QUEUE_PATH, *, now: datetime | None = None
+    path: Path = DEFAULT_QUEUE_PATH,
+    *,
+    now: datetime | None = None,
+    generation: ArtifactGenerationLease | None = None,
 ) -> dict[str, Any]:
-    payload = _load_json(path)
-    if payload is None:
-        if path.exists():
-            raise ValueError("approval_queue_unreadable")
+    try:
+        receipt = read_json_object_strict_receipt(path, generation=generation)
+    except FileNotFoundError:
         return _empty_queue(now=_now_kst(now))
+    if (
+        receipt.logical_path != path.absolute()
+        or receipt.physical_path != receipt.logical_path
+        or receipt.generation_census
+        != ((receipt.logical_path.name, receipt.physical_identity),)
+    ):
+        raise ValueError("approval_queue_generation_invalid")
+    payload = receipt.payload
     if (
         payload.get("schema") != QUEUE_SCHEMA
         or payload.get("metric_contract") != METRIC_CONTRACT
@@ -782,6 +949,14 @@ def load_queue(
         or not isinstance(payload.get("objective_followups", []), list)
     ):
         raise ValueError("approval_queue_contract_invalid")
+    candidate_errors = _persisted_candidate_collection_errors(
+        payload.get("candidates"),
+        payload.get("family_enrollments") or {},
+    )
+    if candidate_errors:
+        raise ValueError(
+            "approval_queue_candidate_contract_invalid:" + ",".join(candidate_errors)
+        )
     # Keep the v1 queue and metric contract compatible with ledgers written
     # before objective follow-ups existed.  The new collection is deliberately
     # separate from candidates and therefore cannot enter approval/apply code.
@@ -1843,6 +2018,51 @@ def _apply_family_receipts(
         status = str(receipt.get("status") or "")
         if status not in {"applied_guard_passed", "post_apply_attribution_complete"}:
             continue
+        family = str(design.get("runtime_family") or "")
+        if family == MAIN_AI_QUALITY_RUNTIME_FAMILY:
+            suffix = "applied" if status == "applied_guard_passed" else "post_apply"
+            canonical = receipt_dir / (
+                f"{str(receipt.get('target_date') or '')}_"
+                f"{str(entry.get('candidate_sha256') or '')}_{suffix}.json"
+            )
+            if path.absolute() != canonical.absolute():
+                continue
+            try:
+                from src.engine.automation import (
+                    main_ai_quality_runtime_family as main_ai_runtime,
+                )
+                from src.engine.scalping import main_ai_quality_live_policy
+
+                if status == "applied_guard_passed":
+                    activation_path = Path(
+                        str(receipt.get("activation_artifact_path") or "")
+                    )
+                    activation = _load_json(activation_path) or {}
+                    if main_ai_runtime.apply_receipt_errors(
+                        receipt,
+                        activation=activation,
+                    ) or main_ai_quality_live_policy.activation_errors(
+                        activation,
+                        target_date=str(receipt.get("target_date") or ""),
+                        selected_path=activation_path,
+                        receipt=receipt,
+                    ):
+                        continue
+                else:
+                    rolling = _load_json(
+                        Path(str(receipt.get("source_rolling_artifact_path") or ""))
+                    )
+                    if rolling is None:
+                        continue
+                    main_ai_runtime.validate_post_apply_attribution_receipt(
+                        entry=entry,
+                        attribution=receipt,
+                        attribution_path=path,
+                        rolling=rolling,
+                        target_date=str(receipt.get("target_date") or ""),
+                    )
+            except (OSError, TypeError, ValueError):
+                continue
         expected_state = (
             STATE_PREOPEN_SCHEDULED
             if status == "applied_guard_passed"
@@ -1914,7 +2134,6 @@ def _apply_family_receipts(
             entry["post_apply_attribution_receipt"] = str(path)
             entry["state"] = STATE_POST_APPLY_ATTRIBUTED
         entry["state_reason"] = status
-        family = str(design.get("runtime_family") or "")
         requires_post_apply = bool(
             (registry_entry or {}).get(
                 "requires_post_apply_attribution_before_auto_chain"
@@ -2027,6 +2246,35 @@ def _validated_existing_enrollments(
             )
         ):
             continue
+        if str(family) == MAIN_AI_QUALITY_RUNTIME_FAMILY:
+            expected_apply_path = receipt_dir / (
+                f"{str(receipt.get('target_date') or '')}_"
+                f"{str(entry.get('candidate_sha256') or '')}_applied.json"
+            )
+            if receipt_path.absolute() != expected_apply_path.absolute():
+                continue
+            try:
+                from src.engine.automation import (
+                    main_ai_quality_runtime_family as main_ai_runtime,
+                )
+                from src.engine.scalping import main_ai_quality_live_policy
+
+                activation_path = Path(
+                    str(receipt.get("activation_artifact_path") or "")
+                )
+                activation = _load_json(activation_path) or {}
+                if main_ai_runtime.apply_receipt_errors(
+                    receipt,
+                    activation=activation,
+                ) or main_ai_quality_live_policy.activation_errors(
+                    activation,
+                    target_date=str(receipt.get("target_date") or ""),
+                    selected_path=activation_path,
+                    receipt=receipt,
+                ):
+                    continue
+            except (OSError, TypeError, ValueError):
+                continue
         if requires_post_apply:
             if raw.get("enrolled_after_post_apply_attribution") is not True:
                 continue
@@ -2063,6 +2311,28 @@ def _validated_existing_enrollments(
                 )
             ):
                 continue
+            if str(family) == MAIN_AI_QUALITY_RUNTIME_FAMILY:
+                expected_attribution_path = receipt_dir / (
+                    f"{str(attribution.get('target_date') or '')}_"
+                    f"{str(entry.get('candidate_sha256') or '')}_post_apply.json"
+                )
+                if attribution_path.absolute() != expected_attribution_path.absolute():
+                    continue
+                try:
+                    rolling = _load_json(
+                        Path(str(attribution.get("source_rolling_artifact_path") or ""))
+                    )
+                    if rolling is None:
+                        continue
+                    main_ai_runtime.validate_post_apply_attribution_receipt(
+                        entry=entry,
+                        attribution=attribution,
+                        attribution_path=attribution_path,
+                        rolling=rolling,
+                        target_date=str(attribution.get("target_date") or ""),
+                    )
+                except (OSError, TypeError, ValueError):
+                    continue
         validated[str(family)] = dict(raw)
     return validated
 
@@ -2228,8 +2498,19 @@ def sync_queue(
                 }
             )
             continue
+        candidate["candidate_sha256"] = digest
         candidate_id = str(candidate["candidate_id"])
         key = _queue_key(candidate_id, digest)
+        collided = by_key.get(key)
+        if collided is not None and collided.get("candidate_sha256") != digest:
+            rejected_candidate_ids.add(candidate_id)
+            intake_rejections.append(
+                {
+                    "candidate_id": candidate_id,
+                    "errors": ["candidate_sha256_prefix_collision"],
+                }
+            )
+            continue
         accepted_queue_keys.add(key)
         for previous in entries:
             if (
@@ -2546,6 +2827,22 @@ def schedule_preopen_handoffs(
             continue
         design = candidate["runtime_design"]
         family = str(design.get("runtime_family") or "")
+        if family == MAIN_AI_QUALITY_RUNTIME_FAMILY:
+            # This registry entry is retained for archive/receipt compatibility,
+            # but its legacy prompt runtime authority is explicitly retired.
+            # The generic scheduler must not publish a positive apply handoff
+            # that a downstream consumer later has to reject.
+            from src.engine.scalping import main_ai_quality_live_policy
+
+            if not main_ai_quality_live_policy.LEGACY_RUNTIME_AUTHORITY_ENABLED:
+                entry["state"] = STATE_DESIGN_REQUIRED
+                entry["state_reason"] = (
+                    "preopen_blocked_runtime_family_authority_disabled"
+                )
+                entry["runtime_design_errors"] = [
+                    "legacy_main_ai_quality_runtime_authority_disabled"
+                ]
+                continue
         registry_digest = _registry_entry_sha256(
             _trusted_registry_entry(family, runtime_registry)
         )
@@ -3211,15 +3508,13 @@ def _load_source_context(*, target_date: date, source_report: Path | None) -> tu
 
 
 @contextmanager
-def _queue_lock(queue_path: Path) -> Iterator[None]:
-    lock_path = queue_path.with_suffix(queue_path.suffix + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+def _queue_lock(queue_path: Path) -> Iterator[ArtifactGenerationLease]:
+    with json_artifact_generation_lock(
+        queue_path,
+        exclusive=True,
+        blocking=True,
+    ) as generation:
+        yield generation
 
 
 def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
@@ -3246,14 +3541,14 @@ def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
         ) = _load_source_context_snapshot(
             target_date=target_date, source_report=args.source_report
         )
-    with _queue_lock(args.queue_path):
+    with _queue_lock(args.queue_path) as queue_generation:
         if (
             not args.queue_path.exists()
             and source_status != "loaded"
             and objective_followup_source_status != "loaded"
         ):
             raise ValueError("approval_queue_and_source_unavailable")
-        queue = load_queue(args.queue_path)
+        queue = load_queue(args.queue_path, generation=queue_generation)
         queue, rejections = sync_queue(
             queue,
             source_candidates=source_candidates,
@@ -3327,7 +3622,11 @@ def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
                 )
             ):
                 raise ValueError("source_artifact_changed_before_commit")
-            _atomic_write_json(args.queue_path, queue)
+            _atomic_write_json(
+                args.queue_path,
+                queue,
+                generation=queue_generation,
+            )
             json_path, md_path = status_report_paths(
                 target_date=target_date,
                 phase=args.phase,
@@ -3339,8 +3638,8 @@ def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _record_decision(args: argparse.Namespace) -> dict[str, Any]:
-    with _queue_lock(args.queue_path):
-        queue = load_queue(args.queue_path)
+    with _queue_lock(args.queue_path) as queue_generation:
+        queue = load_queue(args.queue_path, generation=queue_generation)
         queue, artifact_path = record_operator_decision(
             queue,
             candidate_id=args.candidate_id,
@@ -3351,7 +3650,11 @@ def _record_decision(args: argparse.Namespace) -> dict[str, Any]:
             approval_dir=args.approval_dir,
             apply_receipt_dir=args.apply_receipt_dir,
         )
-        _atomic_write_json(args.queue_path, queue)
+        _atomic_write_json(
+            args.queue_path,
+            queue,
+            generation=queue_generation,
+        )
     return {
         "status": "operator_decision_recorded",
         "decision": args.record_decision,

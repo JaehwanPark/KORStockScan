@@ -65,6 +65,10 @@ WS_CONDITION_SEARCH_ENABLED_ENV = "KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED"
 # KRX/NXT/SOR items use 005930/005930_NX/005930_AL.
 KST = ZoneInfo("Asia/Seoul")
 _ORDER_EXECUTION_RAW_ENVELOPE_SCHEMA = "kiwoom_websocket_order_execution_00_values_v1"
+_ORDER_EXECUTION_RECEIVE_TIME_SOURCE = "websocket_packet_ingress"
+_ORDER_EXECUTION_UNTRUSTED_RECEIVE_TIME_SOURCE = (
+    "handler_dispatch_fallback_not_packet_ingress"
+)
 _ORDER_EXECUTION_RAW_FIDS = (
     "9203",
     "9001",
@@ -747,9 +751,7 @@ class KiwoomWSManager:
         quote_source = (
             "0B_inline_best_quote"
             if inline_complete
-            else "partial_inline_best_quote"
-            if inline_partial
-            else "missing_best_quote"
+            else "partial_inline_best_quote" if inline_partial else "missing_best_quote"
         )
 
         if inline_complete:
@@ -2242,6 +2244,31 @@ class KiwoomWSManager:
                 f"failure ({code}): {exc}"
             )
 
+    def _begin_micro_reversion_transport_epoch(self):
+        """Rotate source-only collector state after a successful WS reconnect."""
+
+        collector = self._micro_reversion_forward_collector
+        if collector is None:
+            return None
+        try:
+            return collector.begin_transport_epoch()
+        except Exception as exc:
+            reason = f"transport_epoch_failure:{type(exc).__name__}"
+            self._micro_reversion_forward_collector_error = type(exc).__name__
+            self._micro_reversion_forward_collector_stop_reason = reason
+            log_error(
+                "[WS] micro-reversion reconnect epoch fail-closed " f"({reason}): {exc}"
+            )
+            # Collector shutdown can drain writers for up to ten seconds.  Do
+            # not hold the websocket bootstrap coroutine (and therefore live
+            # execution/session registration) on an observer-only failure.
+            threading.Thread(
+                target=self._close_micro_reversion_forward_collector,
+                name="micro-reversion-epoch-failure-close",
+                daemon=True,
+            ).start()
+            return None
+
     def _micro_reversion_depth_capture_requested(self):
         collector = self._micro_reversion_forward_collector
         flags = getattr(collector, "flags", None)
@@ -2596,6 +2623,7 @@ class KiwoomWSManager:
             remaining = max(0.1, deadline - time.time())
             try:
                 message = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                packet_received_at = datetime.now(KST)
             except asyncio.TimeoutError:
                 break
 
@@ -2625,7 +2653,9 @@ class KiwoomWSManager:
                 )
                 raise _LoginAckFailure(code, message)
 
-            await self._handle_message(json.dumps(msg_dict))
+            await self._handle_message(
+                json.dumps(msg_dict), received_at=packet_received_at
+            )
 
         raise TimeoutError("LOGIN ACK timeout")
 
@@ -2644,6 +2674,7 @@ class KiwoomWSManager:
             )
 
         if self.is_reconnected:
+            self._begin_micro_reversion_transport_epoch()
             print(
                 "🔄 [WS] 웹소켓 재접속 감지! EventBus에 상태 동기화 이벤트를 발행합니다."
             )
@@ -2744,7 +2775,10 @@ class KiwoomWSManager:
 
                     while True:
                         message = await ws.recv()
-                        await self._handle_message(message)
+                        packet_received_at = datetime.now(KST)
+                        await self._handle_message(
+                            message, received_at=packet_received_at
+                        )
 
             except websockets.ConnectionClosed as e:
                 if self._stop_event.is_set():
@@ -2785,7 +2819,25 @@ class KiwoomWSManager:
         self.websocket = None
         self._session_ready.clear()
 
-    async def _handle_message(self, message):
+    async def _handle_message(self, message, *, received_at=None):
+        try:
+            received_at_has_utc_offset = bool(
+                isinstance(received_at, datetime)
+                and received_at.tzinfo is not None
+                and received_at.utcoffset() is not None
+            )
+        except (TypeError, ValueError, OverflowError):
+            received_at_has_utc_offset = False
+        if received_at_has_utc_offset:
+            packet_received_at = received_at.astimezone(KST)
+            packet_receive_time_source = _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
+        else:
+            # Direct/internal dispatch has no trustworthy packet-ingress
+            # watermark.  Keep a diagnostic timestamp, but never label it as
+            # promotion-grade websocket ingress.  The lifecycle consumer
+            # fails closed on this source tag.
+            packet_received_at = datetime.now(KST)
+            packet_receive_time_source = _ORDER_EXECUTION_UNTRUSTED_RECEIVE_TIME_SOURCE
         try:
             msg_dict = json.loads(message)
             if not isinstance(msg_dict, dict):
@@ -2972,9 +3024,7 @@ class KiwoomWSManager:
                         code = notice["code"]
                         order_no = notice["order_no"]
                         order_type_str = notice["order_type_str"]
-                        broker_reject_reason_raw = notice[
-                            "broker_reject_reason_raw"
-                        ]
+                        broker_reject_reason_raw = notice["broker_reject_reason_raw"]
 
                         print(
                             f"📩 [WS 주문상태] {code} | 주문번호: '{order_no}' | "
@@ -3009,9 +3059,7 @@ class KiwoomWSManager:
                                 "type": notice["exec_type"],
                                 "status": status,
                                 "order_type_str": order_type_str,
-                                "broker_reject_reason_raw": (
-                                    broker_reject_reason_raw
-                                ),
+                                "broker_reject_reason_raw": (broker_reject_reason_raw),
                                 "broker_execution_raw_fields": notice[
                                     "broker_execution_raw_fields"
                                 ],
@@ -3084,6 +3132,14 @@ class KiwoomWSManager:
                                         "broker_execution_time_raw": notice[
                                             "broker_execution_time_raw"
                                         ],
+                                        "broker_execution_received_at": (
+                                            packet_received_at.isoformat(
+                                                timespec="microseconds"
+                                            )
+                                        ),
+                                        "broker_execution_receive_time_source": (
+                                            packet_receive_time_source
+                                        ),
                                         "actual_exchange_code": notice[
                                             "actual_exchange_code"
                                         ],
@@ -4660,9 +4716,7 @@ class KiwoomWSManager:
             "repair_cycle": repair_cycle,
         }
         if "include_alternate_route" in payload:
-            kwargs["include_alternate_route"] = payload.get(
-                "include_alternate_route"
-            )
+            kwargs["include_alternate_route"] = payload.get("include_alternate_route")
         required_realtime_types = payload.get("required_realtime_types")
         if required_realtime_types is None and source.startswith("scanner_"):
             required_realtime_types = ("0B",)

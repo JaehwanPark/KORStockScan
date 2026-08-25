@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from src.engine.scalping.ai_decision_trace import replay_source_input
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import open_text_auto
+from src.utils.jsonl_io import iter_jsonl_objects_strict
 
 KST = ZoneInfo("Asia/Seoul")
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -897,18 +897,10 @@ def rollback_context_transaction(
 
 
 def _iter_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    if not path.exists():
-        return rows
-    with open_text_auto(path) as handle:
-        for line in handle:
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(value, dict):
-                rows.append(value)
-    return rows
+    try:
+        return list(iter_jsonl_objects_strict(path))
+    except FileNotFoundError:
+        return []
 
 
 def _walk(value: Any):

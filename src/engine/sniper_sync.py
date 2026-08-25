@@ -938,8 +938,27 @@ def _restore_sell_receipt_recovery(
         return None, f"journal_loader_failed:{type(exc).__name__}"
     if not isinstance(state, dict):
         return None, reason
-    active_order_no = str(state.get("order_no") or "").strip()
     target_stock["_sell_execution_receipt_state"] = state
+    custody_retry_succeeded = True
+    if state.get("pending_submit_custody_retry_snapshot") is not None:
+        restored_retry_anchor = (
+            _receipt_handlers._restore_pending_sell_submit_custody_retry_snapshot(
+                target_stock
+            )
+        )
+        if not restored_retry_anchor:
+            custody_retry_succeeded = False
+            reason = f"{reason}:submit_custody_retry_snapshot_invalid"
+        elif target_stock.get(
+            "exit_receipt_submission_custody_retry_required"
+        ) is True:
+            custody_retry_succeeded = bool(
+                _receipt_handlers.retry_pending_sell_execution_receipt_custody(
+                    target_stock
+                )
+            )
+            if not custody_retry_succeeded:
+                reason = f"{reason}:submit_custody_append_retry_deferred"
     target_stock["buy_qty"] = max(0, int(broker_remaining_qty or 0))
     target_stock["scale_in_locked"] = True
     target_stock["sell_partial_exit_carry_active"] = True
@@ -947,9 +966,39 @@ def _restore_sell_receipt_recovery(
     target_stock["sell_reconciled_remaining_qty"] = max(
         0, int(broker_remaining_qty or 0)
     )
-    target_stock["sell_cancel_reconciliation_required"] = False
+    replacement_reconciliation_required = bool(
+        state.get("replacement_reconciliation_required")
+        or state.get("replacement_terminal_reconciliation_required")
+    )
+    target_stock["sell_cancel_reconciliation_required"] = bool(
+        not custody_retry_succeeded or replacement_reconciliation_required
+    )
     target_stock["sell_cancel_reconciliation_source"] = (
-        "durable_sell_receipt_journal_exact_match"
+        "submit_custody_append_retry_deferred"
+        if not custody_retry_succeeded
+        else (
+            "durable_replacement_reconciliation_required"
+            if replacement_reconciliation_required
+            else "durable_sell_receipt_journal_exact_match"
+        )
+    )
+    if replacement_reconciliation_required:
+        target_stock["sell_cancel_reconciliation_retry_at"] = 0.0
+        replacement_order_no = str(state.get("replacement_order_no") or "").strip()
+        if replacement_order_no:
+            target_stock["sell_odno"] = replacement_order_no
+    outbox_recovery_succeeded = bool(
+        custody_retry_succeeded
+        and _receipt_handlers.recover_pending_sell_lifecycle_outbox(target_stock)
+    )
+    if not outbox_recovery_succeeded:
+        reason = f"{reason}:lifecycle_outbox_replay_deferred"
+    restored_runtime_state = target_stock.get("_sell_execution_receipt_state")
+    if isinstance(restored_runtime_state, dict):
+        state = restored_runtime_state
+    active_order_no = str(state.get("order_no") or "").strip()
+    tp1_completion_release_pending = bool(
+        state.get("nxt_tp1_completion_runtime_release_pending")
     )
     if str(state.get("partial_order_kind") or "") == "nxt_rising_missed_tp1":
         filled_qty = max(
@@ -971,9 +1020,13 @@ def _restore_sell_receipt_recovery(
         order_still_active = bool(active_order_no)
         target_stock.update(
             {
-                "nxt_rising_missed_tp1_partial_pending": order_still_active,
+                "nxt_rising_missed_tp1_partial_pending": bool(
+                    order_still_active or tp1_completion_release_pending
+                ),
                 "nxt_rising_missed_tp1_partial_applied": bool(
-                    filled_qty > 0 and not order_still_active
+                    filled_qty > 0
+                    and not order_still_active
+                    and not tp1_completion_release_pending
                 ),
                 "nxt_rising_missed_tp1_partial_requested_qty": requested_qty,
                 "nxt_rising_missed_tp1_partial_filled_qty": filled_qty,
@@ -992,15 +1045,111 @@ def _restore_sell_receipt_recovery(
         )
         if order_still_active:
             target_stock["sell_order_time"] = time.time()
-    if active_order_no:
+    if (
+        active_order_no
+        or tp1_completion_release_pending
+        or not outbox_recovery_succeeded
+    ):
         target_stock["status"] = "SELL_ORDERED"
-        target_stock["sell_odno"] = active_order_no
+        if active_order_no:
+            target_stock["sell_odno"] = active_order_no
     else:
         target_stock["status"] = "HOLDING"
         target_stock.pop("sell_odno", None)
         target_stock.pop("sell_ord_no", None)
     record.scale_in_locked = True
     return state, reason
+
+
+def _restore_pending_sell_submit_custody(*, target_stock, record, code: str):
+    """Rehydrate one exact fsynced pre-call SELL generation at startup only."""
+
+    if not isinstance(target_stock, dict):
+        return False, "pending_submit_runtime_target_missing"
+    target_id = _to_int(getattr(record, "id", 0))
+    position_qty = _to_int(getattr(record, "buy_qty", 0))
+    runtime_receipt_state = target_stock.get("_sell_execution_receipt_state")
+    runtime_owner_position_qty = max(
+        _to_int(target_stock.get("sell_submit_owner_position_qty")),
+        _to_int(
+            runtime_receipt_state.get("position_qty")
+            if isinstance(runtime_receipt_state, dict)
+            else 0
+        ),
+        _to_int(target_stock.get("buy_qty")),
+    )
+    if (
+        target_id <= 0
+        or position_qty <= 0
+        or _to_int(target_stock.get("id")) != target_id
+        or str(target_stock.get("code") or "").strip()[:6] != str(code or "").strip()[:6]
+        or runtime_owner_position_qty != position_qty
+    ):
+        return False, "pending_submit_runtime_identity_mismatch"
+    try:
+        from src.engine import sniper_execution_receipts as _receipt_handlers
+
+        fields, reason = _receipt_handlers.load_pending_sell_submit_custody(
+            target_id=target_id,
+            code=code,
+            position_qty=position_qty,
+        )
+    except Exception as exc:
+        return False, f"pending_submit_loader_failed:{type(exc).__name__}"
+    if not isinstance(fields, dict):
+        return False, reason
+    target_stock.update(fields)
+    target_stock.update(
+        {
+            "status": "SELL_ORDERED",
+            "scale_in_locked": True,
+            "sell_cancel_reconciliation_required": True,
+            "sell_cancel_reconciliation_source": (
+                "durable_pending_sell_submit_exact_rehydration"
+            ),
+            "sell_pending_submit_rehydrated": True,
+        }
+    )
+    durable_cancel_order_no = str(
+        target_stock.get("sell_cancel_ack_order_no") or ""
+    ).strip()
+    if re.fullmatch(r"[0-9]{7}", durable_cancel_order_no):
+        target_stock["sell_odno"] = durable_cancel_order_no
+    if not str(
+        target_stock.get("sell_odno") or target_stock.get("sell_ord_no") or ""
+    ).strip():
+        try:
+            from src.engine import sniper_trade_utils as _trade_utils
+
+            bound_order_no, bind_reason = _trade_utils.resolve_pending_sell_order_no(
+                target_stock,
+                KIWOOM_TOKEN,
+            )
+        except Exception as exc:
+            bound_order_no = None
+            bind_reason = f"pending_sell_order_bind_failed:{type(exc).__name__}"
+        if not bound_order_no:
+            target_stock.update(
+                {
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        f"pending_submit_order_number_unresolved:{bind_reason}"
+                    ),
+                }
+            )
+        else:
+            target_stock.update(
+                {
+                    "sell_odno": bound_order_no,
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": (
+                        "pending_sell_order_number_exactly_bound"
+                    ),
+                }
+            )
+    record.status = "SELL_ORDERED"
+    record.scale_in_locked = True
+    return True, reason
 
 
 def _reconcile_scale_in_lock(record, real_qty, real_buy_uv):
@@ -1020,6 +1169,8 @@ def _reconcile_scale_in_lock(record, real_qty, real_buy_uv):
     if target_stock and (
         target_stock.get("sell_partial_exit_carry_active")
         or target_stock.get("sell_partial_exit_recovery_required")
+        or target_stock.get("sell_submit_pending") is True
+        or target_stock.get("sell_pending_submit_durability_clear_required") is True
         or _active_sell_receipt_reconciliation(target_stock)
     ):
         return False
@@ -1087,13 +1238,26 @@ def sync_balance_with_db():
     try:
         from src.engine import sniper_execution_receipts as _receipt_handlers
 
+        protected_recovery_ids = {
+            _to_int(target.get("id"))
+            for target in (ACTIVE_TARGETS or [])
+            if isinstance(target, dict) and _to_int(target.get("id")) > 0
+        }
+        if DB is None:
+            raise RuntimeError("sell_receipt_recovery_prune_db_unavailable")
+        with DB.get_session() as session:
+            protected_recovery_ids.update(
+                _to_int(record_id)
+                for (record_id,) in session.query(RecommendationHistory.id)
+                .filter(
+                    RecommendationHistory.status.in_(("HOLDING", "SELL_ORDERED"))
+                )
+                .all()
+                if _to_int(record_id) > 0
+            )
         _receipt_handlers.prune_sell_receipt_recovery_files(
             force=True,
-            active_target_ids={
-                _to_int(target.get("id"))
-                for target in (ACTIVE_TARGETS or [])
-                if isinstance(target, dict) and _to_int(target.get("id")) > 0
-            },
+            active_target_ids=protected_recovery_ids,
         )
     except Exception as exc:
         log_error(
@@ -1194,6 +1358,251 @@ def sync_balance_with_db():
                 if str(getattr(record, "status", "") or "").upper()
                 in {"HOLDING", "SELL_ORDERED"}
             ]
+            for record in archive_active_records:
+                record_status = str(
+                    getattr(record, "status", "") or ""
+                ).upper()
+                code = str(record.stock_code).strip()[:6]
+                target = next(
+                    (
+                        item
+                        for item in (ACTIVE_TARGETS or [])
+                        if _to_int(item.get("id")) == _to_int(getattr(record, "id", 0))
+                        and str(item.get("code") or "").strip()[:6] == code
+                    ),
+                    None,
+                )
+                try:
+                    from src.engine import (
+                        sniper_execution_receipts as _receipt_handlers,
+                    )
+
+                    pending_fields, pending_probe_reason = (
+                        _receipt_handlers.load_pending_sell_submit_custody(
+                            target_id=getattr(record, "id", None),
+                            code=code,
+                            position_qty=_to_int(getattr(record, "buy_qty", 0)),
+                        )
+                    )
+                except Exception as exc:
+                    pending_fields = None
+                    pending_probe_reason = (
+                        f"pending_submit_probe_failed:{type(exc).__name__}"
+                    )
+                if str(getattr(record, "strategy", "") or "").upper() == "S15_FAST":
+                    # The S15 fast-state journal/recovery loop is the sole
+                    # runtime owner of S15 SELL custody.  Never duplicate that
+                    # owner in ACTIVE_TARGETS or main SELL_ORDERED dispatch.
+                    record.scale_in_locked = True
+                    if target is not None and isinstance(ACTIVE_TARGETS, list):
+                        try:
+                            ACTIVE_TARGETS.remove(target)
+                        except ValueError:
+                            pass
+                    continue
+                if target is None:
+                    if isinstance(pending_fields, dict) and isinstance(
+                        ACTIVE_TARGETS, list
+                    ):
+                        target = {
+                            "id": _to_int(getattr(record, "id", 0)),
+                            "code": code,
+                            "name": str(getattr(record, "stock_name", code) or code),
+                            "status": record_status,
+                            "strategy": str(
+                                getattr(record, "strategy", "SCALPING") or "SCALPING"
+                            ),
+                            "position_tag": getattr(record, "position_tag", None),
+                            "buy_qty": _to_int(getattr(record, "buy_qty", 0)),
+                            "buy_price": _to_float(getattr(record, "buy_price", 0)),
+                            "rec_date": getattr(record, "rec_date", None),
+                            "buy_time": getattr(record, "buy_time", None),
+                            "scale_in_locked": True,
+                        }
+                        target.update(pending_fields)
+                        ACTIVE_TARGETS.append(target)
+                    elif pending_probe_reason != "pending_submit_journal_missing":
+                        record.scale_in_locked = True
+                        log_error(
+                            "[SELL_PENDING_SUBMIT_TARGET_RECOVERY_BLOCKED] "
+                            f"{record.stock_name}({code}) id={record.id} "
+                            f"reason={pending_probe_reason}"
+                        )
+                if (
+                    isinstance(pending_fields, dict)
+                    and pending_fields.get("sell_submit_terminal_outcome_kind")
+                    in {
+                        "cancel_ack_terminal_absence_reconciled",
+                        "cancel_intent_terminal_absence_reconciled",
+                    }
+                ):
+                    if target is None:
+                        record.scale_in_locked = True
+                        continue
+                    target.update(pending_fields)
+                    target["sell_odno"] = str(
+                        pending_fields.get("sell_cancel_ack_order_no")
+                        or pending_fields.get("sell_cancel_intent_order_no")
+                        or ""
+                    ).strip()
+                    generation = str(
+                        pending_fields.get("sell_submit_generation") or ""
+                    ).strip()
+                    expected_receipt_hash = str(
+                        pending_fields.get(
+                            "sell_submit_terminal_outcome_receipt_state_sha256"
+                        )
+                        or ""
+                    ).strip()
+                    empty_receipt_hash = _receipt_handlers._receipt_snapshot_sha256(
+                        {}
+                    )
+                    if expected_receipt_hash != empty_receipt_hash:
+                        restored_receipt, receipt_restore_reason = (
+                            _restore_sell_receipt_recovery(
+                                target_stock=target,
+                                record=record,
+                                code=code,
+                                broker_remaining_qty=_to_int(
+                                    pending_fields.get(
+                                        "sell_submit_terminal_outcome_broker_remaining_qty"
+                                    )
+                                ),
+                            )
+                        )
+                        if not isinstance(restored_receipt, dict):
+                            record.status = "SELL_ORDERED"
+                            target.update(
+                                {
+                                    "status": "SELL_ORDERED",
+                                    "scale_in_locked": True,
+                                    "sell_cancel_reconciliation_required": True,
+                                    "sell_cancel_reconciliation_source": (
+                                        "cancel_terminal_receipt_restore_deferred:"
+                                        f"{receipt_restore_reason}"
+                                    ),
+                                }
+                            )
+                            continue
+                    try:
+                        from src.engine import sniper_state_handlers as _state_handlers
+
+                        terminal_cleared = bool(
+                            _state_handlers._finish_cancel_terminal_outcome_after_db_holding(
+                                target,
+                                code,
+                                target_id=getattr(record, "id", None),
+                                generation=generation,
+                                db=DB,
+                            )
+                        )
+                    except Exception as exc:
+                        terminal_cleared = False
+                        log_error(
+                            "[SELL_CANCEL_TERMINAL_STARTUP_FINISH_FAILED] "
+                            f"{record.stock_name}({code}): {exc}"
+                        )
+                    if terminal_cleared:
+                        target.update(
+                            {
+                                "status": "HOLDING",
+                                "scale_in_locked": True,
+                                "sell_cancel_reconciliation_source": (
+                                    "cancel_terminal_startup_recovered"
+                                ),
+                            }
+                        )
+                        target.pop("sell_odno", None)
+                        target.pop("sell_ord_no", None)
+                        record.status = "HOLDING"
+                    else:
+                        record.status = "SELL_ORDERED"
+                        target.update(
+                            {
+                                "status": "SELL_ORDERED",
+                                "scale_in_locked": True,
+                                "sell_cancel_reconciliation_required": True,
+                                "sell_cancel_reconciliation_source": (
+                                    "cancel_terminal_startup_clear_deferred"
+                                ),
+                            }
+                        )
+                    continue
+                if isinstance(pending_fields, dict) and pending_fields.get(
+                    "sell_submit_terminal_outcome_kind"
+                ) == "definitive_reject_no_broker_order":
+                    if target is None:
+                        record.scale_in_locked = True
+                        continue
+                    target.update(pending_fields)
+                    try:
+                        from src.engine import sniper_state_handlers as _state_handlers
+
+                        terminal_recovered = bool(
+                            _state_handlers._finish_definitive_sell_reject_boundary(
+                                target,
+                                code,
+                                target_id=getattr(record, "id", None),
+                                generation=str(
+                                    pending_fields.get("sell_submit_generation") or ""
+                                ),
+                                db=DB,
+                            )
+                        )
+                    except Exception as exc:
+                        terminal_recovered = False
+                        log_error(
+                            "[SELL_REJECT_TERMINAL_STARTUP_RECOVERY_FAILED] "
+                            f"{record.stock_name}({code}) id={record.id}: {exc}"
+                        )
+                    if terminal_recovered:
+                        record.status = "HOLDING"
+                        target["status"] = "HOLDING"
+                        target.pop("sell_cancel_reconciliation_required", None)
+                        target.pop("sell_cancel_reconciliation_source", None)
+                    else:
+                        record.scale_in_locked = True
+                        target.update(
+                            {
+                                "status": "SELL_ORDERED",
+                                "scale_in_locked": True,
+                                "sell_cancel_reconciliation_required": True,
+                                "sell_cancel_reconciliation_source": (
+                                    "definitive_reject_terminal_startup_recovery_deferred"
+                                ),
+                            }
+                        )
+                    continue
+                if record_status != "SELL_ORDERED":
+                    continue
+                restored, pending_reason = _restore_pending_sell_submit_custody(
+                    target_stock=target,
+                    record=record,
+                    code=code,
+                )
+                if restored:
+                    log_info(
+                        "[SELL_PENDING_SUBMIT_RESTART_RECOVERED] "
+                        f"{record.stock_name}({code}) id={record.id} "
+                        f"generation={target.get('sell_submit_generation')}"
+                    )
+                elif pending_reason != "pending_submit_journal_missing" and target:
+                    record.scale_in_locked = True
+                    target.update(
+                        {
+                            "scale_in_locked": True,
+                            "sell_cancel_reconciliation_required": True,
+                            "sell_cancel_reconciliation_source": (
+                                "pending_submit_restart_rehydrate_blocked:"
+                                f"{pending_reason}"
+                            ),
+                        }
+                    )
+                    log_error(
+                        "[SELL_PENDING_SUBMIT_RESTART_BLOCKED] "
+                        f"{record.stock_name}({code}) id={record.id} "
+                        f"reason={pending_reason}"
+                    )
             for record in archive_active_records:
                 code = str(record.stock_code).strip()[:6]
                 exchange = get_exchange(code)
@@ -1723,12 +2132,90 @@ def refresh_broker_account_snapshot_read_only() -> bool:
     return open_orders_request_succeeded
 
 
+def _retry_pending_final_sell_receipts_in_process() -> dict[str, int]:
+    """Boundedly retry every crash-safe SELL outbox without a bot restart."""
+
+    def _recovery_required(state):
+        return bool(
+            isinstance(state, dict)
+            and (
+                state.get("final_pending_db_commit") is True
+                or state.get("nxt_tp1_completion_runtime_release_pending") is True
+                or bool(state.get("pending_partial_lifecycle_legs"))
+            )
+        )
+
+    with _with_state_lock():
+        candidates = [
+            target
+            for target in list(ACTIVE_TARGETS or [])
+            if isinstance(target, dict)
+            and _recovery_required(target.get("_sell_execution_receipt_state"))
+        ]
+    result = {"scanned": len(candidates), "recovered": 0, "deferred": 0}
+    for target in candidates:
+        # Receipt ingress owns this same lock.  Revalidate and execute the
+        # entire ack/journal/runtime-cleanup transaction while serialized so a
+        # concurrent duplicate WebSocket receipt cannot restore an old pending
+        # map over the periodic recovery result.
+        with _with_state_lock():
+            state = target.get("_sell_execution_receipt_state")
+            if not _recovery_required(state):
+                continue
+            retry_at = _to_float(
+                target.get("sell_lifecycle_outbox_recovery_retry_at")
+                or target.get("sell_final_receipt_recovery_retry_at")
+                or 0.0
+            )
+            now_epoch = time.time()
+            if retry_at > now_epoch:
+                result["deferred"] += 1
+                continue
+            try:
+                from src.engine import sniper_execution_receipts as _receipt_handlers
+
+                if state.get("final_pending_db_commit") is True:
+                    recovered = _receipt_handlers.recover_final_sell_receipt(target)
+                else:
+                    recovered = (
+                        _receipt_handlers.recover_pending_sell_lifecycle_outbox(
+                            target
+                        )
+                    )
+            except Exception as exc:
+                recovered = False
+                log_error(
+                    "[SELL_FINAL_IN_PROCESS_RECOVERY_FAILED] "
+                    f"{target.get('name')}({target.get('code')}): {exc}"
+                )
+            if recovered:
+                result["recovered"] += 1
+                target.pop("sell_final_receipt_recovery_retry_at", None)
+                target.pop("sell_lifecycle_outbox_recovery_retry_at", None)
+                continue
+            result["deferred"] += 1
+            # The periodic owner is already bounded by the account-sync cadence;
+            # this timestamp also prevents accidental tight-loop callers.
+            target["sell_lifecycle_outbox_recovery_retry_at"] = now_epoch + 30.0
+            log_error(
+                "[SELL_LIFECYCLE_IN_PROCESS_RECOVERY_DEFERRED] "
+                f"{target.get('name')}({target.get('code')})"
+            )
+    return result
+
+
 def periodic_account_sync():
     """
     주기적으로 실제 증권사 잔고를 조회하여, 웹소켓 체결 누락으로 인해
     DB와 메모리가 꼬이는 현상을 강제로 바로잡습니다.
     """
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, HIGHEST_PRICES, STATE_LOCK
+
+    # A transient raw-append/ack failure after the DB commit must not strand a
+    # terminal receipt in SELL_ORDERED until process restart.  Retry its exact
+    # durable journal before any account snapshot can remove or reinterpret the
+    # runtime target.
+    _retry_pending_final_sell_receipts_in_process()
 
     if not KIWOOM_TOKEN:
         _refresh_kiwoom_token("토큰 없음(정기 동기화)")

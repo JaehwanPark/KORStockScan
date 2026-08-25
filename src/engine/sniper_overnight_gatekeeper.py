@@ -1,5 +1,6 @@
 """Scalping overnight gatekeeper helpers."""
 
+import inspect
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -551,38 +552,117 @@ def _execute_scalping_sell_today(record, mem_stock=None):
             mem_stock.get("sell_odno", "") or mem_stock.get("sell_ord_no", "") or ""
         )
 
-    rem_qty = _confirm_cancel_or_reload_remaining(
-        code, orig_ord_no, KIWOOM_TOKEN, expected_qty
-    )
+    confirm_callback = _confirm_cancel_or_reload_remaining
+    try:
+        confirm_parameters = inspect.signature(confirm_callback).parameters.values()
+        confirm_accepts_target = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            or parameter.name == "target_stock"
+            for parameter in confirm_parameters
+        )
+    except (TypeError, ValueError):
+        confirm_accepts_target = False
+    if confirm_accepts_target:
+        rem_qty = confirm_callback(
+            code,
+            orig_ord_no,
+            KIWOOM_TOKEN,
+            expected_qty,
+            target_stock=mem_stock,
+        )
+    else:
+        rem_qty = confirm_callback(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
     if rem_qty <= 0:
         print(
             f"⚠️ [{_eod_label()} EOD] {stock_name}({code}) 청산 대상이지만 잔량 확인 실패/0주. 시장가 청산 생략"
         )
         return False, "잔량 없음 또는 확인 실패"
+    if (
+        not isinstance(mem_stock, dict)
+        or _safe_int(mem_stock.get("id"), 0) != _safe_int(record.id, 0)
+        or str(mem_stock.get("code") or "").strip()[:6] != code
+        or _safe_int(mem_stock.get("buy_qty"), 0) < rem_qty
+    ):
+        return False, "exact runtime target unavailable; sell not submitted"
+    from src.engine import sniper_execution_receipts as _receipt_handlers
+    from src.engine import sniper_state_handlers as _state_handlers
 
-    res = _send_market_exit_now(code, rem_qty, KIWOOM_TOKEN)
-    if not _is_ok_response(res):
-        return False, f"시장가 매도 실패: {_format_order_error(res)}"
-
-    ord_no = _extract_ord_no(res)
-    if mem_stock is not None:
-        mem_stock["status"] = "SELL_ORDERED"
-        mem_stock["sell_order_time"] = time.time()
-        mem_stock["sell_target_price"] = int(
-            (WS_MANAGER.get_latest_data(code) or {}).get("curr", 0) or 0
-        )
-        if ord_no:
-            mem_stock["sell_odno"] = ord_no
+    started_at = time.time()
+    session_bucket = _receipt_handlers._sell_execution_session_bucket(
+        datetime.fromtimestamp(started_at, tz=_receipt_handlers._KST)
+    )
+    context_fields = _receipt_handlers.build_pending_sell_submit_context_fields(
+        mem_stock,
+        code=code,
+        requested_qty=rem_qty,
+        started_at=started_at,
+        intended_route="SOR",
+        intended_effective_venue=(
+            "KRX" if session_bucket == "krx_regular" else "UNKNOWN"
+        ),
+        intended_session_bucket=session_bucket,
+    )
+    generation = str(context_fields["sell_submit_generation"])
+    context_sha256 = str(context_fields["sell_submit_context_sha256"])
+    mem_stock.update(
+        {
+            "status": "SELL_ORDERED",
+            "sell_order_time": started_at,
+            "sell_target_price": int(
+                (WS_MANAGER.get_latest_data(code) or {}).get("curr", 0) or 0
+            ),
+            **context_fields,
+        }
+    )
+    if not _state_handlers._persist_sell_submit_pre_call_boundary(
+        mem_stock,
+        code,
+        target_id=record.id,
+        db=DB,
+    ):
+        return False, "pre-call durable custody failed; sell not submitted"
 
     try:
-        with DB.get_session() as session:
-            session.query(RecommendationHistory).filter_by(id=record.id).update(
-                {"status": "SELL_ORDERED"}
-            )
-    except Exception as e:
-        log_error(
-            f"🚨 [{_eod_label()} EOD] DB SELL_ORDERED 업데이트 실패 ({code}): {e}"
+        res = _send_market_exit_now(code, rem_qty, KIWOOM_TOKEN)
+    except Exception as exc:
+        res = {"return_code": "exception", "return_msg": str(exc)}
+    response_contract = _state_handlers._classify_sell_submit_response(res)
+    ord_no = response_contract["order_no"]
+    race_state = _state_handlers._sell_submit_response_race_state(
+        mem_stock,
+        generation=generation,
+        context_sha256=context_sha256,
+        requested_qty=rem_qty,
+        response_order_no=ord_no,
+    )
+    if race_state == "receipt_proof_response_order_conflict":
+        mem_stock["sell_cancel_reconciliation_required"] = True
+        mem_stock["sell_cancel_reconciliation_source"] = (
+            "eod_submit_response_order_conflicts_exact_receipt"
         )
+        return False, "response order conflicts with exact receipt"
+    if race_state in {"receipt_proved", "receipt_proved_custody_gap"}:
+        return True, f"시장가 청산 체결 확인 ({rem_qty}주)"
+    if race_state != "current_pending":
+        return False, "stale/intervened submit response; reconciliation required"
+    if response_contract["state"] == "ambiguous":
+        mem_stock["sell_cancel_reconciliation_required"] = True
+        mem_stock["sell_cancel_reconciliation_source"] = "eod_submit_response_ambiguous"
+        return False, f"시장가 매도 응답 불명확: {_format_order_error(res)}"
+    if response_contract["state"] in {"definitive_reject", "local_no_call"}:
+        if not _state_handlers._commit_definitive_sell_reject_boundary(
+            mem_stock,
+            code,
+            target_id=record.id,
+            generation=generation,
+            db=DB,
+        ):
+            mem_stock["sell_cancel_reconciliation_required"] = True
+            return False, "broker reject confirmed; exact rollback pending"
+        _state_handlers._clear_sell_submit_context(mem_stock)
+        mem_stock["status"] = "HOLDING"
+        return False, f"시장가 매도 거절: {_format_order_error(res)}"
+    mem_stock["sell_odno"] = ord_no
 
     return True, f"시장가 청산 주문 전송 ({rem_qty}주)"
 

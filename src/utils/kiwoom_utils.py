@@ -3,6 +3,7 @@ import json
 import time
 import threading
 import hashlib
+import re
 import requests
 import pandas as pd
 import numpy as np
@@ -798,6 +799,101 @@ def get_account_balance_kt00005(token):
     return list(aggregated_balances.values()), successful_exchanges
 
 
+def get_account_balance_kt00005_with_meta(token):
+    """Return a strict per-venue kt00005 snapshot for execution custody.
+
+    Unlike the compatibility normalizer above, this surface never coerces a
+    malformed numeric field to zero and only marks an exchange successful
+    after every response page and row has been validated atomically.
+    """
+
+    url = get_api_url("/api/dostk/acnt")
+    aggregated_balances = {}
+    successful_exchanges = set()
+    exchange_contract = {}
+
+    def strict_nonnegative_int(value):
+        if value is None or isinstance(value, bool):
+            return None
+        normalized = str(value).strip()
+        if re.fullmatch(r"[+]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)", normalized) is None:
+            return None
+        return int(normalized.replace(",", "").lstrip("+"))
+
+    for exchange in ("KRX", "NXT"):
+        results = fetch_kiwoom_api_continuous(
+            url=url,
+            token=token,
+            api_id="kt00005",
+            payload={"dmst_stex_tp": exchange},
+            use_continuous=True,
+        )
+        staged = {}
+        contract_complete = bool(isinstance(results, list) and results)
+        if contract_complete:
+            for response in results:
+                if not isinstance(response, dict):
+                    contract_complete = False
+                    break
+                raw_code = response.get("return_code", response.get("rt_cd"))
+                if (
+                    raw_code is None
+                    or isinstance(raw_code, bool)
+                    or str(raw_code).strip() != "0"
+                ):
+                    contract_complete = False
+                    break
+                rows = response.get("stk_cntr_remn")
+                if not isinstance(rows, list):
+                    contract_complete = False
+                    break
+                for item in rows:
+                    if not isinstance(item, dict):
+                        contract_complete = False
+                        break
+                    raw_symbol = str(item.get("stk_cd") or "").strip()
+                    code = raw_symbol[1:] if raw_symbol.startswith("A") else raw_symbol
+                    qty = strict_nonnegative_int(item.get("cur_qty"))
+                    buy_price = strict_nonnegative_int(item.get("buy_uv"))
+                    if (
+                        re.fullmatch(r"[0-9]{6}", code) is None
+                        or qty is None
+                        or buy_price is None
+                    ):
+                        contract_complete = False
+                        break
+                    if qty > 0:
+                        if code in staged:
+                            contract_complete = False
+                            break
+                        staged[code] = {
+                            "code": code,
+                            "name": str(item.get("stk_nm") or "").strip(),
+                            "qty": qty,
+                            "buy_price": buy_price,
+                        }
+                if not contract_complete:
+                    break
+        exchange_contract[exchange] = bool(contract_complete)
+        if not contract_complete:
+            continue
+        for code, row in staged.items():
+            aggregated_balances.setdefault(code, row)
+        successful_exchanges.add(exchange)
+
+    return (
+        list(aggregated_balances.values()),
+        successful_exchanges,
+        {
+            "request_succeeded": bool(successful_exchanges),
+            "normalization_contract_complete": {"KRX", "NXT"}.issubset(
+                successful_exchanges
+            ),
+            "exchange_contract_complete": exchange_contract,
+        },
+    )
+
+
 def get_account_execution_snapshot_kt00008(token):
     """
     [kt00008] 계좌별주문체결현황요청
@@ -977,12 +1073,31 @@ def _to_int_safe(value):
         return 0
 
 
+def _strict_nonnegative_integer_contract(value):
+    if value is None or isinstance(value, bool):
+        return False
+    return bool(
+        re.fullmatch(
+            r"[+]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)",
+            str(value).strip(),
+        )
+    )
+
+
 def _pick_first(item, keys):
     for key in keys:
         val = item.get(key)
         if val not in (None, ""):
             return val
     return ""
+
+
+def _pick_first_with_key(item, keys):
+    for key in keys:
+        val = item.get(key)
+        if val not in (None, ""):
+            return key, val
+    return "", ""
 
 
 def _pick_first_positive_int(item, keys):
@@ -1017,6 +1132,8 @@ def _extract_order_rows(res):
 def _normalize_order_history_rows(*, results, source_api):
     normalized = []
     for res in results or []:
+        if not isinstance(res, dict):
+            continue
         trade_date = str(
             res.get("trde_dt") or res.get("ord_dt") or res.get("dt") or ""
         ).strip()
@@ -1042,18 +1159,16 @@ def _normalize_order_history_rows(*, results, source_api):
                     ),
                 )
             ).strip()
-            qty = _to_int_safe(
-                _pick_first(
-                    item,
-                    ("qty", "ord_qty", "cntr_qty", "exct_qty", "cnfm_qty", "oso_qty"),
-                )
+            raw_qty_source, raw_qty_value = _pick_first_with_key(
+                item,
+                ("qty", "ord_qty", "cntr_qty", "exct_qty", "cnfm_qty", "oso_qty"),
             )
-            remaining_qty = _to_int_safe(
-                _pick_first(
-                    item,
-                    ("oso_qty", "osop_qty", "ord_remnq", "remaining_qty"),
-                )
+            raw_remaining_qty_source, raw_remaining_qty_value = _pick_first_with_key(
+                item,
+                ("oso_qty", "osop_qty", "ord_remnq", "remaining_qty"),
             )
+            qty = _to_int_safe(raw_qty_value)
+            remaining_qty = _to_int_safe(raw_remaining_qty_value)
             if source_api == "ka10075":
                 # Open-order reconciliation owns the submitted limit price.  A
                 # partial fill price is execution evidence, not order identity.
@@ -1112,6 +1227,16 @@ def _normalize_order_history_rows(*, results, source_api):
                     ),
                 )
             )
+            normalized_route = (
+                str(_pick_first(item, ("stex_tp", "dmst_stex_tp"))).strip().upper()
+            )
+            normalized_sor_yn = (
+                str(_pick_first(item, ("sor_yn", "sorYn", "sor"))).strip().upper()
+            )
+            route_contract_valid = bool(
+                normalized_sor_yn == "Y"
+                or normalized_route in {"1", "2", "KRX", "NXT", "SOR"}
+            )
             normalized.append(
                 {
                     "source_api": source_api,
@@ -1121,8 +1246,26 @@ def _normalize_order_history_rows(*, results, source_api):
                         _pick_first(item, ("stk_nm", "name", "hts_kor_isnm"))
                     ).strip(),
                     "side": side,
+                    "code_contract_valid": bool(re.fullmatch(r"[0-9]{6}", code)),
+                    "order_no_contract_valid": bool(
+                        re.fullmatch(r"[0-9]{7}", ord_no) and int(ord_no) > 0
+                    ),
+                    "side_contract_valid": side in {"매수", "매도"},
+                    "route_contract_valid": route_contract_valid,
                     "qty": qty,
                     "remaining_qty": remaining_qty,
+                    "raw_qty_value": raw_qty_value,
+                    "raw_qty_source": raw_qty_source,
+                    "raw_remaining_qty_value": raw_remaining_qty_value,
+                    "raw_remaining_qty_source": raw_remaining_qty_source,
+                    "submitted_quantity_source_valid": raw_qty_source
+                    in {"qty", "ord_qty"},
+                    "quantity_contract_valid": (
+                        _strict_nonnegative_integer_contract(raw_qty_value)
+                    ),
+                    "remaining_quantity_contract_valid": (
+                        _strict_nonnegative_integer_contract(raw_remaining_qty_value)
+                    ),
                     "unit_price": unit_price,
                     "ord_no": ord_no,
                     "orig_ord_no": orig_ord_no,
@@ -1142,6 +1285,79 @@ def _normalize_order_history_rows(*, results, source_api):
                 }
             )
     return normalized
+
+
+def _order_snapshot_contract_meta(*, results, rows, source_meta, api_id):
+    meta = _normalize_kiwoom_source_meta(source_meta, api_id)
+    result_list_exact = bool(isinstance(results, list) and results)
+    response_codes = []
+    response_envelopes_exact = result_list_exact
+    expected_list_key = {
+        "ka10075": "oso",
+        "kt00007": "acnt_ord_cntr_prps_dtl",
+    }.get(api_id)
+    for response in results if isinstance(results, list) else ():
+        if not isinstance(response, dict):
+            response_envelopes_exact = False
+            continue
+        raw_code = response.get("return_code", response.get("rt_cd"))
+        if raw_code is None or isinstance(raw_code, bool):
+            response_envelopes_exact = False
+            continue
+        normalized_code = str(raw_code).strip()
+        response_codes.append(normalized_code)
+        if (
+            expected_list_key
+            and normalized_code == "0"
+            and not isinstance(response.get(expected_list_key), list)
+        ):
+            response_envelopes_exact = False
+    declared_page_count = _to_int_safe(meta.get("page_count"))
+    page_contract_exact = bool(
+        declared_page_count <= 0
+        or (isinstance(results, list) and declared_page_count == len(results))
+    )
+    raw_order_row_count = sum(
+        len(_extract_order_rows(response))
+        for response in results or ()
+        if isinstance(response, dict)
+    )
+    contract_incomplete_count = sum(
+        1
+        for row in rows
+        if not bool(row.get("quantity_contract_valid"))
+        or not bool(row.get("remaining_quantity_contract_valid"))
+        or not bool(row.get("submitted_quantity_source_valid"))
+        or not bool(row.get("code_contract_valid"))
+        or not bool(row.get("order_no_contract_valid"))
+        or not bool(row.get("side_contract_valid"))
+        or not bool(row.get("route_contract_valid"))
+    )
+    meta.update(
+        {
+            "response_codes": response_codes,
+            "request_succeeded": bool(
+                response_envelopes_exact
+                and page_contract_exact
+                and len(response_codes) == len(results)
+                and all(code == "0" for code in response_codes)
+            ),
+            "raw_order_row_count": raw_order_row_count,
+            "normalized_order_row_count": len(rows),
+            "normalization_gap_count": max(0, raw_order_row_count - len(rows)),
+            "contract_incomplete_count": contract_incomplete_count,
+            "normalization_contract_complete": bool(
+                response_envelopes_exact
+                and page_contract_exact
+                and len(response_codes) == len(results)
+                and all(code == "0" for code in response_codes)
+                and raw_order_row_count == len(rows)
+                and contract_incomplete_count == 0
+            ),
+            "received_count": raw_order_row_count,
+        }
+    )
+    return meta
 
 
 def get_order_reference_snapshot_kt00007(
@@ -1184,6 +1400,51 @@ def get_order_reference_snapshot_kt00007(
         use_continuous=True,
     )
     return _normalize_order_history_rows(results=results, source_api="kt00007")
+
+
+def get_order_reference_snapshot_kt00007_with_meta(
+    token,
+    *,
+    ord_dt="",
+    qry_tp="1",
+    stk_bond_tp="0",
+    sell_tp="0",
+    stk_cd="",
+    fr_ord_no="",
+    dmst_stex_tp="%",
+    extra_payload=None,
+):
+    """Return kt00007 rows plus raw-vs-normalized contract completeness."""
+
+    url = get_api_url("/api/dostk/acnt")
+    qry_tp_value = str(qry_tp or "1")
+    if qry_tp_value not in {"1", "2", "3", "4"}:
+        qry_tp_value = "1"
+    payload = {
+        "ord_dt": str(ord_dt or ""),
+        "qry_tp": qry_tp_value,
+        "stk_bond_tp": str(stk_bond_tp or "0"),
+        "sell_tp": str(sell_tp or "0"),
+        "stk_cd": str(stk_cd or ""),
+        "fr_ord_no": str(fr_ord_no or ""),
+        "dmst_stex_tp": str(dmst_stex_tp or "%"),
+    }
+    if extra_payload:
+        payload.update({k: v for k, v in dict(extra_payload).items() if v is not None})
+    results, source_meta = _fetch_kiwoom_api_continuous_with_meta(
+        url=url,
+        token=token,
+        api_id="kt00007",
+        payload=payload,
+        use_continuous=True,
+    )
+    rows = _normalize_order_history_rows(results=results, source_api="kt00007")
+    return rows, _order_snapshot_contract_meta(
+        results=results,
+        rows=rows,
+        source_meta=source_meta,
+        api_id="kt00007",
+    )
 
 
 def get_order_reference_snapshot_ka10076(
@@ -1288,19 +1549,13 @@ def get_unfilled_order_snapshot_ka10075_with_meta(
         payload=payload,
         use_continuous=True,
     )
-    source_meta = _normalize_kiwoom_source_meta(source_meta, "ka10075")
-    response_codes = [
-        str((row or {}).get("return_code", (row or {}).get("rt_cd", "0")))
-        for row in results or []
-        if isinstance(row, dict)
-    ]
-    source_meta["response_codes"] = response_codes
-    source_meta["request_succeeded"] = bool(results) and all(
-        code == "0" for code in response_codes
-    )
     rows = _normalize_order_history_rows(results=results, source_api="ka10075")
-    source_meta["received_count"] = len(rows)
-    return rows, source_meta
+    return rows, _order_snapshot_contract_meta(
+        results=results,
+        rows=rows,
+        source_meta=source_meta,
+        api_id="ka10075",
+    )
 
 
 def get_order_reference_snapshot_2nd_pass(

@@ -40,6 +40,7 @@ from src.trading.order.tick_utils import (
     clamp_price_to_tick,
     move_price_by_ticks,
 )
+from src.utils.jsonl_io import iter_jsonl_objects_strict, read_json_object_strict
 
 DEFAULT_PAYLOAD_DIR = Path("data/ai_decision_payloads")
 DEFAULT_LABEL_DIR = Path("data/report/ai_decision_outcome_labels")
@@ -92,25 +93,19 @@ def _aware_kst(value: object) -> datetime | None:
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    if not path.exists():
-        return rows
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, raw_line in enumerate(handle, start=1):
-            try:
-                row = json.loads(raw_line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(row, dict):
-                row["_line_number"] = line_number
-                rows.append(row)
+    try:
+        rows = list(iter_jsonl_objects_strict(path))
+    except FileNotFoundError:
+        return []
+    for line_number, row in enumerate(rows, start=1):
+        row["_line_number"] = line_number
     return rows
 
 
 def _load_labels(path: Path) -> dict[str, dict[str, Any]]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = read_json_object_strict(path)
+    except FileNotFoundError:
         return {}
     labels = payload.get("labels") if isinstance(payload, dict) else None
     if not isinstance(labels, list):

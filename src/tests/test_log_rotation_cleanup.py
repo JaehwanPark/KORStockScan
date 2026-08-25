@@ -82,7 +82,9 @@ def test_log_rotation_cleanup_defers_active_rotation_preserves_open_backups_and_
             assert path.stat().st_ino == inode
         assert os.fstat(open_handle.fileno()).st_nlink == 1
         assert peer_archive.exists()
-        with gzip.open(_generation_gzip(peer_archive), "rt", encoding="utf-8") as handle:
+        with gzip.open(
+            _generation_gzip(peer_archive), "rt", encoding="utf-8"
+        ) as handle:
             assert handle.read() == "closed-peer"
         assert not micro_source.exists()
         assert micro_source.with_suffix(".jsonl.gz").exists()
@@ -1274,8 +1276,47 @@ def test_log_rotation_cleanup_preserves_partial_micro_purge_census(
     log_dir.mkdir(parents=True)
     fake_bin.mkdir()
     fake_ionice = fake_bin / "ionice"
+    capacity_status_path = project_root / "data" / "report" / "capacity.json"
+    capacity_status_path.parent.mkdir(parents=True)
+    capacity_status_content = {
+        "schema": "scalp_micro_reversion_storage_capacity_status_v1",
+        "target_date": "2026-05-22",
+        "capacity_state": "healthy",
+        "disk_free_bytes_after": 3,
+        "retained_physical_bytes_after": 3,
+        "compressed_target_bytes": 0,
+        "bytes_reclaimed": 7,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+        "provider_runtime_effect": False,
+        "provider_route_change_allowed": False,
+        "network_call_performed_by_module": False,
+        "automatic_deletion_authorized": False,
+    }
+    capacity_status_path.write_text(
+        json.dumps(
+            {
+                **capacity_status_content,
+                "artifact_content_sha256": hashlib.sha256(
+                    json.dumps(
+                        capacity_status_content,
+                        ensure_ascii=True,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        default=str,
+                    ).encode("utf-8")
+                ).hexdigest(),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     payload = {
         "schema": "scalp_micro_reversion_storage_maintenance_v1",
+        "as_of_date": "2026-05-22",
         "mode": "apply",
         "status": "partial_failure",
         "actual_order_submitted": False,
@@ -1310,6 +1351,27 @@ def test_log_rotation_cleanup_preserves_partial_micro_purge_census(
         "purge_applied_count": 0,
         "purge_partial_applied_count": 1,
         "deletion_performed": True,
+        "disk_total_bytes": 1_000,
+        "disk_used_bytes_after": 997,
+        "disk_free_bytes_before": 10,
+        "disk_free_bytes_after": 3,
+        "disk_free_bytes_delta": -7,
+        "retained_physical_bytes_before": 10,
+        "retained_physical_bytes_after": 3,
+        "retained_physical_bytes_delta": -7,
+        "compressed_target_bytes": 0,
+        "bytes_reclaimed": 7,
+        "low_disk_watermark_bytes": 1,
+        "critical_disk_watermark_bytes": 0,
+        "capacity_state": "healthy",
+        "capacity_warning": False,
+        "capacity_failure": False,
+        "capacity_workorder_required": False,
+        "capacity_reason_codes": [],
+        "capacity_status_artifact_path": str(capacity_status_path),
+        "capacity_status_written": True,
+        "capacity_status_write_failure_count": 0,
+        "capacity_status_write_failure_reason": None,
     }
     fake_ionice.write_text(
         "#!/usr/bin/env bash\nprintf '%s\\n' "
@@ -1490,7 +1552,10 @@ def test_log_rotation_cleanup_preserves_source_changed_during_gzip(tmp_path):
         "before-growth\ngrowth-during-compression\n"
     )
     assert not archive.with_suffix(".2.gz").exists()
-    assert "status=deferred_writer_active reason=source_changed_during_compression" in result.stdout
+    assert (
+        "status=deferred_writer_active reason=source_changed_during_compression"
+        in result.stdout
+    )
     assert "source_preserved=true" in result.stdout
     assert "archive_writer_active_deferred=1" in result.stdout
     assert "archive_compression_failures=0" in result.stdout
@@ -1545,7 +1610,10 @@ def test_log_rotation_cleanup_preserves_post_publish_source_change(tmp_path):
     assert archive.read_text(encoding="utf-8") == (original + "growth-after-publish\n")
     with gzip.open(_generation_gzip(archive), "rt", encoding="utf-8") as handle:
         assert handle.read() == original
-    assert "status=deferred_writer_active reason=source_changed_after_gzip_publish" in result.stdout
+    assert (
+        "status=deferred_writer_active reason=source_changed_after_gzip_publish"
+        in result.stdout
+    )
     assert "source_preserved=true" in result.stdout
     assert "archive_writer_active_deferred=1" in result.stdout
     assert "archive_compression_failures=0" in result.stdout
@@ -1675,6 +1743,346 @@ def test_log_rotation_cleanup_can_disable_micro_reversion_storage_maintenance(
     assert not source.with_suffix(".jsonl.gz").exists()
     assert "micro_reversion_storage_status=disabled" in result.stdout
     assert "micro_reversion_storage_purge_status=maintenance_disabled" in result.stdout
+
+
+def test_log_rotation_cleanup_low_capacity_warns_and_keeps_peer_lanes_running(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    log_dir.mkdir(parents=True)
+    peer_archive = log_dir / "capacity_warning_peer.log.3"
+    peer_archive.write_text("peer", encoding="utf-8")
+    status_path = project_root / "data" / "report" / "capacity" / "status.json"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "PYTHON_BIN": str(Path(__file__).resolve().parents[2] / ".venv/bin/python"),
+            "TARGET_DATE": "2026-05-22",
+            "LOG_ROTATION_ARCHIVE_QUIET_SECONDS": "0",
+            "MICRO_REVERSION_STORAGE_LOW_DISK_WATERMARK_BYTES": "1000000000000000",
+            "MICRO_REVERSION_STORAGE_CRITICAL_DISK_WATERMARK_BYTES": "0",
+            "MICRO_REVERSION_STORAGE_CAPACITY_STATUS_PATH": str(status_path),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    artifact = json.loads(status_path.read_text(encoding="utf-8"))
+    assert result.returncode == 0
+    assert artifact["status"] == "low_warning_workorder_open"
+    assert artifact["automatic_deletion_authorized"] is False
+    assert "[MICRO_REVERSION_STORAGE_CAPACITY_WARNING]" in result.stdout
+    assert "capacity_state=low_warning" in result.stdout
+    assert "cleanup_will_continue=true" in result.stdout
+    assert _generation_gzip(peer_archive).exists()
+    assert "[DONE] log_rotation_cleanup" in result.stdout
+
+
+def test_log_rotation_cleanup_critical_capacity_fails_after_peer_lanes_continue(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    log_dir.mkdir(parents=True)
+    peer_archive = log_dir / "critical_capacity_peer.log.3"
+    peer_archive.write_text("peer", encoding="utf-8")
+    status_path = project_root / "data" / "report" / "capacity" / "status.json"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "PYTHON_BIN": str(Path(__file__).resolve().parents[2] / ".venv/bin/python"),
+            "TARGET_DATE": "2026-05-22",
+            "LOG_ROTATION_ARCHIVE_QUIET_SECONDS": "0",
+            "MICRO_REVERSION_STORAGE_LOW_DISK_WATERMARK_BYTES": "1000000000000000",
+            "MICRO_REVERSION_STORAGE_CRITICAL_DISK_WATERMARK_BYTES": "999999999999999",
+            "MICRO_REVERSION_STORAGE_CAPACITY_STATUS_PATH": str(status_path),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    artifact = json.loads(status_path.read_text(encoding="utf-8"))
+    assert result.returncode == 1
+    assert artifact["status"] == "critical_blocked"
+    assert artifact["capacity_workorder"]["state"] == "open"
+    assert "[MICRO_REVERSION_STORAGE_FAIL] status=critical_capacity" in result.stdout
+    assert "capacity_state=critical" in result.stdout
+    assert "generic_cleanup_will_continue=true" in result.stdout
+    assert _generation_gzip(peer_archive).exists()
+    assert "[FAIL] log_rotation_cleanup" in result.stdout
+
+
+def test_log_rotation_cleanup_compresses_closed_micro_reversion_report_artifact(
+    tmp_path,
+):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    report_root = (
+        project_root
+        / "data"
+        / "report"
+        / "ai_micro_reversion_materialized_replay_requests"
+    )
+    paired_root = project_root / "data" / "report" / "ai_prompt_paired_replay"
+    quality_root = project_root / "data" / "report" / "main_ai_quality_r0_r3"
+    artifact = report_root / ("ai_micro_reversion_replay_source_bundle_2026-05-21.json")
+    log_dir.mkdir(parents=True)
+    report_root.mkdir(parents=True)
+    paired_root.mkdir(parents=True)
+    quality_root.mkdir(parents=True)
+    authority = {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+    def canonical_hash(payload: dict) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+
+    source_bundle_content = {
+        "schema": "ai_micro_reversion_replay_source_bundle_v1",
+        "target_date": "2026-05-21",
+        "rows": [],
+        **authority,
+    }
+    source_bundle = {
+        **source_bundle_content,
+        "source_bundle_content_sha256": canonical_hash(source_bundle_content),
+    }
+    artifact.write_text(json.dumps(source_bundle) + "\n", encoding="utf-8")
+    materialized_content = {
+        "schema": "ai_micro_reversion_materialized_replay_requests_v1",
+        "target_date": "2026-05-21",
+        "source_bundle_content_sha256": source_bundle["source_bundle_content_sha256"],
+        "source_bundle_artifact_sha256": canonical_hash(source_bundle),
+        **authority,
+    }
+    materialized = {
+        **materialized_content,
+        "report_content_sha256": canonical_hash(materialized_content),
+    }
+    materialized_path = report_root / (
+        "ai_micro_reversion_materialized_replay_requests_2026-05-21.json"
+    )
+    materialized_path.write_text(
+        json.dumps(materialized) + "\n",
+        encoding="utf-8",
+    )
+    terminal_content = {
+        "schema": "ai_micro_reversion_three_arm_offline_results_v1",
+        "target_date": "2026-05-21",
+        "status": "offline_three_arm_execution_complete",
+        "materialized_report_content_sha256": materialized["report_content_sha256"],
+        "materialized_request_census_sha256": "a" * 64,
+        "request_count": 1,
+        "result_count": 1,
+        "deferred_request_count": 0,
+        **authority,
+    }
+    terminal_hash = hashlib.sha256(
+        json.dumps(
+            terminal_content,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    (
+        report_root / "ai_micro_reversion_three_arm_offline_results_2026-05-21.json"
+    ).write_text(
+        json.dumps({**terminal_content, "report_content_sha256": terminal_hash}) + "\n",
+        encoding="utf-8",
+    )
+    paired = paired_root / "ai_prompt_paired_replay_2026-05-21.json"
+    paired.write_text(
+        json.dumps(
+            {
+                "schema": "ai_prompt_paired_replay_v1",
+                "target_date": "2026-05-21",
+                **authority,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    floor_content = {
+        "schema": "micro_reversion_provider_ablation_sample_floor_v1",
+        "target_date": "2026-05-21",
+        **authority,
+    }
+    floor = quality_root / (
+        "micro_reversion_provider_ablation_sample_floor_2026-05-21.json"
+    )
+    floor.write_text(
+        json.dumps(
+            {
+                **floor_content,
+                "floor_content_sha256": canonical_hash(floor_content),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    suffixed_paired = paired_root / "ai_prompt_paired_replay_2026-05-21_entry_KRX.json"
+    suffixed_paired.write_text('{"target_date":"2026-05-21"}\n', encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "PYTHON_BIN": str(Path(__file__).resolve().parents[2] / ".venv/bin/python"),
+            "TARGET_DATE": "2026-05-22",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    compressed = artifact.with_suffix(".json.gz")
+    assert not artifact.exists()
+    with gzip.open(compressed, "rt", encoding="utf-8") as handle:
+        assert json.load(handle)["target_date"] == "2026-05-21"
+    assert not paired.exists()
+    assert paired.with_suffix(".json.gz").exists()
+    assert suffixed_paired.exists()
+    assert not suffixed_paired.with_suffix(".json.gz").exists()
+    assert not materialized_path.exists()
+    assert materialized_path.with_suffix(".json.gz").exists()
+    assert not floor.exists()
+    with gzip.open(floor.with_suffix(".json.gz"), "rt", encoding="utf-8") as handle:
+        floor_after = json.load(handle)
+    assert floor_after["floor_content_sha256"] == canonical_hash(floor_content)
+    assert "report_artifact_compressed=5" in result.stdout
+    assert "artifact_set_terminal=1" in result.stdout
+    assert "report_artifact_failures=0" in result.stdout
+
+
+def test_log_rotation_cleanup_compresses_closed_provider_budget_ledger(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    budget_root = project_root / "data" / "offline_provider_budget"
+    log_dir.mkdir(parents=True)
+    budget_root.mkdir(parents=True)
+    execution_date = "2026-05-21"
+    ledger = budget_root / f"ai_micro_reversion_provider_budget_{execution_date}.jsonl"
+    authority = {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "provider_route_change_allowed": False,
+        "network_call_performed_by_module": False,
+    }
+
+    def with_hash(payload: dict, field: str) -> dict:
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return {**payload, field: hashlib.sha256(encoded).hexdigest()}
+
+    record = with_hash(
+        {
+            "schema": "ai_provider_budget_ledger_record_v1",
+            "sequence": 1,
+            "previous_record_sha256": None,
+            "execution_date": execution_date,
+            **authority,
+        },
+        "record_content_sha256",
+    )
+    ledger_bytes = (json.dumps(record, separators=(",", ":")) + "\n").encode()
+    ledger.write_bytes(ledger_bytes)
+    ledger_hash = hashlib.sha256(ledger_bytes).hexdigest()
+    manifest = with_hash(
+        {
+            "schema": "ai_provider_budget_ledger_manifest_v1",
+            "execution_date": execution_date,
+            "ledger_file": ledger.name,
+            "ledger_size_bytes": len(ledger_bytes),
+            "ledger_bytes_sha256": ledger_hash,
+            "record_count": 1,
+            "head_record_sha256": record["record_content_sha256"],
+            **authority,
+        },
+        "manifest_content_sha256",
+    )
+    ledger.with_suffix(".manifest.json").write_text(
+        json.dumps(manifest) + "\n", encoding="utf-8"
+    )
+    summary = with_hash(
+        {
+            "schema": "ai_provider_budget_summary_v1",
+            "execution_date": execution_date,
+            "ledger_record_count": 1,
+            "ledger_head_sha256": record["record_content_sha256"],
+            "ledger_bytes_sha256": ledger_hash,
+            **authority,
+        },
+        "summary_content_sha256",
+    )
+    ledger.with_suffix(".json").write_text(json.dumps(summary) + "\n", encoding="utf-8")
+    ledger.with_suffix(".lock").touch()
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "PYTHON_BIN": str(Path(__file__).resolve().parents[2] / ".venv/bin/python"),
+            "TARGET_DATE": "2026-05-22",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert not ledger.exists()
+    with gzip.open(ledger.with_suffix(".jsonl.gz"), "rb") as handle:
+        assert handle.read() == ledger_bytes
+    assert "provider_budget_ledgers=1" in result.stdout
+    assert "provider_authority=false" in result.stdout
 
 
 def test_log_rotation_cleanup_defers_archived_and_stale_active_logs(tmp_path):

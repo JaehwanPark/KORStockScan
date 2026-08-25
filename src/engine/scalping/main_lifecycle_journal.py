@@ -36,8 +36,14 @@ PIPELINE_IDENTITY_SCHEMA = "main_scalping_lifecycle_pipeline_identity_v1"
 BROKER_EXECUTION_PROVENANCE_SCHEMA = "kiwoom_ws_order_execution_provenance_v2"
 BROKER_EXECUTION_PROVENANCE_LEGACY_SCHEMA = "kiwoom_ws_order_execution_provenance_v1"
 BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA = "kiwoom_websocket_order_execution_00_values_v1"
+BROKER_EXECUTION_TIMING_SCHEMA = "kiwoom_ws_order_execution_timing_v2"
 KIWOOM_OFFICIAL_REFERENCE_SHA = "69642586f7d84ba9fd8a6faf1f1537c7fda6568b"
 BROKER_EXECUTION_SOURCE_TYPE = "00"
+BROKER_EXECUTION_ORDERING_TIME_SOURCE = "broker_execution_received_at"
+BROKER_EXECUTION_OCCURRENCE_TIME_SOURCE = "official_fid_908"
+BROKER_EXECUTION_RECEIVE_TIME_SOURCE = "websocket_packet_ingress"
+BROKER_EXECUTION_MAX_RECEIVE_LAG_SEC = 60.0
+BROKER_EXECUTION_MAX_NEGATIVE_LAG_SEC = 2.0
 _BROKER_EXECUTION_V2_ONLY_FIELDS = frozenset(
     {
         "broker_execution_reported_venue_scope",
@@ -91,15 +97,21 @@ PIPELINE_STAGE_MAP: dict[tuple[str, str], str] = {
     ("ENTRY_PIPELINE", "scalping_scanner_fast_precheck"): "scanner",
     ("ENTRY_PIPELINE", "scanner_async_result_commit"): "scanner",
     ("ENTRY_PIPELINE", "ai_confirmed"): "entry_decision",
+    ("ENTRY_PIPELINE", "order_leg_sent"): "submit",
     ("ENTRY_PIPELINE", "order_bundle_submitted"): "submit",
+    ("HOLDING_PIPELINE", "entry_execution_receipt_submission_custody"): "submit",
     ("HOLDING_PIPELINE", "position_rebased_after_fill"): "fill",
     ("HOLDING_PIPELINE", "holding_started"): "holding",
     ("HOLDING_PIPELINE", "ai_holding_review"): "holding",
     ("HOLDING_PIPELINE", "stat_action_decision_snapshot"): "scale_in",
+    ("HOLDING_PIPELINE", "scale_in_order_leg_submitted"): "scale_in",
+    ("HOLDING_PIPELINE", "scale_in_execution_receipt_submission_custody"): ("scale_in"),
     ("HOLDING_PIPELINE", "scale_in_order_submitted"): "scale_in",
     ("HOLDING_PIPELINE", "scale_in_executed"): "scale_in",
     ("HOLDING_PIPELINE", "exit_signal"): "exit",
+    ("HOLDING_PIPELINE", "exit_execution_receipt_submission_custody"): "exit",
     ("HOLDING_PIPELINE", "sell_order_sent"): "exit",
+    ("HOLDING_PIPELINE", "sell_partial_fill_progress"): "exit",
     ("HOLDING_PIPELINE", "nxt_rising_missed_tp1_partial_fill_progress"): "exit",
     ("HOLDING_PIPELINE", "nxt_rising_missed_tp1_partial_sell_completed"): "exit",
     ("HOLDING_PIPELINE", "sell_completed"): "exit",
@@ -148,12 +160,30 @@ _ALLOWED_DATA_FIELDS = frozenset(
         "action",
         "reason",
         "decision_trace_id",
+        "source_population_scope",
         "payload_sha256",
         "paired_replay_parent_id",
         "paired_replay_arm",
         "actual_broker_order_submitted",
         "broker_order_no",
         "broker_order_no_list",
+        "broker_order_qty_list",
+        "submission_leg_contract",
+        "submission_leg_self_summarizing",
+        "submission_contract_legacy_unattested",
+        "submission_summary_only",
+        "submission_summary_expected_leg_count",
+        "submission_time_source",
+        "submission_ordering_clock",
+        "submission_causal_upper_bound_at",
+        "submission_causal_upper_bound_source",
+        "submission_custody_binding_schema",
+        "submission_custody_broker_order_no",
+        "submission_custody_broker_execution_no",
+        "submission_custody_broker_order_qty",
+        "submission_custody_broker_cumulative_qty",
+        "submission_custody_broker_remaining_qty",
+        "submission_custody_broker_unit_qty",
         "broker_reconciled",
         "broker_execution_provenance_schema",
         "broker_execution_official_reference_sha",
@@ -174,6 +204,17 @@ _ALLOWED_DATA_FIELDS = frozenset(
         "broker_execution_reported_price",
         "broker_execution_unit_fill_qty",
         "broker_execution_time_hhmmss",
+        "broker_execution_timing_schema",
+        "broker_execution_received_at",
+        "broker_execution_occurred_at",
+        "broker_execution_receive_time_source",
+        "broker_execution_ordering_time_source",
+        "broker_execution_occurrence_time_source",
+        "broker_execution_receive_lag_ms",
+        "broker_execution_lifecycle_observed_at_rebound",
+        "legacy_unattested_receive_clock_recovered",
+        "broker_execution_receipt_companion",
+        "broker_execution_receipt_companion_of_identity",
         "broker_execution_venue",
         "broker_execution_reported_venue_scope",
         "broker_execution_actual_venue",
@@ -207,6 +248,10 @@ _ALLOWED_DATA_FIELDS = frozenset(
         "cost_artifact_verified",
         "symbol_master_sha256",
         "symbol_master_verified",
+        "venue_source",
+        "venue_provenance_status",
+        "session_bucket_source",
+        "session_provenance_status",
         "session_exposure_start_at",
         "session_exposure_end_at",
         "heartbeat",
@@ -764,7 +809,7 @@ def validate_broker_execution_provenance(
     lifecycle_venue: Any,
     expected_fill_state: Any | None = None,
 ) -> str | None:
-    """Return a stable validation error for a canonical complete proof."""
+    """Return a stable validation error for canonical identity-complete proof."""
 
     source_schema = str(data.get("broker_execution_provenance_schema") or "")
     if source_schema not in {
@@ -776,8 +821,17 @@ def validate_broker_execution_provenance(
         key in data for key in _BROKER_EXECUTION_V2_ONLY_FIELDS
     ):
         return "broker_execution_legacy_schema_semantic_drift"
-    if data.get("broker_execution_provenance_state") != "complete":
-        return "broker_execution_provenance_not_complete"
+    provenance_state = str(data.get("broker_execution_provenance_state") or "")
+    if provenance_state not in {
+        "complete",
+        "identity_complete_venue_unresolved",
+    }:
+        return "broker_execution_provenance_not_identity_complete"
+    if (
+        source_schema == BROKER_EXECUTION_PROVENANCE_LEGACY_SCHEMA
+        and provenance_state != "complete"
+    ):
+        return "broker_execution_legacy_schema_semantic_drift"
     side = str(data.get("broker_execution_side") or "").strip().upper()
     venue = str(data.get("broker_execution_venue") or "").strip().upper()
     native_projection = {
@@ -810,10 +864,10 @@ def validate_broker_execution_provenance(
         lifecycle_venue=lifecycle_venue,
         expected_fill_state=expected_fill_state,
     )
-    if rebuilt.get("broker_execution_provenance_state") != "complete":
+    if rebuilt.get("broker_execution_provenance_state") != provenance_state:
         return str(
             rebuilt.get("broker_execution_provenance_error")
-            or "broker_execution_provenance_rebuild_failed"
+            or "broker_execution_provenance_state_rebuild_mismatch"
         )
     legacy_ignored_fields = {
         "broker_execution_provenance_schema",
@@ -861,6 +915,103 @@ def _normalize_submitted_order_numbers(data: Mapping[str, Any]) -> list[str]:
     if primary and primary not in order_numbers:
         raise ValueError("submitted_primary_order_not_in_order_list")
     return order_numbers
+
+
+def normalize_submitted_order_quantities(
+    data: Mapping[str, Any],
+    order_numbers: list[str],
+    requested_qty: Any,
+) -> dict[str, int]:
+    """Return an exact per-order requested-quantity map.
+
+    A bundle total is unambiguous only for one broker order.  Split submissions
+    must carry ``broker_order_qty_list`` as ``ORDER_NO:QTY`` pairs so a later
+    execution receipt can be bound to the exact leg without dividing or
+    otherwise inferring quantity from the aggregate.
+    """
+
+    requested_number = _positive_number(requested_qty)
+    if requested_number is None or not requested_number.is_integer():
+        raise ValueError("submitted_requested_qty_must_be_positive_integer")
+    requested_int = int(requested_number)
+    raw_text = str(data.get("broker_order_qty_list") or "").strip()
+    if not raw_text:
+        if len(order_numbers) != 1:
+            raise ValueError("submitted_order_qty_list_required_for_split_bundle")
+        return {order_numbers[0]: requested_int}
+
+    quantities: dict[str, int] = {}
+    for raw_pair in raw_text.split(","):
+        pair = raw_pair.strip()
+        if pair.count(":") != 1:
+            raise ValueError("submitted_order_qty_pair_invalid")
+        raw_order_no, raw_qty = (part.strip() for part in pair.split(":", 1))
+        order_no = _raw_order_no(raw_order_no)
+        if order_no in quantities:
+            raise ValueError("submitted_order_qty_duplicate_order_no")
+        if re.fullmatch(r"[1-9][0-9]*", raw_qty) is None:
+            raise ValueError("submitted_order_qty_invalid")
+        quantities[order_no] = int(raw_qty)
+
+    if set(quantities) != set(order_numbers):
+        raise ValueError("submitted_order_qty_order_set_mismatch")
+    if sum(quantities.values()) != requested_int:
+        raise ValueError("submitted_order_qty_total_mismatch")
+    return quantities
+
+
+def canonical_submitted_order_qty_list(quantities: Mapping[str, int]) -> str:
+    """Serialize an already validated quantity map in broker-order order."""
+
+    return ",".join(f"{order_no}:{int(qty)}" for order_no, qty in quantities.items())
+
+
+def _validate_submission_contract_fields(
+    data: Mapping[str, Any],
+    order_numbers: list[str],
+    *,
+    allow_single_order_leg: bool = False,
+    required_leg_contract: str | None = None,
+) -> bool:
+    summary_only = data.get("submission_summary_only")
+    leg_contract = data.get("submission_leg_contract")
+    if summary_only not in {None, True, False}:
+        raise ValueError("submission_summary_only_invalid")
+    if leg_contract not in {
+        None,
+        "exact_broker_order_leg_v1",
+        "exact_broker_single_order_leg_v1",
+    }:
+        raise ValueError("submission_leg_contract_invalid")
+    self_summarizing = data.get("submission_leg_self_summarizing")
+    if leg_contract == "exact_broker_single_order_leg_v1":
+        if (
+            not allow_single_order_leg
+            or len(order_numbers) != 1
+            or self_summarizing is not True
+            or summary_only is True
+        ):
+            raise ValueError("submission_single_order_leg_contract_invalid")
+    elif self_summarizing is not None:
+        raise ValueError("submission_leg_self_summarizing_without_contract")
+    if summary_only is True:
+        if leg_contract is not None:
+            raise ValueError("submission_summary_leg_contract_conflict")
+        expected = _positive_number(data.get("submission_summary_expected_leg_count"))
+        if (
+            expected is None
+            or not expected.is_integer()
+            or int(expected) != len(order_numbers)
+        ):
+            raise ValueError("submission_summary_expected_leg_count_mismatch")
+        return True
+    if "submission_summary_expected_leg_count" in data:
+        raise ValueError("submission_summary_expected_leg_count_without_summary")
+    if required_leg_contract is not None and leg_contract is None:
+        return False
+    if required_leg_contract is not None and leg_contract != required_leg_contract:
+        raise ValueError("submission_leg_contract_required")
+    return True
 
 
 def _normalize_attempt_id(value: Any) -> str:
@@ -984,29 +1135,44 @@ def _pipeline_explicit_session_bucket_with_source(
 
 
 def _pipeline_decision_trace_id(
-    stock: Mapping[str, Any], source_fields: Mapping[str, Any]
+    stock: Mapping[str, Any],
+    source_fields: Mapping[str, Any],
+    *,
+    lifecycle_stage: str,
 ) -> str:
-    for source, keys in (
-        (
-            source_fields,
-            (
-                "ai_decision_trace_id",
-                "decision_trace_id",
-                "scanner_async_ai_decision_trace_id",
-            ),
-        ),
-        (
-            stock,
-            (
-                "last_watching_ai_decision_trace_id",
-                "last_watching_ai_attempt_decision_trace_id",
-            ),
-        ),
+    source_keys = (
+        "ai_decision_trace_id",
+        "scale_in_ai_decision_trace_id",
+        "pending_add_ai_decision_trace_id",
+        "decision_trace_id",
+        "scanner_async_ai_decision_trace_id",
+    )
+    explicit_values: list[str] = []
+    for key in source_keys:
+        value = str(source_fields.get(key) or "").strip()
+        if value and value not in {"-", "None", "none", "null"}:
+            if len(value) > MAX_DATA_STRING_LENGTH or "\x00" in value:
+                return ""
+            explicit_values.append(value)
+    if len(set(explicit_values)) > 1:
+        return ""
+    if explicit_values:
+        return explicit_values[0]
+    # Position-level watching state is a valid fallback only for the original
+    # entry decision and its submit descendants.  Holding/scale-in/exit receipt
+    # rows need an explicit current-stage trace; otherwise a stale entry trace
+    # would falsely bind unrelated decisions and venues to the same context.
+    if lifecycle_stage not in {"entry_decision", "submit"}:
+        return ""
+    for key in (
+        "last_watching_ai_decision_trace_id",
+        "last_watching_ai_attempt_decision_trace_id",
     ):
-        for key in keys:
-            value = str(source.get(key) or "").strip()
-            if value and value not in {"-", "None", "none", "null"}:
-                return value[:MAX_DATA_STRING_LENGTH]
+        value = str(stock.get(key) or "").strip()
+        if value and value not in {"-", "None", "none", "null"}:
+            if len(value) > MAX_DATA_STRING_LENGTH or "\x00" in value:
+                return ""
+            return value
     return ""
 
 
@@ -1076,11 +1242,16 @@ def _pipeline_market_coverage_fields(
         in {
             "scalping_scanner_fast_precheck",
             "ai_confirmed",
+            "order_leg_sent",
             "order_bundle_submitted",
+            "entry_execution_receipt_submission_custody",
             "ai_holding_review",
             "stat_action_decision_snapshot",
+            "scale_in_order_leg_submitted",
+            "scale_in_execution_receipt_submission_custody",
             "scale_in_order_submitted",
             "exit_signal",
+            "exit_execution_receipt_submission_custody",
             "sell_order_sent",
         },
         "main_lifecycle_bbo_observed": bbo_observed,
@@ -1096,6 +1267,70 @@ def _pipeline_market_coverage_fields(
             or source_fields.get("heartbeat")
         ),
     }
+
+
+def _pipeline_execution_clock_fields(
+    source_fields: Mapping[str, Any], *, fallback_timestamp: datetime
+) -> tuple[datetime, dict[str, Any]]:
+    """Bind receipt ordering to receive time while retaining FID 908 time.
+
+    This helper is intentionally tolerant on the live telemetry path.  It
+    rewrites the lifecycle ordering timestamp only when both source timestamps
+    are timezone-aware.  The postclose producer performs the strict raw-FID,
+    source, equality, and lag validation and quarantines malformed rows.
+    """
+
+    source_type = str(
+        source_fields.get("broker_raw_source_type")
+        or source_fields.get("main_lifecycle_broker_raw_source_type")
+        or ""
+    ).strip()
+    raw_execution_time = str(source_fields.get("908") or "").strip()
+    if source_type != BROKER_EXECUTION_SOURCE_TYPE or not raw_execution_time:
+        return fallback_timestamp, {
+            "main_lifecycle_ordering_time_source": "source_observed_at"
+        }
+
+    timing_fields: dict[str, Any] = {
+        "main_lifecycle_broker_execution_timing_expected": True,
+    }
+    try:
+        received_value = source_fields.get("broker_execution_received_at")
+        occurred_value = source_fields.get("broker_execution_observed_at")
+        if received_value in (None, "") or occurred_value in (None, ""):
+            raise ValueError("broker_execution_timing_source_missing")
+        received_at = _aware_datetime(received_value).astimezone(KST)
+        occurred_at = _aware_datetime(occurred_value).astimezone(KST)
+    except (TypeError, ValueError):
+        # Preserve exact lineage and the original source timestamp so the live
+        # event remains fail-open.  Postclose sees the timing-required marker
+        # plus raw type-00 proof and rejects the non-recoverable transition.
+        timing_fields["main_lifecycle_ordering_time_source"] = (
+            "broker_execution_timing_invalid"
+        )
+        return fallback_timestamp, timing_fields
+
+    timing_fields.update(
+        {
+            "main_lifecycle_execution_received_at": received_at.isoformat(
+                timespec="microseconds"
+            ),
+            "main_lifecycle_execution_occurred_at": occurred_at.isoformat(
+                timespec="microseconds"
+            ),
+            "main_lifecycle_execution_trade_date": occurred_at.date().isoformat(),
+            "main_lifecycle_execution_receive_time_source": str(
+                source_fields.get("broker_execution_receive_time_source") or ""
+            ).strip(),
+            "main_lifecycle_ordering_time_source": (
+                BROKER_EXECUTION_ORDERING_TIME_SOURCE
+            ),
+            "main_lifecycle_execution_occurrence_time_source": str(
+                source_fields.get("broker_execution_time_source") or ""
+            ).strip(),
+        }
+    )
+    return received_at, timing_fields
 
 
 def pipeline_lifecycle_fields_safe(
@@ -1168,9 +1403,21 @@ def pipeline_lifecycle_fields_safe(
             stock_code=normalized_stock_code,
             attempt_id=attempt_id,
         )
-        timestamp = _aware_datetime(observed_at).astimezone(KST)
+        source_timestamp = _aware_datetime(observed_at).astimezone(KST)
+        timestamp, execution_clock_fields = _pipeline_execution_clock_fields(
+            fields,
+            fallback_timestamp=source_timestamp,
+        )
+        lifecycle_trade_date = str(
+            execution_clock_fields.get("main_lifecycle_execution_trade_date")
+            or source_timestamp.date().isoformat()
+        )
         lifecycle_id = mint_main_lifecycle_id(**lineage)
-        decision_trace_id = _pipeline_decision_trace_id(stock, fields)
+        decision_trace_id = _pipeline_decision_trace_id(
+            stock,
+            fields,
+            lifecycle_stage=lifecycle_stage,
+        )
         lifecycle_venue, lifecycle_venue_source = _pipeline_explicit_venue_with_source(
             stock, fields
         )
@@ -1184,7 +1431,7 @@ def pipeline_lifecycle_fields_safe(
             "main_lifecycle_attempt_id": lineage["attempt_id"],
             "main_lifecycle_record_id": lineage["record_id"],
             "main_lifecycle_stock_code": lineage["stock_code"],
-            "main_lifecycle_trade_date": timestamp.date().isoformat(),
+            "main_lifecycle_trade_date": lifecycle_trade_date,
             "main_lifecycle_observed_at": timestamp.isoformat(timespec="microseconds"),
             "main_lifecycle_venue": lifecycle_venue,
             "main_lifecycle_venue_source": lifecycle_venue_source,
@@ -1207,6 +1454,7 @@ def pipeline_lifecycle_fields_safe(
             "main_lifecycle_runtime_effect": False,
             "main_lifecycle_order_authority": False,
             "main_lifecycle_provider_authority": False,
+            **execution_clock_fields,
             **_pipeline_market_coverage_fields(
                 fields,
                 lifecycle_stage=lifecycle_stage,
@@ -1231,6 +1479,63 @@ def _aware_datetime(value: datetime | str | None) -> datetime:
     if not isinstance(parsed, datetime) or parsed.tzinfo is None:
         raise ValueError("observed_at_must_be_timezone_aware")
     return parsed
+
+
+def validate_broker_execution_timing(
+    data: Mapping[str, Any], *, observed_at: datetime | str
+) -> str | None:
+    """Validate receive-time ordering against the official FID 908 instant."""
+
+    if data.get("broker_execution_timing_schema") != BROKER_EXECUTION_TIMING_SCHEMA:
+        return "broker_execution_timing_schema_invalid"
+    if data.get("broker_execution_ordering_time_source") != (
+        BROKER_EXECUTION_ORDERING_TIME_SOURCE
+    ):
+        return "broker_execution_ordering_time_source_invalid"
+    if data.get("broker_execution_occurrence_time_source") != (
+        BROKER_EXECUTION_OCCURRENCE_TIME_SOURCE
+    ):
+        return "broker_execution_occurrence_time_source_invalid"
+    if data.get("broker_execution_receive_time_source") != (
+        BROKER_EXECUTION_RECEIVE_TIME_SOURCE
+    ):
+        return "broker_execution_receive_time_source_invalid"
+    received_value = data.get("broker_execution_received_at")
+    occurred_value = data.get("broker_execution_occurred_at")
+    if received_value in (None, ""):
+        return "broker_execution_received_at_missing"
+    if occurred_value in (None, ""):
+        return "broker_execution_occurred_at_missing"
+    try:
+        ordering_at = _aware_datetime(observed_at).astimezone(KST)
+        received_at = _aware_datetime(received_value).astimezone(KST)
+        occurred_at = _aware_datetime(occurred_value).astimezone(KST)
+    except (TypeError, ValueError):
+        return "broker_execution_timing_timestamp_invalid"
+    if ordering_at != received_at:
+        return "broker_execution_ordering_timestamp_not_receive_time"
+    if occurred_at.microsecond != 0:
+        return "broker_execution_occurrence_time_precision_invalid"
+    execution_hhmmss = str(data.get("broker_execution_time_hhmmss") or "").strip()
+    if occurred_at.strftime("%H%M%S") != execution_hhmmss:
+        return "broker_execution_occurrence_time_fid908_mismatch"
+    lag_sec = (received_at - occurred_at).total_seconds()
+    if lag_sec < -BROKER_EXECUTION_MAX_NEGATIVE_LAG_SEC:
+        return "broker_execution_receive_time_precedes_occurrence"
+    if lag_sec > BROKER_EXECUTION_MAX_RECEIVE_LAG_SEC:
+        return "broker_execution_receive_lag_exceeds_bound"
+    try:
+        declared_lag_ms = float(data.get("broker_execution_receive_lag_ms"))
+    except (TypeError, ValueError):
+        return "broker_execution_receive_lag_ms_invalid"
+    if (
+        not math.isfinite(declared_lag_ms)
+        or abs(declared_lag_ms - lag_sec * 1000.0) > 0.001
+    ):
+        return "broker_execution_receive_lag_ms_mismatch"
+    if not isinstance(data.get("broker_execution_lifecycle_observed_at_rebound"), bool):
+        return "broker_execution_lifecycle_observed_at_rebound_invalid"
+    return None
 
 
 def _safe_scalar(value: Any) -> Any:
@@ -1309,8 +1614,6 @@ def build_transition(
     )
     target_date = date.fromisoformat(target_date).isoformat()
     timestamp = _aware_datetime(observed_at)
-    if timestamp.astimezone(KST).date().isoformat() != target_date:
-        raise ValueError("observed_at_trade_date_mismatch")
     event_data = _sanitize_data(data)
     normalized_venue = str(venue or "UNKNOWN").strip().upper() or "UNKNOWN"
 
@@ -1321,8 +1624,23 @@ def build_transition(
             if event_data.get("actual_broker_order_submitted") is not True:
                 raise ValueError("submit_actual_broker_order_required")
             order_numbers = _normalize_submitted_order_numbers(event_data)
+            order_quantities = normalize_submitted_order_quantities(
+                event_data,
+                order_numbers,
+                event_data.get("requested_qty"),
+            )
+            submission_contract_attested = _validate_submission_contract_fields(
+                event_data,
+                order_numbers,
+                required_leg_contract="exact_broker_order_leg_v1",
+            )
+            if not submission_contract_attested:
+                event_data["submission_contract_legacy_unattested"] = True
             event_data["broker_order_no"] = order_numbers[0]
             event_data["broker_order_no_list"] = ",".join(order_numbers)
+            event_data["broker_order_qty_list"] = canonical_submitted_order_qty_list(
+                order_quantities
+            )
     if normalized_stage == "fill":
         if event_data.get("fill_state") not in VALID_FILL_STATES:
             raise ValueError("fill_state_invalid")
@@ -1358,8 +1676,23 @@ def build_transition(
             if _positive_number(event_data.get("requested_qty")) is None:
                 raise ValueError("scale_in_submit_requested_qty_invalid")
             order_numbers = _normalize_submitted_order_numbers(event_data)
+            order_quantities = normalize_submitted_order_quantities(
+                event_data,
+                order_numbers,
+                event_data.get("requested_qty"),
+            )
+            submission_contract_attested = _validate_submission_contract_fields(
+                event_data,
+                order_numbers,
+                required_leg_contract="exact_broker_order_leg_v1",
+            )
+            if not submission_contract_attested:
+                event_data["submission_contract_legacy_unattested"] = True
             event_data["broker_order_no"] = order_numbers[0]
             event_data["broker_order_no_list"] = ",".join(order_numbers)
+            event_data["broker_order_qty_list"] = canonical_submitted_order_qty_list(
+                order_quantities
+            )
     if event_data.get("terminal_no_fill") is True:
         if normalized_stage not in NO_FILL_TERMINAL_STAGES:
             raise ValueError("terminal_no_fill_stage_invalid")
@@ -1389,8 +1722,24 @@ def build_transition(
         if _positive_number(event_data.get("requested_qty")) is None:
             raise ValueError("exit_submit_requested_qty_invalid")
         order_numbers = _normalize_submitted_order_numbers(event_data)
+        order_quantities = normalize_submitted_order_quantities(
+            event_data,
+            order_numbers,
+            event_data.get("requested_qty"),
+        )
+        submission_contract_attested = _validate_submission_contract_fields(
+            event_data,
+            order_numbers,
+            allow_single_order_leg=True,
+            required_leg_contract="exact_broker_single_order_leg_v1",
+        )
+        if not submission_contract_attested:
+            event_data["submission_contract_legacy_unattested"] = True
         event_data["broker_order_no"] = order_numbers[0]
         event_data["broker_order_no_list"] = ",".join(order_numbers)
+        event_data["broker_order_qty_list"] = canonical_submitted_order_qty_list(
+            order_quantities
+        )
 
     execution_qty: Any | None = None
     execution_price: Any | None = None
@@ -1410,6 +1759,7 @@ def build_transition(
         execution_qty = event_data.get("exit_qty")
         execution_price = event_data.get("exit_price")
 
+    execution_timing_validated = False
     if execution_qty is not None:
         state = (
             str(event_data.get("broker_execution_provenance_state") or "")
@@ -1460,6 +1810,18 @@ def build_transition(
         if state == "complete":
             if str(event_data.get("broker_execution_provenance_error") or "").strip():
                 raise ValueError("broker_execution_complete_with_error")
+        elif state == "identity_complete_venue_unresolved":
+            if not str(
+                event_data.get("broker_execution_provenance_error") or ""
+            ).strip():
+                raise ValueError("broker_execution_provenance_error_required")
+        else:
+            provenance_error = str(
+                event_data.get("broker_execution_provenance_error") or ""
+            ).strip()
+            if not provenance_error:
+                raise ValueError("broker_execution_provenance_error_required")
+        if state in {"complete", "identity_complete_venue_unresolved"}:
             provenance_error = validate_broker_execution_provenance(
                 event_data,
                 expected_qty=execution_qty,
@@ -1473,12 +1835,87 @@ def build_transition(
                 raise ValueError(
                     f"broker_execution_provenance_invalid:{provenance_error}"
                 )
-        else:
-            provenance_error = str(
-                event_data.get("broker_execution_provenance_error") or ""
-            ).strip()
-            if not provenance_error:
-                raise ValueError("broker_execution_provenance_error_required")
+            timing_error = validate_broker_execution_timing(
+                event_data,
+                observed_at=timestamp,
+            )
+            if timing_error is not None:
+                raise ValueError(f"broker_execution_timing_invalid:{timing_error}")
+            execution_timing_validated = True
+
+    has_execution_timing = any(
+        key in event_data
+        for key in (
+            "broker_execution_timing_schema",
+            "broker_execution_received_at",
+            "broker_execution_occurred_at",
+            "broker_execution_receive_time_source",
+            "broker_execution_ordering_time_source",
+            "broker_execution_occurrence_time_source",
+            "broker_execution_receive_lag_ms",
+            "broker_execution_lifecycle_observed_at_rebound",
+            "broker_execution_receipt_companion",
+            "broker_execution_receipt_companion_of_identity",
+        )
+    )
+    if execution_qty is None and has_execution_timing:
+        if normalized_stage != "holding":
+            raise ValueError("broker_execution_companion_stage_invalid")
+        if event_data.get("broker_execution_receipt_companion") is not True:
+            raise ValueError("broker_execution_timing_non_execution_forbidden")
+        companion_identity = str(
+            event_data.get("broker_execution_identity") or ""
+        ).strip()
+        companion_of_identity = str(
+            event_data.get("broker_execution_receipt_companion_of_identity") or ""
+        ).strip()
+        if not companion_identity or companion_of_identity != companion_identity:
+            raise ValueError("broker_execution_companion_identity_binding_invalid")
+        if str(event_data.get("broker_execution_side") or "").strip() != "BUY":
+            raise ValueError("broker_execution_companion_side_invalid")
+        companion_state = str(
+            event_data.get("broker_execution_provenance_state") or ""
+        ).strip()
+        if companion_state not in {
+            "complete",
+            "identity_complete_venue_unresolved",
+        }:
+            raise ValueError("broker_execution_companion_provenance_not_complete")
+        companion_error = validate_broker_execution_provenance(
+            event_data,
+            expected_qty=event_data.get("broker_execution_unit_fill_qty"),
+            expected_price=event_data.get("broker_execution_price"),
+            expected_stock_code=lineage["stock_code"],
+            expected_side=event_data.get("broker_execution_side"),
+            lifecycle_venue=normalized_venue,
+            expected_fill_state=event_data.get("broker_execution_fill_state"),
+        )
+        if companion_error is not None:
+            raise ValueError(
+                f"broker_execution_companion_provenance_invalid:{companion_error}"
+            )
+        timing_error = validate_broker_execution_timing(
+            event_data,
+            observed_at=timestamp,
+        )
+        if timing_error is not None:
+            raise ValueError(f"broker_execution_timing_invalid:{timing_error}")
+        execution_timing_validated = True
+
+    if has_execution_timing and not execution_timing_validated:
+        # A partial timing fragment must never switch logical trade-date
+        # validation to an absent or synthesized occurrence clock.  Exact
+        # receipt timing is usable only together with identity-complete raw
+        # provenance (or its explicitly bound non-economic companion).
+        raise ValueError("broker_execution_timing_without_validated_receipt")
+
+    logical_timestamp = timestamp
+    if execution_timing_validated:
+        logical_timestamp = _aware_datetime(
+            event_data.get("broker_execution_occurred_at")
+        )
+    if logical_timestamp.astimezone(KST).date().isoformat() != target_date:
+        raise ValueError("observed_at_trade_date_mismatch")
 
     row: dict[str, Any] = {
         "schema": JOURNAL_SCHEMA,
@@ -1624,6 +2061,7 @@ __all__ = [
     "BROKER_EXECUTION_NATIVE_FIELD_ALIASES",
     "BROKER_EXECUTION_PROVENANCE_SCHEMA",
     "BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA",
+    "BROKER_EXECUTION_RECEIVE_TIME_SOURCE",
     "BROKER_EXECUTION_SOURCE_TYPE",
     "JOURNAL_SCHEMA",
     "KIWOOM_OFFICIAL_REFERENCE_SHA",

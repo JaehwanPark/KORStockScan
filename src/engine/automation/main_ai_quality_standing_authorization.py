@@ -374,14 +374,18 @@ def resolve_standing_authorization(
     manifest_errors = _manifest_errors(r3_manifest)
     blocker_codes = [*authorization_errors, *manifest_errors]
     try:
+        reviewed = _aware_kst(str(authorization.get("reviewed_at_kst") or ""))
         expires = _aware_kst(str(authorization.get("expires_at_kst") or ""))
     except ValueError:
+        reviewed = checked_at + timedelta(microseconds=1)
         expires = checked_at
     # Expiry bounds the operator's first-candidate authorization. Once the
     # exact family has completed guarded apply and post-apply attribution, its
     # independently validated enrollment owns later same-contract candidates.
     if checked_at >= expires and not enrolled_continuation:
         blocker_codes.append("standing_authorization_expired")
+    if checked_at < reviewed and not enrolled_continuation:
+        blocker_codes.append("standing_authorization_not_yet_reviewed")
 
     family = str(authorization.get("runtime_family") or "")
     registry = (

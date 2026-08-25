@@ -31,6 +31,7 @@ from src.engine.monitoring.widget_symbol_signal_policy_research import (
     SYMBOLS as RESEARCH_WIDGET_SYMBOLS,
 )
 from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
+from src.utils.jsonl_io import iter_jsonl_objects_strict, read_json_object_strict
 from src.utils.market_day import is_krx_trading_day
 
 AUTHORITY = "widget_collector_expansion_recommendation_only"
@@ -193,19 +194,17 @@ def _load_feature_history(
         "ai_decision_payloads",
         through_date=through_date,
     )
+    logical_paths = {
+        path.with_name(path.name[: -len(".gz")]) if path.suffix == ".gz" else path
+        for path in paths
+    }
+    paths = sorted(logical_paths)
     if eligible_codes is not None and not eligible_codes:
         return history, [str(path) for path in paths]
     for path in paths:
         try:
-            handle = path.open("r", encoding="utf-8")
-        except OSError:
-            continue
-        with handle:
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
+            rows = iter_jsonl_objects_strict(path)
+            for row in rows:
                 if (
                     str(row.get("effective_venue") or "").upper() != "KRX"
                     or str(row.get("session_bucket") or "").lower() != "krx_regular"
@@ -241,6 +240,8 @@ def _load_feature_history(
                         "quote_fresh": quote_stale is False,
                     }
                 )
+        except FileNotFoundError:
+            continue
     return history, [str(path) for path in paths]
 
 
@@ -786,11 +787,16 @@ def _source_artifact_issues(
     label_path: Path,
 ) -> list[str]:
     issues: list[str] = []
-    if not payload_path.is_file():
-        issues.append("exact_payload_artifact_missing")
     try:
-        label_report = json.loads(label_path.read_text(encoding="utf-8"))
+        for _ in iter_jsonl_objects_strict(payload_path):
+            pass
+    except FileNotFoundError:
+        issues.append("exact_payload_artifact_missing")
     except (OSError, ValueError):
+        issues.append("exact_payload_artifact_invalid")
+    try:
+        label_report = read_json_object_strict(label_path)
+    except (FileNotFoundError, OSError, ValueError):
         label_report = None
     if not isinstance(label_report, dict):
         issues.append("outcome_label_artifact_missing_or_invalid")

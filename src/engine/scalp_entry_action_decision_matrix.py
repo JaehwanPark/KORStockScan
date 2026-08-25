@@ -574,6 +574,21 @@ def _risk_context_bucket(fields: dict[str, Any], *, stage: str = "") -> str:
     )
     vpw = _safe_float(fields.get("vpw"), None)
     if strength is None and buy_pressure is None and vpw is None:
+        explicit_unavailable = any(
+            str(value or "")
+            .strip()
+            .lower()
+            .startswith(("not_evaluated", "not_available"))
+            for value in (
+                fields.get("latest_strength"),
+                fields.get("strength_momentum"),
+                fields.get("buy_pressure_10t"),
+                fields.get("buy_pressure"),
+                fields.get("vpw"),
+            )
+        )
+        if explicit_unavailable:
+            return "risk_context_not_available"
         if stage in PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES:
             return "risk_context_not_available"
         return "risk_unknown"
