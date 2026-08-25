@@ -38,6 +38,7 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "entry_cancel_wait_attribution": "entry_cancel_wait_attribution",
     "entry_opportunity_recheck_enqueued": "entry_opportunity_recheck_runtime",
     "entry_opportunity_recheck_refresh_attempted": "entry_opportunity_recheck_runtime",
+    "entry_opportunity_recheck_evaluated": "entry_opportunity_recheck_runtime",
     "entry_opportunity_recheck_fresh_pass": "entry_opportunity_recheck_runtime",
     "entry_opportunity_recheck_normal_buy_reentered": "entry_opportunity_recheck_runtime",
     "entry_opportunity_recheck_probe_armed": "entry_opportunity_recheck_runtime",

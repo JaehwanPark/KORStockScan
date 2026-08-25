@@ -1620,6 +1620,43 @@ def _unique_sell_execution_reconciliation(
     return None, "ambiguous_multiple_sell_executions"
 
 
+def _committed_trade_lifecycle_snapshot(record_id):
+    """Read the latest durable lifecycle state outside the sync transaction.
+
+    ``periodic_account_sync`` loads active rows before its REST calls.  A fast
+    execution receipt can commit the same row while those calls are in flight,
+    leaving the outer ORM instance stale.  A separate session is deliberately
+    used here so the receipt commit wins before zero-inventory reconciliation
+    considers any fallback evidence.
+    """
+
+    safe_record_id = _to_int(record_id)
+    if DB is None or safe_record_id <= 0:
+        return None
+    try:
+        with DB.get_session() as verification_session:
+            latest = (
+                verification_session.query(RecommendationHistory)
+                .filter_by(id=safe_record_id)
+                .first()
+            )
+            if latest is None:
+                return None
+            return {
+                "id": safe_record_id,
+                "status": str(getattr(latest, "status", "") or "").upper(),
+                "sell_price": getattr(latest, "sell_price", None),
+                "sell_time": getattr(latest, "sell_time", None),
+                "profit_rate": getattr(latest, "profit_rate", None),
+            }
+    except Exception as exc:
+        log_error(
+            "[PERIODIC_TRADE_LIFECYCLE_VERIFY_FAILED] "
+            f"record_id={safe_record_id} error={type(exc).__name__}:{exc}"
+        )
+        return None
+
+
 def refresh_broker_account_snapshot_read_only() -> bool:
     """Fetch and publish broker facts without reconciling lifecycle state.
 
@@ -1888,6 +1925,48 @@ def periodic_account_sync():
                             )
                             target_snapshot = dict(target_stock or {})
 
+                        # The execution-receipt path can commit while the
+                        # outer account-sync transaction is waiting on REST.
+                        # Its exact broker receipt must remain authoritative;
+                        # never overwrite a newer terminal row with the stale
+                        # HOLDING/SELL_ORDERED instance loaded above.
+                        committed_snapshot = _committed_trade_lifecycle_snapshot(
+                            getattr(record, "id", None)
+                        )
+                        committed_status = str(
+                            (committed_snapshot or {}).get("status") or ""
+                        ).upper()
+                        if committed_status not in {
+                            "",
+                            "BUY_ORDERED",
+                            "HOLDING",
+                            "SELL_ORDERED",
+                        }:
+                            log_info(
+                                "ℹ️ [정기 동기화] "
+                                f"{record.stock_name}({code}) newer committed lifecycle "
+                                f"wins: status={committed_status}"
+                            )
+                            with _with_state_lock():
+                                if target_stock is not None:
+                                    target_stock["status"] = committed_status
+                                    if committed_snapshot.get("sell_price") is not None:
+                                        target_stock["sell_price"] = (
+                                            committed_snapshot["sell_price"]
+                                        )
+                                    if committed_snapshot.get("profit_rate") is not None:
+                                        target_stock["profit_rate"] = (
+                                            committed_snapshot["profit_rate"]
+                                        )
+                                    target_stock[
+                                        "sell_completion_reconciliation_state"
+                                    ] = "newer_committed_receipt_preserved"
+                                if HIGHEST_PRICES is not None:
+                                    HIGHEST_PRICES.pop(code, None)
+                            if target_stock is not None:
+                                pending_runtime_target_removals.append(target_stock)
+                            continue
+
                         if is_s15_custody:
                             record.scale_in_locked = True
                             if target_stock is not None:
@@ -1951,6 +2030,11 @@ def periodic_account_sync():
                                 "partial_realized_context_requires_fill_receipt"
                             )
                         elif prior_status == "SELL_ORDERED":
+                            # kt00008 has no order number or execution time.
+                            # Limit this weaker date/code/side/qty fallback to
+                            # a lifecycle that already owns a submitted SELL;
+                            # HOLDING rows require the committed receipt check
+                            # above and must not borrow an earlier cycle's fill.
                             exact_execution, exact_execution_reason = (
                                 _unique_sell_execution_reconciliation(
                                     _sell_execution_rows(),

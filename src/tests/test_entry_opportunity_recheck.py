@@ -384,3 +384,7 @@ def test_registry_maps_recheck_stages_to_family():
         threshold_family_for_stage("entry_opportunity_recheck_probe_armed")
         == "entry_opportunity_recheck_runtime"
     )
+    assert (
+        threshold_family_for_stage("entry_opportunity_recheck_evaluated")
+        == "entry_opportunity_recheck_runtime"
+    )

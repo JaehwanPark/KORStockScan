@@ -61882,6 +61882,17 @@ def _handle_watching_strategy_branch(
                     )
                     should_log_recheck_block = False
                     recheck_log_fields = dict(entry_opportunity_recheck.fields)
+                    # Emit one outcome for every eligible runtime evaluation,
+                    # including decisions that remain pending or fail before
+                    # the downstream probe arm.  Without this audit row an ON
+                    # runtime can be indistinguishable from a path that was
+                    # never called when the later conditional stage is quiet.
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "entry_opportunity_recheck_evaluated",
+                        **recheck_log_fields,
+                    )
                     bounded_exploration_cap_blocked = bool(
                         entry_opportunity_recheck.allowed
                         and bounded_exploration_probe_only

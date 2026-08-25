@@ -2258,6 +2258,177 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(monkeypatch)
     assert "EV" not in exact_fields["forbidden_uses"]
 
 
+def test_periodic_account_sync_preserves_concurrent_fast_fill_completion(
+    monkeypatch,
+):
+    record = type(
+        "Record",
+        (),
+        {
+            "id": 35391,
+            "stock_code": "059090",
+            "stock_name": "미코",
+            "status": "HOLDING",
+            "buy_price": 18660.0,
+            "buy_qty": 1,
+            "sell_price": 0,
+            "sell_time": None,
+            "profit_rate": None,
+            "scale_in_locked": False,
+        },
+    )()
+    target = {
+        "id": 35391,
+        "code": "059090",
+        "status": "HOLDING",
+        "buy_qty": 1,
+    }
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _SyncDB([record], [])
+    sniper_sync.ACTIVE_TARGETS = [target]
+    sniper_sync.HIGHEST_PRICES = {"059090": 19000}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: ([], {"KRX", "NXT"}),
+    )
+    monkeypatch.setattr(
+        sniper_sync,
+        "_committed_trade_lifecycle_snapshot",
+        lambda record_id: {
+            "id": record_id,
+            "status": "COMPLETED",
+            "sell_price": 18780,
+            "sell_time": datetime.now(),
+            "profit_rate": calculate_net_profit_rate(18660, 18780),
+        },
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_execution_snapshot_kt00008",
+        lambda token: [],
+    )
+    monkeypatch.setattr(
+        sniper_sync,
+        "remove_manual_control_exclusion_code",
+        lambda code, **kwargs: type(
+            "Removal",
+            (),
+            {
+                "removed": False,
+                "code": code,
+                "source": "manual_control_excluded_codes.txt",
+                "reason": "not_present",
+            },
+        )(),
+    )
+    emitted = []
+    monkeypatch.setattr(
+        sniper_sync,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    # The outer ORM object is the stale pre-REST snapshot and must not be
+    # mutated.  Runtime custody follows the separately committed terminal row.
+    assert record.status == "HOLDING"
+    assert record.sell_price == 0
+    assert record.profit_rate is None
+    assert target["sell_completion_reconciliation_state"] == (
+        "newer_committed_receipt_preserved"
+    )
+    assert target["status"] == "COMPLETED"
+    assert target["sell_price"] == 18780
+    assert target["profit_rate"] == calculate_net_profit_rate(18660, 18780)
+    assert sniper_sync.ACTIVE_TARGETS == []
+    assert emitted == []
+
+
+def test_periodic_account_sync_does_not_borrow_kt00008_sell_for_holding(
+    monkeypatch,
+):
+    record = type(
+        "Record",
+        (),
+        {
+            "id": 35392,
+            "stock_code": "059090",
+            "stock_name": "미코",
+            "status": "HOLDING",
+            "buy_price": 19000.0,
+            "buy_qty": 1,
+            "sell_price": 0,
+            "sell_time": None,
+            "profit_rate": None,
+            "scale_in_locked": False,
+        },
+    )()
+    target = {"id": 35392, "code": "059090", "status": "HOLDING", "buy_qty": 1}
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _SyncDB([record], [])
+    sniper_sync.ACTIVE_TARGETS = [target]
+    sniper_sync.HIGHEST_PRICES = {"059090": 19100}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: ([], {"KRX", "NXT"}),
+    )
+    monkeypatch.setattr(
+        sniper_sync,
+        "_committed_trade_lifecycle_snapshot",
+        lambda record_id: {"id": record_id, "status": "HOLDING"},
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_execution_snapshot_kt00008",
+        lambda token: [
+            {
+                "trade_date": datetime.now().strftime("%Y%m%d"),
+                "code": "059090",
+                "side": "매도",
+                "qty": 1,
+                "unit_price": 18780,
+                "seq": "prior-cycle",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        sniper_sync,
+        "remove_manual_control_exclusion_code",
+        lambda code, **kwargs: type(
+            "Removal",
+            (),
+            {
+                "removed": False,
+                "code": code,
+                "source": "manual_control_excluded_codes.txt",
+                "reason": "not_present",
+            },
+        )(),
+    )
+    emitted = []
+    monkeypatch.setattr(
+        sniper_sync,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    assert record.status == "COMPLETED"
+    assert record.sell_price is None
+    assert record.profit_rate is None
+    assert emitted[0][0][3] == "sell_completion_reconciliation_gap"
+    assert emitted[0][1]["fields"]["execution_match_reason"] == (
+        "prior_status_not_sell_ordered"
+    )
+    assert emitted[0][1]["fields"]["execution_match_count"] == 0
+
+
 def test_execution_broker_snapshot_refresh_is_read_only(monkeypatch):
     published = []
     sentinel_db = object()
