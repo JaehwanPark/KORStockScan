@@ -9,11 +9,14 @@ set -euo pipefail
 # Flow:
 #   1. Touch restart.flag in the project root.
 #   2. bot_main.py detects the flag, removes it, and exits with SIGTERM.
-#   3. src/run_bot.sh observes the exit and starts bot_main.py again after its
-#      normal delay.
+#   3. If the running supervisor loaded a different run_bot.sh generation,
+#      replace only the drained tmux supervisor before starting bot_main.py.
+#   4. Otherwise src/run_bot.sh observes the exit and starts bot_main.py again
+#      after its normal delay.
 #
 # This script intentionally does not use pkill/kill -9, does not start a second
-# bot process directly, and does not mutate runtime threshold/provider/order env.
+# bot process while the old child is alive, and does not mutate runtime
+# threshold/provider/order env.
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PY="${KORSTOCKSCAN_VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
@@ -27,6 +30,8 @@ BOT_PATTERN="${KORSTOCKSCAN_BOT_PROCESS_PATTERN:-[/]python bot_main[.]py$}"
 STOP_TIMEOUT_SEC="${KORSTOCKSCAN_GRACEFUL_RESTART_STOP_TIMEOUT_SEC:-90}"
 START_TIMEOUT_SEC="${KORSTOCKSCAN_GRACEFUL_RESTART_START_TIMEOUT_SEC:-150}"
 POLL_SEC="${KORSTOCKSCAN_GRACEFUL_RESTART_POLL_SEC:-2}"
+BOT_TMUX_SESSION="${KORSTOCKSCAN_BOT_TMUX_SESSION:-bot}"
+RUN_BOT_PATH="$PROJECT_DIR/src/run_bot.sh"
 trap 'rm -f "$RESTART_REQUEST_TMP"' EXIT
 
 bot_pids() {
@@ -45,11 +50,61 @@ contains_pid() {
     return 1
 }
 
+pid_env_value() {
+    local pid="$1"
+    local key="$2"
+    tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null \
+        | sed -n "s/^${key}=//p" \
+        | head -n 1
+}
+
+current_launcher_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$RUN_BOT_PATH" | awk '{print $1}'
+        return
+    fi
+    printf '%s\n' unknown
+}
+
+restart_drained_tmux_supervisor() {
+    local live_pids=()
+    readarray -t live_pids < <(bot_pids)
+    if [ "${#live_pids[@]}" -ne 0 ]; then
+        echo "Refusing supervisor reload because a bot child is alive: ${live_pids[*]}" >&2
+        return 1
+    fi
+    if ! command -v tmux >/dev/null 2>&1; then
+        echo "tmux is required to reload the bot supervisor." >&2
+        return 1
+    fi
+    if ! tmux has-session -t "$BOT_TMUX_SESSION" 2>/dev/null; then
+        echo "Expected tmux supervisor session is missing: $BOT_TMUX_SESSION" >&2
+        return 1
+    fi
+    echo "Reloading drained tmux supervisor session: $BOT_TMUX_SESSION"
+    tmux kill-session -t "$BOT_TMUX_SESSION"
+    tmux new-session -d -s "$BOT_TMUX_SESSION" \
+        "/bin/bash -c \"cd $PROJECT_DIR/src && source ../.venv/bin/activate && exec ./run_bot.sh\""
+}
+
 readarray -t OLD_PIDS < <(bot_pids)
 if [ "${#OLD_PIDS[@]}" -eq 0 ]; then
     echo "No running bot_main.py process found. Not creating a restart request."
     echo "Start the supervised bot with: cd $PROJECT_DIR/src && ./run_bot.sh"
     exit 1
+fi
+
+CURRENT_LAUNCHER_SHA256="$(current_launcher_sha256)"
+LOADED_LAUNCHER_SHA256="$(pid_env_value "${OLD_PIDS[0]}" KORSTOCKSCAN_RUNTIME_LAUNCHER_RUN_BOT_SHA256 || true)"
+RELOAD_SUPERVISOR=false
+if [ -n "$LOADED_LAUNCHER_SHA256" ] \
+    && [ "$LOADED_LAUNCHER_SHA256" != unknown ] \
+    && [ "$CURRENT_LAUNCHER_SHA256" != unknown ] \
+    && [ "$LOADED_LAUNCHER_SHA256" != "$CURRENT_LAUNCHER_SHA256" ]; then
+    RELOAD_SUPERVISOR=true
+    echo "Launcher generation drift detected; supervisor reload required."
+    echo "Loaded run_bot.sh sha256: $LOADED_LAUNCHER_SHA256"
+    echo "Current run_bot.sh sha256: $CURRENT_LAUNCHER_SHA256"
 fi
 
 echo "Requesting graceful bot restart via $RESTART_FLAG"
@@ -82,6 +137,10 @@ if [ "$elapsed" -ge "$STOP_TIMEOUT_SEC" ]; then
     exit 2
 fi
 
+if [ "$RELOAD_SUPERVISOR" = true ]; then
+    restart_drained_tmux_supervisor
+fi
+
 elapsed=0
 while [ "$elapsed" -lt "$START_TIMEOUT_SEC" ]; do
     readarray -t CURRENT_PIDS < <(bot_pids)
@@ -98,9 +157,9 @@ while [ "$elapsed" -lt "$START_TIMEOUT_SEC" ]; do
             if [ "$VERIFY_RC" -ne 0 ]; then
                 echo "[WARN] Runtime env handoff verification failed for PID $pid (rc=$VERIFY_RC)."
                 echo "[WARN] Verification artifact written to data/threshold_cycle/runtime_env/threshold_runtime_env_verify_${APPLICATION_DATE}.json"
-            else
-                echo "Runtime env handoff verification passed."
+                exit "$VERIFY_RC"
             fi
+            echo "Runtime env handoff verification passed."
             exit 0
         fi
     done
