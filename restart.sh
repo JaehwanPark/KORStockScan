@@ -68,6 +68,7 @@ current_launcher_sha256() {
 
 restart_drained_tmux_supervisor() {
     local live_pids=()
+    local kill_rc=0
     readarray -t live_pids < <(bot_pids)
     if [ "${#live_pids[@]}" -ne 0 ]; then
         echo "Refusing supervisor reload because a bot child is alive: ${live_pids[*]}" >&2
@@ -82,7 +83,20 @@ restart_drained_tmux_supervisor() {
         return 1
     fi
     echo "Reloading drained tmux supervisor session: $BOT_TMUX_SESSION"
+    # Killing the final session also terminates the tmux server. Some tmux
+    # versions report that expected server shutdown with a non-zero status, so
+    # judge success from the scoped session state instead of the raw rc alone.
+    set +e
     tmux kill-session -t "$BOT_TMUX_SESSION"
+    kill_rc=$?
+    set -e
+    if tmux has-session -t "$BOT_TMUX_SESSION" 2>/dev/null; then
+        echo "Bot tmux supervisor session survived reload request (rc=$kill_rc)." >&2
+        return 1
+    fi
+    if [ "$kill_rc" -ne 0 ]; then
+        echo "tmux server exited with the final session; confirmed session removal."
+    fi
     tmux new-session -d -s "$BOT_TMUX_SESSION" \
         "/bin/bash -c \"cd $PROJECT_DIR/src && source ../.venv/bin/activate && exec ./run_bot.sh\""
 }

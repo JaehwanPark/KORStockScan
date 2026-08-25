@@ -42,5 +42,7 @@ def test_restart_script_reloads_stale_supervisor_only_after_child_drain():
     assert drift_check < child_drain < supervisor_reload < new_pid_wait
     assert 'tmux kill-session -t "$BOT_TMUX_SESSION"' in source
     assert "Refusing supervisor reload because a bot child is alive" in source
+    assert 'if tmux has-session -t "$BOT_TMUX_SESSION"' in source
+    assert "confirmed session removal" in source
     assert 'exec ./run_bot.sh' in source
     assert 'exit "$VERIFY_RC"' in source
