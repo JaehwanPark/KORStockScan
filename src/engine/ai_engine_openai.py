@@ -629,6 +629,14 @@ class OpenAIResponsesHTTPError(RuntimeError):
         self.timing_meta = dict(timing_meta or {})
 
 
+class OpenAIHTTPWallClockDeadlineError(TimeoutError):
+    """The SDK call outlived the caller-owned end-to-end HTTP budget."""
+
+    def __init__(self, message: str, *, future_cancelled: bool):
+        super().__init__(message)
+        self.future_cancelled = bool(future_cancelled)
+
+
 @dataclass
 class OpenAIWSJob:
     request: OpenAIResponseRequest
@@ -926,6 +934,14 @@ class GPTSniperEngine:
             "openai_ws_roundtrip_ms_values": [],
         }
         self._responses_ws_pool = None
+        # OpenAI/httpx timeouts are inactivity bounds, not a guaranteed
+        # end-to-end wall-clock deadline. Keep one bounded provider worker so
+        # a late response cannot stall the sniper caller or rejoin a later
+        # decision after its request budget expired.
+        self._http_deadline_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="openai-http-deadline",
+        )
 
         if announce_startup:
             print(
@@ -4162,6 +4178,59 @@ class GPTSniperEngine:
             metadata=metadata,
         )
 
+    def _get_http_deadline_executor(self) -> ThreadPoolExecutor:
+        executor = getattr(self, "_http_deadline_executor", None)
+        if executor is None:
+            # Test/compatibility instances may bypass __init__. Calls are
+            # already serialized by api_call_lock, so lazy construction does
+            # not widen provider concurrency.
+            executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="openai-http-deadline",
+            )
+            self._http_deadline_executor = executor
+        return executor
+
+    def _create_openai_response_with_deadline(
+        self,
+        request: OpenAIResponseRequest,
+        *,
+        provider_payload: dict[str, Any],
+    ):
+        remaining = request.remaining_timeout_sec()
+        if remaining <= 0:
+            raise OpenAIHTTPWallClockDeadlineError(
+                "OpenAI HTTP wall-clock deadline exhausted before provider call",
+                future_cancelled=True,
+            )
+        client = self.client
+        future = self._get_http_deadline_executor().submit(
+            client.responses.create,
+            **provider_payload,
+            timeout=max(0.05, remaining),
+        )
+        wait_remaining = request.remaining_timeout_sec()
+        if wait_remaining <= 0:
+            cancelled = future.cancel()
+            raise OpenAIHTTPWallClockDeadlineError(
+                "OpenAI HTTP wall-clock deadline exhausted while queueing provider call",
+                future_cancelled=cancelled,
+            )
+        try:
+            return future.result(timeout=wait_remaining)
+        except TimeoutError as exc:
+            # A provider-raised timeout arrives through a completed Future and
+            # retains its original error. Only an unfinished Future means our
+            # end-to-end wall-clock deadline fired.
+            if future.done():
+                raise
+            cancelled = future.cancel()
+            raise OpenAIHTTPWallClockDeadlineError(
+                "OpenAI HTTP wall-clock deadline exceeded: "
+                f"endpoint={request.endpoint_name}, budget_ms={int(request.timeout_ms)}",
+                future_cancelled=cancelled,
+            ) from exc
+
     def _call_openai_responses_http(self, request: OpenAIResponseRequest):
         use_schema_registry = self._should_use_openai_schema_registry(
             require_json=request.require_json,
@@ -4176,15 +4245,17 @@ class GPTSniperEngine:
         attempts_made = 0
         last_error_type = "-"
         last_error_timeout_like = False
+        last_wall_deadline_exceeded = False
+        last_provider_future_cancelled = False
         for attempt in range(len(self.api_keys)):
             attempts_made = attempt + 1
             provider_started_at = time.perf_counter()
             try:
-                response = self.client.responses.create(
-                    **request.build_provider_payload(
+                response = self._create_openai_response_with_deadline(
+                    request,
+                    provider_payload=request.build_provider_payload(
                         use_schema_registry=use_schema_registry
                     ),
-                    timeout=max(0.05, request.remaining_timeout_sec()),
                 )
                 provider_ms = max(
                     0, int((time.perf_counter() - provider_started_at) * 1000)
@@ -4216,6 +4287,12 @@ class GPTSniperEngine:
                         "openai_http_provider_total_ms": provider_total_ms,
                         "openai_http_attempt_count": attempt + 1,
                         "openai_http_sdk_max_retries": OPENAI_SDK_MAX_RETRIES,
+                        "openai_http_wall_deadline_enforced": True,
+                        "openai_http_wall_deadline_exceeded": False,
+                        "openai_http_provider_future_cancelled": False,
+                        "openai_http_deadline_overshoot_ms": max(
+                            0, provider_total_ms - int(request.timeout_ms)
+                        ),
                     },
                 )
             except RateLimitError as e:
@@ -4247,6 +4324,12 @@ class GPTSniperEngine:
                 last_error = str(e).lower()
                 last_error_type = type(e).__name__
                 last_error_timeout_like = self._is_openai_timeout_like_error(e)
+                last_wall_deadline_exceeded = isinstance(
+                    e, OpenAIHTTPWallClockDeadlineError
+                )
+                last_provider_future_cancelled = bool(
+                    getattr(e, "future_cancelled", False)
+                )
                 if self._is_invalid_prompt_error(e) and not invalid_prompt_retried:
                     log_error(
                         f"⚠️ [OpenAI invalid_prompt retry] {request.context_name} | "
@@ -4311,6 +4394,16 @@ class GPTSniperEngine:
                 "openai_http_error_type": last_error_type,
                 "openai_http_timeout_budget_exhausted": bool(last_error_timeout_like),
                 "openai_http_sdk_max_retries": OPENAI_SDK_MAX_RETRIES,
+                "openai_http_wall_deadline_enforced": True,
+                "openai_http_wall_deadline_exceeded": bool(
+                    last_wall_deadline_exceeded
+                ),
+                "openai_http_provider_future_cancelled": bool(
+                    last_provider_future_cancelled
+                ),
+                "openai_http_deadline_overshoot_ms": max(
+                    0, provider_total_ms - int(request.timeout_ms)
+                ),
             },
         )
 

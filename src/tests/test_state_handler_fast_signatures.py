@@ -3380,7 +3380,11 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
             "openai_http_provider_ms": 640,
             "openai_http_provider_total_ms": 1440,
             "openai_http_attempt_count": 2,
+            "openai_http_deadline_overshoot_ms": 0,
             "openai_http_timeout_budget_exhausted": True,
+            "openai_http_wall_deadline_enforced": True,
+            "openai_http_wall_deadline_exceeded": True,
+            "openai_http_provider_future_cancelled": False,
             "openai_ws_http_fallback_fail_closed": True,
             "openai_ws_http_fallback_error_type": "RuntimeError",
             "openai_http_error_type": "OpenAIResponsesHTTPError",
@@ -3461,7 +3465,11 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["openai_http_provider_ms"] == 640
     assert fields["openai_http_provider_total_ms"] == 1440
     assert fields["openai_http_attempt_count"] == 2
+    assert fields["openai_http_deadline_overshoot_ms"] == 0
     assert fields["openai_http_timeout_budget_exhausted"] is True
+    assert fields["openai_http_wall_deadline_enforced"] is True
+    assert fields["openai_http_wall_deadline_exceeded"] is True
+    assert fields["openai_http_provider_future_cancelled"] is False
     assert fields["openai_ws_http_fallback_fail_closed"] is True
     assert fields["openai_ws_http_fallback_error_type"] == "RuntimeError"
     assert fields["openai_http_error_type"] == "OpenAIResponsesHTTPError"

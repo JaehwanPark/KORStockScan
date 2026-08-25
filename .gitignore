@@ -92,6 +92,10 @@ data/runtime/samsung_*_one_share_state.lock
 data/runtime/samsung_morning_manual_addon_*.lock
 data/runtime/samsung_widget_manual_orders.lock
 data/runtime/low_price_two_leg/*.lock
+data/runtime/build_next_stage2_checklist/*.lock
+data/runtime/episode_manual_exit_receipts.lock
+data/offline_provider_budget/*.lock
+data/observations/scalp_micro_reversion_forward/.partition_maintenance_locks/*.lock
 
 # ==========================================
 # 💻 OS 및 IDE 설정

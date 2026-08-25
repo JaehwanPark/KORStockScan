@@ -9,6 +9,7 @@ import pytest
 
 from src.engine.monitoring.low_price_two_leg_tuning import _aggregate, _sanitize_leg
 from src.trading.order.manual_episode_exit_reconciliation import (
+    load_manual_sell_receipts,
     reconcile_manual_exit,
 )
 
@@ -73,6 +74,27 @@ def _receipt(*, order_qty: int = 20, filled_qty: int = 20) -> list[dict]:
     ]
 
 
+def _target_receipts() -> list[dict]:
+    rows = []
+    for leg in _held_state()["legs"]:
+        rows.append(
+            {
+                "source_api": "kt00007",
+                "trade_date": "20260813",
+                "code": "475150",
+                "side": "매도",
+                "ord_no": leg["target_order_no"],
+                "raw": {
+                    "ord_qty": "10",
+                    "cntr_qty": "0",
+                    "ord_remnq": "10",
+                    "cntr_uv": "0",
+                },
+            }
+        )
+    return rows
+
+
 def test_manual_exit_dry_run_preserves_state_and_reports_confirmation(tmp_path: Path):
     state_path = tmp_path / "state.json"
     payload = _held_state()
@@ -83,6 +105,7 @@ def test_manual_exit_dry_run_preserves_state_and_reports_confirmation(tmp_path: 
         order_no="0012345",
         order_date="2026-08-14",
         receipt_rows=_receipt(),
+        target_order_rows=_target_receipts(),
         observed_at=datetime(2026, 8, 14, 9, 5, tzinfo=KST),
         apply=False,
         state_path=state_path,
@@ -106,6 +129,7 @@ def test_manual_exit_applies_only_exact_whole_owner_receipt(tmp_path: Path):
         order_no="0012345",
         order_date="2026-08-14",
         receipt_rows=_receipt(),
+        target_order_rows=_target_receipts(),
         observed_at=datetime(2026, 8, 14, 9, 5, tzinfo=KST),
         apply=True,
         confirmation="RECONCILE_sk_eternix_midday_2026-08-13_20_0012345",
@@ -190,6 +214,116 @@ def test_manual_exit_rejects_live_target_or_partial_prior_exit(tmp_path: Path):
             state_path=state_path,
             receipt_registry_path=tmp_path / "receipts.json",
         )
+
+
+def test_manual_exit_accepts_prior_day_unfilled_target_with_exact_later_exit(
+    tmp_path: Path,
+):
+    payload = _held_state()
+    for leg in payload["legs"]:
+        leg["status"] = "TARGET_OPEN"
+    payload["status"] = "TARGET_OPEN"
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    dry_run = reconcile_manual_exit(
+        owner_id="sk_eternix_midday",
+        order_no="0012345",
+        order_date="2026-08-14",
+        receipt_rows=_receipt(),
+        target_order_rows=_target_receipts(),
+        observed_at=datetime(2026, 8, 14, 9, 5, tzinfo=KST),
+        apply=False,
+        state_path=state_path,
+        receipt_registry_path=tmp_path / "receipts.json",
+    )
+
+    assert dry_run["prior_day_target_resolution"]["mode"] == (
+        "superseded_by_later_exact_full_manual_sell"
+    )
+    assert len(dry_run["prior_day_target_resolution"]["targets"]) == 2
+
+    reconcile_manual_exit(
+        owner_id="sk_eternix_midday",
+        order_no="0012345",
+        order_date="2026-08-14",
+        receipt_rows=_receipt(),
+        target_order_rows=_target_receipts(),
+        observed_at=datetime(2026, 8, 14, 9, 5, tzinfo=KST),
+        apply=True,
+        confirmation="RECONCILE_sk_eternix_midday_2026-08-13_20_0012345",
+        state_path=state_path,
+        receipt_registry_path=tmp_path / "receipts.json",
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["status"] == "COMPLETE"
+    assert all(
+        leg["prior_target_resolution"]["mode"]
+        == "superseded_by_later_exact_full_manual_sell"
+        for leg in state["legs"]
+    )
+
+
+def test_manual_exit_rejects_same_day_open_target(tmp_path: Path):
+    payload = _held_state()
+    for leg in payload["legs"]:
+        leg["status"] = "TARGET_OPEN"
+        leg["target_order_date"] = "2026-08-14"
+    payload["status"] = "TARGET_OPEN"
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="closed_targets_and_no_partial_exit"):
+        reconcile_manual_exit(
+            owner_id="sk_eternix_midday",
+            order_no="0012345",
+            order_date="2026-08-14",
+            receipt_rows=_receipt(),
+            target_order_rows=_target_receipts(),
+            observed_at=datetime(2026, 8, 14, 9, 5, tzinfo=KST),
+            apply=False,
+            state_path=state_path,
+            receipt_registry_path=tmp_path / "receipts.json",
+        )
+
+
+def test_manual_exit_rejects_prior_target_without_exact_zero_fill_receipt(
+    tmp_path: Path,
+):
+    payload = _held_state()
+    for leg in payload["legs"]:
+        leg["status"] = "TARGET_OPEN"
+    payload["status"] = "TARGET_OPEN"
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    target_rows = _target_receipts()
+    target_rows[0]["raw"]["cntr_qty"] = "1"
+    target_rows[0]["raw"]["cntr_uv"] = "50100"
+
+    with pytest.raises(ValueError, match="prior_target_not_exact_unfilled_order"):
+        reconcile_manual_exit(
+            owner_id="sk_eternix_midday",
+            order_no="0012345",
+            order_date="2026-08-14",
+            receipt_rows=_receipt(),
+            target_order_rows=target_rows,
+            observed_at=datetime(2026, 8, 14, 9, 5, tzinfo=KST),
+            apply=False,
+            state_path=state_path,
+            receipt_registry_path=tmp_path / "receipts.json",
+        )
+
+
+def test_manual_receipt_loader_preserves_explicit_request_date(monkeypatch):
+    monkeypatch.setattr(
+        "src.trading.order.manual_episode_exit_reconciliation.kiwoom_utils."
+        "get_order_reference_snapshot_kt00007",
+        lambda *args, **kwargs: [{"ord_no": "0012345", "trade_date": ""}],
+    )
+
+    rows = load_manual_sell_receipts("token", "2026-08-14", "475150")
+
+    assert rows[0]["trade_date"] == "20260814"
 
 
 def test_manual_exit_receipt_cannot_be_reused_by_another_owner(tmp_path: Path):

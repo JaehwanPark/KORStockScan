@@ -10318,7 +10318,7 @@ def test_verify_runtime_env_handoff_pid_rejects_stale_dated_override(
     assert result["passed"] is True
     assert result["pid_passed"] is False
     assert result["status"] == "fail"
-    assert result["fail_reason"] == "runtime_env_pid_missing"
+    assert result["fail_reason"] == "runtime_env_pid_mismatch"
     assert result["pid_mismatches"] == [
         {
             "family": "rising_missed_nxt_post_block_sampler",

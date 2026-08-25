@@ -5896,9 +5896,12 @@ def verify_runtime_env_handoff(
     elif not passed:
         result["status"] = "fail"
         result["fail_reason"] = "runtime_env_handoff_missing"
-    elif not pid_passed:
+    elif pid_missing:
         result["status"] = "fail"
         result["fail_reason"] = "runtime_env_pid_missing"
+    elif pid_mismatches:
+        result["status"] = "fail"
+        result["fail_reason"] = "runtime_env_pid_mismatch"
     else:
         result["status"] = "pass"
     return result

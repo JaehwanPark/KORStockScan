@@ -2511,6 +2511,43 @@ printf '%s|%s|%s\n' \
     assert result.stdout.strip() == "true|true|false"
 
 
+def test_run_bot_daily_entry_split_contract_satisfies_probe_policy_dependency(
+    tmp_path,
+):
+    script = Path("src/run_bot.sh").read_text(encoding="utf-8")
+    function_block = script[
+        script.index("korstockscan_env_true()") : script.index(
+            "verify_threshold_runtime_env_handoff()"
+        )
+    ]
+    policy_path = tmp_path / "entry_split_policy.json"
+    policy_path.write_text("{}\n", encoding="utf-8")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            function_block + f"""
+export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED=true
+export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE=DAILY
+export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE={policy_path}
+export KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED=false
+unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE
+export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED=true
+export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE=DAILY
+disable_expired_dated_runtime_overrides 2026-08-25 >/dev/null
+printf '%s|%s\n' \
+  "$KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED" \
+  "$KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED"
+""",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "false|true"
+
+
 def test_run_bot_disables_daily_entry_split_when_baseline_policy_is_missing(tmp_path):
     script = Path("src/run_bot.sh").read_text(encoding="utf-8")
     function_block = script[

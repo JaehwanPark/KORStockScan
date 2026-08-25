@@ -31,7 +31,7 @@ DEFAULT_RECEIPT_REGISTRY_PATH = (
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-20T15:34:48+09:00",
+    "retrieved_at_kst": "2026-08-25T07:55:45+09:00",
     "inspected_paths": [
         "kiwoom_docs/계좌.md",
         "kiwoom/_data/kiwoom_api_spec.json",
@@ -126,7 +126,7 @@ def _same_order_no(left: object, right: object) -> bool:
 def load_manual_sell_receipts(
     token: str, order_date: str, symbol: str
 ) -> list[dict[str, Any]]:
-    return kiwoom_utils.get_order_reference_snapshot_kt00007(
+    rows = kiwoom_utils.get_order_reference_snapshot_kt00007(
         token,
         ord_dt=order_date.replace("-", ""),
         qry_tp="1",
@@ -135,6 +135,19 @@ def load_manual_sell_receipts(
         stk_cd=symbol,
         dmst_stex_tp="%",
     )
+    # kt00007 is explicitly scoped by ``ord_dt``, but the broker response does
+    # not consistently echo that date at the response or row level.  Preserve
+    # the request-scoped date on normalized rows so receipt verification does
+    # not silently reject an otherwise exact broker receipt.
+    requested_date = order_date.replace("-", "")
+    return [
+        {
+            **row,
+            "trade_date": str(row.get("trade_date") or requested_date),
+        }
+        for row in rows
+        if isinstance(row, dict)
+    ]
 
 
 def _read_state(path: Path) -> dict[str, Any]:
@@ -210,12 +223,54 @@ def _verified_receipt(
     }
 
 
+def _verified_prior_day_unfilled_target(
+    *,
+    rows: list[dict[str, Any]],
+    order_no: str,
+    order_date: str,
+    symbol: str,
+    expected_qty: int,
+) -> dict[str, Any]:
+    matches = [
+        row
+        for row in rows
+        if _same_order_no(row.get("ord_no"), order_no)
+        and kiwoom_utils.normalize_stock_code(str(row.get("code") or "")) == symbol
+        and str(row.get("side") or "") == "매도"
+        and str(row.get("trade_date") or "").replace("-", "")
+        == order_date.replace("-", "")
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"prior_target_unique_match_required:{len(matches)}")
+    raw = matches[0].get("raw") if isinstance(matches[0].get("raw"), dict) else {}
+    order_qty = _exact_nonnegative_int(raw.get("ord_qty"))
+    filled_qty = _exact_nonnegative_int(raw.get("cntr_qty"))
+    fill_price = _exact_nonnegative_int(raw.get("cntr_uv"))
+    if (
+        expected_qty <= 0
+        or order_qty != expected_qty
+        or filled_qty != 0
+        or fill_price != 0
+    ):
+        raise ValueError("prior_target_not_exact_unfilled_order")
+    return {
+        "source_api": "kt00007",
+        "order_no": str(matches[0].get("ord_no") or ""),
+        "order_date": order_date,
+        "symbol": symbol,
+        "order_qty": order_qty,
+        "filled_qty": filled_qty,
+        "fill_price": fill_price,
+    }
+
+
 def reconcile_manual_exit(
     *,
     owner_id: str,
     order_no: str,
     order_date: str,
     receipt_rows: list[dict[str, Any]],
+    target_order_rows: list[dict[str, Any]] | None = None,
     observed_at: datetime,
     apply: bool,
     confirmation: str = "",
@@ -282,15 +337,6 @@ def reconcile_manual_exit(
         if held_qty <= 0 or _positive_int(state.get("position_qty")) != held_qty:
             raise ValueError("state_has_no_exact_held_inventory")
         if any(
-            str(leg.get("status") or "") != "HELD"
-            or _positive_int(leg.get("target_filled_qty")) != 0
-            or _positive_int(leg.get("target_fill_price")) != 0
-            or _positive_int(leg.get("buy_filled_qty"))
-            != _positive_int(leg.get("position_qty"))
-            for leg in held_legs
-        ):
-            raise ValueError("manual_exit_requires_closed_targets_and_no_partial_exit")
-        if any(
             _positive_int(leg.get("position_qty")) == 0
             and str(leg.get("status") or "") not in {"COMPLETE", "NO_FILL"}
             for leg in legs
@@ -303,6 +349,46 @@ def reconcile_manual_exit(
             symbol=owner.symbol,
             expected_qty=held_qty,
         )
+        superseded_target_legs: list[dict[str, Any]] = []
+        for leg in held_legs:
+            leg_status = str(leg.get("status") or "")
+            no_prior_exit = (
+                _positive_int(leg.get("target_filled_qty")) == 0
+                and _positive_int(leg.get("target_fill_price")) == 0
+                and _positive_int(leg.get("buy_filled_qty"))
+                == _positive_int(leg.get("position_qty"))
+            )
+            if leg_status == "HELD" and no_prior_exit:
+                continue
+            if leg_status != "TARGET_OPEN" or not no_prior_exit:
+                raise ValueError(
+                    "manual_exit_requires_closed_targets_and_no_partial_exit"
+                )
+            try:
+                target_order_date = date.fromisoformat(
+                    str(leg.get("target_order_date") or "")
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "manual_exit_prior_target_order_date_invalid"
+                ) from exc
+            target_order_no = str(leg.get("target_order_no") or "").strip()
+            if not target_order_no or target_order_date >= parsed_order_date:
+                raise ValueError(
+                    "manual_exit_requires_closed_targets_and_no_partial_exit"
+                )
+            superseded_target_legs.append(
+                {
+                    "leg_id": str(leg.get("leg_id") or ""),
+                    **_verified_prior_day_unfilled_target(
+                        rows=list(target_order_rows or []),
+                        order_no=target_order_no,
+                        order_date=target_order_date.isoformat(),
+                        symbol=owner.symbol,
+                        expected_qty=_positive_int(leg.get("target_quantity")),
+                    ),
+                }
+            )
         if registry_path.exists():
             registry = _read_state(registry_path)
             registry_rows = registry.get("receipts")
@@ -342,6 +428,14 @@ def reconcile_manual_exit(
             "trade_date": trade_date.isoformat(),
             "held_qty": held_qty,
             "receipt": receipt,
+            "prior_day_target_resolution": {
+                "mode": (
+                    "superseded_by_later_exact_full_manual_sell"
+                    if superseded_target_legs
+                    else "already_reconciled_held"
+                ),
+                "targets": superseded_target_legs,
+            },
             "expected_confirmation": expected_confirmation,
             "runtime_effect": False,
             "actual_order_submitted": False,
@@ -365,6 +459,14 @@ def reconcile_manual_exit(
         _atomic_write(registry_path, registry)
         for leg in held_legs:
             leg_qty = _positive_int(leg.get("position_qty"))
+            if str(leg.get("status") or "") == "TARGET_OPEN":
+                leg["prior_target_resolution"] = {
+                    "mode": "superseded_by_later_exact_full_manual_sell",
+                    "target_order_no": str(leg.get("target_order_no") or ""),
+                    "target_order_date": str(leg.get("target_order_date") or ""),
+                    "manual_sell_order_no": receipt["order_no"],
+                    "manual_sell_order_date": receipt["order_date"],
+                }
             leg.update(
                 {
                     "status": "COMPLETE",
@@ -402,6 +504,9 @@ def reconcile_manual_exit(
                 "order_date": receipt["order_date"],
                 "filled_qty": receipt["filled_qty"],
                 "fill_price": receipt["fill_price"],
+                "prior_day_target_resolution": result[
+                    "prior_day_target_resolution"
+                ],
             }
         )
         state["audit"] = audit[-100:]
@@ -429,11 +534,29 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("shared_cached_token_unavailable")
     owner = OWNERS[args.owner]
     rows = load_manual_sell_receipts(token, order_date, owner.symbol)
+    state = _read_state(owner.state_path)
+    target_order_dates = sorted(
+        {
+            str(leg.get("target_order_date") or "")
+            for leg in state.get("legs") or []
+            if isinstance(leg, dict)
+            and str(leg.get("status") or "") == "TARGET_OPEN"
+            and str(leg.get("target_order_date") or "") < order_date
+        }
+    )
+    target_rows = [
+        row
+        for target_order_date in target_order_dates
+        for row in load_manual_sell_receipts(
+            token, target_order_date, owner.symbol
+        )
+    ]
     result = reconcile_manual_exit(
         owner_id=args.owner,
         order_no=args.order_no,
         order_date=order_date,
         receipt_rows=rows,
+        target_order_rows=target_rows,
         observed_at=datetime.now(tz=KST),
         apply=args.apply,
         confirmation=args.confirm,

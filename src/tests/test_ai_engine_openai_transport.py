@@ -6583,6 +6583,92 @@ def test_openai_http_timeout_budget_exhaustion_does_not_rotate_key(monkeypatch):
     assert not any("AI 고갈" in msg for msg in log_error_calls)
 
 
+def test_openai_http_enforces_wall_clock_deadline_when_sdk_call_runs_late():
+    engine = _build_engine()
+
+    def _create(**kwargs):
+        openai_module.time.sleep(0.15)
+        return SimpleNamespace(output_text='{"action":"WAIT"}', usage=None)
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
+    request = OpenAIResponseRequest(
+        prompt="PROMPT",
+        user_input="payload",
+        require_json=True,
+        context_name="test_wall_deadline",
+        model_name="gpt-fast",
+        temperature=0.0,
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        request_id="req-wall-deadline",
+        symbol="005930",
+        cache_key="-",
+        submitted_at_perf=openai_module.time.perf_counter(),
+        timeout_ms=50,
+    )
+
+    started = openai_module.time.perf_counter()
+    try:
+        engine._call_openai_responses_http(request)
+    except OpenAIResponsesHTTPError as exc:
+        elapsed = openai_module.time.perf_counter() - started
+        assert elapsed < 0.13
+        assert exc.timing_meta["openai_http_timeout_budget_exhausted"] is True
+        assert exc.timing_meta["openai_http_wall_deadline_enforced"] is True
+        assert exc.timing_meta["openai_http_wall_deadline_exceeded"] is True
+        assert exc.timing_meta["openai_http_provider_future_cancelled"] is False
+        assert exc.timing_meta["openai_http_deadline_overshoot_ms"] < 30
+    else:
+        raise AssertionError("expected wall-clock deadline exhaustion")
+    engine._http_deadline_executor.shutdown(wait=True)
+
+
+def test_openai_http_wall_deadline_cancels_queued_duplicate_provider_call():
+    engine = _build_engine()
+    provider_calls = []
+
+    def _create(**kwargs):
+        provider_calls.append(kwargs)
+        openai_module.time.sleep(0.15)
+        return SimpleNamespace(output_text='{"action":"WAIT"}', usage=None)
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
+
+    def _request(request_id: str) -> OpenAIResponseRequest:
+        return OpenAIResponseRequest(
+            prompt="PROMPT",
+            user_input="payload",
+            require_json=True,
+            context_name="test_wall_deadline_queue",
+            model_name="gpt-fast",
+            temperature=0.0,
+            schema_name="entry_v1",
+            endpoint_name="analyze_target",
+            request_id=request_id,
+            symbol="005930",
+            cache_key="-",
+            submitted_at_perf=openai_module.time.perf_counter(),
+            timeout_ms=30,
+        )
+
+    with pytest.raises(OpenAIResponsesHTTPError) as first_error:
+        engine._call_openai_responses_http(_request("req-wall-deadline-running"))
+    assert (
+        first_error.value.timing_meta["openai_http_provider_future_cancelled"]
+        is False
+    )
+
+    with pytest.raises(OpenAIResponsesHTTPError) as queued_error:
+        engine._call_openai_responses_http(_request("req-wall-deadline-queued"))
+    assert (
+        queued_error.value.timing_meta["openai_http_provider_future_cancelled"]
+        is True
+    )
+
+    engine._http_deadline_executor.shutdown(wait=True)
+    assert len(provider_calls) == 1
+
+
 def test_openai_ws_attempt_timeout_leaves_http_fallback_budget(monkeypatch):
     engine = _build_engine()
     captured = []

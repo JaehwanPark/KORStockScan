@@ -246,7 +246,8 @@ disable_expired_dated_runtime_overrides() {
         fi
         if [ -n "$dependency_enabled_key" ]; then
             dependency_value="${!dependency_enabled_key:-}"
-            if ! korstockscan_env_true "$dependency_value"; then
+            if ! korstockscan_env_true "$dependency_value" && \
+                ! entry_split_daily_contract_allows_override "$dependency_enabled_key" ""; then
                 printf -v "$enabled_key" '%s' "false"
                 export "$enabled_key"
                 echo "⏳ dated operator runtime override dependency 비활성 처리: ${enabled_key} dependency=${dependency_enabled_key}"
