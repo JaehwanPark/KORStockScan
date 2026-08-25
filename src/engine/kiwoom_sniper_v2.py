@@ -11024,6 +11024,77 @@ bind_analysis_dependencies(
 # ==============================================================================
 # 🎯 메인 스나이퍼 엔진 (Phase 3: Event-Driven & 비동기 아키텍처 완전 적용)
 # ==============================================================================
+def _start_post_sell_bbo_observer_worker() -> threading.Thread:
+    """Run source-only post-sell horizon receipts outside the trading loop.
+
+    Entry/holding AI calls can legitimately occupy the main sniper loop for
+    longer than the 15-second final horizon grace.  Keeping this source-only
+    collector on that loop therefore turns otherwise fresh retained BBO into
+    a scheduling-induced source-quality gap.  The worker has no order or
+    runtime-mutation authority and replaces, rather than duplicates, the old
+    main-loop polling call.
+    """
+
+    previous_stop = getattr(run_sniper, "post_sell_bbo_observer_stop", None)
+    previous_thread = getattr(run_sniper, "post_sell_bbo_observer_thread", None)
+    if isinstance(previous_thread, threading.Thread) and previous_thread.is_alive():
+        if isinstance(previous_stop, threading.Event) and not previous_stop.is_set():
+            return previous_thread
+        if isinstance(previous_stop, threading.Event):
+            previous_stop.set()
+        previous_thread.join(timeout=2.0)
+        if previous_thread.is_alive():
+            log_info(
+                "[POST_SELL_BBO_OBSERVER] previous detached observer is still "
+                "stopping; duplicate start suppressed"
+            )
+            return previous_thread
+
+    stop_event = threading.Event()
+    run_sniper.post_sell_bbo_observer_last_success_epoch = 0.0
+    run_sniper.post_sell_bbo_observer_failure_count = 0
+    run_sniper.post_sell_bbo_observer_last_error = ""
+    run_sniper.post_sell_bbo_observer_last_error_log_epoch = 0.0
+    run_sniper.post_sell_bbo_observer_last_result = {}
+
+    def _worker() -> None:
+        while not stop_event.wait(1.0):
+            try:
+                result = sniper_state_handlers.observe_post_sell_executable_bbo_horizons(
+                    now_ts=time.time()
+                )
+                run_sniper.post_sell_bbo_observer_last_success_epoch = time.time()
+                run_sniper.post_sell_bbo_observer_last_result = dict(result or {})
+            except Exception as exc:
+                failed_at = time.time()
+                run_sniper.post_sell_bbo_observer_failure_count += 1
+                run_sniper.post_sell_bbo_observer_last_error = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+                last_log_at = float(
+                    run_sniper.post_sell_bbo_observer_last_error_log_epoch or 0.0
+                )
+                if last_log_at <= 0.0 or failed_at - last_log_at >= 60.0:
+                    run_sniper.post_sell_bbo_observer_last_error_log_epoch = failed_at
+                    log_info(
+                        "[POST_SELL_BBO_OBSERVER] detached observer failed without "
+                        "runtime effect: "
+                        f"{run_sniper.post_sell_bbo_observer_last_error} "
+                        "failure_count="
+                        f"{run_sniper.post_sell_bbo_observer_failure_count}"
+                    )
+
+    thread = threading.Thread(
+        target=_worker,
+        name="post-sell-bbo-observer",
+        daemon=True,
+    )
+    run_sniper.post_sell_bbo_observer_stop = stop_event
+    run_sniper.post_sell_bbo_observer_thread = thread
+    thread.start()
+    return thread
+
+
 def run_sniper(is_test_mode=False):
     global KIWOOM_TOKEN, WS_MANAGER, ACTIVE_TARGETS, AI_ENGINE
     global _SCANNER_PROMOTION_INBOX
@@ -11222,6 +11293,7 @@ def run_sniper(is_test_mode=False):
 
     WS_MANAGER.start()
     time.sleep(2)
+    _start_post_sell_bbo_observer_worker()
 
     # ==========================================
     # 🤖 OpenAI runtime AI engine
@@ -14722,15 +14794,6 @@ def run_sniper(is_test_mode=False):
             except Exception as exc:
                 log_error(
                     "[SMOOTHING_POST_SELL] detached observer failed without "
-                    f"runtime effect: {exc}"
-                )
-            try:
-                sniper_state_handlers.observe_post_sell_executable_bbo_horizons(
-                    now_ts=time.time()
-                )
-            except Exception as exc:
-                log_info(
-                    "[POST_SELL_BBO_OBSERVER] bounded observer failed without "
                     f"runtime effect: {exc}"
                 )
             try:

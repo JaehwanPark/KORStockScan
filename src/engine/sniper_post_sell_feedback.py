@@ -677,55 +677,59 @@ def _register_post_sell_executable_bbo_observer(
             "post_sell_executable_bbo_session": route["session"],
         }
 
-    for key, observer in list(_POST_SELL_EXECUTABLE_BBO_OBSERVERS.items()):
-        if (
-            float(observer.get("observer_expires_at_epoch", 0.0) or 0.0) + 60.0
-            <= now_ts
-        ):
-            _POST_SELL_EXECUTABLE_BBO_OBSERVERS.pop(key, None)
-    if len(_POST_SELL_EXECUTABLE_BBO_OBSERVERS) >= POST_SELL_EXECUTABLE_BBO_MAX_ACTIVE:
-        return {
-            **base,
-            "post_sell_executable_bbo_observer_status": "capacity_rejected",
-            "post_sell_executable_bbo_route_reason": route["reason"],
-            "post_sell_executable_bbo_expected_market_route": route[
-                "expected_market_route"
-            ],
-            "post_sell_executable_bbo_venue": route["venue"],
-            "post_sell_executable_bbo_session": route["session"],
-        }
-
     registration_key = str(payload.get("post_sell_id") or "").strip()
     if not registration_key:
         return {
             **base,
             "post_sell_executable_bbo_observer_status": "registration_key_missing",
         }
-    _POST_SELL_EXECUTABLE_BBO_OBSERVERS[registration_key] = {
-        "registration_key": registration_key,
-        "post_sell_id": registration_key,
-        "recommendation_id": payload.get("recommendation_id"),
-        "stock_code": payload.get("stock_code"),
-        "stock_name": payload.get("stock_name"),
-        "sell_price": payload.get("sell_price"),
-        "sell_epoch": sell_epoch,
-        "registered_at_epoch": now_ts,
-        "retain_until_epoch": retain_until,
-        "observer_expires_at_epoch": observer_expires_at,
-        "expected_market_route": route["expected_market_route"],
-        "broker_route": route["broker_route"],
-        "venue": route["venue"],
-        "session": route["session"],
-        "route_reason": route["reason"],
-        "pending_horizons_sec": list(POST_SELL_EXECUTABLE_BBO_HORIZONS_SEC),
-        "fresh_sample_count": 0,
-        "first_fresh_quote_epoch": 0.0,
-        "last_fresh_quote_epoch": 0.0,
-        "max_fresh_quote_gap_sec": 0.0,
-    }
-    current_until = float(_WS_RETAIN_UNTIL.get(str(payload["stock_code"]), 0.0) or 0.0)
-    if observer_expires_at > current_until:
-        _WS_RETAIN_UNTIL[str(payload["stock_code"])] = observer_expires_at
+    with _WRITE_LOCK:
+        for key, observer in list(_POST_SELL_EXECUTABLE_BBO_OBSERVERS.items()):
+            if (
+                float(observer.get("observer_expires_at_epoch", 0.0) or 0.0) + 60.0
+                <= now_ts
+            ):
+                _POST_SELL_EXECUTABLE_BBO_OBSERVERS.pop(key, None)
+        if (
+            len(_POST_SELL_EXECUTABLE_BBO_OBSERVERS)
+            >= POST_SELL_EXECUTABLE_BBO_MAX_ACTIVE
+        ):
+            return {
+                **base,
+                "post_sell_executable_bbo_observer_status": "capacity_rejected",
+                "post_sell_executable_bbo_route_reason": route["reason"],
+                "post_sell_executable_bbo_expected_market_route": route[
+                    "expected_market_route"
+                ],
+                "post_sell_executable_bbo_venue": route["venue"],
+                "post_sell_executable_bbo_session": route["session"],
+            }
+        _POST_SELL_EXECUTABLE_BBO_OBSERVERS[registration_key] = {
+            "registration_key": registration_key,
+            "post_sell_id": registration_key,
+            "recommendation_id": payload.get("recommendation_id"),
+            "stock_code": payload.get("stock_code"),
+            "stock_name": payload.get("stock_name"),
+            "sell_price": payload.get("sell_price"),
+            "sell_epoch": sell_epoch,
+            "registered_at_epoch": now_ts,
+            "retain_until_epoch": retain_until,
+            "observer_expires_at_epoch": observer_expires_at,
+            "expected_market_route": route["expected_market_route"],
+            "broker_route": route["broker_route"],
+            "venue": route["venue"],
+            "session": route["session"],
+            "route_reason": route["reason"],
+            "pending_horizons_sec": list(POST_SELL_EXECUTABLE_BBO_HORIZONS_SEC),
+            "fresh_sample_count": 0,
+            "first_fresh_quote_epoch": 0.0,
+            "last_fresh_quote_epoch": 0.0,
+            "max_fresh_quote_gap_sec": 0.0,
+        }
+    retain_ws_subscription_until(
+        str(payload["stock_code"]),
+        observer_expires_at,
+    )
     return {
         **base,
         "post_sell_executable_bbo_observer_registered": True,

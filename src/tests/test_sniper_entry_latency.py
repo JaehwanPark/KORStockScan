@@ -34,6 +34,61 @@ def _assert_danger_hard_safety_block(result, *, danger_reasons=None):
                 assert reason in result["latency_danger_reasons"]
 
 
+def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        sniper_runtime.sniper_state_handlers,
+        "observe_post_sell_executable_bbo_horizons",
+        lambda *, now_ts: calls.append(now_ts),
+    )
+
+    thread = sniper_runtime._start_post_sell_bbo_observer_worker()
+    assert sniper_runtime._start_post_sell_bbo_observer_worker() is thread
+    deadline = time.time() + 1.5
+    while not calls and time.time() < deadline:
+        time.sleep(0.02)
+    sniper_runtime.run_sniper.post_sell_bbo_observer_stop.set()
+    thread.join(timeout=1.0)
+
+    assert calls
+    assert not thread.is_alive()
+    assert sniper_runtime.run_sniper.post_sell_bbo_observer_failure_count == 0
+    assert sniper_runtime.run_sniper.post_sell_bbo_observer_last_success_epoch > 0.0
+
+
+def test_post_sell_bbo_observer_rate_limits_repeated_failures(monkeypatch):
+    logs = []
+
+    def _fail_observation(*, now_ts):
+        del now_ts
+        raise RuntimeError("synthetic observer failure")
+
+    monkeypatch.setattr(
+        sniper_runtime.sniper_state_handlers,
+        "observe_post_sell_executable_bbo_horizons",
+        _fail_observation,
+    )
+    monkeypatch.setattr(sniper_runtime, "log_info", logs.append)
+
+    thread = sniper_runtime._start_post_sell_bbo_observer_worker()
+    deadline = time.time() + 2.5
+    while (
+        sniper_runtime.run_sniper.post_sell_bbo_observer_failure_count < 2
+        and time.time() < deadline
+    ):
+        time.sleep(0.02)
+    sniper_runtime.run_sniper.post_sell_bbo_observer_stop.set()
+    thread.join(timeout=1.0)
+
+    assert sniper_runtime.run_sniper.post_sell_bbo_observer_failure_count >= 2
+    assert sniper_runtime.run_sniper.post_sell_bbo_observer_last_error == (
+        "RuntimeError: synthetic observer failure"
+    )
+    assert len(logs) == 1
+    assert "failure_count=1" in logs[0]
+    assert not thread.is_alive()
+
+
 def test_scanner_promotion_correlation_fields_preserve_forced_rising_missed_lineage():
     fields = state_handlers._scanner_promotion_correlation_fields(
         {
