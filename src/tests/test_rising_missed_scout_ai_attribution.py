@@ -127,6 +127,53 @@ def test_non_scout_has_no_execution_attribution() -> None:
     )
 
 
+def test_pre_ai_scout_stage_is_pending_not_provenance_incomplete() -> None:
+    stock = {
+        "id": 8,
+        "name": "PRE_AI_SCOUT",
+        "code": "234567",
+        "rising_missed_one_share_entry_forced": True,
+        "rising_missed_one_share_scout": True,
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+    }
+
+    pending = scout_ai_execution_attribution_fields(
+        stock,
+        stage="rising_missed_scout_allocator_order_plan",
+        actual_order_submitted=False,
+    )
+    invalid_submit = scout_ai_execution_attribution_fields(
+        stock,
+        stage="probe_submitted",
+        actual_order_submitted=True,
+    )
+
+    assert pending["scout_ai_attribution_status"] == (
+        "parent_ai_not_evaluated_yet"
+    )
+    assert invalid_submit["scout_ai_attribution_status"] == (
+        "parent_provenance_incomplete"
+    )
+    summary = feedback._one_share_summary(
+        [
+            {"scout_ai_attribution_status": pending["scout_ai_attribution_status"]},
+            {
+                "scout_ai_attribution_status": (
+                    "linked_parent_pending_probe_bundle"
+                )
+            },
+            {
+                "scout_ai_attribution_status": invalid_submit[
+                    "scout_ai_attribution_status"
+                ]
+            },
+        ]
+    )
+    assert summary["scout_ai_attribution_incomplete_count"] == 1
+    assert summary["scout_ai_attribution_pre_ai_pending_count"] == 1
+    assert summary["scout_ai_attribution_probe_bundle_pending_count"] == 1
+
+
 def test_receipt_confirmed_position_marker_preserves_scout_attribution() -> None:
     stock = _entry_ai_stock()
     stock.update(freeze_scout_ai_parent_fields(stock))

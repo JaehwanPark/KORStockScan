@@ -622,27 +622,55 @@ class ForwardObservationCollector:
             raise RuntimeError(
                 "forward collector shutdown had 1 error(s)"
             ) from callback_timeout_error
-        close_errors: list[Exception] = []
+        worker_errors: list[Exception] = []
         if thread is not None:
             thread.join(timeout=max(0.01, deadline - time.monotonic()))
             if thread.is_alive():
-                close_errors.append(
+                worker_errors.append(
                     TimeoutError("forward collector did not drain in time")
                 )
         if depth_thread is not None:
             depth_thread.join(timeout=max(0.01, deadline - time.monotonic()))
             if depth_thread.is_alive():
-                close_errors.append(
+                worker_errors.append(
                     TimeoutError("depth collector did not drain in time")
                 )
+        # Writers are downstream of both collector workers.  Closing them while
+        # a worker is still draining makes accepted rows fail at _writer_for()
+        # and also consumes the writer deadline before a retry can succeed.
+        # Leave writers running and retry only after both workers quiesce.
+        if worker_errors:
+            with self._metrics_lock:
+                self._worker_alive_after_close += int(
+                    bool(thread is not None and thread.is_alive())
+                )
+                self._worker_alive_after_close += int(
+                    bool(depth_thread is not None and depth_thread.is_alive())
+                )
+            self._record_close_failure(tuple(worker_errors))
+            raise RuntimeError(
+                f"forward collector shutdown had {len(worker_errors)} error(s)"
+            ) from worker_errors[0]
+
+        close_errors: list[Exception] = []
         with self._state_lock:
             self._writers_closing = True
             writers = tuple(self._writers.values()) + tuple(
                 self._depth_writers.values()
             )
+        # Signal every writer before waiting.  Their accepted queues then drain
+        # concurrently instead of the first writer consuming the entire phase.
         for writer in writers:
             try:
-                writer.close(timeout_sec=max(0.01, deadline - time.monotonic()))
+                writer.request_close()
+            except Exception as exc:  # collector shutdown must inspect every writer
+                close_errors.append(exc)
+        writer_deadline = time.monotonic() + max(0.01, timeout_sec)
+        for writer in writers:
+            try:
+                writer.wait_closed(
+                    timeout_sec=max(0.01, writer_deadline - time.monotonic())
+                )
             except Exception as exc:  # collector shutdown must inspect every writer
                 close_errors.append(exc)
         writer_alive_count = 0

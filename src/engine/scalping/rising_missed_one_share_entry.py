@@ -1210,10 +1210,16 @@ def scout_ai_execution_attribution_fields(
         or source.get("entry_split_probe_exit_bundle_id")
         or ""
     ).strip()
+    submitted = _field_present(actual_order_submitted)
     if trace_id and snapshot_id and action and probe_bundle_id:
         status = "linked_frozen_parent"
     elif trace_id and snapshot_id and action:
         status = "linked_parent_pending_probe_bundle"
+    elif not submitted and not trace_id and not snapshot_id and not action:
+        # Candidate/allocator events can legitimately precede the final Entry
+        # AI call.  Keep that ordering visible without misclassifying it as a
+        # provenance defect; a real submit with the same gaps still fails.
+        status = "parent_ai_not_evaluated_yet"
     else:
         status = "parent_provenance_incomplete"
     relationship = (
@@ -1271,9 +1277,7 @@ def scout_ai_execution_attribution_fields(
         "scout_ai_runtime_relationship": relationship,
         "scout_probe_bundle_id": probe_bundle_id or "-",
         "scout_execution_stage": str(stage or "unknown"),
-        "scout_attribution_actual_order_submitted": _field_present(
-            actual_order_submitted
-        ),
+        "scout_attribution_actual_order_submitted": submitted,
         "scout_attribution_metric_role": "execution_decision_provenance",
         "scout_attribution_decision_authority": (
             "forensics_only_no_runtime_decision_change"

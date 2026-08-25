@@ -2586,7 +2586,20 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "scout_ai_attribution_incomplete_count": sum(
             1
             for item in rows
-            if item.get("scout_ai_attribution_status") != "linked_frozen_parent"
+            if item.get("scout_ai_attribution_status")
+            == "parent_provenance_incomplete"
+        ),
+        "scout_ai_attribution_pre_ai_pending_count": sum(
+            1
+            for item in rows
+            if item.get("scout_ai_attribution_status")
+            == "parent_ai_not_evaluated_yet"
+        ),
+        "scout_ai_attribution_probe_bundle_pending_count": sum(
+            1
+            for item in rows
+            if item.get("scout_ai_attribution_status")
+            == "linked_parent_pending_probe_bundle"
         ),
         "scout_ai_attribution_conflict_count": sum(
             1 for item in rows if item.get("scout_ai_attribution_conflict")

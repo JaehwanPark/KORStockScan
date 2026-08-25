@@ -16669,11 +16669,20 @@ def _rising_missed_submit_safety_backoff_fields(
     now_ts: float,
 ) -> dict[str, Any]:
     stock = stock if isinstance(stock, dict) else {}
-    has_backoff_lineage = bool(stock.get("rising_missed_submit_safety_backoff_lineage"))
-    if not (has_backoff_lineage or _has_rising_missed_entry_lineage(stock)):
-        return {}
     key = _rising_missed_submit_safety_backoff_key(stock, code)
     cached = _RISING_MISSED_SUBMIT_SAFETY_BACKOFFS.get(key)
+    has_backoff_lineage = bool(stock.get("rising_missed_submit_safety_backoff_lineage"))
+    # Async Rising Missed evaluation mutates a worker copy while the next
+    # scheduler precheck reads the canonical watch object.  The process-local
+    # cache is keyed by code/record and is therefore the handoff contract
+    # between those objects; requiring a copied stock marker before consulting
+    # it silently discarded a live submit-safety backoff.
+    if not (
+        has_backoff_lineage
+        or cached
+        or _has_rising_missed_entry_lineage(stock)
+    ):
+        return {}
     stock_until = _safe_float(
         stock.get("rising_missed_submit_safety_backoff_until"), 0.0
     )

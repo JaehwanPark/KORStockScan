@@ -695,7 +695,9 @@ def test_series_gap_attributes_queue_and_invalid_envelope_losses(tmp_path) -> No
     assert invalid_runtime.unexplained_sequence_gap_count == 0
 
 
-def test_collector_close_attempts_every_writer_after_worker_timeout(tmp_path) -> None:
+def test_collector_close_defers_writers_until_worker_drain_then_retries(
+    tmp_path,
+) -> None:
     collector = _collector(tmp_path)
     entered = threading.Event()
     release = threading.Event()
@@ -704,25 +706,30 @@ def test_collector_close_attempts_every_writer_after_worker_timeout(tmp_path) ->
         entered.set()
         release.wait(timeout=2)
 
+    requested_writers: list[str] = []
+
     class RecordingWriter:
-        def __init__(self, *, fail_once: bool = False) -> None:
-            self.closed = False
-            self.fail_once = fail_once
-            self.close_calls = 0
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.close_requested = False
+            self.wait_calls = 0
             self.alive = True
 
-        def close(self, *, timeout_sec: float) -> None:
-            self.close_calls += 1
-            self.closed = True
+        def request_close(self) -> None:
+            self.close_requested = True
+            requested_writers.append(self.name)
             self.alive = False
-            if self.fail_once and self.close_calls == 1:
-                raise OSError("synthetic writer close failure")
+
+        def wait_closed(self, *, timeout_sec: float) -> None:
+            self.wait_calls += 1
+            assert self.close_requested is True
+            assert requested_writers == ["first", "second"]
 
         def metrics(self):
             return SimpleNamespace(writer_alive=self.alive)
 
-    first_writer = RecordingWriter(fail_once=True)
-    second_writer = RecordingWriter()
+    first_writer = RecordingWriter("first")
+    second_writer = RecordingWriter("second")
     collector._process_envelope = blocked_process
     collector._writers[("2026-08-08", "KRX", "KRX_REGULAR")] = first_writer
     collector._writers[("2026-08-08", "NXT", "NXT_REGULAR_OVERLAP")] = second_writer
@@ -732,18 +739,20 @@ def test_collector_close_attempts_every_writer_after_worker_timeout(tmp_path) ->
     )
     assert entered.wait(timeout=1)
 
-    with pytest.raises(RuntimeError, match="shutdown had 2 error"):
+    with pytest.raises(RuntimeError, match="shutdown had 1 error"):
         collector.close(timeout_sec=0.01)
-    assert first_writer.closed is True
-    assert second_writer.closed is True
+    assert first_writer.close_requested is False
+    assert second_writer.close_requested is False
     assert collector._lifecycle is CollectorLifecycle.CLOSE_FAILED
     assert collector._close_attempts == 1
     assert collector._close_failures == 1
+    assert collector._writer_alive_after_close == 0
+    assert collector._reference_reconciliation_errors == 0
     release.set()
     collector.close(timeout_sec=1)
     assert collector._lifecycle is CollectorLifecycle.CLOSED
-    assert first_writer.close_calls == 2
-    assert second_writer.close_calls == 2
+    assert first_writer.wait_calls == 1
+    assert second_writer.wait_calls == 1
     assert collector._close_attempts == 2
     with pytest.raises(RuntimeError, match="one-shot"):
         collector.start()

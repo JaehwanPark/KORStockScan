@@ -754,10 +754,21 @@ class NonBlockingPathJournalWriter:
         return True
 
     def close(self, *, timeout_sec: float = 10.0) -> None:
+        self.request_close()
+        self.wait_closed(timeout_sec=timeout_sec)
+
+    def request_close(self) -> None:
+        """Stop accepting rows and ask the writer to drain its accepted queue."""
+
         with self._lock:
-            thread = self._thread
             self._accepting = False
             self._stop_requested.set()
+
+    def wait_closed(self, *, timeout_sec: float = 10.0) -> None:
+        """Wait for a previously requested drain without changing acceptance."""
+
+        with self._lock:
+            thread = self._thread
         if thread is None:
             return
         thread.join(timeout=max(0.01, timeout_sec))

@@ -7587,6 +7587,39 @@ def test_rising_missed_submit_safety_backoff_latency_danger_only_for_rising_line
     assert "rising_missed_submit_safety_backoff_until" not in general_stock
 
 
+def test_rising_missed_submit_safety_backoff_cache_handoffs_to_canonical_watch_copy():
+    worker_copy = _rising_missed_backoff_stock(code="257720")
+    canonical_watch_copy = {
+        "id": worker_copy["id"],
+        "code": worker_copy["code"],
+        "name": worker_copy["name"],
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+    }
+
+    state_handlers._record_rising_missed_submit_safety_backoff(
+        worker_copy,
+        "257720",
+        "latency_state_danger",
+        now_ts=1000.0,
+        source_stage="latency_block",
+    )
+    fields = state_handlers._scanner_fast_precheck_fields(
+        canonical_watch_copy,
+        code="257720",
+        ws_data={"curr": 50_000},
+        now_ts=1001.0,
+    )
+
+    assert "rising_missed_submit_safety_backoff_lineage" not in canonical_watch_copy
+    assert fields["fast_precheck_result"] == "budget_reallocated"
+    assert fields["fast_precheck_reason"] == "submit_safety_backoff_active"
+    assert fields["rising_missed_submit_safety_backoff_reason"] == (
+        "latency_state_danger"
+    )
+
+
 def test_rising_missed_submit_safety_backoff_recovery_allows_heavy_eval():
     stock = _rising_missed_backoff_stock(
         last_watching_ai_source_quality_fields={
