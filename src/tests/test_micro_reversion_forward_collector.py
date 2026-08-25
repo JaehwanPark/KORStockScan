@@ -347,9 +347,8 @@ def test_0d_callback_latency_does_not_poison_frozen_0b_canary_metric(
         "source_quality_gate",
         "forbidden_uses",
     } <= set(depth_contract)
-    assert (
-        "satisfy_or_bypass_0b_callback_latency_canary"
-        in (depth_contract["forbidden_uses"])
+    assert "satisfy_or_bypass_0b_callback_latency_canary" in (
+        depth_contract["forbidden_uses"]
     )
     assert {
         "metric_role",
@@ -490,6 +489,99 @@ def test_stale_series_epoch_is_rejected_before_gap_and_detector(tmp_path) -> Non
     assert runtime.worker_processed_count == 0
     assert runtime.stale_sequence_epoch_envelope_count == 1
     assert runtime.unexplained_sequence_gap_count == 0
+
+
+def test_transport_epoch_drops_queued_old_rows_and_restarts_both_sequences(
+    tmp_path,
+) -> None:
+    collector = _collector(
+        tmp_path,
+        path_capture_enabled=True,
+        depth_capture_enabled=True,
+    )
+    base_ms = int(
+        datetime.fromisoformat("2026-08-08T09:00:00.010+09:00").timestamp() * 1_000
+    )
+    try:
+        with collector._transport_epoch_lock:
+            old_epoch = collector.runtime_snapshot().sequence_epoch
+            assert (
+                collector.observe_kiwoom_0b(
+                    "000001",
+                    _snapshot(received_at_ms=base_ms),
+                    realtime_type="0B",
+                )
+                is ProducerCanaryResult.ENQUEUED
+            )
+            assert (
+                collector.observe_kiwoom_0d(
+                    "000001",
+                    _depth_snapshot(received_at_ms=base_ms),
+                    realtime_type="0D",
+                )
+                is ProducerCanaryResult.ENQUEUED
+            )
+            new_epoch = collector.begin_transport_epoch()
+            assert new_epoch > old_epoch
+            assert (
+                collector.observe_kiwoom_0b(
+                    "000001",
+                    _snapshot(
+                        exchange_time="090001000",
+                        received_at_ms=base_ms + 1_000,
+                        price=10_010,
+                    ),
+                    realtime_type="0B",
+                )
+                is ProducerCanaryResult.ENQUEUED
+            )
+            assert (
+                collector.observe_kiwoom_0d(
+                    "000001",
+                    _depth_snapshot(
+                        orderbook_time="090001000",
+                        received_at_ms=base_ms + 1_000,
+                    ),
+                    realtime_type="0D",
+                )
+                is ProducerCanaryResult.ENQUEUED
+            )
+
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            runtime = collector.runtime_snapshot()
+            if (
+                runtime.writer_persisted_envelope_count >= 1
+                and runtime.depth_writer_persisted_envelope_count >= 1
+            ):
+                break
+            time.sleep(0.01)
+    finally:
+        collector.close()
+
+    runtime = collector.runtime_snapshot()
+    market_file = next(tmp_path.rglob("market_stream.jsonl"))
+    depth_file = next(tmp_path.rglob("market_depth_stream.jsonl"))
+    market_rows = [
+        json.loads(line)
+        for line in market_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    depth_rows = [
+        json.loads(line)
+        for line in depth_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert len(market_rows) == len(depth_rows) == 1
+    assert market_rows[0]["sequence_epoch"] == new_epoch
+    assert depth_rows[0]["sequence_epoch"] == new_epoch
+    assert market_rows[0]["source_sequence"] == 1
+    assert depth_rows[0]["source_sequence"] == 1
+    assert market_rows[0]["series_sequence"] == 1
+    assert depth_rows[0]["series_sequence"] == 1
+    assert runtime.stale_sequence_epoch_envelope_count == 1
+    assert runtime.depth_dropped_envelope_count == 1
 
 
 def test_event_symbol_mismatch_is_blocked_and_counted(tmp_path) -> None:

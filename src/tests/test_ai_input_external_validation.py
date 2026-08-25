@@ -1,3 +1,4 @@
+import gzip
 import json
 from datetime import datetime
 
@@ -344,31 +345,39 @@ def test_request_and_response_provenance_join_by_request_id(tmp_path, monkeypatc
     trace_dir.mkdir()
     monkeypatch.setattr(mod, "REQUEST_DIR", request_dir)
     monkeypatch.setattr(mod, "TRACE_DIR", trace_dir)
-    (request_dir / "ai_decision_requests_2026-07-24.jsonl").write_text(
-        json.dumps(
-            {
-                "request_id": "req-1",
-                "symbol": "005930",
-                "endpoint": "holding_score",
-                "payload_sha256": "a" * 64,
-            }
-        )
-        + "\n",
+    with gzip.open(
+        request_dir / "ai_decision_requests_2026-07-24.jsonl.gz",
+        "wt",
         encoding="utf-8",
-    )
-    (trace_dir / "ai_decision_trace_2026-07-24.jsonl").write_text(
-        json.dumps(
-            {
-                "request_id": "req-1",
-                "provider_actual": "openai",
-                "provider_response_id": "resp-1",
-                "response_sha256": "b" * 64,
-                "total_tokens": 120,
-            }
+    ) as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "request_id": "req-1",
+                    "symbol": "005930",
+                    "endpoint": "holding_score",
+                    "payload_sha256": "a" * 64,
+                }
+            )
+            + "\n"
         )
-        + "\n",
+    with gzip.open(
+        trace_dir / "ai_decision_trace_2026-07-24.jsonl.gz",
+        "wt",
         encoding="utf-8",
-    )
+    ) as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "request_id": "req-1",
+                    "provider_actual": "openai",
+                    "provider_response_id": "resp-1",
+                    "response_sha256": "b" * 64,
+                    "total_tokens": 120,
+                }
+            )
+            + "\n"
+        )
 
     rows = mod.load_request_provenance("2026-07-24")["005930"]
 

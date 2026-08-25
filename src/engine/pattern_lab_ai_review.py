@@ -1727,6 +1727,7 @@ def _is_resolved_feedback_source_missing_gap(
 ) -> bool:
     if str(item.get("final_state") or "") not in {
         "automation_handoff_gap",
+        "source_quality_gap",
         "ai_review_gap",
     }:
         return False
@@ -1749,7 +1750,10 @@ def _is_resolved_feedback_source_missing_gap(
 def _is_resolved_closed_feedback_handoff_gap(
     item: dict[str, Any], context: dict[str, Any]
 ) -> bool:
-    if str(item.get("final_state") or "") != "automation_handoff_gap":
+    if str(item.get("final_state") or "") not in {
+        "automation_handoff_gap",
+        "source_quality_gap",
+    }:
         return False
     if str(item.get("final_decision") or "") == "keep":
         return False
@@ -1772,7 +1776,10 @@ def _is_resolved_closed_feedback_handoff_gap(
 def _is_resolved_code_improvement_workorder_self_review_gap(
     item: dict[str, Any], context: dict[str, Any]
 ) -> bool:
-    if str(item.get("final_state") or "") != "ai_review_gap":
+    if str(item.get("final_state") or "") not in {
+        "ai_review_gap",
+        "source_quality_gap",
+    }:
         return False
     if str(item.get("final_decision") or "") == "keep":
         return False
@@ -1794,7 +1801,10 @@ def _is_resolved_code_improvement_workorder_self_review_gap(
 def _is_resolved_pattern_lab_ai_review_contract_gap(
     item: dict[str, Any], context: dict[str, Any]
 ) -> bool:
-    if str(item.get("final_state") or "") != "ai_review_gap":
+    if str(item.get("final_state") or "") not in {
+        "ai_review_gap",
+        "source_quality_gap",
+    }:
         return False
     if str(item.get("final_decision") or "") == "keep":
         return False
@@ -1865,7 +1875,11 @@ def _apply_feedback_handoff_resolutions(
         ai_review_contract_gap = _is_resolved_pattern_lab_ai_review_contract_gap(
             item, context
         )
-        if final_state in {"automation_handoff_gap", "ai_review_gap"} and (
+        if final_state in {
+            "automation_handoff_gap",
+            "source_quality_gap",
+            "ai_review_gap",
+        } and (
             generic_review
             or source_missing_gap
             or closed_handoff_gap

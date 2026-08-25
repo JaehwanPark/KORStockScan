@@ -1,11 +1,417 @@
+import gzip
+import hashlib
 import json
+import os
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from types import SimpleNamespace
+
+import pytest
 
 from src.utils import pipeline_event_logger as logger_mod
 
 
 def _reset_logger_state(monkeypatch):
     monkeypatch.setattr(logger_mod, "_PRODUCER_COMPACTOR", None)
+
+
+def test_exact_lifecycle_event_uses_logical_trade_date_partition_across_midnight(
+    monkeypatch, tmp_path
+):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 8, 15, 0, 0, 0, 500_000)
+            return value if tz is None else value.replace(tzinfo=tz)
+
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(logger_mod, "datetime", FixedDateTime)
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+            PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST=(),
+        ),
+    )
+
+    payload = logger_mod.emit_pipeline_event(
+        "HOLDING_PIPELINE",
+        "TEST",
+        "005930",
+        "position_rebased_after_fill",
+        record_id=77,
+        fields={
+            "main_lifecycle_identity_schema": (
+                "main_scalping_lifecycle_pipeline_identity_v1"
+            ),
+            "main_lifecycle_id": "mlc-" + "a" * 32,
+            "main_lifecycle_trade_date": "2026-08-14",
+            "main_lifecycle_decision_authority": ("source_only_lifecycle_observation"),
+            "main_lifecycle_runtime_effect": False,
+            "main_lifecycle_order_authority": False,
+            "main_lifecycle_provider_authority": False,
+        },
+    )
+
+    assert payload["emitted_date"] == "2026-08-15"
+    assert payload["storage_partition_date"] == "2026-08-14"
+    event_dir = tmp_path / "pipeline_events"
+    logical_path = event_dir / "pipeline_events_2026-08-14.jsonl"
+    late_path = event_dir / "pipeline_events_2026-08-14.late.jsonl"
+    assert not logical_path.exists()
+    assert late_path.exists()
+    assert not (
+        tmp_path / "pipeline_events" / "pipeline_events_2026-08-15.jsonl"
+    ).exists()
+    assert json.loads(late_path.read_text(encoding="utf-8"))["emitted_date"] == (
+        "2026-08-15"
+    )
+
+
+def test_midnight_lifecycle_append_preserves_existing_gzip_partition(
+    monkeypatch, tmp_path
+):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 8, 15, 0, 0, 0, 500_000)
+            return value if tz is None else value.replace(tzinfo=tz)
+
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(logger_mod, "datetime", FixedDateTime)
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+            PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST=(),
+        ),
+    )
+    event_dir = tmp_path / "pipeline_events"
+    event_dir.mkdir(parents=True)
+    gzip_path = event_dir / "pipeline_events_2026-08-14.jsonl.gz"
+    with gzip.open(gzip_path, "wt", encoding="utf-8") as handle:
+        handle.write('{"existing":true}\n')
+    archived_sha256 = hashlib.sha256(gzip_path.read_bytes()).hexdigest()
+
+    logger_mod.emit_pipeline_event(
+        "HOLDING_PIPELINE",
+        "TEST",
+        "005930",
+        "position_rebased_after_fill",
+        record_id=77,
+        fields={
+            "main_lifecycle_identity_schema": (
+                "main_scalping_lifecycle_pipeline_identity_v1"
+            ),
+            "main_lifecycle_id": "mlc-" + "b" * 32,
+            "main_lifecycle_trade_date": "2026-08-14",
+            "main_lifecycle_decision_authority": ("source_only_lifecycle_observation"),
+            "main_lifecycle_runtime_effect": False,
+            "main_lifecycle_order_authority": False,
+            "main_lifecycle_provider_authority": False,
+        },
+    )
+
+    assert gzip_path.exists()
+    assert not (event_dir / "pipeline_events_2026-08-14.jsonl").exists()
+    assert hashlib.sha256(gzip_path.read_bytes()).hexdigest() == archived_sha256
+    with gzip.open(gzip_path, "rt", encoding="utf-8") as handle:
+        rows = [json.loads(line) for line in handle if line.strip()]
+    assert rows == [{"existing": True}]
+    late_path = event_dir / "pipeline_events_2026-08-14.late.jsonl"
+    late_rows = [
+        json.loads(line)
+        for line in late_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert late_rows[0]["storage_partition_date"] == "2026-08-14"
+
+
+def test_late_pipeline_event_sidecar_serializes_concurrent_writers(tmp_path):
+    logical_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    expected = [json.dumps({"sequence": value}) + "\n" for value in range(64)]
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(
+            executor.map(
+                lambda line: logger_mod._append_late_pipeline_event_jsonl(
+                    logical_path,
+                    line,
+                ),
+                expected,
+            )
+        )
+
+    late_path = tmp_path / "pipeline_events_2026-08-14.late.jsonl"
+    observed = [
+        json.loads(line)
+        for line in late_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert sorted(row["sequence"] for row in observed) == list(range(64))
+
+
+def test_same_day_pipeline_event_base_serializes_concurrent_writers(tmp_path):
+    logical_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    expected = [json.dumps({"sequence": value}) + "\n" for value in range(128)]
+
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        list(
+            executor.map(
+                lambda line: logger_mod._append_jsonl(logical_path, line),
+                expected,
+            )
+        )
+
+    observed = [
+        json.loads(line)
+        for line in logical_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert sorted(row["sequence"] for row in observed) == list(range(128))
+
+
+def test_existing_base_append_avoids_file_and_parent_fsync(monkeypatch, tmp_path):
+    logical_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    fsync_calls = []
+    monkeypatch.setattr(logger_mod.os, "fsync", fsync_calls.append)
+
+    logger_mod._append_jsonl(logical_path, '{"sequence":1}\n')
+    assert len(fsync_calls) == 2
+
+    fsync_calls.clear()
+    logger_mod._append_jsonl(logical_path, '{"sequence":2}\n')
+
+    assert fsync_calls == []
+
+
+def test_late_sidecar_fsyncs_file_and_parent_on_every_append(monkeypatch, tmp_path):
+    logical_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    fsync_calls = []
+    monkeypatch.setattr(logger_mod.os, "fsync", fsync_calls.append)
+
+    logger_mod._append_late_pipeline_event_jsonl(logical_path, '{"sequence":1}\n')
+    assert len(fsync_calls) == 2
+
+    fsync_calls.clear()
+    logger_mod._append_late_pipeline_event_jsonl(logical_path, '{"sequence":2}\n')
+
+    assert len(fsync_calls) == 2
+
+
+def test_order_leg_request_existing_hot_path_performs_no_fsync(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "off")
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+            PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST=(),
+        ),
+    )
+    fsync_calls = []
+    monkeypatch.setattr(logger_mod.os, "fsync", fsync_calls.append)
+
+    logger_mod.emit_pipeline_event(
+        "BUY_PIPELINE",
+        "TEST",
+        "005930",
+        "order_leg_request",
+        fields={"leg_id": "LEG-1"},
+    )
+    assert len(fsync_calls) == 4
+
+    fsync_calls.clear()
+    logger_mod.emit_pipeline_event(
+        "BUY_PIPELINE",
+        "TEST",
+        "005930",
+        "order_leg_request",
+        fields={"leg_id": "LEG-2"},
+    )
+
+    assert fsync_calls == []
+
+
+def test_emit_pipeline_event_reports_jsonl_disabled_without_append(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=False,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+            PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST=(),
+        ),
+    )
+
+    payload = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "TEST",
+        "005930",
+        "order_leg_sent",
+        fields={"actual_order_submitted": True},
+    )
+
+    assert payload["structured_append_attempted"] is False
+    assert payload["structured_append_succeeded"] is False
+    assert payload["structured_raw_append_attempted"] is False
+    assert payload["structured_append_status"] == "jsonl_disabled"
+    assert not (tmp_path / "pipeline_events").exists()
+
+
+def test_emit_pipeline_event_reports_raw_append_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "off")
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+            PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST=(),
+        ),
+    )
+    monkeypatch.setattr(
+        logger_mod,
+        "_append_pipeline_event_jsonl",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("synthetic")),
+    )
+    monkeypatch.setattr(logger_mod, "log_error", lambda *_args, **_kwargs: None)
+
+    payload = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "TEST",
+        "005930",
+        "order_leg_sent",
+        fields={"actual_order_submitted": True},
+    )
+
+    assert payload["structured_append_attempted"] is True
+    assert payload["structured_raw_append_attempted"] is True
+    assert payload["structured_append_succeeded"] is False
+    assert payload["structured_append_status"] == "raw_append_failed"
+    assert payload["structured_append_error_type"] == "OSError"
+
+
+def test_pipeline_event_base_completes_short_writes(monkeypatch, tmp_path):
+    logical_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    original_write = logger_mod.os.write
+
+    def short_write(descriptor, payload):
+        chunk_size = max(1, len(payload) // 3)
+        return original_write(descriptor, payload[:chunk_size])
+
+    monkeypatch.setattr(logger_mod.os, "write", short_write)
+    expected = json.dumps({"message": "가" * 128}, ensure_ascii=False) + "\n"
+
+    logger_mod._append_jsonl(logical_path, expected)
+
+    assert logical_path.read_text(encoding="utf-8") == expected
+
+
+def test_pipeline_event_base_rejects_invalid_utf8_before_mutation(tmp_path):
+    logical_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+
+    with pytest.raises(UnicodeEncodeError):
+        logger_mod._append_jsonl(logical_path, "\ud800\n")
+
+    assert not logical_path.exists()
+    assert not logger_mod._pipeline_event_partition_lock_path(logical_path).exists()
+
+
+def test_pipeline_event_base_rejects_symlink_without_touching_target(tmp_path):
+    target = tmp_path / "outside.jsonl"
+    target.write_text('{"preserve":true}\n', encoding="utf-8")
+    logical_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    logical_path.symlink_to(target)
+
+    with pytest.raises(OSError):
+        logger_mod._append_jsonl(logical_path, '{"redirected":true}\n')
+
+    assert target.read_text(encoding="utf-8") == '{"preserve":true}\n'
+
+
+def test_pipeline_event_base_rejects_non_regular_target_without_blocking(tmp_path):
+    logical_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    os.mkfifo(logical_path)
+
+    with pytest.raises(OSError):
+        logger_mod._append_jsonl(logical_path, '{"redirected":true}\n')
+
+
+def test_pipeline_event_base_and_late_reject_shared_lock_symlink(tmp_path):
+    logical_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    lock_target = tmp_path / "outside.lock"
+    lock_target.write_text("preserve", encoding="utf-8")
+    lock_path = logger_mod._pipeline_event_partition_lock_path(logical_path)
+    lock_path.symlink_to(lock_target)
+
+    with pytest.raises(OSError):
+        logger_mod._append_jsonl(logical_path, '{"base":true}\n')
+    with pytest.raises(OSError):
+        logger_mod._append_late_pipeline_event_jsonl(
+            logical_path,
+            '{"late":true}\n',
+        )
+
+    assert lock_target.read_text(encoding="utf-8") == "preserve"
+    assert not logical_path.exists()
+    assert not logger_mod._late_pipeline_event_path(logical_path).exists()
+
+
+def test_pipeline_event_writer_pins_parent_directory_across_path_swap(
+    monkeypatch,
+    tmp_path,
+):
+    original_dir = tmp_path / "events"
+    outside_dir = tmp_path / "outside"
+    saved_dir = tmp_path / "events.saved"
+    original_dir.mkdir()
+    outside_dir.mkdir()
+    logical_path = original_dir / "pipeline_events_2026-08-14.jsonl"
+    original_prepare = logger_mod._prepare_jsonl_parent
+    swapped = False
+
+    def prepare_then_swap(path):
+        nonlocal swapped
+        descriptor = original_prepare(path)
+        if not swapped:
+            original_dir.rename(saved_dir)
+            original_dir.symlink_to(outside_dir, target_is_directory=True)
+            swapped = True
+        return descriptor
+
+    monkeypatch.setattr(logger_mod, "_prepare_jsonl_parent", prepare_then_swap)
+
+    logger_mod._append_jsonl(logical_path, '{"pinned":true}\n')
+
+    assert (saved_dir / logical_path.name).read_text(encoding="utf-8") == (
+        '{"pinned":true}\n'
+    )
+    assert not (outside_dir / logical_path.name).exists()
 
 
 def test_emit_pipeline_event_writes_text_and_jsonl(monkeypatch, tmp_path):
@@ -38,6 +444,9 @@ def test_emit_pipeline_event_writes_text_and_jsonl(monkeypatch, tmp_path):
         fields={"reason": "time stop", "profit_rate": "+0.5"},
     )
 
+    assert payload["structured_append_succeeded"] is True
+    assert payload["structured_append_status"] == "raw_appended"
+    assert payload["structured_compaction_suppressed"] is False
     assert emitted_messages
     assert emitted_messages[0].startswith(
         "[HOLDING_PIPELINE] 테스트종목(123456) stage=bad_entry_block_observed"
@@ -60,6 +469,7 @@ def test_emit_pipeline_event_writes_text_and_jsonl(monkeypatch, tmp_path):
     assert rows[0]["pipeline"] == "HOLDING_PIPELINE"
     assert rows[0]["record_id"] == 77
     assert rows[0]["fields"]["reason"] == "time stop"
+    assert "structured_append_succeeded" not in rows[0]
 
     compact_path = (
         tmp_path
@@ -550,7 +960,7 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(
         ),
     )
     monkeypatch.setattr(logger_mod, "log_info", lambda msg, send_telegram=False: None)
-    logger_mod.emit_pipeline_event(
+    suppressed = logger_mod.emit_pipeline_event(
         "ENTRY_PIPELINE",
         "테스트종목",
         "123456",
@@ -567,6 +977,13 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(
         fields={"reason": "near_day_high", "actual_order_submitted": "true"},
     )
     logger_mod.flush_pipeline_event_producer_summary(preserved["emitted_date"])
+
+    assert suppressed["structured_append_succeeded"] is False
+    assert suppressed["structured_raw_append_attempted"] is False
+    assert suppressed["structured_compaction_suppressed"] is True
+    assert suppressed["structured_append_status"] == "raw_suppressed_by_compaction"
+    assert preserved["structured_append_succeeded"] is True
+    assert preserved["structured_append_status"] == "raw_appended"
 
     raw_path = (
         tmp_path

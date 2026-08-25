@@ -1739,6 +1739,11 @@ def test_observation_source_quality_audit_reviews_rising_missed_nxt_unknown_prov
                         "absolute_type_receive_ts_and_actual_ws_item_route"
                     ),
                     "rising_missed_effective_venue": "NXT_ELIGIBILITY_UNKNOWN",
+                    "latency_true_ofi_nxt_probability_band_effective_venue": (
+                        "NXT_ELIGIBILITY_UNKNOWN"
+                    ),
+                    "latency_true_ofi_nxt_probability_band_context": False,
+                    "latency_true_ofi_nxt_probability_band_applied": False,
                 },
             ),
             _event(
@@ -1815,6 +1820,9 @@ def test_observation_source_quality_audit_reviews_rising_missed_nxt_unknown_prov
     assert nxt_reviewed["rising_missed_effective_venue"]["reviewed_reason"] == (
         "reviewed_rising_missed_nxt_eligibility_not_available"
     )
+    assert nxt_reviewed["latency_true_ofi_nxt_probability_band_effective_venue"][
+        "reviewed_reason"
+    ] == ("reviewed_rising_missed_nxt_eligibility_not_available")
     assert (
         reviewed["rising_missed_nxt_post_block_price_sample"][
             "rising_missed_nxt_post_block_ws_0b_route"
@@ -1823,6 +1831,51 @@ def test_observation_source_quality_audit_reviews_rising_missed_nxt_unknown_prov
     )
     assert reviewed["budget_pass"]["rising_missed_nxt_eligible"]["reviewed_reason"] == (
         "reviewed_rising_missed_nxt_eligibility_not_available"
+    )
+
+
+def test_observation_source_quality_audit_does_not_review_applied_nxt_probability_band_unknown(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-15",
+        [
+            _event(
+                "latency_pass",
+                {
+                    "rising_missed_nxt_eligible": "unknown",
+                    "rising_missed_nxt_observation_only": True,
+                    "rising_missed_nxt_metric_role": "source_quality_gate",
+                    "rising_missed_nxt_decision_authority": (
+                        "observe_only_no_runtime_mutation"
+                    ),
+                    "rising_missed_nxt_source_quality_gate": (
+                        "absolute_type_receive_ts_and_actual_ws_item_route"
+                    ),
+                    "rising_missed_effective_venue": "NXT_ELIGIBILITY_UNKNOWN",
+                    "latency_true_ofi_nxt_probability_band_effective_venue": (
+                        "NXT_ELIGIBILITY_UNKNOWN"
+                    ),
+                    "latency_true_ofi_nxt_probability_band_context": True,
+                    "latency_true_ofi_nxt_probability_band_applied": True,
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-15")
+
+    finding = next(
+        item
+        for item in report["unknown_token_findings"]
+        if item["stage"] == "latency_pass"
+    )
+    assert any(
+        field["field"] == "latency_true_ofi_nxt_probability_band_effective_venue"
+        for field in finding["fields"]
     )
 
 

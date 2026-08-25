@@ -29,6 +29,7 @@ _ORDERABLE_AMOUNT_CACHE_LOCK = threading.RLock()
 _DEPOSIT_API_FETCH_LOCKS = {}
 _LAST_SUCCESSFUL_DEPOSIT_BY_KEY = {}
 _ORDERABLE_AMOUNT_CACHE = {}
+_LOCAL_SELL_NO_CALL_TOKEN = object()
 KST = ZoneInfo("Asia/Seoul")
 KRX_REGULAR_OPEN = datetime_time(hour=9, minute=0)
 KRX_REGULAR_CLOSE = datetime_time(hour=15, minute=30)
@@ -39,6 +40,17 @@ _DEFENSIVE_BUY_TIME_BLOCK_OVERRIDE_REASONS = frozenset(
         "late_loss_avg_down_retry",
     }
 )
+
+
+def is_verified_local_sell_no_call_response(response):
+    """Recognize only the process-local result emitted before broker transport."""
+
+    return bool(
+        isinstance(response, dict)
+        and response.get("_local_sell_no_call_token") is _LOCAL_SELL_NO_CALL_TOKEN
+        and response.get("return_code") == "SELL_TIME_BLOCKED"
+        and response.get("broker_order_attempted") is False
+    )
 
 
 def get_last_inventory_errors():
@@ -758,24 +770,51 @@ def get_my_inventory(token):
                 url, headers, params, "kt00018", timeout=5
             )
 
-            if str(data.get("return_code", data.get("rt_cd", ""))) == "0":
-                successful_exchanges.add(exchange)
+            if not isinstance(data, dict):
+                raise ValueError("kt00018_response_shape_invalid")
+            if (
+                getattr(response, "status_code", None) == 200
+                and str(data.get("return_code", data.get("rt_cd", ""))) == "0"
+            ):
                 stock_list = data.get("acnt_evlt_remn_indv_tot", [])
-
+                if not isinstance(stock_list, list):
+                    raise ValueError("kt00018_inventory_list_shape_invalid")
+                staged_inventory = {}
                 for item in stock_list:
-                    raw_code = item.get("stk_cd", "")
+                    if not isinstance(item, dict):
+                        raise ValueError("kt00018_inventory_row_shape_invalid")
+                    raw_code = str(item.get("stk_cd") or "").strip()
                     code = raw_code[1:] if raw_code.startswith("A") else raw_code
-                    qty = int(item.get("rmnd_qty", 0))
+                    if re.fullmatch(r"[0-9]{6}", code) is None:
+                        raise ValueError("kt00018_inventory_code_invalid")
+                    raw_qty = item.get("rmnd_qty")
+                    if isinstance(raw_qty, bool):
+                        raise ValueError("kt00018_inventory_quantity_invalid")
+                    qty_text = str("" if raw_qty is None else raw_qty).strip()
+                    if (
+                        re.fullmatch(
+                            r"[+]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)", qty_text
+                        )
+                        is None
+                    ):
+                        raise ValueError("kt00018_inventory_quantity_invalid")
+                    qty = int(qty_text.replace(",", "").lstrip("+"))
                     name = item.get("stk_nm", "")
 
                     if qty > 0:
-                        # 💡 [수정됨] KRX 데이터가 먼저 들어가고, NXT 조회 시 이미 딕셔너리에 있는 종목이면 무시(방어)합니다.
-                        if code not in aggregated_inventory:
-                            aggregated_inventory[code] = {
-                                "code": code,
-                                "name": name,
-                                "qty": qty,
-                            }
+                        if code in staged_inventory:
+                            raise ValueError(
+                                "kt00018_inventory_duplicate_symbol_invalid"
+                            )
+                        staged_inventory[code] = {
+                            "code": code,
+                            "name": name,
+                            "qty": qty,
+                        }
+                for code, row in staged_inventory.items():
+                    # KRX is queried first; NXT duplicates remain ignored.
+                    aggregated_inventory.setdefault(code, row)
+                successful_exchanges.add(exchange)
             else:
                 err_code = data.get("return_code", data.get("rt_cd", ""))
                 err_msg = (
@@ -1544,6 +1583,8 @@ def send_sell_order_market(
             "return_msg": label,
             "ord_no": "",
             "sell_time_block_fields": fields,
+            "broker_order_attempted": False,
+            "_local_sell_no_call_token": _LOCAL_SELL_NO_CALL_TOKEN,
         }
 
     url = kiwoom_utils.get_api_url("/api/dostk/ordr")
@@ -1700,6 +1741,24 @@ def send_cancel_order(code, orig_ord_no, token, qty=0, dmst_stex_tp=None):
         "cncl_qty": str(qty),  # 🚀 '0'이면 남은 물량 싹 다 취소!
     }
 
+    def response_with_request_provenance(data):
+        response = _with_order_route_provenance(
+            data,
+            route_resolution=route_resolution,
+            broker_route_attempted=True,
+        )
+        response.update(
+            {
+                "cancel_request_api_id": "kt10003",
+                "cancel_request_code": clean_code,
+                "cancel_request_orig_ord_no": str(orig_ord_no),
+                "cancel_request_qty": str(qty),
+                "cancel_request_route": route_resolution["effective_dmst_stex_tp"],
+                "cancel_request_bound": True,
+            }
+        )
+        return response
+
     try:
         res, data = _post_kiwoom_with_auth_retry(
             url, headers, payload, "kt10003", timeout=5
@@ -1711,21 +1770,13 @@ def send_cancel_order(code, orig_ord_no, token, qty=0, dmst_stex_tp=None):
             print(
                 f"✅ [취소접수] {clean_code} {cncl_qty_result}주 취소 성공 (새주문번호:{new_ord_no})"
             )
-            return _with_order_route_provenance(
-                data,
-                route_resolution=route_resolution,
-                broker_route_attempted=True,
-            )
+            return response_with_request_provenance(data)
         else:
             err_msg = data.get("return_msg", "상세 사유 없음")
             msg = f"❌ [취소거절] {clean_code}: {err_msg}"
             log_error(msg)
             # EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
-            return _with_order_route_provenance(
-                data,
-                route_resolution=route_resolution,
-                broker_route_attempted=True,
-            )
+            return response_with_request_provenance(data)
 
     except Exception as e:
         msg = f"🔥 [취소주문] 시스템 예외: {str(e)}"

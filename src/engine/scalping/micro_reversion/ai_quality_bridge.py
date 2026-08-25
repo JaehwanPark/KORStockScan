@@ -9,24 +9,41 @@ label.  The original provider payload and its hash are never modified.
 from __future__ import annotations
 
 import argparse
-import gzip
+import fcntl
 import hashlib
 import json
 import math
 import os
+import shutil
 import sqlite3
+import stat
 import tempfile
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterator, Iterable, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import existing_or_gzip_path
+from src.utils.jsonl_io import (
+    existing_or_gzip_path,
+    iter_jsonl_objects_strict,
+    read_json_object_strict,
+    write_json_object_generation_safe,
+)
 
+from .ask_depletion import (
+    ASK_DEPLETION_METRIC_CONTRACT,
+    ASK_DEPLETION_SCHEMA,
+    DEFAULT_HORIZONS_MS as DEFAULT_ASK_DEPLETION_HORIZONS_MS,
+    DEFAULT_TOP_DEPTH_LEVELS as DEFAULT_ASK_DEPLETION_TOP_DEPTH_LEVELS,
+    AskDepletionContext,
+    build_ask_depletion_report,
+)
 from .contracts import (
     CLEAN_BASELINE_DATE,
     normalize_symbol,
@@ -51,6 +68,18 @@ from .path_journal import (
     validate_market_stream_path_provenance,
 )
 from .path_capture import PATH_CAPTURE_AUTHORITY
+from .replay_ablation_contract import (
+    CURRENT_ARMS,
+    CURRENT_ASK_CANDIDATE_ARM,
+    CURRENT_ASK_CONTROL_ARM,
+    CURRENT_BASE_CONTROL_ARM,
+    CURRENT_DESIGN_ACTIVATION_DATE,
+    CURRENT_DESIGN_VERSION,
+    LEGACY_ARMS,
+    LEGACY_DESIGN_VERSION,
+    SOURCE_ONLY_AUTHORITY_CONTRACT as ABLATION_SOURCE_ONLY_AUTHORITY,
+    build_current_design_replay_ids,
+)
 from .tax import (
     InstrumentType,
     ListingMarket,
@@ -62,14 +91,206 @@ from .tax import (
 TACTICAL_EVIDENCE_SCHEMA = "tactical_micro_reversion_evidence_v1"
 LIFECYCLE_PROJECTION_SCHEMA = "micro_reversion_fast_lifecycle_projection_v1"
 OUTCOME_SCHEMA = "micro_reversion_ai_quality_outcome_v1"
+OUTCOME_REBUILD_SOURCE_SCHEMA = "micro_reversion_outcome_rebuild_source_ref_v2"
+OUTCOME_SOURCE_POOL_SCHEMA = "micro_reversion_outcome_source_pool_v1"
 THREE_ARM_SCHEMA = "micro_reversion_ai_quality_three_arm_manifest_v1"
 THREE_ARM_REQUEST_SCHEMA = "micro_reversion_ai_quality_three_arm_requests_v1"
 REPORT_SCHEMA = "micro_reversion_ai_quality_bridge_v1"
 BRIDGE_CONFIG_SCHEMA = "micro_reversion_ai_quality_bridge_config_v1"
 BRIDGE_PRODUCER_VERSION = "micro_reversion_ai_quality_bridge_v1_4"
+RELEVANT_SOURCE_CACHE_SCHEMA = "micro_reversion_relevant_source_cache_v1"
+RELEVANT_SOURCE_CACHE_INDEX_VERSION = "relevant_source_sqlite_v1"
+DEFAULT_RELEVANT_SOURCE_CACHE_ROOT = (
+    DATA_DIR / "cache" / "micro_reversion_relevant_source_index"
+)
+DEFAULT_RELEVANT_SOURCE_CACHE_KEEP = 3
+DEFAULT_RELEVANT_SOURCE_CACHE_PARTIAL_MAX_AGE_SEC = 24 * 60 * 60
 COST_PROFILE_SCHEMA = "micro_reversion_reviewed_cost_profile_v1"
 COST_CATALOG_SCHEMA = "micro_reversion_reviewed_cost_catalog_v2"
+REVIEWED_COST_POLICY_EFFECTIVE_FROM = date(2026, 8, 18)
 CONFIRMATION_WINDOW_SCHEMA = "micro_reversion_confirmation_window_axis_v1"
+ASK_DEPLETION_FEATURE_VIEW_SCHEMA = "micro_reversion_ask_depletion_feature_view_v2"
+
+_ECONOMIC_SOURCE_ONLY_FORBIDDEN_USES = [
+    "live_prompt_or_threshold_mutation",
+    "broker_order_submission_or_cancel",
+    "automated_sell_or_position_sizing",
+    "provider_route_or_bot_state_change",
+    "position_cap_or_cooldown_change",
+    "hard_protect_emergency_or_stale_guard_bypass",
+    "unverified_cost_or_symbol_promotion",
+]
+_ECONOMIC_SOURCE_ONLY_AUTHORITY = {
+    "decision_authority": "offline_economic_reference_source_only",
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "trading_runtime_effect": False,
+    "trading_decision_effect": False,
+    "selection_authority": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "provider_call_performed": False,
+    "forbidden_uses": _ECONOMIC_SOURCE_ONLY_FORBIDDEN_USES,
+}
+_EXACT_REVIEWED_LEGACY_COST_FIELDS = frozenset(
+    {
+        "schema",
+        "artifact_id",
+        "effective_date",
+        "venues",
+        "instrument_scope",
+        "source",
+        "buy_fee_bps",
+        "sell_fee_bps",
+        "statutory_sell_tax_bps",
+        "uncertainty_buffer_bps",
+        *_ECONOMIC_SOURCE_ONLY_AUTHORITY,
+    }
+)
+_HISTORICAL_REVIEWED_LEGACY_COST_FIELDS = frozenset(
+    {
+        "schema",
+        "artifact_id",
+        "effective_date",
+        "venues",
+        "instrument_scope",
+        "source",
+        "buy_fee_bps",
+        "sell_fee_bps",
+        "statutory_sell_tax_bps",
+        "uncertainty_buffer_bps",
+    }
+)
+_CANONICAL_COST_CATALOG_FIELDS = frozenset(
+    {
+        "schema",
+        "artifact_id",
+        "target_date",
+        "verification_status",
+        "verified",
+        "profile_count",
+        "census",
+        "profiles",
+        "content_sha256",
+        *_ECONOMIC_SOURCE_ONLY_AUTHORITY,
+    }
+)
+_CANONICAL_COST_PROFILE_FIELDS = frozenset(
+    {
+        "profile_id",
+        "effective_from",
+        "effective_to",
+        "venues",
+        "listing_markets",
+        "instrument_types",
+        "instrument_tax_classes",
+        "buy_fee_bps",
+        "sell_fee_bps",
+        "statutory_sell_tax_bps",
+        "uncertainty_buffer_bps",
+        "source_bindings",
+        "bridge_reviewed_cost_payload",
+        "bridge_reviewed_cost_payload_sha256",
+        "verification_status",
+        "verified",
+        "content_sha256",
+        *_ECONOMIC_SOURCE_ONLY_AUTHORITY,
+    }
+)
+_CANONICAL_COST_SOURCE_BINDING_FIELDS = frozenset(
+    {
+        "symbol_master_source_id",
+        "symbol_master_source_sha256",
+        "broker_fee_source_id",
+        "broker_fee_source_sha256",
+        "broker_fee_record_sha256",
+        "statutory_tax_source_id",
+        "statutory_tax_source_sha256",
+        "statutory_tax_record_sha256",
+    }
+)
+
+KST = ZoneInfo("Asia/Seoul")
+
+ASK_DEPLETION_CONTEXT_FIELDS = frozenset(
+    {
+        "event_id",
+        "anchor_role",
+        "symbol",
+        "venue",
+        "session_bucket",
+        "sequence_epoch",
+        "anchor_event_local_receive_timestamp_ms",
+        "event_market_source_sequence",
+        "observed_through_local_receive_timestamp_ms",
+        "depth_source_complete",
+        "market_source_complete",
+    }
+)
+ASK_DEPLETION_HORIZON_FIELDS = frozenset(
+    {
+        "horizon_ms",
+        "mature",
+        "source_quality_status",
+        "eligible_for_feature_ablation",
+        "source_gap_reasons",
+        "depth_endpoint_age_ms",
+        "depth_observation_count",
+        "anchor_best_ask",
+        "endpoint_best_ask",
+        "initial_anchor_ask_qty",
+        "endpoint_anchor_ask_qty",
+        "minimum_anchor_ask_qty",
+        "max_best_ask_depletion_qty",
+        "max_best_ask_depletion_ratio",
+        "best_ask_depletion_velocity_qty_per_sec",
+        "price_level_cleared",
+        "first_price_level_clear_delay_ms",
+        "downward_reprice_observed",
+        "aggressive_buy_qty_before_max_depletion",
+        "aggressive_buy_trade_backed_ratio",
+        "unexplained_or_cancel_like_depletion_qty",
+        "unexplained_or_cancel_like_depletion_ratio",
+        "max_refill_qty",
+        "refill_ratio",
+        "refill_half_life_ms",
+        "top_depth",
+    }
+)
+ASK_DEPLETION_TOP_DEPTH_FIELDS = frozenset(
+    {
+        "retained_level_count",
+        "anchor_price_count",
+        "initial_qty",
+        "endpoint_qty",
+        "minimum_qty",
+        "max_depletion_qty",
+        "max_depletion_ratio",
+    }
+)
+ASK_DEPLETION_SIDECAR_AUTHORITY = {
+    "selection_authority": False,
+    "sim_effect": False,
+    "runtime_effect": False,
+    "trading_runtime_effect": False,
+    "trading_decision_effect": False,
+    "provider_effect": False,
+    "threshold_effect": False,
+    "quantity_effect": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+}
+ASK_DEPLETION_SIDECAR_RECONSTRUCTION_FIELDS = frozenset(
+    {
+        "max_depth_age_ms",
+        "anchor_depth_age_ms",
+        "anchor_source_quality_status",
+        "source_quality_status",
+        "source_gap_reasons",
+        "ignored_cross_scope_depth_row_count",
+        "ignored_cross_scope_market_row_count",
+    }
+)
 
 MARKET_SCHEMAS = {
     "scalp_micro_reversion_market_stream_point_v1",
@@ -517,14 +738,14 @@ class BridgeConfig:
                 if computed_artifact_hash != artifact_hash:
                     raise ValueError("verified cost catalog artifact hash mismatch")
             else:
-                if self.statutory_sell_tax_bps is None:
-                    raise ValueError("verified cost profile statutory tax missing")
+                _validate_exact_reviewed_legacy_cost_profile(
+                    artifact_payload,
+                    target_date=date.fromisoformat(effective_date),
+                )
                 expected_artifact_fields = {
-                    "schema": COST_PROFILE_SCHEMA,
                     "artifact_id": artifact_id,
                     "effective_date": effective_date,
                     "venues": list(normalized_venues),
-                    "instrument_scope": "domestic_common_or_preferred_stock",
                     "source": source,
                     "buy_fee_bps": self.buy_fee_bps,
                     "sell_fee_bps": self.sell_fee_bps,
@@ -678,6 +899,13 @@ def _sha256(value: Any) -> str:
     return hashlib.sha256(_canonical_bytes(value)).hexdigest()
 
 
+def _is_sha256(value: Any) -> bool:
+    text = str(value or "")
+    return len(text) == 64 and all(
+        character in "0123456789abcdef" for character in text
+    )
+
+
 def _producer_sha256(value: Any) -> str:
     serialized = json.dumps(
         value,
@@ -689,24 +917,171 @@ def _producer_sha256(value: Any) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
+def _validate_economic_source_only_authority(
+    payload: Mapping[str, Any], *, error_prefix: str
+) -> None:
+    for field, expected in _ECONOMIC_SOURCE_ONLY_AUTHORITY.items():
+        if payload.get(field) != expected:
+            raise ValueError(f"{error_prefix}_authority_invalid:{field}")
+
+
+def _native_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _validated_cost_number(
+    payload: Mapping[str, Any], *, field: str, error_prefix: str
+) -> float:
+    value = payload.get(field)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) < 0
+    ):
+        raise ValueError(f"{error_prefix}_numeric_invalid:{field}")
+    return float(value)
+
+
+def _validate_reviewed_policy_values(
+    payload: Mapping[str, Any],
+    *,
+    target_date: date,
+    effective_from: date,
+    error_prefix: str,
+) -> None:
+    if target_date < REVIEWED_COST_POLICY_EFFECTIVE_FROM:
+        return
+    if effective_from < REVIEWED_COST_POLICY_EFFECTIVE_FROM:
+        raise ValueError(f"{error_prefix}_effective_before_reviewed_policy")
+    expected = {
+        "buy_fee_bps": 1.5,
+        "sell_fee_bps": 1.5,
+        "statutory_sell_tax_bps": 20.0,
+        "uncertainty_buffer_bps": 0.0,
+    }
+    for field, value in expected.items():
+        if (
+            _validated_cost_number(
+                payload,
+                field=field,
+                error_prefix=error_prefix,
+            )
+            != value
+        ):
+            raise ValueError(f"{error_prefix}_reviewed_value_mismatch:{field}")
+
+
+def _validate_exact_reviewed_legacy_cost_profile(
+    payload: Mapping[str, Any], *, target_date: date
+) -> None:
+    """Validate the exact bridge payload emitted by the reviewed owner."""
+
+    current_policy = target_date >= REVIEWED_COST_POLICY_EFFECTIVE_FROM
+    payload_fields = frozenset(payload)
+    authority_enhanced_historical = bool(
+        not current_policy and payload_fields == _EXACT_REVIEWED_LEGACY_COST_FIELDS
+    )
+    if (
+        current_policy
+        and payload_fields != _EXACT_REVIEWED_LEGACY_COST_FIELDS
+        or not current_policy
+        and payload_fields
+        not in {
+            _EXACT_REVIEWED_LEGACY_COST_FIELDS,
+            _HISTORICAL_REVIEWED_LEGACY_COST_FIELDS,
+        }
+    ):
+        raise ValueError("verified_cost_profile_fields_invalid")
+    if payload.get("schema") != COST_PROFILE_SCHEMA:
+        raise ValueError("verified_cost_profile_schema_invalid")
+    if current_policy or authority_enhanced_historical:
+        _validate_economic_source_only_authority(
+            payload,
+            error_prefix="verified_cost_profile",
+        )
+    artifact_id = str(payload.get("artifact_id") or "").strip()
+    source = str(payload.get("source") or "").strip()
+    if (
+        not artifact_id
+        or not source
+        or current_policy
+        and source != f"canonical_economic_reference_v2:{artifact_id}"
+        or payload.get("instrument_scope") != "domestic_common_or_preferred_stock"
+    ):
+        raise ValueError("verified_cost_profile_identity_invalid")
+    venues = payload.get("venues")
+    if (
+        not isinstance(venues, list)
+        or not venues
+        or venues != sorted(set(venues))
+        or any(
+            not isinstance(venue, str)
+            or normalize_venue(venue) != venue
+            or venue not in {"KRX", "NXT", "SOR"}
+            for venue in venues
+        )
+    ):
+        raise ValueError("verified_cost_profile_venues_invalid")
+    for field in (
+        "buy_fee_bps",
+        "sell_fee_bps",
+        "statutory_sell_tax_bps",
+        "uncertainty_buffer_bps",
+    ):
+        _validated_cost_number(
+            payload,
+            field=field,
+            error_prefix="verified_cost_profile",
+        )
+    try:
+        effective_from = date.fromisoformat(str(payload.get("effective_date") or ""))
+    except ValueError as exc:
+        raise ValueError("verified_cost_profile_date_invalid") from exc
+    if target_date < effective_from:
+        raise ValueError("verified_cost_profile_not_effective_on_target_date")
+    _validate_reviewed_policy_values(
+        payload,
+        target_date=target_date,
+        effective_from=effective_from,
+        error_prefix="verified_cost_profile",
+    )
+
+
+def _validated_profile_scope(
+    profile: Mapping[str, Any],
+    *,
+    field: str,
+    allowed: frozenset[str],
+) -> list[str]:
+    values = profile.get(field)
+    if (
+        not isinstance(values, list)
+        or not values
+        or values != sorted(set(values))
+        or any(not isinstance(value, str) or value not in allowed for value in values)
+    ):
+        raise ValueError(f"verified_cost_catalog_profile_scope_invalid:{field}")
+    return values
+
+
 def _validate_cost_catalog_payload(
     payload: Mapping[str, Any], *, target_date: date
 ) -> None:
+    if set(payload) != _CANONICAL_COST_CATALOG_FIELDS:
+        raise ValueError("verified_cost_catalog_fields_invalid")
     if (
         payload.get("schema") != COST_CATALOG_SCHEMA
         or payload.get("verification_status") != "verified"
         or payload.get("verified") is not True
         or payload.get("target_date") != target_date.isoformat()
+        or not str(payload.get("artifact_id") or "").strip()
     ):
         raise ValueError("verified_cost_catalog_header_invalid")
-    for field, expected in (
-        ("runtime_effect", False),
-        ("allowed_runtime_apply", False),
-        ("actual_order_submitted", False),
-        ("broker_order_forbidden", True),
-    ):
-        if payload.get(field) is not expected:
-            raise ValueError(f"verified_cost_catalog_authority_invalid:{field}")
+    _validate_economic_source_only_authority(
+        payload,
+        error_prefix="verified_cost_catalog",
+    )
     declared_hash = str(payload.get("content_sha256") or "")
     content = {key: value for key, value in payload.items() if key != "content_sha256"}
     if declared_hash != _producer_sha256(content):
@@ -714,12 +1089,47 @@ def _validate_cost_catalog_payload(
     profiles = payload.get("profiles")
     if not isinstance(profiles, list) or not profiles:
         raise ValueError("verified_cost_catalog_profiles_missing")
-    if payload.get("profile_count") != len(profiles):
+    if not _native_nonnegative_int(payload.get("profile_count")) or payload.get(
+        "profile_count"
+    ) != len(profiles):
         raise ValueError("verified_cost_catalog_profile_count_mismatch")
+    census = payload.get("census")
+    census_fields = {
+        "profile_count",
+        "venue_count",
+        "listing_market_count",
+        "instrument_type_count",
+        "instrument_tax_class_count",
+    }
+    if (
+        not isinstance(census, Mapping)
+        or set(census) != census_fields
+        or not all(
+            _native_nonnegative_int(census.get(field)) for field in census_fields
+        )
+    ):
+        raise ValueError("verified_cost_catalog_census_invalid")
+
     profile_ids: set[str] = set()
+    all_venues: set[str] = set()
+    all_listing_markets: set[str] = set()
+    all_instrument_types: set[str] = set()
+    all_tax_classes: set[str] = set()
     for profile in profiles:
-        if not isinstance(profile, Mapping):
+        if (
+            not isinstance(profile, Mapping)
+            or set(profile) != _CANONICAL_COST_PROFILE_FIELDS
+        ):
             raise ValueError("verified_cost_catalog_profile_invalid")
+        _validate_economic_source_only_authority(
+            profile,
+            error_prefix="verified_cost_catalog_profile",
+        )
+        if (
+            profile.get("verification_status") != "verified"
+            or profile.get("verified") is not True
+        ):
+            raise ValueError("verified_cost_catalog_profile_verification_invalid")
         profile_id = str(profile.get("profile_id") or "")
         if not profile_id or profile_id in profile_ids:
             raise ValueError("verified_cost_catalog_profile_id_invalid")
@@ -730,14 +1140,7 @@ def _validate_cost_catalog_payload(
         }
         if declared_profile_hash != _producer_sha256(profile_content):
             raise ValueError("verified_cost_catalog_profile_hash_mismatch")
-        bridge_payload = profile.get("bridge_reviewed_cost_payload")
-        if (
-            not isinstance(bridge_payload, Mapping)
-            or bridge_payload.get("schema") != COST_PROFILE_SCHEMA
-            or profile.get("bridge_reviewed_cost_payload_sha256")
-            != _producer_sha256(bridge_payload)
-        ):
-            raise ValueError("verified_cost_catalog_bridge_payload_invalid")
+
         try:
             effective_from = date.fromisoformat(
                 str(profile.get("effective_from") or "")
@@ -749,41 +1152,119 @@ def _validate_cost_catalog_payload(
             )
         except ValueError as exc:
             raise ValueError("verified_cost_catalog_profile_window_invalid") from exc
-        if target_date < effective_from or (
-            effective_to is not None and target_date > effective_to
+        if (
+            effective_to is not None
+            and effective_to < effective_from
+            or target_date < effective_from
+            or effective_to is not None
+            and target_date > effective_to
         ):
             raise ValueError("verified_cost_catalog_profile_not_effective")
-        for scope_field in (
-            "venues",
-            "listing_markets",
-            "instrument_types",
-            "instrument_tax_classes",
-        ):
-            scope = profile.get(scope_field)
-            if (
-                not isinstance(scope, list)
-                or not scope
-                or not all(isinstance(value, str) and value.strip() for value in scope)
-            ):
-                raise ValueError(
-                    f"verified_cost_catalog_profile_scope_invalid:{scope_field}"
-                )
+
+        venues = _validated_profile_scope(
+            profile,
+            field="venues",
+            allowed=frozenset({"KRX", "NXT", "SOR"}),
+        )
+        listing_markets = _validated_profile_scope(
+            profile,
+            field="listing_markets",
+            allowed=frozenset({"KOSPI", "KOSDAQ"}),
+        )
+        instrument_types = _validated_profile_scope(
+            profile,
+            field="instrument_types",
+            allowed=frozenset({"EQUITY"}),
+        )
+        tax_classes = _validated_profile_scope(
+            profile,
+            field="instrument_tax_classes",
+            allowed=frozenset({"ordinary_taxable_equity_20bps"}),
+        )
+        all_venues.update(venues)
+        all_listing_markets.update(listing_markets)
+        all_instrument_types.update(instrument_types)
+        all_tax_classes.update(tax_classes)
+
         for numeric_field in (
             "buy_fee_bps",
             "sell_fee_bps",
             "statutory_sell_tax_bps",
             "uncertainty_buffer_bps",
         ):
-            value = profile.get(numeric_field)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(float(value))
-                or float(value) < 0
-            ):
+            _validated_cost_number(
+                profile,
+                field=numeric_field,
+                error_prefix="verified_cost_catalog_profile",
+            )
+        _validate_reviewed_policy_values(
+            profile,
+            target_date=target_date,
+            effective_from=effective_from,
+            error_prefix="verified_cost_catalog_profile",
+        )
+
+        source_bindings = profile.get("source_bindings")
+        if (
+            not isinstance(source_bindings, Mapping)
+            or set(source_bindings) != _CANONICAL_COST_SOURCE_BINDING_FIELDS
+        ):
+            raise ValueError("verified_cost_catalog_source_bindings_invalid")
+        for field in _CANONICAL_COST_SOURCE_BINDING_FIELDS:
+            value = str(source_bindings.get(field) or "")
+            if field.endswith("_sha256"):
+                if not _is_sha256(value):
+                    raise ValueError(
+                        f"verified_cost_catalog_source_binding_invalid:{field}"
+                    )
+            elif not value:
                 raise ValueError(
-                    f"verified_cost_catalog_profile_numeric_invalid:{numeric_field}"
+                    f"verified_cost_catalog_source_binding_invalid:{field}"
                 )
+        if target_date >= REVIEWED_COST_POLICY_EFFECTIVE_FROM and (
+            source_bindings.get("broker_fee_source_id")
+            != "operator-reviewed-kiwoom-fee-2026-08-18"
+            or source_bindings.get("statutory_tax_source_id")
+            != "operator-reviewed-statutory-tax-2026-08-18"
+            or not str(source_bindings.get("symbol_master_source_id") or "").startswith(
+                "kis-official-common-stock-master-"
+            )
+        ):
+            raise ValueError("verified_cost_catalog_reviewed_source_binding_invalid")
+
+        bridge_payload = profile.get("bridge_reviewed_cost_payload")
+        if not isinstance(bridge_payload, Mapping):
+            raise ValueError("verified_cost_catalog_bridge_payload_invalid")
+        _validate_exact_reviewed_legacy_cost_profile(
+            bridge_payload,
+            target_date=target_date,
+        )
+        bridge_expected = {
+            "artifact_id": profile_id,
+            "effective_date": effective_from.isoformat(),
+            "venues": venues,
+            "buy_fee_bps": profile.get("buy_fee_bps"),
+            "sell_fee_bps": profile.get("sell_fee_bps"),
+            "statutory_sell_tax_bps": profile.get("statutory_sell_tax_bps"),
+            "uncertainty_buffer_bps": profile.get("uncertainty_buffer_bps"),
+        }
+        if any(
+            bridge_payload.get(field) != expected
+            for field, expected in bridge_expected.items()
+        ) or profile.get("bridge_reviewed_cost_payload_sha256") != _producer_sha256(
+            bridge_payload
+        ):
+            raise ValueError("verified_cost_catalog_bridge_payload_invalid")
+
+    expected_census = {
+        "profile_count": len(profiles),
+        "venue_count": len(all_venues),
+        "listing_market_count": len(all_listing_markets),
+        "instrument_type_count": len(all_instrument_types),
+        "instrument_tax_class_count": len(all_tax_classes),
+    }
+    if dict(census) != expected_census:
+        raise ValueError("verified_cost_catalog_census_mismatch")
 
 
 def _resolved_cost_profile(
@@ -796,6 +1277,16 @@ def _resolved_cost_profile(
     if not config.cost_profile_catalog_payload_json:
         if not config.cost_profile_verified:
             return None
+        if observed_date is not None:
+            effective_from = date.fromisoformat(config.cost_profile_effective_date)
+            if observed_date >= effective_from:
+                direct_payload = json.loads(config.cost_profile_artifact_payload_json)
+                if not isinstance(direct_payload, Mapping):
+                    raise ValueError("verified_cost_profile_artifact_invalid")
+                _validate_exact_reviewed_legacy_cost_profile(
+                    direct_payload,
+                    target_date=observed_date,
+                )
         return {
             "profile_id": config.cost_profile_artifact_id,
             "profile_content_sha256": config.cost_profile_artifact_sha256,
@@ -1587,6 +2078,420 @@ def _scope_key(row: Mapping[str, Any]) -> tuple[str, str, str, int]:
         _session(row.get("session_bucket")),
         sequence_epoch,
     )
+
+
+def _timestamp_kst_date(value: Any) -> str | None:
+    try:
+        return _parse_timestamp(value).astimezone(KST).date().isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
+def _epoch_is_exact(value: Any, expected: int) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value > 0
+        and value == expected
+    )
+
+
+def _canonical_unique_rows(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    timestamp: Any,
+    sequence_field: str | None = "source_sequence",
+) -> list[Mapping[str, Any]]:
+    """Return a deterministic exact-row census without physical duplicates."""
+
+    unique: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        row_hash = _sha256(row)
+        existing = unique.get(row_hash)
+        if existing is not None and existing != row:
+            raise ValueError("micro_reversion_canonical_source_hash_collision")
+        unique.setdefault(row_hash, row)
+
+    def key(row: Mapping[str, Any]) -> tuple[int, int, str]:
+        observed = timestamp(row)
+        if not isinstance(observed, int) or isinstance(observed, bool):
+            raise ValueError("micro_reversion_canonical_source_timestamp_invalid")
+        sequence = (
+            _nonnegative_int(row.get(sequence_field)) or 0
+            if sequence_field is not None
+            else 0
+        )
+        return observed, sequence, _sha256(row)
+
+    return sorted(unique.values(), key=key)
+
+
+def _normalized_pipeline_session(value: Any) -> str:
+    session = _session(value)
+    return {
+        "KRX_LIKE_PREMARKET": "PREMARKET_KRX_LIKE",
+        "KRX_LIKE_AFTERMARKET": "AFTERMARKET_KRX_LIKE",
+    }.get(session, session)
+
+
+def _parse_pipeline_timestamp(value: Any) -> datetime:
+    """Parse the pipeline journal's historical naive-KST timestamp contract."""
+
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("pipeline timestamp missing")
+    parsed = datetime.fromisoformat(text)
+    return parsed.replace(tzinfo=KST) if parsed.tzinfo is None else parsed
+
+
+def _entry_like_decision_stage(value: Any) -> bool:
+    return str(value or "").strip().lower() in {
+        "entry",
+        "entry_screen",
+        "analyze_target",
+        "gatekeeper",
+        "post_probe",
+    }
+
+
+def _canonical_entry_pipeline_rows(
+    *,
+    evidence: Mapping[str, Any],
+    entry_pipeline_rows: Iterable[Mapping[str, Any]],
+    future_end_us: int,
+) -> list[Mapping[str, Any]]:
+    """Select only exact entry-stage allocator rows in the causal outcome window."""
+
+    stage = evidence.get("decision_stage") or (
+        evidence.get(LIFECYCLE_PROJECTION_SCHEMA) or {}
+    ).get("decision_stage")
+    if not _entry_like_decision_stage(stage):
+        return []
+    trace_id = str(evidence.get("decision_trace_id") or "").strip()
+    symbol = normalize_symbol(evidence.get("stock_code"))
+    expected_venue = _exact_venue(evidence.get("trace_effective_venue"))
+    expected_session = _normalized_pipeline_session(
+        evidence.get("trace_session_bucket")
+    )
+    target_date = _timestamp_kst_date(evidence.get("snapshot_captured_at"))
+    try:
+        decision_us = _timestamp_us(evidence.get("trace_decision_ts"))
+        if target_date is None:
+            raise ValueError("snapshot date missing")
+        date.fromisoformat(target_date)
+    except (TypeError, ValueError):
+        return []
+    selected: list[Mapping[str, Any]] = []
+    for row in entry_pipeline_rows:
+        if not isinstance(row, Mapping) or row.get("pipeline") != "ENTRY_PIPELINE":
+            continue
+        fields = row.get("fields")
+        if not isinstance(fields, Mapping):
+            continue
+        emitted_at = row.get("emitted_at")
+        try:
+            parsed = _parse_pipeline_timestamp(emitted_at)
+            emitted_us = int(parsed.timestamp() * 1_000_000)
+        except (TypeError, ValueError):
+            continue
+        emitted_date = parsed.astimezone(KST).date().isoformat()
+        declared_date = str(row.get("emitted_date") or "").strip()
+        if (
+            emitted_date != target_date
+            or declared_date != target_date
+            or emitted_us < decision_us
+            or emitted_us > future_end_us
+            or str(fields.get("ai_decision_trace_id") or "").strip() != trace_id
+            or normalize_symbol(row.get("stock_code")) != symbol
+            or _exact_venue(fields.get("effective_venue") or fields.get("venue"))
+            != expected_venue
+            or _normalized_pipeline_session(fields.get("market_session_bucket"))
+            != expected_session
+        ):
+            continue
+        selected.append(row)
+    return _canonical_unique_rows(
+        selected,
+        timestamp=lambda row: int(
+            _parse_pipeline_timestamp(row.get("emitted_at")).timestamp() * 1_000_000
+        ),
+        sequence_field="record_id",
+    )
+
+
+def _canonical_tactical_source_rows(
+    *,
+    target_date: str,
+    trace: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    market_rows: Iterable[Mapping[str, Any]],
+    depth_rows: Iterable[Mapping[str, Any]],
+    event_references: Iterable[Mapping[str, Any]],
+    config: BridgeConfig,
+) -> dict[str, Any]:
+    """Bound one trace to exact-date/scope/epoch causal source rows.
+
+    Semantically invalid rows remain in the selected epoch so the downstream
+    evidence builder can reproduce its source-quality blockers. Rows whose
+    timestamp, date, scope, or epoch cannot be proven are never copied into a
+    parent or content-addressed source pool.
+    """
+
+    watermark, _ = exact_snapshot_watermark(trace, payload)
+    scope = resolve_micro_scope(trace)
+    symbol = normalize_symbol(trace.get("stock_code"))
+    if (
+        watermark is None
+        or _timestamp_kst_date(watermark.get("captured_at")) != target_date
+        or scope.status != "resolved"
+        or not symbol
+    ):
+        return {
+            "selected_epoch": 0,
+            "market_rows": [],
+            "depth_rows": [],
+            "event_reference_rows": [],
+            "context_start_us": 0,
+            "snapshot_us": 0,
+            "future_end_us": 0,
+        }
+    snapshot_us = int(watermark["captured_at_us"])
+    context_start_us = max(
+        0,
+        snapshot_us
+        - (config.active_wave_max_age_sec + config.context_lookback_sec) * 1_000_000,
+    )
+    future_end_us = (
+        snapshot_us
+        + (
+            _post_snapshot_source_horizon_sec(config) * 1_000
+            + config.max_outcome_endpoint_lag_ms
+        )
+        * 1_000
+    )
+    scope3 = (symbol, scope.venue, scope.session_bucket)
+
+    dated_market: list[Mapping[str, Any]] = []
+    for row in market_rows:
+        if (
+            normalize_symbol(row.get("symbol")),
+            normalize_venue(row.get("venue")),
+            _session(row.get("session_bucket")),
+        ) != scope3 or _timestamp_kst_date(
+            row.get("local_receive_timestamp")
+        ) != target_date:
+            continue
+        try:
+            observed_us = _timestamp_us(row.get("local_receive_timestamp"))
+        except (TypeError, ValueError):
+            continue
+        if context_start_us <= observed_us <= future_end_us:
+            dated_market.append(row)
+    dated_depth: list[Mapping[str, Any]] = []
+    for row in depth_rows:
+        if (
+            normalize_symbol(row.get("symbol")),
+            normalize_venue(row.get("venue")),
+            _session(row.get("session_bucket")),
+        ) != scope3 or _timestamp_kst_date(
+            row.get("local_receive_timestamp")
+        ) != target_date:
+            continue
+        try:
+            observed_us = _timestamp_us(row.get("local_receive_timestamp"))
+        except (TypeError, ValueError):
+            continue
+        if context_start_us <= observed_us <= future_end_us:
+            dated_depth.append(row)
+
+    dated_references: list[Mapping[str, Any]] = []
+    for row in event_references:
+        detected_at_ms = row.get("event_detected_at_ms")
+        if (
+            (
+                normalize_symbol(row.get("symbol")),
+                normalize_venue(row.get("venue")),
+                _session(row.get("session_bucket")),
+            )
+            != scope3
+            or not isinstance(detected_at_ms, int)
+            or isinstance(detected_at_ms, bool)
+            or detected_at_ms <= 0
+        ):
+            continue
+        detected_us = detected_at_ms * 1_000
+        try:
+            detected_date = (
+                datetime.fromtimestamp(detected_at_ms / 1_000.0, tz=KST)
+                .date()
+                .isoformat()
+            )
+        except (OSError, OverflowError, ValueError):
+            continue
+        if (
+            detected_date == target_date
+            and context_start_us <= detected_us <= snapshot_us
+        ):
+            dated_references.append(row)
+
+    # Epoch is a transport-generation identity, not a semantic-quality result.
+    # Fix the newest causal generation across every native transport stream
+    # before validating row contents.  A reconnect can deliver 0D depth or an
+    # event reference before its first 0B trade; selecting from market rows
+    # alone would silently fall back to the previous connection.  Two epochs
+    # observed at the exact latest causal timestamp are not orderable by their
+    # per-stream source sequences, so fail closed instead of choosing one by
+    # hash/order.
+    causal_epoch_observations = [
+        (
+            _timestamp_us(row.get("local_receive_timestamp")),
+            int(row["sequence_epoch"]),
+        )
+        for row in (*dated_market, *dated_depth)
+        if _timestamp_us(row.get("local_receive_timestamp")) <= snapshot_us
+        and isinstance(row.get("sequence_epoch"), int)
+        and not isinstance(row.get("sequence_epoch"), bool)
+        and int(row["sequence_epoch"]) > 0
+    ]
+    causal_epoch_observations.extend(
+        (
+            int(row["event_detected_at_ms"]) * 1_000,
+            int(row["sequence_epoch"]),
+        )
+        for row in dated_references
+        if isinstance(row.get("sequence_epoch"), int)
+        and not isinstance(row.get("sequence_epoch"), bool)
+        and int(row["sequence_epoch"]) > 0
+    )
+    latest_causal_us = max(
+        (observed_us for observed_us, _epoch in causal_epoch_observations),
+        default=None,
+    )
+    latest_causal_epochs = {
+        epoch
+        for observed_us, epoch in causal_epoch_observations
+        if observed_us == latest_causal_us
+    }
+    selected_epoch = (
+        next(iter(latest_causal_epochs)) if len(latest_causal_epochs) == 1 else 0
+    )
+    selected_market = [
+        row
+        for row in dated_market
+        if _epoch_is_exact(row.get("sequence_epoch"), selected_epoch)
+    ]
+    selected_market = _canonical_unique_rows(
+        selected_market,
+        timestamp=lambda row: _timestamp_us(row.get("local_receive_timestamp")),
+    )
+
+    selected_depth = [
+        row
+        for row in dated_depth
+        if _epoch_is_exact(row.get("sequence_epoch"), selected_epoch)
+    ]
+    selected_depth = _canonical_unique_rows(
+        selected_depth,
+        timestamp=lambda row: _timestamp_us(row.get("local_receive_timestamp")),
+    )
+
+    selected_references = [
+        row
+        for row in dated_references
+        if _epoch_is_exact(row.get("sequence_epoch"), selected_epoch)
+    ]
+    selected_references = _canonical_unique_rows(
+        selected_references,
+        timestamp=lambda row: int(row.get("event_detected_at_ms") or 0) * 1_000,
+        sequence_field="event_sequence_in_wave",
+    )
+    return {
+        "selected_epoch": selected_epoch,
+        "market_rows": selected_market,
+        "depth_rows": selected_depth,
+        "event_reference_rows": selected_references,
+        "context_start_us": context_start_us,
+        "snapshot_us": snapshot_us,
+        "future_end_us": future_end_us,
+    }
+
+
+def _canonical_future_outcome_source_rows(
+    *,
+    evidence: Mapping[str, Any],
+    market_rows: Iterable[Mapping[str, Any]],
+    depth_rows: Iterable[Mapping[str, Any]],
+    entry_pipeline_rows: Iterable[Mapping[str, Any]],
+    config: BridgeConfig,
+) -> dict[str, list[Mapping[str, Any]]]:
+    """Return the minimal exact rows capable of rebuilding one future outcome."""
+
+    snapshot_ms = int(evidence.get("snapshot_captured_at_ms") or 0)
+    snapshot_us = snapshot_ms * 1_000
+    future_end_us = (
+        snapshot_us
+        + (
+            _post_snapshot_source_horizon_sec(config) * 1_000
+            + config.max_outcome_endpoint_lag_ms
+        )
+        * 1_000
+    )
+    target_date = _timestamp_kst_date(evidence.get("snapshot_captured_at"))
+    if target_date is None:
+        return {"market": [], "depth": [], "entry_pipeline": []}
+    scope4 = (
+        normalize_symbol(evidence.get("stock_code")),
+        normalize_venue(evidence.get("micro_venue")),
+        _session(evidence.get("micro_session_bucket")),
+        int(evidence.get("sequence_epoch") or 0),
+    )
+    selected_market: list[Mapping[str, Any]] = []
+    for row in market_rows:
+        if (
+            _scope_key(row) != scope4
+            or not _epoch_is_exact(row.get("sequence_epoch"), scope4[3])
+            or _timestamp_kst_date(row.get("local_receive_timestamp")) != target_date
+        ):
+            continue
+        try:
+            observed_us = _timestamp_us(row.get("local_receive_timestamp"))
+        except (TypeError, ValueError):
+            continue
+        if snapshot_us < observed_us <= future_end_us:
+            selected_market.append(row)
+    selected_market = _canonical_unique_rows(
+        selected_market,
+        timestamp=lambda row: _timestamp_us(row.get("local_receive_timestamp")),
+    )
+
+    depth_start_us = max(0, snapshot_us - config.max_depth_age_ms * 1_000)
+    selected_depth: list[Mapping[str, Any]] = []
+    for row in depth_rows:
+        if (
+            _scope_key(row) != scope4
+            or not _epoch_is_exact(row.get("sequence_epoch"), scope4[3])
+            or _timestamp_kst_date(row.get("local_receive_timestamp")) != target_date
+        ):
+            continue
+        try:
+            observed_us = _timestamp_us(row.get("local_receive_timestamp"))
+        except (TypeError, ValueError):
+            continue
+        if depth_start_us <= observed_us <= future_end_us:
+            selected_depth.append(row)
+    selected_depth = _canonical_unique_rows(
+        selected_depth,
+        timestamp=lambda row: _timestamp_us(row.get("local_receive_timestamp")),
+    )
+    return {
+        "market": selected_market,
+        "depth": selected_depth,
+        "entry_pipeline": _canonical_entry_pipeline_rows(
+            evidence=evidence,
+            entry_pipeline_rows=entry_pipeline_rows,
+            future_end_us=future_end_us,
+        ),
+    }
 
 
 def _levels(value: Any) -> tuple[tuple[int, float, int], ...]:
@@ -4318,6 +5223,770 @@ def build_tactical_evidence(
     return {**context_without_hash, "evidence_sha256": _sha256(context_without_hash)}
 
 
+def _validated_ask_depletion_evidence_watermark(
+    evidence: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], int, int, int, int, int]:
+    """Return the exact native causal watermark required by ask-depletion."""
+
+    event = evidence.get("event")
+    if not isinstance(event, Mapping):
+        raise ValueError("ask_depletion_event_missing")
+    event_ms = event.get("event_detected_at_ms")
+    event_sequence = event.get("event_source_sequence")
+    observed_through_ms = evidence.get("snapshot_captured_at_ms")
+    sequence_epoch = evidence.get("sequence_epoch")
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in (
+            event_ms,
+            event_sequence,
+            observed_through_ms,
+            sequence_epoch,
+        )
+    ):
+        raise ValueError("ask_depletion_event_watermark_invalid")
+    snapshot_captured_at = evidence.get("snapshot_captured_at")
+    if not isinstance(snapshot_captured_at, str) or not snapshot_captured_at.strip():
+        raise ValueError("ask_depletion_event_watermark_invalid")
+    try:
+        observed_through_us = _timestamp_us(snapshot_captured_at)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ask_depletion_event_watermark_invalid") from exc
+    if (
+        observed_through_ms != observed_through_us // 1_000
+        or event_ms > observed_through_ms
+    ):
+        raise ValueError("ask_depletion_event_watermark_invalid")
+    return (
+        event,
+        event_ms,
+        event_sequence,
+        observed_through_ms,
+        observed_through_us,
+        sequence_epoch,
+    )
+
+
+def _validate_ask_depletion_context_native(context: Mapping[str, Any]) -> None:
+    if any(
+        not isinstance(context.get(field), str) or not context.get(field)
+        for field in (
+            "event_id",
+            "anchor_role",
+            "symbol",
+            "venue",
+            "session_bucket",
+        )
+    ) or any(
+        isinstance(context.get(field), bool)
+        or not isinstance(context.get(field), int)
+        or context.get(field) <= 0
+        for field in (
+            "sequence_epoch",
+            "anchor_event_local_receive_timestamp_ms",
+            "event_market_source_sequence",
+            "observed_through_local_receive_timestamp_ms",
+        )
+    ):
+        raise ValueError("ask_depletion_context_native_type_invalid")
+    if any(
+        not isinstance(context.get(field), bool)
+        for field in ("depth_source_complete", "market_source_complete")
+    ):
+        raise ValueError("ask_depletion_context_native_type_invalid")
+    if (
+        context["anchor_event_local_receive_timestamp_ms"]
+        > context["observed_through_local_receive_timestamp_ms"]
+    ):
+        raise ValueError("ask_depletion_context_watermark_invalid")
+
+
+def build_ask_depletion_feature_sidecar(
+    *,
+    evidence: Mapping[str, Any],
+    market_rows: Iterable[Mapping[str, Any]],
+    depth_rows: Iterable[Mapping[str, Any]],
+    max_depth_age_ms: int = 1_000,
+) -> dict[str, Any]:
+    """Build the causal ask-depletion sidecar for the current replay design.
+
+    The shock event is the feature anchor and the Exact-V2 snapshot is the
+    observation watermark.  Rows after that snapshot are never admitted even
+    when the caller supplies a larger outcome window.  Invalid rows make the
+    exact source incomplete; they are never silently removed and treated as a
+    continuous path.
+    """
+
+    _validate_tactical_evidence_shape(evidence)
+    if (
+        isinstance(max_depth_age_ms, bool)
+        or not isinstance(max_depth_age_ms, int)
+        or max_depth_age_ms <= 0
+    ):
+        raise ValueError("ask_depletion_max_depth_age_ms_invalid")
+    evidence_hash = str(evidence.get("evidence_sha256") or "")
+    evidence_content = {
+        key: value for key, value in evidence.items() if key != "evidence_sha256"
+    }
+    if not evidence_hash or evidence_hash != _sha256(evidence_content):
+        raise ValueError("ask_depletion_evidence_sha256_mismatch")
+    (
+        event,
+        event_ms,
+        event_sequence,
+        observed_through_ms,
+        observed_through_us,
+        sequence_epoch,
+    ) = _validated_ask_depletion_evidence_watermark(evidence)
+    event_id = str(event.get("shock_event_id") or "").strip()
+    if not event_id:
+        raise ValueError("ask_depletion_event_watermark_invalid")
+    event_us = event_ms * 1_000
+    if observed_through_us < event_us:
+        raise ValueError("ask_depletion_event_watermark_invalid")
+    symbol = normalize_symbol(evidence.get("stock_code"))
+    venue = normalize_venue(evidence.get("micro_venue"))
+    session_bucket = _session(evidence.get("micro_session_bucket"))
+    scope = (symbol, venue, session_bucket, sequence_epoch)
+    if not symbol or venue == "UNKNOWN" or not session_bucket:
+        raise ValueError("ask_depletion_scope_invalid")
+
+    market_path: list[Mapping[str, Any]] = []
+    market_source_complete = True
+    for row in market_rows:
+        if not isinstance(row, Mapping) or _scope_key(row) != scope:
+            continue
+        try:
+            received_us = _timestamp_us(row.get("local_receive_timestamp"))
+            source_sequence = int(row.get("source_sequence") or 0)
+        except (TypeError, ValueError):
+            market_source_complete = False
+            continue
+        if (received_us, source_sequence) < (
+            event_us,
+            event_sequence,
+        ) or received_us > observed_through_us:
+            continue
+        valid, _reason = _valid_market_row(row)
+        if (
+            not valid
+            or row.get("schema") != "scalp_micro_reversion_market_stream_point_v3"
+        ):
+            market_source_complete = False
+            continue
+        market_path.append(row)
+    market_path.sort(
+        key=lambda row: (
+            _timestamp_us(row.get("local_receive_timestamp")),
+            int(row.get("source_sequence") or 0),
+        )
+    )
+    if _series_sequence_findings(market_path, prefix="ask_depletion_market"):
+        market_source_complete = False
+
+    depth_path: list[Mapping[str, Any]] = []
+    depth_source_complete = True
+    anchor_lower_us = event_us - max_depth_age_ms * 1_000
+    for row in depth_rows:
+        if not isinstance(row, Mapping) or _scope_key(row) != scope:
+            continue
+        try:
+            received_us = _timestamp_us(row.get("local_receive_timestamp"))
+        except (TypeError, ValueError):
+            depth_source_complete = False
+            continue
+        if not anchor_lower_us <= received_us <= observed_through_us:
+            continue
+        valid, _reason = _valid_depth_row(row)
+        if not valid:
+            depth_source_complete = False
+            continue
+        depth_path.append(row)
+    depth_path.sort(
+        key=lambda row: (
+            _timestamp_us(row.get("local_receive_timestamp")),
+            int(row.get("source_sequence") or 0),
+        )
+    )
+    if _series_sequence_findings(depth_path, prefix="ask_depletion_depth"):
+        depth_source_complete = False
+    anchor_candidates = [
+        row
+        for row in depth_path
+        if _timestamp_us(row.get("local_receive_timestamp")) < event_us
+    ]
+    anchor_depth = anchor_candidates[-1] if anchor_candidates else None
+
+    report = build_ask_depletion_report(
+        context=AskDepletionContext(
+            event_id=event_id,
+            anchor_role="shock_event",
+            symbol=symbol,
+            venue=venue,
+            session_bucket=session_bucket,
+            sequence_epoch=sequence_epoch,
+            anchor_event_local_receive_timestamp_ms=event_ms,
+            event_market_source_sequence=event_sequence,
+            observed_through_local_receive_timestamp_ms=observed_through_ms,
+            depth_source_complete=depth_source_complete,
+            market_source_complete=market_source_complete,
+        ),
+        anchor_depth=anchor_depth,
+        depth_rows=depth_path,
+        market_rows=market_path,
+        max_depth_age_ms=max_depth_age_ms,
+    ).as_dict()
+    contract_sha256 = _sha256(
+        {
+            "schema": ASK_DEPLETION_SCHEMA,
+            **ASK_DEPLETION_METRIC_CONTRACT,
+        }
+    )
+    content = {
+        **report,
+        "max_depth_age_ms": max_depth_age_ms,
+        "tactical_micro_reversion_evidence_sha256": evidence_hash,
+        "ask_depletion_contract_sha256": contract_sha256,
+    }
+    return {
+        **content,
+        "ask_depletion_context_sha256": _sha256(content),
+    }
+
+
+def _validated_ask_depletion_feature_view(
+    sidecar: Mapping[str, Any],
+    *,
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the complete fixed-horizon view required for provider ablation."""
+
+    _validate_tactical_evidence_shape(evidence)
+    evidence_hash = str(evidence.get("evidence_sha256") or "")
+    evidence_content = {
+        key: value for key, value in evidence.items() if key != "evidence_sha256"
+    }
+    if not evidence_hash or evidence_hash != _sha256(evidence_content):
+        raise ValueError("ask_depletion_evidence_sha256_mismatch")
+    (
+        event,
+        event_ms,
+        event_sequence,
+        observed_through_ms,
+        _observed_through_us,
+        sequence_epoch,
+    ) = _validated_ask_depletion_evidence_watermark(evidence)
+    if sidecar.get("schema") != ASK_DEPLETION_SCHEMA:
+        raise ValueError("ask_depletion_sidecar_schema_invalid")
+    declared_context_hash = str(sidecar.get("ask_depletion_context_sha256") or "")
+    content = {
+        key: value
+        for key, value in sidecar.items()
+        if key != "ask_depletion_context_sha256"
+    }
+    if not declared_context_hash or declared_context_hash != _sha256(content):
+        raise ValueError("ask_depletion_context_sha256_mismatch")
+    expected_contract_hash = _sha256(
+        {
+            "schema": ASK_DEPLETION_SCHEMA,
+            **ASK_DEPLETION_METRIC_CONTRACT,
+        }
+    )
+    if sidecar.get("ask_depletion_contract_sha256") != expected_contract_hash:
+        raise ValueError("ask_depletion_contract_sha256_mismatch")
+    for field, expected in ASK_DEPLETION_METRIC_CONTRACT.items():
+        observed = sidecar.get(field)
+        if field == "forbidden_uses":
+            if not isinstance(observed, (list, tuple)) or tuple(observed) != tuple(
+                expected
+            ):
+                raise ValueError(
+                    "ask_depletion_sidecar_metric_contract_invalid:forbidden_uses"
+                )
+        elif observed != expected:
+            raise ValueError(f"ask_depletion_sidecar_metric_contract_invalid:{field}")
+    for field, expected in ASK_DEPLETION_SIDECAR_AUTHORITY.items():
+        if sidecar.get(field) is not expected:
+            raise ValueError(f"ask_depletion_sidecar_authority_invalid:{field}")
+    context = sidecar.get("context")
+    if not isinstance(context, Mapping):
+        raise ValueError("ask_depletion_sidecar_context_invalid")
+    if set(context) != ASK_DEPLETION_CONTEXT_FIELDS:
+        raise ValueError("ask_depletion_sidecar_context_shape_invalid")
+    _validate_ask_depletion_context_native(context)
+    expected_context_identity = {
+        "event_id": str(event.get("shock_event_id") or ""),
+        "anchor_role": "shock_event",
+        "symbol": normalize_symbol(evidence.get("stock_code")),
+        "venue": normalize_venue(evidence.get("micro_venue")),
+        "session_bucket": _session(evidence.get("micro_session_bucket")),
+        "sequence_epoch": sequence_epoch,
+        "anchor_event_local_receive_timestamp_ms": event_ms,
+        "event_market_source_sequence": event_sequence,
+        "observed_through_local_receive_timestamp_ms": observed_through_ms,
+    }
+    if any(
+        context.get(field) != expected
+        for field, expected in expected_context_identity.items()
+    ):
+        raise ValueError("ask_depletion_sidecar_context_identity_mismatch")
+    if sidecar.get("tactical_micro_reversion_evidence_sha256") != evidence_hash:
+        raise ValueError("ask_depletion_tactical_evidence_binding_mismatch")
+    top_source_gaps = sidecar.get("source_gap_reasons")
+    if (
+        isinstance(sidecar.get("anchor_source_sequence"), bool)
+        or not isinstance(sidecar.get("anchor_source_sequence"), int)
+        or sidecar.get("anchor_source_sequence") <= 0
+        or sidecar.get("anchor_source_quality_status")
+        != "eligible_source_only_feature_ablation"
+        or sidecar.get("source_quality_status")
+        != "eligible_source_only_feature_ablation"
+        or not isinstance(top_source_gaps, (list, tuple))
+        or any(not isinstance(reason, str) or not reason for reason in top_source_gaps)
+        or bool(top_source_gaps)
+        or context.get("depth_source_complete") is not True
+        or context.get("market_source_complete") is not True
+    ):
+        raise ValueError("ask_depletion_sidecar_source_quality_invalid")
+    horizons = sidecar.get("horizons")
+    if not isinstance(horizons, (list, tuple)):
+        raise ValueError("ask_depletion_horizons_invalid")
+    observed_horizons: list[int] = []
+    for row in horizons:
+        if not isinstance(row, Mapping) or set(row) != ASK_DEPLETION_HORIZON_FIELDS:
+            raise ValueError("ask_depletion_horizon_shape_invalid")
+        horizon_ms = row.get("horizon_ms")
+        source_gaps = row.get("source_gap_reasons")
+        if (
+            isinstance(horizon_ms, bool)
+            or not isinstance(horizon_ms, int)
+            or horizon_ms <= 0
+            or not isinstance(row.get("mature"), bool)
+            or not isinstance(row.get("eligible_for_feature_ablation"), bool)
+            or not isinstance(source_gaps, (list, tuple))
+            or any(not isinstance(reason, str) or not reason for reason in source_gaps)
+        ):
+            raise ValueError("ask_depletion_horizon_contract_invalid")
+        observed_horizons.append(horizon_ms)
+        if (
+            row.get("mature") is not True
+            or row.get("eligible_for_feature_ablation") is not True
+            or observed_through_ms < event_ms + horizon_ms
+            or row.get("source_quality_status")
+            != "eligible_source_only_feature_ablation"
+            or source_gaps
+            or isinstance(row.get("depth_observation_count"), bool)
+            or not isinstance(row.get("depth_observation_count"), int)
+            or row.get("depth_observation_count") <= 0
+        ):
+            raise ValueError("ask_depletion_complete_horizon_contract_invalid")
+    if tuple(observed_horizons) != DEFAULT_ASK_DEPLETION_HORIZONS_MS:
+        raise ValueError("ask_depletion_horizon_census_invalid")
+    eligible_horizons = [deepcopy(dict(row)) for row in horizons]
+    view_without_hash = {
+        "schema": ASK_DEPLETION_FEATURE_VIEW_SCHEMA,
+        "source_schema": ASK_DEPLETION_SCHEMA,
+        "context": deepcopy(sidecar.get("context")),
+        "anchor_source_sequence": sidecar.get("anchor_source_sequence"),
+        "eligible_horizon_count": len(eligible_horizons),
+        "eligible_horizons": eligible_horizons,
+        "sidecar_hash_reconstruction": {
+            field: deepcopy(sidecar.get(field))
+            for field in ASK_DEPLETION_SIDECAR_RECONSTRUCTION_FIELDS
+        },
+        "tactical_micro_reversion_evidence_sha256": evidence_hash,
+        "ask_depletion_contract_sha256": expected_contract_hash,
+        "ask_depletion_context_sha256": declared_context_hash,
+        **ABLATION_SOURCE_ONLY_AUTHORITY,
+    }
+    feature_view = {
+        **view_without_hash,
+        "feature_view_sha256": _sha256(view_without_hash),
+    }
+    validate_ask_depletion_feature_view(feature_view, evidence=evidence)
+    return feature_view
+
+
+def validate_ask_depletion_feature_view(
+    feature_view: Mapping[str, Any], *, evidence: Mapping[str, Any]
+) -> None:
+    """Revalidate one persisted current-design feature view without its sidecar."""
+
+    _validate_tactical_evidence_shape(evidence)
+    evidence_hash = str(evidence.get("evidence_sha256") or "")
+    evidence_without_hash = {
+        key: value for key, value in evidence.items() if key != "evidence_sha256"
+    }
+    if not evidence_hash or evidence_hash != _sha256(evidence_without_hash):
+        raise ValueError("ask_depletion_feature_evidence_hash_invalid")
+    (
+        event,
+        event_ms,
+        event_sequence,
+        observed_through_ms,
+        _observed_through_us,
+        sequence_epoch,
+    ) = _validated_ask_depletion_evidence_watermark(evidence)
+    expected_fields = {
+        "schema",
+        "source_schema",
+        "context",
+        "anchor_source_sequence",
+        "eligible_horizon_count",
+        "eligible_horizons",
+        "sidecar_hash_reconstruction",
+        "tactical_micro_reversion_evidence_sha256",
+        "ask_depletion_contract_sha256",
+        "ask_depletion_context_sha256",
+        "feature_view_sha256",
+        *ABLATION_SOURCE_ONLY_AUTHORITY,
+    }
+    if set(feature_view) != expected_fields:
+        raise ValueError("ask_depletion_feature_view_shape_invalid")
+    feature_without_hash = {
+        key: value
+        for key, value in feature_view.items()
+        if key != "feature_view_sha256"
+    }
+    if feature_view.get("feature_view_sha256") != _sha256(feature_without_hash):
+        raise ValueError("ask_depletion_feature_view_hash_invalid")
+    if (
+        feature_view.get("schema") != ASK_DEPLETION_FEATURE_VIEW_SCHEMA
+        or feature_view.get("source_schema") != ASK_DEPLETION_SCHEMA
+        or feature_view.get("tactical_micro_reversion_evidence_sha256") != evidence_hash
+        or feature_view.get("ask_depletion_contract_sha256")
+        != _sha256(
+            {
+                "schema": ASK_DEPLETION_SCHEMA,
+                **ASK_DEPLETION_METRIC_CONTRACT,
+            }
+        )
+    ):
+        raise ValueError("ask_depletion_feature_view_identity_invalid")
+    context_hash = str(feature_view.get("ask_depletion_context_sha256") or "")
+    if len(context_hash) != 64 or any(
+        character not in "0123456789abcdef" for character in context_hash
+    ):
+        raise ValueError("ask_depletion_feature_context_hash_invalid")
+    sidecar_reconstruction = feature_view.get("sidecar_hash_reconstruction")
+    max_depth_age_ms = (
+        sidecar_reconstruction.get("max_depth_age_ms")
+        if isinstance(sidecar_reconstruction, Mapping)
+        else None
+    )
+    anchor_depth_age_ms = (
+        sidecar_reconstruction.get("anchor_depth_age_ms")
+        if isinstance(sidecar_reconstruction, Mapping)
+        else None
+    )
+    if (
+        not isinstance(sidecar_reconstruction, Mapping)
+        or set(sidecar_reconstruction) != ASK_DEPLETION_SIDECAR_RECONSTRUCTION_FIELDS
+        or isinstance(max_depth_age_ms, bool)
+        or not isinstance(max_depth_age_ms, int)
+        or max_depth_age_ms <= 0
+        or isinstance(anchor_depth_age_ms, bool)
+        or not isinstance(anchor_depth_age_ms, (int, float))
+        or not math.isfinite(float(anchor_depth_age_ms))
+        or not 0 <= float(anchor_depth_age_ms) <= max_depth_age_ms
+        or sidecar_reconstruction.get("anchor_source_quality_status")
+        != "eligible_source_only_feature_ablation"
+        or sidecar_reconstruction.get("source_quality_status")
+        != "eligible_source_only_feature_ablation"
+        or sidecar_reconstruction.get("source_gap_reasons") not in ([], ())
+        or any(
+            isinstance(sidecar_reconstruction.get(field), bool)
+            or not isinstance(sidecar_reconstruction.get(field), int)
+            or sidecar_reconstruction.get(field) < 0
+            for field in (
+                "ignored_cross_scope_depth_row_count",
+                "ignored_cross_scope_market_row_count",
+            )
+        )
+    ):
+        raise ValueError("ask_depletion_feature_sidecar_reconstruction_invalid")
+    reconstructed_sidecar_content = {
+        "context": deepcopy(feature_view.get("context")),
+        "anchor_source_sequence": feature_view.get("anchor_source_sequence"),
+        **deepcopy(dict(sidecar_reconstruction)),
+        "horizons": deepcopy(feature_view.get("eligible_horizons")),
+        "schema": ASK_DEPLETION_SCHEMA,
+        **ASK_DEPLETION_SIDECAR_AUTHORITY,
+        **ASK_DEPLETION_METRIC_CONTRACT,
+        "tactical_micro_reversion_evidence_sha256": evidence_hash,
+        "ask_depletion_contract_sha256": feature_view.get(
+            "ask_depletion_contract_sha256"
+        ),
+    }
+    if _sha256(reconstructed_sidecar_content) != context_hash:
+        raise ValueError("ask_depletion_feature_sidecar_hash_rebuild_mismatch")
+    for field, expected in ABLATION_SOURCE_ONLY_AUTHORITY.items():
+        if feature_view.get(field) is not expected:
+            raise ValueError(f"ask_depletion_feature_authority_invalid:{field}")
+    context = feature_view.get("context")
+    if not isinstance(context, Mapping) or set(context) != ASK_DEPLETION_CONTEXT_FIELDS:
+        raise ValueError("ask_depletion_feature_context_invalid")
+    _validate_ask_depletion_context_native(context)
+    expected_context_identity = {
+        "event_id": str(event.get("shock_event_id") or ""),
+        "anchor_role": "shock_event",
+        "symbol": normalize_symbol(evidence.get("stock_code")),
+        "venue": normalize_venue(evidence.get("micro_venue")),
+        "session_bucket": _session(evidence.get("micro_session_bucket")),
+        "sequence_epoch": sequence_epoch,
+        "anchor_event_local_receive_timestamp_ms": event_ms,
+        "event_market_source_sequence": event_sequence,
+        "observed_through_local_receive_timestamp_ms": observed_through_ms,
+        "depth_source_complete": True,
+        "market_source_complete": True,
+    }
+    if any(
+        context.get(field) != expected
+        for field, expected in expected_context_identity.items()
+    ):
+        raise ValueError("ask_depletion_feature_context_binding_invalid")
+    anchor_sequence = feature_view.get("anchor_source_sequence")
+    horizons = feature_view.get("eligible_horizons")
+    eligible_horizon_count = feature_view.get("eligible_horizon_count")
+    if (
+        isinstance(anchor_sequence, bool)
+        or not isinstance(anchor_sequence, int)
+        or anchor_sequence <= 0
+        or not isinstance(horizons, list)
+        or isinstance(eligible_horizon_count, bool)
+        or not isinstance(eligible_horizon_count, int)
+        or eligible_horizon_count != len(horizons)
+        or len(horizons) != len(DEFAULT_ASK_DEPLETION_HORIZONS_MS)
+    ):
+        raise ValueError("ask_depletion_feature_horizon_census_invalid")
+
+    def strict_number(value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
+
+    def nonnegative_integer(value: Any) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
+    def ratio_matches(observed: Any, numerator: int, denominator: int) -> bool:
+        if denominator <= 0:
+            return numerator == 0 and observed is None
+        parsed = strict_number(observed)
+        if parsed is None or not 0.0 <= parsed <= 1.0:
+            return False
+        expected = numerator / denominator
+        return abs(parsed - expected) <= 1e-7
+
+    def nonnegative_ratio_matches(
+        observed: Any, numerator: int, denominator: int
+    ) -> bool:
+        parsed = strict_number(observed)
+        if parsed is None or parsed < 0.0 or denominator <= 0:
+            return False
+        return abs(parsed - (numerator / denominator)) <= 1e-7
+
+    observed_horizons: list[int] = []
+    for horizon in horizons:
+        if (
+            not isinstance(horizon, Mapping)
+            or set(horizon) != ASK_DEPLETION_HORIZON_FIELDS
+        ):
+            raise ValueError("ask_depletion_feature_horizon_shape_invalid")
+        horizon_ms = horizon.get("horizon_ms")
+        source_gaps = horizon.get("source_gap_reasons")
+        if (
+            isinstance(horizon_ms, bool)
+            or not isinstance(horizon_ms, int)
+            or horizon.get("mature") is not True
+            or horizon.get("eligible_for_feature_ablation") is not True
+            or observed_through_ms < event_ms + horizon_ms
+            or horizon.get("source_quality_status")
+            != "eligible_source_only_feature_ablation"
+            or not isinstance(source_gaps, (list, tuple))
+            or source_gaps
+            or isinstance(horizon.get("depth_observation_count"), bool)
+            or not isinstance(horizon.get("depth_observation_count"), int)
+            or horizon.get("depth_observation_count") <= 0
+        ):
+            raise ValueError("ask_depletion_feature_horizon_semantics_invalid")
+        prices = tuple(
+            strict_number(horizon.get(field))
+            for field in ("anchor_best_ask", "endpoint_best_ask")
+        )
+        quantities = {
+            field: nonnegative_integer(horizon.get(field))
+            for field in (
+                "initial_anchor_ask_qty",
+                "endpoint_anchor_ask_qty",
+                "minimum_anchor_ask_qty",
+                "max_best_ask_depletion_qty",
+                "aggressive_buy_qty_before_max_depletion",
+                "unexplained_or_cancel_like_depletion_qty",
+                "max_refill_qty",
+            )
+        }
+        initial_qty = quantities["initial_anchor_ask_qty"]
+        endpoint_qty = quantities["endpoint_anchor_ask_qty"]
+        minimum_qty = quantities["minimum_anchor_ask_qty"]
+        depletion_qty = quantities["max_best_ask_depletion_qty"]
+        aggressive_qty = quantities["aggressive_buy_qty_before_max_depletion"]
+        unexplained_qty = quantities["unexplained_or_cancel_like_depletion_qty"]
+        refill_qty = quantities["max_refill_qty"]
+        velocity = strict_number(horizon.get("best_ask_depletion_velocity_qty_per_sec"))
+        endpoint_age = strict_number(horizon.get("depth_endpoint_age_ms"))
+        price_level_cleared = horizon.get("price_level_cleared")
+        if (
+            any(value is None or value <= 0 for value in prices)
+            or any(
+                value is None
+                for value in (
+                    initial_qty,
+                    endpoint_qty,
+                    minimum_qty,
+                    depletion_qty,
+                    aggressive_qty,
+                    refill_qty,
+                )
+            )
+            or initial_qty is None
+            or initial_qty <= 0
+            or endpoint_qty is None
+            or minimum_qty is None
+            or depletion_qty is None
+            or aggressive_qty is None
+            or refill_qty is None
+            or minimum_qty > initial_qty
+            or endpoint_qty < minimum_qty
+            or depletion_qty != initial_qty - minimum_qty
+            or refill_qty < endpoint_qty - minimum_qty
+            or velocity is None
+            or velocity < 0
+            or endpoint_age is None
+            or not 0 <= endpoint_age <= max_depth_age_ms
+            or not isinstance(price_level_cleared, bool)
+            or (price_level_cleared and minimum_qty != 0)
+            or not isinstance(horizon.get("downward_reprice_observed"), bool)
+            or not ratio_matches(
+                horizon.get("max_best_ask_depletion_ratio"),
+                depletion_qty,
+                initial_qty,
+            )
+        ):
+            raise ValueError("ask_depletion_feature_numeric_semantics_invalid")
+        aggressive_ratio = strict_number(
+            horizon.get("aggressive_buy_trade_backed_ratio")
+        )
+        unexplained_ratio = horizon.get("unexplained_or_cancel_like_depletion_ratio")
+        refill_ratio = horizon.get("refill_ratio")
+        if depletion_qty > 0:
+            if (
+                unexplained_qty != max(0, depletion_qty - aggressive_qty)
+                or unexplained_qty is None
+                or unexplained_qty > depletion_qty
+                or not ratio_matches(
+                    aggressive_ratio,
+                    min(aggressive_qty, depletion_qty),
+                    depletion_qty,
+                )
+                or not ratio_matches(
+                    unexplained_ratio,
+                    unexplained_qty,
+                    depletion_qty,
+                )
+                or not nonnegative_ratio_matches(
+                    refill_ratio,
+                    refill_qty,
+                    depletion_qty,
+                )
+            ):
+                raise ValueError("ask_depletion_feature_trade_backing_ratio_invalid")
+        elif any(
+            value is not None
+            for value in (
+                aggressive_ratio,
+                unexplained_qty,
+                unexplained_ratio,
+                refill_ratio,
+            )
+        ):
+            raise ValueError("ask_depletion_feature_zero_depletion_semantics_invalid")
+        for field in ("first_price_level_clear_delay_ms", "refill_half_life_ms"):
+            value = horizon.get(field)
+            if value is not None and (
+                nonnegative_integer(value) is None or value > horizon_ms
+            ):
+                raise ValueError(
+                    "ask_depletion_feature_optional_delay_semantics_invalid"
+                )
+        clear_delay = horizon.get("first_price_level_clear_delay_ms")
+        if price_level_cleared is not (clear_delay is not None):
+            raise ValueError("ask_depletion_feature_clear_delay_binding_invalid")
+        refill_half_life_ms = horizon.get("refill_half_life_ms")
+        if depletion_qty > 0 and (
+            (refill_qty * 2 >= depletion_qty) is not (refill_half_life_ms is not None)
+        ):
+            raise ValueError("ask_depletion_feature_refill_half_life_binding_invalid")
+        if depletion_qty == 0 and refill_half_life_ms is not None:
+            raise ValueError("ask_depletion_feature_refill_half_life_binding_invalid")
+        top_depth = horizon.get("top_depth")
+        if not isinstance(top_depth, (list, tuple)) or len(top_depth) != len(
+            DEFAULT_ASK_DEPLETION_TOP_DEPTH_LEVELS
+        ):
+            raise ValueError("ask_depletion_feature_top_depth_census_invalid")
+        observed_levels: list[int] = []
+        for depth in top_depth:
+            if (
+                not isinstance(depth, Mapping)
+                or set(depth) != ASK_DEPLETION_TOP_DEPTH_FIELDS
+            ):
+                raise ValueError("ask_depletion_feature_top_depth_shape_invalid")
+            retained = depth.get("retained_level_count")
+            anchor_price_count = depth.get("anchor_price_count")
+            depth_initial = nonnegative_integer(depth.get("initial_qty"))
+            depth_endpoint = nonnegative_integer(depth.get("endpoint_qty"))
+            depth_minimum = nonnegative_integer(depth.get("minimum_qty"))
+            depth_depletion = nonnegative_integer(depth.get("max_depletion_qty"))
+            if (
+                isinstance(retained, bool)
+                or not isinstance(retained, int)
+                or isinstance(anchor_price_count, bool)
+                or not isinstance(anchor_price_count, int)
+                or anchor_price_count != retained
+                or any(
+                    value is None
+                    for value in (
+                        depth_initial,
+                        depth_endpoint,
+                        depth_minimum,
+                        depth_depletion,
+                    )
+                )
+                or depth_initial is None
+                or depth_initial <= 0
+                or depth_endpoint is None
+                or depth_minimum is None
+                or depth_depletion is None
+                or depth_minimum > depth_initial
+                or depth_endpoint < depth_minimum
+                or depth_depletion != depth_initial - depth_minimum
+                or not ratio_matches(
+                    depth.get("max_depletion_ratio"),
+                    depth_depletion,
+                    depth_initial,
+                )
+            ):
+                raise ValueError("ask_depletion_feature_top_depth_semantics_invalid")
+            observed_levels.append(retained)
+        if tuple(observed_levels) != DEFAULT_ASK_DEPLETION_TOP_DEPTH_LEVELS:
+            raise ValueError("ask_depletion_feature_top_depth_levels_invalid")
+        observed_horizons.append(horizon_ms)
+    if tuple(observed_horizons) != DEFAULT_ASK_DEPLETION_HORIZONS_MS:
+        raise ValueError("ask_depletion_feature_horizon_order_invalid")
+
+
 def build_future_outcome(
     *,
     evidence: Mapping[str, Any],
@@ -5172,6 +6841,316 @@ def build_future_outcome(
     }
 
 
+def build_future_outcome_rebuild_source(
+    *,
+    evidence: Mapping[str, Any],
+    market_rows: Iterable[Mapping[str, Any]],
+    depth_rows: Iterable[Mapping[str, Any]],
+    entry_pipeline_rows: Iterable[Mapping[str, Any]],
+    control_action: str | None,
+    config: BridgeConfig,
+    source_pool_rows: dict[str, dict[str, dict[str, Any]]],
+) -> dict[str, Any]:
+    """Intern one outcome's raw rows and persist only ordered hash references."""
+
+    expected_pool_names = {"market", "depth", "entry_pipeline"}
+    if set(source_pool_rows) != expected_pool_names or any(
+        not isinstance(source_pool_rows.get(name), dict) for name in expected_pool_names
+    ):
+        raise ValueError("future_outcome_source_pool_builder_invalid")
+
+    canonical = _canonical_future_outcome_source_rows(
+        evidence=evidence,
+        market_rows=market_rows,
+        depth_rows=depth_rows,
+        entry_pipeline_rows=entry_pipeline_rows,
+        config=config,
+    )
+
+    def intern(name: str, rows: Iterable[Mapping[str, Any]]) -> tuple[list[str], int]:
+        pool = source_pool_rows[name]
+        references: list[str] = []
+        row_count = 0
+        for raw_row in rows:
+            row = deepcopy(dict(raw_row))
+            row_hash = _sha256(row)
+            existing = pool.get(row_hash)
+            if existing is not None and existing != row:
+                raise ValueError("future_outcome_source_pool_hash_collision")
+            pool.setdefault(row_hash, row)
+            references.append(row_hash)
+            row_count += 1
+        return references, row_count
+
+    market_refs, market_count = intern("market", canonical["market"])
+    depth_refs, depth_count = intern("depth", canonical["depth"])
+    entry_pipeline_refs, entry_pipeline_count = intern(
+        "entry_pipeline", canonical["entry_pipeline"]
+    )
+    body = {
+        "schema": OUTCOME_REBUILD_SOURCE_SCHEMA,
+        "decision_trace_id": evidence.get("decision_trace_id"),
+        "evidence_sha256": evidence.get("evidence_sha256"),
+        "bridge_config": _bridge_config_contract(config),
+        "control_action": str(control_action or "").strip().upper() or None,
+        "market_row_count": market_count,
+        "market_row_sha256s_sha256": _sha256(market_refs),
+        "market_row_sha256s": market_refs,
+        "depth_row_count": depth_count,
+        "depth_row_sha256s_sha256": _sha256(depth_refs),
+        "depth_row_sha256s": depth_refs,
+        "entry_pipeline_row_count": entry_pipeline_count,
+        "entry_pipeline_row_sha256s_sha256": _sha256(entry_pipeline_refs),
+        "entry_pipeline_row_sha256s": entry_pipeline_refs,
+        # Filled after the report-wide pool is finalized.  It is deliberately
+        # excluded here to avoid a circular hash between the pool and refs.
+        "source_pool_content_sha256": None,
+        "provider_visible": False,
+        "outcome_embedded_in_provider_input": False,
+        **AUTHORITY_CONTRACT,
+    }
+    return {**body, "rebuild_source_sha256": _sha256(body)}
+
+
+def build_future_outcome_source_pool(
+    source_pool_rows: Mapping[str, Mapping[str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    """Finalize one report-wide, content-addressed raw outcome source pool."""
+
+    expected_pool_names = ("market", "depth", "entry_pipeline")
+    normalized: dict[str, dict[str, dict[str, Any]]] = {}
+    counts: dict[str, int] = {}
+    for name in expected_pool_names:
+        raw_pool = source_pool_rows.get(name)
+        if not isinstance(raw_pool, Mapping):
+            raise ValueError("future_outcome_source_pool_group_missing")
+        pool: dict[str, dict[str, Any]] = {}
+        for row_hash, raw_row in raw_pool.items():
+            if not isinstance(raw_row, Mapping):
+                raise ValueError("future_outcome_source_pool_row_invalid")
+            row = deepcopy(dict(raw_row))
+            if str(row_hash or "") != _sha256(row):
+                raise ValueError("future_outcome_source_pool_row_hash_invalid")
+            pool[str(row_hash)] = row
+        normalized[name] = pool
+        counts[name] = len(pool)
+    body = {
+        "schema": OUTCOME_SOURCE_POOL_SCHEMA,
+        "row_pools": normalized,
+        "row_pool_counts": counts,
+        "provider_visible": False,
+        "outcome_embedded_in_provider_input": False,
+        **AUTHORITY_CONTRACT,
+    }
+    return {**body, "source_pool_content_sha256": _sha256(body)}
+
+
+def validate_future_outcome_source_pool(
+    source_pool: Mapping[str, Any],
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Validate and return the exact content-addressed pool groups."""
+
+    body = {
+        key: value
+        for key, value in source_pool.items()
+        if key != "source_pool_content_sha256"
+    }
+    if (
+        source_pool.get("schema") != OUTCOME_SOURCE_POOL_SCHEMA
+        or source_pool.get("source_pool_content_sha256") != _sha256(body)
+        or source_pool.get("provider_visible") is not False
+        or source_pool.get("outcome_embedded_in_provider_input") is not False
+    ):
+        raise ValueError("future_outcome_source_pool_contract_invalid")
+    for field, expected in AUTHORITY_CONTRACT.items():
+        if source_pool.get(field) is not expected:
+            raise ValueError(f"future_outcome_source_pool_authority_invalid:{field}")
+    pools = source_pool.get("row_pools")
+    counts = source_pool.get("row_pool_counts")
+    if not isinstance(pools, Mapping) or not isinstance(counts, Mapping):
+        raise ValueError("future_outcome_source_pool_census_invalid")
+    expected_pool_names = {"market", "depth", "entry_pipeline"}
+    if set(pools) != expected_pool_names or set(counts) != expected_pool_names:
+        raise ValueError("future_outcome_source_pool_census_invalid")
+    validated: dict[str, dict[str, dict[str, Any]]] = {}
+    for name in sorted(expected_pool_names):
+        raw_pool = pools.get(name)
+        count = counts.get(name)
+        if (
+            not isinstance(raw_pool, Mapping)
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count != len(raw_pool)
+        ):
+            raise ValueError("future_outcome_source_pool_census_invalid")
+        pool: dict[str, dict[str, Any]] = {}
+        for row_hash, raw_row in raw_pool.items():
+            if not isinstance(raw_row, Mapping) or str(row_hash or "") != _sha256(
+                raw_row
+            ):
+                raise ValueError("future_outcome_source_pool_row_hash_invalid")
+            pool[str(row_hash)] = dict(raw_row)
+        validated[name] = pool
+    return validated
+
+
+def validate_future_outcome_source_pool_reference_census(
+    source_pool: Mapping[str, Any],
+    rebuild_sources: Iterable[Mapping[str, Any]],
+    *,
+    _validated_source_pools: (
+        Mapping[str, Mapping[str, Mapping[str, Any]]] | None
+    ) = None,
+) -> None:
+    """Require every pooled row to be referenced by at least one report row."""
+
+    pools = (
+        _validated_source_pools
+        if _validated_source_pools is not None
+        else validate_future_outcome_source_pool(source_pool)
+    )
+    reference_field_by_pool = {
+        "market": "market_row_sha256s",
+        "depth": "depth_row_sha256s",
+        "entry_pipeline": "entry_pipeline_row_sha256s",
+    }
+    referenced: dict[str, set[str]] = {
+        pool_name: set() for pool_name in reference_field_by_pool
+    }
+    source_pool_hash = source_pool.get("source_pool_content_sha256")
+    for rebuild_source in rebuild_sources:
+        if not isinstance(rebuild_source, Mapping):
+            raise ValueError("future_outcome_rebuild_source_census_invalid")
+        body = {
+            key: value
+            for key, value in rebuild_source.items()
+            if key != "rebuild_source_sha256"
+        }
+        if (
+            rebuild_source.get("rebuild_source_sha256") != _sha256(body)
+            or rebuild_source.get("source_pool_content_sha256") != source_pool_hash
+        ):
+            raise ValueError("future_outcome_rebuild_source_census_invalid")
+        for pool_name, reference_field in reference_field_by_pool.items():
+            references = rebuild_source.get(reference_field)
+            if (
+                not isinstance(references, list)
+                or any(
+                    not isinstance(value, str) or not _is_sha256(value)
+                    for value in references
+                )
+                or len(references) != len(set(references))
+            ):
+                raise ValueError("future_outcome_rebuild_source_census_invalid")
+            referenced[pool_name].update(references)
+    if any(referenced[name] != set(pools[name]) for name in referenced):
+        raise ValueError("future_outcome_source_pool_orphan_or_missing")
+
+
+def bind_future_outcome_rebuild_source_to_pool(
+    rebuild_source: Mapping[str, Any], *, source_pool_content_sha256: str
+) -> dict[str, Any]:
+    """Bind a compact row-reference proof to the finalized report-wide pool."""
+
+    if not _is_sha256(source_pool_content_sha256):
+        raise ValueError("future_outcome_source_pool_hash_invalid")
+    body = {
+        key: deepcopy(value)
+        for key, value in rebuild_source.items()
+        if key != "rebuild_source_sha256"
+    }
+    if body.get("source_pool_content_sha256") not in {None, source_pool_content_sha256}:
+        raise ValueError("future_outcome_rebuild_source_pool_rebind_forbidden")
+    body["source_pool_content_sha256"] = source_pool_content_sha256
+    return {**body, "rebuild_source_sha256": _sha256(body)}
+
+
+def rebuild_future_outcome_from_source(
+    *,
+    evidence: Mapping[str, Any],
+    rebuild_source: Mapping[str, Any],
+    source_pool: Mapping[str, Any],
+    _validated_source_pools: (
+        Mapping[str, Mapping[str, Mapping[str, Any]]] | None
+    ) = None,
+) -> dict[str, Any]:
+    """Validate compact refs against the bound pool and rebuild one outcome."""
+
+    content = {
+        key: value
+        for key, value in rebuild_source.items()
+        if key != "rebuild_source_sha256"
+    }
+    if (
+        rebuild_source.get("schema") != OUTCOME_REBUILD_SOURCE_SCHEMA
+        or rebuild_source.get("rebuild_source_sha256") != _sha256(content)
+        or rebuild_source.get("decision_trace_id") != evidence.get("decision_trace_id")
+        or rebuild_source.get("evidence_sha256") != evidence.get("evidence_sha256")
+        or rebuild_source.get("source_pool_content_sha256")
+        != source_pool.get("source_pool_content_sha256")
+        or rebuild_source.get("provider_visible") is not False
+        or rebuild_source.get("outcome_embedded_in_provider_input") is not False
+    ):
+        raise ValueError("future_outcome_rebuild_source_contract_invalid")
+    for field, expected in AUTHORITY_CONTRACT.items():
+        if rebuild_source.get(field) is not expected:
+            raise ValueError(f"future_outcome_rebuild_source_authority_invalid:{field}")
+    source_pools = (
+        _validated_source_pools
+        if _validated_source_pools is not None
+        else validate_future_outcome_source_pool(source_pool)
+    )
+    row_groups: dict[str, list[Mapping[str, Any]]] = {}
+    for name in ("market", "depth", "entry_pipeline"):
+        references = rebuild_source.get(f"{name}_row_sha256s")
+        count = rebuild_source.get(f"{name}_row_count")
+        if (
+            not isinstance(references, list)
+            or any(not _is_sha256(row_hash) for row_hash in references)
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count != len(references)
+            or rebuild_source.get(f"{name}_row_sha256s_sha256") != _sha256(references)
+        ):
+            raise ValueError(f"future_outcome_rebuild_source_{name}_census_invalid")
+        pool = source_pools[name]
+        rows: list[Mapping[str, Any]] = []
+        for row_hash in references:
+            row = pool.get(row_hash)
+            if not isinstance(row, Mapping) or (
+                _validated_source_pools is None and _sha256(row) != row_hash
+            ):
+                raise ValueError(
+                    f"future_outcome_rebuild_source_{name}_reference_invalid"
+                )
+            rows.append(row)
+        row_groups[name] = rows
+    config_contract = rebuild_source.get("bridge_config")
+    if not isinstance(config_contract, Mapping):
+        raise ValueError("future_outcome_rebuild_source_config_missing")
+    config = _bridge_config_from_contract(config_contract)
+    canonical = _canonical_future_outcome_source_rows(
+        evidence=evidence,
+        market_rows=row_groups["market"],
+        depth_rows=row_groups["depth"],
+        entry_pipeline_rows=row_groups["entry_pipeline"],
+        config=config,
+    )
+    if any(
+        list(row_groups[name]) != canonical[name]
+        for name in ("market", "depth", "entry_pipeline")
+    ):
+        raise ValueError("future_outcome_rebuild_source_noncanonical_rows")
+    return build_future_outcome(
+        evidence=evidence,
+        market_rows=row_groups["market"],
+        depth_rows=row_groups["depth"],
+        entry_pipeline_rows=row_groups["entry_pipeline"],
+        control_action=rebuild_source.get("control_action"),
+        config=config,
+    )
+
+
 def _control_decision_findings(
     trace: Mapping[str, Any] | None,
     *,
@@ -5316,22 +7295,75 @@ def _control_decision_findings(
 def build_three_arm_manifest(
     *,
     evidence: Mapping[str, Any],
+    ablation_design_version: str,
     control_prompt_version: str,
     control_contract: Mapping[str, Any] | None = None,
     control_trace: Mapping[str, Any] | None = None,
     outcome: Mapping[str, Any] | None = None,
+    ask_depletion_sidecar: Mapping[str, Any] | None = None,
+    current_source_gap_reason: str | None = None,
 ) -> dict[str, Any]:
     """Describe three replay arms plus a non-comparable captured reference."""
 
     exact_hash = str(evidence.get("source_exact_payload_sha256") or "")
     evidence_hash = str(evidence.get("evidence_sha256") or "")
-    base_identity = {"source_exact_payload_sha256": exact_hash}
-    enriched_identity = {
-        **base_identity,
-        "tactical_micro_reversion_evidence_sha256": evidence_hash,
-    }
+    normalized_source_gap_reason = str(current_source_gap_reason or "").strip()
+    if ablation_design_version == CURRENT_DESIGN_VERSION:
+        if ask_depletion_sidecar is None:
+            if not normalized_source_gap_reason:
+                raise ValueError("ask_depletion_current_design_sidecar_missing")
+            ask_feature_view = None
+        else:
+            if normalized_source_gap_reason:
+                raise ValueError(
+                    "ask_depletion_current_design_gap_conflicts_with_sidecar"
+                )
+            ask_feature_view = _validated_ask_depletion_feature_view(
+                ask_depletion_sidecar,
+                evidence=evidence,
+            )
+    elif ablation_design_version == LEGACY_DESIGN_VERSION:
+        if ask_depletion_sidecar is not None or normalized_source_gap_reason:
+            raise ValueError("ask_depletion_legacy_design_sidecar_forbidden")
+        ask_feature_view = None
+    else:
+        raise ValueError("micro_reversion_ablation_design_version_invalid")
+    if ablation_design_version == LEGACY_DESIGN_VERSION:
+        design_version = LEGACY_DESIGN_VERSION
+        design_arms = LEGACY_ARMS
+        base_identity = {"source_exact_payload_sha256": exact_hash}
+        enriched_identity = {
+            **base_identity,
+            "tactical_micro_reversion_evidence_sha256": evidence_hash,
+        }
+        feature_comparison = "micro_context_effect"
+        feature_axis = "tactical_micro_reversion_context_only"
+    else:
+        design_version = CURRENT_DESIGN_VERSION
+        design_arms = CURRENT_ARMS
+        base_identity = {
+            "source_exact_payload_sha256": exact_hash,
+            "tactical_micro_reversion_evidence_sha256": evidence_hash,
+        }
+        enriched_identity = {
+            **base_identity,
+            "ask_depletion_contract_sha256": (
+                ask_feature_view["ask_depletion_contract_sha256"]
+                if ask_feature_view is not None
+                else None
+            ),
+            "ask_depletion_context_sha256": (
+                ask_feature_view["ask_depletion_context_sha256"]
+                if ask_feature_view is not None
+                else None
+            ),
+        }
+        feature_comparison = "ask_depletion_feature_effect"
+        feature_axis = "ask_liquidity_depletion_context_only"
     base_pair_hash = _sha256(base_identity)
-    enriched_pair_hash = _sha256(enriched_identity)
+    enriched_pair_hash = (
+        _sha256(enriched_identity) if ask_feature_view is not None else None
+    )
     contract = dict(control_contract or {})
     locked_contract = {
         "prompt_sha256": contract.get("prompt_sha256"),
@@ -5356,12 +7388,31 @@ def build_three_arm_manifest(
         evidence.get("exact_replay_source_semantic_status")
         == "stored_semantic_hash_verified"
     )
-    context_eligible = observation_context_eligible and semantic_identity_verified
+    context_eligible = bool(
+        observation_context_eligible
+        and semantic_identity_verified
+        and (ask_feature_view is not None or design_version == LEGACY_DESIGN_VERSION)
+    )
     control_findings = _control_decision_findings(
         control_trace,
         control_contract=locked_contract,
     )
     control_eligible = not control_findings
+    materialization_blockers = (
+        [f"ask_depletion_source_gap:{normalized_source_gap_reason}"]
+        if normalized_source_gap_reason
+        else []
+    )
+    replay_arm_materialization_status = (
+        "ask_depletion_source_gap_blocked"
+        if materialization_blockers
+        else "replay_request_materialization_required"
+    )
+    candidate_arm_materialization_status = (
+        "ask_depletion_source_gap_blocked"
+        if materialization_blockers
+        else "candidate_prompt_contract_required"
+    )
     outcome_economic_eligible = False
     if isinstance(outcome, Mapping):
         outcome_without_hash = {
@@ -5396,6 +7447,8 @@ def build_three_arm_manifest(
     )
     return {
         "schema": THREE_ARM_SCHEMA,
+        "ablation_design_version": design_version,
+        "ablation_arms": list(design_arms),
         "decision_trace_id": evidence.get("decision_trace_id"),
         "captured_natural_reference": {
             "prompt_version": control_prompt_version,
@@ -5419,25 +7472,25 @@ def build_three_arm_manifest(
         },
         "replay_arms": [
             {
-                "arm": "replay_control_exact_no_micro",
+                "arm": design_arms[0],
                 "prompt_version": control_prompt_version,
                 **locked_contract,
                 **base_identity,
                 "analytical_context_pair_sha256": base_pair_hash,
                 "actual_provider_input_identity_sha256": None,
-                "materialization_status": "replay_request_materialization_required",
+                "materialization_status": replay_arm_materialization_status,
             },
             {
-                "arm": "replay_control_exact_plus_micro",
+                "arm": design_arms[1],
                 "prompt_version": control_prompt_version,
                 **locked_contract,
                 **enriched_identity,
                 "analytical_context_pair_sha256": enriched_pair_hash,
                 "actual_provider_input_identity_sha256": None,
-                "materialization_status": "replay_request_materialization_required",
+                "materialization_status": replay_arm_materialization_status,
             },
             {
-                "arm": "replay_candidate_exact_plus_micro",
+                "arm": design_arms[2],
                 "prompt_version": None,
                 "status": "candidate_prompt_contract_required",
                 "provider": contract.get("provider"),
@@ -5459,14 +7512,18 @@ def build_three_arm_manifest(
                 **enriched_identity,
                 "analytical_context_pair_sha256": enriched_pair_hash,
                 "actual_provider_input_identity_sha256": None,
-                "materialization_status": "candidate_prompt_contract_required",
+                "materialization_status": candidate_arm_materialization_status,
             },
         ],
-        "micro_effect_comparison": (
-            "replay_control_exact_no_micro_vs_replay_control_exact_plus_micro"
-        ),
-        "prompt_effect_comparison": (
-            "replay_control_exact_plus_micro_vs_replay_candidate_exact_plus_micro"
+        "feature_effect_comparison": f"{design_arms[0]}_vs_{design_arms[1]}",
+        "micro_effect_comparison": f"{design_arms[0]}_vs_{design_arms[1]}",
+        "feature_effect_comparison_role": feature_comparison,
+        "feature_effect_changed_axis": feature_axis,
+        "prompt_effect_comparison": f"{design_arms[1]}_vs_{design_arms[2]}",
+        "prompt_effect_comparison_role": (
+            "prompt_contract_effect_conditional_on_ask_depletion"
+            if design_version == CURRENT_DESIGN_VERSION
+            else "prompt_contract_effect"
         ),
         "identical_exact_payload_across_replay_arms": True,
         "identical_micro_context_between_enriched_replay_arms": True,
@@ -5481,6 +7538,7 @@ def build_three_arm_manifest(
         "paired_replay_materialization_eligible": (
             context_eligible and control_eligible
         ),
+        "materialization_blockers": materialization_blockers,
         "paired_replay_ready": False,
         "net_economic_evaluation_eligible": economic_eligible,
         "promotion_evidence_eligible": False,
@@ -5533,6 +7591,71 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
         raise ValueError(
             "micro_context_unknown_top_level_field:" + ",".join(sorted(unknown))
         )
+
+    # These identities are exact source bindings.  Never allow Python's
+    # ``str``/symbol normalization coercions to turn a resealed non-string
+    # value into an apparently valid ask-depletion scope.
+    for field in ("stock_code", "micro_venue", "micro_session_bucket"):
+        value = evidence.get(field)
+        if not isinstance(value, str) or value != value.strip():
+            raise ValueError(f"micro_context_native_string_invalid:{field}")
+    event_identity = evidence.get("event")
+    if isinstance(event_identity, Mapping) and "shock_event_id" in event_identity:
+        shock_event_id = event_identity.get("shock_event_id")
+        if (
+            not isinstance(shock_event_id, str)
+            or not shock_event_id
+            or shock_event_id != shock_event_id.strip()
+        ):
+            raise ValueError("micro_context_native_string_invalid:event.shock_event_id")
+
+    def require_native_positive_int(
+        container: Mapping[str, Any],
+        field: str,
+        *,
+        optional: bool = False,
+        allow_zero_for_source_unavailable: bool = False,
+    ) -> None:
+        value = container.get(field)
+        if optional and value is None:
+            return
+        if (
+            allow_zero_for_source_unavailable
+            and evidence.get("state") == "source_unavailable"
+            and (
+                value is None
+                or (
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value == 0
+                )
+            )
+        ):
+            return
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"micro_context_native_positive_int_invalid:{field}")
+
+    require_native_positive_int(
+        evidence,
+        "sequence_epoch",
+        allow_zero_for_source_unavailable=True,
+    )
+    require_native_positive_int(
+        evidence,
+        "snapshot_captured_at_ms",
+        allow_zero_for_source_unavailable=True,
+    )
+    if isinstance(event_identity, Mapping):
+        for field in ("event_detected_at_ms", "event_source_sequence"):
+            require_native_positive_int(event_identity, field, optional=True)
+    for watermark_name in ("decision_watermark", "depth_watermark"):
+        watermark = evidence.get(watermark_name)
+        if isinstance(watermark, Mapping):
+            require_native_positive_int(
+                watermark,
+                "source_sequence",
+                optional=True,
+            )
 
     allowed_by_path: dict[tuple[str, ...], set[str]] = {
         ("decision_watermark",): {
@@ -6183,22 +8306,34 @@ def materialize_micro_reversion_three_arm_requests(
     replay_control_request: Mapping[str, Any],
     replay_candidate_request: Mapping[str, Any],
     evidence: Mapping[str, Any],
+    ablation_design_version: str,
     source_trace: Mapping[str, Any],
     source_payload: Mapping[str, Any],
     source_market_rows: Iterable[Mapping[str, Any]],
     source_depth_rows: Iterable[Mapping[str, Any]],
     source_event_references: Iterable[Mapping[str, Any]],
     config: BridgeConfig,
+    ask_depletion_sidecar: Mapping[str, Any] | None = None,
     excluded_scopes: set[tuple[str, str, str, int]] | None = None,
     verified_symbol_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Materialize fair offline A/B/C requests without calling a provider.
 
-    A and B share the current prompt and exact input; B and C share the same
-    exact input plus the same micro sidecar.  The only permitted B/C change is
-    the prompt contract.  This function never performs a provider or broker
-    call and never grants runtime authority.
+    Historical callers must explicitly select the legacy exact/no-micro
+    design.  Current callers use A=current micro, B=current
+    micro+ask depletion, C=candidate prompt over the identical B input.  The
+    only permitted B/C change is the prompt contract.  This function never
+    performs a provider or broker call and never grants runtime authority.
     """
+
+    if ablation_design_version == CURRENT_DESIGN_VERSION:
+        if ask_depletion_sidecar is None:
+            raise ValueError("ask_depletion_current_design_sidecar_missing")
+    elif ablation_design_version == LEGACY_DESIGN_VERSION:
+        if ask_depletion_sidecar is not None:
+            raise ValueError("ask_depletion_legacy_design_sidecar_forbidden")
+    else:
+        raise ValueError("micro_reversion_ablation_design_version_invalid")
 
     def prompt_contract(
         request: Mapping[str, Any], *, stored_control: bool
@@ -6386,7 +8521,7 @@ def materialize_micro_reversion_three_arm_requests(
         field: candidate_prompt.get(field) for field in decision_contract_fields
     }
 
-    parent_replay_id = str(
+    base_parent_replay_id = str(
         replay_control_request.get("paired_replay_id")
         or f"micro-pair-{_sha256((evidence.get('decision_trace_id'), evidence.get('evidence_sha256')))[:24]}"
     )
@@ -6423,25 +8558,128 @@ def materialize_micro_reversion_three_arm_requests(
     ):
         raise ValueError("three_arm_enriched_input_hash_mismatch")
 
+    if ablation_design_version == CURRENT_DESIGN_VERSION:
+        assert ask_depletion_sidecar is not None
+        feature_view = _validated_ask_depletion_feature_view(
+            ask_depletion_sidecar,
+            evidence=evidence,
+        )
+        if ask_depletion_sidecar.get(
+            "tactical_micro_reversion_evidence_sha256"
+        ) != evidence.get("evidence_sha256"):
+            raise ValueError("ask_depletion_tactical_evidence_binding_mismatch")
+
+        def attach_ask_feature(request: Mapping[str, Any]) -> dict[str, Any]:
+            candidate_input = deepcopy(request.get("candidate_input"))
+            if not isinstance(candidate_input, dict):
+                raise ValueError("ask_depletion_candidate_input_missing")
+            if ASK_DEPLETION_FEATURE_VIEW_SCHEMA in candidate_input:
+                raise ValueError("ask_depletion_feature_already_present")
+            candidate_input[ASK_DEPLETION_FEATURE_VIEW_SCHEMA] = deepcopy(feature_view)
+            return {
+                **deepcopy(dict(request)),
+                "candidate_input": candidate_input,
+                "candidate_input_sha256": _sha256(candidate_input),
+                "ask_depletion_contract_sha256": feature_view[
+                    "ask_depletion_contract_sha256"
+                ],
+                "ask_depletion_context_sha256": feature_view[
+                    "ask_depletion_context_sha256"
+                ],
+            }
+
+        ask_control = attach_ask_feature(enriched_control)
+        ask_candidate = attach_ask_feature(enriched_candidate)
+        if ask_control.get("candidate_input_sha256") != ask_candidate.get(
+            "candidate_input_sha256"
+        ):
+            raise ValueError("ask_depletion_prompt_pair_input_mismatch")
+        if enriched_control.get("candidate_input_sha256") == ask_control.get(
+            "candidate_input_sha256"
+        ):
+            raise ValueError("ask_depletion_feature_input_not_distinct")
+        replay_ids = build_current_design_replay_ids(base_parent_replay_id)
+        request_id_by_arm = dict(replay_ids.request_ids_by_arm)
+        current_control = {
+            **enriched_control,
+            "paired_replay_parent_id": replay_ids.parent_id,
+            "paired_replay_id": request_id_by_arm[CURRENT_BASE_CONTROL_ARM],
+            "micro_reversion_replay_arm": CURRENT_BASE_CONTROL_ARM,
+            "ablation_design_version": CURRENT_DESIGN_VERSION,
+            "provider_call_performed": False,
+            **ABLATION_SOURCE_ONLY_AUTHORITY,
+        }
+        ask_control = {
+            **ask_control,
+            "paired_replay_parent_id": replay_ids.parent_id,
+            "paired_replay_id": request_id_by_arm[CURRENT_ASK_CONTROL_ARM],
+            "micro_reversion_replay_arm": CURRENT_ASK_CONTROL_ARM,
+            "ablation_design_version": CURRENT_DESIGN_VERSION,
+            "provider_call_performed": False,
+            **ABLATION_SOURCE_ONLY_AUTHORITY,
+        }
+        ask_candidate = {
+            **ask_candidate,
+            "paired_replay_parent_id": replay_ids.parent_id,
+            "paired_replay_id": request_id_by_arm[CURRENT_ASK_CANDIDATE_ARM],
+            "micro_reversion_replay_arm": CURRENT_ASK_CANDIDATE_ARM,
+            "ablation_design_version": CURRENT_DESIGN_VERSION,
+            "provider_call_performed": False,
+            **ABLATION_SOURCE_ONLY_AUTHORITY,
+        }
+        result_without_hash = {
+            "schema": THREE_ARM_REQUEST_SCHEMA,
+            "ablation_design_version": CURRENT_DESIGN_VERSION,
+            "ablation_arms": list(CURRENT_ARMS),
+            "decision_trace_id": evidence.get("decision_trace_id"),
+            "source_exact_payload_sha256": evidence.get("source_exact_payload_sha256"),
+            "tactical_micro_reversion_evidence_sha256": evidence.get("evidence_sha256"),
+            "ask_depletion_contract_sha256": feature_view[
+                "ask_depletion_contract_sha256"
+            ],
+            "ask_depletion_context_sha256": feature_view[
+                "ask_depletion_context_sha256"
+            ],
+            "requests": [current_control, ask_control, ask_candidate],
+            "feature_effect_input_hashes_differ_only_by_ask_sidecar": True,
+            "prompt_effect_ask_input_hashes_identical": True,
+            "candidate_comparison_axis": "prompt_and_response_contract_only",
+            "control_decision_contract_sha256": _sha256(control_decision_contract),
+            "candidate_decision_contract_sha256": _sha256(candidate_decision_contract),
+            "locked_execution_contract_sha256": _sha256(
+                {field: control_prompt.get(field) for field in execution_fields}
+            ),
+            "provider_call_performed": False,
+            "paired_replay_materialized": True,
+            "paired_replay_ready": True,
+            "decision_authority": "offline_replay_no_runtime_change",
+            **AUTHORITY_CONTRACT,
+            **ABLATION_SOURCE_ONLY_AUTHORITY,
+        }
+        return {
+            **result_without_hash,
+            "materialization_sha256": _sha256(result_without_hash),
+        }
+
     exact_control = {
         **control_base,
-        "paired_replay_parent_id": parent_replay_id,
-        "paired_replay_id": f"{parent_replay_id}:exact-control",
+        "paired_replay_parent_id": base_parent_replay_id,
+        "paired_replay_id": f"{base_parent_replay_id}:exact-control",
         "micro_reversion_replay_arm": "replay_control_exact_no_micro",
         "provider_call_performed": False,
         **AUTHORITY_CONTRACT,
     }
     enriched_control = {
         **enriched_control,
-        "paired_replay_parent_id": parent_replay_id,
-        "paired_replay_id": f"{parent_replay_id}:micro-control",
+        "paired_replay_parent_id": base_parent_replay_id,
+        "paired_replay_id": f"{base_parent_replay_id}:micro-control",
         "micro_reversion_replay_arm": "replay_control_exact_plus_micro",
         "provider_call_performed": False,
     }
     enriched_candidate = {
         **enriched_candidate,
-        "paired_replay_parent_id": parent_replay_id,
-        "paired_replay_id": f"{parent_replay_id}:micro-candidate",
+        "paired_replay_parent_id": base_parent_replay_id,
+        "paired_replay_id": f"{base_parent_replay_id}:micro-candidate",
         "micro_reversion_replay_arm": "replay_candidate_exact_plus_micro",
         "provider_call_performed": False,
     }
@@ -6559,29 +8797,62 @@ class _SQLiteRelevantSourceStore:
         path: Path | str,
         *,
         windows: Mapping[tuple[str, str, str], tuple[tuple[int, int], ...]],
+        create: bool = True,
+        cache_status: str = "ephemeral",
     ) -> None:
-        self._connection = sqlite3.connect(path)
-        self._connection.execute("PRAGMA journal_mode=OFF")
-        self._connection.execute("PRAGMA synchronous=OFF")
-        self._connection.execute("PRAGMA temp_store=FILE")
-        self._connection.execute("""
-            CREATE TABLE source_rows (
-                kind TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                venue TEXT NOT NULL,
-                session_bucket TEXT NOT NULL,
-                observed_us INTEGER NOT NULL,
-                source_sequence INTEGER NOT NULL,
-                payload_json TEXT NOT NULL
+        self.path = Path(path) if path else None
+        self.cache_status = cache_status
+        if create:
+            self._connection = sqlite3.connect(path)
+            self._connection.execute("PRAGMA journal_mode=OFF")
+            self._connection.execute("PRAGMA synchronous=OFF")
+            self._connection.execute("PRAGMA temp_store=FILE")
+            self._connection.execute("""
+                CREATE TABLE source_rows (
+                    kind TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    venue TEXT NOT NULL,
+                    session_bucket TEXT NOT NULL,
+                    observed_us INTEGER NOT NULL,
+                    source_sequence INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL
+                )
+                """)
+        else:
+            if self.path is None or not self.path.is_file():
+                raise ValueError("relevant_source_cache_sqlite_missing")
+            self._connection = sqlite3.connect(
+                f"{self.path.resolve().as_uri()}?mode=ro",
+                uri=True,
             )
-            """)
+            self._connection.execute("PRAGMA query_only=ON")
+            tables = {
+                str(row[0])
+                for row in self._connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            indexes = {
+                str(row[0])
+                for row in self._connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'index'"
+                )
+            }
+            if "source_rows" not in tables or "source_rows_scope_time" not in indexes:
+                self._connection.close()
+                raise ValueError("relevant_source_cache_sqlite_schema_invalid")
         self._window_index = {
             key: (tuple(window[0] for window in scope_windows), scope_windows)
             for key, scope_windows in windows.items()
         }
         self.invalid_timestamp_counts: Counter[str] = Counter()
+        self.invalid_timestamp_counts_by_scope: Counter[tuple[str, str, str, str]] = (
+            Counter()
+        )
         self.retained_row_counts: Counter[str] = Counter()
-        self._finalized = False
+        self._finalized = not create
+        if not create:
+            self._refresh_retained_counts()
 
     def __enter__(self) -> _SQLiteRelevantSourceStore:
         return self
@@ -6646,6 +8917,7 @@ class _SQLiteRelevantSourceStore:
                 continue
             if observed_us is None:
                 self.invalid_timestamp_counts[kind] += 1
+                self.invalid_timestamp_counts_by_scope[(kind, *key)] += 1
                 continue
             if not self._is_relevant(key, observed_us):
                 continue
@@ -6693,6 +8965,32 @@ class _SQLiteRelevantSourceStore:
         self._connection.commit()
         self._finalized = True
 
+    def _refresh_retained_counts(self) -> None:
+        self.retained_row_counts.clear()
+        for kind in self._KINDS:
+            total = 0
+            for scope, (_, windows) in self._window_index.items():
+                for start_ms, end_ms in windows:
+                    row = self._connection.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM source_rows
+                        WHERE kind = ?
+                          AND symbol = ?
+                          AND venue = ?
+                          AND session_bucket = ?
+                          AND observed_us BETWEEN ? AND ?
+                        """,
+                        (
+                            kind,
+                            *scope,
+                            start_ms * 1_000,
+                            end_ms * 1_000 + 999,
+                        ),
+                    ).fetchone()
+                    total += int(row[0] if row else 0)
+            self.retained_row_counts[kind] = total
+
     def rows(
         self,
         kind: str,
@@ -6719,6 +9017,670 @@ class _SQLiteRelevantSourceStore:
             (kind, *scope, start_us, end_us),
         )
         return [json.loads(row[0]) for row in cursor]
+
+
+def _stable_file_sha256(path: Path) -> dict[str, Any]:
+    """Hash one immutable raw generation and reject concurrent replacement."""
+
+    requested = path.absolute()
+    resolved = requested.resolve(strict=True)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(resolved, flags)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("relevant_source_generation_not_regular_file")
+        digest = hashlib.sha256()
+        byte_count = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            byte_count += len(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    current = resolved.stat(follow_symlinks=False)
+    try:
+        resolved_after = requested.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("relevant_source_generation_path_changed") from exc
+    stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+    if (
+        any(
+            getattr(before, field) != getattr(after, field)
+            or getattr(after, field) != getattr(current, field)
+            for field in stable_fields
+        )
+        or byte_count != int(after.st_size)
+        or resolved_after != resolved
+    ):
+        raise ValueError("relevant_source_generation_changed_during_hash")
+    return {
+        "path": str(resolved),
+        "stored_bytes": byte_count,
+        "stored_sha256": digest.hexdigest(),
+    }
+
+
+def _relevant_source_generation(
+    *,
+    target_date: str,
+    market_paths: Sequence[Path],
+    depth_paths: Sequence[Path],
+    reference_paths: Sequence[Path],
+) -> dict[str, Any]:
+    sources: list[dict[str, Any]] = []
+    for kind, paths in (
+        ("market", market_paths),
+        ("depth", depth_paths),
+        ("reference", reference_paths),
+    ):
+        for path in sorted(paths, key=lambda value: str(value.resolve())):
+            sources.append({"kind": kind, **_stable_file_sha256(path)})
+    sources.sort(key=lambda row: (str(row["kind"]), str(row["path"])))
+    body = {
+        "schema": "micro_reversion_relevant_source_generation_v1",
+        "target_date": target_date,
+        "source_count": len(sources),
+        "sources": sources,
+    }
+    return {**body, "source_generation_content_sha256": _producer_sha256(body)}
+
+
+def _relevant_source_path_census(
+    *,
+    market_paths: Sequence[Path],
+    depth_paths: Sequence[Path],
+    reference_paths: Sequence[Path],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return tuple(
+        (
+            kind,
+            tuple(sorted(str(path.absolute()) for path in paths)),
+        )
+        for kind, paths in (
+            ("market", market_paths),
+            ("depth", depth_paths),
+            ("reference", reference_paths),
+        )
+    )
+
+
+def _rediscover_relevant_source_paths(
+    observation_root: Path, target_date: str
+) -> tuple[list[Path], list[Path], list[Path]]:
+    return (
+        _partition_paths(observation_root, target_date, "market_stream"),
+        _partition_paths(observation_root, target_date, "market_depth_stream"),
+        _partition_paths(
+            observation_root,
+            target_date,
+            "market_stream_event_references",
+        ),
+    )
+
+
+def _assert_relevant_source_generation_unchanged(
+    *,
+    expected_generation: Mapping[str, Any],
+    target_date: str,
+    market_paths: Sequence[Path],
+    depth_paths: Sequence[Path],
+    reference_paths: Sequence[Path],
+    observation_root: Path | None,
+) -> None:
+    current_paths = (market_paths, depth_paths, reference_paths)
+    if observation_root is not None:
+        discovered = _rediscover_relevant_source_paths(observation_root, target_date)
+        if _relevant_source_path_census(
+            market_paths=market_paths,
+            depth_paths=depth_paths,
+            reference_paths=reference_paths,
+        ) != _relevant_source_path_census(
+            market_paths=discovered[0],
+            depth_paths=discovered[1],
+            reference_paths=discovered[2],
+        ):
+            raise ValueError(
+                "relevant_source_generation_changed_during_materialization"
+            )
+        current_paths = discovered
+    if (
+        _relevant_source_generation(
+            target_date=target_date,
+            market_paths=current_paths[0],
+            depth_paths=current_paths[1],
+            reference_paths=current_paths[2],
+        )
+        != expected_generation
+    ):
+        raise ValueError("relevant_source_generation_changed_during_materialization")
+
+
+def _validate_relevant_source_generation(
+    value: Mapping[str, Any], *, expected_target_date: str
+) -> str:
+    body = {
+        key: item
+        for key, item in value.items()
+        if key != "source_generation_content_sha256"
+    }
+    sources = value.get("sources")
+    if (
+        value.get("schema") != "micro_reversion_relevant_source_generation_v1"
+        or value.get("target_date") != expected_target_date
+        or value.get("source_generation_content_sha256") != _producer_sha256(body)
+        or not isinstance(sources, list)
+        or value.get("source_count") != len(sources)
+    ):
+        raise ValueError("relevant_source_cache_generation_invalid")
+    identities: set[tuple[str, str]] = set()
+    previous: tuple[str, str] | None = None
+    for source in sources:
+        if not isinstance(source, Mapping):
+            raise ValueError("relevant_source_cache_generation_invalid")
+        kind = str(source.get("kind") or "")
+        path = str(source.get("path") or "")
+        stored_bytes = source.get("stored_bytes")
+        stored_sha256 = str(source.get("stored_sha256") or "")
+        identity = (kind, path)
+        if (
+            set(source) != {"kind", "path", "stored_bytes", "stored_sha256"}
+            or kind not in _SQLiteRelevantSourceStore._KINDS
+            or not Path(path).is_absolute()
+            or isinstance(stored_bytes, bool)
+            or not isinstance(stored_bytes, int)
+            or stored_bytes < 0
+            or len(stored_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in stored_sha256)
+            or identity in identities
+            or (previous is not None and identity <= previous)
+        ):
+            raise ValueError("relevant_source_cache_generation_invalid")
+        identities.add(identity)
+        previous = identity
+    return str(value["source_generation_content_sha256"])
+
+
+def _canonical_relevant_source_coverage(
+    windows: Mapping[tuple[str, str, str], tuple[tuple[int, int], ...]],
+) -> dict[str, Any]:
+    rows = [
+        {
+            "symbol": key[0],
+            "venue": key[1],
+            "session_bucket": key[2],
+            "start_ms": int(start_ms),
+            "end_ms": int(end_ms),
+        }
+        for key, scope_windows in sorted(windows.items())
+        for start_ms, end_ms in scope_windows
+    ]
+    if any(
+        not row["symbol"]
+        or row["venue"] == "UNKNOWN"
+        or row["session_bucket"] == "UNKNOWN"
+        or row["start_ms"] < 0
+        or row["end_ms"] < row["start_ms"]
+        for row in rows
+    ):
+        raise ValueError("relevant_source_cache_window_invalid")
+    body = {
+        "schema": "micro_reversion_relevant_source_coverage_v1",
+        "window_count": len(rows),
+        "windows": rows,
+    }
+    return {**body, "coverage_content_sha256": _producer_sha256(body)}
+
+
+def _coverage_windows(
+    coverage: Mapping[str, Any],
+) -> dict[tuple[str, str, str], tuple[tuple[int, int], ...]]:
+    body = {
+        key: value
+        for key, value in coverage.items()
+        if key != "coverage_content_sha256"
+    }
+    rows = coverage.get("windows")
+    if (
+        coverage.get("schema") != "micro_reversion_relevant_source_coverage_v1"
+        or coverage.get("coverage_content_sha256") != _producer_sha256(body)
+        or not isinstance(rows, list)
+        or coverage.get("window_count") != len(rows)
+    ):
+        raise ValueError("relevant_source_cache_coverage_invalid")
+    grouped: dict[tuple[str, str, str], list[tuple[int, int]]] = defaultdict(list)
+    previous: tuple[str, str, str, int, int] | None = None
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("relevant_source_cache_coverage_invalid")
+        key = (
+            str(row.get("symbol") or ""),
+            str(row.get("venue") or ""),
+            str(row.get("session_bucket") or ""),
+        )
+        start_ms = row.get("start_ms")
+        end_ms = row.get("end_ms")
+        current = (*key, start_ms, end_ms)
+        if (
+            not all(key)
+            or "UNKNOWN" in key[1:]
+            or isinstance(start_ms, bool)
+            or not isinstance(start_ms, int)
+            or isinstance(end_ms, bool)
+            or not isinstance(end_ms, int)
+            or start_ms < 0
+            or end_ms < start_ms
+            or (previous is not None and current <= previous)
+        ):
+            raise ValueError("relevant_source_cache_coverage_invalid")
+        grouped[key].append((start_ms, end_ms))
+        previous = current
+    for scope_windows in grouped.values():
+        if any(
+            next_start <= current_end
+            for (_, current_end), (next_start, _) in zip(
+                scope_windows, scope_windows[1:]
+            )
+        ):
+            raise ValueError("relevant_source_cache_coverage_invalid")
+    return {key: tuple(value) for key, value in grouped.items()}
+
+
+def _coverage_contains(
+    stored: Mapping[tuple[str, str, str], tuple[tuple[int, int], ...]],
+    requested: Mapping[tuple[str, str, str], tuple[tuple[int, int], ...]],
+) -> bool:
+    for key, requested_windows in requested.items():
+        stored_windows = stored.get(key, ())
+        if any(
+            not any(
+                stored_start <= requested_start and requested_end <= stored_end
+                for stored_start, stored_end in stored_windows
+            )
+            for requested_start, requested_end in requested_windows
+        ):
+            return False
+    return True
+
+
+def _cache_metadata_content(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: item for key, item in value.items() if key != "metadata_content_sha256"
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                return digest.hexdigest()
+            digest.update(chunk)
+
+
+def _load_relevant_source_cache_metadata(
+    cache_dir: Path,
+    *,
+    target_date: str,
+    config_sha256: str,
+    source_generation_sha256: str,
+    requested_windows: Mapping[tuple[str, str, str], tuple[tuple[int, int], ...]],
+) -> dict[str, Any]:
+    metadata_path = cache_dir / "metadata.json"
+    sqlite_path = cache_dir / "source.sqlite3"
+    metadata = read_json_object_strict(metadata_path)
+    content = _cache_metadata_content(metadata)
+    coverage = metadata.get("coverage")
+    source_generation = metadata.get("source_generation")
+    validated_source_generation_sha256 = _validate_relevant_source_generation(
+        source_generation if isinstance(source_generation, Mapping) else {},
+        expected_target_date=target_date,
+    )
+    stored_windows = _coverage_windows(
+        coverage if isinstance(coverage, Mapping) else {}
+    )
+    if (
+        metadata.get("schema") != RELEVANT_SOURCE_CACHE_SCHEMA
+        or metadata.get("index_version") != RELEVANT_SOURCE_CACHE_INDEX_VERSION
+        or metadata.get("complete") is not True
+        or metadata.get("target_date") != target_date
+        or metadata.get("bridge_config_sha256") != config_sha256
+        or metadata.get("source_generation_content_sha256") != source_generation_sha256
+        or validated_source_generation_sha256 != source_generation_sha256
+        or metadata.get("metadata_content_sha256") != _producer_sha256(content)
+        or not _coverage_contains(stored_windows, requested_windows)
+        or not sqlite_path.is_file()
+        or metadata.get("sqlite_bytes") != sqlite_path.stat().st_size
+        or metadata.get("sqlite_sha256") != _sha256_file(sqlite_path)
+    ):
+        raise ValueError("relevant_source_cache_contract_invalid")
+    with sqlite3.connect(
+        f"{sqlite_path.resolve().as_uri()}?mode=ro", uri=True
+    ) as connection:
+        row = connection.execute("PRAGMA integrity_check").fetchone()
+    if row != ("ok",):
+        raise ValueError("relevant_source_cache_integrity_invalid")
+    return metadata
+
+
+@contextmanager
+def _relevant_source_cache_lock(cache_root: Path) -> Iterator[None]:
+    cache_root.mkdir(parents=True, exist_ok=True)
+    lock_path = cache_root / ".cache.lock"
+    with lock_path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _remove_cache_only_tree(path: Path, *, cache_root: Path) -> None:
+    resolved_root = cache_root.resolve()
+    resolved = path.resolve()
+    if resolved.parent == resolved_root or resolved_root in resolved.parents:
+        shutil.rmtree(resolved)
+        return
+    raise ValueError("relevant_source_cache_cleanup_scope_invalid")
+
+
+def _cleanup_relevant_source_cache(
+    cache_root: Path,
+    *,
+    keep_completed: int = DEFAULT_RELEVANT_SOURCE_CACHE_KEEP,
+    partial_max_age_sec: int = DEFAULT_RELEVANT_SOURCE_CACHE_PARTIAL_MAX_AGE_SEC,
+    now_timestamp: float | None = None,
+    protected_paths: set[Path] | None = None,
+) -> dict[str, int]:
+    if keep_completed < 1 or partial_max_age_sec < 0:
+        raise ValueError("relevant_source_cache_retention_invalid")
+    if not cache_root.exists():
+        return {"partial_removed": 0, "completed_removed": 0}
+    now = datetime.now().timestamp() if now_timestamp is None else now_timestamp
+    partial_removed = 0
+    for path in sorted(cache_root.rglob(".partial-*")):
+        if path.is_dir() and now - path.stat().st_mtime >= partial_max_age_sec:
+            _remove_cache_only_tree(path, cache_root=cache_root)
+            partial_removed += 1
+    completed: list[tuple[float, Path]] = []
+    for path in sorted(cache_root.glob("????-??-??/cache-*")):
+        if not path.is_dir():
+            continue
+        metadata_path = path / "metadata.json"
+        try:
+            metadata = read_json_object_strict(metadata_path)
+            created = datetime.fromisoformat(
+                str(metadata.get("created_at") or "")
+            ).timestamp()
+        except (EOFError, OSError, TypeError, ValueError):
+            created = path.stat().st_mtime
+        completed.append((created, path))
+    completed_removed = 0
+    protected = {path.resolve() for path in (protected_paths or set())}
+    retained = set(protected)
+    for _, path in sorted(completed, reverse=True):
+        if len(retained) >= keep_completed:
+            break
+        retained.add(path.resolve())
+    for _, path in sorted(completed, reverse=True):
+        if path.resolve() in retained:
+            continue
+        _remove_cache_only_tree(path, cache_root=cache_root)
+        completed_removed += 1
+    return {
+        "partial_removed": partial_removed,
+        "completed_removed": completed_removed,
+    }
+
+
+def _apply_cache_metadata_diagnostics(
+    store: _SQLiteRelevantSourceStore,
+    metadata: Mapping[str, Any],
+    *,
+    requested_windows: Mapping[tuple[str, str, str], tuple[tuple[int, int], ...]],
+) -> None:
+    requested_scopes = set(requested_windows)
+    counts: Counter[str] = Counter()
+    rows = metadata.get("invalid_timestamp_counts_by_scope")
+    if not isinstance(rows, list):
+        raise ValueError("relevant_source_cache_invalid_timestamp_census_invalid")
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("relevant_source_cache_invalid_timestamp_census_invalid")
+        scope = (
+            str(row.get("symbol") or ""),
+            str(row.get("venue") or ""),
+            str(row.get("session_bucket") or ""),
+        )
+        kind = str(row.get("kind") or "")
+        count = row.get("count")
+        if (
+            kind not in store._KINDS
+            or not all(scope)
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count < 0
+        ):
+            raise ValueError("relevant_source_cache_invalid_timestamp_census_invalid")
+        if scope in requested_scopes:
+            counts[kind] += count
+    store.invalid_timestamp_counts = counts
+
+
+@contextmanager
+def open_relevant_source_store(
+    *,
+    target_date: str,
+    windows: Mapping[tuple[str, str, str], tuple[tuple[int, int], ...]],
+    config: BridgeConfig,
+    market_paths: Sequence[Path],
+    depth_paths: Sequence[Path],
+    reference_paths: Sequence[Path],
+    persistent_cache: bool,
+    observation_root: Path | None = None,
+    cache_root: Path = DEFAULT_RELEVANT_SOURCE_CACHE_ROOT,
+    keep_completed: int = DEFAULT_RELEVANT_SOURCE_CACHE_KEEP,
+) -> Iterator[_SQLiteRelevantSourceStore]:
+    """Open a validated reusable source index or build one from exact raw rows."""
+
+    if observation_root is not None:
+        discovered = _rediscover_relevant_source_paths(observation_root, target_date)
+        if _relevant_source_path_census(
+            market_paths=market_paths,
+            depth_paths=depth_paths,
+            reference_paths=reference_paths,
+        ) != _relevant_source_path_census(
+            market_paths=discovered[0],
+            depth_paths=discovered[1],
+            reference_paths=discovered[2],
+        ):
+            raise ValueError("relevant_source_generation_path_census_changed")
+    source_generation = _relevant_source_generation(
+        target_date=target_date,
+        market_paths=market_paths,
+        depth_paths=depth_paths,
+        reference_paths=reference_paths,
+    )
+    if not persistent_cache:
+        with _SQLiteRelevantSourceStore("", windows=windows) as source_store:
+            source_store.ingest("market", _iter_jsonl(market_paths))
+            source_store.ingest("depth", _iter_jsonl(depth_paths))
+            source_store.ingest(
+                "reference",
+                _iter_jsonl(reference_paths),
+                reference_rows=True,
+            )
+            source_store.finalize()
+            try:
+                yield source_store
+            except BaseException:
+                raise
+            else:
+                _assert_relevant_source_generation_unchanged(
+                    expected_generation=source_generation,
+                    target_date=target_date,
+                    market_paths=market_paths,
+                    depth_paths=depth_paths,
+                    reference_paths=reference_paths,
+                    observation_root=observation_root,
+                )
+        return
+
+    source_generation_sha256 = str(
+        source_generation["source_generation_content_sha256"]
+    )
+    config_sha256 = str(_bridge_config_contract(config)["config_sha256"])
+    requested_coverage = _canonical_relevant_source_coverage(windows)
+    base_key = _producer_sha256(
+        {
+            "index_version": RELEVANT_SOURCE_CACHE_INDEX_VERSION,
+            "target_date": target_date,
+            "bridge_config_sha256": config_sha256,
+            "source_generation_content_sha256": source_generation_sha256,
+        }
+    )
+    target_root = cache_root / target_date
+    selected_dir: Path | None = None
+    selected_metadata: dict[str, Any] | None = None
+    cache_status = "cache_reused"
+    with _relevant_source_cache_lock(cache_root):
+        target_root.mkdir(parents=True, exist_ok=True)
+        for candidate in sorted(target_root.glob(f"cache-{base_key}-*")):
+            try:
+                candidate_metadata = _load_relevant_source_cache_metadata(
+                    candidate,
+                    target_date=target_date,
+                    config_sha256=config_sha256,
+                    source_generation_sha256=source_generation_sha256,
+                    requested_windows=windows,
+                )
+            except (EOFError, OSError, sqlite3.DatabaseError, TypeError, ValueError):
+                _remove_cache_only_tree(candidate, cache_root=cache_root)
+                continue
+            selected_dir = candidate
+            selected_metadata = candidate_metadata
+            break
+        if selected_dir is None:
+            cache_status = "cache_built"
+            staging = Path(tempfile.mkdtemp(prefix=".partial-", dir=str(target_root)))
+            sqlite_path = staging / "source.sqlite3"
+            try:
+                with _SQLiteRelevantSourceStore(
+                    sqlite_path,
+                    windows=windows,
+                    cache_status="cache_building",
+                ) as building_store:
+                    building_store.ingest("market", _iter_jsonl(market_paths))
+                    building_store.ingest("depth", _iter_jsonl(depth_paths))
+                    building_store.ingest(
+                        "reference",
+                        _iter_jsonl(reference_paths),
+                        reference_rows=True,
+                    )
+                    building_store.finalize()
+                    invalid_timestamp_counts_by_scope = [
+                        {
+                            "kind": key[0],
+                            "symbol": key[1],
+                            "venue": key[2],
+                            "session_bucket": key[3],
+                            "count": count,
+                        }
+                        for key, count in sorted(
+                            building_store.invalid_timestamp_counts_by_scope.items()
+                        )
+                    ]
+                    retained_row_counts = dict(building_store.retained_row_counts)
+                if (
+                    _relevant_source_generation(
+                        target_date=target_date,
+                        market_paths=market_paths,
+                        depth_paths=depth_paths,
+                        reference_paths=reference_paths,
+                    )
+                    != source_generation
+                ):
+                    raise ValueError("relevant_source_generation_changed_during_ingest")
+                metadata_body = {
+                    "schema": RELEVANT_SOURCE_CACHE_SCHEMA,
+                    "index_version": RELEVANT_SOURCE_CACHE_INDEX_VERSION,
+                    "complete": True,
+                    "target_date": target_date,
+                    "created_at": datetime.now().astimezone().isoformat(),
+                    "bridge_config_sha256": config_sha256,
+                    "source_generation": source_generation,
+                    "source_generation_content_sha256": (source_generation_sha256),
+                    "coverage": requested_coverage,
+                    "sqlite_bytes": sqlite_path.stat().st_size,
+                    "sqlite_sha256": _sha256_file(sqlite_path),
+                    "retained_row_counts": retained_row_counts,
+                    "invalid_timestamp_counts_by_scope": (
+                        invalid_timestamp_counts_by_scope
+                    ),
+                    "cache_only_rebuildable": True,
+                    "provider_call_performed": False,
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                }
+                selected_metadata = {
+                    **metadata_body,
+                    "metadata_content_sha256": _producer_sha256(metadata_body),
+                }
+                _atomic_write_json(staging / "metadata.json", selected_metadata)
+                coverage_sha = str(requested_coverage["coverage_content_sha256"])
+                selected_dir = target_root / f"cache-{base_key}-{coverage_sha}"
+                if selected_dir.exists():
+                    _remove_cache_only_tree(selected_dir, cache_root=cache_root)
+                os.replace(staging, selected_dir)
+            except BaseException:
+                if staging.exists():
+                    _remove_cache_only_tree(staging, cache_root=cache_root)
+                raise
+        _cleanup_relevant_source_cache(
+            cache_root,
+            keep_completed=keep_completed,
+            protected_paths={selected_dir},
+        )
+        assert selected_dir is not None and selected_metadata is not None
+        source_store = _SQLiteRelevantSourceStore(
+            selected_dir / "source.sqlite3",
+            windows=windows,
+            create=False,
+            cache_status=cache_status,
+        )
+        _apply_cache_metadata_diagnostics(
+            source_store,
+            selected_metadata,
+            requested_windows=windows,
+        )
+        source_store.cache_diagnostics = {
+            "cache_status": "validated_complete",
+            "source_generation_content_sha256": source_generation_sha256,
+            "requested_coverage_content_sha256": requested_coverage[
+                "coverage_content_sha256"
+            ],
+            "requested_windows_covered": True,
+            "cache_only_rebuildable": True,
+        }
+    try:
+        yield source_store
+    except BaseException:
+        raise
+    else:
+        _assert_relevant_source_generation_unchanged(
+            expected_generation=source_generation,
+            target_date=target_date,
+            market_paths=market_paths,
+            depth_paths=depth_paths,
+            reference_paths=reference_paths,
+            observation_root=observation_root,
+        )
+    finally:
+        source_store.close()
 
 
 def build_bridge_report(
@@ -7068,6 +10030,12 @@ def build_bridge_report(
         return scoped_rows[left:right]
 
     rows = []
+    outcome_source_pool_rows: dict[str, dict[str, dict[str, Any]]] = {
+        "market": {},
+        "depth": {},
+        "entry_pipeline": {},
+    }
+    canonical_entry_pipeline_hashes: set[str] = set()
     exclusions = Counter()
     processed_scope_keys: set[tuple[str, str, str]] = set()
     for trace in trace_rows:
@@ -7126,38 +10094,57 @@ def build_bridge_report(
             scoped_market = market_by_scope.get(scope_key, ())
             scoped_depth = depth_by_scope.get(scope_key, ())
             scoped_references = references_by_scope.get(scope_key, ())
-            trace_market_rows = [
-                *bounded_rows(
+            trace_market_rows = list(
+                bounded_rows(
                     scoped_market,
                     market_times_by_scope.get(scope_key, ()),
                     start_us=context_start_us,
                     end_us=outcome_end_us,
-                ),
-                *invalid_market_by_scope.get(scope_key, ()),
-            ]
-            trace_depth_rows = [
-                *bounded_rows(
+                )
+            )
+            trace_depth_rows = list(
+                bounded_rows(
                     scoped_depth,
                     depth_times_by_scope.get(scope_key, ()),
                     start_us=context_start_us,
                     end_us=outcome_end_us,
-                ),
-                *invalid_depth_by_scope.get(scope_key, ()),
-            ]
-            trace_references = [
-                *bounded_rows(
+                )
+            )
+            trace_references = list(
+                bounded_rows(
                     scoped_references,
                     reference_times_by_scope.get(scope_key, ()),
                     start_us=context_start_us,
                     end_us=watermark_us,
-                ),
-                *invalid_references_by_scope.get(scope_key, ()),
-            ]
-        evidence = build_tactical_evidence(
+                )
+            )
+        canonical_source = _canonical_tactical_source_rows(
+            target_date=target_date,
             trace=trace,
             payload=payload,
             market_rows=trace_market_rows,
             depth_rows=trace_depth_rows,
+            event_references=trace_references,
+            config=selected_config,
+        )
+        trace_market_rows = canonical_source["market_rows"]
+        trace_depth_rows = canonical_source["depth_rows"]
+        trace_references = canonical_source["event_reference_rows"]
+        evidence_market_rows = [
+            row
+            for row in trace_market_rows
+            if _timestamp_us(row.get("local_receive_timestamp")) <= watermark_us
+        ]
+        evidence_depth_rows = [
+            row
+            for row in trace_depth_rows
+            if _timestamp_us(row.get("local_receive_timestamp")) <= watermark_us
+        ]
+        evidence = build_tactical_evidence(
+            trace=trace,
+            payload=payload,
+            market_rows=evidence_market_rows,
+            depth_rows=evidence_depth_rows,
             event_references=trace_references,
             config=selected_config,
             excluded_scopes=excluded_scopes,
@@ -7165,6 +10152,24 @@ def build_bridge_report(
                 str(trace.get("decision_trace_id") or "").strip()
             ),
         )
+        ask_depletion_sidecar: dict[str, Any] | None = None
+        ask_depletion_sidecar_status = "not_eligible"
+        try:
+            candidate_sidecar = build_ask_depletion_feature_sidecar(
+                evidence=evidence,
+                market_rows=evidence_market_rows,
+                depth_rows=evidence_depth_rows,
+                max_depth_age_ms=selected_config.max_depth_age_ms,
+            )
+            _validated_ask_depletion_feature_view(
+                candidate_sidecar,
+                evidence=evidence,
+            )
+        except (TypeError, ValueError) as exc:
+            ask_depletion_sidecar_status = str(exc).split(":", 1)[0]
+        else:
+            ask_depletion_sidecar = candidate_sidecar
+            ask_depletion_sidecar_status = "eligible_source_only_feature_ablation"
         state = str(evidence.get("state") or "source_unavailable")
         wave_id = str((evidence.get("event") or {}).get("parent_wave_id") or "")
         wave_key = (
@@ -7174,19 +10179,62 @@ def build_bridge_report(
             str(trace.get("decision_stage") or ""),
             wave_id,
         )
-        outcome = build_future_outcome(
+        trace_entry_pipeline_rows = verified_pipeline_rows_by_trace_symbol.get(
+            (
+                str(trace.get("decision_trace_id") or "").strip(),
+                normalize_symbol(trace.get("stock_code")),
+            ),
+            (),
+        )
+        canonical_outcome_source = _canonical_future_outcome_source_rows(
             evidence=evidence,
             market_rows=trace_market_rows,
             depth_rows=trace_depth_rows,
-            entry_pipeline_rows=verified_pipeline_rows_by_trace_symbol.get(
-                (
-                    str(trace.get("decision_trace_id") or "").strip(),
-                    normalize_symbol(trace.get("stock_code")),
-                ),
-                (),
+            entry_pipeline_rows=trace_entry_pipeline_rows,
+            config=selected_config,
+        )
+        canonical_entry_pipeline_hashes.update(
+            _sha256(row) for row in canonical_outcome_source["entry_pipeline"]
+        )
+        rebuilt_evidence = build_tactical_evidence(
+            trace=trace,
+            payload=payload,
+            market_rows=evidence_market_rows,
+            depth_rows=evidence_depth_rows,
+            event_references=trace_references,
+            config=selected_config,
+            excluded_scopes=excluded_scopes,
+            verified_symbol_metadata=(verified_symbol_metadata_by_trace or {}).get(
+                str(trace.get("decision_trace_id") or "").strip()
             ),
+        )
+        if rebuilt_evidence != evidence:
+            raise ValueError("tactical_evidence_canonical_rebuild_mismatch")
+        if ask_depletion_sidecar is not None:
+            rebuilt_sidecar = build_ask_depletion_feature_sidecar(
+                evidence=evidence,
+                market_rows=evidence_market_rows,
+                depth_rows=evidence_depth_rows,
+                max_depth_age_ms=selected_config.max_depth_age_ms,
+            )
+            if rebuilt_sidecar != ask_depletion_sidecar:
+                raise ValueError("ask_depletion_canonical_rebuild_mismatch")
+        outcome = build_future_outcome(
+            evidence=evidence,
+            market_rows=canonical_outcome_source["market"],
+            depth_rows=canonical_outcome_source["depth"],
+            entry_pipeline_rows=canonical_outcome_source["entry_pipeline"],
             control_action=str(trace.get("action") or ""),
             config=selected_config,
+        )
+        outcome_rebuild_source = build_future_outcome_rebuild_source(
+            evidence=evidence,
+            market_rows=canonical_outcome_source["market"],
+            depth_rows=canonical_outcome_source["depth"],
+            entry_pipeline_rows=canonical_outcome_source["entry_pipeline"],
+            control_action=str(trace.get("action") or ""),
+            config=selected_config,
+            source_pool_rows=outcome_source_pool_rows,
         )
         row = {
             "decision_trace_id": trace.get("decision_trace_id"),
@@ -7203,12 +10251,22 @@ def build_bridge_report(
             "primary_mature_outcome_parent_wave_stage_row": False,
             "same_parent_wave_repeat": False,
             TACTICAL_EVIDENCE_SCHEMA: evidence,
+            "ask_depletion_sidecar": ask_depletion_sidecar,
+            "ask_depletion_sidecar_status": ask_depletion_sidecar_status,
             "future_outcome": outcome,
+            "future_outcome_rebuild_source": outcome_rebuild_source,
             "three_arm_manifest": build_three_arm_manifest(
                 evidence=evidence,
+                ablation_design_version=CURRENT_DESIGN_VERSION,
                 control_prompt_version=str(trace.get("prompt_version") or "unknown"),
                 control_trace=trace,
                 outcome=outcome,
+                ask_depletion_sidecar=ask_depletion_sidecar,
+                current_source_gap_reason=(
+                    ask_depletion_sidecar_status
+                    if ask_depletion_sidecar is None
+                    else None
+                ),
                 control_contract={
                     "prompt_sha256": trace.get("prompt_sha256"),
                     "provider": trace.get("provider_actual"),
@@ -7231,9 +10289,42 @@ def build_bridge_report(
             ),
         }
         rows.append(row)
+        if ask_depletion_sidecar is None:
+            exclusions[f"ask_depletion_source_gap:{ask_depletion_sidecar_status}"] += 1
         if state == "source_unavailable":
             for reason in (evidence.get("source_quality") or {}).get("blockers") or []:
                 exclusions[str(reason)] += 1
+    future_outcome_source_pool = build_future_outcome_source_pool(
+        outcome_source_pool_rows
+    )
+    future_outcome_source_pool_hash = str(
+        future_outcome_source_pool["source_pool_content_sha256"]
+    )
+    validated_future_outcome_source_pools = validate_future_outcome_source_pool(
+        future_outcome_source_pool
+    )
+    for row in rows:
+        rebound_source = bind_future_outcome_rebuild_source_to_pool(
+            row["future_outcome_rebuild_source"],
+            source_pool_content_sha256=future_outcome_source_pool_hash,
+        )
+        row["future_outcome_rebuild_source"] = rebound_source
+        if (
+            rebuild_future_outcome_from_source(
+                evidence=row[TACTICAL_EVIDENCE_SCHEMA],
+                rebuild_source=rebound_source,
+                source_pool=future_outcome_source_pool,
+                _validated_source_pools=validated_future_outcome_source_pools,
+            )
+            != row["future_outcome"]
+        ):
+            raise ValueError("future_outcome_rebuild_source_producer_mismatch")
+    validate_future_outcome_source_pool_reference_census(
+        future_outcome_source_pool,
+        [row["future_outcome_rebuild_source"] for row in rows],
+        _validated_source_pools=validated_future_outcome_source_pools,
+    )
+
     grouped_wave_rows: dict[tuple[str, str, str, str, str], list[int]] = defaultdict(
         list
     )
@@ -7387,6 +10478,14 @@ def build_bridge_report(
             for row in rows
         )
     )
+    pipeline_source_contract["canonical_entry_pipeline_row_count"] = len(
+        canonical_entry_pipeline_hashes
+    )
+    pipeline_source_contract["trace_symbol_linked_noncanonical_row_count"] = max(
+        0,
+        pipeline_census["trace_symbol_linked_row_count"]
+        - len(canonical_entry_pipeline_hashes),
+    )
     generated = generated_at or datetime.now().astimezone()
     report_without_hash = {
         "schema": REPORT_SCHEMA,
@@ -7534,7 +10633,28 @@ def build_bridge_report(
         },
         "report_row_count": len(rows),
         "rows": rows,
+        "future_outcome_source_pool": future_outcome_source_pool,
+        "future_outcome_source_pool_content_sha256": (future_outcome_source_pool_hash),
+        "future_outcome_source_pool_artifact_sha256": _sha256(
+            future_outcome_source_pool
+        ),
         "entry_pipeline_source": pipeline_source_contract,
+        "source_materialization": (
+            {
+                "mode": (
+                    "sqlite_persistent_relevant_source_index"
+                    if source_store is not None
+                    and getattr(source_store, "cache_status", "ephemeral")
+                    != "ephemeral"
+                    else (
+                        "sqlite_bounded_per_trace"
+                        if source_store is not None
+                        else "in_memory_api"
+                    )
+                ),
+                "cache": deepcopy(getattr(source_store, "cache_diagnostics", None)),
+            }
+        ),
         "source_exact_payload_mutated": False,
         "future_outcomes_separate_from_prompt_context": True,
         "default_exact_v2_cohort_unchanged": True,
@@ -7543,6 +10663,11 @@ def build_bridge_report(
         "paired_replay_ready": False,
         **REPORT_METRIC_CONTRACT,
         **AUTHORITY_CONTRACT,
+        **(
+            ABLATION_SOURCE_ONLY_AUTHORITY
+            if target_date >= CURRENT_DESIGN_ACTIVATION_DATE
+            else {}
+        ),
     }
     return {
         **report_without_hash,
@@ -7552,14 +10677,7 @@ def build_bridge_report(
 
 def _iter_jsonl(paths: Iterable[Path]) -> Iterable[dict[str, Any]]:
     for path in paths:
-        opener = gzip.open if path.suffix == ".gz" else open
-        with opener(path, "rt", encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                payload = json.loads(line)
-                if isinstance(payload, dict):
-                    yield payload
+        yield from iter_jsonl_objects_strict(path)
 
 
 def _partition_paths(root: Path, target_date: str, name: str) -> list[Path]:
@@ -7672,26 +10790,14 @@ def _excluded_scopes(payload: Mapping[str, Any]) -> set[tuple[str, str, str, int
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, allow_nan=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    write_json_object_generation_safe(
+        path,
+        payload,
+        ensure_ascii=False,
+        indent=2,
+        allow_nan=False,
+        trailing_newline=True,
+    )
 
 
 def _iter_jsonl_with_content_provenance(
@@ -7706,55 +10812,17 @@ def _iter_jsonl_with_content_provenance(
     publishing a census that is not reproducible from the declared artifact.
     """
 
-    initial_stat = path.stat()
-    content_digest = hashlib.sha256()
-    content_bytes = 0
-    line_count = 0
-    nonempty_line_count = 0
-    json_object_row_count = 0
-    opener = gzip.open if path.suffix == ".gz" else open
-    with opener(path, "rb") as handle:
-        for raw_line in handle:
-            content_digest.update(raw_line)
-            content_bytes += len(raw_line)
-            line_count += 1
-            if not raw_line.strip():
-                continue
-            nonempty_line_count += 1
-            payload = json.loads(raw_line)
-            if isinstance(payload, dict):
-                json_object_row_count += 1
-                yield payload
-    source_sha256 = _file_sha256(path)
-    final_stat = path.stat()
-    if (
-        initial_stat.st_dev,
-        initial_stat.st_ino,
-        initial_stat.st_size,
-        initial_stat.st_mtime_ns,
-    ) != (
-        final_stat.st_dev,
-        final_stat.st_ino,
-        final_stat.st_size,
-        final_stat.st_mtime_ns,
-    ):
-        raise ValueError("entry_pipeline_source_changed_during_read")
-    provenance.update(
-        {
-            "source_sha256": source_sha256,
-            "source_bytes": final_stat.st_size,
-            "source_content_sha256": content_digest.hexdigest(),
-            "source_content_bytes": content_bytes,
-            "source_line_count": line_count,
-            "source_nonempty_line_count": nonempty_line_count,
-            "source_json_object_row_count": json_object_row_count,
-            "source_snapshot_stable": True,
-        }
-    )
+    yield from iter_jsonl_objects_strict(path, provenance=provenance)
 
 
 def _verified_cost_config_from_path(path: Path, *, target_date: date) -> BridgeConfig:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = read_json_object_strict(path)
+    return _verified_cost_config_from_payload(payload, target_date=target_date)
+
+
+def _verified_cost_config_from_payload(
+    payload: object, *, target_date: date
+) -> BridgeConfig:
     if not isinstance(payload, dict):
         raise ValueError("verified_cost_profile_schema_invalid")
     if payload.get("schema") == COST_CATALOG_SCHEMA:
@@ -7793,6 +10861,7 @@ def _verified_cost_config_from_path(path: Path, *, target_date: date) -> BridgeC
         )
     if payload.get("schema") != COST_PROFILE_SCHEMA:
         raise ValueError("verified_cost_profile_schema_invalid")
+    _validate_exact_reviewed_legacy_cost_profile(payload, target_date=target_date)
     numeric_fields: dict[str, float] = {}
     for field in (
         "buy_fee_bps",
@@ -7800,18 +10869,8 @@ def _verified_cost_config_from_path(path: Path, *, target_date: date) -> BridgeC
         "statutory_sell_tax_bps",
         "uncertainty_buffer_bps",
     ):
-        value = payload.get(field)
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(float(value))
-            or float(value) < 0
-        ):
-            raise ValueError(f"verified_cost_profile_numeric_invalid:{field}")
-        numeric_fields[field] = float(value)
+        numeric_fields[field] = float(payload[field])
     effective_date = date.fromisoformat(str(payload.get("effective_date") or ""))
-    if target_date < effective_date:
-        raise ValueError("verified_cost_profile_not_effective_on_target_date")
     canonical_payload_json = json.dumps(
         payload,
         ensure_ascii=False,
@@ -7833,6 +10892,110 @@ def _verified_cost_config_from_path(path: Path, *, target_date: date) -> BridgeC
             sorted({normalize_venue(value) for value in payload.get("venues") or []})
         ),
     )
+
+
+def _validated_scheduled_prepared_trace_census(
+    *,
+    target_date: str,
+    prepared_artifact: Mapping[str, Any],
+    expected_artifact_sha256: str,
+    expected_request_count: int,
+    traces: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Bind scheduled bridge work to one exact prepared trace census."""
+
+    from src.engine.scalping import ai_decision_quality as quality
+
+    target = date.fromisoformat(target_date)
+    if _sha256(prepared_artifact) != expected_artifact_sha256:
+        raise ValueError("prepared_artifact_outer_sha256_mismatch")
+    prepared_requests, _ = quality.validate_micro_reversion_prepared_artifact(
+        prepared_artifact,
+        expected_target_date=target_date,
+    )
+    if expected_request_count <= 0 or len(prepared_requests) != expected_request_count:
+        raise ValueError("prepared_request_census_mismatch")
+    prepared_trace_ids = [
+        str(request.get("decision_trace_id") or "") for request in prepared_requests
+    ]
+    prepared_trace_id_set = set(prepared_trace_ids)
+    trace_rows_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for trace in traces:
+        trace_id = str(trace.get("decision_trace_id") or "")
+        if trace_id in prepared_trace_id_set:
+            trace_rows_by_id[trace_id].append(trace)
+    if any(
+        len(trace_rows_by_id.get(trace_id, ())) != 1 for trace_id in prepared_trace_ids
+    ):
+        raise ValueError("prepared_trace_census_missing_or_duplicated")
+    selected_traces = [trace_rows_by_id[trace_id][0] for trace_id in prepared_trace_ids]
+    for trace in selected_traces:
+        try:
+            decision_ts = datetime.fromisoformat(
+                str(trace.get("decision_ts") or "").replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise ValueError("prepared_trace_target_date_mismatch") from exc
+        if (
+            decision_ts.tzinfo is None
+            or decision_ts.utcoffset() is None
+            or decision_ts.astimezone(KST).date() != target
+        ):
+            raise ValueError("prepared_trace_target_date_mismatch")
+    census = {
+        "schema": "micro_reversion_scheduled_prepared_trace_census_v1",
+        "target_date": target_date,
+        "prepared_artifact_sha256": expected_artifact_sha256,
+        "prepared_request_count": len(prepared_trace_ids),
+        "decision_trace_ids_sha256": _sha256(prepared_trace_ids),
+        "exact_trace_census": True,
+        "broad_manual_trace_corpus_used": False,
+        "provider_call_performed": False,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+    }
+    return selected_traces, census
+
+
+def _bind_scheduled_prepared_census_to_report(
+    *,
+    report: Mapping[str, Any],
+    traces: Sequence[Mapping[str, Any]],
+    census: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Seal scheduled census provenance with the bridge artifact hash contract."""
+
+    existing_body = {
+        key: value for key, value in report.items() if key != "report_content_sha256"
+    }
+    bridge_trace_ids = [
+        str(row.get("decision_trace_id") or "")
+        for row in report.get("rows") or []
+        if isinstance(row, Mapping)
+    ]
+    scheduled_trace_ids = {
+        str(trace.get("decision_trace_id") or "") for trace in traces
+    }
+    if (
+        report.get("report_content_sha256") != _sha256(existing_body)
+        or census.get("target_date") != report.get("target_date")
+        or report.get("report_row_count") != len(bridge_trace_ids)
+        or any(not trace_id for trace_id in bridge_trace_ids)
+        or len(bridge_trace_ids) != len(set(bridge_trace_ids))
+        or not set(bridge_trace_ids).issubset(scheduled_trace_ids)
+    ):
+        raise ValueError("scheduled_bridge_output_trace_census_invalid")
+    bound_census = {
+        **dict(census),
+        "bridge_joined_trace_count": len(bridge_trace_ids),
+        "bridge_joined_trace_ids_sha256": _sha256(bridge_trace_ids),
+        "bridge_unjoined_trace_count": len(scheduled_trace_ids) - len(bridge_trace_ids),
+    }
+    report_body = {
+        **existing_body,
+        "scheduled_prepared_trace_census": bound_census,
+    }
+    return {**report_body, "report_content_sha256": _sha256(report_body)}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -7882,11 +11045,72 @@ def main(argv: list[str] | None = None) -> int:
             "data/pipeline_events/pipeline_events_DATE.jsonl."
         ),
     )
+    parser.add_argument(
+        "--storage-capacity-status",
+        type=Path,
+        help=(
+            "Canonical exact-date micro-reversion capacity status. Required "
+            "for --write; a fresh direct disk snapshot is also enforced."
+        ),
+    )
+    parser.add_argument(
+        "--prepared-requests",
+        type=Path,
+        help=(
+            "Exact validated R0 prepared-request census. Scheduled use binds "
+            "the bridge to these traces instead of the broad manual corpus."
+        ),
+    )
+    parser.add_argument("--prepared-artifact-sha256")
+    parser.add_argument("--prepared-request-count", type=int)
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     target = date.fromisoformat(args.date)
     if target < CLEAN_BASELINE_DATE:
         parser.error("date is before clean tuning baseline")
+    prepared_binding_args = (
+        args.prepared_requests,
+        args.prepared_artifact_sha256,
+        args.prepared_request_count,
+    )
+    if any(value is not None for value in prepared_binding_args) and not all(
+        value is not None for value in prepared_binding_args
+    ):
+        parser.error(
+            "--prepared-requests, --prepared-artifact-sha256, and "
+            "--prepared-request-count must be supplied together"
+        )
+    if args.prepared_request_count is not None and args.prepared_request_count <= 0:
+        parser.error("--prepared-request-count must be positive")
+    output = (
+        DATA_DIR
+        / "report"
+        / "micro_reversion_ai_quality_bridge"
+        / f"micro_reversion_ai_quality_bridge_{args.date}.json"
+    )
+    if args.write:
+        if args.storage_capacity_status is None:
+            parser.error("--write requires --storage-capacity-status")
+        expected_capacity_path = (
+            DATA_DIR
+            / "report"
+            / "micro_reversion_storage_capacity"
+            / f"micro_reversion_storage_capacity_{args.date}.json"
+        ).absolute()
+        if args.storage_capacity_status.absolute() != expected_capacity_path:
+            parser.error("storage capacity status path is not canonical")
+        from .storage_maintenance import evaluate_large_artifact_capacity_gate
+
+        capacity_gate = evaluate_large_artifact_capacity_gate(
+            target_date=target,
+            capacity_status_path=expected_capacity_path,
+            storage_path=output.parent,
+        )
+        if capacity_gate.get("large_artifact_growth_allowed") is not True:
+            parser.error(
+                "large artifact capacity blocked:"
+                f"{str(capacity_gate.get('status') or 'unknown')}"
+            )
     logical_trace_path = (
         DATA_DIR / "ai_decision_trace" / f"ai_decision_trace_{args.date}.jsonl"
     )
@@ -7895,22 +11119,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     trace_path = existing_or_gzip_path(logical_trace_path)
     payload_path = existing_or_gzip_path(logical_payload_path)
-    if not trace_path.exists() or not payload_path.exists():
+    if not (trace_path.exists() or trace_path.is_symlink()) or not (
+        payload_path.exists() or payload_path.is_symlink()
+    ):
         parser.error("exact trace or payload artifact is missing")
     exclusion_payload = load_source_exclusion_manifest(args.source_exclusion_manifest)
     if bool(args.verified_cost_profile) != bool(args.symbol_master):
         parser.error(
             "--verified-cost-profile and --symbol-master must be supplied together"
         )
+    symbol_master = None
+    symbol_master_sha256 = ""
     if args.verified_cost_profile:
-        if not args.verified_cost_profile.exists() or not args.symbol_master.exists():
-            parser.error("verified cost profile or symbol master artifact is missing")
+        from .symbol_master import VerifiedSymbolMaster
+
         try:
             config = _verified_cost_config_from_path(
                 args.verified_cost_profile,
                 target_date=target,
             )
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            symbol_master_payload = read_json_object_strict(args.symbol_master)
+            symbol_master_sha256 = _sha256(symbol_master_payload)
+            symbol_master = VerifiedSymbolMaster.from_payload(
+                symbol_master_payload,
+                require_canonical_owner=(
+                    target >= date.fromisoformat(CURRENT_DESIGN_ACTIVATION_DATE)
+                ),
+            )
+        except (EOFError, OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
     else:
         config = BridgeConfig(
@@ -7924,20 +11160,23 @@ def main(argv: list[str] | None = None) -> int:
         )
     traces = list(_iter_jsonl((trace_path,)))
     payloads = list(_iter_jsonl((payload_path,)))
-    verified_symbol_metadata_by_trace: dict[str, dict[str, Any]] = {}
-    if args.symbol_master:
-        from .symbol_master import VerifiedSymbolMaster
-
+    scheduled_prepared_census: dict[str, Any] | None = None
+    if args.prepared_requests is not None:
         try:
-            symbol_master_payload = json.loads(
-                args.symbol_master.read_text(encoding="utf-8")
+            prepared_artifact = read_json_object_strict(args.prepared_requests)
+            traces, scheduled_prepared_census = (
+                _validated_scheduled_prepared_trace_census(
+                    target_date=args.date,
+                    prepared_artifact=prepared_artifact,
+                    expected_artifact_sha256=args.prepared_artifact_sha256,
+                    expected_request_count=args.prepared_request_count,
+                    traces=traces,
+                )
             )
-            if not isinstance(symbol_master_payload, dict):
-                raise ValueError("symbol_master_artifact_invalid")
-            symbol_master = VerifiedSymbolMaster.from_json_path(args.symbol_master)
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            parser.error(str(exc))
-        symbol_master_sha256 = _sha256(symbol_master_payload)
+        except (EOFError, OSError, TypeError, ValueError) as exc:
+            parser.error(f"scheduled prepared trace binding invalid:{exc}")
+    verified_symbol_metadata_by_trace: dict[str, dict[str, Any]] = {}
+    if symbol_master is not None:
         for trace in traces:
             trace_id = str(trace.get("decision_trace_id") or "").strip()
             if not trace_id:
@@ -7954,7 +11193,7 @@ def main(argv: list[str] | None = None) -> int:
         DATA_DIR / "pipeline_events" / f"pipeline_events_{args.date}.jsonl"
     )
     entry_pipeline_path = existing_or_gzip_path(logical_entry_pipeline_path)
-    if entry_pipeline_path.exists():
+    if entry_pipeline_path.exists() or entry_pipeline_path.is_symlink():
         entry_pipeline_source = {
             "status": "available_hash_verified",
             "logical_source_path": str(logical_entry_pipeline_path),
@@ -7986,17 +11225,16 @@ def main(argv: list[str] | None = None) -> int:
     reference_paths = _partition_paths(
         args.observation_root, args.date, "market_stream_event_references"
     )
-    # sqlite's empty filename creates an OS-managed temporary database that is
-    # removed even when an outer timeout terminates the process.
-    with _SQLiteRelevantSourceStore("", windows=windows) as source_store:
-        source_store.ingest("market", _iter_jsonl(market_paths))
-        source_store.ingest("depth", _iter_jsonl(depth_paths))
-        source_store.ingest(
-            "reference",
-            _iter_jsonl(reference_paths),
-            reference_rows=True,
-        )
-        source_store.finalize()
+    with open_relevant_source_store(
+        target_date=args.date,
+        windows=windows,
+        config=config,
+        market_paths=market_paths,
+        depth_paths=depth_paths,
+        reference_paths=reference_paths,
+        persistent_cache=args.write,
+        observation_root=args.observation_root,
+    ) as source_store:
         report = build_bridge_report(
             target_date=args.date,
             traces=traces,
@@ -8013,12 +11251,15 @@ def main(argv: list[str] | None = None) -> int:
                 verified_symbol_metadata_by_trace or None
             ),
         )
-    output = (
-        DATA_DIR
-        / "report"
-        / "micro_reversion_ai_quality_bridge"
-        / f"micro_reversion_ai_quality_bridge_{args.date}.json"
-    )
+    if scheduled_prepared_census is not None:
+        try:
+            report = _bind_scheduled_prepared_census_to_report(
+                report=report,
+                traces=traces,
+                census=scheduled_prepared_census,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.write:
         _atomic_write_json(output, report)
     print(

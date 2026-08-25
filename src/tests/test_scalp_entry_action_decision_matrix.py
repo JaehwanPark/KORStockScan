@@ -1749,6 +1749,27 @@ def test_scalp_entry_adm_pre_submit_missing_context_is_not_available(
     )
 
 
+def test_scalp_entry_adm_explicit_runtime_block_context_is_not_available():
+    row = mod._base_row(
+        {
+            "stage": "scalp_entry_action_decision_snapshot",
+            "stock_code": "950260",
+            "record_id": "R1",
+            "emitted_at": "2026-08-25T12:08:32+09:00",
+            "fields": {
+                "source_stage": "real_weak_ai_micro_entry_block",
+                "chosen_action": "NO_BUY_AI",
+                "buy_pressure_10t": "not_evaluated_runtime_block",
+            },
+        }
+    )
+
+    assert row["risk_context_bucket"] == "risk_context_not_available"
+    summary = mod._unknown_bucket_summary([row])
+    assert "risk_context_bucket" not in summary["dimension_counts"]
+    assert summary["not_available_dimension_counts"]["risk_context_bucket"] == 1
+
+
 def test_scalp_entry_adm_post_entry_missing_score_is_not_available(
     tmp_path, monkeypatch
 ):

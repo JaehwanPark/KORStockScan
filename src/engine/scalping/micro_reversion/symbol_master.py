@@ -7,12 +7,15 @@ strategy labels, or symbol names.
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from enum import StrEnum
+import hashlib
+import json
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
+
+from src.utils.jsonl_io import read_json_object_strict
 
 from .contracts import normalize_symbol
 from .tax import (
@@ -26,6 +29,43 @@ from .tax import (
 )
 
 SYMBOL_MASTER_SCHEMA = "scalp_micro_reversion_symbol_master_v1"
+SYMBOL_MASTER_SOURCE_CONTRACT_SCHEMA = "micro_reversion_raw_symbol_product_master_v3"
+
+_SOURCE_ONLY_FORBIDDEN_USES = [
+    "live_prompt_or_threshold_mutation",
+    "broker_order_submission_or_cancel",
+    "automated_sell_or_position_sizing",
+    "provider_route_or_bot_state_change",
+    "position_cap_or_cooldown_change",
+    "hard_protect_emergency_or_stale_guard_bypass",
+    "unverified_cost_or_symbol_promotion",
+]
+_CANONICAL_AUTHORITY = {
+    "decision_authority": "instrument_metadata_source_only",
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "trading_runtime_effect": False,
+    "trading_decision_effect": False,
+    "selection_authority": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "provider_call_performed": False,
+    "forbidden_uses": _SOURCE_ONLY_FORBIDDEN_USES,
+}
+_CANONICAL_PAYLOAD_FIELDS = frozenset(
+    {
+        "schema",
+        "artifact_id",
+        "source_contract_schema",
+        "verification_status",
+        "verified",
+        "source_artifacts",
+        "census",
+        "records",
+        "content_sha256",
+        *_CANONICAL_AUTHORITY,
+    }
+)
 
 
 class MetadataConflictStatus(StrEnum):
@@ -174,8 +214,12 @@ class VerifiedSymbolMaster:
         }
 
     @classmethod
-    def from_json_path(cls, path: Path) -> VerifiedSymbolMaster:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    def from_payload(
+        cls,
+        payload: object,
+        *,
+        require_canonical_owner: bool = False,
+    ) -> VerifiedSymbolMaster:
         if (
             not isinstance(payload, dict)
             or payload.get("schema") != SYMBOL_MASTER_SCHEMA
@@ -184,7 +228,22 @@ class VerifiedSymbolMaster:
         raw_records = payload.get("records")
         if not isinstance(raw_records, list):
             raise ValueError("symbol master records must be a list")
-        return cls(_record_from_mapping(row) for row in raw_records)
+        records = tuple(_record_from_mapping(row) for row in raw_records)
+        if require_canonical_owner:
+            _validate_canonical_owner_payload(payload, records=records)
+        return cls(records)
+
+    @classmethod
+    def from_json_path(
+        cls,
+        path: Path,
+        *,
+        require_canonical_owner: bool = False,
+    ) -> VerifiedSymbolMaster:
+        return cls.from_payload(
+            read_json_object_strict(Path(path)),
+            require_canonical_owner=require_canonical_owner,
+        )
 
     def _validate_overlaps(self) -> None:
         for symbol, records in self._records.items():
@@ -236,3 +295,137 @@ def _parse_aware_timestamp(value: str, *, field_name: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"{field_name} must include a timezone offset")
     return parsed
+
+
+def _content_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _is_native_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _validate_authority(
+    payload: Mapping[str, Any],
+    *,
+    expected_decision_authority: str,
+    error_prefix: str,
+) -> None:
+    expected = {
+        **_CANONICAL_AUTHORITY,
+        "decision_authority": expected_decision_authority,
+    }
+    for field, value in expected.items():
+        if payload.get(field) != value:
+            raise ValueError(f"{error_prefix}_authority_invalid:{field}")
+
+
+def _validate_canonical_owner_payload(
+    payload: Mapping[str, Any],
+    *,
+    records: tuple[SymbolMasterRecord, ...],
+) -> None:
+    """Require the exact canonical owner generation for current P2 authority."""
+
+    if set(payload) != _CANONICAL_PAYLOAD_FIELDS:
+        raise ValueError("symbol_master_canonical_fields_invalid")
+    if payload.get("verified") is not True:
+        raise ValueError("symbol_master_canonical_verified_invalid")
+    if payload.get("verification_status") != "verified":
+        raise ValueError("symbol_master_canonical_verification_status_invalid")
+    if not str(payload.get("artifact_id") or "").strip():
+        raise ValueError("symbol_master_canonical_artifact_id_invalid")
+    if payload.get("source_contract_schema") != SYMBOL_MASTER_SOURCE_CONTRACT_SCHEMA:
+        raise ValueError("symbol_master_canonical_source_contract_schema_invalid")
+    _validate_authority(
+        payload,
+        expected_decision_authority="instrument_metadata_source_only",
+        error_prefix="symbol_master_canonical",
+    )
+
+    declared_hash = str(payload.get("content_sha256") or "")
+    body = {key: value for key, value in payload.items() if key != "content_sha256"}
+    if declared_hash != _content_sha256(body):
+        raise ValueError("symbol_master_canonical_content_sha256_mismatch")
+
+    census = payload.get("census")
+    if not isinstance(census, Mapping) or set(census) != {
+        "record_count",
+        "symbol_count",
+    }:
+        raise ValueError("symbol_master_canonical_census_invalid")
+    if not all(_is_native_nonnegative_int(census.get(field)) for field in census):
+        raise ValueError("symbol_master_canonical_census_invalid")
+    expected_census = {
+        "record_count": len(records),
+        "symbol_count": len({record.symbol for record in records}),
+    }
+    if dict(census) != expected_census or not records:
+        raise ValueError("symbol_master_canonical_census_mismatch")
+
+    source_artifacts = payload.get("source_artifacts")
+    if (
+        not isinstance(source_artifacts, list)
+        or len(source_artifacts) != 1
+        or not isinstance(source_artifacts[0], Mapping)
+    ):
+        raise ValueError("symbol_master_canonical_source_artifact_invalid")
+    source = source_artifacts[0]
+    _validate_authority(
+        source,
+        expected_decision_authority="offline_economic_reference_source_only",
+        error_prefix="symbol_master_canonical_source",
+    )
+    if (
+        source.get("kind") != "symbol_product_master"
+        or source.get("payload_schema") != SYMBOL_MASTER_SOURCE_CONTRACT_SCHEMA
+        or source.get("status") != "verified"
+        or source.get("verified") is not True
+        or source.get("blockers") != []
+    ):
+        raise ValueError("symbol_master_canonical_source_artifact_invalid")
+    expected_hash = str(source.get("expected_sha256") or "")
+    observed_hash = str(source.get("observed_sha256") or "")
+    if (
+        len(expected_hash) != 64
+        or expected_hash != observed_hash
+        or any(character not in "0123456789abcdef" for character in expected_hash)
+    ):
+        raise ValueError("symbol_master_canonical_source_hash_invalid")
+    expected_size = source.get("expected_size_bytes")
+    observed_size = source.get("observed_size_bytes")
+    if (
+        not _is_native_nonnegative_int(expected_size)
+        or expected_size <= 0
+        or expected_size != observed_size
+        or source.get("record_count") != len(records)
+    ):
+        raise ValueError("symbol_master_canonical_source_census_invalid")
+    logical_path = str(source.get("logical_path") or "").strip()
+    source_id = str(source.get("source_id") or "").strip()
+    if (
+        logical_path != "policy://micro-reversion/symbol_product_master.json"
+        or not source_id.startswith("kis-official-common-stock-master-")
+    ):
+        raise ValueError("symbol_master_canonical_source_identity_invalid")
+
+    expected_reference = f"{logical_path}#sha256={observed_hash}"
+    for record in records:
+        if (
+            record.listing_market not in {ListingMarket.KOSPI, ListingMarket.KOSDAQ}
+            or record.instrument_type is not InstrumentType.EQUITY
+            or record.instrument_tax_class
+            is not InstrumentTaxClass.ORDINARY_TAXABLE_EQUITY_20BPS
+            or record.metadata_source != "official_symbol_product_master_v2"
+            or record.source_reference != expected_reference
+            or record.conflict_status is not MetadataConflictStatus.CLEAN
+        ):
+            raise ValueError("symbol_master_canonical_record_scope_invalid")

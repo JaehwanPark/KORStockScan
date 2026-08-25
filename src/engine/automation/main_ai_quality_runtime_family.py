@@ -12,8 +12,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
-import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
@@ -24,6 +22,14 @@ from src.engine.automation import machine_microstructure_policy_approval as appr
 from src.engine.scalping import main_ai_quality_live_policy as live_policy
 from src.engine.scalping.micro_reversion import ai_quality_cycle
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import (
+    ArtifactGenerationLease,
+    JsonObjectReadReceipt,
+    json_artifact_generation_lock,
+    read_json_object_strict,
+    read_json_object_strict_receipt,
+    write_json_object_generation_safe,
+)
 from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
@@ -61,6 +67,20 @@ def _sha256(value: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _stored_json_sha256(value: Mapping[str, Any]) -> str:
+    raw = (
+        json.dumps(
+            dict(value),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _economic_payload_sha256(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -74,41 +94,41 @@ def _economic_payload_sha256(value: Any) -> str:
     ).hexdigest()
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _load_json(path: Path) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file():
-        return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        return read_json_object_strict_receipt(path).payload
+    except FileNotFoundError:
         return {}
-    return payload if isinstance(payload, dict) else {}
 
 
-def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+def _read_current_authority_receipt(path: Path) -> JsonObjectReadReceipt:
+    receipt = read_json_object_strict_receipt(path)
+    if (
+        receipt.logical_path != path.absolute()
+        or receipt.physical_path != receipt.logical_path
+        or receipt.generation_census
+        != ((receipt.logical_path.name, receipt.physical_identity),)
+    ):
+        raise ValueError(f"current_authority_generation_invalid:{path}")
+    return receipt
+
+
+def _atomic_write_json(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    generation: ArtifactGenerationLease | None = None,
+) -> None:
+    write_json_object_generation_safe(
+        path,
+        payload,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+        allow_nan=False,
+        trailing_newline=True,
+        generation=generation,
+    )
 
 
 def source_report_path(target_date: str) -> Path:
@@ -249,6 +269,10 @@ def build_promotion_candidate(
 ) -> dict[str, Any]:
     """Materialize one exact machine-policy candidate or fail closed."""
 
+    ai_quality_cycle.validate_r3_source_only_manifest(
+        r3_manifest,
+        source_rolling_artifact=rolling,
+    )
     enrolled_continuation = _exact_enrolled_continuation(approval_queue)
     resolution = standing.resolve_standing_authorization(
         authorization,
@@ -431,8 +455,39 @@ def build_post_apply_continuation_candidate(
 ) -> dict[str, Any]:
     """Carry the exact applied policy one day after a passing R6 receipt."""
 
+    ai_quality_cycle.validate_r2_rolling_artifact(rolling)
     prior = entry.get("candidate")
     prior = prior if isinstance(prior, Mapping) else {}
+    prior_design = prior.get("runtime_design")
+    prior_design = prior_design if isinstance(prior_design, Mapping) else {}
+    prior_bounded = prior_design.get("bounded_values")
+    prior_bounded = prior_bounded if isinstance(prior_bounded, Mapping) else {}
+    validate_post_apply_attribution_receipt(
+        entry=entry,
+        attribution=attribution,
+        attribution_path=attribution_path,
+        rolling=rolling,
+        target_date=target_date,
+        require_persisted=(entry.get("state") == approval.STATE_POST_APPLY_ATTRIBUTED),
+    )
+    matching_partitions = [
+        row
+        for row in rolling.get("partitions") or []
+        if isinstance(row, Mapping)
+        and row.get("decision_stage") == "entry"
+        and str(row.get("effective_venue") or "").upper() == "KRX"
+        and str(row.get("session_bucket") or "").upper() == "KRX_REGULAR"
+        and row.get("current_prompt_sha256") == prior_bounded.get("recommended")
+        and target_date in (row.get("source_dates") or [])
+    ]
+    if len(matching_partitions) != 1:
+        raise ValueError("post_apply_continuation_exact_partition_not_unique")
+    continuation_partition = matching_partitions[0]
+    ai_quality_cycle.validate_r2_partition_candidate_state(
+        continuation_partition,
+        target_date=target_date,
+        global_candidate_blockers=rolling.get("global_candidate_blockers") or [],
+    )
     if (
         entry.get("state")
         not in {approval.STATE_APPLIED, approval.STATE_POST_APPLY_ATTRIBUTED}
@@ -460,9 +515,30 @@ def build_post_apply_continuation_candidate(
         != attribution.get("source_rolling_artifact_sha256")
         or attribution.get("source_symbol_master_date") != target_date
         or len(str(attribution.get("source_symbol_master_artifact_sha256") or "")) != 64
+        or attribution.get("source_symbol_master_date")
+        != continuation_partition.get("latest_symbol_master_source_date")
+        or attribution.get("source_symbol_master_artifact_sha256")
+        != continuation_partition.get("latest_symbol_master_artifact_sha256")
     ):
         raise ValueError("post_apply_continuation_source_contract_invalid")
     source_day = date.fromisoformat(target_date)
+    continuation_window = (continuation_partition.get("windows") or {}).get("5")
+    if not isinstance(continuation_window, Mapping):
+        raise ValueError("post_apply_continuation_window_missing")
+    refreshed_evidence = {
+        **dict(prior.get("evidence") or {}),
+        "expected_candidate_p10_5d": continuation_window.get("control_p10_ev_pct"),
+        "expected_candidate_severe_tail_5d": continuation_window.get(
+            "control_severe_tail_count"
+        ),
+        "expected_candidate_deferred_5d": continuation_window.get(
+            "control_deferred_count"
+        ),
+        "continuation_evidence_source_date": target_date,
+        "continuation_evidence_attribution_sha256": attribution.get(
+            "receipt_content_sha256"
+        ),
+    }
     candidate = {
         key: value
         for key, value in prior.items()
@@ -476,6 +552,7 @@ def build_post_apply_continuation_candidate(
             ),
             "source_date": target_date,
             "evidence_valid_through": (source_day + timedelta(days=31)).isoformat(),
+            "evidence": refreshed_evidence,
             "first_operator_approval_required": False,
             "source_bindings": {
                 **dict(prior.get("source_bindings") or {}),
@@ -510,12 +587,18 @@ def build_post_apply_continuation_candidate(
     return candidate
 
 
-def _handoff_sha256(path: Path, handoff: Mapping[str, Any]) -> str:
-    if not path.is_file() or path.is_symlink():
-        raise ValueError("preopen_handoff_file_invalid")
-    if json.loads(path.read_text(encoding="utf-8")) != dict(handoff):
+def _handoff_sha256(
+    path: Path,
+    handoff: Mapping[str, Any],
+    *,
+    receipt: JsonObjectReadReceipt | None = None,
+) -> str:
+    captured = receipt or _read_current_authority_receipt(path)
+    if captured.logical_path != path.absolute():
+        raise ValueError("preopen_handoff_receipt_path_mismatch")
+    if captured.payload != dict(handoff):
         raise ValueError("preopen_handoff_snapshot_changed")
-    return _file_sha256(path)
+    return captured.raw_sha256
 
 
 def build_preopen_activation(
@@ -528,6 +611,7 @@ def build_preopen_activation(
     activation_artifact_path: Path,
     apply_receipt_path: Path,
     symbol_master_path: Path | None = None,
+    handoff_receipt: JsonObjectReadReceipt | None = None,
 ) -> dict[str, Any]:
     target_date = now.astimezone(KST).date().isoformat()
     design = candidate.get("runtime_design")
@@ -540,7 +624,8 @@ def build_preopen_activation(
         ai_quality_cycle.ECONOMIC_REPORT_ROOT
         / f"micro_reversion_symbol_master_{master_source_date}.json"
     )
-    symbol_master = _load_json(selected_master_path)
+    symbol_master_receipt = read_json_object_strict_receipt(selected_master_path)
+    symbol_master = symbol_master_receipt.payload
     errors = [
         *standing._authorization_errors(authorization),
         *approval.evidence_readiness_errors(candidate),
@@ -550,8 +635,7 @@ def build_preopen_activation(
         key: value for key, value in symbol_master.items() if key != "content_sha256"
     }
     if (
-        selected_master_path.is_symlink()
-        or not selected_master_path.is_file()
+        symbol_master_receipt.logical_path != selected_master_path.absolute()
         or symbol_master.get("schema") != "scalp_micro_reversion_symbol_master_v1"
         or symbol_master.get("verified") is not True
         or symbol_master.get("verification_status") != "verified"
@@ -577,9 +661,15 @@ def build_preopen_activation(
     authorization_mode = str(handoff.get("authorization_mode") or "")
     if authorization_mode == "first_explicit_operator_approval":
         try:
-            if now.astimezone(KST) >= standing._aware_kst(
+            reviewed_at = standing._aware_kst(
+                str(authorization.get("reviewed_at_kst") or "")
+            )
+            expires_at = standing._aware_kst(
                 str(authorization.get("expires_at_kst") or "")
-            ):
+            )
+            if now.astimezone(KST) < reviewed_at:
+                errors.append("standing_authorization_not_yet_reviewed_before_preopen")
+            if now.astimezone(KST) >= expires_at:
                 errors.append("standing_authorization_expired_before_preopen")
         except ValueError:
             errors.append("standing_authorization_expiry_invalid_before_preopen")
@@ -620,7 +710,11 @@ def build_preopen_activation(
         errors.append("preopen_handoff_authorization_mode_invalid")
     if errors:
         raise ValueError("preopen_apply_blocked:" + ",".join(sorted(set(errors))))
-    handoff_hash = _handoff_sha256(handoff_path, handoff)
+    handoff_hash = _handoff_sha256(
+        handoff_path,
+        handoff,
+        receipt=handoff_receipt,
+    )
     body = {
         "schema": live_policy.ACTIVATION_SCHEMA,
         "target_date": target_date,
@@ -676,8 +770,18 @@ def apply_receipt(activation: Mapping[str, Any]) -> dict[str, Any]:
             "runtime_registry_entry_sha256"
         ),
         "preopen_handoff": activation.get("preopen_handoff"),
+        "preopen_handoff_sha256": activation.get("preopen_handoff_sha256"),
+        "standing_authorization_sha256": activation.get(
+            "standing_authorization_sha256"
+        ),
         "activation_artifact_path": activation.get("activation_artifact_path"),
         "activation_artifact_sha256": activation.get("artifact_content_sha256"),
+        "activation_artifact_raw_sha256": _stored_json_sha256(activation),
+        "symbol_master_source_date": activation.get("symbol_master_source_date"),
+        "symbol_master_path": activation.get("symbol_master_path"),
+        "symbol_master_artifact_sha256": activation.get(
+            "symbol_master_artifact_sha256"
+        ),
         "receipt_owner": APPLY_RECEIPT_OWNER,
         "same_stage_owner_conflict_free": True,
         "hard_safety_and_broker_guards_preserved": True,
@@ -687,6 +791,42 @@ def apply_receipt(activation: Mapping[str, Any]) -> dict[str, Any]:
         "broker_order_forbidden": True,
     }
     return {**body, "receipt_content_sha256": _sha256(body)}
+
+
+def validate_post_apply_attribution_receipt(
+    *,
+    entry: Mapping[str, Any],
+    attribution: Mapping[str, Any],
+    attribution_path: Path,
+    rolling: Mapping[str, Any],
+    target_date: str,
+    require_persisted: bool = True,
+) -> None:
+    expected_path = approval.APPLY_RECEIPT_DIR / (
+        f"{target_date}_{str(entry.get('candidate_sha256') or '')}_post_apply.json"
+    )
+    if attribution_path.absolute() != expected_path.absolute():
+        raise ValueError("post_apply_attribution_path_not_canonical")
+    if require_persisted:
+        captured = _read_current_authority_receipt(attribution_path)
+        if captured.payload != dict(attribution):
+            raise ValueError("post_apply_attribution_snapshot_mismatch")
+    try:
+        attributed_at = datetime.fromisoformat(
+            str(attribution.get("attributed_at_kst") or "")
+        )
+    except ValueError as exc:
+        raise ValueError("post_apply_attribution_time_invalid") from exc
+    if attributed_at.tzinfo is None:
+        raise ValueError("post_apply_attribution_time_invalid")
+    expected = build_post_apply_attribution_receipt(
+        entry={**dict(entry), "state": approval.STATE_APPLIED},
+        rolling=rolling,
+        target_date=target_date,
+        now=attributed_at.astimezone(KST),
+    )
+    if dict(attribution) != expected:
+        raise ValueError("post_apply_attribution_semantic_mismatch")
 
 
 def apply_receipt_errors(
@@ -704,6 +844,7 @@ def apply_receipt_errors(
     for field, expected in (
         ("schema", approval.APPLY_RECEIPT_SCHEMA),
         ("status", "applied_guard_passed"),
+        ("applied_at_kst", activation.get("applied_at_kst")),
         ("target_date", activation.get("target_date")),
         ("queue_key", activation.get("queue_key")),
         ("candidate_id", activation.get("candidate_id")),
@@ -714,8 +855,20 @@ def apply_receipt_errors(
         ("bounded_contract_sha256", approval.MAIN_AI_QUALITY_BOUNDED_CONTRACT_SHA256),
         ("runtime_registry_entry_sha256", _registry_sha256()),
         ("preopen_handoff", activation.get("preopen_handoff")),
+        ("preopen_handoff_sha256", activation.get("preopen_handoff_sha256")),
+        (
+            "standing_authorization_sha256",
+            activation.get("standing_authorization_sha256"),
+        ),
         ("activation_artifact_path", activation.get("activation_artifact_path")),
         ("activation_artifact_sha256", activation.get("artifact_content_sha256")),
+        ("activation_artifact_raw_sha256", _stored_json_sha256(activation)),
+        ("symbol_master_source_date", activation.get("symbol_master_source_date")),
+        ("symbol_master_path", activation.get("symbol_master_path")),
+        (
+            "symbol_master_artifact_sha256",
+            activation.get("symbol_master_artifact_sha256"),
+        ),
         ("receipt_owner", APPLY_RECEIPT_OWNER),
         ("runtime_effect", True),
         ("runtime_apply_performed", True),
@@ -724,6 +877,56 @@ def apply_receipt_errors(
     ):
         if receipt.get(field) != expected:
             errors.append(f"apply_receipt_contract_mismatch:{field}")
+    return sorted(set(errors))
+
+
+def _preopen_entry_errors(
+    *,
+    queue: Mapping[str, Any],
+    entry: Mapping[str, Any],
+    handoff: Mapping[str, Any],
+    authorization: Mapping[str, Any],
+) -> list[str]:
+    errors = approval._persisted_candidate_errors(entry)
+    candidate = entry.get("candidate")
+    candidate = candidate if isinstance(candidate, Mapping) else {}
+    design = candidate.get("runtime_design")
+    design = design if isinstance(design, Mapping) else {}
+    for field, expected in (
+        ("queue_key", entry.get("queue_key")),
+        ("candidate_id", entry.get("candidate_id")),
+        ("candidate_sha256", entry.get("candidate_sha256")),
+        ("target_date", entry.get("preopen_target_date")),
+        ("authorization_mode", entry.get("authorization_mode")),
+        ("runtime_family", design.get("runtime_family")),
+        ("stage", design.get("stage")),
+        ("axis", design.get("axis")),
+        ("bounded_contract_sha256", design.get("bounded_contract_sha256")),
+        ("runtime_registry_entry_sha256", entry.get("runtime_registry_entry_sha256")),
+    ):
+        if handoff.get(field) != expected:
+            errors.append(f"preopen_entry_handoff_mismatch:{field}")
+    authorization_mode = str(handoff.get("authorization_mode") or "")
+    if authorization_mode == "first_explicit_operator_approval":
+        for field in (
+            "operator_decision_artifact",
+            "operator_authorization_id",
+        ):
+            if handoff.get(field) != entry.get(field):
+                errors.append(f"preopen_operator_binding_mismatch:{field}")
+        if handoff.get("operator_authorization_id") != authorization.get(
+            "operator_authorization_id"
+        ):
+            errors.append("preopen_standing_authorization_id_mismatch")
+    elif authorization_mode == "enrolled_same_bounded_family_auto_chain":
+        family = str(design.get("runtime_family") or "")
+        enrollment = (queue.get("family_enrollments") or {}).get(family)
+        if handoff.get("family_enrollment") != enrollment:
+            errors.append("preopen_handoff_family_enrollment_mismatch")
+        if not _exact_enrolled_continuation(queue):
+            errors.append("preopen_family_enrollment_not_exact")
+    else:
+        errors.append("preopen_authorization_mode_invalid")
     return sorted(set(errors))
 
 
@@ -738,6 +941,7 @@ def build_post_apply_attribution_receipt(
 
     if entry.get("state") != approval.STATE_APPLIED:
         raise ValueError("post_apply_candidate_not_applied")
+    ai_quality_cycle.validate_r2_rolling_artifact(rolling)
     candidate = entry.get("candidate")
     candidate = candidate if isinstance(candidate, Mapping) else {}
     design = candidate.get("runtime_design")
@@ -746,13 +950,17 @@ def build_post_apply_attribution_receipt(
     evidence = evidence if isinstance(evidence, Mapping) else {}
     bounded = design.get("bounded_values")
     bounded = bounded if isinstance(bounded, Mapping) else {}
-    source_apply_receipt = _load_json(
-        Path(str(entry.get("family_apply_receipt") or ""))
-    )
+    source_apply_path = Path(str(entry.get("family_apply_receipt") or ""))
+    source_apply_receipt_capture = _read_current_authority_receipt(source_apply_path)
+    source_apply_receipt = source_apply_receipt_capture.payload
     activation_path = Path(
         str(source_apply_receipt.get("activation_artifact_path") or "")
     )
-    activation = _load_json(activation_path)
+    activation_capture = _read_current_authority_receipt(activation_path)
+    activation = activation_capture.payload
+    expected_apply_path = approval.APPLY_RECEIPT_DIR / (
+        f"{target_date}_{str(entry.get('candidate_sha256') or '')}_applied.json"
+    )
     if (
         approval._candidate_runtime_family(candidate)
         != approval.MAIN_AI_QUALITY_RUNTIME_FAMILY
@@ -761,11 +969,16 @@ def build_post_apply_attribution_receipt(
         or not _artifact_hash_valid(rolling)
         or rolling.get("target_date") != target_date
         or rolling.get("global_candidate_blockers") != []
+        or source_apply_path.absolute() != expected_apply_path.absolute()
+        or activation.get("apply_receipt_path") != str(source_apply_path)
         or apply_receipt_errors(source_apply_receipt, activation=activation)
         or live_policy.activation_errors(
             activation,
             target_date=target_date,
             selected_path=activation_path,
+            receipt=source_apply_receipt,
+            activation_receipt=activation_capture,
+            apply_receipt_receipt=source_apply_receipt_capture,
         )
     ):
         raise ValueError("post_apply_source_contract_invalid")
@@ -782,6 +995,11 @@ def build_post_apply_attribution_receipt(
     if len(partitions) != 1:
         raise ValueError("post_apply_exact_partition_not_unique")
     partition = partitions[0]
+    ai_quality_cycle.validate_r2_partition_candidate_state(
+        partition,
+        target_date=target_date,
+        global_candidate_blockers=rolling.get("global_candidate_blockers") or [],
+    )
     if (
         partition.get("latest_symbol_master_source_date") != target_date
         or len(str(partition.get("latest_symbol_master_artifact_sha256") or "")) != 64
@@ -835,6 +1053,17 @@ def build_post_apply_attribution_receipt(
         "runtime_registry_entry_sha256": _registry_sha256(),
         "preopen_handoff": entry.get("preopen_handoff"),
         "source_apply_receipt": entry.get("family_apply_receipt"),
+        "source_apply_receipt_raw_sha256": source_apply_receipt_capture.raw_sha256,
+        "source_apply_receipt_content_sha256": source_apply_receipt.get(
+            "receipt_content_sha256"
+        ),
+        "source_activation_artifact_path": str(activation_path),
+        "source_activation_artifact_sha256": activation.get("artifact_content_sha256"),
+        "source_activation_artifact_raw_sha256": activation_capture.raw_sha256,
+        "source_preopen_handoff_sha256": activation.get("preopen_handoff_sha256"),
+        "source_rolling_artifact_path": str(
+            ai_quality_cycle.rolling_report_path(target_date)
+        ),
         "source_rolling_artifact_sha256": rolling.get("artifact_content_sha256"),
         "source_symbol_master_date": partition.get("latest_symbol_master_source_date"),
         "source_symbol_master_artifact_sha256": partition.get(
@@ -853,23 +1082,38 @@ def build_post_apply_attribution_receipt(
     return {**body, "receipt_content_sha256": _sha256(body)}
 
 
-def _postclose(
+def _postclose_locked(
     *,
     target_date: str,
     write: bool,
     now: datetime,
     queue_path: Path,
+    queue_generation: ArtifactGenerationLease | None,
     approval_dir: Path = approval.APPROVAL_DIR,
     apply_receipt_dir: Path = approval.APPLY_RECEIPT_DIR,
 ) -> dict[str, Any]:
     if write and now.astimezone(KST).date().isoformat() != target_date:
         raise ValueError("postclose_runtime_family_write_target_date_not_current")
-    authorization = _load_json(STANDING_AUTHORIZATION_PATH)
+    authorization = _read_current_authority_receipt(STANDING_AUTHORIZATION_PATH).payload
     r3_path = ai_quality_cycle.r3_manifest_path(target_date)
     rolling_path = ai_quality_cycle.rolling_report_path(target_date)
-    r3 = _load_json(r3_path)
-    rolling = _load_json(rolling_path)
-    queue = approval.load_queue(queue_path, now=now)
+    rolling = read_json_object_strict(rolling_path)
+    r3: dict[str, Any] = {}
+    queue = approval.load_queue(
+        queue_path,
+        now=now,
+        generation=queue_generation,
+    )
+    persisted_applied = [
+        entry
+        for entry in queue.get("candidates") or []
+        if isinstance(entry, Mapping)
+        and entry.get("state") == approval.STATE_APPLIED
+        and approval._candidate_runtime_family(entry.get("candidate") or {})
+        == approval.MAIN_AI_QUALITY_RUNTIME_FAMILY
+    ]
+    if len(persisted_applied) > 1:
+        raise ValueError("post_apply_attribution_candidate_not_unique")
     queue, _ = approval.sync_queue(
         queue,
         source_candidates=[],
@@ -879,7 +1123,18 @@ def _postclose(
         apply_receipt_dir=apply_receipt_dir,
         runtime_registry=approval.TRUSTED_RUNTIME_FAMILY_REGISTRY,
     )
+    reconciled_applied = [
+        entry
+        for entry in queue.get("candidates") or []
+        if isinstance(entry, Mapping)
+        and entry.get("state") == approval.STATE_APPLIED
+        and approval._candidate_runtime_family(entry.get("candidate") or {})
+        == approval.MAIN_AI_QUALITY_RUNTIME_FAMILY
+    ]
+    if len(reconciled_applied) > 1:
+        raise ValueError("post_apply_attribution_candidate_not_unique")
     attribution_records: list[tuple[Mapping[str, Any], dict[str, Any], Path]] = []
+    pending_attributions: list[tuple[Mapping[str, Any], dict[str, Any], Path]] = []
     attribution_paths: list[Path] = []
     attribution_blockers: list[dict[str, str]] = []
     # Recover idempotently when a prior run durably wrote the attribution
@@ -924,15 +1179,25 @@ def _postclose(
             )
             continue
         attribution_path = apply_receipt_dir / (
-            f"{target_date}_{str(entry.get('candidate_sha256') or '')[:16]}_"
+            f"{target_date}_{str(entry.get('candidate_sha256') or '')}_"
             "post_apply.json"
         )
+        pending_attributions.append((entry, attribution, attribution_path))
+    if len(attribution_records) + len(pending_attributions) > 1:
+        raise ValueError("post_apply_attribution_candidate_not_unique")
+    if pending_attributions:
+        entry, attribution, attribution_path = pending_attributions[0]
         if write:
-            _atomic_write_json(attribution_path, attribution)
+            try:
+                existing = _read_current_authority_receipt(attribution_path)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None and existing.payload != attribution:
+                raise ValueError("post_apply_attribution_publish_conflict")
+            if existing is None:
+                _atomic_write_json(attribution_path, attribution)
         attribution_records.append((entry, attribution, attribution_path))
         attribution_paths.append(attribution_path)
-    if len(attribution_records) > 1:
-        raise ValueError("post_apply_attribution_candidate_not_unique")
     if attribution_paths:
         queue, _ = approval.sync_queue(
             queue,
@@ -947,7 +1212,11 @@ def _postclose(
         # materialize a later candidate.  A missing next candidate must never
         # erase the completed attribution or leave auto-chain state ambiguous.
         if write:
-            approval._atomic_write_json(queue_path, queue)
+            approval._atomic_write_json(
+                queue_path,
+                queue,
+                generation=queue_generation,
+            )
     continuation = bool(attribution_records)
     if continuation:
         if write and not _exact_enrolled_continuation(queue):
@@ -962,6 +1231,7 @@ def _postclose(
         )
         candidate_source_path = rolling_path
     else:
+        r3 = read_json_object_strict(r3_path)
         candidate = build_promotion_candidate(
             authorization=authorization,
             r3_manifest=r3,
@@ -1030,7 +1300,11 @@ def _postclose(
     source_report = {**source_body, "artifact_content_sha256": _sha256(source_body)}
     if write:
         _atomic_write_json(source_report_path(target_date), source_report)
-        approval._atomic_write_json(queue_path, queue)
+        approval._atomic_write_json(
+            queue_path,
+            queue,
+            generation=queue_generation,
+        )
     return {
         "status": (
             "post_apply_continuation_queued"
@@ -1059,10 +1333,68 @@ def _postclose(
     }
 
 
-def _preopen(
-    *, target_date: str, write: bool, now: datetime, queue_path: Path
+def _postclose(
+    *,
+    target_date: str,
+    write: bool,
+    now: datetime,
+    queue_path: Path,
+    approval_dir: Path = approval.APPROVAL_DIR,
+    apply_receipt_dir: Path = approval.APPLY_RECEIPT_DIR,
 ) -> dict[str, Any]:
-    queue = approval.load_queue(queue_path, now=now)
+    if not write:
+        return _postclose_locked(
+            target_date=target_date,
+            write=False,
+            now=now,
+            queue_path=queue_path,
+            queue_generation=None,
+            approval_dir=approval_dir,
+            apply_receipt_dir=apply_receipt_dir,
+        )
+    with approval._queue_lock(queue_path) as queue_generation:
+        return _postclose_locked(
+            target_date=target_date,
+            write=write,
+            now=now,
+            queue_path=queue_path,
+            queue_generation=queue_generation,
+            approval_dir=approval_dir,
+            apply_receipt_dir=apply_receipt_dir,
+        )
+
+
+def _preopen_runtime_authority_blocked_result(*, target_date: str) -> dict[str, Any]:
+    return {
+        "status": "blocked_fail_closed",
+        "reason": live_policy.LEGACY_RUNTIME_AUTHORITY_BLOCKER,
+        "blocking_reasons": [live_policy.LEGACY_RUNTIME_AUTHORITY_BLOCKER],
+        "target_date": target_date,
+        "runtime_effect": False,
+        "runtime_apply_performed": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def _preopen_locked(
+    *,
+    target_date: str,
+    write: bool,
+    now: datetime,
+    queue_path: Path,
+    queue_generation: ArtifactGenerationLease | None,
+) -> dict[str, Any]:
+    if not live_policy.LEGACY_RUNTIME_AUTHORITY_ENABLED:
+        return _preopen_runtime_authority_blocked_result(target_date=target_date)
+    if write and queue_path.absolute() != approval.DEFAULT_QUEUE_PATH.absolute():
+        raise ValueError("preopen_write_queue_path_not_canonical")
+    queue = approval.load_queue(
+        queue_path,
+        now=now,
+        generation=queue_generation,
+    )
     matches = [
         row
         for row in queue.get("candidates") or []
@@ -1078,25 +1410,132 @@ def _preopen(
         raise ValueError("preopen_exact_family_candidate_multiple")
     entry = matches[0]
     handoff_path = Path(str(entry.get("preopen_handoff") or ""))
-    handoff = _load_json(handoff_path)
-    authorization = _load_json(STANDING_AUTHORIZATION_PATH)
+    handoff_receipt = _read_current_authority_receipt(handoff_path)
+    handoff = handoff_receipt.payload
+    authorization_receipt = _read_current_authority_receipt(STANDING_AUTHORIZATION_PATH)
+    authorization = authorization_receipt.payload
+    entry_errors = _preopen_entry_errors(
+        queue=queue,
+        entry=entry,
+        handoff=handoff,
+        authorization=authorization,
+    )
+    if entry_errors:
+        raise ValueError("preopen_entry_contract_invalid:" + ",".join(entry_errors))
+    if write:
+        expected_handoff = (
+            approval.HANDOFF_DIR
+            / target_date
+            / (
+                f"{approval._safe_id(str(entry.get('candidate_id') or 'candidate'))}_"
+                f"{str(entry.get('candidate_sha256') or '')[:16]}.json"
+            )
+        )
+        if handoff_path.absolute() != expected_handoff.absolute():
+            raise ValueError("preopen_handoff_path_not_canonical")
     activation_artifact_path = live_policy.activation_path(target_date)
     receipt_path = approval.APPLY_RECEIPT_DIR / (
-        f"{target_date}_{str(entry.get('candidate_sha256') or '')[:16]}_applied.json"
+        f"{target_date}_{str(entry.get('candidate_sha256') or '')}_applied.json"
     )
-    activation = build_preopen_activation(
-        handoff_path=handoff_path,
-        handoff=handoff,
-        candidate=entry.get("candidate") or {},
-        authorization=authorization,
-        now=now,
-        activation_artifact_path=activation_artifact_path,
-        apply_receipt_path=receipt_path,
-    )
-    receipt = apply_receipt(activation)
-    if write:
-        _atomic_write_json(activation_artifact_path, activation)
-        _atomic_write_json(receipt_path, receipt)
+    if not write:
+        activation = build_preopen_activation(
+            handoff_path=handoff_path,
+            handoff=handoff,
+            candidate=entry.get("candidate") or {},
+            authorization=authorization,
+            now=now,
+            activation_artifact_path=activation_artifact_path,
+            apply_receipt_path=receipt_path,
+            handoff_receipt=handoff_receipt,
+        )
+        apply_receipt(activation)
+        return {
+            "status": "applied_guard_passed",
+            "activation_path": str(activation_artifact_path),
+            "apply_receipt_path": str(receipt_path),
+            "candidate_sha256": entry.get("candidate_sha256"),
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+        }
+    with (
+        json_artifact_generation_lock(
+            activation_artifact_path,
+            exclusive=True,
+            blocking=True,
+        ) as activation_generation,
+        json_artifact_generation_lock(
+            receipt_path,
+            exclusive=True,
+            blocking=True,
+        ) as receipt_generation,
+    ):
+        try:
+            existing_activation = read_json_object_strict(
+                activation_artifact_path,
+                generation=activation_generation,
+            )
+        except FileNotFoundError:
+            existing_activation = None
+        try:
+            existing_receipt = read_json_object_strict(
+                receipt_path,
+                generation=receipt_generation,
+            )
+        except FileNotFoundError:
+            existing_receipt = None
+        if (existing_activation is None) != (existing_receipt is None):
+            raise ValueError("preopen_activation_receipt_partial_generation")
+        if existing_activation is not None and existing_receipt is not None:
+            existing_errors = [
+                *live_policy.activation_errors(
+                    existing_activation,
+                    target_date=target_date,
+                    selected_path=activation_artifact_path,
+                    receipt=existing_receipt,
+                ),
+                *apply_receipt_errors(
+                    existing_receipt,
+                    activation=existing_activation,
+                ),
+            ]
+            if (
+                existing_activation.get("queue_key") != entry.get("queue_key")
+                or existing_activation.get("candidate_sha256")
+                != entry.get("candidate_sha256")
+                or existing_activation.get("preopen_handoff_sha256")
+                != handoff_receipt.raw_sha256
+            ):
+                existing_errors.append("preopen_existing_pair_entry_mismatch")
+            if existing_errors:
+                raise ValueError(
+                    "preopen_existing_pair_invalid:"
+                    + ",".join(sorted(set(existing_errors)))
+                )
+            activation = existing_activation
+            receipt = existing_receipt
+        else:
+            activation = build_preopen_activation(
+                handoff_path=handoff_path,
+                handoff=handoff,
+                candidate=entry.get("candidate") or {},
+                authorization=authorization,
+                now=now,
+                activation_artifact_path=activation_artifact_path,
+                apply_receipt_path=receipt_path,
+                handoff_receipt=handoff_receipt,
+            )
+            receipt = apply_receipt(activation)
+            if write:
+                _atomic_write_json(
+                    activation_artifact_path,
+                    activation,
+                    generation=activation_generation,
+                )
+                _atomic_write_json(
+                    receipt_path,
+                    receipt,
+                    generation=receipt_generation,
+                )
     return {
         "status": "applied_guard_passed",
         "activation_path": str(activation_artifact_path),
@@ -1105,6 +1544,31 @@ def _preopen(
         "runtime_effect": True,
         "actual_order_submitted": False,
     }
+
+
+def _preopen(
+    *, target_date: str, write: bool, now: datetime, queue_path: Path
+) -> dict[str, Any]:
+    if write and queue_path.absolute() != approval.DEFAULT_QUEUE_PATH.absolute():
+        raise ValueError("preopen_write_queue_path_not_canonical")
+    if not live_policy.LEGACY_RUNTIME_AUTHORITY_ENABLED:
+        return _preopen_runtime_authority_blocked_result(target_date=target_date)
+    if not write:
+        return _preopen_locked(
+            target_date=target_date,
+            write=False,
+            now=now,
+            queue_path=queue_path,
+            queue_generation=None,
+        )
+    with approval._queue_lock(queue_path) as queue_generation:
+        return _preopen_locked(
+            target_date=target_date,
+            write=write,
+            now=now,
+            queue_path=queue_path,
+            queue_generation=queue_generation,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1137,6 +1601,8 @@ def main(argv: list[str] | None = None) -> int:
                 queue_path=args.queue_path,
             )
         )
+        if result.get("status") == "blocked_fail_closed":
+            exit_code = 2
     except (OSError, TypeError, ValueError) as exc:
         result = {
             "status": "blocked_fail_closed",

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from datetime import datetime
+from datetime import datetime, tzinfo
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +22,27 @@ class _FakeWS:
 
     async def send(self, payload):
         self.sent.append(payload)
+
+
+class _RecordingTransportEpochCollector:
+    def __init__(self, order=None):
+        self.epochs = []
+        self.order = order
+
+    def begin_transport_epoch(self):
+        epoch = 1_000 + len(self.epochs)
+        self.epochs.append(epoch)
+        if self.order is not None:
+            self.order.append("transport_epoch")
+        return epoch
+
+
+class _OffsetlessTZ(tzinfo):
+    def utcoffset(self, _dt):
+        return None
+
+    def dst(self, _dt):
+        return None
 
 
 def _reset_ws_hot_override_cache():
@@ -108,6 +129,125 @@ def test_handle_message_ignores_non_dict_payload():
     asyncio.run(manager._handle_message(json.dumps(["PING"])))
 
     assert fake_ws.sent == []
+
+
+def test_order_execution_carries_websocket_packet_ingress_timestamp():
+    manager = KiwoomWSManager("test-token")
+    packet_received_at = datetime(
+        2026, 8, 25, 9, 0, 3, 456789, tzinfo=kiwoom_websocket.KST
+    )
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "00",
+                            "name": "주문체결",
+                            "values": {
+                                "9203": "1000001",
+                                "9001": "A005930",
+                                "913": "체결",
+                                "900": "1",
+                                "902": "0",
+                                "903": "70000",
+                                "905": "+매수",
+                                "907": "2",
+                                "908": "090003",
+                                "909": "2000001",
+                                "910": "70000",
+                                "911": "1",
+                                "914": "70000",
+                                "915": "1",
+                                "2134": "1",
+                                "2135": "KRX",
+                                "2136": "N",
+                            },
+                        }
+                    ],
+                }
+            ),
+            received_at=packet_received_at,
+        )
+    )
+
+    queued = []
+    while not manager._state_event_queue.empty():
+        queued.append(manager._state_event_queue.get_nowait())
+    execution_payload = next(
+        payload for event_type, payload in queued if event_type == "ORDER_EXECUTED"
+    )
+    assert execution_payload["broker_execution_received_at"] == (
+        packet_received_at.isoformat(timespec="microseconds")
+    )
+    assert execution_payload["broker_execution_receive_time_source"] == (
+        "websocket_packet_ingress"
+    )
+
+
+@pytest.mark.parametrize(
+    "received_at",
+    [
+        None,
+        datetime(2026, 8, 25, 9, 0, 3, 456789),
+        datetime(2026, 8, 25, 9, 0, 3, 456789, tzinfo=_OffsetlessTZ()),
+    ],
+    ids=["missing", "timezone_naive", "offsetless_tzinfo"],
+)
+def test_order_execution_without_aware_ingress_timestamp_is_never_trusted(
+    received_at,
+):
+    manager = KiwoomWSManager("test-token")
+    message = json.dumps(
+        {
+            "trnm": "REAL",
+            "data": [
+                {
+                    "type": "00",
+                    "name": "주문체결",
+                    "values": {
+                        "9203": "1000001",
+                        "9001": "A005930",
+                        "913": "체결",
+                        "900": "1",
+                        "902": "0",
+                        "903": "70000",
+                        "905": "+매수",
+                        "907": "2",
+                        "908": "090003",
+                        "909": "2000001",
+                        "910": "70000",
+                        "911": "1",
+                        "914": "70000",
+                        "915": "1",
+                        "2134": "1",
+                        "2135": "KRX",
+                        "2136": "N",
+                    },
+                }
+            ],
+        }
+    )
+
+    if received_at is None:
+        asyncio.run(manager._handle_message(message))
+    else:
+        asyncio.run(manager._handle_message(message, received_at=received_at))
+
+    queued = []
+    while not manager._state_event_queue.empty():
+        queued.append(manager._state_event_queue.get_nowait())
+    execution_payload = next(
+        payload for event_type, payload in queued if event_type == "ORDER_EXECUTED"
+    )
+    assert execution_payload["broker_execution_receive_time_source"] == (
+        "handler_dispatch_fallback_not_packet_ingress"
+    )
+    assert execution_payload["broker_execution_receive_time_source"] != (
+        "websocket_packet_ingress"
+    )
 
 
 def _epoch_at_090010():
@@ -798,6 +938,8 @@ def test_realtime_0b_incomplete_cache_does_not_create_cached_touch(monkeypatch):
 
 def test_await_login_ack_raises_on_login_failure():
     manager = KiwoomWSManager("test-token")
+    collector = _RecordingTransportEpochCollector()
+    manager._micro_reversion_forward_collector = collector
     fake_ws = _FakeWS(
         [
             json.dumps(
@@ -809,10 +951,14 @@ def test_await_login_ack_raises_on_login_failure():
     with pytest.raises(RuntimeError):
         asyncio.run(manager._await_login_ack(fake_ws, timeout_sec=1.0))
 
+    assert collector.epochs == []
+
 
 def test_post_login_bootstrap_skips_condition_list_by_default(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", raising=False)
     manager = KiwoomWSManager("test-token")
+    collector = _RecordingTransportEpochCollector()
+    manager._micro_reversion_forward_collector = collector
     fake_ws = _FakeWS([])
     manager.websocket = fake_ws
 
@@ -821,16 +967,27 @@ def test_post_login_bootstrap_skips_condition_list_by_default(monkeypatch):
     sent = [json.loads(payload) for payload in fake_ws.sent]
     assert not any(payload.get("trnm") == "CNSRLST" for payload in sent)
     assert manager._session_ready.is_set()
+    assert collector.epochs == []
 
 
 def test_post_login_bootstrap_restores_symbols_after_readiness_boundary(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", raising=False)
     manager = KiwoomWSManager("test-token")
+    boundary_order = []
+    collector = _RecordingTransportEpochCollector(boundary_order)
+    manager._micro_reversion_forward_collector = collector
     fake_ws = _FakeWS([])
     manager.websocket = fake_ws
     manager.is_reconnected = True
     manager.subscribed_codes.add("005930")
     manager._registered_items_by_code["005930"] = ("005930",)
+    original_enqueue = manager._enqueue_state_event
+
+    def record_enqueue(event_type, payload):
+        boundary_order.append(event_type)
+        return original_enqueue(event_type, payload)
+
+    manager._enqueue_state_event = record_enqueue
 
     asyncio.run(manager._send_post_login_bootstrap())
 
@@ -847,6 +1004,52 @@ def test_post_login_bootstrap_restores_symbols_after_readiness_boundary(monkeypa
     assert manager._session_ready.is_set()
     assert len(symbol_regs) == 1
     assert symbol_regs[0]["refresh"] == "1"
+    assert collector.epochs == [1_000]
+    assert boundary_order[:2] == ["transport_epoch", "WS_RECONNECTED"]
+
+
+def test_reconnect_epoch_failure_schedules_cleanup_without_blocking_bootstrap(
+    monkeypatch,
+):
+    monkeypatch.delenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", raising=False)
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = _FakeWS([])
+    manager.is_reconnected = True
+
+    class BrokenCollector:
+        def begin_transport_epoch(self):
+            raise RuntimeError("synthetic epoch failure")
+
+    manager._micro_reversion_forward_collector = BrokenCollector()
+    scheduled = []
+    close_calls = []
+
+    class DeferredThread:
+        def __init__(self, *, target, name, daemon):
+            assert name == "micro-reversion-epoch-failure-close"
+            assert daemon is True
+            self.target = target
+
+        def start(self):
+            scheduled.append(self.target)
+
+    monkeypatch.setattr(kiwoom_websocket.threading, "Thread", DeferredThread)
+    monkeypatch.setattr(
+        manager,
+        "_close_micro_reversion_forward_collector",
+        lambda: close_calls.append(True),
+    )
+
+    asyncio.run(manager._send_post_login_bootstrap())
+
+    assert manager._session_ready.is_set()
+    assert manager._micro_reversion_forward_collector_stop_reason == (
+        "transport_epoch_failure:RuntimeError"
+    )
+    assert len(scheduled) == 1
+    assert close_calls == []
+    scheduled[0]()
+    assert close_calls == [True]
 
 
 def test_condition_list_ignored_by_default(monkeypatch):
@@ -1393,9 +1596,7 @@ def test_send_reg_source_only_types_are_limited_to_0b_and_0d(monkeypatch):
     assert payload["refresh"] == "1"
     assert [row["type"] for row in payload["data"]] == [["0B"], ["0D"]]
     assert all(row["item"] == ["039490_NX"] for row in payload["data"])
-    assert not manager.realtime_data["039490"].get(
-        "program_subscription_requested_at"
-    )
+    assert not manager.realtime_data["039490"].get("program_subscription_requested_at")
 
 
 def test_send_reg_uses_single_effective_route_by_default(monkeypatch):
@@ -1559,9 +1760,7 @@ def test_execute_unsubscribe_retains_micro_collection_as_source_only(monkeypatch
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes = {"111111"}
     manager._registered_items_by_code = {"111111": ("111111_AL",)}
-    manager._micro_reversion_observation_items_by_code = {
-        "111111": "111111_AL"
-    }
+    manager._micro_reversion_observation_items_by_code = {"111111": "111111_AL"}
     manager.realtime_data = {"111111": {"curr": 1000}}
 
     manager.execute_unsubscribe(["111111"])
@@ -1578,9 +1777,7 @@ def test_widget_observation_registration_is_not_reclassified_as_micro_only(
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes = {"005930"}
     manager._registered_items_by_code = {"005930": ("005930_AL",)}
-    manager._micro_reversion_observation_items_by_code = {
-        "005930": "005930_AL"
-    }
+    manager._micro_reversion_observation_items_by_code = {"005930": "005930_AL"}
 
     manager.execute_unsubscribe(["005930"])
 
@@ -1594,9 +1791,7 @@ def test_micro_collection_demotion_replaces_route_with_source_only_types(monkeyp
     manager.loop = SimpleNamespace(is_running=lambda: True)
     manager.subscribed_codes = {"111111"}
     manager._registered_items_by_code = {"111111": ("111111",)}
-    manager._micro_reversion_observation_items_by_code = {
-        "111111": "111111_AL"
-    }
+    manager._micro_reversion_observation_items_by_code = {"111111": "111111_AL"}
     captured = []
 
     def fake_send_reg(codes, **kwargs):
@@ -1631,9 +1826,7 @@ def test_micro_collection_demotion_replaces_route_with_source_only_types(monkeyp
 
 def test_micro_collection_set_rotation_removes_old_source_only_code(monkeypatch):
     manager = KiwoomWSManager("test-token")
-    manager._micro_reversion_observation_items_by_code = {
-        "111111": "111111_AL"
-    }
+    manager._micro_reversion_observation_items_by_code = {"111111": "111111_AL"}
     manager._micro_reversion_observation_only_codes = {"111111"}
     manager.subscribed_codes = {"111111"}
     manager._registered_items_by_code = {"111111": ("111111_AL",)}
@@ -1658,9 +1851,7 @@ def test_micro_collection_set_rotation_removes_old_source_only_code(monkeypatch)
     assert subscribed[0][0] == ["222222_NX"]
     assert subscribed[0][1]["realtime_types"] == ("0B", "0D")
     assert subscribed[0][1]["observation_only"] is True
-    assert manager._micro_reversion_observation_items_by_code == {
-        "222222": "222222_NX"
-    }
+    assert manager._micro_reversion_observation_items_by_code == {"222222": "222222_NX"}
 
 
 def test_micro_collection_set_does_not_race_boot_runtime_registration(monkeypatch):
@@ -1690,9 +1881,7 @@ def test_real_subscription_stays_source_only_until_replacement_reg_is_sent():
     manager = KiwoomWSManager("test-token")
     manager._started = True
     manager.subscribed_codes = {"111111"}
-    manager._micro_reversion_observation_items_by_code = {
-        "111111": "111111_AL"
-    }
+    manager._micro_reversion_observation_items_by_code = {"111111": "111111_AL"}
     manager._micro_reversion_observation_only_codes = {"111111"}
 
     manager.execute_subscribe(["111111"], source="scanner_runtime_target_attach")
@@ -1894,9 +2083,7 @@ def test_real_subscription_requests_source_only_route_replacement(monkeypatch):
     manager.loop = SimpleNamespace(is_running=lambda: True)
     manager.subscribed_codes = {"111111"}
     manager._registered_items_by_code = {"111111": ("111111_NX",)}
-    manager._micro_reversion_observation_items_by_code = {
-        "111111": "111111_NX"
-    }
+    manager._micro_reversion_observation_items_by_code = {"111111": "111111_NX"}
     manager._micro_reversion_observation_only_codes = {"111111"}
     captured = []
 

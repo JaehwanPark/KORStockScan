@@ -23,6 +23,10 @@ MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED="${MICRO_REVERSION_STORAGE_MAINTENAN
 MICRO_REVERSION_STORAGE_PURGE_ENABLED="${MICRO_REVERSION_STORAGE_PURGE_ENABLED:-false}"
 MICRO_REVERSION_STORAGE_ROOT="${MICRO_REVERSION_STORAGE_ROOT:-$PROJECT_DIR/data/observations/scalp_micro_reversion_forward}"
 MICRO_REVERSION_STORAGE_NICE_LEVEL="${MICRO_REVERSION_STORAGE_NICE_LEVEL:-15}"
+MICRO_REVERSION_REPORT_ARTIFACT_RETENTION_DAYS="${MICRO_REVERSION_REPORT_ARTIFACT_RETENTION_DAYS:-90}"
+MICRO_REVERSION_STORAGE_LOW_DISK_WATERMARK_BYTES="${MICRO_REVERSION_STORAGE_LOW_DISK_WATERMARK_BYTES:-5368709120}"
+MICRO_REVERSION_STORAGE_CRITICAL_DISK_WATERMARK_BYTES="${MICRO_REVERSION_STORAGE_CRITICAL_DISK_WATERMARK_BYTES:-1073741824}"
+MICRO_REVERSION_STORAGE_CAPACITY_STATUS_PATH="${MICRO_REVERSION_STORAGE_CAPACITY_STATUS_PATH:-$PROJECT_DIR/data/report/micro_reversion_storage_capacity/micro_reversion_storage_capacity_${TARGET_DATE}.json}"
 PYTHON_BIN="${PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python3"
@@ -74,6 +78,18 @@ if [[ ! "$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "$MICRO_REVERSION_STORAGE_NICE_LEVEL" =~ ^([0-9]|1[0-9])$ ]]; then
   echo "[LOG_CLEANUP_ERROR] micro-reversion storage nice level must be 0..19: $MICRO_REVERSION_STORAGE_NICE_LEVEL"
+  exit 2
+fi
+if [[ ! "$MICRO_REVERSION_REPORT_ARTIFACT_RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[LOG_CLEANUP_ERROR] micro-reversion report artifact retention days must be positive integer: $MICRO_REVERSION_REPORT_ARTIFACT_RETENTION_DAYS"
+  exit 2
+fi
+if [[ ! "$MICRO_REVERSION_STORAGE_LOW_DISK_WATERMARK_BYTES" =~ ^[0-9]+$ || ! "$MICRO_REVERSION_STORAGE_CRITICAL_DISK_WATERMARK_BYTES" =~ ^[0-9]+$ ]]; then
+  echo "[LOG_CLEANUP_ERROR] micro-reversion capacity watermarks must be non-negative integers"
+  exit 2
+fi
+if [[ "$MICRO_REVERSION_STORAGE_LOW_DISK_WATERMARK_BYTES" -lt "$MICRO_REVERSION_STORAGE_CRITICAL_DISK_WATERMARK_BYTES" ]]; then
+  echo "[LOG_CLEANUP_ERROR] micro-reversion low disk watermark must not be below critical watermark"
   exit 2
 fi
 if [[ "$MICRO_REVERSION_STORAGE_PURGE_ENABLED" != "true" && "$MICRO_REVERSION_STORAGE_PURGE_ENABLED" != "false" ]]; then
@@ -133,6 +149,58 @@ micro_reversion_storage_partition_failure_count=0
 micro_reversion_storage_failed_candidate_count=0
 micro_reversion_storage_failed_candidate_bytes=0
 micro_reversion_storage_recovery_required_count=0
+micro_reversion_report_artifact_action_count=0
+micro_reversion_report_artifact_compressed_count=0
+micro_reversion_report_artifact_source_bytes=0
+micro_reversion_report_artifact_failure_count=0
+micro_reversion_report_artifact_retention_candidate_count=0
+micro_reversion_report_artifact_retention_candidate_bytes=0
+micro_reversion_artifact_set_count=0
+micro_reversion_artifact_set_terminal_count=0
+micro_reversion_artifact_set_superseded_count=0
+micro_reversion_artifact_set_incomplete_count=0
+micro_reversion_artifact_set_stale_workorder_count=0
+micro_reversion_artifact_set_stale_workorder_bytes=0
+micro_reversion_immutable_source_artifact_count=0
+micro_reversion_immutable_source_artifact_bytes=0
+micro_reversion_checkpoint_journal_count=0
+micro_reversion_checkpoint_terminal_count=0
+micro_reversion_checkpoint_superseded_count=0
+micro_reversion_checkpoint_incomplete_count=0
+micro_reversion_checkpoint_stale_workorder_count=0
+micro_reversion_checkpoint_stale_workorder_bytes=0
+micro_reversion_provider_budget_ledger_count=0
+micro_reversion_provider_budget_ledger_bytes=0
+micro_reversion_provider_budget_retention_candidate_count=0
+micro_reversion_provider_budget_retention_candidate_bytes=0
+micro_reversion_exact_ai_artifact_count=0
+micro_reversion_exact_ai_artifact_bytes=0
+micro_reversion_exact_ai_compressed_count=0
+micro_reversion_exact_ai_failure_count=0
+micro_reversion_exact_ai_retention_candidate_count=0
+micro_reversion_exact_ai_retention_candidate_bytes=0
+micro_reversion_daily_owner_partition_count=0
+micro_reversion_daily_owner_file_count=0
+micro_reversion_daily_owner_bytes=0
+micro_reversion_daily_owner_exact_date_file_count=0
+micro_reversion_daily_owner_exact_date_bytes=0
+micro_reversion_daily_owner_retention_candidate_count=0
+micro_reversion_daily_owner_retention_candidate_bytes=0
+micro_reversion_daily_owner_failure_count=0
+micro_reversion_daily_owner_status="not_run"
+micro_reversion_daily_owner_archive_offload_status="not_run"
+micro_reversion_storage_disk_free_bytes_before=0
+micro_reversion_storage_disk_free_bytes_after=0
+micro_reversion_storage_disk_free_bytes_delta=0
+micro_reversion_storage_retained_physical_bytes_after=0
+micro_reversion_storage_compressed_target_bytes=0
+micro_reversion_storage_bytes_reclaimed=0
+micro_reversion_storage_capacity_state="not_run"
+micro_reversion_storage_capacity_warning="false"
+micro_reversion_storage_capacity_failure="false"
+micro_reversion_storage_capacity_workorder_required="false"
+micro_reversion_storage_capacity_status_written="false"
+micro_reversion_storage_capacity_status_write_failures=0
 compressed_archive_count=0
 archive_compression_finalized_count=0
 archive_verified_existing_source_preserved_count=0
@@ -214,6 +282,7 @@ compression_reason_is_writer_active() {
 
 update_writer_defer_state() {
   if ! "$PYTHON_BIN" - "$WRITER_DEFER_STATE_FILE" "$writer_defer_keys_file" "$writer_defer_result_file" "$WRITER_DEFER_FAILURE_THRESHOLD" "$TARGET_DATE" "$cleanup_run_id" "$find_enumeration_failure_count" <<'PY'
+import hashlib
 import json
 import os
 import sys
@@ -418,6 +487,24 @@ run_micro_reversion_storage_maintenance() {
       --root "$MICRO_REVERSION_STORAGE_ROOT"
       --as-of-date "$TARGET_DATE"
       --apply
+      --report-artifact-root "$PROJECT_DIR/data/report/ai_micro_reversion_materialized_replay_requests"
+      --report-artifact-root "$PROJECT_DIR/data/report/micro_reversion_ai_quality_bridge"
+      --report-artifact-root "$PROJECT_DIR/data/report/main_ai_quality_r0_r3"
+      --report-artifact-root "$PROJECT_DIR/data/report/micro_reversion_storage_capacity"
+      --report-artifact-root "$PROJECT_DIR/data/report/ai_prompt_paired_replay"
+      --report-artifact-root "$PROJECT_DIR/data/report/micro_reversion_economic_reference"
+      --report-artifact-root "$PROJECT_DIR/data/offline_provider_budget"
+      --exact-ai-artifact-root "$PROJECT_DIR/data/ai_decision_payloads"
+      --exact-ai-artifact-root "$PROJECT_DIR/data/ai_decision_trace"
+      --exact-ai-artifact-root "$PROJECT_DIR/data/ai_decision_outcomes"
+      --exact-ai-artifact-root "$PROJECT_DIR/data/ai_decision_requests"
+      --exact-ai-artifact-root "$PROJECT_DIR/data/ai_decision_prompts"
+      --exact-ai-artifact-root "$PROJECT_DIR/data/report/ai_decision_outcome_labels"
+      --micro-reversion-daily-owner-root "$PROJECT_DIR/data/policy/micro_reversion/daily"
+      --report-artifact-retention-days "$MICRO_REVERSION_REPORT_ARTIFACT_RETENTION_DAYS"
+      --low-disk-watermark-bytes "$MICRO_REVERSION_STORAGE_LOW_DISK_WATERMARK_BYTES"
+      --critical-disk-watermark-bytes "$MICRO_REVERSION_STORAGE_CRITICAL_DISK_WATERMARK_BYTES"
+      --capacity-status-path "$MICRO_REVERSION_STORAGE_CAPACITY_STATUS_PATH"
     )
     if [[ "$MICRO_REVERSION_STORAGE_PURGE_ENABLED" == "true" ]]; then
       maintenance_command+=(--purge-expired)
@@ -432,23 +519,28 @@ run_micro_reversion_storage_maintenance() {
         "${maintenance_command[@]}"
     fi
   ) >"$result_path" || lock_rc=$?
-  if [[ "$lock_rc" -ne 0 ]]; then
+  if [[ "$lock_rc" -eq 75 ]]; then
     rm -f "$result_path"
-    if [[ "$lock_rc" -eq 75 ]]; then
       micro_reversion_storage_status="lock_busy"
       micro_reversion_storage_purge_status="not_run_lock_busy"
-    elif [[ "$lock_rc" -eq 76 ]]; then
+    return 1
+  fi
+  if [[ "$lock_rc" -eq 76 ]]; then
+    rm -f "$result_path"
       micro_reversion_storage_status="unsafe_lock"
       micro_reversion_storage_purge_status="not_run_unsafe_lock"
-    else
-      micro_reversion_storage_status="failed"
-      micro_reversion_storage_purge_status="execution_failed"
-    fi
+    return 1
+  fi
+  if [[ "$lock_rc" -ne 0 && ! -s "$result_path" ]]; then
+    rm -f "$result_path"
+    micro_reversion_storage_status="failed"
+    micro_reversion_storage_purge_status="execution_failed"
     return 1
   fi
 
   local parsed
   if ! parsed="$("$PYTHON_BIN" - "$result_path" <<'PY'
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -483,6 +575,161 @@ def native_nonnegative_int(value, *, field):
     return value
 
 
+def native_int(value, *, field):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SystemExit(f"storage maintenance {field} is invalid")
+    return value
+
+
+def validate_capacity(payload, *, field_prefix):
+    low = native_nonnegative_int(
+        payload.get("low_disk_watermark_bytes"),
+        field=f"{field_prefix} low_disk_watermark_bytes",
+    )
+    critical = native_nonnegative_int(
+        payload.get("critical_disk_watermark_bytes"),
+        field=f"{field_prefix} critical_disk_watermark_bytes",
+    )
+    if low < critical:
+        raise SystemExit(f"storage maintenance {field_prefix} watermarks conflict")
+    for field in (
+        "disk_total_bytes",
+        "disk_used_bytes_after",
+        "disk_free_bytes_before",
+        "disk_free_bytes_after",
+        "retained_physical_bytes_before",
+        "retained_physical_bytes_after",
+        "compressed_target_bytes",
+        "bytes_reclaimed",
+    ):
+        native_nonnegative_int(
+            payload.get(field), field=f"{field_prefix} {field}"
+        )
+    native_int(
+        payload.get("disk_free_bytes_delta"),
+        field=f"{field_prefix} disk_free_bytes_delta",
+    )
+    native_int(
+        payload.get("retained_physical_bytes_delta"),
+        field=f"{field_prefix} retained_physical_bytes_delta",
+    )
+    if payload.get("disk_free_bytes_delta") != (
+        payload.get("disk_free_bytes_after") - payload.get("disk_free_bytes_before")
+    ):
+        raise SystemExit(f"storage maintenance {field_prefix} free delta mismatch")
+    if payload.get("retained_physical_bytes_delta") != (
+        payload.get("retained_physical_bytes_after")
+        - payload.get("retained_physical_bytes_before")
+    ):
+        raise SystemExit(
+            f"storage maintenance {field_prefix} retained byte delta mismatch"
+        )
+    if payload.get("bytes_reclaimed") != max(
+        0,
+        payload.get("retained_physical_bytes_before")
+        - payload.get("retained_physical_bytes_after"),
+    ):
+        raise SystemExit(
+            f"storage maintenance {field_prefix} reclaimed byte mismatch"
+        )
+    free_after = payload.get("disk_free_bytes_after")
+    expected_state = (
+        "critical"
+        if free_after < critical
+        else ("low_warning" if free_after < low else "healthy")
+    )
+    if payload.get("capacity_state") != expected_state:
+        raise SystemExit(f"storage maintenance {field_prefix} capacity state mismatch")
+    expected_warning = expected_state == "low_warning"
+    expected_failure = expected_state == "critical"
+    if (
+        payload.get("capacity_warning") is not expected_warning
+        or payload.get("capacity_failure") is not expected_failure
+        or payload.get("capacity_workorder_required")
+        is not (expected_state != "healthy")
+    ):
+        raise SystemExit(
+            f"storage maintenance {field_prefix} capacity flags mismatch"
+        )
+    reason_codes = payload.get("capacity_reason_codes")
+    expected_reasons = (
+        ["disk_free_below_critical_watermark"]
+        if expected_failure
+        else (["disk_free_below_low_watermark"] if expected_warning else [])
+    )
+    if reason_codes != expected_reasons:
+        raise SystemExit(
+            f"storage maintenance {field_prefix} capacity reasons mismatch"
+        )
+    return expected_state
+
+
+capacity_state = validate_capacity(payload, field_prefix="root")
+capacity_status_path = payload.get("capacity_status_artifact_path")
+capacity_status_written = payload.get("capacity_status_written")
+capacity_status_write_failure_count = native_nonnegative_int(
+    payload.get("capacity_status_write_failure_count"),
+    field="capacity_status_write_failure_count",
+)
+if not isinstance(capacity_status_path, str) or not capacity_status_path:
+    raise SystemExit("storage maintenance capacity status path missing")
+if capacity_status_written is not (capacity_status_write_failure_count == 0):
+    raise SystemExit("storage maintenance capacity status write census mismatch")
+if capacity_status_write_failure_count:
+    if not isinstance(payload.get("capacity_status_write_failure_reason"), str):
+        raise SystemExit("storage maintenance capacity status failure missing")
+else:
+    capacity_artifact_path = Path(capacity_status_path)
+    capacity_artifact = json.loads(capacity_artifact_path.read_text(encoding="utf-8"))
+    if capacity_artifact.get("schema") != (
+        "scalp_micro_reversion_storage_capacity_status_v1"
+    ):
+        raise SystemExit("storage maintenance capacity artifact schema mismatch")
+    declared_hash = capacity_artifact.get("artifact_content_sha256")
+    content = {
+        key: value
+        for key, value in capacity_artifact.items()
+        if key != "artifact_content_sha256"
+    }
+    encoded = json.dumps(
+        content,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    if (
+        not isinstance(declared_hash, str)
+        or hashlib.sha256(encoded).hexdigest() != declared_hash
+    ):
+        raise SystemExit("storage maintenance capacity artifact hash mismatch")
+    if (
+        capacity_artifact.get("target_date") != payload.get("as_of_date")
+        or capacity_artifact.get("capacity_state") != capacity_state
+        or capacity_artifact.get("disk_free_bytes_after")
+        != payload.get("disk_free_bytes_after")
+        or capacity_artifact.get("retained_physical_bytes_after")
+        != payload.get("retained_physical_bytes_after")
+        or capacity_artifact.get("compressed_target_bytes")
+        != payload.get("compressed_target_bytes")
+        or capacity_artifact.get("bytes_reclaimed")
+        != payload.get("bytes_reclaimed")
+    ):
+        raise SystemExit("storage maintenance capacity artifact binding mismatch")
+    if (
+        capacity_artifact.get("runtime_effect") is not False
+        or capacity_artifact.get("allowed_runtime_apply") is not False
+        or capacity_artifact.get("actual_order_submitted") is not False
+        or capacity_artifact.get("broker_order_forbidden") is not True
+        or capacity_artifact.get("trading_runtime_effect") is not False
+        or capacity_artifact.get("provider_runtime_effect") is not False
+        or capacity_artifact.get("provider_route_change_allowed") is not False
+        or capacity_artifact.get("network_call_performed_by_module") is not False
+        or capacity_artifact.get("automatic_deletion_authorized") is not False
+    ):
+        raise SystemExit("storage maintenance capacity artifact authority mismatch")
+
+
 action_source_bytes = 0
 for row in actions:
     if not isinstance(row, dict) or row.get("applied") is not True:
@@ -508,7 +755,385 @@ if (
     or partition_failure_count != len(partition_failures)
 ):
     raise SystemExit("storage maintenance partition failure census mismatch")
-expected_status = "partial_failure" if partition_failure_count else "pass"
+report_artifacts = payload.get("report_artifact_maintenance")
+report_artifact_action_count = 0
+report_artifact_compressed_count = 0
+report_artifact_source_bytes = 0
+report_artifact_failure_count = 0
+report_artifact_retention_candidate_count = 0
+report_artifact_retention_candidate_bytes = 0
+artifact_set_count = 0
+artifact_set_terminal_count = 0
+artifact_set_superseded_count = 0
+artifact_set_incomplete_count = 0
+artifact_set_stale_workorder_count = 0
+artifact_set_stale_workorder_bytes = 0
+immutable_source_artifact_count = 0
+immutable_source_artifact_bytes = 0
+checkpoint_journal_count = 0
+checkpoint_terminal_count = 0
+checkpoint_superseded_count = 0
+checkpoint_incomplete_count = 0
+checkpoint_stale_workorder_count = 0
+checkpoint_stale_workorder_bytes = 0
+provider_budget_ledger_count = 0
+provider_budget_ledger_bytes = 0
+provider_budget_retention_candidate_count = 0
+provider_budget_retention_candidate_bytes = 0
+exact_ai_artifact_count = 0
+exact_ai_artifact_bytes = 0
+exact_ai_compressed_count = 0
+exact_ai_failure_count = 0
+exact_ai_retention_candidate_count = 0
+exact_ai_retention_candidate_bytes = 0
+daily_owner_partition_count = 0
+daily_owner_file_count = 0
+daily_owner_bytes = 0
+daily_owner_exact_date_file_count = 0
+daily_owner_exact_date_bytes = 0
+daily_owner_retention_candidate_count = 0
+daily_owner_retention_candidate_bytes = 0
+daily_owner_failure_count = 0
+daily_owner_status = "not_run"
+daily_owner_archive_offload_status = "not_run"
+if report_artifacts is not None:
+    if not isinstance(report_artifacts, dict) or report_artifacts.get("schema") != (
+        "scalp_micro_reversion_report_artifact_storage_maintenance_v1"
+    ):
+        raise SystemExit("report artifact maintenance schema mismatch")
+    if report_artifacts.get("mode") != "apply":
+        raise SystemExit("report artifact maintenance did not apply")
+    if (
+        report_artifacts.get("actual_order_submitted") is not False
+        or report_artifacts.get("broker_order_forbidden") is not True
+        or report_artifacts.get("trading_runtime_effect") is not False
+        or report_artifacts.get("provider_runtime_effect") is not False
+        or report_artifacts.get("provider_route_change_allowed") is not False
+        or report_artifacts.get("deletion_performed") is not False
+    ):
+        raise SystemExit("report artifact maintenance authority mismatch")
+    report_capacity_state = validate_capacity(
+        report_artifacts, field_prefix="report artifact"
+    )
+    report_actions = report_artifacts.get("actions")
+    report_failures = report_artifacts.get("failures")
+    if not isinstance(report_actions, list) or not isinstance(report_failures, list):
+        raise SystemExit("report artifact maintenance census invalid")
+    allowed_report_actions = {
+        "compress_json_artifact",
+        "finalize_verified_json_artifact_compression",
+        "publish_verified_json_artifact_gzip_source_preserved",
+        "compress_checkpoint_record_json",
+        "finalize_verified_checkpoint_record_compression",
+        "publish_verified_checkpoint_record_gzip_source_preserved",
+        "compress_provider_budget_jsonl",
+        "finalize_verified_provider_budget_compression",
+        "publish_verified_provider_budget_gzip_source_preserved",
+        "compress_exact_ai_jsonl",
+        "finalize_verified_exact_ai_jsonl_compression",
+        "publish_verified_exact_ai_jsonl_gzip_source_preserved",
+        "compress_exact_ai_json",
+        "finalize_verified_exact_ai_json_compression",
+        "publish_verified_exact_ai_json_gzip_source_preserved",
+    }
+    for row in report_actions:
+        if (
+            not isinstance(row, dict)
+            or row.get("applied") is not True
+            or row.get("action") not in allowed_report_actions
+        ):
+            raise SystemExit("report artifact maintenance action invalid")
+    report_artifact_action_count = native_nonnegative_int(
+        report_artifacts.get("action_count"), field="report artifact action_count"
+    )
+    report_artifact_compressed_count = native_nonnegative_int(
+        report_artifacts.get("compressed_count"),
+        field="report artifact compressed_count",
+    )
+    report_artifact_source_bytes = native_nonnegative_int(
+        report_artifacts.get("source_bytes"), field="report artifact source_bytes"
+    )
+    report_artifact_failure_count = native_nonnegative_int(
+        report_artifacts.get("failure_count"), field="report artifact failure_count"
+    )
+    report_artifact_retention_candidate_count = native_nonnegative_int(
+        report_artifacts.get("retention_candidate_count"),
+        field="report artifact retention_candidate_count",
+    )
+    report_artifact_retention_candidate_bytes = native_nonnegative_int(
+        report_artifacts.get("retention_candidate_bytes"),
+        field="report artifact retention_candidate_bytes",
+    )
+    artifact_set_census = report_artifacts.get("artifact_set_census")
+    checkpoint_census = report_artifacts.get("checkpoint_journal_census")
+    provider_budget_census = report_artifacts.get("provider_budget_ledger_census")
+    exact_ai_census = report_artifacts.get("exact_ai_artifact_maintenance")
+    daily_owner_census = report_artifacts.get("micro_reversion_daily_owner_census")
+    if (
+        not isinstance(artifact_set_census, dict)
+        or not isinstance(checkpoint_census, dict)
+        or not isinstance(provider_budget_census, dict)
+        or not isinstance(exact_ai_census, dict)
+        or not isinstance(daily_owner_census, dict)
+    ):
+        raise SystemExit("report artifact terminal ledger census invalid")
+    artifact_set_count = native_nonnegative_int(
+        artifact_set_census.get("set_count"), field="artifact set_count"
+    )
+    artifact_set_terminal_count = native_nonnegative_int(
+        artifact_set_census.get("terminal_count"), field="artifact terminal_count"
+    )
+    artifact_set_superseded_count = native_nonnegative_int(
+        artifact_set_census.get("explicitly_superseded_count"),
+        field="artifact explicitly_superseded_count",
+    )
+    artifact_set_incomplete_count = native_nonnegative_int(
+        artifact_set_census.get("incomplete_resumable_count"),
+        field="artifact incomplete_resumable_count",
+    )
+    artifact_set_stale_workorder_count = native_nonnegative_int(
+        artifact_set_census.get("stale_workorder_count"),
+        field="artifact stale_workorder_count",
+    )
+    artifact_set_stale_workorder_bytes = native_nonnegative_int(
+        artifact_set_census.get("stale_workorder_bytes"),
+        field="artifact stale_workorder_bytes",
+    )
+    immutable_source_artifact_count = native_nonnegative_int(
+        artifact_set_census.get("immutable_source_artifact_count"),
+        field="immutable source artifact_count",
+    )
+    immutable_source_artifact_bytes = native_nonnegative_int(
+        artifact_set_census.get("immutable_source_artifact_bytes"),
+        field="immutable source artifact_bytes",
+    )
+    if artifact_set_count != (
+        artifact_set_terminal_count
+        + artifact_set_superseded_count
+        + artifact_set_incomplete_count
+    ):
+        raise SystemExit("artifact set state census mismatch")
+    if artifact_set_stale_workorder_count > artifact_set_incomplete_count:
+        raise SystemExit("artifact set stale workorder census mismatch")
+    checkpoint_journal_count = native_nonnegative_int(
+        checkpoint_census.get("journal_count"), field="checkpoint journal_count"
+    )
+    checkpoint_terminal_count = native_nonnegative_int(
+        checkpoint_census.get("terminal_count"), field="checkpoint terminal_count"
+    )
+    checkpoint_superseded_count = native_nonnegative_int(
+        checkpoint_census.get("superseded_count"),
+        field="checkpoint superseded_count",
+    )
+    checkpoint_incomplete_count = native_nonnegative_int(
+        checkpoint_census.get("incomplete_resumable_count"),
+        field="checkpoint incomplete_resumable_count",
+    )
+    checkpoint_stale_workorder_count = native_nonnegative_int(
+        checkpoint_census.get("stale_workorder_count"),
+        field="checkpoint stale_workorder_count",
+    )
+    checkpoint_stale_workorder_bytes = native_nonnegative_int(
+        checkpoint_census.get("stale_workorder_bytes"),
+        field="checkpoint stale_workorder_bytes",
+    )
+    if checkpoint_journal_count != (
+        checkpoint_terminal_count
+        + checkpoint_superseded_count
+        + checkpoint_incomplete_count
+    ):
+        raise SystemExit("checkpoint journal state census mismatch")
+    if checkpoint_stale_workorder_count > checkpoint_incomplete_count:
+        raise SystemExit("checkpoint stale workorder census mismatch")
+    provider_budget_ledger_count = native_nonnegative_int(
+        provider_budget_census.get("ledger_count"),
+        field="provider budget ledger_count",
+    )
+    provider_budget_ledger_bytes = native_nonnegative_int(
+        provider_budget_census.get("ledger_bytes"),
+        field="provider budget ledger_bytes",
+    )
+    provider_budget_retention_candidate_count = native_nonnegative_int(
+        provider_budget_census.get("retention_candidate_count"),
+        field="provider budget retention_candidate_count",
+    )
+    provider_budget_retention_candidate_bytes = native_nonnegative_int(
+        provider_budget_census.get("retention_candidate_bytes"),
+        field="provider budget retention_candidate_bytes",
+    )
+    if provider_budget_retention_candidate_count > provider_budget_ledger_count:
+        raise SystemExit("provider budget retention census mismatch")
+    if exact_ai_census.get("schema") != (
+        "scalp_micro_reversion_exact_ai_artifact_storage_maintenance_v1"
+    ):
+        raise SystemExit("exact AI artifact maintenance schema mismatch")
+    exact_ai_artifact_count = native_nonnegative_int(
+        exact_ai_census.get("artifact_count"), field="exact AI artifact_count"
+    )
+    exact_ai_artifact_bytes = native_nonnegative_int(
+        exact_ai_census.get("artifact_bytes"), field="exact AI artifact_bytes"
+    )
+    exact_ai_compressed_count = native_nonnegative_int(
+        exact_ai_census.get("compressed_count"), field="exact AI compressed_count"
+    )
+    exact_ai_failure_count = native_nonnegative_int(
+        exact_ai_census.get("failure_count"), field="exact AI failure_count"
+    )
+    exact_ai_retention_candidate_count = native_nonnegative_int(
+        exact_ai_census.get("retention_candidate_count"),
+        field="exact AI retention_candidate_count",
+    )
+    exact_ai_retention_candidate_bytes = native_nonnegative_int(
+        exact_ai_census.get("retention_candidate_bytes"),
+        field="exact AI retention_candidate_bytes",
+    )
+    exact_ai_receipts = exact_ai_census.get("artifact_receipts")
+    if not isinstance(exact_ai_receipts, list) or len(exact_ai_receipts) != (
+        exact_ai_artifact_count
+    ):
+        raise SystemExit("exact AI artifact receipt census mismatch")
+    exact_ai_receipt_bytes = 0
+    for receipt in exact_ai_receipts:
+        physical = receipt.get("physical_representations") if isinstance(receipt, dict) else None
+        decoded_hash = receipt.get("decoded_content_sha256") if isinstance(receipt, dict) else None
+        if (
+            not isinstance(physical, list)
+            or not physical
+            or not isinstance(decoded_hash, str)
+            or len(decoded_hash) != 64
+        ):
+            raise SystemExit("exact AI artifact receipt invalid")
+        for representation in physical:
+            if not isinstance(representation, dict):
+                raise SystemExit("exact AI physical receipt invalid")
+            exact_ai_receipt_bytes += native_nonnegative_int(
+                representation.get("stored_bytes"),
+                field="exact AI receipt stored_bytes",
+            )
+            stored_hash = representation.get("stored_sha256")
+            if not isinstance(stored_hash, str) or len(stored_hash) != 64:
+                raise SystemExit("exact AI receipt stored hash invalid")
+    if exact_ai_receipt_bytes != exact_ai_artifact_bytes:
+        raise SystemExit("exact AI artifact byte census mismatch")
+    if (
+        exact_ai_retention_candidate_count > exact_ai_artifact_count
+        or exact_ai_census.get("deletion_performed") is not False
+        or exact_ai_census.get("archive_offload_performed") is not False
+        or exact_ai_census.get("status")
+        != ("partial_failure" if exact_ai_failure_count else "pass")
+    ):
+        raise SystemExit("exact AI artifact maintenance contract mismatch")
+    if daily_owner_census.get("schema") != (
+        "scalp_micro_reversion_daily_owner_storage_census_v1"
+    ):
+        raise SystemExit("micro-reversion daily owner census schema mismatch")
+    daily_owner_partition_count = native_nonnegative_int(
+        daily_owner_census.get("partition_count"), field="daily owner partition_count"
+    )
+    daily_owner_file_count = native_nonnegative_int(
+        daily_owner_census.get("file_count"), field="daily owner file_count"
+    )
+    daily_owner_bytes = native_nonnegative_int(
+        daily_owner_census.get("physical_bytes"), field="daily owner physical_bytes"
+    )
+    daily_owner_exact_date_file_count = native_nonnegative_int(
+        daily_owner_census.get("exact_date_file_count"),
+        field="daily owner exact_date_file_count",
+    )
+    daily_owner_exact_date_bytes = native_nonnegative_int(
+        daily_owner_census.get("exact_date_bytes"),
+        field="daily owner exact_date_bytes",
+    )
+    daily_owner_retention_candidate_count = native_nonnegative_int(
+        daily_owner_census.get("retention_candidate_count"),
+        field="daily owner retention_candidate_count",
+    )
+    daily_owner_retention_candidate_bytes = native_nonnegative_int(
+        daily_owner_census.get("retention_candidate_bytes"),
+        field="daily owner retention_candidate_bytes",
+    )
+    daily_owner_failure_count = native_nonnegative_int(
+        daily_owner_census.get("failure_count"), field="daily owner failure_count"
+    )
+    daily_owner_archive_offload_status = daily_owner_census.get(
+        "durable_archive_offload_owner_status"
+    )
+    daily_owner_status = daily_owner_census.get("status")
+    daily_owner_receipts = daily_owner_census.get("partition_receipts")
+    if (
+        not isinstance(daily_owner_receipts, list)
+        or len(daily_owner_receipts) != daily_owner_partition_count
+        or sum(
+            native_nonnegative_int(
+                row.get("file_count") if isinstance(row, dict) else None,
+                field="daily owner receipt file_count",
+            )
+            for row in daily_owner_receipts
+        )
+        != daily_owner_file_count
+        or sum(
+            native_nonnegative_int(
+                row.get("physical_bytes") if isinstance(row, dict) else None,
+                field="daily owner receipt physical_bytes",
+            )
+            for row in daily_owner_receipts
+        )
+        != daily_owner_bytes
+    ):
+        raise SystemExit("micro-reversion daily owner receipt census mismatch")
+    if (
+        daily_owner_retention_candidate_count > daily_owner_partition_count
+        or daily_owner_census.get("automatic_compression_authorized") is not False
+        or daily_owner_census.get("automatic_deletion_authorized") is not False
+        or daily_owner_census.get("archive_offload_authorized") is not False
+        or daily_owner_archive_offload_status
+        != "open_owner_required_no_automatic_archive_offload_or_deletion"
+        or daily_owner_status
+        not in (
+            {"partial_failure"}
+            if daily_owner_failure_count
+            else {"pass", "not_present"}
+        )
+    ):
+        raise SystemExit("micro-reversion daily owner census contract mismatch")
+    expected_report_compressed = sum(
+        row.get("action")
+        in {
+            "compress_json_artifact",
+            "finalize_verified_json_artifact_compression",
+            "compress_checkpoint_record_json",
+            "finalize_verified_checkpoint_record_compression",
+            "compress_provider_budget_jsonl",
+            "finalize_verified_provider_budget_compression",
+            "compress_exact_ai_jsonl",
+            "finalize_verified_exact_ai_jsonl_compression",
+            "compress_exact_ai_json",
+            "finalize_verified_exact_ai_json_compression",
+        }
+        for row in report_actions
+    )
+    if (
+        report_artifact_action_count != len(report_actions)
+        or report_artifact_compressed_count != expected_report_compressed
+        or report_artifact_failure_count != len(report_failures)
+        or report_artifacts.get("status")
+        != (
+            "partial_failure"
+            if report_failures or report_capacity_state == "critical"
+            else "pass"
+        )
+    ):
+        raise SystemExit("report artifact maintenance declared census mismatch")
+expected_status = (
+    "partial_failure"
+    if (
+        partition_failure_count
+        or report_artifact_failure_count
+        or capacity_state == "critical"
+        or capacity_status_write_failure_count
+    )
+    else "pass"
+)
 if payload.get("status") != expected_status:
     raise SystemExit("storage maintenance status mismatch")
 failure_candidate_count = 0
@@ -602,6 +1227,58 @@ print(
     failed_candidate_count,
     failed_candidate_bytes,
     recovery_required_count,
+    report_artifact_action_count,
+    report_artifact_compressed_count,
+    report_artifact_source_bytes,
+    report_artifact_failure_count,
+    report_artifact_retention_candidate_count,
+    report_artifact_retention_candidate_bytes,
+    artifact_set_count,
+    artifact_set_terminal_count,
+    artifact_set_superseded_count,
+    artifact_set_incomplete_count,
+    artifact_set_stale_workorder_count,
+    artifact_set_stale_workorder_bytes,
+    immutable_source_artifact_count,
+    immutable_source_artifact_bytes,
+    checkpoint_journal_count,
+    checkpoint_terminal_count,
+    checkpoint_superseded_count,
+    checkpoint_incomplete_count,
+    checkpoint_stale_workorder_count,
+    checkpoint_stale_workorder_bytes,
+    provider_budget_ledger_count,
+    provider_budget_ledger_bytes,
+    provider_budget_retention_candidate_count,
+    provider_budget_retention_candidate_bytes,
+    exact_ai_artifact_count,
+    exact_ai_artifact_bytes,
+    exact_ai_compressed_count,
+    exact_ai_failure_count,
+    exact_ai_retention_candidate_count,
+    exact_ai_retention_candidate_bytes,
+    daily_owner_partition_count,
+    daily_owner_file_count,
+    daily_owner_bytes,
+    daily_owner_exact_date_file_count,
+    daily_owner_exact_date_bytes,
+    daily_owner_retention_candidate_count,
+    daily_owner_retention_candidate_bytes,
+    daily_owner_failure_count,
+    daily_owner_status,
+    daily_owner_archive_offload_status,
+    payload.get("disk_free_bytes_before"),
+    payload.get("disk_free_bytes_after"),
+    payload.get("disk_free_bytes_delta"),
+    payload.get("retained_physical_bytes_after"),
+    payload.get("compressed_target_bytes"),
+    payload.get("bytes_reclaimed"),
+    capacity_state,
+    "true" if payload.get("capacity_warning") is True else "false",
+    "true" if payload.get("capacity_failure") is True else "false",
+    "true" if payload.get("capacity_workorder_required") is True else "false",
+    "true" if capacity_status_written is True else "false",
+    capacity_status_write_failure_count,
 )
 PY
   )"; then
@@ -623,16 +1300,83 @@ PY
     micro_reversion_storage_partition_failure_count \
     micro_reversion_storage_failed_candidate_count \
     micro_reversion_storage_failed_candidate_bytes \
-    micro_reversion_storage_recovery_required_count <<<"$parsed"
+    micro_reversion_storage_recovery_required_count \
+    micro_reversion_report_artifact_action_count \
+    micro_reversion_report_artifact_compressed_count \
+    micro_reversion_report_artifact_source_bytes \
+    micro_reversion_report_artifact_failure_count \
+    micro_reversion_report_artifact_retention_candidate_count \
+    micro_reversion_report_artifact_retention_candidate_bytes \
+    micro_reversion_artifact_set_count \
+    micro_reversion_artifact_set_terminal_count \
+    micro_reversion_artifact_set_superseded_count \
+    micro_reversion_artifact_set_incomplete_count \
+    micro_reversion_artifact_set_stale_workorder_count \
+    micro_reversion_artifact_set_stale_workorder_bytes \
+    micro_reversion_immutable_source_artifact_count \
+    micro_reversion_immutable_source_artifact_bytes \
+    micro_reversion_checkpoint_journal_count \
+    micro_reversion_checkpoint_terminal_count \
+    micro_reversion_checkpoint_superseded_count \
+    micro_reversion_checkpoint_incomplete_count \
+    micro_reversion_checkpoint_stale_workorder_count \
+    micro_reversion_checkpoint_stale_workorder_bytes \
+    micro_reversion_provider_budget_ledger_count \
+    micro_reversion_provider_budget_ledger_bytes \
+    micro_reversion_provider_budget_retention_candidate_count \
+    micro_reversion_provider_budget_retention_candidate_bytes \
+    micro_reversion_exact_ai_artifact_count \
+    micro_reversion_exact_ai_artifact_bytes \
+    micro_reversion_exact_ai_compressed_count \
+    micro_reversion_exact_ai_failure_count \
+    micro_reversion_exact_ai_retention_candidate_count \
+    micro_reversion_exact_ai_retention_candidate_bytes \
+    micro_reversion_daily_owner_partition_count \
+    micro_reversion_daily_owner_file_count \
+    micro_reversion_daily_owner_bytes \
+    micro_reversion_daily_owner_exact_date_file_count \
+    micro_reversion_daily_owner_exact_date_bytes \
+    micro_reversion_daily_owner_retention_candidate_count \
+    micro_reversion_daily_owner_retention_candidate_bytes \
+    micro_reversion_daily_owner_failure_count \
+    micro_reversion_daily_owner_status \
+    micro_reversion_daily_owner_archive_offload_status \
+    micro_reversion_storage_disk_free_bytes_before \
+    micro_reversion_storage_disk_free_bytes_after \
+    micro_reversion_storage_disk_free_bytes_delta \
+    micro_reversion_storage_retained_physical_bytes_after \
+    micro_reversion_storage_compressed_target_bytes \
+    micro_reversion_storage_bytes_reclaimed \
+    micro_reversion_storage_capacity_state \
+    micro_reversion_storage_capacity_warning \
+    micro_reversion_storage_capacity_failure \
+    micro_reversion_storage_capacity_workorder_required \
+    micro_reversion_storage_capacity_status_written \
+    micro_reversion_storage_capacity_status_write_failures <<<"$parsed"
   if [[ "$micro_reversion_storage_purge_enabled" != "$MICRO_REVERSION_STORAGE_PURGE_ENABLED" ]]; then
     rm -f "$result_path"
     micro_reversion_storage_status="purge_authority_mismatch"
     micro_reversion_storage_purge_status="authority_mismatch"
     return 1
   fi
-  if [[ "$micro_reversion_storage_partition_failure_count" -gt 0 ]]; then
+  if [[ "$micro_reversion_storage_capacity_status_write_failures" -gt 0 ]]; then
+    rm -f "$result_path"
+    micro_reversion_storage_status="capacity_status_write_failure"
+    return 1
+  fi
+  if [[ "$micro_reversion_storage_capacity_failure" == "true" ]]; then
+    rm -f "$result_path"
+    micro_reversion_storage_status="critical_capacity"
+    return 1
+  fi
+  if [[ "$micro_reversion_storage_partition_failure_count" -gt 0 || "$micro_reversion_report_artifact_failure_count" -gt 0 ]]; then
     rm -f "$result_path"
     micro_reversion_storage_status="partial_failure"
+    return 1
+  fi
+  if [[ "$lock_rc" -ne 0 ]]; then
+    rm -f "$result_path"
+    micro_reversion_storage_status="unexpected_nonzero_exit"
     return 1
   fi
   rm -f "$result_path"
@@ -923,9 +1667,12 @@ compress_file_verified() {
 if [[ "$DATA_MAINTENANCE_ENABLED" == "true" ]]; then
   if ! run_micro_reversion_storage_maintenance; then
     micro_reversion_storage_failure_count=$((micro_reversion_storage_failure_count + 1))
-    echo "[MICRO_REVERSION_STORAGE_FAIL] status=${micro_reversion_storage_status} purge_status=${micro_reversion_storage_purge_status} generic_cleanup_will_continue=true"
+    echo "[MICRO_REVERSION_STORAGE_FAIL] status=${micro_reversion_storage_status} purge_status=${micro_reversion_storage_purge_status} capacity_state=${micro_reversion_storage_capacity_state} disk_free_bytes_after=${micro_reversion_storage_disk_free_bytes_after} retained_physical_bytes_after=${micro_reversion_storage_retained_physical_bytes_after} compressed_target_bytes=${micro_reversion_storage_compressed_target_bytes} bytes_reclaimed=${micro_reversion_storage_bytes_reclaimed} capacity_workorder_required=${micro_reversion_storage_capacity_workorder_required} capacity_status_written=${micro_reversion_storage_capacity_status_written} generic_cleanup_will_continue=true"
   else
-    echo "[MICRO_REVERSION_STORAGE] status=${micro_reversion_storage_status} actions=${micro_reversion_storage_action_count} compressed=${micro_reversion_storage_compressed_count} purged=${micro_reversion_storage_purged_count} purge_partial=${micro_reversion_storage_purge_partial_count} purge_enabled=${micro_reversion_storage_purge_enabled} purge_status=${micro_reversion_storage_purge_status} runtime_effect=false order_authority=false"
+    if [[ "$micro_reversion_storage_capacity_warning" == "true" ]]; then
+      echo "[MICRO_REVERSION_STORAGE_CAPACITY_WARNING] capacity_state=${micro_reversion_storage_capacity_state} disk_free_bytes_after=${micro_reversion_storage_disk_free_bytes_after} low_disk_watermark_bytes=${MICRO_REVERSION_STORAGE_LOW_DISK_WATERMARK_BYTES} critical_disk_watermark_bytes=${MICRO_REVERSION_STORAGE_CRITICAL_DISK_WATERMARK_BYTES} capacity_workorder_required=${micro_reversion_storage_capacity_workorder_required} capacity_status_written=${micro_reversion_storage_capacity_status_written} cleanup_will_continue=true"
+    fi
+    echo "[MICRO_REVERSION_STORAGE] status=${micro_reversion_storage_status} actions=${micro_reversion_storage_action_count} compressed=${micro_reversion_storage_compressed_count} purged=${micro_reversion_storage_purged_count} purge_partial=${micro_reversion_storage_purge_partial_count} purge_enabled=${micro_reversion_storage_purge_enabled} purge_status=${micro_reversion_storage_purge_status} report_artifact_actions=${micro_reversion_report_artifact_action_count} report_artifact_compressed=${micro_reversion_report_artifact_compressed_count} report_artifact_source_bytes=${micro_reversion_report_artifact_source_bytes} report_artifact_failures=${micro_reversion_report_artifact_failure_count} report_artifact_retention_candidates=${micro_reversion_report_artifact_retention_candidate_count} report_artifact_retention_candidate_bytes=${micro_reversion_report_artifact_retention_candidate_bytes} artifact_sets=${micro_reversion_artifact_set_count} artifact_set_terminal=${micro_reversion_artifact_set_terminal_count} artifact_set_superseded=${micro_reversion_artifact_set_superseded_count} artifact_set_incomplete=${micro_reversion_artifact_set_incomplete_count} artifact_set_stale_workorders=${micro_reversion_artifact_set_stale_workorder_count} artifact_set_stale_workorder_bytes=${micro_reversion_artifact_set_stale_workorder_bytes} immutable_source_artifacts=${micro_reversion_immutable_source_artifact_count} immutable_source_artifact_bytes=${micro_reversion_immutable_source_artifact_bytes} checkpoint_journals=${micro_reversion_checkpoint_journal_count} checkpoint_terminal=${micro_reversion_checkpoint_terminal_count} checkpoint_superseded=${micro_reversion_checkpoint_superseded_count} checkpoint_incomplete=${micro_reversion_checkpoint_incomplete_count} checkpoint_stale_workorders=${micro_reversion_checkpoint_stale_workorder_count} checkpoint_stale_workorder_bytes=${micro_reversion_checkpoint_stale_workorder_bytes} provider_budget_ledgers=${micro_reversion_provider_budget_ledger_count} provider_budget_ledger_bytes=${micro_reversion_provider_budget_ledger_bytes} provider_budget_retention_candidates=${micro_reversion_provider_budget_retention_candidate_count} provider_budget_retention_candidate_bytes=${micro_reversion_provider_budget_retention_candidate_bytes} exact_ai_artifacts=${micro_reversion_exact_ai_artifact_count} exact_ai_artifact_bytes=${micro_reversion_exact_ai_artifact_bytes} exact_ai_compressed=${micro_reversion_exact_ai_compressed_count} exact_ai_failures=${micro_reversion_exact_ai_failure_count} exact_ai_retention_candidates=${micro_reversion_exact_ai_retention_candidate_count} exact_ai_retention_candidate_bytes=${micro_reversion_exact_ai_retention_candidate_bytes} daily_owner_status=${micro_reversion_daily_owner_status} daily_owner_partitions=${micro_reversion_daily_owner_partition_count} daily_owner_files=${micro_reversion_daily_owner_file_count} daily_owner_bytes=${micro_reversion_daily_owner_bytes} daily_owner_exact_date_files=${micro_reversion_daily_owner_exact_date_file_count} daily_owner_exact_date_bytes=${micro_reversion_daily_owner_exact_date_bytes} daily_owner_retention_candidates=${micro_reversion_daily_owner_retention_candidate_count} daily_owner_retention_candidate_bytes=${micro_reversion_daily_owner_retention_candidate_bytes} daily_owner_archive_offload_status=${micro_reversion_daily_owner_archive_offload_status} disk_free_bytes_before=${micro_reversion_storage_disk_free_bytes_before} disk_free_bytes_after=${micro_reversion_storage_disk_free_bytes_after} disk_free_bytes_delta=${micro_reversion_storage_disk_free_bytes_delta} retained_physical_bytes_after=${micro_reversion_storage_retained_physical_bytes_after} compressed_target_bytes=${micro_reversion_storage_compressed_target_bytes} bytes_reclaimed=${micro_reversion_storage_bytes_reclaimed} capacity_state=${micro_reversion_storage_capacity_state} capacity_workorder_required=${micro_reversion_storage_capacity_workorder_required} capacity_status_written=${micro_reversion_storage_capacity_status_written} runtime_effect=false order_authority=false provider_authority=false deletion_authority=false archive_offload_authority=false"
   fi
 fi
 

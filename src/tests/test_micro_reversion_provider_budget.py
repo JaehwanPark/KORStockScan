@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import json
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -20,6 +21,7 @@ from src.engine.scalping.micro_reversion.provider_budget import (
     CircuitBreakerOpenError,
     DuplicateAttemptError,
     PricingArtifactError,
+    ProviderModelSelection,
     ProviderBudgetLedger,
     ProviderBudgetError,
     SettlementError,
@@ -28,6 +30,7 @@ from src.engine.scalping.micro_reversion.provider_budget import (
     conservative_token_ceiling,
     load_reviewed_pricing_artifact,
     pricing_artifact_content_sha256,
+    validate_batch_pricing_coverage,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -192,6 +195,36 @@ def test_pricing_artifact_missing_or_model_missing_fails_closed(
         pricing.price_for("openai", "unknown-model")
 
 
+def test_pricing_artifact_and_raw_source_symlinks_fail_closed(
+    tmp_path: Path,
+) -> None:
+    artifact = _write_pricing_artifact(tmp_path / "artifact")
+    artifact_link = tmp_path / "artifact-link.json"
+    artifact_link.symlink_to(artifact)
+    with pytest.raises(PricingArtifactError, match="artifact_unreadable"):
+        load_reviewed_pricing_artifact(artifact_link, as_of_date=EXECUTION_DATE)
+
+    raw_source = artifact.parent / "provider-pricing-source.txt"
+    raw_target = artifact.parent / "provider-pricing-source-real.txt"
+    raw_source.rename(raw_target)
+    raw_source.symlink_to(raw_target.name)
+    with pytest.raises(PricingArtifactError, match="raw_source_unreadable"):
+        load_reviewed_pricing_artifact(artifact, as_of_date=EXECUTION_DATE)
+
+
+def test_pricing_artifact_rejects_symlinked_parent_component(tmp_path: Path) -> None:
+    real_directory = tmp_path / "real"
+    artifact = _write_pricing_artifact(real_directory)
+    alias = tmp_path / "alias"
+    alias.symlink_to(real_directory, target_is_directory=True)
+
+    with pytest.raises(PricingArtifactError, match="artifact_unreadable"):
+        load_reviewed_pricing_artifact(
+            alias / artifact.name,
+            as_of_date=EXECUTION_DATE,
+        )
+
+
 def test_pricing_artifact_content_hash_and_rate_basis_fail_closed(
     tmp_path: Path,
 ) -> None:
@@ -251,6 +284,176 @@ def test_operator_reviewed_zero_cost_pricing_is_exact_and_budgeted(
     assert pricing.pricing_basis == OPERATOR_ZERO_COST_BASIS
     assert permit.reserved_cost_usd == Decimal("0")
     assert budget.summary(now=NOW)["pricing_basis"] == OPERATOR_ZERO_COST_BASIS
+
+
+def test_daily_parent_cap_is_shared_across_historical_target_dates(
+    tmp_path: Path,
+) -> None:
+    path = _write_pricing_artifact(
+        tmp_path,
+        prices=[
+            {
+                "provider": "openai",
+                "model": "gpt-test",
+                "input_usd_per_million_tokens": "0",
+                "output_usd_per_million_tokens": "0",
+            }
+        ],
+        pricing_basis=OPERATOR_ZERO_COST_BASIS,
+    )
+    budget = ProviderBudgetLedger(
+        ledger_path=tmp_path / "shared-parent-budget.jsonl",
+        pricing=load_reviewed_pricing_artifact(path, as_of_date=EXECUTION_DATE),
+        execution_date=EXECUTION_DATE,
+        daily_attempt_cap=390,
+        daily_usd_cap="1",
+    )
+    ceiling = conservative_token_ceiling("request", max_output_tokens=10)
+    for index in range(130):
+        budget.reserve_attempt(
+            AttemptIdentity(
+                target_date=("2026-08-13" if index % 2 else "2026-08-14"),
+                parent_id=f"parent-{index:03d}",
+                request_id=f"request-{index:03d}",
+                arm="replay_candidate_exact_plus_micro",
+                provider="openai",
+                model="gpt-test",
+                attempt_number=1,
+            ),
+            token_ceiling=ceiling,
+            now=NOW,
+        )
+
+    # Another arm/retry for an already admitted parent remains legal.
+    budget.reserve_attempt(
+        AttemptIdentity(
+            target_date="2026-08-14",
+            parent_id="parent-000",
+            request_id="request-000-control",
+            arm="replay_control_exact_plus_micro",
+            provider="openai",
+            model="gpt-test",
+            attempt_number=1,
+        ),
+        token_ceiling=ceiling,
+        now=NOW,
+    )
+    with pytest.raises(BudgetExceededError, match="daily_parent_cap"):
+        budget.reserve_attempt(
+            AttemptIdentity(
+                target_date="2026-08-13",
+                parent_id="parent-130",
+                request_id="request-130",
+                arm="replay_candidate_exact_plus_micro",
+                provider="openai",
+                model="gpt-test",
+                attempt_number=1,
+            ),
+            token_ceiling=ceiling,
+            now=NOW,
+        )
+
+
+def test_read_only_reservation_census_is_exact_and_does_not_mutate_custody(
+    tmp_path: Path,
+) -> None:
+    pricing_path = _write_pricing_artifact(
+        tmp_path,
+        prices=[
+            {
+                "provider": "openai",
+                "model": "gpt-test",
+                "input_usd_per_million_tokens": "0",
+                "output_usd_per_million_tokens": "0",
+            }
+        ],
+        pricing_basis=OPERATOR_ZERO_COST_BASIS,
+    )
+    ledger_path = tmp_path / "read-only-census.jsonl"
+    budget = ProviderBudgetLedger(
+        ledger_path=ledger_path,
+        pricing=load_reviewed_pricing_artifact(
+            pricing_path,
+            as_of_date=EXECUTION_DATE,
+        ),
+        execution_date=EXECUTION_DATE,
+        daily_attempt_cap=390,
+        daily_usd_cap="1",
+    )
+    identity = AttemptIdentity(
+        target_date="2026-08-14",
+        parent_id="parent-read-only",
+        request_id="request-read-only",
+        arm="replay_candidate_exact_plus_micro",
+        provider="openai",
+        model="gpt-test",
+        attempt_number=1,
+    )
+    permit = budget.reserve_attempt(
+        identity,
+        token_ceiling=conservative_token_ceiling("request", max_output_tokens=10),
+        now=NOW,
+    )
+    custody_paths = (ledger_path, budget.manifest_path, budget.lock_path)
+    before = {path: path.stat().st_mtime_ns for path in custody_paths}
+
+    assert budget.validated_reservation_census_read_only() == (
+        {
+            "execution_date": EXECUTION_DATE.isoformat(),
+            "reservation_id": permit.reservation_id,
+            "attempt_identity": identity.as_dict(),
+            "attempt_identity_sha256": identity.content_sha256,
+            "settled": False,
+        },
+    )
+    assert {path: path.stat().st_mtime_ns for path in custody_paths} == before
+
+
+def test_read_only_reservation_census_rejects_deleted_ledger_behind_summary(
+    tmp_path: Path,
+) -> None:
+    pricing_path = _write_pricing_artifact(
+        tmp_path,
+        prices=[
+            {
+                "provider": "openai",
+                "model": "gpt-test",
+                "input_usd_per_million_tokens": "0",
+                "output_usd_per_million_tokens": "0",
+            }
+        ],
+        pricing_basis=OPERATOR_ZERO_COST_BASIS,
+    )
+    ledger_path = tmp_path / "read-only-summary-custody.jsonl"
+    budget = ProviderBudgetLedger(
+        ledger_path=ledger_path,
+        pricing=load_reviewed_pricing_artifact(
+            pricing_path,
+            as_of_date=EXECUTION_DATE,
+        ),
+        execution_date=EXECUTION_DATE,
+        daily_attempt_cap=390,
+        daily_usd_cap="1",
+    )
+    budget.reserve_attempt(
+        AttemptIdentity(
+            target_date="2026-08-14",
+            parent_id="parent-summary-custody",
+            request_id="request-summary-custody",
+            arm="replay_candidate_exact_plus_micro",
+            provider="openai",
+            model="gpt-test",
+            attempt_number=1,
+        ),
+        token_ceiling=conservative_token_ceiling("request", max_output_tokens=10),
+        now=NOW,
+    )
+    budget.write_summary(ledger_path.with_suffix(".json"), now=NOW)
+    ledger_path.unlink()
+    budget.manifest_path.unlink()
+
+    with pytest.raises(BudgetLedgerIntegrityError, match="summary_custody_mismatch"):
+        budget.validated_reservation_census_read_only()
 
 
 def test_operator_zero_cost_basis_rejects_any_nonzero_rate(tmp_path: Path) -> None:
@@ -314,6 +517,84 @@ def test_token_ceiling_uses_utf8_bytes_and_never_returns_content() -> None:
         )
 
 
+def test_batch_pricing_coverage_binds_bedrock_physical_route(tmp_path: Path) -> None:
+    artifact = _write_pricing_artifact(
+        tmp_path,
+        prices=[
+            {
+                "provider": "openai",
+                "model": "gpt-test",
+                "input_usd_per_million_tokens": "1",
+                "output_usd_per_million_tokens": "10",
+            },
+            {
+                "provider": "bedrock",
+                "model": "nova_lite_v2",
+                "input_usd_per_million_tokens": "1",
+                "output_usd_per_million_tokens": "2",
+            },
+        ],
+    )
+    pricing = load_reviewed_pricing_artifact(artifact, as_of_date=EXECUTION_DATE)
+    openai = ProviderModelSelection(provider="OPENAI", model="gpt-test")
+    bedrock = ProviderModelSelection(
+        provider="bedrock",
+        model="nova_lite_v2",
+        physical_model_id="us.amazon.nova-lite-v2:0",
+        region_name="US-WEST-2",
+    )
+
+    census = validate_batch_pricing_coverage(
+        pricing,
+        [bedrock, openai, bedrock],
+    )
+
+    assert census == (bedrock, openai)
+    assert census[0].physical_model_id == "us.amazon.nova-lite-v2:0"
+    assert census[0].region_name == "us-west-2"
+
+
+def test_batch_pricing_coverage_fails_on_gap_or_physical_route_conflict(
+    tmp_path: Path,
+) -> None:
+    pricing = _pricing(tmp_path)
+    missing = ProviderModelSelection(provider="openai", model="missing")
+    with pytest.raises(PricingArtifactError, match="model_missing"):
+        validate_batch_pricing_coverage(pricing, [missing])
+    with pytest.raises(ValueError, match="physical_model_id"):
+        ProviderModelSelection(provider="bedrock", model="nova_lite_v2")
+
+    artifact = _write_pricing_artifact(
+        tmp_path / "bedrock",
+        prices=[
+            {
+                "provider": "bedrock",
+                "model": "nova_lite_v2",
+                "input_usd_per_million_tokens": "1",
+                "output_usd_per_million_tokens": "2",
+            }
+        ],
+    )
+    bedrock_pricing = load_reviewed_pricing_artifact(
+        artifact,
+        as_of_date=EXECUTION_DATE,
+    )
+    first = ProviderModelSelection(
+        provider="bedrock",
+        model="nova_lite_v2",
+        physical_model_id="us.amazon.nova-lite-v2:0",
+        region_name="us-west-2",
+    )
+    second = ProviderModelSelection(
+        provider="bedrock",
+        model="nova_lite_v2",
+        physical_model_id="eu.amazon.nova-lite-v2:0",
+        region_name="eu-west-1",
+    )
+    with pytest.raises(PricingArtifactError, match="physical_route_conflict"):
+        validate_batch_pricing_coverage(bedrock_pricing, [first, second])
+
+
 def test_budget_requires_positive_caps_and_exactly_one_worker(tmp_path: Path) -> None:
     pricing = _pricing(tmp_path)
     common = {
@@ -329,8 +610,12 @@ def test_budget_requires_positive_caps_and_exactly_one_worker(tmp_path: Path) ->
         ProviderBudgetLedger(**common, worker_count=1.0)
     with pytest.raises(ValueError, match="daily_attempt_cap"):
         ProviderBudgetLedger(**{**common, "daily_attempt_cap": 0})
+    with pytest.raises(ValueError, match="daily_attempt_cap"):
+        ProviderBudgetLedger(**{**common, "daily_attempt_cap": 391})
     with pytest.raises(ValueError, match="daily_usd_cap"):
         ProviderBudgetLedger(**{**common, "daily_usd_cap": "0"})
+    with pytest.raises(ValueError, match="daily_usd_cap"):
+        ProviderBudgetLedger(**{**common, "daily_usd_cap": "1.0000001"})
 
 
 def test_reservation_is_durable_before_call_and_summary_has_no_authority(
@@ -543,6 +828,127 @@ def test_valid_orphan_ledger_tail_repairs_stale_atomic_manifest(
     assert reopened.summary(now=NOW)["reservation_count"] == 2
     repaired = json.loads(reopened.manifest_path.read_text(encoding="utf-8"))
     assert repaired["record_count"] == 2
+
+
+def test_verified_gzip_ledger_preserves_manifest_hash_and_is_read_only(
+    tmp_path: Path,
+) -> None:
+    budget = _budget(tmp_path)
+    ceiling = conservative_token_ceiling("request", max_output_tokens=10)
+    identity = _identity()
+    permit = budget.reserve_attempt(identity, token_ceiling=ceiling, now=NOW)
+    expected = budget.summary(now=NOW)
+    ledger_bytes = budget.ledger_path.read_bytes()
+    manifest = json.loads(budget.manifest_path.read_text(encoding="utf-8"))
+    archived_path = budget.ledger_path.with_suffix(f"{budget.ledger_path.suffix}.gz")
+    with gzip.open(archived_path, "wb") as handle:
+        handle.write(ledger_bytes)
+    budget.ledger_path.unlink()
+
+    reopened = _budget(tmp_path)
+    observed = reopened.summary(now=NOW)
+
+    assert observed["ledger_record_count"] == expected["ledger_record_count"]
+    assert observed["ledger_bytes_sha256"] == hashlib.sha256(ledger_bytes).hexdigest()
+    assert observed["ledger_bytes_sha256"] == manifest["ledger_bytes_sha256"]
+    assert reopened.validated_reservation_census_read_only() == (
+        {
+            "execution_date": EXECUTION_DATE.isoformat(),
+            "reservation_id": permit.reservation_id,
+            "attempt_identity": identity.as_dict(),
+            "attempt_identity_sha256": identity.content_sha256,
+            "settled": False,
+        },
+    )
+    with pytest.raises(ProviderBudgetError, match="archived_ledger_read_only"):
+        reopened.reserve_attempt(
+            _identity(request_id="request-2"),
+            token_ceiling=ceiling,
+            now=NOW,
+        )
+    assert not reopened.ledger_path.exists()
+    with gzip.open(archived_path, "rb") as handle:
+        assert handle.read() == ledger_bytes
+
+
+def test_plain_and_gzip_provider_budget_ledger_conflict_fails_closed(
+    tmp_path: Path,
+) -> None:
+    budget = _budget(tmp_path)
+    budget.reserve_attempt(
+        _identity(),
+        token_ceiling=conservative_token_ceiling("request", max_output_tokens=10),
+        now=NOW,
+    )
+    archived_path = budget.ledger_path.with_suffix(f"{budget.ledger_path.suffix}.gz")
+    with gzip.open(archived_path, "wb") as handle:
+        handle.write(budget.ledger_path.read_bytes())
+
+    with pytest.raises(BudgetLedgerIntegrityError, match="plain_gzip_ledger_conflict"):
+        budget.summary(now=NOW)
+    with pytest.raises(BudgetLedgerIntegrityError, match="plain_gzip_ledger_conflict"):
+        budget.reserve_attempt(
+            _identity(request_id="request-2"),
+            token_ceiling=conservative_token_ceiling("request-2", max_output_tokens=10),
+            now=NOW,
+        )
+
+
+def test_corrupt_archived_provider_budget_ledger_fails_closed(
+    tmp_path: Path,
+) -> None:
+    budget = _budget(tmp_path)
+    budget.reserve_attempt(
+        _identity(),
+        token_ceiling=conservative_token_ceiling("request", max_output_tokens=10),
+        now=NOW,
+    )
+    archived_path = budget.ledger_path.with_suffix(f"{budget.ledger_path.suffix}.gz")
+    budget.ledger_path.unlink()
+    archived_path.write_bytes(b"not-a-gzip-ledger")
+
+    with pytest.raises(BudgetLedgerIntegrityError, match="ledger_unreadable"):
+        budget.summary(now=NOW)
+
+
+def test_ledger_and_lock_symlinks_fail_closed_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    ledger_budget = _budget(tmp_path / "ledger")
+    ledger_target = tmp_path / "ledger-target.jsonl"
+    ledger_target.write_bytes(b"")
+    ledger_budget.ledger_path.symlink_to(ledger_target)
+
+    with pytest.raises(BudgetLedgerIntegrityError, match="ledger_unreadable"):
+        ledger_budget.summary(now=NOW)
+    assert ledger_target.read_bytes() == b""
+
+    lock_budget = _budget(tmp_path / "lock")
+    lock_target = tmp_path / "lock-target"
+    lock_target.write_bytes(b"do-not-lock-or-change")
+    lock_budget.lock_path.symlink_to(lock_target)
+    with pytest.raises(BudgetLedgerIntegrityError, match="lock_path_invalid"):
+        lock_budget.summary(now=NOW)
+    assert lock_target.read_bytes() == b"do-not-lock-or-change"
+
+
+def test_manifest_symlink_fails_closed_without_overwriting_target(
+    tmp_path: Path,
+) -> None:
+    budget = _budget(tmp_path)
+    budget.reserve_attempt(
+        _identity(),
+        token_ceiling=conservative_token_ceiling("request", max_output_tokens=10),
+        now=NOW,
+    )
+    manifest_target = tmp_path / "manifest-target.json"
+    manifest_target.write_bytes(b"do-not-read-or-change")
+    budget.manifest_path.unlink()
+    budget.manifest_path.symlink_to(manifest_target)
+
+    with pytest.raises(BudgetLedgerIntegrityError, match="manifest_unreadable"):
+        budget.summary(now=NOW)
+    assert manifest_target.read_bytes() == b"do-not-read-or-change"
 
 
 def test_ledger_or_manifest_tamper_fails_closed(tmp_path: Path) -> None:

@@ -1,3 +1,4 @@
+import gzip
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -13,6 +14,14 @@ from src.engine.scalping import multi_timeframe_context
 
 KST = ZoneInfo("Asia/Seoul")
 TEST_NOW = datetime(2026, 7, 27, 8, 30, tzinfo=KST)
+
+
+def test_exact_source_iterator_reads_gzip_only_generation(tmp_path):
+    logical = tmp_path / "ai_decision_trace_2026-07-24.jsonl"
+    with gzip.open(logical.with_suffix(".jsonl.gz"), "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps({"decision_trace_id": "trace-1"}) + "\n")
+
+    assert promotion._iter_jsonl(logical) == [{"decision_trace_id": "trace-1"}]
 
 
 def _validation(provider_none=0):

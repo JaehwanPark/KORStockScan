@@ -463,6 +463,90 @@ def test_pattern_lab_ai_review_resolves_closed_propagation_and_workorder_source_
     )
 
 
+def test_pattern_lab_ai_review_resolves_late_bound_source_quality_gap_state(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir
+        / "pattern_lab_currentness_audit"
+        / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 4,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "code_improvement_workorder",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "pattern_lab_propagation_audit",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {
+                "status": "pass",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "summary": {},
+            },
+        )
+    _write_json(
+        report_dir
+        / "scalping_pattern_lab_automation"
+        / "scalping_pattern_lab_automation_2026-05-15.json",
+        {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": [],
+            "forbidden_use_violations": [],
+        },
+        "final_conclusions": [
+            {
+                "review_id": "ai_review_gap",
+                "domain": "scalping",
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "pattern_lab_propagation_audit source is missing.",
+                "required_followup": ["restore_pattern_lab_propagation_audit"],
+            },
+            {
+                "review_id": "automation_handoff_gap",
+                "domain": "scalping",
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "LDM/threshold feedback is missing because code_improvement_workorder source is missing.",
+                "required_followup": ["restore_code_improvement_workorder"],
+            },
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report(
+        "2026-05-15",
+        provider="openai",
+        ai_raw_response=raw_response,
+        include_swing=False,
+    )
+
+    assert report["status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusions = report["ai_two_pass_review"]["final_conclusions"]
+    assert {item["final_state"] for item in conclusions} == {
+        "source_only_keep_collecting"
+    }
+    assert all(item["auditor_pass"] is True for item in conclusions)
+
+
 def test_pattern_lab_ai_review_keeps_unclosed_propagation_source_gap(
     tmp_path, monkeypatch
 ):

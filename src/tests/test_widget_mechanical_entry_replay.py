@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from datetime import date
 
@@ -200,3 +201,24 @@ def test_same_symbol_range_within_one_minute_is_one_mechanical_episode():
 
     assert accepted == [base]
     assert duplicates == 1
+
+
+def test_source_loaders_read_strict_gzip_only_generations(tmp_path):
+    payload_path = tmp_path / "ai_decision_payloads_2026-08-04.jsonl"
+    label_path = tmp_path / "ai_decision_outcome_labels_2026-08-04.json"
+    with gzip.open(
+        payload_path.with_suffix(".jsonl.gz"), "wt", encoding="utf-8"
+    ) as handle:
+        handle.write(json.dumps({"decision_trace_id": "trace-1"}) + "\n")
+    with gzip.open(
+        label_path.with_suffix(".json.gz"), "wt", encoding="utf-8"
+    ) as handle:
+        json.dump(
+            {"labels": [{"decision_trace_id": "trace-1", "label_status": "mature"}]},
+            handle,
+        )
+
+    assert replay._load_jsonl(payload_path) == [
+        {"decision_trace_id": "trace-1", "_line_number": 1}
+    ]
+    assert replay._load_labels(label_path)["trace-1"]["label_status"] == "mature"

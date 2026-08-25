@@ -60,6 +60,18 @@ S15_CUSTODY_DIR = Path(
 )
 _S15_REQUIRED_EXCHANGES = frozenset({"KRX", "NXT"})
 _S15_RECOVERY_THREADS = set()
+_S15_SELL_TERMINAL_MARKER_KEYS = (
+    "s15_sell_terminal_outcome_kind",
+    "s15_sell_terminal_outcome_generation",
+    "s15_sell_terminal_outcome_context_sha256",
+    "s15_sell_terminal_outcome_target_id",
+    "s15_sell_terminal_outcome_code",
+    "s15_sell_terminal_outcome_owner_position_qty",
+    "s15_sell_terminal_outcome_requested_qty",
+    "s15_sell_terminal_outcome_intended_route",
+    "s15_sell_terminal_outcome_intended_effective_venue",
+    "s15_sell_terminal_outcome_intended_session_bucket",
+)
 
 
 def _canonical_json(payload):
@@ -483,6 +495,171 @@ def _restore_fast_trade_states_from_journal():
                 if not _clear_fast_state_journal(code):
                     raise ValueError("s15_terminal_journal_clear_failed")
                 continue
+            from src.engine import sniper_execution_receipts as _receipt_handlers
+
+            shadow_id = int(state.get("shadow_id") or state.get("id") or 0)
+            position_qty = max(
+                int(state.get("buy_qty") or 0),
+                int(state.get("cum_buy_qty") or 0),
+            )
+            db_owner_exact = False
+            db_status = ""
+            if DB is not None and shadow_id > 0 and position_qty > 0:
+                try:
+                    with DB.get_session() as session:
+                        record = (
+                            session.query(RecommendationHistory)
+                            .filter_by(
+                                id=shadow_id,
+                                stock_code=code,
+                                buy_qty=position_qty,
+                            )
+                            .first()
+                        )
+                    db_status = str(getattr(record, "status", "") or "").upper()
+                    db_owner_exact = bool(
+                        record is not None
+                        and str(getattr(record, "strategy", "") or "").upper()
+                        == "S15_FAST"
+                    )
+                except Exception as exc:
+                    state["s15_pending_submit_restore_error"] = str(exc)[:240]
+            restored_pending, pending_reason = (
+                _receipt_handlers.load_pending_sell_submit_custody(
+                    target_id=shadow_id,
+                    code=code,
+                    position_qty=position_qty,
+                )
+                if shadow_id > 0 and position_qty > 0
+                else (None, "pending_submit_owner_invalid")
+            )
+            fast_pending = state.get("sell_submit_pending") is True
+            validated_fast_context, _fast_context_reason = (
+                _receipt_handlers._validated_sell_pending_submit_context(state)
+            )
+            fast_terminal_marker_exact = bool(
+                validated_fast_context is not None
+                and state.get("s15_sell_terminal_outcome_kind")
+                == "definitive_reject_no_broker_order"
+                and str(state.get("s15_sell_terminal_outcome_generation") or "").strip()
+                == str(validated_fast_context.get("generation") or "").strip()
+                and str(
+                    state.get("s15_sell_terminal_outcome_context_sha256") or ""
+                ).strip()
+                == str(state.get("sell_submit_context_sha256") or "").strip()
+                and int(state.get("s15_sell_terminal_outcome_target_id") or 0)
+                == int(validated_fast_context.get("target_id") or 0)
+                and str(state.get("s15_sell_terminal_outcome_code") or "").strip()
+                == str(validated_fast_context.get("code") or "").strip()
+                and int(state.get("s15_sell_terminal_outcome_owner_position_qty") or 0)
+                == int(validated_fast_context.get("owner_position_qty") or 0)
+                and int(state.get("s15_sell_terminal_outcome_requested_qty") or 0)
+                == int(validated_fast_context.get("requested_qty") or 0)
+                and str(
+                    state.get("s15_sell_terminal_outcome_intended_route") or ""
+                ).strip()
+                == str(validated_fast_context.get("intended_route") or "").strip()
+                and str(
+                    state.get("s15_sell_terminal_outcome_intended_effective_venue")
+                    or ""
+                ).strip()
+                == str(
+                    validated_fast_context.get("intended_effective_venue") or ""
+                ).strip()
+                and str(
+                    state.get("s15_sell_terminal_outcome_intended_session_bucket") or ""
+                ).strip()
+                == str(
+                    validated_fast_context.get("intended_session_bucket") or ""
+                ).strip()
+            )
+            if (
+                isinstance(restored_pending, dict)
+                and restored_pending.get("sell_submit_terminal_outcome_kind")
+                == "definitive_reject_no_broker_order"
+            ):
+                state.update(restored_pending)
+                state.update(
+                    {
+                        "id": shadow_id,
+                        "code": code,
+                        "status": "SELL_ORDERED",
+                    }
+                )
+                try:
+                    from src.engine import sniper_state_handlers as _state_handlers
+
+                    terminal_recovered = bool(
+                        _state_handlers._finish_definitive_sell_reject_boundary(
+                            state,
+                            code,
+                            target_id=shadow_id,
+                            generation=str(
+                                restored_pending.get("sell_submit_generation") or ""
+                            ),
+                            db=DB,
+                        )
+                    )
+                except Exception as exc:
+                    terminal_recovered = False
+                    state["s15_pending_submit_restore_error"] = str(exc)[:240]
+                if terminal_recovered:
+                    state["status"] = "HOLDING"
+                    state["s15_recovery_reason"] = (
+                        "definitive_reject_terminal_restart_recovered"
+                    )
+                    if not _persist_fast_state(code, state):
+                        terminal_recovered = False
+                if not terminal_recovered:
+                    state["status"] = "RECOVERY_REQUIRED"
+                    state["s15_recovery_reason"] = (
+                        "definitive_reject_terminal_restart_recovery_deferred"
+                    )
+            elif restored_pending is not None:
+                exact_fast_context = all(
+                    state.get(key) == value
+                    for key, value in restored_pending.items()
+                    if key != "sell_submit_pending"
+                )
+                if not db_owner_exact or db_status != "SELL_ORDERED":
+                    state["status"] = "RECOVERY_REQUIRED"
+                    state["s15_recovery_reason"] = "pending_submit_db_owner_mismatch"
+                elif fast_pending and not exact_fast_context:
+                    state["status"] = "RECOVERY_REQUIRED"
+                    state["s15_recovery_reason"] = (
+                        "pending_submit_dual_journal_context_mismatch"
+                    )
+                else:
+                    state.update(restored_pending)
+                    state["status"] = "RECOVERY_REQUIRED"
+                    state["s15_recovery_reason"] = (
+                        "pending_submit_exact_restart_reconciliation"
+                    )
+            elif (
+                fast_pending
+                and fast_terminal_marker_exact
+                and db_owner_exact
+                and db_status == "HOLDING"
+                and pending_reason == "pending_submit_journal_missing"
+            ):
+                for field_name in _receipt_handlers._SELL_PENDING_SUBMIT_RUNTIME_KEYS:
+                    state.pop(field_name, None)
+                for field_name in _S15_SELL_TERMINAL_MARKER_KEYS:
+                    state.pop(field_name, None)
+                state["status"] = "HOLDING"
+                state["s15_recovery_reason"] = (
+                    "definitive_reject_terminal_fast_journal_recovered"
+                )
+                if not _persist_fast_state(code, state):
+                    state["status"] = "RECOVERY_REQUIRED"
+                    state["s15_recovery_reason"] = (
+                        "definitive_reject_terminal_fast_journal_persist_deferred"
+                    )
+            elif fast_pending:
+                state["status"] = "RECOVERY_REQUIRED"
+                state["s15_recovery_reason"] = (
+                    f"pending_submit_common_journal_invalid:{pending_reason}"
+                )
             with FAST_LOCK:
                 if code in FAST_TRADE_STATE:
                     raise ValueError("s15_custody_duplicate_runtime_state")
@@ -497,9 +674,56 @@ def _restore_fast_trade_states_from_journal():
 def _s15_inventory_and_orders(code):
     if not _s15_symbol_allocation_unambiguous(code):
         return None, (), "same_symbol_custody_allocation_ambiguous"
-    inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(
-        KIWOOM_TOKEN
+    # Establish the order state first.  The inventory used for residual SELL
+    # authority must be fetched after this snapshot so a fill that removes the
+    # order cannot be hidden behind an older pre-fill balance.
+    rows, meta = kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta(
+        KIWOOM_TOKEN,
+        all_stk_tp="0",
+        trde_tp="0",
+        stex_tp="0",
     )
+    if not bool((meta or {}).get("request_succeeded", False)):
+        return None, (), "unfilled_order_snapshot_failed"
+    if not bool((meta or {}).get("normalization_contract_complete", False)):
+        return None, (), "open_order_snapshot_contract_incomplete"
+    for row in rows or ():
+        if not isinstance(row, dict):
+            return None, (), "open_order_identity_or_side_invalid"
+        row_code = str(row.get("code") or "").strip()[:6]
+        row_remaining = _strict_nonnegative_int(row.get("remaining_qty"))
+        if (
+            row_remaining is not None
+            and row_remaining > 0
+            and re.fullmatch(r"[0-9]{6}", row_code) is None
+        ):
+            return None, (), "open_order_identity_or_side_invalid"
+    matching_orders = [
+        row for row in rows or () if str(row.get("code") or "").strip()[:6] == code
+    ]
+    parsed_remaining = [
+        _strict_nonnegative_int(row.get("remaining_qty")) for row in matching_orders
+    ]
+    if any(remaining is None for remaining in parsed_remaining):
+        return None, (), "open_order_numeric_contract_invalid"
+    orders = tuple(
+        row
+        for row, remaining in zip(matching_orders, parsed_remaining, strict=True)
+        if remaining > 0
+    )
+    for row in orders:
+        order_no = _s15_order_no(row)
+        if (
+            re.fullmatch(r"[0-9]{7}", order_no) is None
+            or int(order_no) <= 0
+            or _s15_order_side(row) not in {"BUY", "SELL"}
+        ):
+            return None, (), "open_order_identity_or_side_invalid"
+    inventory, successful_exchanges, inventory_meta = (
+        kiwoom_utils.get_account_balance_kt00005_with_meta(KIWOOM_TOKEN)
+    )
+    if not bool((inventory_meta or {}).get("normalization_contract_complete", False)):
+        return None, (), "inventory_snapshot_contract_incomplete"
     normalized_exchanges = {
         str(exchange or "").strip().upper() for exchange in successful_exchanges or ()
     }
@@ -520,27 +744,6 @@ def _s15_inventory_and_orders(code):
             return None, (), "inventory_numeric_contract_invalid"
         quantity += row_qty
         weighted_amount += row_qty * row_price
-    rows, meta = kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta(
-        KIWOOM_TOKEN,
-        all_stk_tp="0",
-        trde_tp="0",
-        stex_tp="0",
-    )
-    if not bool((meta or {}).get("request_succeeded", False)):
-        return None, (), "unfilled_order_snapshot_failed"
-    matching_orders = [
-        row for row in rows or () if str(row.get("code") or "").strip()[:6] == code
-    ]
-    parsed_remaining = [
-        _strict_nonnegative_int(row.get("remaining_qty")) for row in matching_orders
-    ]
-    if any(remaining is None for remaining in parsed_remaining):
-        return None, (), "open_order_numeric_contract_invalid"
-    orders = tuple(
-        row
-        for row, remaining in zip(matching_orders, parsed_remaining, strict=True)
-        if remaining > 0
-    )
     avg_price = int(weighted_amount / quantity) if quantity else 0
     return {"qty": quantity, "avg_price": avg_price}, orders, "exact"
 
@@ -599,6 +802,28 @@ def _s15_order_no(row):
     ).strip()
 
 
+def _s15_open_sell_matches_pending_context(row, state, *, order_no):
+    """Validate one open SELL row against one already-bound S15 generation."""
+
+    from src.engine import sniper_trade_utils as _trade_utils
+
+    submitted_qty = _strict_nonnegative_int(row.get("qty"))
+    remaining_qty = _strict_nonnegative_int(row.get("remaining_qty"))
+    requested_qty = _strict_nonnegative_int(state.get("sell_submit_requested_qty"))
+    intended_route = str(state.get("sell_submit_intended_route") or "").strip().upper()
+    return bool(
+        _s15_order_side(row) == "SELL"
+        and _s15_order_no(row) == str(order_no or "").strip()
+        and row.get("submitted_quantity_source_valid") is True
+        and submitted_qty is not None
+        and requested_qty is not None
+        and submitted_qty == requested_qty
+        and remaining_qty is not None
+        and 0 < remaining_qty <= submitted_qty
+        and _trade_utils._pending_sell_order_route(row) == intended_route
+    )
+
+
 def _start_s15_recovery_thread(code, state):
     with state["lock"]:
         if state.get("_recovery_thread_active"):
@@ -621,6 +846,404 @@ def _start_s15_recovery_thread(code, state):
     return True
 
 
+def _reconcile_s15_positive_inventory_owner(code, state, snapshot):
+    """Commit a terminal partial BUY to its exact shadow before any SELL."""
+
+    shadow_id = int(state.get("shadow_id") or state.get("id") or 0)
+    inventory_qty = int((snapshot or {}).get("qty") or 0)
+    sold_qty = int(state.get("cum_sell_qty", 0) or 0)
+    owner_buy_qty = int(state.get("cum_buy_qty", 0) or 0)
+    receipt_buy_amount = int(state.get("cum_buy_amount", 0) or 0)
+    avg_price = int(state.get("avg_buy_price", 0) or 0)
+    inventory_avg_price = int((snapshot or {}).get("avg_price") or 0)
+    buy_order_no = str(state.get("buy_ord_no") or "").strip()
+    if (
+        DB is None
+        or shadow_id <= 0
+        or inventory_qty <= 0
+        or owner_buy_qty <= 0
+        or avg_price <= 0
+    ):
+        with state["lock"]:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = "partial_buy_owner_identity_or_price_invalid"
+        _persist_fast_state(code, state)
+        return False
+    receipt_avg_from_amount = (
+        int(receipt_buy_amount / owner_buy_qty)
+        if owner_buy_qty > 0 and receipt_buy_amount > 0
+        else 0
+    )
+    if not all(
+        (
+            owner_buy_qty == inventory_qty + sold_qty,
+            receipt_buy_amount > 0,
+            avg_price > 0,
+            inventory_avg_price > 0,
+            avg_price == inventory_avg_price,
+            receipt_avg_from_amount == avg_price,
+        )
+    ):
+        with state["lock"]:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = "partial_buy_db_reconciliation_failed"
+            state["s15_partial_buy_db_error"] = (
+                "s15_partial_buy_receipt_inventory_economics_mismatch"
+            )
+        _persist_fast_state(code, state)
+        return False
+    if re.fullmatch(r"[0-9]{7}", buy_order_no) is None or int(buy_order_no) <= 0:
+        with state["lock"]:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = "partial_buy_db_reconciliation_failed"
+            state["s15_partial_buy_db_error"] = "s15_partial_buy_order_identity_invalid"
+        _persist_fast_state(code, state)
+        return False
+    committed = False
+    try:
+        with DB.get_session() as session:
+            record = (
+                session.query(RecommendationHistory)
+                .filter_by(
+                    id=shadow_id,
+                    stock_code=str(code or "").strip()[:6],
+                )
+                .first()
+            )
+            record_status = str(getattr(record, "status", "") or "").upper()
+            record_qty = int(getattr(record, "buy_qty", 0) or 0)
+            record_buy_price = int(getattr(record, "buy_price", 0) or 0)
+            strategy = str(getattr(record, "strategy", "") or "").upper()
+            if record is None or strategy != "S15_FAST":
+                raise RuntimeError("s15_partial_buy_db_owner_missing")
+            if (
+                record_status == "HOLDING"
+                and record_qty == owner_buy_qty
+                and record_buy_price == avg_price
+            ):
+                committed = True
+            elif (
+                record_status == "SELL_ORDERED"
+                and record_qty == owner_buy_qty
+                and record_buy_price == avg_price
+            ):
+                committed = True
+            elif record_status == "BUY_ORDERED" and record_qty in {
+                0,
+                owner_buy_qty,
+            }:
+                updated_rows = (
+                    session.query(RecommendationHistory)
+                    .filter_by(
+                        id=shadow_id,
+                        stock_code=str(code or "").strip()[:6],
+                        status="BUY_ORDERED",
+                        buy_qty=record_qty,
+                    )
+                    .update(
+                        {
+                            "status": "HOLDING",
+                            "buy_qty": owner_buy_qty,
+                            "buy_price": avg_price,
+                            "scale_in_locked": True,
+                        }
+                    )
+                )
+                if updated_rows != 1:
+                    raise RuntimeError(
+                        f"s15_partial_buy_db_owner_rowcount:{updated_rows}"
+                    )
+                committed = True
+            else:
+                raise RuntimeError(
+                    "s15_partial_buy_db_owner_state_mismatch:"
+                    f"{record_status}:{record_qty}"
+                )
+    except Exception as exc:
+        with state["lock"]:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = "partial_buy_db_reconciliation_failed"
+            state["s15_partial_buy_db_error"] = str(exc)[:240]
+        _persist_fast_state(code, state)
+        return False
+    if not committed:
+        return False
+    with state["lock"]:
+        state["buy_qty"] = owner_buy_qty
+        state["cum_buy_qty"] = owner_buy_qty
+        state["avg_buy_price"] = avg_price
+        state["status"] = "HOLDING"
+        state["s15_partial_buy_owner_reconciled"] = True
+        state.pop("s15_partial_buy_db_error", None)
+    if not _persist_fast_state(code, state):
+        with state["lock"]:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = (
+                "partial_buy_fast_state_reconciliation_failed"
+            )
+        return False
+    return True
+
+
+def _reconcile_s15_pending_sell_cancel(code, state):
+    """Let the common exact cancel boundary own one S15 SELL generation."""
+
+    with state["lock"]:
+        generation = str(state.get("sell_submit_generation") or "").strip()
+        order_no = str(
+            state.get("pending_cancel_ord_no")
+            or state.get("sell_odno")
+            or state.get("sell_ord_no")
+            or ""
+        ).strip()
+    if not generation or not order_no:
+        return None
+    from src.engine import sniper_execution_receipts as _receipt_handlers
+    from src.engine import sniper_state_handlers as _state_handlers
+
+    owns_cancel = bool(
+        _receipt_handlers.pending_sell_cancel_ack_exact(
+            state,
+            code=code,
+            order_no=order_no,
+        )
+        or _receipt_handlers.pending_sell_cancel_intent_exact(
+            state,
+            code=code,
+            order_no=order_no,
+        )
+    )
+    if not owns_cancel:
+        return None
+    with state["lock"]:
+        state["status"] = "SELL_ORDERED"
+        state["sell_odno"] = order_no
+        state["sell_ord_no"] = order_no
+        state["sell_cancel_reconciliation_required"] = True
+    released = bool(
+        _state_handlers.process_sell_cancellation(
+            state,
+            code,
+            order_no,
+            DB,
+        )
+    )
+    if released:
+        with state["lock"]:
+            state.pop("pending_cancel_ord_no", None)
+            state["s15_recovery_reason"] = "stop_exit_cancel_terminal_released"
+    else:
+        with state["lock"]:
+            state["status"] = "SELL_ORDERED"
+            state["s15_recovery_reason"] = "stop_exit_cancel_terminal_pending"
+    _persist_fast_state(code, state)
+    return released
+
+
+def _submit_s15_stop_cancel(
+    state,
+    code,
+    order_no,
+    *,
+    allow_existing_intent_open_order_retry=False,
+):
+    """Fsync one S15 cancel intent before the only permitted kt10003 call."""
+
+    from src.engine import sniper_execution_receipts as _receipt_handlers
+    from src.engine import sniper_trade_utils as _trade_utils
+
+    normalized_code = str(code or "").strip()[:6]
+    normalized_order_no = str(order_no or "").strip()
+    cancel_route = str(state.get("sell_submit_intended_route") or "SOR").strip().upper()
+    with state["lock"]:
+        generation = str(state.get("sell_submit_generation") or "").strip()
+        context_sha256 = str(state.get("sell_submit_context_sha256") or "").strip()
+        current_order_no = str(
+            state.get("sell_odno") or state.get("sell_ord_no") or ""
+        ).strip()
+        if (
+            not generation
+            or not context_sha256
+            or not normalized_code
+            or not re.fullmatch(r"[0-9]{7}", normalized_order_no)
+            or int(normalized_order_no) <= 0
+            or (current_order_no and current_order_no != normalized_order_no)
+        ):
+            return False
+        state["status"] = "SELL_ORDERED"
+        state["sell_odno"] = normalized_order_no
+        state["sell_ord_no"] = normalized_order_no
+        # This marker is part of the pre-call crash boundary.  It is bound to
+        # the exact SELL generation so a later generation can never inherit a
+        # stale stop-cancel retry.
+        state["s15_stop_cancel_retry_required"] = True
+        state["s15_stop_cancel_retry_generation"] = generation
+        state["s15_stop_cancel_retry_context_sha256"] = context_sha256
+        state["s15_stop_cancel_retry_order_no"] = normalized_order_no
+    if not _persist_fast_state(code, state):
+        return False
+    cancel_ack_exact = _receipt_handlers.pending_sell_cancel_ack_exact(
+        state,
+        code=code,
+        order_no=normalized_order_no,
+    )
+    cancel_intent_exact = _receipt_handlers.pending_sell_cancel_intent_exact(
+        state,
+        code=code,
+        order_no=normalized_order_no,
+    )
+    if cancel_ack_exact or (
+        cancel_intent_exact and not allow_existing_intent_open_order_retry
+    ):
+        with state["lock"]:
+            state.pop("s15_stop_cancel_retry_required", None)
+            state.pop("s15_stop_cancel_retry_generation", None)
+            state.pop("s15_stop_cancel_retry_context_sha256", None)
+            state.pop("s15_stop_cancel_retry_order_no", None)
+        return True
+    if (
+        not cancel_intent_exact
+        and not _receipt_handlers.persist_pending_sell_cancel_intent_custody(
+            state,
+            order_no=normalized_order_no,
+            broker_route=cancel_route,
+        )
+    ):
+        return False
+    cancel_res = kiwoom_orders.send_cancel_order(
+        code=code,
+        orig_ord_no=normalized_order_no,
+        token=KIWOOM_TOKEN,
+        qty=0,
+        dmst_stex_tp=cancel_route,
+    )
+    if _trade_utils.cancel_response_ack_exact(
+        cancel_res,
+        intended_route=cancel_route,
+        expected_orig_order_no=normalized_order_no,
+        expected_code=code,
+        expected_max_qty=int(state.get("sell_submit_requested_qty") or 0),
+    ):
+        _receipt_handlers.persist_pending_sell_cancel_ack_custody(
+            state,
+            order_no=normalized_order_no,
+            cancel_response=cancel_res,
+        )
+    with state["lock"]:
+        state["pending_cancel_ord_no"] = normalized_order_no
+        state.pop("s15_stop_cancel_retry_required", None)
+        state.pop("s15_stop_cancel_retry_generation", None)
+        state.pop("s15_stop_cancel_retry_context_sha256", None)
+        state.pop("s15_stop_cancel_retry_order_no", None)
+    return True
+
+
+def _retry_s15_stop_cancel_if_required(code, state):
+    """Retry one exact open stop cancel across the bounded crash window."""
+
+    from src.engine import sniper_execution_receipts as _receipt_handlers
+
+    with state["lock"]:
+        retry_required = state.get("s15_stop_cancel_retry_required") is True
+        order_no = str(state.get("s15_stop_cancel_retry_order_no") or "").strip()
+        retry_generation = str(
+            state.get("s15_stop_cancel_retry_generation") or ""
+        ).strip()
+        retry_context_sha256 = str(
+            state.get("s15_stop_cancel_retry_context_sha256") or ""
+        ).strip()
+        current_generation = str(state.get("sell_submit_generation") or "").strip()
+        current_context_sha256 = str(
+            state.get("sell_submit_context_sha256") or ""
+        ).strip()
+        current_order_no = str(
+            state.get("sell_odno") or state.get("sell_ord_no") or ""
+        ).strip()
+    if not retry_required:
+        return None
+    if (
+        not retry_generation
+        or retry_generation != current_generation
+        or not retry_context_sha256
+        or retry_context_sha256 != current_context_sha256
+        or not order_no
+        or order_no != current_order_no
+    ):
+        with state["lock"]:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = "stop_exit_cancel_retry_context_mismatch"
+        _persist_fast_state(code, state)
+        return False
+    snapshot, open_orders, snapshot_reason = _s15_inventory_and_orders(code)
+    if snapshot is None:
+        with state["lock"]:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = (
+                f"stop_exit_cancel_retry_snapshot_blocked:{snapshot_reason}"
+            )
+        _persist_fast_state(code, state)
+        return False
+    open_buys = [row for row in open_orders if _s15_order_side(row) == "BUY"]
+    open_sells = [row for row in open_orders if _s15_order_side(row) == "SELL"]
+    cancel_intent_exact = _receipt_handlers.pending_sell_cancel_intent_exact(
+        state,
+        code=code,
+        order_no=order_no,
+    )
+    cancel_ack_exact = _receipt_handlers.pending_sell_cancel_ack_exact(
+        state,
+        code=code,
+        order_no=order_no,
+    )
+    if (
+        open_buys
+        or len(open_sells) != 1
+        or not _s15_open_sell_matches_pending_context(
+            open_sells[0],
+            state,
+            order_no=order_no,
+        )
+    ):
+        if cancel_intent_exact or cancel_ack_exact:
+            with state["lock"]:
+                state["status"] = "SELL_ORDERED"
+                state["pending_cancel_ord_no"] = order_no
+                state["s15_recovery_reason"] = "stop_exit_terminal_pending"
+                state.pop("s15_stop_cancel_retry_required", None)
+                state.pop("s15_stop_cancel_retry_generation", None)
+                state.pop("s15_stop_cancel_retry_context_sha256", None)
+                state.pop("s15_stop_cancel_retry_order_no", None)
+            _persist_fast_state(code, state)
+            return True
+        with state["lock"]:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = (
+                "stop_exit_cancel_retry_exact_open_order_required"
+            )
+        _persist_fast_state(code, state)
+        return False
+    if not order_no or not _submit_s15_stop_cancel(
+        state,
+        code,
+        order_no,
+        allow_existing_intent_open_order_retry=True,
+    ):
+        with state["lock"]:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = "stop_exit_cancel_intent_durability_failed"
+        _persist_fast_state(code, state)
+        return False
+    with state["lock"]:
+        state["status"] = "SELL_ORDERED"
+        state["s15_recovery_reason"] = "stop_exit_terminal_pending"
+        state.pop("s15_stop_cancel_retry_required", None)
+        state.pop("s15_stop_cancel_retry_generation", None)
+        state.pop("s15_stop_cancel_retry_context_sha256", None)
+        state.pop("s15_stop_cancel_retry_order_no", None)
+    _persist_fast_state(code, state)
+    return True
+
+
 def _recover_s15_custody(code, state):
     """Reconcile open BUY/SELL orders before placing one exact residual exit."""
 
@@ -639,18 +1262,36 @@ def _recover_s15_custody(code, state):
             if receipt_complete:
                 _finalize_s15_completed_state(code, state)
                 return
+            stop_cancel_retry = _retry_s15_stop_cancel_if_required(code, state)
+            if stop_cancel_retry is not None:
+                time.sleep(
+                    0.1 if stop_cancel_retry else (1.0 if poll_attempt <= 120 else 30.0)
+                )
+                continue
+            cancel_release = _reconcile_s15_pending_sell_cancel(code, state)
+            if cancel_release is not None:
+                time.sleep(
+                    0.1 if cancel_release else (1.0 if poll_attempt <= 120 else 30.0)
+                )
+                continue
             snapshot, open_orders, reason = _s15_inventory_and_orders(code)
             if snapshot is None:
                 with state["lock"]:
                     state["status"] = "RECOVERY_REQUIRED"
                     state["s15_recovery_reason"] = reason
                 _persist_fast_state(code, state)
+                if reason == "open_order_identity_or_side_invalid":
+                    return
                 time.sleep(1.0 if poll_attempt <= 120 else 30.0)
                 continue
 
             open_buys = [row for row in open_orders if _s15_order_side(row) == "BUY"]
             open_sells = [row for row in open_orders if _s15_order_side(row) == "SELL"]
-            if any(not _s15_order_no(row) for row in open_buys + open_sells):
+            if any(
+                re.fullmatch(r"[0-9]{7}", _s15_order_no(row)) is None
+                or int(_s15_order_no(row)) <= 0
+                for row in open_buys + open_sells
+            ):
                 with state["lock"]:
                     state["status"] = "RECOVERY_REQUIRED"
                     state["s15_recovery_reason"] = "open_order_identity_missing"
@@ -682,6 +1323,13 @@ def _recover_s15_custody(code, state):
                     0, int(state.get("cum_buy_qty", 0) or 0) - sold_qty
                 )
 
+            if qty > 0 and not _reconcile_s15_positive_inventory_owner(
+                code,
+                state,
+                snapshot,
+            ):
+                return
+
             if qty == 0:
                 if known_position_qty == 0 and not open_sells:
                     with state["lock"]:
@@ -701,6 +1349,56 @@ def _recover_s15_custody(code, state):
                 time.sleep(1.0 if poll_attempt <= 120 else 30.0)
                 continue
 
+            with state["lock"]:
+                pending_generation = bool(
+                    state.get("sell_submit_pending") is True
+                    and str(state.get("sell_submit_generation") or "").strip()
+                )
+                pending_order_no = str(
+                    state.get("sell_odno") or state.get("sell_ord_no") or ""
+                ).strip()
+            if pending_generation:
+                if not pending_order_no:
+                    from src.engine import sniper_trade_utils as _trade_utils
+
+                    pending_order_no, bind_reason = (
+                        _trade_utils.resolve_pending_sell_order_no(
+                            state,
+                            KIWOOM_TOKEN,
+                        )
+                    )
+                else:
+                    if len(
+                        open_sells
+                    ) != 1 or not _s15_open_sell_matches_pending_context(
+                        open_sells[0],
+                        state,
+                        order_no=pending_order_no,
+                    ):
+                        with state["lock"]:
+                            state["status"] = "RECOVERY_REQUIRED"
+                            state["s15_recovery_reason"] = (
+                                "pending_sell_order_open_identity_conflict"
+                            )
+                        _persist_fast_state(code, state)
+                        time.sleep(1.0 if poll_attempt <= 120 else 30.0)
+                        continue
+                    bind_reason = "pending_sell_order_already_bound_exact_open_row"
+                with state["lock"]:
+                    if pending_order_no:
+                        state["sell_odno"] = pending_order_no
+                        state["sell_ord_no"] = pending_order_no
+                        state["status"] = "EXIT_SENT"
+                        state["s15_recovery_reason"] = bind_reason
+                    else:
+                        state["status"] = "RECOVERY_REQUIRED"
+                        state["s15_recovery_reason"] = (
+                            f"pending_sell_order_number_unresolved:{bind_reason}"
+                        )
+                _persist_fast_state(code, state)
+                time.sleep(1.0 if poll_attempt <= 120 else 30.0)
+                continue
+
             if len(open_sells) > 1:
                 with state["lock"]:
                     state["status"] = "RECOVERY_REQUIRED"
@@ -709,30 +1407,80 @@ def _recover_s15_custody(code, state):
                 return
             if open_sells:
                 with state["lock"]:
-                    state["sell_ord_no"] = _s15_order_no(open_sells[0])
-                    state["status"] = "EXIT_SENT"
+                    state["status"] = "RECOVERY_REQUIRED"
+                    state["s15_recovery_reason"] = (
+                        "open_sell_without_pending_generation"
+                    )
                 _persist_fast_state(code, state)
-                update_s15_shadow_record(
-                    state.get("shadow_id"),
-                    status="SELL_ORDERED",
-                    scale_in_locked=True,
-                )
                 time.sleep(1.0 if poll_attempt <= 120 else 30.0)
                 continue
 
-            exit_response = _send_exit_best_ioc(code, qty, KIWOOM_TOKEN)
-            exit_order_no = _extract_ord_no(exit_response)
-            if not _is_ok_response(exit_response) or not exit_order_no:
+            residual_route = (
+                str(kiwoom_orders.resolve_order_dmst_stex_tp() or "SOR").strip().upper()
+            )
+            residual_submit = _arm_s15_pending_sell_submit(
+                state,
+                code,
+                qty,
+                route=residual_route,
+                kind="recovery_residual_ioc",
+            )
+            if residual_submit is None:
+                return
+            try:
+                exit_response = _send_exit_best_ioc(code, qty, KIWOOM_TOKEN)
+            except Exception as exc:
+                exit_response = {"return_code": "exception", "return_msg": str(exc)}
+            residual_state, exit_order_no, residual_error = _classify_s15_sell_response(
+                exit_response
+            )
+            if _s15_receipt_first_response_handled(
+                state,
+                code,
+                submit=residual_submit,
+                response_state=residual_state,
+                response_order_no=exit_order_no,
+                qty=qty,
+            ):
+                time.sleep(1.0 if poll_attempt <= 120 else 30.0)
+                continue
+            if residual_state == "ambiguous":
                 with state["lock"]:
                     state["status"] = "RECOVERY_REQUIRED"
-                    state["s15_recovery_reason"] = "residual_exit_not_exactly_accepted"
+                    state["s15_recovery_reason"] = "residual_exit_response_ambiguous"
+                    state["s15_sell_submit_response_error"] = residual_error[:240]
+                _persist_fast_state(code, state)
+                return
+            if residual_state in {"definitive_reject", "local_no_call"}:
+                if not _clear_s15_pending_sell_submit(
+                    state,
+                    generation=residual_submit["generation"],
+                ):
+                    with state["lock"]:
+                        state["status"] = "RECOVERY_REQUIRED"
+                        state["s15_recovery_reason"] = (
+                            "residual_exit_reject_boundary_incomplete"
+                        )
+                    _persist_fast_state(code, state)
+                    return
+                with state["lock"]:
+                    state["status"] = "RECOVERY_REQUIRED"
+                    state["s15_recovery_reason"] = "residual_exit_rejected"
+                    state["s15_sell_submit_response_error"] = residual_error[:240]
                 _persist_fast_state(code, state)
                 return
             with state["lock"]:
                 state["sell_ord_no"] = exit_order_no
                 state["status"] = "EXIT_RETRY"
                 state["s15_recovery_reason"] = "exact_residual_exit_submitted"
-            _persist_fast_state(code, state)
+            if not _persist_fast_state(code, state):
+                return
+            _log_s15_sell_order_sent(
+                state,
+                code,
+                order_no=exit_order_no,
+                qty=qty,
+            )
             update_s15_shadow_record(
                 state.get("shadow_id"),
                 status="SELL_ORDERED",
@@ -904,6 +1652,394 @@ def _is_ok_response(res):
     if isinstance(res, dict):
         return str(res.get("return_code", res.get("rt_cd", ""))) == "0"
     return bool(res)
+
+
+def _classify_s15_sell_response(response):
+    if kiwoom_orders.is_verified_local_sell_no_call_response(response):
+        return (
+            "local_no_call",
+            "",
+            str(response.get("return_msg") or "sell_time_blocked"),
+        )
+    if not isinstance(response, dict):
+        return "ambiguous", "", "non_dict_or_missing_response"
+    has_code = "return_code" in response or "rt_cd" in response
+    raw_return_code = response.get("return_code", response.get("rt_cd", ""))
+    return_code = (
+        ""
+        if raw_return_code is None or isinstance(raw_return_code, bool)
+        else str(raw_return_code).strip()
+    )
+    order_no = _extract_ord_no(response).strip()
+    message = str(
+        response.get("return_msg")
+        or response.get("msg1")
+        or response.get("err_msg")
+        or ""
+    ).strip()
+    available_qty_ambiguous = bool(response.get("non_fatal_no_qty") is True) or (
+        "매도가능수량" in message
+    )
+    if not has_code or not return_code:
+        return "ambiguous", order_no, message or "return_code_missing"
+    if return_code != "0":
+        if re.fullmatch(r"-?[1-9][0-9]*", return_code) and not available_qty_ambiguous:
+            return "definitive_reject", order_no, message or "broker_rejected"
+        return "ambiguous", order_no, message or "broker_response_ambiguous"
+    if re.fullmatch(r"[0-9]{7}", order_no) is None or int(order_no) == 0:
+        return "ambiguous", order_no, "accepted_order_identity_missing"
+    return "success", order_no, message
+
+
+def _s15_sell_context_keys():
+    from src.engine import sniper_execution_receipts as _receipt_handlers
+
+    return _receipt_handlers._SELL_PENDING_SUBMIT_CONTEXT_KEYS
+
+
+def _arm_s15_pending_sell_submit(state, code, qty, *, route, kind):
+    """Persist exact S15 sell intent before the first broker-call instruction."""
+
+    from src.engine import sniper_execution_receipts as _receipt_handlers
+
+    with state["lock"]:
+        if state.get("sell_submit_pending") is True:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = (
+                "existing_sell_submit_generation_reconciliation_only"
+            )
+            _persist_fast_state(code, state)
+            return None
+    normalized_route = str(route or "").strip().upper()
+    if normalized_route not in {"KRX", "NXT", "SOR"}:
+        normalized_route = "SOR"
+    started_at = _now_ts()
+    session_bucket = _receipt_handlers._sell_execution_session_bucket(
+        datetime.fromtimestamp(started_at, tz=_receipt_handlers._KST)
+    )
+    if normalized_route in {"KRX", "NXT"}:
+        effective_venue = normalized_route
+    elif session_bucket == "krx_regular":
+        effective_venue = "KRX"
+    elif session_bucket.startswith("nxt_"):
+        effective_venue = "NXT"
+    else:
+        effective_venue = "UNKNOWN"
+    with state["lock"]:
+        position_qty = max(
+            int(qty or 0),
+            int(state.get("cum_buy_qty", 0) or 0),
+        )
+        state.update(
+            {
+                "id": int(state.get("shadow_id") or 0),
+                "code": str(code or "").strip()[:6],
+                "strategy": "S15_FAST",
+                "buy_qty": position_qty,
+                "status": "EXIT_SUBMITTING",
+                "s15_sell_submit_kind": str(kind or "sell"),
+            }
+        )
+        fields = _receipt_handlers.build_pending_sell_submit_context_fields(
+            state,
+            code=code,
+            requested_qty=int(qty),
+            started_at=started_at,
+            intended_route=normalized_route,
+            intended_effective_venue=effective_venue,
+            intended_session_bucket=session_bucket,
+        )
+        state.update(fields)
+    db_boundary_committed = False
+    if DB is not None and int(state.get("shadow_id") or 0) > 0:
+        try:
+            with DB.get_session() as session:
+                updated_rows = (
+                    session.query(RecommendationHistory)
+                    .filter_by(
+                        id=state.get("shadow_id"),
+                        stock_code=str(code or "").strip()[:6],
+                        buy_qty=position_qty,
+                        status="HOLDING",
+                    )
+                    .update({"status": "SELL_ORDERED", "scale_in_locked": True})
+                )
+                if updated_rows != 1:
+                    raise RuntimeError(f"s15_sell_db_owner_rowcount:{updated_rows}")
+            db_boundary_committed = True
+        except Exception as exc:
+            state["s15_sell_submit_db_error"] = str(exc)[:240]
+    if not db_boundary_committed:
+        with state["lock"]:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = "sell_submit_db_boundary_failed"
+        _persist_fast_state(code, state)
+        return None
+    if not _receipt_handlers.persist_pending_sell_submit_custody(state):
+        rollback_committed = False
+        try:
+            with DB.get_session() as session:
+                updated_rows = (
+                    session.query(RecommendationHistory)
+                    .filter_by(
+                        id=state.get("shadow_id"),
+                        stock_code=str(code or "").strip()[:6],
+                        buy_qty=position_qty,
+                        status="SELL_ORDERED",
+                    )
+                    .update({"status": "HOLDING"})
+                )
+                rollback_committed = updated_rows == 1
+        except Exception:
+            rollback_committed = False
+        with state["lock"]:
+            state["status"] = "HOLDING" if rollback_committed else "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = (
+                "sell_submit_common_custody_failed_no_call"
+                if rollback_committed
+                else "sell_submit_common_custody_failed_db_rollback_failed"
+            )
+            if rollback_committed:
+                for field_name in _s15_sell_context_keys():
+                    state.pop(field_name, None)
+        _persist_fast_state(code, state)
+        return None
+    if not _persist_fast_state(code, state):
+        rollback_committed = False
+        try:
+            with DB.get_session() as session:
+                updated_rows = (
+                    session.query(RecommendationHistory)
+                    .filter_by(
+                        id=state.get("shadow_id"),
+                        stock_code=str(code or "").strip()[:6],
+                        buy_qty=position_qty,
+                        status="SELL_ORDERED",
+                    )
+                    .update({"status": "HOLDING"})
+                )
+                rollback_committed = updated_rows == 1
+        except Exception:
+            rollback_committed = False
+        custody_cleared = False
+        if rollback_committed:
+            custody_cleared = _receipt_handlers.clear_pending_sell_submit_custody(
+                state.get("shadow_id"),
+                generation=str(fields.get("sell_submit_generation") or ""),
+            )
+            if not custody_cleared:
+                try:
+                    with DB.get_session() as session:
+                        restored_rows = (
+                            session.query(RecommendationHistory)
+                            .filter_by(
+                                id=state.get("shadow_id"),
+                                stock_code=str(code or "").strip()[:6],
+                                buy_qty=position_qty,
+                                status="HOLDING",
+                            )
+                            .update({"status": "SELL_ORDERED", "scale_in_locked": True})
+                        )
+                        if restored_rows != 1:
+                            raise RuntimeError(
+                                "s15_fast_state_failure_interlock_restore_rowcount:"
+                                f"{restored_rows}"
+                            )
+                except Exception as exc:
+                    state["s15_sell_submit_db_error"] = str(exc)[:240]
+        if not rollback_committed or not custody_cleared:
+            state["status"] = "RECOVERY_REQUIRED"
+            state["s15_recovery_reason"] = (
+                "fast_state_persist_failed_db_rollback_failed"
+                if not rollback_committed
+                else "fast_state_persist_failed_custody_clear_failed"
+            )
+        else:
+            state["status"] = "HOLDING"
+            for field_name in _s15_sell_context_keys():
+                state.pop(field_name, None)
+        return None
+    return {
+        "generation": str(fields["sell_submit_generation"]),
+        "context_sha256": str(fields["sell_submit_context_sha256"]),
+    }
+
+
+def _clear_s15_pending_sell_submit(state, *, generation):
+    from src.engine import sniper_state_handlers as _state_handlers
+    from src.engine import sniper_execution_receipts as _receipt_handlers
+
+    state["id"] = int(state.get("shadow_id") or 0)
+    state["code"] = str(state.get("code") or "").strip()[:6]
+    state["status"] = "SELL_ORDERED"
+    if not _receipt_handlers.persist_pending_sell_definitive_reject_outcome(
+        state,
+        generation=str(generation or ""),
+    ):
+        return False
+    with state["lock"]:
+        state.update(
+            {
+                "s15_sell_terminal_outcome_kind": ("definitive_reject_no_broker_order"),
+                "s15_sell_terminal_outcome_generation": str(generation or ""),
+                "s15_sell_terminal_outcome_context_sha256": str(
+                    state.get("sell_submit_context_sha256") or ""
+                ),
+                "s15_sell_terminal_outcome_target_id": int(
+                    state.get("sell_submit_target_id") or 0
+                ),
+                "s15_sell_terminal_outcome_code": str(
+                    state.get("sell_submit_code") or ""
+                ).strip(),
+                "s15_sell_terminal_outcome_owner_position_qty": int(
+                    state.get("sell_submit_owner_position_qty") or 0
+                ),
+                "s15_sell_terminal_outcome_requested_qty": int(
+                    state.get("sell_submit_requested_qty") or 0
+                ),
+                "s15_sell_terminal_outcome_intended_route": str(
+                    state.get("sell_submit_intended_route") or ""
+                ).strip(),
+                "s15_sell_terminal_outcome_intended_effective_venue": str(
+                    state.get("sell_submit_intended_effective_venue") or ""
+                ).strip(),
+                "s15_sell_terminal_outcome_intended_session_bucket": str(
+                    state.get("sell_submit_intended_session_bucket") or ""
+                ).strip(),
+            }
+        )
+    if not _persist_fast_state(str(state.get("code") or "")[:6], state):
+        state["status"] = "RECOVERY_REQUIRED"
+        state["s15_recovery_reason"] = "terminal_fast_marker_persist_failed"
+        return False
+    if not _state_handlers._finish_definitive_sell_reject_boundary(
+        state,
+        state["code"],
+        target_id=state["id"],
+        generation=str(generation or ""),
+        db=DB,
+    ):
+        return False
+    with state["lock"]:
+        for field_name in _s15_sell_context_keys():
+            state.pop(field_name, None)
+        for field_name in _S15_SELL_TERMINAL_MARKER_KEYS:
+            state.pop(field_name, None)
+        state.pop("s15_sell_submit_kind", None)
+        state["status"] = "HOLDING"
+    return _persist_fast_state(str(state.get("code") or "")[:6], state)
+
+
+def _log_s15_sell_order_sent(
+    state,
+    code,
+    *,
+    order_no,
+    qty,
+    corroboration_only=False,
+    custody_committed=False,
+):
+    from src.engine import sniper_execution_receipts as _receipt_handlers
+
+    route = str(state.get("sell_submit_intended_route") or "UNKNOWN").upper()
+    effective_venue = str(
+        state.get("sell_submit_intended_effective_venue") or "UNKNOWN"
+    ).upper()
+    session_bucket = str(
+        state.get("sell_submit_intended_session_bucket") or "outside_krx_nxt_window"
+    )
+    _receipt_handlers._log_holding_pipeline(
+        state.get("name"),
+        code,
+        state.get("shadow_id"),
+        "sell_order_sent",
+        candidate_stock=state,
+        requested_qty=int(qty),
+        submitted_qty=int(qty),
+        qty=int(qty),
+        broker_order_no=str(order_no),
+        broker_order_no_list=str(order_no),
+        broker_order_qty_list=f"{order_no}:{int(qty)}",
+        lifecycle_submission_leg_contract="exact_broker_single_order_leg_v1",
+        lifecycle_submission_time_source=(
+            "pipeline_emit_after_broker_success_response"
+        ),
+        sell_submit_response_corroboration_only=bool(corroboration_only),
+        exit_receipt_submission_custody_committed=bool(custody_committed),
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        runtime_effect=not bool(corroboration_only),
+        broker_route=route,
+        effective_venue=effective_venue,
+        exit_effective_venue=effective_venue,
+        market_session_bucket=session_bucket,
+        exit_market_session_bucket=session_bucket,
+        metric_role="execution_quality_real_only",
+        decision_authority="broker_sell_submission_observation_only",
+        window_policy="same_position_cycle_broker_submission",
+        sample_floor="1_successful_broker_sell_submission",
+        primary_decision_metric="broker_sell_order_sent_qty",
+        source_quality_gate=(
+            "successful_broker_response_and_execution_route_provenance"
+        ),
+        forbidden_uses=(
+            "threshold_mutation|provider_route_change|quantity_cap_release|"
+            "broker_guard_bypass|bot_restart"
+        ),
+    )
+
+
+def _s15_receipt_first_response_handled(
+    state,
+    code,
+    *,
+    submit,
+    response_state,
+    response_order_no,
+    qty,
+):
+    """Keep exact receipt truth monotonic when HTTP completes afterwards."""
+
+    from src.engine import sniper_state_handlers as _state_handlers
+
+    race_state = _state_handlers._sell_submit_response_race_state(
+        state,
+        generation=submit["generation"],
+        context_sha256=submit["context_sha256"],
+        requested_qty=int(qty),
+        response_order_no=str(response_order_no or ""),
+    )
+    proof = state.get("_sell_submit_receipt_proof")
+    proof = dict(proof) if isinstance(proof, dict) else {}
+    if race_state in {"receipt_proved", "receipt_proved_custody_gap"}:
+        receipt_order_no = str(proof.get("order_no") or "").strip()
+        if response_state == "success" and receipt_order_no:
+            _log_s15_sell_order_sent(
+                state,
+                code,
+                order_no=receipt_order_no,
+                qty=qty,
+                corroboration_only=True,
+                custody_committed=race_state == "receipt_proved",
+            )
+        if race_state == "receipt_proved_custody_gap":
+            state["sell_cancel_reconciliation_required"] = True
+            state["s15_recovery_reason"] = "receipt_submission_custody_retry_required"
+        _persist_fast_state(code, state)
+        return True
+    if race_state in {
+        "receipt_proof_response_order_conflict",
+        "stale_or_intervened",
+    }:
+        state["sell_cancel_reconciliation_required"] = True
+        state["s15_recovery_reason"] = (
+            "sell_submit_response_order_conflict"
+            if race_state == "receipt_proof_response_order_conflict"
+            else "sell_submit_response_stale_or_intervened"
+        )
+        _persist_fast_state(code, state)
+        return True
+    return False
 
 
 def _confirm_s15_cancel_or_reload_remaining(code, state, wait_sec=0.5):
@@ -1329,7 +2465,36 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             stop_price=stop_price,
         )
 
-        sell_res = _send_s15_limit_sell(code, real_buy_qty, target_price)
+        initial_sell_route = (
+            str(kiwoom_orders.resolve_order_dmst_stex_tp() or "SOR").strip().upper()
+        )
+        initial_submit = _arm_s15_pending_sell_submit(
+            state,
+            code,
+            real_buy_qty,
+            route=initial_sell_route,
+            kind="initial_profit_limit",
+        )
+        if initial_submit is None:
+            _start_s15_recovery_thread(code, state)
+            return
+        try:
+            sell_res = _send_s15_limit_sell(code, real_buy_qty, target_price)
+        except Exception as exc:
+            sell_res = {"return_code": "exception", "return_msg": str(exc)}
+        initial_response_state, initial_order_no, initial_error = (
+            _classify_s15_sell_response(sell_res)
+        )
+        if _s15_receipt_first_response_handled(
+            state,
+            code,
+            submit=initial_submit,
+            response_state=initial_response_state,
+            response_order_no=initial_order_no,
+            qty=real_buy_qty,
+        ):
+            _start_s15_recovery_thread(code, state)
+            return
         sell_route_fields = sell_res if isinstance(sell_res, dict) else {}
         with state["lock"]:
             state["sell_execution_broker_route"] = str(
@@ -1343,7 +2508,28 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                 or "response_route_missing"
             )
 
-        if not _is_ok_response(sell_res):
+        if initial_response_state == "ambiguous":
+            with state["lock"]:
+                state["status"] = "RECOVERY_REQUIRED"
+                state["s15_recovery_reason"] = "initial_sell_response_ambiguous"
+                state["s15_sell_submit_response_error"] = initial_error[:240]
+            _persist_fast_state(code, state)
+            _start_s15_recovery_thread(code, state)
+            return
+
+        if initial_response_state in {"definitive_reject", "local_no_call"}:
+            if not _clear_s15_pending_sell_submit(
+                state,
+                generation=initial_submit["generation"],
+            ):
+                with state["lock"]:
+                    state["status"] = "RECOVERY_REQUIRED"
+                    state["s15_recovery_reason"] = (
+                        "initial_sell_reject_custody_clear_failed"
+                    )
+                _persist_fast_state(code, state)
+                _start_s15_recovery_thread(code, state)
+                return
             print(
                 f"🚨 [S15 Fail-safe] {name} 익절 지정가 매도 세팅 실패. 보호 상태 유지 후 최유리(IOC) 청산 시도."
             )
@@ -1359,23 +2545,85 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                     state["status"] = "RECOVERY_REQUIRED"
                     state["s15_recovery_reason"] = "residual_inventory_unknown"
             elif rem_qty > 0:
-                emergency_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
-                emergency_order_no = _extract_ord_no(emergency_res)
-                if _is_ok_response(emergency_res) and emergency_order_no:
+                emergency_route = (
+                    str(kiwoom_orders.resolve_order_dmst_stex_tp() or "SOR")
+                    .strip()
+                    .upper()
+                )
+                emergency_submit = _arm_s15_pending_sell_submit(
+                    state,
+                    code,
+                    rem_qty,
+                    route=emergency_route,
+                    kind="emergency_ioc",
+                )
+                if emergency_submit is None:
+                    _start_s15_recovery_thread(code, state)
+                    return
+                try:
+                    emergency_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
+                except Exception as exc:
+                    emergency_res = {
+                        "return_code": "exception",
+                        "return_msg": str(exc),
+                    }
+                emergency_state, emergency_order_no, emergency_error = (
+                    _classify_s15_sell_response(emergency_res)
+                )
+                if _s15_receipt_first_response_handled(
+                    state,
+                    code,
+                    submit=emergency_submit,
+                    response_state=emergency_state,
+                    response_order_no=emergency_order_no,
+                    qty=rem_qty,
+                ):
+                    _start_s15_recovery_thread(code, state)
+                    return
+                if emergency_state == "success":
                     with state["lock"]:
                         state["sell_ord_no"] = emergency_order_no
                         state["status"] = "EXIT_RETRY"
                         state["updated_at"] = _now_ts()
-                    _persist_fast_state(code, state)
+                    if not _persist_fast_state(code, state):
+                        return
+                    _log_s15_sell_order_sent(
+                        state,
+                        code,
+                        order_no=emergency_order_no,
+                        qty=rem_qty,
+                    )
                     update_s15_shadow_record(
                         state.get("shadow_id"),
                         status="SELL_ORDERED",
                         scale_in_locked=True,
                     )
+                elif emergency_state in {"definitive_reject", "local_no_call"}:
+                    if not _clear_s15_pending_sell_submit(
+                        state,
+                        generation=emergency_submit["generation"],
+                    ):
+                        with state["lock"]:
+                            state["status"] = "RECOVERY_REQUIRED"
+                            state["s15_recovery_reason"] = (
+                                "emergency_sell_reject_boundary_incomplete"
+                            )
+                        _persist_fast_state(code, state)
+                        _start_s15_recovery_thread(code, state)
+                        return
+                    with state["lock"]:
+                        state["status"] = "HOLDING_NEEDS_EXIT"
+                        state["s15_recovery_reason"] = "emergency_sell_rejected"
+                        state["s15_sell_submit_response_error"] = emergency_error[:240]
+                    _persist_fast_state(code, state)
                 else:
-                    print(
-                        f"🚨 [S15 Fail-safe] {name} 긴급 청산 주문도 실패. 상태 유지 및 관리자 알림 필요."
-                    )
+                    with state["lock"]:
+                        state["status"] = "RECOVERY_REQUIRED"
+                        state["s15_recovery_reason"] = (
+                            "emergency_sell_response_ambiguous"
+                        )
+                        state["s15_sell_submit_response_error"] = emergency_error[:240]
+                    _persist_fast_state(code, state)
             else:
                 print(
                     f"ℹ️ [S15 Fail-safe] {name} 재조회 결과 잔량 없음. 자연 종료 가능."
@@ -1384,20 +2632,19 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             _start_s15_recovery_thread(code, state)
             return
 
-        sell_order_no = _extract_ord_no(sell_res)
-        if not sell_order_no:
-            with state["lock"]:
-                state["status"] = "RECOVERY_REQUIRED"
-                state["s15_recovery_reason"] = "accepted_sell_order_number_missing"
-            _persist_fast_state(code, state)
-            _start_s15_recovery_thread(code, state)
-            return
+        sell_order_no = initial_order_no
         with state["lock"]:
             state["sell_ord_no"] = sell_order_no
             state["status"] = "EXIT_SENT"
             state["updated_at"] = _now_ts()
         if not _persist_fast_state(code, state):
             return
+        _log_s15_sell_order_sent(
+            state,
+            code,
+            order_no=sell_order_no,
+            qty=real_buy_qty,
+        )
         update_s15_shadow_record(
             state.get("shadow_id"),
             status="SELL_ORDERED",
@@ -1428,19 +2675,24 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                     sell_ord_no = state.get("sell_ord_no", "")
 
                 if sell_ord_no:
-                    cancel_res = kiwoom_orders.send_cancel_order(
-                        code=code,
-                        orig_ord_no=sell_ord_no,
-                        token=KIWOOM_TOKEN,
-                        qty=0,
-                        dmst_stex_tp=state.get("sell_execution_broker_route"),
+                    cancel_ready = _submit_s15_stop_cancel(
+                        state,
+                        code,
+                        sell_ord_no,
                     )
-                    if _is_ok_response(cancel_res):
+                    if not cancel_ready:
                         with state["lock"]:
-                            state["pending_cancel_ord_no"] = sell_ord_no
-                with state["lock"]:
-                    state["status"] = "SELL_CANCEL_RECONCILING"
-                    state["s15_recovery_reason"] = "stop_exit_terminal_pending"
+                            state["status"] = "RECOVERY_REQUIRED"
+                            state["s15_recovery_reason"] = (
+                                "stop_exit_cancel_intent_durability_failed"
+                                if state.get("s15_stop_cancel_retry_required") is True
+                                else "stop_exit_cancel_context_invalid"
+                            )
+                    else:
+                        with state["lock"]:
+                            state["status"] = "SELL_ORDERED"
+                            state.pop("s15_stop_cancel_retry_required", None)
+                            state["s15_recovery_reason"] = "stop_exit_terminal_pending"
                 _persist_fast_state(code, state)
                 _start_s15_recovery_thread(code, state)
                 break

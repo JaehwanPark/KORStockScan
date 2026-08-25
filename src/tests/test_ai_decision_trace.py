@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import stat
+from contextlib import contextmanager
+
+import pytest
 
 from src.engine.scalping import ai_decision_trace as trace
 
@@ -23,6 +26,66 @@ def _enable(monkeypatch, tmp_path):
     trace._SEEN_REQUEST_IDS.clear()
     trace._SEEN_OUTCOME_LABEL_IDS.clear()
     trace._SEEN_CONTEXT_CANDIDATE_HASHES.clear()
+
+
+def test_append_jsonl_fails_closed_on_parent_directory_replacement(
+    tmp_path,
+    monkeypatch,
+):
+    parent = tmp_path / "ai_decision_trace"
+    replaced_parent = tmp_path / "ai_decision_trace-replaced"
+    parent.mkdir()
+    path = parent / "ai_decision_trace_2026-08-25.jsonl"
+    original_lock = trace.jsonl_artifact_generation_lock
+
+    @contextmanager
+    def replace_parent_after_lock(*args, **kwargs):
+        with original_lock(*args, **kwargs) as generation:
+            parent.rename(replaced_parent)
+            parent.mkdir()
+            yield generation
+
+    monkeypatch.setattr(
+        trace,
+        "jsonl_artifact_generation_lock",
+        replace_parent_after_lock,
+    )
+
+    with pytest.raises(OSError, match="jsonl_generation_parent_changed"):
+        trace._append_jsonl(path, {"schema": "ai_decision_trace_v1"})
+
+    assert list(parent.iterdir()) == []
+    assert not (replaced_parent / path.name).exists()
+
+
+def test_append_jsonl_rejects_named_entry_replacement_after_write(
+    tmp_path,
+    monkeypatch,
+):
+    parent = tmp_path / "ai_decision_trace"
+    parent.mkdir()
+    path = parent / "ai_decision_trace_2026-08-25.jsonl"
+    path.write_text('{"generation":"old"}\n', encoding="utf-8")
+    replacement = parent / "replacement.tmp"
+    replacement_bytes = b'{"generation":"replacement"}\n'
+    real_write = trace.os.write
+    replaced = False
+
+    def replace_named_entry_after_write(descriptor, payload):
+        nonlocal replaced
+        count = real_write(descriptor, payload)
+        if not replaced:
+            replaced = True
+            replacement.write_bytes(replacement_bytes)
+            replacement.replace(path)
+        return count
+
+    monkeypatch.setattr(trace.os, "write", replace_named_entry_after_write)
+
+    with pytest.raises(OSError, match="jsonl_generation_entry_changed"):
+        trace._append_jsonl(path, {"schema": "ai_decision_trace_v1"})
+
+    assert path.read_bytes() == replacement_bytes
 
 
 def test_timeout_exception_trace_normalizes_transport_provenance(monkeypatch, tmp_path):

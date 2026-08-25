@@ -472,6 +472,7 @@ class ForwardObservationCollector:
         self._last_worker_sequence: dict[tuple[int, str, str, str], int] = {}
         self._series_with_gap: set[tuple[int, str, str, str]] = set()
         self._detector_clock_ms: dict[tuple[str, str, str], int] = {}
+        self._transport_epoch_lock = threading.RLock()
         self._state_lock = threading.Lock()
         self._callback_condition = threading.Condition(self._state_lock)
         self._metrics_lock = threading.Lock()
@@ -574,6 +575,37 @@ class ForwardObservationCollector:
                     daemon=True,
                 )
                 self._depth_thread.start()
+
+    def begin_transport_epoch(self) -> int:
+        """Atomically detach queued/path state from a completed WS transport.
+
+        Producer callbacks remain non-blocking.  A callback that already took
+        an old epoch may enqueue after this boundary, but both workers reject
+        that immutable old-epoch row before persistence or detector use.
+        """
+
+        with self._transport_epoch_lock:
+            with self._state_lock:
+                if (
+                    self._lifecycle is not CollectorLifecycle.RUNNING
+                    or not self._accepting
+                ):
+                    raise RuntimeError(
+                        "transport epoch requires a running forward collector"
+                    )
+                previous_epoch = self._sequence_epoch
+                self._sequence_epoch = max(time.time_ns(), previous_epoch + 1)
+                self._source_sequences.clear()
+                self._depth_source_sequences.clear()
+                self._series_epochs.clear()
+                self._sequence_losses.clear()
+                self._last_worker_sequence.clear()
+                self._detector_clock_ms.clear()
+                sequence_epoch = self._sequence_epoch
+            self._detector.reset()
+            self._ring.reset_transport_epoch()
+            self._coalescer.reset_transport_epoch()
+            return sequence_epoch
 
     def close(self, *, timeout_sec: float = 10.0) -> None:
         deadline = time.monotonic() + max(0.01, timeout_sec)
@@ -1336,28 +1368,38 @@ class ForwardObservationCollector:
             except queue.Empty:
                 continue
             try:
-                writer = self._depth_writer_for(point)
-                if not writer.submit(point):
-                    self._increment("_depth_dropped")
-                else:
-                    self._increment("_depth_worker_processed")
+                with self._transport_epoch_lock:
+                    if self._is_stale_depth_sequence_epoch(point):
+                        self._increment("_depth_dropped")
+                        continue
+                    writer = self._depth_writer_for(point)
+                    if not writer.submit(point):
+                        self._increment("_depth_dropped")
+                    else:
+                        self._increment("_depth_worker_processed")
             except Exception:
                 self._increment("_depth_worker_errors")
             finally:
                 self._depth_sink.task_done()
 
     def _process_envelope(self, envelope: RawMarketObservation) -> None:
-        if self._is_stale_sequence_epoch(envelope):
-            self._increment("_stale_sequence_epoch_envelopes")
-            return
-        self._account_for_sequence_gap(envelope)
-        self._process_allowed_envelope(envelope)
+        with self._transport_epoch_lock:
+            if self._is_stale_sequence_epoch(envelope):
+                self._increment("_stale_sequence_epoch_envelopes")
+                return
+            self._account_for_sequence_gap(envelope)
+            self._process_allowed_envelope(envelope)
 
     def _is_stale_sequence_epoch(self, envelope: RawMarketObservation) -> bool:
         series_key = (envelope.symbol, envelope.venue, envelope.session_bucket)
         with self._state_lock:
             current_epoch = self._series_epochs.get(series_key)
         return current_epoch != envelope.sequence_epoch
+
+    def _is_stale_depth_sequence_epoch(self, point: MarketDepthPoint) -> bool:
+        with self._state_lock:
+            current_epoch = self._sequence_epoch
+        return current_epoch != point.sequence_epoch
 
     def _event_registration_allowed(
         self, envelope: RawMarketObservation, event: Any

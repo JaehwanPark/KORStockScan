@@ -1153,8 +1153,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < scalp_sim_prior_refresh_idx
         < post_conversion_workorder_idx
         < next_checklist_idx
-        < pending_verify_idx
         < final_next_checklist_idx
+        < pending_verify_idx
         < final_verify_idx
         < tuning_control_idx
     )
@@ -1720,7 +1720,21 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     final_runtime_index = script.index(
         '"runtime_approval_summary_final_refresh"', final_workorder_index
     )
-    assert final_ev_index < final_workorder_index < final_runtime_index
+    final_checklist_index = script.index(
+        '"next_stage2_checklist_final_refresh"', final_runtime_index
+    )
+    pending_verify_index = script.index(
+        'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m '
+        "src.engine.verify_threshold_cycle_postclose_chain",
+        final_checklist_index,
+    )
+    assert (
+        final_ev_index
+        < final_workorder_index
+        < final_runtime_index
+        < final_checklist_index
+        < pending_verify_index
+    )
     assert "runtime_approval_summary_post_conversion_lane_workorder" in script
     assert (
         '"$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"'

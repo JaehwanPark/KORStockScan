@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import threading
 import uuid
 from datetime import datetime
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import jsonl_artifact_generation_lock
 from src.utils.logger import log_error
 
 TRACE_SCHEMA = "ai_decision_trace_v1"
@@ -258,41 +260,62 @@ def _json_bytes(value: Any) -> bytes:
 
 
 def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     line = (
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
         + "\n"
     )
-    parent_flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        parent_flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        parent_flags |= os.O_NOFOLLOW
-    parent_descriptor = os.open(path.parent, parent_flags)
-    descriptor = -1
-    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    try:
-        os.fchmod(parent_descriptor, 0o700)
-        descriptor = os.open(
-            path.name,
-            flags,
-            0o600,
-            dir_fd=parent_descriptor,
-        )
-        os.fchmod(descriptor, 0o600)
-        encoded = line.encode("utf-8")
-        written = 0
-        while written < len(encoded):
-            count = os.write(descriptor, encoded[written:])
-            if count <= 0:
-                raise OSError(f"short write for trace file: {path}")
-            written += count
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        os.close(parent_descriptor)
+    with jsonl_artifact_generation_lock(
+        path,
+        exclusive=True,
+        blocking=True,
+    ) as generation:
+        descriptor = -1
+        entry_name = generation.logical.name
+        try:
+            generation.chmod_parent(0o700)
+            existing = generation.stat_name(entry_name)
+            if existing is not None and not stat.S_ISREG(existing.st_mode):
+                raise OSError(f"trace file is not regular: {generation.logical}")
+            created = existing is None
+            flags = os.O_WRONLY | os.O_APPEND
+            if created:
+                flags |= os.O_CREAT | os.O_EXCL
+            descriptor = generation.open_name(
+                entry_name,
+                flags,
+                0o600,
+            )
+            opened_identity = generation.assert_open_descriptor_name_identity(
+                descriptor,
+                entry_name,
+            )
+            if existing is not None and opened_identity != (
+                existing.st_dev,
+                existing.st_ino,
+                existing.st_size,
+                existing.st_mtime_ns,
+            ):
+                raise OSError(f"trace file changed before append: {generation.logical}")
+            os.fchmod(descriptor, 0o600)
+            encoded = line.encode("utf-8")
+            written = 0
+            while written < len(encoded):
+                count = os.write(descriptor, encoded[written:])
+                if count <= 0:
+                    raise OSError(f"short write for trace file: {path}")
+                written += count
+            if created:
+                os.fsync(descriptor)
+            final_identity = generation.assert_open_descriptor_name_identity(
+                descriptor,
+                entry_name,
+            )
+            if created:
+                generation.fsync_parent()
+                generation.assert_name_identity(entry_name, final_identity)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
 
 
 def _load_seen(path: Path, field: str) -> set[str]:

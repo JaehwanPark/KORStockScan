@@ -40,6 +40,108 @@ def _seed_successful_deposit_for_token(token, amount, updated_at):
     }
 
 
+def test_kt00018_inventory_requires_http200_and_atomic_strict_rows(monkeypatch):
+    responses = iter(
+        (
+            (
+                types.SimpleNamespace(status_code=500),
+                {
+                    "return_code": 0,
+                    "acnt_evlt_remn_indv_tot": [
+                        {"stk_cd": "A123456", "stk_nm": "BAD_HTTP", "rmnd_qty": "5"}
+                    ],
+                },
+            ),
+            (
+                types.SimpleNamespace(status_code=200),
+                {
+                    "return_code": 0,
+                    "acnt_evlt_remn_indv_tot": [
+                        {"stk_cd": "A654321", "stk_nm": "NXT", "rmnd_qty": "3"}
+                    ],
+                },
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_post_kiwoom_with_auth_retry",
+        lambda *args, **kwargs: next(responses),
+    )
+
+    rows, exchanges = kiwoom_orders.get_my_inventory("TOKEN")
+
+    assert rows == [{"code": "654321", "name": "NXT", "qty": 3}]
+    assert exchanges == {"NXT"}
+
+
+def test_kt00018_malformed_venue_contributes_no_partial_rows(monkeypatch):
+    responses = iter(
+        (
+            (
+                types.SimpleNamespace(status_code=200),
+                {
+                    "return_code": 0,
+                    "acnt_evlt_remn_indv_tot": [
+                        {"stk_cd": "A123456", "stk_nm": "KRX", "rmnd_qty": "5"}
+                    ],
+                },
+            ),
+            (
+                types.SimpleNamespace(status_code=200),
+                {
+                    "return_code": 0,
+                    "acnt_evlt_remn_indv_tot": [
+                        {"stk_cd": "A654321", "stk_nm": "NXT", "rmnd_qty": "2"},
+                        {"stk_cd": "A111111", "stk_nm": "BAD", "rmnd_qty": "1e2"},
+                    ],
+                },
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_post_kiwoom_with_auth_retry",
+        lambda *args, **kwargs: next(responses),
+    )
+
+    rows, exchanges = kiwoom_orders.get_my_inventory("TOKEN")
+
+    assert rows == [{"code": "123456", "name": "KRX", "qty": 5}]
+    assert exchanges == {"KRX"}
+
+
+def test_kt00018_duplicate_symbol_invalidates_whole_venue(monkeypatch):
+    responses = iter(
+        (
+            (
+                types.SimpleNamespace(status_code=200),
+                {
+                    "return_code": 0,
+                    "acnt_evlt_remn_indv_tot": [
+                        {"stk_cd": "A123456", "stk_nm": "ONE", "rmnd_qty": "5"},
+                        {"stk_cd": "A123456", "stk_nm": "TWO", "rmnd_qty": "4"},
+                    ],
+                },
+            ),
+            (
+                types.SimpleNamespace(status_code=200),
+                {"return_code": 0, "acnt_evlt_remn_indv_tot": []},
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_post_kiwoom_with_auth_retry",
+        lambda *args, **kwargs: next(responses),
+    )
+
+    rows, exchanges = kiwoom_orders.get_my_inventory("TOKEN")
+
+    assert rows == []
+    assert exchanges == {"NXT"}
+
+
 def test_get_deposit_uses_virtual_orderable_amount(monkeypatch):
     monkeypatch.setattr(
         sniper_config,
@@ -387,6 +489,7 @@ def test_send_sell_order_market_uses_requested_exchange(monkeypatch):
 
     assert result["ord_no"] == "SKRX"
     assert captured["payload"]["dmst_stex_tp"] == "KRX"
+    assert "cancel_request_api_id" not in result
 
 
 def test_send_smart_sell_order_forwards_requested_exchange(monkeypatch):
@@ -421,7 +524,12 @@ def test_send_cancel_order_uses_requested_exchange(monkeypatch):
         status_code = 200
 
         def json(self):
-            return {"return_code": "0", "ord_no": "C1", "cncl_qty": "전량"}
+            return {
+                "return_code": "0",
+                "ord_no": "0000999",
+                "base_orig_ord_no": "0062400",
+                "cncl_qty": "1",
+            }
 
     monkeypatch.setattr(
         kiwoom_orders.kiwoom_utils,
@@ -451,6 +559,12 @@ def test_send_cancel_order_uses_requested_exchange(monkeypatch):
     assert result["broker_route"] == "KRX"
     assert result["broker_route_resolution"] == "explicit_request"
     assert result["broker_route_attempted"] is True
+    assert result["cancel_request_api_id"] == "kt10003"
+    assert result["cancel_request_code"] == "034020"
+    assert result["cancel_request_orig_ord_no"] == "0062482"
+    assert result["cancel_request_qty"] == "0"
+    assert result["cancel_request_route"] == "KRX"
+    assert result["cancel_request_bound"] is True
 
 
 def test_get_deposit_loop_cache_can_be_disabled_by_string_config(monkeypatch):

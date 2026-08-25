@@ -18,7 +18,11 @@ from typing import Any, Callable, Iterable
 
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
+from src.utils.jsonl_io import (
+    existing_or_gzip_path,
+    iter_jsonl,
+    iter_jsonl_objects_strict,
+)
 
 try:
     import fcntl
@@ -369,27 +373,34 @@ def _load_stage_index(
             }
         )
 
-    for row in iter_jsonl(existing_or_gzip_path(ai_trace_path)):
-        if str(row.get("endpoint") or "") not in ENTRY_AI_ENDPOINTS:
-            continue
-        code = _safe_code(row.get("stock_code") or row.get("symbol"))
-        ts = _parse_ts(row.get("decision_ts") or row.get("created_at"))
-        if not code or ts is None or ts.date().isoformat() != target_date:
-            continue
-        ai_row = {
-            "ts": ts,
-            "venue": _normalize_event_venue(row.get("effective_venue")),
-            "action": str(row.get("action") or ""),
-            "provider_called": _boolish(row.get("provider_called")),
-            "provider_actual": str(row.get("provider_actual") or ""),
-            "result_source": str(row.get("result_source") or ""),
-            "record_id": _lineage_value(row.get("record_id")),
-            "request_id": str(row.get("request_id") or ""),
-        }
-        index[code]["entry_ai_trace"].append(ai_row)
-        provider_actual = ai_row["provider_actual"].strip().lower()
-        if ai_row["provider_called"] and provider_actual and provider_actual != "none":
-            index[code]["entry_ai_provider_called"].append(ai_row)
+    try:
+        for row in iter_jsonl_objects_strict(ai_trace_path):
+            if str(row.get("endpoint") or "") not in ENTRY_AI_ENDPOINTS:
+                continue
+            code = _safe_code(row.get("stock_code") or row.get("symbol"))
+            ts = _parse_ts(row.get("decision_ts") or row.get("created_at"))
+            if not code or ts is None or ts.date().isoformat() != target_date:
+                continue
+            ai_row = {
+                "ts": ts,
+                "venue": _normalize_event_venue(row.get("effective_venue")),
+                "action": str(row.get("action") or ""),
+                "provider_called": _boolish(row.get("provider_called")),
+                "provider_actual": str(row.get("provider_actual") or ""),
+                "result_source": str(row.get("result_source") or ""),
+                "record_id": _lineage_value(row.get("record_id")),
+                "request_id": str(row.get("request_id") or ""),
+            }
+            index[code]["entry_ai_trace"].append(ai_row)
+            provider_actual = ai_row["provider_actual"].strip().lower()
+            if (
+                ai_row["provider_called"]
+                and provider_actual
+                and provider_actual != "none"
+            ):
+                index[code]["entry_ai_provider_called"].append(ai_row)
+    except FileNotFoundError:
+        pass
     return index
 
 

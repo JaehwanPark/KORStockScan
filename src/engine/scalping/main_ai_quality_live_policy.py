@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
@@ -24,6 +24,10 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_system_prompt,
 )
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import (
+    JsonObjectReadReceipt,
+    read_json_object_strict_receipt,
+)
 
 KST = ZoneInfo("Asia/Seoul")
 ACTIVATION_SCHEMA = "main_ai_quality_prompt_contract_preopen_activation_v1"
@@ -35,6 +39,10 @@ TUNING_AXIS = "prompt_contract_effect"
 BOUNDED_CONTRACT_SHA256 = (
     "8d6cfa74efa8cba403047bab2bbbeebb547f6f6936db799c238eab8c128e7a29"
 )
+LEGACY_RUNTIME_AUTHORITY_BLOCKER = (
+    "main_ai_quality_legacy_runtime_authority_fail_closed"
+)
+LEGACY_RUNTIME_AUTHORITY_ENABLED = False
 APPLY_RECEIPT_SCHEMA = "machine_microstructure_policy_family_apply_receipt_v1"
 APPLY_RECEIPT_OWNER = "main_ai_quality_runtime_family_preopen_apply"
 CONTROL_PROMPT_VERSION = "hot_v1"
@@ -81,29 +89,22 @@ def activation_path(target_date: str) -> Path:
 
 def _load_regular_json(path: Path) -> dict[str, Any]:
     try:
-        if path.is_symlink() or not path.is_file():
-            return {}
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        return read_json_object_strict_receipt(path).payload
+    except (FileNotFoundError, OSError, ValueError):
         return {}
-    return payload if isinstance(payload, dict) else {}
 
 
 @lru_cache(maxsize=16)
 def _validated_master_symbols(
-    path_text: str,
+    payload_json: str,
     expected_sha256: str,
     source_date_text: str,
     target_date_text: str,
-    device_id: int,
-    inode: int,
-    mtime_ns: int,
-    ctime_ns: int,
-    size_bytes: int,
 ) -> frozenset[str]:
-    del device_id, inode, mtime_ns, ctime_ns, size_bytes
-    path = Path(path_text)
-    payload = _load_regular_json(path)
+    try:
+        payload = json.loads(payload_json)
+    except (TypeError, ValueError):
+        return frozenset()
     try:
         source_day = date.fromisoformat(source_date_text)
         target_day = date.fromisoformat(target_date_text)
@@ -155,34 +156,70 @@ def _validated_master_symbols(
 
 
 def _activation_master_symbols(
-    value: Mapping[str, Any], *, target_date: str
+    value: Mapping[str, Any],
+    *,
+    target_date: str,
+    receipt: JsonObjectReadReceipt | None = None,
 ) -> frozenset[str]:
     path = Path(str(value.get("symbol_master_path") or ""))
     expected = str(value.get("symbol_master_artifact_sha256") or "")
     source_date = str(value.get("symbol_master_source_date") or "")
     try:
-        if path.is_symlink() or not path.is_file():
-            return frozenset()
-        stat = path.stat()
-    except OSError:
+        captured = receipt or read_json_object_strict_receipt(path)
+    except (FileNotFoundError, OSError, ValueError):
+        return frozenset()
+    expected_path = (
+        DATA_DIR
+        / "report"
+        / "micro_reversion_economic_reference"
+        / f"micro_reversion_symbol_master_{source_date}.json"
+    )
+    if captured.logical_path != path.absolute() or path.absolute() != expected_path:
         return frozenset()
     return _validated_master_symbols(
-        str(path),
+        json.dumps(
+            captured.payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ),
         expected,
         source_date,
         target_date,
-        stat.st_dev,
-        stat.st_ino,
-        stat.st_mtime_ns,
-        stat.st_ctime_ns,
-        stat.st_size,
     )
 
 
 def activation_errors(
-    value: Mapping[str, Any], *, target_date: str, selected_path: Path
+    value: Mapping[str, Any],
+    *,
+    target_date: str,
+    selected_path: Path,
+    receipt: Mapping[str, Any] | None = None,
+    activation_receipt: JsonObjectReadReceipt | None = None,
+    apply_receipt_receipt: JsonObjectReadReceipt | None = None,
+    handoff_receipt: JsonObjectReadReceipt | None = None,
+    master_receipt: JsonObjectReadReceipt | None = None,
 ) -> list[str]:
     errors: list[str] = []
+    try:
+        captured_activation = activation_receipt or read_json_object_strict_receipt(
+            selected_path
+        )
+    except (FileNotFoundError, OSError, ValueError):
+        captured_activation = None
+        errors.append("activation_generation_invalid")
+    canonical_activation_path = activation_path(target_date).absolute()
+    if selected_path.absolute() != canonical_activation_path:
+        errors.append("activation_path_not_canonical")
+    if captured_activation is not None:
+        if (
+            captured_activation.logical_path != canonical_activation_path
+            or captured_activation.payload != dict(value)
+            or captured_activation.physical_path != captured_activation.logical_path
+            or len(captured_activation.generation_census) != 1
+        ):
+            errors.append("activation_generation_binding_invalid")
     body = {
         key: item for key, item in value.items() if key != "artifact_content_sha256"
     }
@@ -230,10 +267,39 @@ def activation_errors(
             errors.append(f"activation_sha256_invalid:{field}")
     if value.get("activation_artifact_path") != str(selected_path):
         errors.append("activation_artifact_path_mismatch")
-    if not _activation_master_symbols(value, target_date=target_date):
+    if not _activation_master_symbols(
+        value,
+        target_date=target_date,
+        receipt=master_receipt,
+    ):
         errors.append("activation_symbol_master_invalid_or_empty")
     receipt_path = Path(str(value.get("apply_receipt_path") or ""))
-    receipt = _load_regular_json(receipt_path)
+    expected_receipt_path = (
+        DATA_DIR
+        / "threshold_cycle"
+        / "machine_microstructure_policy"
+        / "apply_receipts"
+        / f"{target_date}_{str(value.get('candidate_sha256') or '')}_applied.json"
+    ).absolute()
+    if receipt_path.absolute() != expected_receipt_path:
+        errors.append("apply_receipt_path_not_canonical")
+    try:
+        captured_receipt = apply_receipt_receipt or read_json_object_strict_receipt(
+            receipt_path
+        )
+    except (FileNotFoundError, OSError, ValueError):
+        captured_receipt = None
+        errors.append("apply_receipt_generation_invalid")
+    persisted_receipt = captured_receipt.payload if captured_receipt is not None else {}
+    if receipt is not None and dict(receipt) != persisted_receipt:
+        errors.append("apply_receipt_snapshot_mismatch")
+    receipt = persisted_receipt
+    if captured_receipt is not None and (
+        captured_receipt.logical_path != expected_receipt_path
+        or captured_receipt.physical_path != captured_receipt.logical_path
+        or len(captured_receipt.generation_census) != 1
+    ):
+        errors.append("apply_receipt_generation_binding_invalid")
     receipt_body = {
         key: item for key, item in receipt.items() if key != "receipt_content_sha256"
     }
@@ -242,6 +308,7 @@ def activation_errors(
     for field, expected in (
         ("schema", APPLY_RECEIPT_SCHEMA),
         ("status", "applied_guard_passed"),
+        ("applied_at_kst", value.get("applied_at_kst")),
         ("target_date", target_date),
         ("candidate_sha256", value.get("candidate_sha256")),
         ("candidate_id", value.get("candidate_id")),
@@ -252,8 +319,23 @@ def activation_errors(
         ("bounded_contract_sha256", BOUNDED_CONTRACT_SHA256),
         ("runtime_registry_entry_sha256", value.get("runtime_registry_entry_sha256")),
         ("preopen_handoff", value.get("preopen_handoff")),
+        ("preopen_handoff_sha256", value.get("preopen_handoff_sha256")),
+        (
+            "standing_authorization_sha256",
+            value.get("standing_authorization_sha256"),
+        ),
         ("activation_artifact_path", str(selected_path)),
         ("activation_artifact_sha256", value.get("artifact_content_sha256")),
+        (
+            "activation_artifact_raw_sha256",
+            captured_activation.raw_sha256 if captured_activation is not None else None,
+        ),
+        ("symbol_master_source_date", value.get("symbol_master_source_date")),
+        ("symbol_master_path", value.get("symbol_master_path")),
+        (
+            "symbol_master_artifact_sha256",
+            value.get("symbol_master_artifact_sha256"),
+        ),
         ("receipt_owner", APPLY_RECEIPT_OWNER),
         ("same_stage_owner_conflict_free", True),
         ("hard_safety_and_broker_guards_preserved", True),
@@ -264,6 +346,93 @@ def activation_errors(
     ):
         if receipt.get(field) != expected:
             errors.append(f"apply_receipt_contract_mismatch:{field}")
+    try:
+        applied_at = datetime.fromisoformat(str(value.get("applied_at_kst") or ""))
+        if applied_at.tzinfo is None:
+            raise ValueError
+        applied_at = applied_at.astimezone(KST)
+        if applied_at.date().isoformat() != target_date or applied_at.time() >= time(
+            8, 0
+        ):
+            errors.append("activation_applied_at_outside_preopen_window")
+    except (TypeError, ValueError):
+        errors.append("activation_applied_at_invalid")
+
+    handoff_path = Path(str(value.get("preopen_handoff") or ""))
+    try:
+        captured_handoff = handoff_receipt or read_json_object_strict_receipt(
+            handoff_path
+        )
+    except (FileNotFoundError, OSError, ValueError):
+        captured_handoff = None
+        errors.append("preopen_handoff_generation_invalid")
+    if captured_handoff is not None:
+        try:
+            from src.engine.automation import (
+                machine_microstructure_policy_approval as approval,
+            )
+
+            expected_handoff = (
+                approval.HANDOFF_DIR
+                / target_date
+                / (
+                    f"{approval._safe_id(str(value.get('candidate_id') or 'candidate'))}_"
+                    f"{str(value.get('candidate_sha256') or '')[:16]}.json"
+                )
+            ).absolute()
+            expected_registry_sha256 = approval._registry_entry_sha256(
+                approval.TRUSTED_RUNTIME_FAMILY_REGISTRY.get(RUNTIME_FAMILY)
+            )
+        except (ImportError, ValueError):
+            expected_handoff = Path("/__invalid_handoff__")
+            expected_registry_sha256 = None
+        if (
+            handoff_path.absolute() != expected_handoff
+            or captured_handoff.logical_path != expected_handoff
+            or captured_handoff.physical_path != captured_handoff.logical_path
+            or len(captured_handoff.generation_census) != 1
+            or captured_handoff.raw_sha256 != value.get("preopen_handoff_sha256")
+        ):
+            errors.append("preopen_handoff_generation_binding_invalid")
+        handoff = captured_handoff.payload
+        for field, expected in (
+            ("schema", "machine_microstructure_policy_preopen_handoff_v1"),
+            ("target_date", target_date),
+            ("queue_key", value.get("queue_key")),
+            ("candidate_id", value.get("candidate_id")),
+            ("candidate_sha256", value.get("candidate_sha256")),
+            ("runtime_family", RUNTIME_FAMILY),
+            ("stage", TARGET_STAGE),
+            ("axis", TUNING_AXIS),
+            ("effective_venue", TARGET_VENUE),
+            ("session_bucket", TARGET_SESSION),
+            ("bounded_contract_sha256", BOUNDED_CONTRACT_SHA256),
+            ("runtime_registry_entry_sha256", expected_registry_sha256),
+            (
+                "preopen_consumer",
+                "src.engine.automation.main_ai_quality_runtime_family.preopen_apply",
+            ),
+            ("status", "preopen_authorization_handoff_ready"),
+            ("runtime_effect", False),
+            ("runtime_apply_performed", False),
+            ("allowed_runtime_apply", True),
+            ("actual_order_submitted", False),
+            ("broker_order_forbidden", True),
+        ):
+            if handoff.get(field) != expected:
+                errors.append(f"preopen_handoff_contract_mismatch:{field}")
+        if handoff.get("bounded_values") != {
+            "current": CONTROL_PROMPT_SHA256,
+            "recommended": RECOMMENDED_PROMPT_SHA256,
+        }:
+            errors.append("preopen_handoff_bounded_values_mismatch")
+        if handoff.get("authorization_mode") not in {
+            "first_explicit_operator_approval",
+            "enrolled_same_bounded_family_auto_chain",
+        }:
+            errors.append("preopen_handoff_authorization_mode_invalid")
+        if value.get("runtime_registry_entry_sha256") != expected_registry_sha256:
+            errors.append("activation_runtime_registry_hash_mismatch")
     return sorted(set(errors))
 
 
@@ -293,9 +462,23 @@ def resolve_main_ai_quality_live_policy(
         "session_bucket": session or None,
         "stock_code": symbol or None,
         "runtime_effect": False,
+        "runtime_apply_performed": False,
+        "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+    # P0-P2 remain source-only until the legacy PREOPEN/runtime authority chain
+    # is replaced by a separately reviewed exact-generation contract.  Keep this
+    # gate ahead of every artifact read so even previously published authority
+    # generations cannot select the candidate prompt.
+    if not LEGACY_RUNTIME_AUTHORITY_ENABLED:
+        result.update(
+            {
+                "status": "fallback_legacy_runtime_authority_disabled",
+                "blocking_reasons": [LEGACY_RUNTIME_AUTHORITY_BLOCKER],
+            }
+        )
+        return result
     if configured != CONTROL_PROMPT_VERSION:
         result["status"] = "fallback_same_stage_owner_conflict"
         return result
@@ -303,15 +486,40 @@ def resolve_main_ai_quality_live_policy(
         result["status"] = "fallback_outside_exact_cohort"
         return result
     selected_path = path or activation_path(target_date)
-    activation = _load_regular_json(selected_path)
+    try:
+        activation_receipt = read_json_object_strict_receipt(selected_path)
+        activation = activation_receipt.payload
+        apply_receipt_receipt = read_json_object_strict_receipt(
+            Path(str(activation.get("apply_receipt_path") or ""))
+        )
+        handoff_receipt = read_json_object_strict_receipt(
+            Path(str(activation.get("preopen_handoff") or ""))
+        )
+        master_receipt = read_json_object_strict_receipt(
+            Path(str(activation.get("symbol_master_path") or ""))
+        )
+    except (FileNotFoundError, OSError, ValueError):
+        result["status"] = "fallback_activation_invalid"
+        result["blocking_reasons"] = ["activation_authority_generation_invalid"]
+        return result
     errors = activation_errors(
-        activation, target_date=target_date, selected_path=selected_path
+        activation,
+        target_date=target_date,
+        selected_path=selected_path,
+        activation_receipt=activation_receipt,
+        apply_receipt_receipt=apply_receipt_receipt,
+        handoff_receipt=handoff_receipt,
+        master_receipt=master_receipt,
     )
     if errors:
         result["status"] = "fallback_activation_invalid"
         result["blocking_reasons"] = errors
         return result
-    if symbol not in _activation_master_symbols(activation, target_date=target_date):
+    if symbol not in _activation_master_symbols(
+        activation,
+        target_date=target_date,
+        receipt=master_receipt,
+    ):
         result["status"] = "fallback_outside_verified_common_stock_master"
         return result
     result.update(

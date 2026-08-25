@@ -325,7 +325,7 @@ def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
     assert '"${VERIFY_DISABLED_STAGE_ARGS[@]}"' in script
 
 
-def test_automation_trigger_decision_cache_survives_command_substitution(tmp_path):
+def test_automation_trigger_decision_cache_reuses_production_state_contract(tmp_path):
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     function_text = "\n".join(
         [
@@ -362,6 +362,9 @@ def test_automation_trigger_decision_cache_survives_command_substitution(tmp_pat
     fake_python.chmod(0o755)
     shell = f"""
 set -euo pipefail
+run_postclose_cmd() {{
+  "$@"
+}}
 {function_text}
 TARGET_DATE=2026-06-17
 FORCE_LIFECYCLE_BUCKET_WINDOWS=false
@@ -372,8 +375,10 @@ AUTOMATION_TRIGGER_DECISION_REPORT_JSON={report_path}
 AUTOMATION_TRIGGER_DECISION_CACHE_MARKER={marker_path}
 WRITE_COUNT_PATH={count_path}
 export AUTOMATION_TRIGGER_DECISION_REPORT_JSON WRITE_COUNT_PATH
-first="$(automation_trigger_decision "skip_step")"
-second="$(automation_trigger_decision "skip_step")"
+automation_trigger_decision "skip_step"
+first="$AUTOMATION_TRIGGER_DECISION_RESULT"
+automation_trigger_decision "skip_step"
+second="$AUTOMATION_TRIGGER_DECISION_RESULT"
 reason="$(automation_trigger_reason "skip_step")"
 source="$(automation_trigger_source)"
 printf '%s|%s|%s|%s|%s\\n' "$first" "$second" "$reason" "$source" "$(cat "$WRITE_COUNT_PATH")"

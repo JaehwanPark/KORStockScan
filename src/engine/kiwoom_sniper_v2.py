@@ -898,6 +898,7 @@ def _send_exit_best_ioc(
     dmst_stex_tp=None,
     reason_type=None,
     strategy=None,
+    bypass_open_time_block=False,
 ):
     """[공통 긴급 청산 래퍼] 최유리(IOC, 16) 조건으로 즉각 청산 시도"""
     return sniper_trade_utils.send_exit_best_ioc(
@@ -907,13 +908,25 @@ def _send_exit_best_ioc(
         dmst_stex_tp=dmst_stex_tp,
         reason_type=reason_type,
         strategy=strategy,
+        bypass_open_time_block=bypass_open_time_block,
     )
 
 
-def _confirm_cancel_or_reload_remaining(code, orig_ord_no, token, expected_qty):
+def _confirm_cancel_or_reload_remaining(
+    code,
+    orig_ord_no,
+    token,
+    expected_qty,
+    *,
+    target_stock=None,
+):
     """[공통 유틸] 주문 취소 후 실제 계좌 잔고를 재조회하여 팔아야 할 정확한 잔량(rem_qty) 반환"""
     return sniper_trade_utils.confirm_cancel_or_reload_remaining(
-        code, orig_ord_no, token, expected_qty
+        code,
+        orig_ord_no,
+        token,
+        expected_qty,
+        target_stock=target_stock,
     )
 
 

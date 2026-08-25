@@ -1261,6 +1261,11 @@ def _recovery_actions(
                     "final EV refresh after pattern audits and workorder lineage repair",
                 ),
                 RecoveryAction(
+                    "refresh_code_improvement_workorder_final",
+                    _workorder_command(target_date, verification),
+                    "final workorder source fingerprint refresh after EV",
+                ),
+                RecoveryAction(
                     "refresh_runtime_approval_summary",
                     [
                         _python_bin(),

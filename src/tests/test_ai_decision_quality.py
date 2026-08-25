@@ -1,9 +1,13 @@
+import base64
 import gzip
 import hashlib
 import json
+import multiprocessing
 import sys
+import time
 from copy import deepcopy
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -16,8 +20,114 @@ from src.engine.scalping.micro_reversion.provider_budget import (
     PRICING_AUTHORITY,
     pricing_artifact_content_sha256,
 )
+from src.engine.scalping.micro_reversion.storage_maintenance import (
+    STORAGE_CAPACITY_GROWTH_GATE_SCHEMA,
+    STORAGE_CRITICAL_DISK_WATERMARK_BYTES,
+    STORAGE_LOW_DISK_WATERMARK_BYTES,
+)
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+def _checkpoint_concurrent_append_worker(
+    checkpoint_path_text: str,
+    materialized_hash: str,
+    result_id: str,
+    ready_queue,
+    start_event,
+    result_queue,
+) -> None:
+    """Exercise the same custody transaction used by direct execution."""
+
+    checkpoint_path = Path(checkpoint_path_text)
+    try:
+        ready_queue.put(result_id)
+        if not start_event.wait(timeout=10):
+            raise RuntimeError("checkpoint_concurrency_start_timeout")
+        with quality._micro_reversion_checkpoint_custody_lock(
+            checkpoint_path,
+            exclusive=True,
+        ):
+            existing = quality._load_micro_reversion_checkpoint_unlocked(
+                checkpoint_path,
+                repair_manifest=True,
+            )
+            # Widen the stale-read race. Without the custody lock both workers
+            # would construct sequence 1 from the same empty journal.
+            time.sleep(0.1)
+            sequence = int(existing.get("checkpoint_record_count") or 0) + 1
+            previous_hash = str(existing.get("checkpoint_head_sha256") or "") or None
+            record = quality._micro_reversion_checkpoint_record(
+                materialized_report_content_sha256=materialized_hash,
+                sequence=sequence,
+                previous_record_sha256=previous_hash,
+                result={"result_id": result_id},
+            )
+            quality._write_micro_reversion_checkpoint_record_unlocked(
+                checkpoint_path,
+                record,
+            )
+        result_queue.put(("ok", result_id, sequence))
+    except BaseException as exc:  # pragma: no cover - surfaced in parent
+        result_queue.put(("error", result_id, repr(exc)))
+
+
+def _micro_reversion_direct_execute_worker(
+    cli_args,
+    ready_queue,
+    start_event,
+    result_queue,
+) -> None:
+    """Run one exact direct executor in a forked process."""
+
+    try:
+        ready_queue.put("ready")
+        if not start_event.wait(timeout=10):
+            raise RuntimeError("micro_reversion_direct_concurrency_start_timeout")
+        result_queue.put(("ok", quality.main(cli_args)))
+    except BaseException as exc:  # pragma: no cover - surfaced in parent
+        result_queue.put(("error", repr(exc)))
+
+
+def _healthy_capacity_gate(*, target_date: str, capacity_path) -> dict:
+    total_bytes = STORAGE_LOW_DISK_WATERMARK_BYTES * 3
+    free_bytes = STORAGE_LOW_DISK_WATERMARK_BYTES * 2
+    return {
+        "schema": STORAGE_CAPACITY_GROWTH_GATE_SCHEMA,
+        "target_date": target_date,
+        "status": "allowed",
+        "large_artifact_growth_allowed": True,
+        "effective_capacity_state": "healthy",
+        "artifact_status": "missing",
+        "artifact_capacity_state": None,
+        "capacity_status_artifact_path": str(capacity_path.absolute()),
+        "capacity_status_artifact_raw_sha256": None,
+        "capacity_status_artifact_validation_error": None,
+        "direct_snapshot_provenance": "shutil.disk_usage_at_consumer_gate",
+        "direct_capacity_state": "healthy",
+        "direct_disk_snapshot": {
+            "disk_total_bytes": total_bytes,
+            "disk_used_bytes": total_bytes - free_bytes,
+            "disk_free_bytes": free_bytes,
+        },
+        "direct_disk_snapshot_error": None,
+        "low_disk_watermark_bytes": STORAGE_LOW_DISK_WATERMARK_BYTES,
+        "critical_disk_watermark_bytes": STORAGE_CRITICAL_DISK_WATERMARK_BYTES,
+        "reason_codes": ["capacity_status_artifact_missing_direct_snapshot_used"],
+        "decision_authority": "storage_capacity_growth_gate_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "provider_route_change_allowed": False,
+        "network_call_performed_by_module": False,
+        "forbidden_uses": [
+            "broker_order_submission_or_cancel",
+            "provider_route_or_model_change",
+            "strategy_threshold_quantity_cap_or_bot_change",
+            "automatic_purge_or_deletion_authority",
+        ],
+    }
 
 
 def _freeze_quality_clock(monkeypatch, *, target_date: str) -> None:
@@ -43,6 +153,204 @@ def _freeze_quality_clock(monkeypatch, *, target_date: str) -> None:
     monkeypatch.setattr(provider_budget, "datetime", _FixedDateTime)
 
 
+def _provider_authority_cli_args(
+    *,
+    monkeypatch,
+    target_date: str,
+    pricing_path,
+    pricing_payload: dict,
+    ledger_path,
+    summary_path,
+) -> list[str]:
+    pricing_file_sha256 = hashlib.sha256(pricing_path.read_bytes()).hexdigest()
+    source_artifacts = [
+        {
+            "target_date": f"2026-08-{day:02d}",
+            "content_sha256": hashlib.sha256(
+                f"provider-budget-source-{day}".encode()
+            ).hexdigest(),
+        }
+        for day in range(10, 15)
+    ]
+    budget_basis = {
+        "evaluated_call_median": 781,
+        "target_share_of_evaluated_median_pct": 50.0,
+        "daily_parent_cap": 130,
+        "logical_requests_per_parent": 3,
+        "maximum_logical_request_count": 390,
+        "daily_attempt_cap": 390,
+        "source_artifacts": source_artifacts,
+    }
+    policy_path = pricing_path.with_name("economic-policy.json")
+    policy_path.write_text(
+        json.dumps({"provider_budget_basis": budget_basis}), encoding="utf-8"
+    )
+    policy_bytes = policy_path.read_bytes()
+    manifest_path = pricing_path.with_name("economic-manifest.json")
+    manifest_path.write_text(
+        json.dumps({"schema": "test-economic-manifest-v1"}), encoding="utf-8"
+    )
+    manifest_bytes = manifest_path.read_bytes()
+    owner_body = {
+        "schema": "micro_reversion_economic_reference_owner_report_v1",
+        "target_date": target_date,
+        "generated_at": f"{target_date}T18:00:00+09:00",
+        "status": "pass",
+        "policy_path": str(policy_path.absolute()),
+        "policy_sha256": hashlib.sha256(policy_bytes).hexdigest(),
+        "economic_manifest_path": str(manifest_path.absolute()),
+        "economic_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "economic_manifest_size_bytes": len(manifest_bytes),
+        "provider_pricing_path": str(pricing_path.absolute()),
+        "provider_pricing_sha256": pricing_file_sha256,
+        "provider_pricing_size_bytes": pricing_path.stat().st_size,
+        "provider_pricing_content_sha256": pricing_payload["artifact_content_sha256"],
+        "eligible_common_stock_count": 2,
+        "eligible_kospi_count": 1,
+        "eligible_kosdaq_count": 1,
+        "provider_budget_basis": budget_basis,
+        "provider_call_performed": False,
+        "decision_authority": "offline_economic_reference_source_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "trading_runtime_effect": False,
+        "trading_decision_effect": False,
+        "selection_authority": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": ["direct_runtime_or_order_apply"],
+    }
+    owner = {
+        **owner_body,
+        "artifact_content_sha256": quality._sha256(owner_body),
+    }
+    owner_path = pricing_path.with_name("owner-report.json")
+    owner_path.write_text(json.dumps(owner), encoding="utf-8")
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_economic_owner_report_path",
+        lambda _target_date: owner_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_economic_policy_path",
+        lambda: policy_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_economic_manifest_path",
+        lambda: manifest_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_provider_pricing_path",
+        lambda: pricing_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_provider_budget_ledger_path",
+        lambda _execution_date: ledger_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_provider_budget_summary_path",
+        lambda _execution_date: summary_path,
+    )
+    return [
+        "--micro-reversion-economic-owner-report",
+        str(owner_path),
+        "--micro-reversion-economic-owner-report-content-sha256",
+        owner["artifact_content_sha256"],
+        "--micro-reversion-provider-pricing-file-sha256",
+        pricing_file_sha256,
+        "--micro-reversion-provider-pricing-content-sha256",
+        pricing_payload["artifact_content_sha256"],
+    ]
+
+
+def test_micro_reversion_provider_authority_rejects_self_hashed_noncanonical_owner(
+    tmp_path, monkeypatch
+):
+    target_date = "2026-08-18"
+    canonical_owner = tmp_path / "canonical" / "owner_report.json"
+    canonical_pricing = tmp_path / "canonical" / "provider_pricing.json"
+    arbitrary_owner = tmp_path / "attacker" / "owner_report.json"
+    arbitrary_pricing = tmp_path / "attacker" / "provider_pricing.json"
+    arbitrary_owner.parent.mkdir(parents=True)
+    arbitrary_owner.write_text("{}", encoding="utf-8")
+    arbitrary_pricing.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_economic_owner_report_path",
+        lambda _target_date: canonical_owner,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_provider_pricing_path",
+        lambda: canonical_pricing,
+    )
+
+    fake_hash = "a" * 64
+    with pytest.raises(
+        RuntimeError,
+        match="micro_reversion_provider_owner_report_path_not_canonical",
+    ):
+        quality._validate_micro_reversion_provider_authority_binding(
+            target_date=target_date,
+            owner_report_path=arbitrary_owner,
+            expected_owner_report_content_sha256=fake_hash,
+            pricing_path=arbitrary_pricing,
+            expected_pricing_file_sha256=fake_hash,
+            expected_pricing_content_sha256=fake_hash,
+            reviewed_pricing=SimpleNamespace(
+                artifact_file_sha256=fake_hash,
+                artifact_content_sha256=fake_hash,
+            ),
+        )
+
+
+def test_micro_reversion_provider_authority_rejects_canonical_owner_parent_symlink(
+    tmp_path, monkeypatch
+):
+    target_date = "2026-08-18"
+    real_parent = tmp_path / "real-owner"
+    real_parent.mkdir()
+    (real_parent / "owner_report.json").write_text("{}", encoding="utf-8")
+    linked_parent = tmp_path / "canonical-owner"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    owner_path = linked_parent / "owner_report.json"
+    pricing_path = tmp_path / "provider_pricing.json"
+    pricing_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_economic_owner_report_path",
+        lambda _target_date: owner_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_provider_pricing_path",
+        lambda: pricing_path,
+    )
+
+    fake_hash = "b" * 64
+    with pytest.raises(
+        RuntimeError,
+        match="micro_reversion_provider_owner_report_unreadable",
+    ):
+        quality._validate_micro_reversion_provider_authority_binding(
+            target_date=target_date,
+            owner_report_path=owner_path,
+            expected_owner_report_content_sha256=fake_hash,
+            pricing_path=pricing_path,
+            expected_pricing_file_sha256=fake_hash,
+            expected_pricing_content_sha256=fake_hash,
+            reviewed_pricing=SimpleNamespace(
+                artifact_file_sha256=fake_hash,
+                artifact_content_sha256=fake_hash,
+            ),
+        )
+
+
 def test_legacy_holding_prompt_endpoint_is_consumed_as_holding_score():
     assert (
         quality._trace_endpoint(
@@ -61,6 +369,28 @@ def test_load_jsonl_reads_verified_gzip_archive(tmp_path):
         handle.write('{"stage":"ai_confirmed"}\n')
 
     assert quality._load_jsonl(plain_path) == [{"stage": "ai_confirmed"}]
+
+
+def test_quality_atomic_writer_delegates_preserving_existing_format(
+    tmp_path, monkeypatch
+):
+    observed = {}
+
+    def capture(path, value, **options):
+        observed.update({"path": path, "value": value, **options})
+
+    monkeypatch.setattr(quality, "write_json_object_generation_safe", capture)
+    output = tmp_path / "report.json"
+    quality._atomic_write_json(output, {"b": 2, "a": 1})
+
+    assert observed == {
+        "path": output,
+        "value": {"b": 2, "a": 1},
+        "ensure_ascii": False,
+        "indent": 2,
+        "sort_keys": False,
+        "trailing_newline": False,
+    }
 
 
 def _payload():
@@ -619,9 +949,9 @@ def test_cached_semantic_repair_requires_current_version_and_exact_repair_list()
 
     assert quality._semantic_repair_provenance_matches(result, request) is True
     stale = json.loads(json.dumps(result))
-    stale["candidate_attempts"][0]["provider_provenance"]["semantic_repair_version"] = (
-        "bounded_opportunity_fail_safe_repair_v1"
-    )
+    stale["candidate_attempts"][0]["provider_provenance"][
+        "semantic_repair_version"
+    ] = "bounded_opportunity_fail_safe_repair_v1"
     assert quality._semantic_repair_provenance_matches(stale, request) is False
     stale_list = json.loads(json.dumps(result))
     stale_list["candidate_attempts"][0]["provider_provenance"]["repairs"] = []
@@ -5112,9 +5442,8 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     )
     assert results[0]["same_payload_confirmed"] is True
     assert results[0]["status"] == "pass"
-    assert (
-        results[0]["candidate_contract_sha256"]
-        == (requests[0]["candidate"]["contract_sha256"])
+    assert results[0]["candidate_contract_sha256"] == (
+        requests[0]["candidate"]["contract_sha256"]
     )
     report = quality.build_paired_replay_report(
         target_date="2026-07-27",
@@ -5184,7 +5513,7 @@ def _micro_reversion_materialization_fixture():
     live_response_schema = quality.build_openai_response_text_format(
         "decision_quality_v2_7_entry"
     )["schema"]
-    captured_at = "2026-08-14T09:00:10.000+09:00"
+    captured_at = "2026-08-14T09:00:16.000+09:00"
     exact_payload = {
         "schema": "entry_payload_v1",
         "requested_qty": 5,
@@ -5220,7 +5549,7 @@ def _micro_reversion_materialization_fixture():
             "model": "gpt-test",
             "schema_name": "decision_quality_v2_7_entry",
             "require_json": True,
-            "temperature": 0,
+            "temperature": None,
             "max_output_tokens": 900,
             "reasoning_effort": "medium",
             "prompt_sha256": control_prompt_sha256,
@@ -5232,7 +5561,7 @@ def _micro_reversion_materialization_fixture():
         "schema": "ai_decision_trace_v1",
         "decision_trace_id": "trace-materialize-1",
         "request_id": "request-materialize-1",
-        "decision_ts": "2026-08-14T09:00:11.000+09:00",
+        "decision_ts": "2026-08-14T09:00:17.000+09:00",
         "decision_stage": "entry",
         "endpoint": "analyze_target",
         "stock_code": "000001",
@@ -5251,7 +5580,7 @@ def _micro_reversion_materialization_fixture():
         "provider_called": True,
         "model": "gpt-test",
         "model_requested": "gpt-test",
-        "request_temperature": 0,
+        "request_temperature": None,
         "request_reasoning_effort": "medium",
         "transport": "responses_http",
         "openai_response_schema_mode": "strict_dynamic_entry",
@@ -5287,7 +5616,7 @@ def _micro_reversion_materialization_fixture():
         "model": "gpt-test",
         "schema_name": "decision_quality_v2_7_entry",
         "require_json": True,
-        "temperature": 0,
+        "temperature": None,
         "max_output_tokens": 900,
         "reasoning_effort": "medium",
         "prompt_sha256": control_prompt_sha256,
@@ -5434,9 +5763,36 @@ def _micro_reversion_materialization_fixture():
             bid=9_950,
             ask=9_960,
         ),
+        market(
+            "2026-08-14T09:00:11.000+09:00",
+            price=9_970,
+            side="BUY",
+            qty=100,
+            sequence=5,
+            bid=9_960,
+            ask=9_970,
+        ),
+        market(
+            "2026-08-14T09:00:16.000+09:00",
+            price=9_980,
+            side="BUY",
+            qty=100,
+            sequence=6,
+            bid=9_970,
+            ask=9_980,
+        ),
     ]
-    depth_rows = [
-        {
+
+    def depth(
+        timestamp,
+        *,
+        sequence,
+        quantities,
+        best_bid=9_950,
+        best_ask=9_960,
+    ):
+        ask_depth = sum(quantities)
+        return {
             "schema": "scalp_micro_reversion_market_depth_point_v1",
             "metric_contract_id": "scalp_micro_reversion_market_depth_contract_v1",
             "realtime_type": "0D",
@@ -5445,27 +5801,86 @@ def _micro_reversion_materialization_fixture():
             "venue": "KRX",
             "session_bucket": "KRX_REGULAR",
             "sequence_epoch": 123,
-            "source_sequence": 1,
-            "series_sequence": 1,
-            "exchange_timestamp": "2026-08-14T09:00:09.700+09:00",
-            "local_receive_timestamp": "2026-08-14T09:00:09.700+09:00",
-            "best_bid": 9_950,
-            "best_ask": 9_960,
+            "source_sequence": sequence,
+            "series_sequence": sequence,
+            "exchange_timestamp": timestamp,
+            "local_receive_timestamp": timestamp,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
             "best_bid_qty": 100,
-            "best_ask_qty": 100,
+            "best_ask_qty": quantities[0],
             "bid_depth": 1_000,
-            "ask_depth": 1_000,
+            "ask_depth": ask_depth,
             "route_depth_totals": {
-                "KRX": {"bid": 1_000, "ask": 1_000},
+                "KRX": {"bid": 1_000, "ask": ask_depth},
                 "NXT": {"bid": 0, "ask": 0},
-                "combined": {"bid": 1_000, "ask": 1_000},
+                "combined": {"bid": 1_000, "ask": ask_depth},
             },
-            "bid_levels": [[1, 9_950, 100], [2, 9_940, 900]],
-            "ask_levels": [[1, 9_960, 100], [2, 9_970, 900]],
+            "bid_levels": [[1, best_bid, 100], [2, best_bid - 10, 900]],
+            "ask_levels": [
+                [level, best_ask + (level - 1) * 10, quantity]
+                for level, quantity in enumerate(quantities, start=1)
+            ],
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "trading_runtime_effect": False,
         }
+
+    depth_rows = [
+        depth(
+            "2026-08-14T09:00:05.900+09:00",
+            sequence=1,
+            quantities=(100, 200, 300, 400, 500),
+        ),
+        depth(
+            "2026-08-14T09:00:06.250+09:00",
+            sequence=2,
+            quantities=(80, 180, 280, 380, 480),
+        ),
+        depth(
+            "2026-08-14T09:00:06.500+09:00",
+            sequence=3,
+            quantities=(60, 160, 260, 360, 460),
+        ),
+        depth(
+            "2026-08-14T09:00:06.700+09:00",
+            sequence=4,
+            quantities=(70, 170, 270, 370, 470),
+        ),
+        depth(
+            "2026-08-14T09:00:07.000+09:00",
+            sequence=5,
+            quantities=(80, 180, 280, 380, 480),
+        ),
+        depth(
+            "2026-08-14T09:00:07.500+09:00",
+            sequence=6,
+            quantities=(90, 190, 290, 390, 490),
+        ),
+        depth(
+            "2026-08-14T09:00:08.999+09:00",
+            sequence=7,
+            quantities=(90, 190, 290, 390, 490),
+        ),
+        depth(
+            "2026-08-14T09:00:09.700+09:00",
+            sequence=8,
+            quantities=(90, 190, 290, 390, 490),
+        ),
+        depth(
+            "2026-08-14T09:00:10.999+09:00",
+            sequence=9,
+            quantities=(90, 190, 290, 390, 490),
+            best_bid=9_960,
+            best_ask=9_970,
+        ),
+        depth(
+            "2026-08-14T09:00:15.999+09:00",
+            sequence=10,
+            quantities=(90, 190, 290, 390, 490),
+            best_bid=9_970,
+            best_ask=9_980,
+        ),
     ]
     event_references = [
         {
@@ -5556,6 +5971,91 @@ def _micro_reversion_materialization_fixture():
     return prepared, source_bundle
 
 
+def _reseal_current_materialized_report(report: dict) -> None:
+    template = deepcopy(report["materializations"][0])
+    reconstruction_template = deepcopy(
+        report["current_control_contract_reconstructions"][0]
+    )
+    grouped: dict[str, list[dict]] = {}
+    for request in report["requests"]:
+        grouped.setdefault(request["paired_replay_parent_id"], []).append(request)
+    decision_fields = (
+        "prompt_version",
+        "system_prompt_sha256",
+        "schema_name",
+        "response_schema_sha256",
+        "semantic_validator_version",
+    )
+    execution_fields = (
+        "provider",
+        "model",
+        "temperature",
+        "reasoning_effort",
+        "transport",
+        "max_output_tokens",
+        "response_schema_mode",
+        "require_json",
+        "response_schema_registry_used",
+    )
+    materializations = []
+    for rows in grouped.values():
+        by_arm = {row["micro_reversion_replay_arm"]: row for row in rows}
+        base = by_arm["replay_control_exact_plus_micro"]
+        ask_control = by_arm["replay_control_exact_plus_micro_ask_depletion"]
+        candidate = by_arm["replay_candidate_exact_plus_micro_ask_depletion"]
+        control_contract = base["candidate"]
+        candidate_contract = candidate["candidate"]
+        content = {
+            **{
+                key: value
+                for key, value in template.items()
+                if key != "materialization_sha256"
+            },
+            "decision_trace_id": base["decision_trace_id"],
+            "source_exact_payload_sha256": base["source_exact_payload_sha256"],
+            "tactical_micro_reversion_evidence_sha256": base[
+                "tactical_micro_reversion_evidence_sha256"
+            ],
+            "ask_depletion_contract_sha256": ask_control[
+                "ask_depletion_contract_sha256"
+            ],
+            "ask_depletion_context_sha256": ask_control["ask_depletion_context_sha256"],
+            "control_decision_contract_sha256": quality._sha256(
+                {field: control_contract.get(field) for field in decision_fields}
+            ),
+            "candidate_decision_contract_sha256": quality._sha256(
+                {field: candidate_contract.get(field) for field in decision_fields}
+            ),
+            "locked_execution_contract_sha256": quality._sha256(
+                {field: control_contract.get(field) for field in execution_fields}
+            ),
+        }
+        materializations.append(
+            {
+                **content,
+                "materialization_sha256": quality._sha256(
+                    {**content, "requests": rows}
+                ),
+            }
+        )
+    report["materializations"] = materializations
+    report["materialization_count"] = len(materializations)
+    report["current_control_contract_reconstructions"] = [
+        deepcopy(reconstruction_template) for _ in materializations
+    ]
+    report["source_exclusion_count"] = len(report["source_exclusions"])
+    report["prepared_request_count"] = len(materializations) + len(
+        report["source_exclusions"]
+    )
+    report["request_ids"] = [
+        request["paired_replay_id"] for request in report["requests"]
+    ]
+    report["request_count"] = len(report["requests"])
+    report["report_content_sha256"] = quality._sha256(
+        {key: value for key, value in report.items() if key != "report_content_sha256"}
+    )
+
+
 def test_materializes_micro_reversion_requests_from_actual_prepared_output():
     prepared, source_bundle = _micro_reversion_materialization_fixture()
     persisted_prepared = json.loads(json.dumps(prepared))
@@ -5571,10 +6071,13 @@ def test_materializes_micro_reversion_requests_from_actual_prepared_output():
     assert report["materialization_count"] == 1
     assert report["request_count"] == 3
     assert len(set(report["request_ids"])) == 3
+    assert report["ablation_design_version"] == (
+        "current_micro_vs_ask_depletion_prompt_v1"
+    )
     assert [row["micro_reversion_replay_arm"] for row in report["requests"]] == [
-        "replay_control_exact_no_micro",
         "replay_control_exact_plus_micro",
-        "replay_candidate_exact_plus_micro",
+        "replay_control_exact_plus_micro_ask_depletion",
+        "replay_candidate_exact_plus_micro_ask_depletion",
     ]
     assert report["requests"][0]["candidate"]["prompt_version"] == (
         "current_control_v1"
@@ -5601,6 +6104,75 @@ def test_materializes_micro_reversion_requests_from_actual_prepared_output():
     ]
 
 
+def test_current_source_bundle_rejects_rehashed_sidecar_semantic_tampering() -> None:
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+
+    def reseal_sidecar(bundle: dict) -> None:
+        row = bundle["rows"][0]
+        sidecar = row["ask_depletion_sidecar"]
+        sidecar["ask_depletion_context_sha256"] = quality._sha256(
+            {
+                key: value
+                for key, value in sidecar.items()
+                if key != "ask_depletion_context_sha256"
+            }
+        )
+        row["ask_depletion_context_sha256"] = sidecar["ask_depletion_context_sha256"]
+        bundle["source_bundle_content_sha256"] = quality._sha256(
+            {
+                key: value
+                for key, value in bundle.items()
+                if key != "source_bundle_content_sha256"
+            }
+        )
+
+    cross_symbol = deepcopy(source_bundle)
+    cross_symbol["rows"][0]["ask_depletion_sidecar"]["context"]["symbol"] = "999999"
+    reseal_sidecar(cross_symbol)
+    with pytest.raises(
+        ValueError, match="ask_depletion_sidecar_context_identity_mismatch"
+    ):
+        quality.materialize_micro_reversion_offline_requests(
+            prepared_requests=prepared,
+            bridge_source_bundle=cross_symbol,
+        )
+
+    immature = deepcopy(source_bundle)
+    eligible_horizon = next(
+        row
+        for row in immature["rows"][0]["ask_depletion_sidecar"]["horizons"]
+        if row["eligible_for_feature_ablation"] is True
+    )
+    eligible_horizon["mature"] = False
+    eligible_horizon["source_gap_reasons"] = ["forced_gap"]
+    reseal_sidecar(immature)
+    with pytest.raises(
+        ValueError, match="ask_depletion_complete_horizon_contract_invalid"
+    ):
+        quality.materialize_micro_reversion_offline_requests(
+            prepared_requests=prepared,
+            bridge_source_bundle=immature,
+        )
+
+    mixed_legacy_current = deepcopy(source_bundle)
+    mixed_legacy_current.pop("ablation_design_version")
+    mixed_legacy_current["source_bundle_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in mixed_legacy_current.items()
+            if key != "source_bundle_content_sha256"
+        }
+    )
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_source_bundle_legacy_current_contract_mixed",
+    ):
+        quality.materialize_micro_reversion_offline_requests(
+            prepared_requests=prepared,
+            bridge_source_bundle=mixed_legacy_current,
+        )
+
+
 def test_micro_reversion_source_contract_reconstructs_omitted_exact_payload():
     prepared, source_bundle = _micro_reversion_materialization_fixture()
     persisted_request = json.loads(json.dumps(prepared[0]))
@@ -5614,9 +6186,9 @@ def test_micro_reversion_source_contract_reconstructs_omitted_exact_payload():
     )
 
     tampered_payload = json.loads(json.dumps(source_row["source_payload"]))
-    tampered_payload["sanitized_replay_context"]["exact_payload"]["requested_qty"] = (
-        99_999
-    )
+    tampered_payload["sanitized_replay_context"]["exact_payload"][
+        "requested_qty"
+    ] = 99_999
     with pytest.raises(
         ValueError, match="micro_reversion_source_exact_payload_sha256_mismatch"
     ):
@@ -5663,12 +6235,12 @@ def test_micro_reversion_control_semantic_analysis_is_derived_outside_provider_i
     prepared, source_bundle = _micro_reversion_materialization_fixture()
     request = json.loads(json.dumps(prepared[0]))
     request.pop("exact_payload")
-    request["candidate"]["prompt_version"] = (
-        f"{quality.DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry"
-    )
-    request["candidate"]["semantic_validator_version"] = (
-        quality.BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
-    )
+    request["candidate"][
+        "prompt_version"
+    ] = f"{quality.DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry"
+    request["candidate"][
+        "semantic_validator_version"
+    ] = quality.BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
 
     hydrated = quality._rehydrate_micro_reversion_prepared_request(
         request=request,
@@ -5753,20 +6325,24 @@ def test_micro_reversion_materialization_fails_closed_without_full_control_promp
 def test_micro_reversion_materialize_cli_does_not_enter_provider_source_flow(
     tmp_path, monkeypatch, capsys
 ):
+    from src.engine.scalping.micro_reversion import ai_quality_cycle as cycle
+
     prepared, source_bundle = _micro_reversion_materialization_fixture()
     prepared_path = tmp_path / "prepared.json"
     source_path = tmp_path / "source.json"
     output_path = tmp_path / "materialized.json"
-    prepared_path.write_text(
-        json.dumps(
-            {
-                "target_date": "2026-08-14",
-                "prepared_request_count": len(prepared),
-                "prepared_requests": prepared,
-            }
-        ),
-        encoding="utf-8",
+    capacity_path = tmp_path / "capacity.json"
+    prepared_artifact = cycle.build_prepared_request_artifact(
+        target_date="2026-08-14",
+        paired_report={
+            "schema": quality.PAIRED_SCHEMA,
+            "target_date": "2026-08-14",
+            "requests": prepared,
+            **cycle.OFFLINE_AUTHORITY,
+        },
+        source={"resolved_path": str(prepared_path), "stored_sha256": "a" * 64},
     )
+    prepared_path.write_text(json.dumps(prepared_artifact), encoding="utf-8")
     source_path.write_text(json.dumps(source_bundle), encoding="utf-8")
     monkeypatch.setattr(
         quality,
@@ -5777,6 +6353,19 @@ def test_micro_reversion_materialize_cli_does_not_enter_provider_source_flow(
         quality,
         "micro_reversion_materialized_request_path",
         lambda target_date: output_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_storage_capacity_status_path",
+        lambda _target_date: capacity_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "_micro_reversion_large_artifact_capacity_gate",
+        lambda **_kwargs: _healthy_capacity_gate(
+            target_date="2026-08-14",
+            capacity_path=capacity_path,
+        ),
     )
 
     assert (
@@ -5790,6 +6379,8 @@ def test_micro_reversion_materialize_cli_does_not_enter_provider_source_flow(
                 str(prepared_path),
                 "--micro-reversion-source-bundle",
                 str(source_path),
+                "--micro-reversion-storage-capacity-status",
+                str(capacity_path),
                 "--write",
             ]
         )
@@ -5805,9 +6396,25 @@ def test_micro_reversion_materialize_cli_does_not_enter_provider_source_flow(
     assert written["actual_order_submitted"] is False
 
 
+def test_micro_reversion_json_loader_resolves_archived_gzip(tmp_path):
+    logical_path = tmp_path / "ai_micro_reversion_replay_source_bundle_2026-08-24.json"
+    expected = {"schema": "test", "target_date": "2026-08-24"}
+    with gzip.open(
+        logical_path.with_suffix(".json.gz"), "wt", encoding="utf-8"
+    ) as handle:
+        json.dump(expected, handle)
+
+    assert quality._load_json(logical_path) == expected
+
+
 def test_micro_reversion_source_bundle_cli_reads_gzip_exact_journals(
     tmp_path, monkeypatch, capsys
 ):
+    from src.engine.scalping.micro_reversion import ai_quality_cycle as cycle
+    from src.engine.scalping.micro_reversion.symbol_master import (
+        VerifiedSymbolMaster,
+    )
+
     prepared, source_bundle = _micro_reversion_materialization_fixture()
     source_row = source_bundle["rows"][0]
     trace = source_row["source_trace"]
@@ -5826,16 +6433,17 @@ def test_micro_reversion_source_bundle_cli_reads_gzip_exact_journals(
     prepared_path = tmp_path / "prepared.json"
     contract_path = tmp_path / "control_contracts.json"
     symbol_master_path = tmp_path / "symbol_master.json"
-    prepared_path.write_text(
-        json.dumps(
-            {
-                "target_date": "2026-08-14",
-                "prepared_request_count": len(prepared),
-                "prepared_requests": prepared,
-            }
-        ),
-        encoding="utf-8",
+    prepared_artifact = cycle.build_prepared_request_artifact(
+        target_date="2026-08-14",
+        paired_report={
+            "schema": quality.PAIRED_SCHEMA,
+            "target_date": "2026-08-14",
+            "requests": prepared,
+            **cycle.OFFLINE_AUTHORITY,
+        },
+        source={"resolved_path": str(prepared_path), "stored_sha256": "a" * 64},
     )
+    prepared_path.write_text(json.dumps(prepared_artifact), encoding="utf-8")
     contract_path.write_text(
         json.dumps(
             {
@@ -5889,6 +6497,13 @@ def test_micro_reversion_source_bundle_cli_reads_gzip_exact_journals(
     monkeypatch.setattr(quality, "TRACE_DIR", trace_dir)
     monkeypatch.setattr(quality, "PAYLOAD_DIR", payload_dir)
     monkeypatch.setattr(quality, "PROMPT_DIR", prompt_dir)
+    monkeypatch.setattr(
+        VerifiedSymbolMaster,
+        "from_json_path",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("symbol master must not be reread after strict payload load")
+        ),
+    )
 
     assert (
         quality.main(
@@ -5917,6 +6532,43 @@ def test_micro_reversion_source_bundle_cli_reads_gzip_exact_journals(
     assert report["provider_call_performed"] is False
     assert report["runtime_effect"] is False
     assert report["actual_order_submitted"] is False
+
+    data_dir = tmp_path / "isolated-data"
+    pipeline_path = data_dir / "pipeline_events" / "pipeline_events_2026-08-14.jsonl"
+    pipeline_path.parent.mkdir(parents=True)
+    pipeline_path.with_name(f"{pipeline_path.name}.gz").symlink_to(
+        tmp_path / "missing-pipeline-target.jsonl.gz"
+    )
+    bridge_path = tmp_path / "bridge.json"
+    bridge_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(quality, "DATA_DIR", data_dir)
+
+    def consume_entry_pipeline_rows(**kwargs):
+        list(kwargs["entry_pipeline_rows"])
+        raise AssertionError("broken pipeline generation must fail closed")
+
+    monkeypatch.setattr(
+        quality,
+        "build_micro_reversion_source_bundle",
+        consume_entry_pipeline_rows,
+    )
+    with pytest.raises(ValueError, match="jsonl_artifact_path_type_invalid"):
+        quality.main(
+            [
+                "--date",
+                "2026-08-14",
+                "--mode",
+                "micro_reversion_source_bundle",
+                "--micro-reversion-prepared-requests",
+                str(prepared_path),
+                "--micro-reversion-control-contracts",
+                str(contract_path),
+                "--micro-reversion-observation-root",
+                str(observation_root),
+                "--micro-reversion-bridge-report",
+                str(bridge_path),
+            ]
+        )
 
 
 def _micro_reversion_execution_label(prepared):
@@ -5976,19 +6628,17 @@ def _micro_reversion_action_neutral_bridge_fixture():
     )
     last_market = market_rows[-1]
     last_depth = depth_rows[-1]
+    path_extension_start = datetime.fromisoformat(
+        str(last_market["local_receive_timestamp"])
+    ).replace(microsecond=0)
     for offset_sec in range(1, 13):
-        timestamp = (
-            datetime.fromisoformat("2026-08-14T09:00:11+09:00")
-            .replace(microsecond=0)
-            .timestamp()
-            + offset_sec
-        )
+        timestamp = path_extension_start.timestamp() + offset_sec
         observed_at = datetime.fromtimestamp(timestamp, tz=KST).isoformat()
         market_rows.append(
             {
                 **last_market,
-                "source_sequence": 4 + offset_sec,
-                "series_sequence": 4 + offset_sec,
+                "source_sequence": last_market["source_sequence"] + offset_sec,
+                "series_sequence": last_market["series_sequence"] + offset_sec,
                 "exchange_timestamp": observed_at,
                 "local_receive_timestamp": observed_at,
                 "trade_price": 10_060,
@@ -6000,14 +6650,20 @@ def _micro_reversion_action_neutral_bridge_fixture():
         depth_rows.append(
             {
                 **last_depth,
-                "source_sequence": 1 + offset_sec,
-                "series_sequence": 1 + offset_sec,
+                "source_sequence": last_depth["source_sequence"] + offset_sec,
+                "series_sequence": last_depth["series_sequence"] + offset_sec,
                 "exchange_timestamp": observed_at,
                 "local_receive_timestamp": observed_at,
                 "best_bid": 10_050,
                 "best_ask": 10_060,
                 "bid_levels": [[1, 10_050, 100], [2, 10_040, 900]],
-                "ask_levels": [[1, 10_060, 100], [2, 10_070, 900]],
+                "ask_levels": [
+                    [1, 10_060, 90],
+                    [2, 10_070, 190],
+                    [3, 10_080, 290],
+                    [4, 10_090, 390],
+                    [5, 10_100, 490],
+                ],
             }
         )
     config = BridgeConfig(**source_row["bridge_config"])
@@ -6027,6 +6683,75 @@ def _micro_reversion_action_neutral_bridge_fixture():
         evidence
     )
     return prepared, materialized, bridge_report
+
+
+def _current_outcome_artifact_for_materialized(materialized: dict) -> dict:
+    """Clone one exact bridge proof onto the materialized parent census."""
+
+    _, base_materialized, bridge_report = (
+        _micro_reversion_action_neutral_bridge_fixture()
+    )
+    base_artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        bridge_report=bridge_report,
+        materialized_report=base_materialized,
+    )
+    template = base_artifact["labels"][0]
+    join_keys = list(
+        dict.fromkeys(
+            str(request["outcome_join_key"]) for request in materialized["requests"]
+        )
+    )
+    labels = []
+    for join_key in join_keys:
+        label = deepcopy(template)
+        label["label_id"] = join_key
+        label["target_date"] = materialized["target_date"]
+        label["materialized_report_content_sha256"] = materialized[
+            "report_content_sha256"
+        ]
+        label["label_content_sha256"] = quality._sha256(
+            {
+                key: value
+                for key, value in label.items()
+                if key != "label_content_sha256"
+            }
+        )
+        labels.append(label)
+    parent_bindings = quality._micro_reversion_materialized_parent_bindings(
+        materialized["requests"]
+    )
+    artifact = deepcopy(base_artifact)
+    artifact.update(
+        {
+            "target_date": materialized["target_date"],
+            "status": "action_neutral_labels_ready",
+            "prepared_parent_count": len(labels),
+            "eligible_label_count": len(labels),
+            "excluded_parent_count": 0,
+            "labels": labels,
+            "exclusions": [],
+            "materialized_parent_binding_count": len(parent_bindings),
+            "materialized_parent_bindings": parent_bindings,
+            "materialized_parent_bindings_sha256": quality._sha256(parent_bindings),
+            "materialized_report_content_sha256": materialized["report_content_sha256"],
+        }
+    )
+    artifact["artifact_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in artifact.items()
+            if key != "artifact_content_sha256"
+        }
+    )
+    quality._validate_micro_reversion_outcome_label_artifact(
+        artifact,
+        expected_design_version=materialized["ablation_design_version"],
+        expected_target_date=materialized["target_date"],
+        expected_materialized_report_content_sha256=materialized[
+            "report_content_sha256"
+        ],
+    )
+    return artifact
 
 
 def test_micro_reversion_bridge_outcome_adapts_action_neutral_seconds_label():
@@ -6052,9 +6777,139 @@ def test_micro_reversion_bridge_outcome_adapts_action_neutral_seconds_label():
     assert label["quantity_authority"] == ("standardized_one_share_observation_only")
     assert label["notional_net_profit_eligible"] is False
     assert label["outcome_embedded_in_provider_input"] is False
+    assert "source_bridge_report" not in artifact
+    assert artifact["bridge_report_artifact_sha256"] == quality._sha256(bridge_report)
+    assert "source_bridge_report" not in label
 
 
-def test_micro_reversion_bridge_outcome_binds_integrated_micro_session_to_trace():
+def test_current_materialized_report_rejects_resealed_cross_date_evidence():
+    _, materialized, _ = _micro_reversion_action_neutral_bridge_fixture()
+    materialized["target_date"] = "2026-08-24"
+    _reseal_current_materialized_report(materialized)
+
+    with pytest.raises(ValueError, match="current_target_date_mismatch"):
+        quality._validate_micro_reversion_materialized_report(materialized)
+
+
+def test_current_target_date_rejects_cross_date_fixed_followthrough_endpoint():
+    _, _, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
+    bridge_row = bridge_report["rows"][0]
+    evidence = deepcopy(bridge_row["tactical_micro_reversion_evidence_v1"])
+    outcome = deepcopy(bridge_row["future_outcome"])
+    fixed_outcome = outcome["confirmation_window_axis"]["observations"][0][
+        "fixed_followthrough_outcomes"
+    ][0]
+    fixed_outcome["endpoint_observed_at_ms"] = (
+        evidence["snapshot_captured_at_ms"] + 86_400_000
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "micro_reversion_current_target_date_mismatch:"
+            "outcome.confirmation_window_axis.observations"
+        ),
+    ):
+        quality._validate_current_micro_reversion_target_date_binding(
+            target_date="2026-08-14",
+            evidence=evidence,
+            outcome=outcome,
+        )
+
+
+def test_action_neutral_artifact_rejects_resealed_shifted_bridge_row():
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
+    artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        bridge_report=bridge_report,
+        materialized_report=materialized,
+    )
+    from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+        rebuild_future_outcome_from_source,
+    )
+
+    source_bridge = deepcopy(bridge_report)
+    source_row = source_bridge["rows"][0]
+    rebuild_source = source_row["future_outcome_rebuild_source"]
+    rebuild_source["control_action"] = "DROP"
+    rebuild_source["rebuild_source_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in rebuild_source.items()
+            if key != "rebuild_source_sha256"
+        }
+    )
+    source_row["future_outcome"] = rebuild_future_outcome_from_source(
+        evidence=source_row["tactical_micro_reversion_evidence_v1"],
+        rebuild_source=rebuild_source,
+        source_pool=source_bridge["future_outcome_source_pool"],
+    )
+    source_bridge["report_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in source_bridge.items()
+            if key != "report_content_sha256"
+        }
+    )
+    artifact["bridge_report_content_sha256"] = source_bridge["report_content_sha256"]
+    artifact["bridge_report_artifact_sha256"] = quality._sha256(source_bridge)
+    for label in artifact["labels"]:
+        label["bridge_report_content_sha256"] = artifact["bridge_report_content_sha256"]
+        label["bridge_report_artifact_sha256"] = artifact[
+            "bridge_report_artifact_sha256"
+        ]
+        label["label_content_sha256"] = quality._sha256(
+            {
+                key: value
+                for key, value in label.items()
+                if key != "label_content_sha256"
+            }
+        )
+    artifact["artifact_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in artifact.items()
+            if key != "artifact_content_sha256"
+        }
+    )
+
+    with pytest.raises(ValueError, match="label_artifact_binding_invalid"):
+        quality._validate_micro_reversion_outcome_label_artifact(
+            artifact,
+            source_bridge_report=source_bridge,
+        )
+
+
+def test_action_neutral_artifact_validates_bridge_source_pool_once(monkeypatch):
+    from src.engine.scalping.micro_reversion import ai_quality_bridge
+
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
+    artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        bridge_report=bridge_report,
+        materialized_report=materialized,
+    )
+    validation_calls = 0
+    original_validation = ai_quality_bridge.validate_future_outcome_source_pool
+
+    def counted_validation(*args, **kwargs):
+        nonlocal validation_calls
+        validation_calls += 1
+        return original_validation(*args, **kwargs)
+
+    monkeypatch.setattr(
+        ai_quality_bridge,
+        "validate_future_outcome_source_pool",
+        counted_validation,
+    )
+
+    quality._validate_micro_reversion_outcome_label_artifact(
+        artifact,
+        source_bridge_report=bridge_report,
+    )
+
+    assert validation_calls == 1
+
+
+def test_micro_reversion_bridge_outcome_rejects_unproven_integrated_micro_scope():
     _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
     evidence_key = "tactical_micro_reversion_evidence_v1"
     bridge_row = bridge_report["rows"][0]
@@ -6070,10 +6925,75 @@ def test_micro_reversion_bridge_outcome_binds_integrated_micro_session_to_trace(
     evidence["evidence_sha256"] = quality._sha256(
         {key: value for key, value in evidence.items() if key != "evidence_sha256"}
     )
-    outcome = bridge_row["future_outcome"]
-    outcome["evidence_sha256"] = evidence["evidence_sha256"]
-    outcome["outcome_sha256"] = quality._sha256(
-        {key: value for key, value in outcome.items() if key != "outcome_sha256"}
+    from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+        rebuild_future_outcome_from_source,
+    )
+
+    rebuild_source = bridge_row["future_outcome_rebuild_source"]
+    source_pool = bridge_report["future_outcome_source_pool"]
+    for pool_name in ("market", "depth"):
+        replacements = {}
+        rewritten_pool = {}
+        for old_hash, raw_row in source_pool["row_pools"][pool_name].items():
+            rewritten_row = {
+                **raw_row,
+                "venue": "SOR",
+                "session_bucket": "SOR_REGULAR",
+            }
+            new_hash = quality._sha256(rewritten_row)
+            replacements[old_hash] = new_hash
+            rewritten_pool[new_hash] = rewritten_row
+        source_pool["row_pools"][pool_name] = rewritten_pool
+        reference_field = f"{pool_name}_row_sha256s"
+        rebuild_source[reference_field] = [
+            replacements[row_hash] for row_hash in rebuild_source[reference_field]
+        ]
+        rebuild_source[f"{reference_field}_sha256"] = quality._sha256(
+            rebuild_source[reference_field]
+        )
+    source_pool["source_pool_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in source_pool.items()
+            if key != "source_pool_content_sha256"
+        }
+    )
+    bridge_report["future_outcome_source_pool_content_sha256"] = source_pool[
+        "source_pool_content_sha256"
+    ]
+    bridge_report["future_outcome_source_pool_artifact_sha256"] = quality._sha256(
+        source_pool
+    )
+    rebuild_source["evidence_sha256"] = evidence["evidence_sha256"]
+    rebuild_source["source_pool_content_sha256"] = source_pool[
+        "source_pool_content_sha256"
+    ]
+    rebuild_source["rebuild_source_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in rebuild_source.items()
+            if key != "rebuild_source_sha256"
+        }
+    )
+    bridge_row["future_outcome"] = rebuild_future_outcome_from_source(
+        evidence=evidence,
+        rebuild_source=rebuild_source,
+        source_pool=bridge_report["future_outcome_source_pool"],
+    )
+    sidecar = bridge_row["ask_depletion_sidecar"]
+    sidecar["context"].update(
+        {
+            "venue": "SOR",
+            "session_bucket": "SOR_REGULAR",
+        }
+    )
+    sidecar["tactical_micro_reversion_evidence_sha256"] = evidence["evidence_sha256"]
+    sidecar["ask_depletion_context_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in sidecar.items()
+            if key != "ask_depletion_context_sha256"
+        }
     )
     bridge_report["report_content_sha256"] = quality._sha256(
         {
@@ -6087,25 +7007,41 @@ def test_micro_reversion_bridge_outcome_binds_integrated_micro_session_to_trace(
         if evidence_key not in candidate_input:
             continue
         candidate_input[evidence_key] = deepcopy(evidence)
+        feature_view = candidate_input.get(
+            "micro_reversion_ask_depletion_feature_view_v2"
+        )
+        if isinstance(feature_view, dict):
+            feature_view["context"] = deepcopy(sidecar["context"])
+            feature_view["tactical_micro_reversion_evidence_sha256"] = evidence[
+                "evidence_sha256"
+            ]
+            feature_view["ask_depletion_context_sha256"] = sidecar[
+                "ask_depletion_context_sha256"
+            ]
+            feature_view["feature_view_sha256"] = quality._sha256(
+                {
+                    key: value
+                    for key, value in feature_view.items()
+                    if key != "feature_view_sha256"
+                }
+            )
+            request["ask_depletion_context_sha256"] = sidecar[
+                "ask_depletion_context_sha256"
+            ]
         request["candidate_input_sha256"] = quality._sha256(candidate_input)
         request["tactical_micro_reversion_evidence_sha256"] = evidence[
             "evidence_sha256"
         ]
-    materialized["report_content_sha256"] = quality._sha256(
-        {
-            key: value
-            for key, value in materialized.items()
-            if key != "report_content_sha256"
-        }
-    )
+    _reseal_current_materialized_report(materialized)
 
-    artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
-        bridge_report=bridge_report,
-        materialized_report=materialized,
-    )
-
-    assert artifact["eligible_label_count"] == 1
-    assert artifact["labels"][0]["session_bucket"] == "KRX_REGULAR"
+    with pytest.raises(
+        ValueError,
+        match="current_action_neutral_selective_exclusion_forbidden",
+    ):
+        quality.build_micro_reversion_action_neutral_outcome_labels(
+            bridge_report=bridge_report,
+            materialized_report=materialized,
+        )
 
 
 def test_micro_reversion_bridge_outcome_rejects_unsupported_stage_per_row():
@@ -6113,24 +7049,16 @@ def test_micro_reversion_bridge_outcome_rejects_unsupported_stage_per_row():
     for request in materialized["requests"]:
         request["stage"] = "entry_price"
         request["endpoint"] = "entry_price"
-    materialized["report_content_sha256"] = quality._sha256(
-        {
-            key: value
-            for key, value in materialized.items()
-            if key != "report_content_sha256"
-        }
-    )
+    _reseal_current_materialized_report(materialized)
 
-    artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
-        bridge_report=bridge_report,
-        materialized_report=materialized,
-    )
-
-    assert artifact["eligible_label_count"] == 0
-    assert artifact["excluded_parent_count"] == 1
-    assert artifact["exclusions"][0]["reason"] == (
-        "micro_reversion_bridge_stage_owner_unsupported"
-    )
+    with pytest.raises(
+        ValueError,
+        match="current_action_neutral_selective_exclusion_forbidden",
+    ):
+        quality.build_micro_reversion_action_neutral_outcome_labels(
+            bridge_report=bridge_report,
+            materialized_report=materialized,
+        )
 
 
 def test_micro_reversion_action_neutral_label_tamper_fails_declared_hash():
@@ -6192,7 +7120,7 @@ def test_micro_reversion_action_neutral_label_flows_into_three_arm_evaluator():
 
     report = quality.run_micro_reversion_materialized_requests(
         materialized_report=materialized,
-        outcome_labels=artifact["labels"],
+        outcome_label_artifact=artifact,
         execute_candidate=True,
         candidate_runner=runner,
         max_new_requests=3,
@@ -6222,6 +7150,7 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
     materialized_path = tmp_path / "materialized.json"
     bridge_path = tmp_path / "bridge.json"
     output_path = tmp_path / "execution.json"
+    capacity_path = tmp_path / "capacity.json"
     raw_pricing_path = tmp_path / "provider-pricing-source.txt"
     raw_pricing_bytes = b"reviewed test pricing source\n"
     raw_pricing_path.write_bytes(raw_pricing_bytes)
@@ -6259,6 +7188,7 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
     pricing_path.write_text(json.dumps(pricing_payload), encoding="utf-8")
     budget_ledger_path = tmp_path / "provider-budget.jsonl"
     budget_summary_path = tmp_path / "provider-budget-summary.json"
+    outcome_companion_path = tmp_path / "action-neutral-outcome-labels.json"
     materialized_path.write_text(json.dumps(materialized), encoding="utf-8")
     bridge_path.write_text(json.dumps(bridge_report), encoding="utf-8")
     monkeypatch.setattr(quality, "_offline_openai_api_keys", lambda: ["test-key"])
@@ -6267,10 +7197,30 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
         "micro_reversion_execution_result_path",
         lambda target_date: output_path,
     )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_action_neutral_label_path",
+        lambda _target_date: outcome_companion_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_storage_capacity_status_path",
+        lambda _target_date: capacity_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "_micro_reversion_large_artifact_capacity_gate",
+        lambda **_kwargs: _healthy_capacity_gate(
+            target_date="2026-08-14",
+            capacity_path=capacity_path,
+        ),
+    )
+    provider_request_ids = []
 
     def fake_openai_runner(request, *, api_keys, timeout_sec):
         assert api_keys == ["test-key"]
         assert timeout_sec == 45.0
+        provider_request_ids.append(request["paired_replay_id"])
         candidate = request["candidate"]
         return {
             "candidate_response": _valid_micro_reversion_entry_response(),
@@ -6292,36 +7242,42 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
     monkeypatch.setattr(
         quality, "execute_openai_prompt_v2_candidate", fake_openai_runner
     )
+    cli_args = [
+        "--date",
+        "2026-08-14",
+        "--mode",
+        "micro_reversion_execute",
+        "--micro-reversion-materialized-requests",
+        str(materialized_path),
+        "--micro-reversion-bridge-report",
+        str(bridge_path),
+        "--execute-candidate",
+        "--write",
+        "--candidate-max-new-requests",
+        "3",
+        "--micro-reversion-provider-pricing",
+        str(pricing_path),
+        "--micro-reversion-provider-daily-attempt-cap",
+        "12",
+        "--micro-reversion-provider-daily-usd-cap",
+        "1",
+        "--micro-reversion-storage-capacity-status",
+        str(capacity_path),
+        "--micro-reversion-provider-budget-ledger",
+        str(budget_ledger_path),
+        "--micro-reversion-provider-budget-summary",
+        str(budget_summary_path),
+        *_provider_authority_cli_args(
+            monkeypatch=monkeypatch,
+            target_date="2026-08-14",
+            pricing_path=pricing_path,
+            pricing_payload=pricing_payload,
+            ledger_path=budget_ledger_path,
+            summary_path=budget_summary_path,
+        ),
+    ]
 
-    assert (
-        quality.main(
-            [
-                "--date",
-                "2026-08-14",
-                "--mode",
-                "micro_reversion_execute",
-                "--micro-reversion-materialized-requests",
-                str(materialized_path),
-                "--micro-reversion-bridge-report",
-                str(bridge_path),
-                "--execute-candidate",
-                "--write",
-                "--candidate-max-new-requests",
-                "3",
-                "--micro-reversion-provider-pricing",
-                str(pricing_path),
-                "--micro-reversion-provider-daily-attempt-cap",
-                "12",
-                "--micro-reversion-provider-daily-usd-cap",
-                "1",
-                "--micro-reversion-provider-budget-ledger",
-                str(budget_ledger_path),
-                "--micro-reversion-provider-budget-summary",
-                str(budget_summary_path),
-            ]
-        )
-        == 0
-    )
+    assert quality.main(cli_args) == 0
 
     printed = json.loads(capsys.readouterr().out)
     written = json.loads(output_path.read_text(encoding="utf-8"))
@@ -6330,11 +7286,250 @@ def test_micro_reversion_execute_cli_uses_safe_single_worker_default(
     assert written["provider_call_performed"] is True
     assert budget_ledger_path.exists()
     assert budget_summary_path.exists()
+    assert json.loads(outcome_companion_path.read_text(encoding="utf-8"))[
+        "artifact_content_sha256"
+    ]
     assert written["runtime_effect"] is False
     assert written["actual_order_submitted"] is False
     checkpoint_path = output_path.with_name(f"{output_path.stem}.checkpoint.json")
     assert not checkpoint_path.exists()
     assert not quality._micro_reversion_checkpoint_record_dir(checkpoint_path).exists()
+    assert len(provider_request_ids) == 3
+
+    compressed_output_path = output_path.with_name(f"{output_path.name}.gz")
+    with (
+        output_path.open("rb") as source,
+        gzip.open(compressed_output_path, "wb") as target,
+    ):
+        target.write(source.read())
+    output_path.unlink()
+
+    assert quality.main(cli_args) == 0
+
+    resumed_printed = json.loads(capsys.readouterr().out)
+    assert resumed_printed["status"] == "offline_three_arm_execution_complete"
+    assert resumed_printed["artifact_path"] == str(compressed_output_path)
+    assert len(provider_request_ids) == 3
+    assert compressed_output_path.exists()
+    assert not output_path.exists()
+
+    checkpoint_record = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256=(
+            quality._micro_reversion_materialized_request_census_sha256(materialized)
+        ),
+        sequence=1,
+        previous_record_sha256=None,
+        result=written["results"][0],
+    )
+    quality._write_micro_reversion_checkpoint_record(
+        checkpoint_path,
+        checkpoint_record,
+    )
+    output_path.write_text('{"conflicting_plain_result":true}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="json_artifact_plain_gzip_conflict"):
+        quality.main(cli_args)
+
+    assert output_path.exists()
+    assert compressed_output_path.exists()
+    assert len(provider_request_ids) == 3
+
+
+def test_micro_reversion_direct_execute_serializes_and_reuses_terminal_report(
+    tmp_path,
+    monkeypatch,
+):
+    """Two exact executors publish one call census and one terminal winner."""
+
+    target_date = "2026-08-14"
+    _freeze_quality_clock(monkeypatch, target_date=target_date)
+    monkeypatch.setattr(
+        quality,
+        "MICRO_REVERSION_PROVIDER_RESPONSE_CHAIN_ACTIVATION_DATE",
+        target_date,
+    )
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
+    materialized_path = tmp_path / "materialized.json"
+    bridge_path = tmp_path / "bridge.json"
+    output_path = tmp_path / "execution.json"
+    capacity_path = tmp_path / "capacity.json"
+    outcome_path = tmp_path / "outcomes.json"
+    raw_pricing_path = tmp_path / "provider-pricing-source.txt"
+    raw_pricing_bytes = b"reviewed concurrent direct pricing source\n"
+    raw_pricing_path.write_bytes(raw_pricing_bytes)
+    pricing_path = tmp_path / "provider-pricing.json"
+    pricing_payload = {
+        "schema": PRICING_ARTIFACT_SCHEMA,
+        "artifact_id": "provider-pricing-concurrent-direct-v1",
+        "review_status": "reviewed",
+        "reviewed_at": f"{target_date}T18:00:00+09:00",
+        "effective_from": target_date,
+        "effective_to": target_date,
+        "pricing_basis": "provider_public_rate",
+        "raw_pricing_source_path": raw_pricing_path.name,
+        "raw_pricing_source_bytes_sha256": hashlib.sha256(
+            raw_pricing_bytes
+        ).hexdigest(),
+        "raw_pricing_source_size_bytes": len(raw_pricing_bytes),
+        "prices": [
+            {
+                "provider": "openai",
+                "model": "gpt-test",
+                "input_usd_per_million_tokens": "1",
+                "output_usd_per_million_tokens": "10",
+            }
+        ],
+        "decision_authority": PRICING_AUTHORITY,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    pricing_payload["artifact_content_sha256"] = pricing_artifact_content_sha256(
+        pricing_payload
+    )
+    pricing_path.write_text(json.dumps(pricing_payload), encoding="utf-8")
+    materialized_path.write_text(json.dumps(materialized), encoding="utf-8")
+    bridge_path.write_text(json.dumps(bridge_report), encoding="utf-8")
+    budget_ledger_path = tmp_path / "provider-budget.jsonl"
+    budget_summary_path = tmp_path / "provider-budget-summary.json"
+    monkeypatch.setattr(quality, "_offline_openai_api_keys", lambda: ["test-key"])
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_execution_result_path",
+        lambda _target_date: output_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_action_neutral_label_path",
+        lambda _target_date: outcome_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_storage_capacity_status_path",
+        lambda _target_date: capacity_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "_micro_reversion_large_artifact_capacity_gate",
+        lambda **_kwargs: _healthy_capacity_gate(
+            target_date=target_date,
+            capacity_path=capacity_path,
+        ),
+    )
+    process_context = multiprocessing.get_context("fork")
+    provider_call_count = process_context.Value("i", 0)
+    provider_call_lock = process_context.Lock()
+    original_openai_runner = quality.execute_openai_prompt_v2_candidate
+
+    def concurrent_openai_runner(
+        request,
+        *,
+        api_keys=None,
+        timeout_sec=45.0,
+        _request_projection_only=False,
+    ):
+        if _request_projection_only:
+            return original_openai_runner(
+                request,
+                _request_projection_only=True,
+            )
+        assert api_keys == ["test-key"]
+        assert timeout_sec == 45.0
+        with provider_call_lock:
+            provider_call_count.value += 1
+        time.sleep(0.05)
+        response = _tamper_evident_openai_runner(request)
+        response["provider_provenance"].update(
+            {"input_tokens": 120, "output_tokens": 30}
+        )
+        return response
+
+    monkeypatch.setattr(
+        quality,
+        "execute_openai_prompt_v2_candidate",
+        concurrent_openai_runner,
+    )
+    cli_args = [
+        "--date",
+        target_date,
+        "--mode",
+        "micro_reversion_execute",
+        "--micro-reversion-materialized-requests",
+        str(materialized_path),
+        "--micro-reversion-bridge-report",
+        str(bridge_path),
+        "--execute-candidate",
+        "--write",
+        "--candidate-max-new-requests",
+        "3",
+        "--micro-reversion-provider-pricing",
+        str(pricing_path),
+        "--micro-reversion-provider-daily-attempt-cap",
+        "12",
+        "--micro-reversion-provider-daily-usd-cap",
+        "1",
+        "--micro-reversion-storage-capacity-status",
+        str(capacity_path),
+        "--micro-reversion-provider-budget-ledger",
+        str(budget_ledger_path),
+        "--micro-reversion-provider-budget-summary",
+        str(budget_summary_path),
+        *_provider_authority_cli_args(
+            monkeypatch=monkeypatch,
+            target_date=target_date,
+            pricing_path=pricing_path,
+            pricing_payload=pricing_payload,
+            ledger_path=budget_ledger_path,
+            summary_path=budget_summary_path,
+        ),
+    ]
+    ready_queue = process_context.Queue()
+    result_queue = process_context.Queue()
+    start_event = process_context.Event()
+    processes = [
+        process_context.Process(
+            target=_micro_reversion_direct_execute_worker,
+            args=(cli_args, ready_queue, start_event, result_queue),
+        )
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    outcomes = []
+    try:
+        assert [ready_queue.get(timeout=10) for _ in processes] == ["ready", "ready"]
+        start_event.set()
+        outcomes = [result_queue.get(timeout=30) for _ in processes]
+    finally:
+        start_event.set()
+        for process in processes:
+            process.join(timeout=30)
+            if process.is_alive():  # pragma: no cover - failure cleanup
+                process.terminate()
+                process.join(timeout=10)
+
+    assert sorted(outcomes) == [("ok", 0), ("ok", 0)]
+    assert all(process.exitcode == 0 for process in processes)
+    assert provider_call_count.value == 3
+    terminal = json.loads(output_path.read_text(encoding="utf-8"))
+    assert terminal["status"] == "offline_three_arm_execution_complete"
+    assert terminal["candidate_model_call_attempted"] is True
+    assert terminal["provider_call_performed"] is True
+    assert terminal["new_result_count"] == 3
+    assert len(terminal["new_result_ids"]) == 3
+    assert terminal["report_content_sha256"] == quality._sha256(
+        {
+            key: value
+            for key, value in terminal.items()
+            if key != "report_content_sha256"
+        }
+    )
+    checkpoint = quality._load_micro_reversion_checkpoint(
+        quality.micro_reversion_execution_checkpoint_path(target_date)
+    )
+    assert checkpoint["checkpoint_record_count"] == 3
+    assert [row["result_id"] for row in checkpoint["results"]] == terminal["result_ids"]
 
 
 def test_micro_reversion_cli_ignores_unselected_openai_credentials_for_bedrock_batch(
@@ -6356,7 +7551,7 @@ def test_micro_reversion_cli_ignores_unselected_openai_credentials_for_bedrock_b
         request["paired_replay_id"] = (
             f"{future_parent_id}:{request['micro_reversion_replay_arm']}"
         )
-        request["decision_trace_id"] = "future-openai-trace"
+        request["decision_trace_id"] = prepared[0]["decision_trace_id"]
         request["outcome_join_key"] = future_label_id
     for request in materialized["requests"]:
         candidate = request["candidate"]
@@ -6366,33 +7561,14 @@ def test_micro_reversion_cli_ignores_unselected_openai_credentials_for_bedrock_b
         )
         candidate["contract_sha256"] = quality._candidate_contract_sha256(candidate)
     materialized["requests"].extend(future_openai_requests)
-    materialized["request_ids"] = [
-        request["paired_replay_id"] for request in materialized["requests"]
-    ]
-    materialized["request_count"] = len(materialized["requests"])
-    materialized["report_content_sha256"] = quality._sha256(
-        {
-            key: value
-            for key, value in materialized.items()
-            if key != "report_content_sha256"
-        }
-    )
-    first_label = _micro_reversion_execution_label(prepared)
-    future_label = {
-        **deepcopy(first_label),
-        "label_id": future_label_id,
-        "decision_trace_id": "future-openai-trace",
-    }
+    _reseal_current_materialized_report(materialized)
+    outcome_artifact = _current_outcome_artifact_for_materialized(materialized)
     materialized_path = tmp_path / "materialized.json"
     outcome_path = tmp_path / "outcomes.json"
     output_path = tmp_path / "execution.json"
+    capacity_path = tmp_path / "capacity.json"
     materialized_path.write_text(json.dumps(materialized), encoding="utf-8")
-    outcome_path.write_text(
-        json.dumps(
-            {"schema": "test_outcomes_v1", "labels": [first_label, future_label]}
-        ),
-        encoding="utf-8",
-    )
+    outcome_path.write_text(json.dumps(outcome_artifact), encoding="utf-8")
     raw_pricing_path = tmp_path / "provider-pricing-source.txt"
     raw_pricing_bytes = b"reviewed mixed provider test pricing source\n"
     raw_pricing_path.write_bytes(raw_pricing_bytes)
@@ -6441,11 +7617,24 @@ def test_micro_reversion_cli_ignores_unselected_openai_credentials_for_bedrock_b
         "micro_reversion_execution_result_path",
         lambda _target_date: output_path,
     )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_storage_capacity_status_path",
+        lambda _target_date: capacity_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "_micro_reversion_large_artifact_capacity_gate",
+        lambda **_kwargs: _healthy_capacity_gate(
+            target_date="2026-08-14",
+            capacity_path=capacity_path,
+        ),
+    )
     original_exclusion = quality._micro_reversion_executor_exclusion
     monkeypatch.setattr(
         quality,
         "_micro_reversion_executor_exclusion",
-        lambda request: (
+        lambda request, **_kwargs: (
             None
             if str((request.get("candidate") or {}).get("provider") or "")
             == "bedrock_test"
@@ -6499,10 +7688,20 @@ def test_micro_reversion_cli_ignores_unselected_openai_credentials_for_bedrock_b
             "12",
             "--micro-reversion-provider-daily-usd-cap",
             "1",
+            "--micro-reversion-storage-capacity-status",
+            str(capacity_path),
             "--micro-reversion-provider-budget-ledger",
             str(tmp_path / "provider-budget.jsonl"),
             "--micro-reversion-provider-budget-summary",
             str(tmp_path / "provider-budget-summary.json"),
+            *_provider_authority_cli_args(
+                monkeypatch=monkeypatch,
+                target_date="2026-08-14",
+                pricing_path=pricing_path,
+                pricing_payload=pricing_payload,
+                ledger_path=tmp_path / "provider-budget.jsonl",
+                summary_path=tmp_path / "provider-budget-summary.json",
+            ),
         ]
     )
 
@@ -6542,6 +7741,42 @@ def test_micro_reversion_execute_cli_rejects_explicit_parallel_workers(
         )
 
 
+def test_micro_reversion_execute_cli_rejects_no_write_before_provider_call(
+    tmp_path, monkeypatch
+):
+    materialized_path = tmp_path / "materialized.json"
+    materialized_path.write_text("{}", encoding="utf-8")
+    provider_called = False
+
+    def forbidden_provider(*_args, **_kwargs):
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("provider call must be blocked before durable write")
+
+    monkeypatch.setattr(
+        quality,
+        "execute_openai_prompt_v2_candidate",
+        forbidden_provider,
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        quality.main(
+            [
+                "--date",
+                "2026-08-25",
+                "--mode",
+                "micro_reversion_execute",
+                "--micro-reversion-materialized-requests",
+                str(materialized_path),
+                "--execute-candidate",
+                "--candidate-max-new-requests",
+                "3",
+            ]
+        )
+
+    assert provider_called is False
+
+
 def _valid_micro_reversion_entry_response():
     return {
         "edge_state": "EDGE",
@@ -6562,6 +7797,892 @@ def _valid_micro_reversion_entry_response():
             "trigger": "recovery_required",
         },
     }
+
+
+def _tamper_evident_openai_runner(request, response=None, *, raw_text=None):
+    response = _valid_micro_reversion_entry_response() if response is None else response
+    raw_bytes = (
+        raw_text.encode("utf-8")
+        if raw_text is not None
+        else json.dumps(
+            response,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    if raw_text is None:
+        parsed_response = response
+        parse_status = "pass"
+    else:
+        try:
+            parsed_response = json.loads(raw_text)
+        except ValueError:
+            parsed_response = None
+            parse_status = "candidate_response_json_invalid"
+        else:
+            parse_status = "pass"
+        if parse_status == "pass" and not isinstance(parsed_response, dict):
+            parsed_response = None
+            parse_status = "candidate_response_not_object"
+    candidate = request["candidate"]
+    declared_schema = candidate.get("response_schema")
+    if isinstance(declared_schema, dict) and (
+        candidate.get("semantic_validator_version")
+        != quality.ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+    ):
+        response_schema = declared_schema
+    else:
+        response_schema = quality._candidate_openai_schema(
+            stage=request["stage"],
+            candidate=candidate,
+            setup_evidence=request.get("entry_setup_evidence"),
+        )
+    schema_instance_sha256 = candidate.get(
+        "response_schema_instance_sha256"
+    ) or quality._sha256(response_schema)
+    response_id = f"response-{request['paired_replay_id']}"
+    projection = quality.execute_openai_prompt_v2_candidate(
+        request,
+        _request_projection_only=True,
+    )["provider_request_projection"]
+    receipt_content = {
+        "schema": quality.MICRO_REVERSION_OPENAI_ATTEMPT_RECEIPT_SCHEMA,
+        "paired_replay_parent_id": request.get("paired_replay_parent_id"),
+        "paired_replay_id": request["paired_replay_id"],
+        "micro_reversion_replay_arm": request.get("micro_reversion_replay_arm"),
+        "candidate_input_sha256": request.get("candidate_input_sha256"),
+        "candidate_contract_sha256": candidate["contract_sha256"],
+        "offline_provider_attempt_number": request["offline_provider_attempt_number"],
+        "provider": "openai",
+        "model": candidate["model"],
+        "response_id": response_id,
+        "provider_output_projection": "openai_output_text",
+        "provider_output_encoding": "utf-8+base64",
+        "provider_output_bytes_b64": base64.b64encode(raw_bytes).decode("ascii"),
+        "provider_output_size_bytes": len(raw_bytes),
+        "provider_output_bytes_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+        "parse_transform_version": (
+            quality.MICRO_REVERSION_OPENAI_PARSE_TRANSFORM_VERSION
+        ),
+        "parse_status": parse_status,
+        "parsed_candidate_payload": parsed_response,
+        "parsed_candidate_payload_sha256": (
+            quality._sha256(parsed_response)
+            if isinstance(parsed_response, dict)
+            else None
+        ),
+        "response_schema_instance_sha256": schema_instance_sha256,
+        "provider_request_projection": projection,
+        "provider_request_projection_sha256": quality._sha256(projection),
+    }
+    return {
+        "candidate_response": parsed_response or {},
+        "provider_attempt_receipt": {
+            **receipt_content,
+            "attempt_receipt_content_sha256": quality._sha256(receipt_content),
+        },
+        "provider_provenance": {
+            "provider": "openai",
+            "model": candidate["model"],
+            "transport": "openai_responses_http_offline",
+            "source_transport_contract": candidate["transport"],
+            "response_id": response_id,
+            "response_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+            "provider_request_projection_sha256": quality._sha256(projection),
+            "provider_none": False,
+            "provider_call_attempted": True,
+            "provider_call_succeeded": True,
+        },
+    }
+
+
+def _reseal_current_candidate_attempt_chain(request, replay_result):
+    previous_hash = None
+    selected_attempt = None
+    for attempt in replay_result["candidate_attempts"]:
+        attempt["previous_attempt_content_sha256"] = previous_hash
+        attempt["attempt_content_sha256"] = quality._sha256(
+            {
+                key: value
+                for key, value in attempt.items()
+                if key != "attempt_content_sha256"
+            }
+        )
+        previous_hash = attempt["attempt_content_sha256"]
+        if attempt["status"] == "pass":
+            selected_attempt = attempt
+    assert selected_attempt is not None
+    selected_hash = selected_attempt["attempt_content_sha256"]
+    replay_result["candidate_attempt_chain_head_sha256"] = previous_hash
+    replay_result["candidate_selected_attempt_number"] = selected_attempt[
+        "attempt_number"
+    ]
+    replay_result["candidate_selected_attempt_content_sha256"] = selected_hash
+    replay_result["candidate_selected_payload_content_sha256"] = quality._sha256(
+        selected_attempt["parsed_candidate_response"]
+    )
+    assert replay_result["candidate_transform_chain"] == []
+    replay_result["candidate_transform_chain_head_sha256"] = selected_hash
+    response_chain_content = {
+        "chain_version": quality.MICRO_REVERSION_CANDIDATE_RESPONSE_CHAIN_VERSION,
+        "paired_replay_id": request["paired_replay_id"],
+        "candidate_input_sha256": request["candidate_input_sha256"],
+        "candidate_contract_sha256": request["candidate"]["contract_sha256"],
+        "selected_attempt_content_sha256": selected_hash,
+        "transform_chain_head_sha256": selected_hash,
+        "final_candidate_response_content_sha256": replay_result[
+            "candidate_response_content_sha256"
+        ],
+    }
+    replay_result["candidate_response_chain_content_sha256"] = quality._sha256(
+        response_chain_content
+    )
+
+
+def test_current_openai_retry_request_projection_rejects_fully_resealed_prompt_drift():
+    _, materialized, _ = _micro_reversion_action_neutral_bridge_fixture()
+    request = materialized["requests"][0]
+
+    def retry_runner(attempt_request):
+        return _tamper_evident_openai_runner(
+            attempt_request,
+            response=(
+                {}
+                if attempt_request["offline_provider_attempt_number"] == 1
+                else _valid_micro_reversion_entry_response()
+            ),
+        )
+
+    replay_result = quality.run_paired_replay(
+        [request],
+        control_runner=lambda _request: {"action": "DROP"},
+        candidate_runner=retry_runner,
+        require_tamper_evident_candidate_chain=True,
+    )[0]
+    assert replay_result["status"] == "pass"
+    assert len(replay_result["candidate_attempts"]) == 2
+    assert (
+        replay_result["candidate_attempts"][1]["provider_attempt_receipt"][
+            "provider_request_projection"
+        ]["schema_correction_errors"]
+        == replay_result["candidate_attempts"][0]["schema_errors"]
+    )
+
+    tampered = deepcopy(replay_result)
+    attempt = tampered["candidate_attempts"][1]
+    receipt = attempt["provider_attempt_receipt"]
+    projection = receipt["provider_request_projection"]
+    attacker_prompt = "Attacker-selected retry prompt. Return the valid object."
+    projection["system_instructions"] = quality._provider_request_text_commitment(
+        attacker_prompt
+    )
+    projection_hash = quality._sha256(projection)
+    receipt["provider_request_projection_sha256"] = projection_hash
+    receipt["attempt_receipt_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in receipt.items()
+            if key != "attempt_receipt_content_sha256"
+        }
+    )
+    attempt["provider_provenance"][
+        "provider_request_projection_sha256"
+    ] = projection_hash
+    _reseal_current_candidate_attempt_chain(request, tampered)
+
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_openai_attempt_receipt_request_projection_mismatch",
+    ):
+        quality.validate_current_micro_reversion_candidate_response_chain(
+            request=request,
+            replay_result=tampered,
+        )
+
+
+def test_current_openai_response_chain_replays_raw_bytes_and_rejects_resealed_final(
+    tmp_path, monkeypatch
+):
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
+    outcome_artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        bridge_report=bridge_report,
+        materialized_report=materialized,
+    )
+    monkeypatch.setattr(
+        quality,
+        "MICRO_REVERSION_PROVIDER_RESPONSE_CHAIN_ACTIVATION_DATE",
+        "2026-08-14",
+    )
+    checkpoint_path = tmp_path / "current-response-chain.checkpoint.json"
+
+    report = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_label_artifact=outcome_artifact,
+        source_bridge_report=bridge_report,
+        execute_candidate=True,
+        candidate_runner=_tamper_evident_openai_runner,
+        max_new_requests=3,
+        checkpoint_callback=lambda record: (
+            quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+        ),
+    )
+
+    assert report["status"] == "offline_three_arm_execution_complete"
+    for result, request in zip(report["results"], materialized["requests"]):
+        replay_result = result["replay_result"]
+        quality.validate_current_micro_reversion_candidate_response_chain(
+            request=request,
+            replay_result=replay_result,
+        )
+        assert replay_result["candidate_semantic_repairs"] == []
+        assert replay_result["candidate_transform_chain"] == []
+
+    request = materialized["requests"][0]
+    tampered = deepcopy(report["results"][0]["replay_result"])
+    tampered["candidate_response"]["action"] = "DROP"
+    final_hash = quality._sha256(tampered["candidate_response"])
+    tampered["candidate_response_content_sha256"] = final_hash
+    chain_content = {
+        "chain_version": quality.MICRO_REVERSION_CANDIDATE_RESPONSE_CHAIN_VERSION,
+        "paired_replay_id": request["paired_replay_id"],
+        "candidate_input_sha256": request["candidate_input_sha256"],
+        "candidate_contract_sha256": request["candidate"]["contract_sha256"],
+        "selected_attempt_content_sha256": tampered[
+            "candidate_selected_attempt_content_sha256"
+        ],
+        "transform_chain_head_sha256": tampered[
+            "candidate_transform_chain_head_sha256"
+        ],
+        "final_candidate_response_content_sha256": final_hash,
+    }
+    tampered["candidate_response_chain_content_sha256"] = quality._sha256(chain_content)
+
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_current_direct_response_binding_mismatch",
+    ):
+        quality.validate_current_micro_reversion_candidate_response_chain(
+            request=request,
+            replay_result=tampered,
+        )
+
+
+def test_current_openai_invalid_json_attempts_retain_raw_receipt_chain():
+    _, materialized, _ = _micro_reversion_action_neutral_bridge_fixture()
+    request = materialized["requests"][0]
+
+    result = quality.run_paired_replay(
+        [request],
+        control_runner=lambda _request: {"action": "DROP"},
+        candidate_runner=lambda attempt_request: _tamper_evident_openai_runner(
+            attempt_request,
+            raw_text="not-json",
+        ),
+        require_tamper_evident_candidate_chain=True,
+    )[0]
+
+    assert result["status"] == "schema_rejected"
+    assert len(result["candidate_attempts"]) == quality.CANDIDATE_SCHEMA_MAX_ATTEMPTS
+    assert all(
+        attempt["provider_attempt_receipt"]["parse_status"]
+        == "candidate_response_json_invalid"
+        and attempt["parsed_candidate_response"] is None
+        and attempt["status"] == "schema_rejected"
+        for attempt in result["candidate_attempts"]
+    )
+    assert (
+        result["candidate_attempt_chain_head_sha256"]
+        == result["candidate_attempts"][-1]["attempt_content_sha256"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage", "endpoint"),
+    (("holding", "holding_flow"), ("exit", "exit")),
+)
+def test_current_bedrock_lifecycle_parent_chain_uses_single_calls_and_rejects_reseal(
+    monkeypatch, stage, endpoint
+):
+    from src.engine.bedrock_nova_provider import (
+        BedrockNovaModelProfile,
+        BedrockNovaResult,
+    )
+    from src.engine.scalping import ai_stage_coverage_replay
+
+    response = {
+        **_valid_micro_reversion_entry_response(),
+        "action": "HOLD",
+    }
+    response_schema = quality._prompt_v2_openai_schema("holding")
+    prompt = "Review the frozen holding lifecycle input. Return JSON only."
+    candidate = {
+        "provider": "bedrock",
+        "model": "nova_lite_v2",
+        "transport": "bedrock_converse_offline",
+        "prompt_version": "current_holding_candidate_v1",
+        "system_prompt": prompt,
+        "system_prompt_sha256": quality._sha256(prompt),
+        "response_schema": response_schema,
+        "response_schema_sha256": quality._sha256(response_schema),
+        "schema_name": "current_holding_candidate_v1",
+        "require_json": True,
+        "max_output_tokens": 768,
+        "semantic_validator_version": (
+            quality.DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION
+        ),
+    }
+    bedrock_request_profile = {
+        "schema": quality.MICRO_REVERSION_BEDROCK_REQUEST_PROFILE_SCHEMA,
+        "family": "lite_v2",
+        "model_id": "test.nova-lite-v2",
+        "region_name": "ap-northeast-2",
+        "max_output_tokens": 768,
+        "temperature": 0,
+        "timeout_ms": 5_000,
+        "prompt_cache_enabled": False,
+    }
+    candidate["bedrock_request_profile"] = bedrock_request_profile
+    candidate["bedrock_request_profile_sha256"] = quality._sha256(
+        bedrock_request_profile
+    )
+    candidate["contract_sha256"] = quality._candidate_contract_sha256(candidate)
+    exact_payload = {"holding": {"position_qty": 10}}
+    candidate_input = {"exact_payload": exact_payload}
+    parent_id = f"current-bedrock-{stage}-parent"
+    requests = [
+        {
+            "paired_replay_parent_id": parent_id,
+            "paired_replay_id": f"{parent_id}:{arm}",
+            "micro_reversion_replay_arm": arm,
+            "ablation_design_version": quality.CURRENT_DESIGN_VERSION,
+            "decision_trace_id": f"current-bedrock-{stage}-trace",
+            "stage": stage,
+            "endpoint": endpoint,
+            "payload_sha256": quality._sha256(exact_payload),
+            "source_exact_payload_sha256": quality._sha256(exact_payload),
+            "exact_payload": exact_payload,
+            "candidate_input": candidate_input,
+            "candidate_input_sha256": quality._sha256(candidate_input),
+            "candidate": deepcopy(candidate),
+            **quality.OFFLINE_CONTRACT,
+        }
+        for arm in quality.arm_set_for_design(quality.CURRENT_DESIGN_VERSION)
+    ]
+    profile = BedrockNovaModelProfile(
+        family="lite_v2",
+        model_id="test.nova-lite-v2",
+        region_name="ap-northeast-2",
+        max_output_tokens=768,
+        timeout_ms=5_000,
+        prompt_cache_enabled=False,
+        input_usd_per_1m=0.0,
+        output_usd_per_1m=0.0,
+        cache_read_input_usd_per_1m=0.0,
+        cache_write_input_usd_per_1m=0.0,
+    )
+    raw_text = json.dumps(response, sort_keys=True, separators=(",", ":"))
+    calls = []
+    rotation_flags = []
+
+    class FakeProvider:
+        def __init__(self, *, key_rotation_enabled=True):
+            rotation_flags.append(key_rotation_enabled)
+
+        def converse(self, *, prompt, user_input, profile):
+            calls.append((prompt, user_input, profile.family))
+            return BedrockNovaResult(
+                payload=deepcopy(response),
+                raw_text=raw_text,
+                parse_ok=True,
+                parse_error="",
+                model_id=profile.model_id,
+                region_name=profile.region_name,
+                key_index=0,
+                latency_ms=10,
+                input_tokens=100,
+                output_tokens=30,
+                cache_read_input_tokens=0,
+                cache_write_input_tokens=0,
+                total_input_tokens=100,
+                estimated_cost_usd=0.0,
+                attempted_key_count=1,
+                response_id=f"bedrock-response-{len(calls)}",
+            )
+
+    monkeypatch.setattr(
+        ai_stage_coverage_replay,
+        "lite_v2_profile_from_env",
+        lambda: profile,
+    )
+    monkeypatch.setattr(
+        ai_stage_coverage_replay,
+        "BedrockNovaProvider",
+        FakeProvider,
+    )
+
+    model_drift_profile = BedrockNovaModelProfile(
+        **{
+            **profile.__dict__,
+            "model_id": "attacker.overridden-model",
+        }
+    )
+    monkeypatch.setattr(
+        ai_stage_coverage_replay,
+        "lite_v2_profile_from_env",
+        lambda: model_drift_profile,
+    )
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_bedrock_selected_profile_drift",
+    ):
+        ai_stage_coverage_replay.execute_bedrock_candidate_single_network_attempt(
+            {**requests[0], "offline_provider_attempt_number": 1}
+        )
+    lower_token_profile = BedrockNovaModelProfile(
+        **{
+            **profile.__dict__,
+            "max_output_tokens": 767,
+        }
+    )
+    monkeypatch.setattr(
+        ai_stage_coverage_replay,
+        "lite_v2_profile_from_env",
+        lambda: lower_token_profile,
+    )
+    with pytest.raises(
+        ValueError,
+        match="bedrock_budgeted_profile_output_tokens_drift",
+    ):
+        ai_stage_coverage_replay.execute_bedrock_candidate_single_network_attempt(
+            {**requests[0], "offline_provider_attempt_number": 1}
+        )
+    assert calls == []
+    rotation_flags.clear()
+    monkeypatch.setattr(
+        ai_stage_coverage_replay,
+        "lite_v2_profile_from_env",
+        lambda: profile,
+    )
+
+    results = quality.run_paired_replay(
+        requests,
+        control_runner=lambda _request: {"action": "HOLD"},
+        candidate_runner=(
+            ai_stage_coverage_replay.execute_bedrock_candidate_single_network_attempt
+        ),
+        require_tamper_evident_candidate_chain=True,
+    )
+
+    assert len(calls) == 3
+    assert rotation_flags == [False, False, False]
+    assert {result["status"] for result in results} == {"pass"}
+    for request, result in zip(requests, results):
+        quality.validate_current_micro_reversion_candidate_response_chain(
+            request=request,
+            replay_result=result,
+        )
+        receipt = result["candidate_attempts"][0]["provider_attempt_receipt"]
+        assert (
+            receipt["provider_output_bytes_sha256"]
+            == hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+        )
+
+    resealed_profile_drift = deepcopy(results[0])
+    drift_attempt = resealed_profile_drift["candidate_attempts"][0]
+    drift_receipt = drift_attempt["provider_attempt_receipt"]
+    drift_receipt["model_id"] = "attacker.resealed-model"
+    drift_receipt["region_name"] = "us-east-1"
+    drift_receipt["attempt_receipt_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in drift_receipt.items()
+            if key != "attempt_receipt_content_sha256"
+        }
+    )
+    drift_provenance = drift_attempt["provider_provenance"]
+    drift_provenance["model_id"] = drift_receipt["model_id"]
+    drift_provenance["bedrock_model_id"] = drift_receipt["model_id"]
+    drift_provenance["bedrock_region_name"] = drift_receipt["region_name"]
+    _reseal_current_candidate_attempt_chain(requests[0], resealed_profile_drift)
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_bedrock_attempt_receipt_binding_mismatch",
+    ):
+        quality.validate_current_micro_reversion_candidate_response_chain(
+            request=requests[0],
+            replay_result=resealed_profile_drift,
+        )
+
+    class RetryProvider:
+        attempt_count = 0
+
+        def __init__(self, *, key_rotation_enabled=True):
+            assert key_rotation_enabled is False
+
+        def converse(self, *, prompt, user_input, profile):
+            type(self).attempt_count += 1
+            valid = type(self).attempt_count == 2
+            retry_raw_text = raw_text if valid else "not-json"
+            return BedrockNovaResult(
+                payload=deepcopy(response) if valid else {},
+                raw_text=retry_raw_text,
+                parse_ok=valid,
+                parse_error="" if valid else "JSONDecodeError",
+                model_id=profile.model_id,
+                region_name=profile.region_name,
+                key_index=0,
+                latency_ms=10,
+                input_tokens=10,
+                output_tokens=2,
+                cache_read_input_tokens=0,
+                cache_write_input_tokens=0,
+                total_input_tokens=10,
+                estimated_cost_usd=0.0,
+                attempted_key_count=1,
+                response_id=f"bedrock-retry-{type(self).attempt_count}",
+            )
+
+    monkeypatch.setattr(
+        ai_stage_coverage_replay,
+        "BedrockNovaProvider",
+        RetryProvider,
+    )
+    retry_result = quality.run_paired_replay(
+        [requests[0]],
+        control_runner=lambda _request: {"action": "HOLD"},
+        candidate_runner=(
+            ai_stage_coverage_replay.execute_bedrock_candidate_single_network_attempt
+        ),
+        require_tamper_evident_candidate_chain=True,
+    )[0]
+    assert retry_result["status"] == "pass"
+    assert len(retry_result["candidate_attempts"]) == 2
+    tampered_retry = deepcopy(retry_result)
+    retry_attempt = tampered_retry["candidate_attempts"][1]
+    retry_receipt = retry_attempt["provider_attempt_receipt"]
+    retry_projection = retry_receipt["provider_request_projection"]
+    retry_projection["system_text"] = quality._provider_request_text_commitment(
+        "Attacker-selected Bedrock retry system text."
+    )
+    retry_projection_hash = quality._sha256(retry_projection)
+    retry_receipt["provider_request_projection_sha256"] = retry_projection_hash
+    retry_receipt["attempt_receipt_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in retry_receipt.items()
+            if key != "attempt_receipt_content_sha256"
+        }
+    )
+    retry_attempt["provider_provenance"][
+        "provider_request_projection_sha256"
+    ] = retry_projection_hash
+    _reseal_current_candidate_attempt_chain(requests[0], tampered_retry)
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_bedrock_attempt_receipt_request_projection_mismatch",
+    ):
+        quality.validate_current_micro_reversion_candidate_response_chain(
+            request=requests[0],
+            replay_result=tampered_retry,
+        )
+
+    class InvalidJsonProvider:
+        def __init__(self, *, key_rotation_enabled=True):
+            assert key_rotation_enabled is False
+
+        def converse(self, *, prompt, user_input, profile):
+            return BedrockNovaResult(
+                payload={},
+                raw_text="not-json",
+                parse_ok=False,
+                parse_error="JSONDecodeError",
+                model_id=profile.model_id,
+                region_name=profile.region_name,
+                key_index=0,
+                latency_ms=10,
+                input_tokens=10,
+                output_tokens=2,
+                cache_read_input_tokens=0,
+                cache_write_input_tokens=0,
+                total_input_tokens=10,
+                estimated_cost_usd=0.0,
+                attempted_key_count=1,
+                response_id="bedrock-invalid-json",
+            )
+
+    monkeypatch.setattr(
+        ai_stage_coverage_replay,
+        "BedrockNovaProvider",
+        InvalidJsonProvider,
+    )
+    invalid_result = quality.run_paired_replay(
+        [requests[0]],
+        control_runner=lambda _request: {"action": "HOLD"},
+        candidate_runner=(
+            ai_stage_coverage_replay.execute_bedrock_candidate_single_network_attempt
+        ),
+        require_tamper_evident_candidate_chain=True,
+    )[0]
+    assert invalid_result["status"] == "schema_rejected"
+    assert len(invalid_result["candidate_attempts"]) == (
+        quality.CANDIDATE_SCHEMA_MAX_ATTEMPTS
+    )
+    assert all(
+        attempt["provider_attempt_receipt"]["parse_status"] == "JSONDecodeError"
+        and attempt["parsed_candidate_response"] is None
+        for attempt in invalid_result["candidate_attempts"]
+    )
+
+    tampered = deepcopy(results[0])
+    tampered["candidate_response"]["action"] = "TRIM"
+    final_hash = quality._sha256(tampered["candidate_response"])
+    tampered["candidate_response_content_sha256"] = final_hash
+    chain_content = {
+        "chain_version": quality.MICRO_REVERSION_CANDIDATE_RESPONSE_CHAIN_VERSION,
+        "paired_replay_id": requests[0]["paired_replay_id"],
+        "candidate_input_sha256": requests[0]["candidate_input_sha256"],
+        "candidate_contract_sha256": candidate["contract_sha256"],
+        "selected_attempt_content_sha256": tampered[
+            "candidate_selected_attempt_content_sha256"
+        ],
+        "transform_chain_head_sha256": tampered[
+            "candidate_transform_chain_head_sha256"
+        ],
+        "final_candidate_response_content_sha256": final_hash,
+    }
+    tampered["candidate_response_chain_content_sha256"] = quality._sha256(chain_content)
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_current_direct_response_binding_mismatch",
+    ):
+        quality.validate_current_micro_reversion_candidate_response_chain(
+            request=requests[0],
+            replay_result=tampered,
+        )
+
+
+def test_current_checkpoint_companion_rejects_resealed_parent_to_deferred_attack(
+    tmp_path, monkeypatch
+):
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
+    outcome_artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        bridge_report=bridge_report,
+        materialized_report=materialized,
+    )
+    monkeypatch.setattr(
+        quality,
+        "MICRO_REVERSION_PROVIDER_RESPONSE_CHAIN_ACTIVATION_DATE",
+        "2026-08-14",
+    )
+    checkpoint_path = tmp_path / "current-parent-census.checkpoint.json"
+    report = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_label_artifact=outcome_artifact,
+        source_bridge_report=bridge_report,
+        execute_candidate=True,
+        candidate_runner=_tamper_evident_openai_runner,
+        max_new_requests=3,
+        checkpoint_callback=lambda record: (
+            quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+        ),
+    )
+    checkpoint = quality._load_micro_reversion_checkpoint(checkpoint_path)
+    labels = outcome_artifact["labels"]
+
+    tampered = deepcopy(report)
+    tampered["status"] = "offline_three_arm_execution_batch_complete"
+    tampered["result_count"] = 0
+    tampered["result_ids"] = []
+    tampered["results"] = []
+    tampered["new_result_count"] = 0
+    tampered["new_result_ids"] = []
+    tampered["committed_parent_count"] = 0
+    tampered["newly_committed_parent_count"] = 0
+    tampered["selected_parent_ids"] = []
+    tampered["selected_request_ids"] = []
+    tampered["deferred_request_count"] = len(materialized["requests"])
+    tampered["deferred_request_ids"] = [
+        request["paired_replay_id"] for request in materialized["requests"]
+    ]
+    evaluation = quality.build_micro_reversion_three_arm_evaluation(
+        results=[],
+        outcome_labels=labels,
+        ablation_design_version=quality.CURRENT_DESIGN_VERSION,
+    )
+    tampered["three_arm_evaluation"] = {
+        **evaluation,
+        "evaluation_content_sha256": quality._sha256(evaluation),
+    }
+    tampered_without_hash = {
+        key: value for key, value in tampered.items() if key != "report_content_sha256"
+    }
+    tampered["report_content_sha256"] = quality._sha256(tampered_without_hash)
+
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_current_checkpoint_committed_census_mismatch",
+    ):
+        quality.validate_current_micro_reversion_checkpoint_companion(
+            report=tampered,
+            checkpoint_artifact=checkpoint,
+            materialized_report=materialized,
+            outcome_labels=labels,
+        )
+
+
+def test_current_entry_risk_composition_is_recomputed_from_selected_attempt():
+    setup_evidence = quality.build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10_000}},
+        exact_analysis={
+            "schema": "exact_payload_analysis_v1",
+            "source_quality": {
+                "status": "fresh_consistent",
+                "completed_bar_count": 20,
+            },
+            "executable_liquidity": {"execution_cost_state": "low"},
+            "contradictions": ["multi_horizon_direction_conflict"],
+            "deterministic_contract_facts": {
+                "structural_edge_floor": True,
+                "early_session_structural_edge_floor": False,
+                "early_session_probe_candidate": False,
+                "orderly_pullback_recovery": False,
+                "trusted_supportive_trigger": True,
+                "adverse_distribution_no_edge": False,
+                "blocking_overextension": True,
+                "ask_wall_wide_spread": False,
+            },
+        },
+        recovery_analysis={
+            "schema": "anticipatory_reversal_analysis_v1",
+            "source_mode": "fresh_dual",
+            "hard_blockers": [],
+            "clean_continuation_probe": {"eligible": True},
+            "recovery_confirmation_probe": {"eligible": False},
+        },
+    )
+    risk_response = {
+        "schema": "entry_setup_risk_adjudication_v1",
+        "risk_verdict": "VETO",
+        "risk_codes": ["OVEREXTENSION_CHASE"],
+        "supporting_fact_ids": ["structural_edge_floor"],
+        "contradicting_fact_ids": ["blocking_overextension"],
+        "confidence": 80,
+    }
+    candidate = {
+        "provider": "openai",
+        "model": "gpt-test",
+        "transport": "openai_responses_http_offline",
+        "prompt_version": (
+            f"{quality.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION}"
+            "_entry"
+        ),
+        "semantic_validator_version": (
+            quality.ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+        ),
+        "entry_decision_composer_version": quality.ENTRY_DECISION_COMPOSER_VERSION,
+        "system_prompt": "Adjudicate the exact setup risk. Return JSON only.",
+        "temperature": None,
+        "reasoning_effort": None,
+        "max_output_tokens": 512,
+        "schema_name": "entry_setup_risk_adjudication_v1",
+    }
+    candidate["system_prompt_sha256"] = quality._sha256(candidate["system_prompt"])
+    candidate["contract_sha256"] = quality._candidate_contract_sha256(candidate)
+    request = {
+        "paired_replay_parent_id": "risk-parent",
+        "paired_replay_id": "risk-parent:arm",
+        "micro_reversion_replay_arm": quality.arm_set_for_design(
+            quality.CURRENT_DESIGN_VERSION
+        )[2],
+        "ablation_design_version": quality.CURRENT_DESIGN_VERSION,
+        "decision_trace_id": "risk-trace",
+        "stage": "entry",
+        "payload_sha256": "risk-payload",
+        "candidate_input_sha256": quality._sha256({"risk": "input"}),
+        "entry_setup_evidence": setup_evidence,
+        "control": {
+            "provider": "openai",
+            "model": "gpt-test",
+            "reasoning_effort": None,
+        },
+        "candidate": candidate,
+        **quality.OFFLINE_CONTRACT,
+    }
+
+    replay_result = quality.run_paired_replay(
+        [request],
+        control_runner=lambda _request: {"action": "WAIT"},
+        candidate_runner=lambda attempt_request: _tamper_evident_openai_runner(
+            attempt_request, risk_response
+        ),
+        require_tamper_evident_candidate_chain=True,
+    )[0]
+
+    assert replay_result["status"] == "pass"
+    assert replay_result["candidate_risk_adjudication_response"] == risk_response
+    assert replay_result["candidate_response"]["action"] == "DROP"
+    assert len(replay_result["candidate_transform_chain"]) == 1
+    quality.validate_current_micro_reversion_candidate_response_chain(
+        request=request,
+        replay_result=replay_result,
+    )
+
+    tampered = deepcopy(replay_result)
+    tampered["candidate_response"]["action"] = "WAIT"
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_current_composition_rebuild_mismatch",
+    ):
+        quality.validate_current_micro_reversion_candidate_response_chain(
+            request=request,
+            replay_result=tampered,
+        )
+
+
+def test_current_post_network_semantic_repair_is_fail_closed(tmp_path, monkeypatch):
+    _, materialized, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
+    outcome_artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        bridge_report=bridge_report,
+        materialized_report=materialized,
+    )
+    monkeypatch.setattr(
+        quality,
+        "MICRO_REVERSION_PROVIDER_RESPONSE_CHAIN_ACTIVATION_DATE",
+        "2026-08-14",
+    )
+    checkpoint_path = tmp_path / "current-fail-closed.checkpoint.json"
+
+    report = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_label_artifact=outcome_artifact,
+        execute_candidate=True,
+        candidate_runner=lambda request: _tamper_evident_openai_runner(
+            request, {"action": "INVALID"}
+        ),
+        max_new_requests=3,
+        checkpoint_callback=lambda record: (
+            quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+        ),
+    )
+    checkpoint = quality._load_micro_reversion_checkpoint(checkpoint_path)
+
+    assert report["status"] == (
+        "offline_three_arm_execution_complete_with_failures_or_exclusions"
+    )
+    assert report["result_count"] == 0
+    assert checkpoint["checkpoint_record_count"] == 3
+    for result in checkpoint["results"]:
+        replay_result = result["replay_result"]
+        assert replay_result["status"] == "schema_rejected"
+        assert replay_result["candidate_semantic_repairs"] == []
+        assert len(replay_result["candidate_attempts"]) == (
+            quality.CANDIDATE_SCHEMA_MAX_ATTEMPTS
+        )
+        assert {
+            attempt["provider_provenance"]["provider"]
+            for attempt in replay_result["candidate_attempts"]
+        } == {"openai"}
 
 
 def test_micro_reversion_execution_defaults_to_no_provider_calls():
@@ -6586,6 +8707,46 @@ def test_micro_reversion_execution_defaults_to_no_provider_calls():
     assert all("requests" not in row for row in materialized["materializations"])
 
 
+def test_current_micro_reversion_execution_revalidates_both_single_axes() -> None:
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+
+    unrelated_feature = deepcopy(materialized)
+    for request in unrelated_feature["requests"][1:]:
+        request["candidate_input"]["unrelated_extra_feature"] = {"value": 1}
+        request["candidate_input_sha256"] = quality._sha256(request["candidate_input"])
+    _reseal_current_materialized_report(unrelated_feature)
+    with pytest.raises(
+        ValueError,
+        match=(
+            "micro_reversion_materialized_feature_only_delta_invalid|"
+            "micro_reversion_execution_ask_binding_mismatch"
+        ),
+    ):
+        quality.run_micro_reversion_materialized_requests(
+            materialized_report=unrelated_feature
+        )
+
+    changed_execution_axis = deepcopy(materialized)
+    candidate = changed_execution_axis["requests"][2]["candidate"]
+    candidate["temperature"] = 0.25
+    candidate["contract_sha256"] = quality._candidate_contract_sha256(candidate)
+    _reseal_current_materialized_report(changed_execution_axis)
+    with pytest.raises(
+        ValueError,
+        match=(
+            "micro_reversion_materialized_prompt_only_delta_invalid|"
+            "micro_reversion_execution_locked_contract_axis_mismatch"
+        ),
+    ):
+        quality.run_micro_reversion_materialized_requests(
+            materialized_report=changed_execution_axis
+        )
+
+
 def test_micro_reversion_execution_does_not_call_parent_without_outcome_label():
     prepared, source_bundle = _micro_reversion_materialization_fixture()
     materialized = quality.materialize_micro_reversion_offline_requests(
@@ -6593,10 +8754,17 @@ def test_micro_reversion_execution_does_not_call_parent_without_outcome_label():
         bridge_source_bundle=source_bundle,
     )
     calls = []
-    unrelated_label = {
-        **_micro_reversion_execution_label(prepared),
-        "label_id": "unrelated-label",
-    }
+    unrelated_label = deepcopy(
+        _current_outcome_artifact_for_materialized(materialized)["labels"][0]
+    )
+    unrelated_label["label_id"] = "unrelated-label"
+    unrelated_label["label_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in unrelated_label.items()
+            if key != "label_content_sha256"
+        }
+    )
 
     report = quality.run_micro_reversion_materialized_requests(
         materialized_report=materialized,
@@ -6628,6 +8796,42 @@ def test_micro_reversion_bedrock_holding_flow_is_explicitly_unsupported():
     assert quality._micro_reversion_executor_exclusion(request) == (
         "bedrock_holding_flow_offline_executor_not_implemented"
     )
+    assert quality._micro_reversion_executor_exclusion(
+        request,
+        strict_current_response_chain=True,
+    ) == ("current_design_bedrock_request_profile_invalid")
+    request_profile = {
+        "schema": quality.MICRO_REVERSION_BEDROCK_REQUEST_PROFILE_SCHEMA,
+        "family": "lite_v2",
+        "model_id": "global.amazon.nova-2-lite-v1:0",
+        "region_name": "ap-northeast-2",
+        "max_output_tokens": 768,
+        "temperature": 0,
+        "timeout_ms": 7_000,
+        "prompt_cache_enabled": False,
+    }
+    request["candidate"].update(
+        {
+            "max_output_tokens": 768,
+            "bedrock_request_profile": request_profile,
+            "bedrock_request_profile_sha256": quality._sha256(request_profile),
+        }
+    )
+    assert (
+        quality._micro_reversion_executor_exclusion(
+            request,
+            strict_current_response_chain=True,
+        )
+        is None
+    )
+
+    entry_price = deepcopy(request)
+    entry_price.update({"stage": "entry_price", "endpoint": "entry_price"})
+    entry_price["candidate"]["model"] = "qwen3_32b"
+    assert quality._micro_reversion_executor_exclusion(
+        entry_price,
+        strict_current_response_chain=True,
+    ) == ("current_design_bedrock_entry_price_replayable_transform_not_implemented")
 
 
 def test_micro_reversion_execution_joins_one_outcome_after_three_arm_calls():
@@ -6657,7 +8861,9 @@ def test_micro_reversion_execution_joins_one_outcome_after_three_arm_calls():
 
     report = quality.run_micro_reversion_materialized_requests(
         materialized_report=materialized,
-        outcome_labels=[_micro_reversion_execution_label(prepared)],
+        outcome_labels=_current_outcome_artifact_for_materialized(materialized)[
+            "labels"
+        ],
         execute_candidate=True,
         candidate_runner=runner,
         max_new_requests=3,
@@ -6672,8 +8878,118 @@ def test_micro_reversion_execution_joins_one_outcome_after_three_arm_calls():
     assert len(report["outcome_joins"]) == 1
     assert report["outcomes_embedded_in_provider_input"] is False
     assert all(row["replay_result"]["status"] == "pass" for row in report["results"])
-    assert report["three_arm_evaluation"]["complete_parent_count"] == 1
+    evaluation = report["three_arm_evaluation"]
+    assert evaluation["complete_parent_count"] == 1
+    assert evaluation["ablation_design_version"] == (
+        "current_micro_vs_ask_depletion_prompt_v1"
+    )
+    assert evaluation["ablation_arms"] == [
+        "replay_control_exact_plus_micro",
+        "replay_control_exact_plus_micro_ask_depletion",
+        "replay_candidate_exact_plus_micro_ask_depletion",
+    ]
+    assert [row["comparison_role"] for row in evaluation["comparisons"]] == [
+        "ask_depletion_feature_effect",
+        "prompt_contract_effect_conditional_on_ask_depletion",
+    ]
+    assert [row["changed_axis"] for row in evaluation["comparisons"]] == [
+        "ask_liquidity_depletion_context_only",
+        "prompt_and_response_contract_only",
+    ]
     assert report["three_arm_evaluation"]["notional_net_profit_eligible"] is False
+
+
+def test_current_holding_trim_keeps_parent_and_existing_position_exposure():
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    label = _current_outcome_artifact_for_materialized(materialized)["labels"][0]
+    report = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[label],
+        execute_candidate=True,
+        candidate_runner=_tamper_evident_openai_runner,
+        max_new_requests=3,
+    )
+    results = deepcopy(report["results"])
+    actions = ("TRIM", "HOLD", "EXIT")
+    for result, action in zip(results, actions):
+        result["stage"] = "holding"
+        result["replay_result"]["stage"] = "holding"
+        result["replay_result"]["candidate_response"]["action"] = action
+
+    evaluation = quality.build_micro_reversion_three_arm_evaluation(
+        results=results,
+        outcome_labels=[label],
+        ablation_design_version=quality.CURRENT_DESIGN_VERSION,
+    )
+
+    trim_arm = quality.arm_set_for_design(quality.CURRENT_DESIGN_VERSION)[0]
+    assert evaluation["complete_parent_count"] == 1
+    assert evaluation["excluded_parent_count"] == 0
+    assert evaluation["exclusions"] == []
+    trim_value = evaluation["rows"][0]["arms"][trim_arm]
+    assert trim_value["action"] == "TRIM"
+    assert trim_value["runtime_normalized_action"] == "HOLD"
+    assert trim_value["exposure_role"] == "existing_position_exposure"
+    assert trim_value["exposure_fraction"] == 1.0
+    assert evaluation["arm_metrics"][trim_arm]["action_counts"] == {"TRIM": 1}
+
+
+def test_micro_reversion_evaluation_excludes_mixed_design_parent_once() -> None:
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    label = _current_outcome_artifact_for_materialized(materialized)["labels"][0]
+
+    def runner(request):
+        return {
+            "candidate_response": _valid_micro_reversion_entry_response(),
+            "provider_provenance": {
+                "provider": "openai",
+                "model": "gpt-test",
+                "transport": "openai_responses_http_offline",
+                "source_transport_contract": request["candidate"]["transport"],
+                "response_id": f"response-{request['paired_replay_id']}",
+                "response_sha256": quality._sha256(request["paired_replay_id"]),
+                "provider_none": False,
+                "provider_call_attempted": True,
+                "provider_call_succeeded": True,
+            },
+        }
+
+    execution = quality.run_micro_reversion_materialized_requests(
+        materialized_report=materialized,
+        outcome_labels=[label],
+        execute_candidate=True,
+        candidate_runner=runner,
+        max_new_requests=3,
+    )
+    mixed_parent_id = "mixed-design-parent"
+    mixed_results = deepcopy(execution["results"])
+    for result in mixed_results:
+        result["paired_replay_parent_id"] = mixed_parent_id
+    mixed_results[0]["ablation_design_version"] = "exact_no_micro_vs_micro_prompt_v1"
+
+    evaluation = quality.build_micro_reversion_three_arm_evaluation(
+        results=[*execution["results"], *mixed_results],
+        outcome_labels=[label],
+    )
+
+    assert evaluation["complete_parent_count"] == 1
+    assert {row["paired_replay_parent_id"] for row in evaluation["rows"]} == {
+        execution["results"][0]["paired_replay_parent_id"]
+    }
+    assert evaluation["exclusions"] == [
+        {
+            "paired_replay_parent_id": mixed_parent_id,
+            "reason": "ablation_design_invalid",
+        }
+    ]
 
 
 def test_micro_reversion_execution_rejects_schema_valid_missing_provider_provenance():
@@ -6685,7 +9001,9 @@ def test_micro_reversion_execution_rejects_schema_valid_missing_provider_provena
 
     report = quality.run_micro_reversion_materialized_requests(
         materialized_report=materialized,
-        outcome_labels=[_micro_reversion_execution_label(prepared)],
+        outcome_labels=_current_outcome_artifact_for_materialized(materialized)[
+            "labels"
+        ],
         execute_candidate=True,
         candidate_runner=lambda _request: {
             "candidate_response": _valid_micro_reversion_entry_response(),
@@ -6720,7 +9038,9 @@ def test_micro_reversion_execution_budget_never_slices_one_parent_arms():
 
     report = quality.run_micro_reversion_materialized_requests(
         materialized_report=materialized,
-        outcome_labels=[_micro_reversion_execution_label(prepared)],
+        outcome_labels=_current_outcome_artifact_for_materialized(materialized)[
+            "labels"
+        ],
         execute_candidate=True,
         candidate_runner=runner,
         max_new_requests=2,
@@ -6755,26 +9075,11 @@ def test_micro_reversion_execution_commits_one_bounded_parent_per_batch():
         request["paired_replay_id"] = (
             f"{second_parent_id}:{request['micro_reversion_replay_arm']}"
         )
-        request["decision_trace_id"] = "trace-materialize-2"
+        request["decision_trace_id"] = prepared[0]["decision_trace_id"]
         request["outcome_join_key"] = second_label_id
     materialized["requests"].extend(second_requests)
-    materialized["request_ids"] = [
-        request["paired_replay_id"] for request in materialized["requests"]
-    ]
-    materialized["request_count"] = len(materialized["requests"])
-    materialized["report_content_sha256"] = quality._sha256(
-        {
-            key: value
-            for key, value in materialized.items()
-            if key != "report_content_sha256"
-        }
-    )
-    first_label = _micro_reversion_execution_label(prepared)
-    second_label = {
-        **deepcopy(first_label),
-        "label_id": second_label_id,
-        "decision_trace_id": "trace-materialize-2",
-    }
+    _reseal_current_materialized_report(materialized)
+    outcome_artifact = _current_outcome_artifact_for_materialized(materialized)
     calls: list[str] = []
 
     def runner(request):
@@ -6796,7 +9101,7 @@ def test_micro_reversion_execution_commits_one_bounded_parent_per_batch():
 
     first_batch = quality.run_micro_reversion_materialized_requests(
         materialized_report=materialized,
-        outcome_labels=[first_label, second_label],
+        outcome_label_artifact=outcome_artifact,
         execute_candidate=True,
         candidate_runner=runner,
         max_new_requests=3,
@@ -6820,7 +9125,7 @@ def test_micro_reversion_execution_commits_one_bounded_parent_per_batch():
     calls.clear()
     second_batch = quality.run_micro_reversion_materialized_requests(
         materialized_report=materialized,
-        outcome_labels=[first_label, second_label],
+        outcome_label_artifact=outcome_artifact,
         execute_candidate=True,
         candidate_runner=runner,
         existing_result_artifact=first_batch,
@@ -6850,26 +9155,11 @@ def test_micro_reversion_execution_isolates_failed_parent_from_clean_batch():
         request["paired_replay_id"] = (
             f"{clean_parent_id}:{request['micro_reversion_replay_arm']}"
         )
-        request["decision_trace_id"] = "trace-clean-after-failure"
+        request["decision_trace_id"] = prepared[0]["decision_trace_id"]
         request["outcome_join_key"] = clean_label_id
     materialized["requests"].extend(clean_requests)
-    materialized["request_ids"] = [
-        request["paired_replay_id"] for request in materialized["requests"]
-    ]
-    materialized["request_count"] = len(materialized["requests"])
-    materialized["report_content_sha256"] = quality._sha256(
-        {
-            key: value
-            for key, value in materialized.items()
-            if key != "report_content_sha256"
-        }
-    )
-    first_label = _micro_reversion_execution_label(prepared)
-    clean_label = {
-        **deepcopy(first_label),
-        "label_id": clean_label_id,
-        "decision_trace_id": "trace-clean-after-failure",
-    }
+    _reseal_current_materialized_report(materialized)
+    outcome_artifact = _current_outcome_artifact_for_materialized(materialized)
 
     def runner(request):
         failed_parent = request["paired_replay_parent_id"] == failed_parent_id
@@ -6894,7 +9184,7 @@ def test_micro_reversion_execution_isolates_failed_parent_from_clean_batch():
 
     batch = quality.run_micro_reversion_materialized_requests(
         materialized_report=materialized,
-        outcome_labels=[first_label, clean_label],
+        outcome_label_artifact=outcome_artifact,
         execute_candidate=True,
         candidate_runner=runner,
         max_new_requests=6,
@@ -6925,11 +9215,19 @@ def test_micro_reversion_execution_isolates_failed_parent_from_clean_batch():
     prior_label_hashes = {
         result["outcome_label_content_sha256"] for result in batch["results"]
     }
-    rebound_clean_label = deepcopy(clean_label)
-    rebound_clean_label["horizon_metrics"]["10m"]["end_return_pct"] = 0.75
+    rematerialized = deepcopy(materialized)
+    rematerialized["generated_at"] = "2026-08-14T23:59:59+09:00"
+    rematerialized["report_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in rematerialized.items()
+            if key != "report_content_sha256"
+        }
+    )
+    rebound_artifact = _current_outcome_artifact_for_materialized(rematerialized)
     resumed = quality.run_micro_reversion_materialized_requests(
-        materialized_report=materialized,
-        outcome_labels=[first_label, rebound_clean_label],
+        materialized_report=rematerialized,
+        outcome_label_artifact=rebound_artifact,
         execute_candidate=True,
         candidate_runner=runner,
         existing_result_artifact=batch,
@@ -6964,31 +9262,15 @@ def test_micro_reversion_batch_allows_unselected_intentional_exclusion():
         request["paired_replay_id"] = (
             f"{supported_parent_id}:{request['micro_reversion_replay_arm']}"
         )
-        request["decision_trace_id"] = "trace-supported-second"
+        request["decision_trace_id"] = prepared[0]["decision_trace_id"]
         request["outcome_join_key"] = supported_label_id
     for request in materialized["requests"]:
         candidate = request["candidate"]
         candidate["provider"] = "unsupported_offline_provider"
         candidate["contract_sha256"] = quality._candidate_contract_sha256(candidate)
     materialized["requests"].extend(supported_requests)
-    materialized["request_ids"] = [
-        request["paired_replay_id"] for request in materialized["requests"]
-    ]
-    materialized["request_count"] = len(materialized["requests"])
-    materialized["report_content_sha256"] = quality._sha256(
-        {
-            key: value
-            for key, value in materialized.items()
-            if key != "report_content_sha256"
-        }
-    )
-    first_label = _micro_reversion_execution_label(prepared)
-    supported_label = {
-        **deepcopy(first_label),
-        "label_id": supported_label_id,
-        "decision_trace_id": "trace-supported-second",
-    }
-    supported_label["horizon_metrics"]["10m"]["source_quality_adjusted_ev_pct"] = 0.5
+    _reseal_current_materialized_report(materialized)
+    outcome_artifact = _current_outcome_artifact_for_materialized(materialized)
     calls: list[str] = []
 
     def runner(request):
@@ -7010,7 +9292,7 @@ def test_micro_reversion_batch_allows_unselected_intentional_exclusion():
 
     batch = quality.run_micro_reversion_materialized_requests(
         materialized_report=materialized,
-        outcome_labels=[first_label, supported_label],
+        outcome_label_artifact=outcome_artifact,
         execute_candidate=True,
         candidate_runner=runner,
         max_new_requests=3,
@@ -7112,7 +9394,7 @@ def test_micro_reversion_batch_allows_unselected_intentional_exclusion():
 
     rerun = quality.run_micro_reversion_materialized_requests(
         materialized_report=materialized,
-        outcome_labels=[first_label, supported_label],
+        outcome_label_artifact=outcome_artifact,
         execute_candidate=True,
         candidate_runner=forbidden_rerun,
         existing_result_artifact=batch,
@@ -7166,7 +9448,7 @@ def test_micro_reversion_execution_does_not_infer_provider_success_from_hash():
 
     report = quality.run_micro_reversion_materialized_requests(
         materialized_report=materialized,
-        outcome_labels=[_micro_reversion_execution_label(prepared)],
+        outcome_label_artifact=_current_outcome_artifact_for_materialized(materialized),
         execute_candidate=True,
         candidate_runner=runner,
         max_new_requests=3,
@@ -7284,7 +9566,7 @@ def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
         prepared_requests=prepared,
         bridge_source_bundle=source_bundle,
     )
-    label = _micro_reversion_execution_label(prepared)
+    outcome_artifact = _current_outcome_artifact_for_materialized(materialized)
     first_calls = []
     checkpoint_path = tmp_path / "micro-execution.checkpoint.json"
 
@@ -7321,7 +9603,7 @@ def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
     with pytest.raises(RuntimeError, match="simulated_process_interruption"):
         quality.run_micro_reversion_materialized_requests(
             materialized_report=materialized,
-            outcome_labels=[label],
+            outcome_label_artifact=outcome_artifact,
             execute_candidate=True,
             candidate_runner=first_runner,
             max_new_requests=3,
@@ -7340,9 +9622,11 @@ def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
             if key != "report_content_sha256"
         }
     )
-    assert (
-        rematerialized["report_content_sha256"]
-        != (materialized["report_content_sha256"])
+    rematerialized_outcome_artifact = _current_outcome_artifact_for_materialized(
+        rematerialized
+    )
+    assert rematerialized["report_content_sha256"] != (
+        materialized["report_content_sha256"]
     )
     assert quality._micro_reversion_materialized_request_census_sha256(
         rematerialized
@@ -7353,7 +9637,7 @@ def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
 
     still_partial = quality.run_micro_reversion_materialized_requests(
         materialized_report=rematerialized,
-        outcome_labels=[label],
+        outcome_label_artifact=rematerialized_outcome_artifact,
         execute_candidate=True,
         candidate_runner=forbidden_runner,
         existing_result_artifact=checkpoint,
@@ -7379,7 +9663,7 @@ def test_micro_reversion_execution_resumes_hash_bound_checkpoint(tmp_path):
 
     resumed = quality.run_micro_reversion_materialized_requests(
         materialized_report=rematerialized,
-        outcome_labels=[label],
+        outcome_label_artifact=rematerialized_outcome_artifact,
         execute_candidate=True,
         candidate_runner=second_runner,
         existing_result_artifact=checkpoint,
@@ -7464,6 +9748,204 @@ def test_micro_reversion_checkpoint_record_tamper_fails_closed(tmp_path):
         quality._load_micro_reversion_checkpoint(checkpoint_path)
 
 
+def test_micro_reversion_checkpoint_malformed_record_fails_closed(tmp_path):
+    checkpoint_path = tmp_path / "malformed-record.checkpoint.json"
+    record = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256="b" * 64,
+        sequence=1,
+        previous_record_sha256=None,
+        result={"result_id": "malformed-record-result"},
+    )
+    quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+    record_path = next(
+        quality._micro_reversion_checkpoint_record_dir(checkpoint_path).glob("*.json")
+    )
+    record_path.write_text("{", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="json_generation_payload_invalid"):
+        quality._load_micro_reversion_checkpoint(checkpoint_path)
+
+
+def test_micro_reversion_checkpoint_record_symlink_fails_closed(tmp_path):
+    checkpoint_path = tmp_path / "symlink-record.checkpoint.json"
+    record = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256="b" * 64,
+        sequence=1,
+        previous_record_sha256=None,
+        result={"result_id": "symlink-record-result"},
+    )
+    quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+    record_path = next(
+        quality._micro_reversion_checkpoint_record_dir(checkpoint_path).glob("*.json")
+    )
+    external_path = tmp_path / "external-record.json"
+    record_path.replace(external_path)
+    record_path.symlink_to(external_path)
+
+    with pytest.raises(ValueError, match="json_artifact_path_type_invalid"):
+        quality._load_micro_reversion_checkpoint(checkpoint_path)
+
+
+def test_micro_reversion_checkpoint_record_directory_symlink_rejects_before_write(
+    tmp_path,
+):
+    checkpoint_path = tmp_path / "symlink-record-directory.checkpoint.json"
+    external_directory = tmp_path / "external-record-directory"
+    external_directory.mkdir()
+    record_dir = quality._micro_reversion_checkpoint_record_dir(checkpoint_path)
+    record_dir.symlink_to(external_directory, target_is_directory=True)
+    record = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256="b" * 64,
+        sequence=1,
+        previous_record_sha256=None,
+        result={"result_id": "must-not-escape-record-directory"},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_checkpoint_record_directory_invalid",
+    ):
+        quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+
+    assert list(external_directory.iterdir()) == []
+    assert not checkpoint_path.exists()
+
+
+def test_micro_reversion_checkpoint_custody_serializes_concurrent_append(tmp_path):
+    checkpoint_path = tmp_path / "concurrent-append.checkpoint.json"
+    materialized_hash = "7" * 64
+    process_context = multiprocessing.get_context("spawn")
+    ready_queue = process_context.Queue()
+    result_queue = process_context.Queue()
+    start_event = process_context.Event()
+    workers = [
+        process_context.Process(
+            target=_checkpoint_concurrent_append_worker,
+            args=(
+                str(checkpoint_path),
+                materialized_hash,
+                f"concurrent-result-{index}",
+                ready_queue,
+                start_event,
+                result_queue,
+            ),
+        )
+        for index in (1, 2)
+    ]
+    for worker in workers:
+        worker.start()
+    assert {ready_queue.get(timeout=10) for _ in workers} == {
+        "concurrent-result-1",
+        "concurrent-result-2",
+    }
+    start_event.set()
+    for worker in workers:
+        worker.join(timeout=15)
+        assert worker.exitcode == 0
+
+    worker_results = [result_queue.get(timeout=5) for _ in workers]
+    assert {row[0] for row in worker_results} == {"ok"}
+    assert {row[2] for row in worker_results} == {1, 2}
+    checkpoint = quality._load_micro_reversion_checkpoint(checkpoint_path)
+    assert checkpoint["checkpoint_record_count"] == 2
+    assert {row["result_id"] for row in checkpoint["results"]} == {
+        "concurrent-result-1",
+        "concurrent-result-2",
+    }
+    record_names = sorted(
+        path.name
+        for path in quality._micro_reversion_checkpoint_record_dir(
+            checkpoint_path
+        ).glob("*.json")
+    )
+    assert [name[:8] for name in record_names] == ["00000001", "00000002"]
+
+
+def test_micro_reversion_checkpoint_custody_lock_symlink_fails_closed(tmp_path):
+    checkpoint_path = tmp_path / "symlink-lock.checkpoint.json"
+    external_lock = tmp_path / "external-lock"
+    external_lock.write_text("unchanged", encoding="utf-8")
+    lock_path = quality._micro_reversion_checkpoint_custody_lock_path(checkpoint_path)
+    lock_path.symlink_to(external_lock)
+
+    with pytest.raises(OSError):
+        quality._load_micro_reversion_checkpoint(checkpoint_path)
+
+    assert external_lock.read_text(encoding="utf-8") == "unchanged"
+    assert not checkpoint_path.exists()
+
+
+def test_micro_reversion_checkpoint_collision_symlink_fails_before_manifest_write(
+    tmp_path,
+):
+    checkpoint_path = tmp_path / "symlink-collision.checkpoint.json"
+    record = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256="b" * 64,
+        sequence=1,
+        previous_record_sha256=None,
+        result={"result_id": "symlink-collision-result"},
+    )
+    record_dir = quality._micro_reversion_checkpoint_record_dir(checkpoint_path)
+    record_dir.mkdir(parents=True)
+    external_path = tmp_path / "external-collision-record.json"
+    quality._atomic_write_json(external_path, record)
+    collision_path = record_dir / (
+        "00000001-" + record["checkpoint_record_content_sha256"] + ".json"
+    )
+    collision_path.symlink_to(external_path)
+
+    with pytest.raises(ValueError, match="json_artifact_path_type_invalid"):
+        quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+    assert not checkpoint_path.exists()
+
+
+def test_micro_reversion_checkpoint_malformed_manifest_is_not_repaired_silently(
+    tmp_path,
+):
+    checkpoint_path = tmp_path / "malformed-manifest.checkpoint.json"
+    record = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256="c" * 64,
+        sequence=1,
+        previous_record_sha256=None,
+        result={"result_id": "malformed-manifest-result"},
+    )
+    quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+    checkpoint_path.write_text("{", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="json_generation_payload_invalid"):
+        quality._load_micro_reversion_checkpoint(
+            checkpoint_path,
+            repair_manifest=True,
+        )
+
+
+def test_micro_reversion_checkpoint_rejects_divergent_plain_gzip_manifests(
+    tmp_path,
+):
+    checkpoint_path = tmp_path / "manifest-conflict.checkpoint.json"
+    record = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256="d" * 64,
+        sequence=1,
+        previous_record_sha256=None,
+        result={"result_id": "manifest-conflict-result"},
+    )
+    quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+    conflicting_manifest = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    conflicting_manifest["checkpoint_record_count"] = 0
+    with gzip.open(
+        checkpoint_path.with_name(checkpoint_path.name + ".gz"),
+        "wt",
+        encoding="utf-8",
+    ) as handle:
+        json.dump(conflicting_manifest, handle)
+
+    with pytest.raises(ValueError, match="json_artifact_plain_gzip_conflict"):
+        quality._load_micro_reversion_checkpoint(
+            checkpoint_path,
+            repair_manifest=True,
+        )
+
+
 def test_micro_reversion_checkpoint_recovers_record_written_before_manifest(
     tmp_path,
 ):
@@ -7481,6 +9963,12 @@ def test_micro_reversion_checkpoint_recovers_record_written_before_manifest(
     )
     quality._atomic_write_json(record_path, record)
 
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_checkpoint_manifest_missing",
+    ):
+        quality._load_micro_reversion_checkpoint(checkpoint_path)
+
     reconstructed = quality._load_micro_reversion_checkpoint(
         checkpoint_path,
         repair_manifest=True,
@@ -7490,10 +9978,124 @@ def test_micro_reversion_checkpoint_recovers_record_written_before_manifest(
     assert reconstructed["results"][0]["result_id"] == "orphan-result"
     manifest = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert manifest["checkpoint_record_count"] == 1
-    assert (
-        manifest["checkpoint_head_sha256"]
-        == (record["checkpoint_record_content_sha256"])
+    assert manifest["checkpoint_head_sha256"] == (
+        record["checkpoint_record_content_sha256"]
     )
+
+
+def test_micro_reversion_checkpoint_stale_manifest_requires_explicit_repair(tmp_path):
+    checkpoint_path = tmp_path / "stale-prefix.checkpoint.json"
+    materialized_hash = "e" * 64
+    first = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256=materialized_hash,
+        sequence=1,
+        previous_record_sha256=None,
+        result={"result_id": "stale-prefix-result-1"},
+    )
+    quality._write_micro_reversion_checkpoint_record(checkpoint_path, first)
+    second = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256=materialized_hash,
+        sequence=2,
+        previous_record_sha256=first["checkpoint_record_content_sha256"],
+        result={"result_id": "stale-prefix-result-2"},
+    )
+    record_path = quality._micro_reversion_checkpoint_record_dir(checkpoint_path) / (
+        "00000002-" + second["checkpoint_record_content_sha256"] + ".json"
+    )
+    quality._atomic_write_json(record_path, second)
+
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_checkpoint_manifest_stale_prefix",
+    ):
+        quality._load_micro_reversion_checkpoint(checkpoint_path)
+
+    reconstructed = quality._load_micro_reversion_checkpoint(
+        checkpoint_path,
+        repair_manifest=True,
+    )
+    assert reconstructed["checkpoint_record_count"] == 2
+    assert (
+        reconstructed["checkpoint_head_sha256"]
+        == second["checkpoint_record_content_sha256"]
+    )
+
+
+def test_micro_reversion_checkpoint_resume_reads_verified_gzip_records(tmp_path):
+    checkpoint_path = tmp_path / "compressed.checkpoint.json"
+    materialized_hash = "a" * 64
+    previous_hash = None
+    for sequence in (1, 2):
+        result = {
+            "result_id": f"result-{sequence}",
+            "paired_replay_id": f"request-{sequence}",
+        }
+        record = quality._micro_reversion_checkpoint_record(
+            materialized_report_content_sha256=materialized_hash,
+            sequence=sequence,
+            previous_record_sha256=previous_hash,
+            result=result,
+        )
+        quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+        previous_hash = record["checkpoint_record_content_sha256"]
+
+    record_dir = quality._micro_reversion_checkpoint_record_dir(checkpoint_path)
+    for source in sorted(record_dir.glob("*.json")):
+        compressed = source.with_suffix(".json.gz")
+        with (
+            source.open("rb") as input_handle,
+            gzip.open(compressed, "wb") as output_handle,
+        ):
+            output_handle.write(input_handle.read())
+        source.unlink()
+
+    reconstructed = quality._load_micro_reversion_checkpoint(checkpoint_path)
+
+    assert reconstructed["checkpoint_record_count"] == 2
+    assert [row["result_id"] for row in reconstructed["results"]] == [
+        "result-1",
+        "result-2",
+    ]
+    resumed_record = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256=materialized_hash,
+        sequence=3,
+        previous_record_sha256=previous_hash,
+        result={
+            "result_id": "result-3",
+            "paired_replay_id": "request-3",
+        },
+    )
+    quality._write_micro_reversion_checkpoint_record(
+        checkpoint_path,
+        resumed_record,
+    )
+    resumed = quality._load_micro_reversion_checkpoint(checkpoint_path)
+    assert resumed["checkpoint_record_count"] == 3
+    assert resumed["results"][-1]["result_id"] == "result-3"
+
+
+def test_micro_reversion_checkpoint_rejects_plain_gzip_logical_collision(tmp_path):
+    checkpoint_path = tmp_path / "collision.checkpoint.json"
+    record = quality._micro_reversion_checkpoint_record(
+        materialized_report_content_sha256="a" * 64,
+        sequence=1,
+        previous_record_sha256=None,
+        result={"result_id": "result-1"},
+    )
+    quality._write_micro_reversion_checkpoint_record(checkpoint_path, record)
+    source = next(
+        quality._micro_reversion_checkpoint_record_dir(checkpoint_path).glob("*.json")
+    )
+    with (
+        source.open("rb") as input_handle,
+        gzip.open(source.with_suffix(".json.gz"), "wb") as output_handle,
+    ):
+        output_handle.write(input_handle.read())
+
+    with pytest.raises(
+        ValueError, match="micro_reversion_checkpoint_record_storage_conflict"
+    ):
+        quality._load_micro_reversion_checkpoint(checkpoint_path)
 
 
 def test_micro_reversion_source_bundle_excludes_bad_row_without_aborting():
@@ -7567,6 +10169,101 @@ def test_micro_reversion_source_bundle_excludes_bad_row_without_aborting():
     assert rebuilt["excluded_row_count"] == 1
     assert rebuilt["prepared_request_count"] == 2
     assert rebuilt["exclusions"][0]["decision_trace_id"] == "missing-source-trace"
+
+
+def test_micro_reversion_source_bundle_validates_bridge_commitment_once(
+    monkeypatch,
+):
+    from src.engine.scalping.micro_reversion import ai_quality_bridge
+
+    prepared, seed_bundle = _micro_reversion_materialization_fixture()
+    _, _, bridge_report = _micro_reversion_action_neutral_bridge_fixture()
+    seed = seed_bundle["rows"][0]
+    trace = seed["source_trace"]
+    payload = seed["source_payload"]
+    commitment_calls = 0
+    source_pool_validation_calls = 0
+    original_commitment = quality._micro_reversion_outcome_source_commitment
+    original_source_pool_validation = (
+        ai_quality_bridge.validate_future_outcome_source_pool
+    )
+
+    def counted_commitment(*args, **kwargs):
+        nonlocal commitment_calls
+        commitment_calls += 1
+        return original_commitment(*args, **kwargs)
+
+    def counted_source_pool_validation(*args, **kwargs):
+        nonlocal source_pool_validation_calls
+        source_pool_validation_calls += 1
+        return original_source_pool_validation(*args, **kwargs)
+
+    monkeypatch.setattr(
+        quality,
+        "_micro_reversion_outcome_source_commitment",
+        counted_commitment,
+    )
+    monkeypatch.setattr(
+        ai_quality_bridge,
+        "validate_future_outcome_source_pool",
+        counted_source_pool_validation,
+    )
+    report = quality.build_micro_reversion_source_bundle(
+        target_date="2026-08-14",
+        prepared_requests=prepared,
+        traces=[trace],
+        payloads=[payload],
+        prompt_rows=[
+            {
+                "schema": "ai_decision_prompt_v1",
+                "endpoint": trace["endpoint"],
+                "model": trace["model"],
+                "schema_name": payload["schema_name"],
+                "prompt_sha256": trace["prompt_sha256"],
+                "sanitized_prompt": seed["current_control_prompt_contract"][
+                    "system_prompt"
+                ],
+                "replay_exact": True,
+                "redacted": False,
+            }
+        ],
+        control_prompt_contracts=[
+            {
+                "decision_trace_id": trace["decision_trace_id"],
+                "prompt_sha256": trace["prompt_sha256"],
+                "prompt_contract": seed["current_control_prompt_contract"],
+            }
+        ],
+        market_rows=quality._micro_reversion_source_rows_from_pool(
+            source_bundle=seed_bundle,
+            bundle_row=seed,
+            pool_name="market",
+            reference_field="source_market_row_sha256s",
+        ),
+        depth_rows=quality._micro_reversion_source_rows_from_pool(
+            source_bundle=seed_bundle,
+            bundle_row=seed,
+            pool_name="depth",
+            reference_field="source_depth_row_sha256s",
+        ),
+        event_references=quality._micro_reversion_source_rows_from_pool(
+            source_bundle=seed_bundle,
+            bundle_row=seed,
+            pool_name="event_reference",
+            reference_field="source_event_reference_sha256s",
+        ),
+        bridge_config=seed["bridge_config"],
+        verified_symbol_metadata_by_trace={
+            trace["decision_trace_id"]: seed["verified_symbol_metadata"]
+        },
+        outcome_source_bridge_report=bridge_report,
+    )
+
+    assert commitment_calls == 1
+    assert source_pool_validation_calls == 1
+    assert report["outcome_source_commitment"]["bridge_report_content_sha256"] == (
+        bridge_report["report_content_sha256"]
+    )
 
 
 def test_micro_reversion_source_bundle_uses_bounded_sqlite_store():
@@ -7661,8 +10358,8 @@ def test_micro_reversion_source_bundle_uses_bounded_sqlite_store():
         is False
     )
     assert rebuilt["source_materialization_diagnostics"]["retained_row_counts"] == {
-        "market": 4,
-        "depth": 1,
+        "market": 6,
+        "depth": 10,
         "reference": 1,
     }
     assert rebuilt["eligible_row_count"] == 1
@@ -7808,6 +10505,7 @@ def test_holding_paired_replay_uses_noncollapsed_prompt_and_pointer_ledger():
         **_trace(action="EXIT"),
         "decision_stage": "holding",
         "endpoint": "holding_score",
+        "source_event_stage": "scale_in_submit_authority_retry",
         "prompt_version": "holding_score_v2",
         "prompt_sha256": "holding-prompt-1",
     }
@@ -7877,6 +10575,36 @@ def test_holding_paired_replay_uses_noncollapsed_prompt_and_pointer_ledger():
 
     assert len(requests) == 1
     request = requests[0]
+    assert request["source_event_stage"] == "scale_in_submit_authority_retry"
+    exact_envelope_sha256 = quality._sha256({"request": "holding-scale-in"})
+    bound_request = {
+        **request,
+        "request_envelope_sha256": exact_envelope_sha256,
+    }
+    bound_trace = {**trace, "request_envelope_sha256": exact_envelope_sha256}
+    bound_payload = {
+        **payload,
+        "endpoint": "holding_score",
+        "request_envelope_sha256": exact_envelope_sha256,
+    }
+    quality._assert_micro_reversion_source_contract(
+        request=bound_request,
+        source_trace=bound_trace,
+        source_payload=bound_payload,
+    )
+    drifted_source_stage_request = {
+        **bound_request,
+        "source_event_stage": "holding_score_upstream_preflight",
+    }
+    with pytest.raises(
+        ValueError,
+        match="micro_reversion_source_contract_source_event_stage_mismatch",
+    ):
+        quality._assert_micro_reversion_source_contract(
+            request=drifted_source_stage_request,
+            source_trace=bound_trace,
+            source_payload=bound_payload,
+        )
     assert request["candidate"]["prompt_version"] == (
         quality.DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION
     )

@@ -357,6 +357,174 @@ def test_unfilled_order_snapshot_meta_distinguishes_empty_success_from_failure(
     assert meta["response_codes"] == ["17"]
 
 
+def test_ka10075_meta_surfaces_dropped_raw_order_identity(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "_fetch_kiwoom_api_continuous_with_meta",
+        lambda **_kwargs: (
+            [
+                {
+                    "oso": [
+                        {
+                            "stk_cd": "",
+                            "ord_no": "0000456",
+                            "ord_qty": "5",
+                            "ord_remnq": "5",
+                            "io_tp_nm": "매도",
+                            "stex_tp": "1",
+                        }
+                    ],
+                    "return_code": 0,
+                }
+            ],
+            {"api_id": "ka10075", "page_count": 1},
+        ),
+    )
+
+    rows, meta = kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta("token")
+
+    assert rows == []
+    assert meta["raw_order_row_count"] == 1
+    assert meta["normalized_order_row_count"] == 0
+    assert meta["normalization_gap_count"] == 1
+    assert meta["normalization_contract_complete"] is False
+
+
+def test_ka10075_meta_surfaces_malformed_numeric_and_side_contract(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "_fetch_kiwoom_api_continuous_with_meta",
+        lambda **_kwargs: (
+            [
+                {
+                    "oso": [
+                        {
+                            "stk_cd": "005930",
+                            "ord_no": "0000456",
+                            "ord_qty": "1e2",
+                            "ord_remnq": "5",
+                            "io_tp_nm": "UNKNOWN",
+                            "stex_tp": "1",
+                        }
+                    ],
+                    "return_code": 0,
+                }
+            ],
+            {"api_id": "ka10075", "page_count": 1},
+        ),
+    )
+
+    rows, meta = kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta("token")
+
+    assert len(rows) == 1
+    assert meta["normalization_gap_count"] == 0
+    assert meta["contract_incomplete_count"] == 1
+    assert meta["normalization_contract_complete"] is False
+
+
+def test_order_snapshot_meta_rejects_missing_status_and_list_shape(monkeypatch):
+    responses = iter(
+        (
+            ([{"oso": []}], {"api_id": "ka10075", "page_count": 1}),
+            ([{"return_code": 0}], {"api_id": "ka10075", "page_count": 1}),
+            ([None], {"api_id": "ka10075", "page_count": 1}),
+        )
+    )
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "_fetch_kiwoom_api_continuous_with_meta",
+        lambda **_kwargs: next(responses),
+    )
+
+    for _ in range(3):
+        rows, meta = kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta("token")
+        assert rows == []
+        assert meta["request_succeeded"] is False
+        assert meta["normalization_contract_complete"] is False
+
+
+def test_s15_kt00005_strict_meta_rejects_one_malformed_venue(monkeypatch):
+    responses = iter(
+        (
+            [
+                {
+                    "return_code": 0,
+                    "stk_cntr_remn": [
+                        {
+                            "stk_cd": "A123456",
+                            "stk_nm": "TEST",
+                            "cur_qty": "5",
+                            "buy_uv": "10000",
+                        }
+                    ],
+                }
+            ],
+            [
+                {
+                    "return_code": 0,
+                    "stk_cntr_remn": [
+                        {
+                            "stk_cd": "A654321",
+                            "stk_nm": "BAD",
+                            "cur_qty": "1e2",
+                            "buy_uv": "10000",
+                        }
+                    ],
+                }
+            ],
+        )
+    )
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: next(responses),
+    )
+
+    rows, exchanges, meta = kiwoom_utils.get_account_balance_kt00005_with_meta("token")
+
+    assert rows == [{"code": "123456", "name": "TEST", "qty": 5, "buy_price": 10_000}]
+    assert exchanges == {"KRX"}
+    assert meta["normalization_contract_complete"] is False
+
+
+def test_s15_kt00005_strict_meta_rejects_duplicate_symbol_venue(monkeypatch):
+    responses = iter(
+        (
+            [
+                {
+                    "return_code": 0,
+                    "stk_cntr_remn": [
+                        {
+                            "stk_cd": "A123456",
+                            "stk_nm": "ONE",
+                            "cur_qty": "5",
+                            "buy_uv": "10000",
+                        },
+                        {
+                            "stk_cd": "A123456",
+                            "stk_nm": "TWO",
+                            "cur_qty": "4",
+                            "buy_uv": "10000",
+                        },
+                    ],
+                }
+            ],
+            [{"return_code": 0, "stk_cntr_remn": []}],
+        )
+    )
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: next(responses),
+    )
+
+    rows, exchanges, meta = kiwoom_utils.get_account_balance_kt00005_with_meta("token")
+
+    assert rows == []
+    assert exchanges == {"NXT"}
+    assert meta["normalization_contract_complete"] is False
+
+
 def test_find_order_reference_match_by_code_side_qty_price():
     rows = [
         {

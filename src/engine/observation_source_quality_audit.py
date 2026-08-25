@@ -3727,6 +3727,7 @@ def _reviewed_unknown_reason_for_stage_field(
         if str(key or "") not in {
             "rising_missed_nxt_eligible",
             "rising_missed_effective_venue",
+            "latency_true_ofi_nxt_probability_band_effective_venue",
         }:
             return False
         if (
@@ -3736,6 +3737,11 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         if (
             str(key or "") == "rising_missed_effective_venue"
+            and str(value or "") != "NXT_ELIGIBILITY_UNKNOWN"
+        ):
+            return False
+        if (
+            str(key or "") == "latency_true_ofi_nxt_probability_band_effective_venue"
             and str(value or "") != "NXT_ELIGIBILITY_UNKNOWN"
         ):
             return False
@@ -3757,8 +3763,17 @@ def _reviewed_unknown_reason_for_stage_field(
             and _field_text("rising_missed_nxt_positive_micro_authority")
             == "trusted_signed_ws_0b_existing_tp1_contract"
         )
+        derived_probability_band_not_applied = str(
+            key or ""
+        ) != "latency_true_ofi_nxt_probability_band_effective_venue" or (
+            _field_text("latency_true_ofi_nxt_probability_band_context").lower()
+            in {"false", "0", "no"}
+            and _field_text("latency_true_ofi_nxt_probability_band_applied").lower()
+            in {"false", "0", "no"}
+        )
         return (
             standard_contract_present
+            and derived_probability_band_not_applied
             and effective_venue
             in {
                 "NXT_ELIGIBILITY_UNKNOWN",
