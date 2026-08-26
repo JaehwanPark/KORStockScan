@@ -997,6 +997,8 @@ def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_
                 "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
                 "rising_missed_tp1_candidate_lane": "low_rebound",
                 "current_price_observed": 10000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
                 "venue": "PREMARKET_KRX_LIKE",
                 "venue_resolution": "canonicalized:rising_missed_effective_venue",
             },
@@ -1007,7 +1009,11 @@ def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_
             "000701",
             "tp1",
             "holding_observation",
-            {"current_price_observed": 10140},
+            {
+                "current_price_observed": 10140,
+                "market_data_effective_best_bid": 10140,
+                "market_data_effective_best_ask": 10150,
+            },
             emitted_at="2026-07-14T09:05:00+09:00",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -1195,6 +1201,8 @@ def test_nxt_post_block_sampler_recovers_counterfactual_first_hit_label(tmp_path
             {
                 **common,
                 "rising_missed_tp1_effective_price": 10000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
                 "selector_reason": "rising_missed_tp1_insufficient_positive_support",
                 "selector_deferred": False,
                 "rising_missed_tp1_counterfactual_submit_safety_action": "RECHECK_REQUIRED",
@@ -1475,6 +1483,8 @@ def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(
                 "rising_missed_tp1_candidate_allowed": True,
                 "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
                 "current_price_observed": 10000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
             },
             emitted_at="2026-07-14T09:00:00+09:00",
         ),
@@ -1483,7 +1493,11 @@ def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(
             "000702",
             "adverse",
             "holding_observation",
-            {"current_price_observed": 9920},
+            {
+                "current_price_observed": 9920,
+                "market_data_effective_best_bid": 9920,
+                "market_data_effective_best_ask": 9930,
+            },
             emitted_at="2026-07-14T09:02:00+09:00",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -1497,6 +1511,8 @@ def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(
                 "rising_missed_tp1_candidate_allowed": True,
                 "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
                 "current_price_observed": 10000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
                 "actual_fee_krw": 10,
                 "actual_tax_krw": 10,
             },
@@ -1507,7 +1523,11 @@ def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(
             "000703",
             "net",
             "holding_observation",
-            {"current_price_observed": 10130},
+            {
+                "current_price_observed": 10130,
+                "market_data_effective_best_bid": 10130,
+                "market_data_effective_best_ask": 10140,
+            },
             emitted_at="2026-07-14T09:15:00+09:00",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -1546,6 +1566,8 @@ def test_tp1_first_hit_label_accepts_explicit_zero_costs_without_closing_pending
                 "rising_missed_tp1_candidate_allowed": True,
                 "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
                 "current_price_observed": 10000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
                 "actual_fee_krw": 0,
                 "actual_tax_krw": 0,
             },
@@ -1589,6 +1611,8 @@ def test_tp1_first_hit_label_uses_effective_price_and_later_cost_only_event(tmp_
                 "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
                 "rising_missed_tp1_effective_price": 10000,
                 "current_price_observed": 9000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
                 "quantity": 1,
             },
             emitted_at="2026-07-14T09:00:00+09:00",
@@ -1601,6 +1625,8 @@ def test_tp1_first_hit_label_uses_effective_price_and_later_cost_only_event(tmp_
             {
                 "current_price_observed": 10130,
                 "rising_missed_tp1_effective_price": 10000,
+                "market_data_effective_best_bid": 10130,
+                "market_data_effective_best_ask": 10140,
             },
             emitted_at="2026-07-14T09:05:00+09:00",
             pipeline="HOLDING_PIPELINE",
@@ -1624,7 +1650,7 @@ def test_tp1_first_hit_label_uses_effective_price_and_later_cost_only_event(tmp_
 
     label = report["rising_missed_tp1_first_hit_label_rows"][0]
     assert label["entry_price"] == 10000.0
-    assert label["entry_price_source"] == "rising_missed_tp1_effective_price"
+    assert label["entry_price_source"] == "market_data_effective_bbo:best_ask"
     assert label["gross_first_hit_label"] == "gross_target_first"
     assert label["actual_cost_pct"] == 0.2
     assert label["net_label"] == "net_target_confirmed"
@@ -1646,6 +1672,8 @@ def test_tp1_first_hit_label_does_not_reuse_propagated_effective_anchor(tmp_path
                     "rising_missed_tp1_candidate_pass"
                 ),
                 "rising_missed_tp1_effective_price": 10_000,
+                "market_data_effective_best_bid": 9_990,
+                "market_data_effective_best_ask": 10_000,
             },
             emitted_at="2026-07-15T18:25:00+09:00",
         ),
@@ -1658,6 +1686,8 @@ def test_tp1_first_hit_label_does_not_reuse_propagated_effective_anchor(tmp_path
                 "rising_missed_tp1_evaluation_id": "nxt-anchor-eval",
                 "rising_missed_tp1_effective_price": 10_000,
                 "holding_ws_recovered_curr": 10_160,
+                "market_data_effective_best_bid": 10_160,
+                "market_data_effective_best_ask": 10_170,
                 "holding_rest_quote_request_code": "000707_NX",
                 "holding_rest_quote_effective_venue": "NXT",
                 "holding_rest_quote_route_consistent": True,
@@ -1696,6 +1726,8 @@ def test_tp1_first_hit_ignores_unproven_holding_rest_recovery(tmp_path):
                     "rising_missed_tp1_candidate_pass"
                 ),
                 "rising_missed_tp1_effective_price": 10_000,
+                "market_data_effective_best_bid": 9_990,
+                "market_data_effective_best_ask": 10_000,
             },
             emitted_at="2026-07-15T08:18:00+09:00",
         ),
@@ -1750,8 +1782,8 @@ def test_tp1_first_hit_ignores_unproven_holding_rest_recovery(tmp_path):
     )
 
     label = report["rising_missed_tp1_first_hit_label_rows"][0]
-    assert label["gross_first_hit_label"] == "no_hit_within_20m"
-    assert label["min_move_pct_within_20m"] == 0.4
+    assert label["gross_first_hit_label"] == ("source_gap_non_executable_price_only")
+    assert label["min_move_pct_within_20m"] is None
 
 
 def test_tp1_first_hit_ignores_rejected_holding_rest_divergence(tmp_path):
@@ -1770,6 +1802,8 @@ def test_tp1_first_hit_ignores_rejected_holding_rest_divergence(tmp_path):
                     "rising_missed_tp1_candidate_pass"
                 ),
                 "rising_missed_tp1_effective_price": 10_000,
+                "market_data_effective_best_bid": 9_990,
+                "market_data_effective_best_ask": 10_000,
             },
             emitted_at="2026-07-15T08:18:00+09:00",
         ),
@@ -1826,10 +1860,10 @@ def test_tp1_first_hit_ignores_rejected_holding_rest_divergence(tmp_path):
     )
 
     label = report["rising_missed_tp1_first_hit_label_rows"][0]
-    assert label["gross_first_hit_label"] == "no_hit_within_20m"
+    assert label["gross_first_hit_label"] == ("source_gap_non_executable_price_only")
     assert label["first_hit_ts"] is None
-    assert label["max_move_pct_within_20m"] == 0.5
-    assert label["min_move_pct_within_20m"] == 0.4
+    assert label["max_move_pct_within_20m"] is None
+    assert label["min_move_pct_within_20m"] is None
 
 
 def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_scanner_price(
@@ -1849,6 +1883,8 @@ def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_
                 "rising_missed_tp1_evaluation_id": "pass-eval",
                 "rising_missed_tp1_effective_price": 10000,
                 "current_price_observed": 9000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
             },
             emitted_at="2026-07-14T09:00:00+09:00",
         ),
@@ -1857,7 +1893,12 @@ def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_
             "000706",
             "pass",
             "real_weak_ai_micro_entry_block",
-            {"current_price_observed": 9000, "mark_price_at_submit": 10140},
+            {
+                "current_price_observed": 9000,
+                "mark_price_at_submit": 10140,
+                "best_bid_at_submit": 10140,
+                "best_ask_at_submit": 10150,
+            },
             emitted_at="2026-07-14T09:01:00+09:00",
         ),
         _event(
@@ -1872,6 +1913,8 @@ def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_
                 "rising_missed_tp1_evaluation_id": "counterfactual-eval",
                 "rising_missed_tp1_effective_price": 20000,
                 "current_price_observed": 18000,
+                "market_data_effective_best_bid": 19990,
+                "market_data_effective_best_ask": 20000,
                 "rising_missed_tp1_counterfactual_submit_safety_action": "RECHECK_REQUIRED",
                 "rising_missed_tp1_counterfactual_submit_safety_risks": "momentum_support_weak",
             },
@@ -1890,7 +1933,12 @@ def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_
             "000806",
             "counterfactual",
             "scalping_scanner_watching_runtime_skip",
-            {"current_price_observed": 20280, "ws_last_0b_age_ms": 100},
+            {
+                "current_price_observed": 20280,
+                "ws_last_0b_age_ms": 100,
+                "market_data_effective_best_bid": 20280,
+                "market_data_effective_best_ask": 20290,
+            },
             emitted_at="2026-07-14T09:04:00+09:00",
         ),
     ]
@@ -1904,7 +1952,7 @@ def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_
 
     pass_label = report["rising_missed_tp1_first_hit_label_rows"][0]
     assert pass_label["entry_price"] == 10000.0
-    assert pass_label["entry_price_source"] == "rising_missed_tp1_effective_price"
+    assert pass_label["entry_price_source"] == ("market_data_effective_bbo:best_ask")
     assert pass_label["gross_first_hit_label"] == "gross_target_first"
     counterfactual_label = report[
         "rising_missed_tp1_counterfactual_first_hit_label_rows"
@@ -1912,7 +1960,7 @@ def test_tp1_labels_prefer_effective_candidate_and_fresh_submit_mark_over_stale_
     assert counterfactual_label["entry_price"] == 20000.0
     assert (
         counterfactual_label["entry_price_source"]
-        == "rising_missed_tp1_effective_price"
+        == "market_data_effective_bbo:best_ask"
     )
     assert counterfactual_label["gross_first_hit_label"] == "gross_target_first"
     assert counterfactual_label["first_hit_ts"] == "2026-07-14T09:04:00+09:00"
@@ -1941,6 +1989,8 @@ def test_tp1_label_ignores_unfresh_decision_stage_current_price_before_submit_ma
                 "rising_missed_tp1_evaluation_id": "stale-decision-price-eval",
                 "rising_missed_tp1_effective_price": 10000,
                 "current_price_observed": 11000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
             },
             emitted_at="2026-07-14T09:00:00+09:00",
         ),
@@ -2008,7 +2058,7 @@ def test_tp1_label_ignores_unfresh_decision_stage_current_price_before_submit_ma
     label = report["rising_missed_tp1_first_hit_label_rows"][0]
     assert label["entry_price"] == 10000.0
     assert label["gross_first_hit_label"] == "pending_horizon"
-    assert label["max_move_pct_within_20m"] == 0.5
+    assert label["max_move_pct_within_20m"] == 0.4
     # The effective candidate anchor is not a post-block price observation.
     assert label["observed_price_event_count"] == 2
     blocker = report["submit_safety_blocker_rows"][0]
@@ -2031,6 +2081,8 @@ def test_tp1_counterfactual_multi_horizon_marks_late_recovery_after_adverse(
             {
                 "rising_missed_tp1_evaluation_id": "late-recovery-eval",
                 "rising_missed_tp1_effective_price": 10000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
                 "selector_reason": "rising_missed_tp1_insufficient_positive_support",
                 "selector_deferred": False,
                 "rising_missed_tp1_counterfactual_submit_safety_action": (
@@ -2044,7 +2096,11 @@ def test_tp1_counterfactual_multi_horizon_marks_late_recovery_after_adverse(
             "000811",
             "late-recovery",
             "holding_observation",
-            {"current_price_observed": 9900},
+            {
+                "current_price_observed": 9900,
+                "market_data_effective_best_bid": 9900,
+                "market_data_effective_best_ask": 9910,
+            },
             emitted_at="2026-07-14T09:00:30+09:00",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -2053,7 +2109,11 @@ def test_tp1_counterfactual_multi_horizon_marks_late_recovery_after_adverse(
             "000811",
             "late-recovery",
             "holding_observation",
-            {"current_price_observed": 10000},
+            {
+                "current_price_observed": 10000,
+                "market_data_effective_best_bid": 10000,
+                "market_data_effective_best_ask": 10010,
+            },
             emitted_at="2026-07-14T09:05:00+09:00",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -2062,7 +2122,11 @@ def test_tp1_counterfactual_multi_horizon_marks_late_recovery_after_adverse(
             "000811",
             "late-recovery",
             "holding_observation",
-            {"current_price_observed": 10130},
+            {
+                "current_price_observed": 10130,
+                "market_data_effective_best_bid": 10130,
+                "market_data_effective_best_ask": 10140,
+            },
             emitted_at="2026-07-14T09:25:00+09:00",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -2121,6 +2185,8 @@ def test_tp1_counterfactual_multi_horizon_marks_no_symbol_price_as_source_gap(
             {
                 "rising_missed_tp1_evaluation_id": "coverage-gap-eval",
                 "rising_missed_tp1_effective_price": 10000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
                 "rising_missed_effective_venue": "KRX",
                 "selector_reason": "rising_missed_tp1_lane_not_eligible",
                 "selector_deferred": False,
@@ -2170,6 +2236,125 @@ def test_tp1_counterfactual_multi_horizon_marks_no_symbol_price_as_source_gap(
     )
 
 
+def test_tp1_counterfactual_multi_horizon_rejects_mark_only_price(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            815,
+            "000815",
+            "mark-only",
+            "rising_missed_tp1_counterfactual_submit_safety",
+            {
+                "rising_missed_tp1_evaluation_id": "mark-only-eval",
+                "rising_missed_tp1_effective_price": 10000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
+                "rising_missed_effective_venue": "KRX",
+                "selector_reason": "rising_missed_tp1_lane_not_eligible",
+                "selector_deferred": False,
+                "rising_missed_tp1_counterfactual_submit_safety_action": (
+                    "RECHECK_REQUIRED"
+                ),
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            815,
+            "000815",
+            "mark-only",
+            "holding_observation",
+            {"current_price_observed": 10130},
+            emitted_at="2026-07-14T09:01:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            999,
+            "000999",
+            "watermark",
+            "holding_observation",
+            {"current_price_observed": 10000},
+            emitted_at="2026-07-14T10:01:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    label = report["rising_missed_tp1_counterfactual_first_hit_label_rows"][0]
+    measurement_20m = next(
+        item
+        for item in label["post_block_horizon_measurements"]
+        if item["horizon_min"] == 20
+    )
+    assert measurement_20m["outcome_label"] == ("source_gap_non_executable_price_only")
+    assert measurement_20m["source_quality_state"] == (
+        "source_gap_non_executable_price_only"
+    )
+    assert measurement_20m["observed_price_event_count"] == 0
+    assert measurement_20m["non_executable_price_event_count"] == 1
+    assert measurement_20m["first_hit_price_source"] is None
+
+
+def test_tp1_counterfactual_projection_keeps_bbo_only_price_event(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
+    rows = [
+        _event(
+            816,
+            "000816",
+            "bbo-only",
+            "rising_missed_tp1_counterfactual_submit_safety",
+            {
+                "rising_missed_tp1_evaluation_id": "bbo-only-eval",
+                "rising_missed_tp1_effective_price": 10000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
+                "rising_missed_effective_venue": "KRX",
+                "selector_reason": "rising_missed_tp1_lane_not_eligible",
+                "selector_deferred": False,
+                "rising_missed_tp1_counterfactual_submit_safety_action": (
+                    "RECHECK_REQUIRED"
+                ),
+            },
+            emitted_at="2026-07-14T09:00:00+09:00",
+        ),
+        _event(
+            816,
+            "000816",
+            "bbo-only",
+            "holding_observation",
+            {
+                "market_data_effective_best_bid": 10130,
+                "market_data_effective_best_ask": 10140,
+            },
+            emitted_at="2026-07-14T09:01:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-14", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    label = report["rising_missed_tp1_counterfactual_first_hit_label_rows"][0]
+    assert label["gross_first_hit_label"] == "gross_target_first"
+    measurement_1m = next(
+        item
+        for item in label["post_block_horizon_measurements"]
+        if item["horizon_min"] == 1
+    )
+    assert measurement_1m["first_hit_price_source"] == (
+        "market_data_effective_bbo:best_bid"
+    )
+
+
 def test_tp1_counterfactual_multi_horizon_rejects_other_nxt_evaluation_samples(
     tmp_path,
 ):
@@ -2183,6 +2368,8 @@ def test_tp1_counterfactual_multi_horizon_rejects_other_nxt_evaluation_samples(
             {
                 "rising_missed_tp1_evaluation_id": "candidate-evaluation",
                 "rising_missed_tp1_effective_price": 10000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
                 "selector_reason": "rising_missed_tp1_lane_not_eligible",
                 "selector_deferred": False,
                 "rising_missed_tp1_counterfactual_submit_safety_action": (
@@ -2244,6 +2431,10 @@ def test_tp1_counterfactual_multi_horizon_does_not_call_target_first_a_recovery(
             {
                 "rising_missed_tp1_evaluation_id": "target-first-eval",
                 "rising_missed_tp1_effective_price": 10000,
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
+                "rising_missed_effective_venue": "KRX",
+                "rising_missed_market_session_bucket": "krx_regular",
                 "selector_reason": "rising_missed_tp1_lane_not_eligible",
                 "selector_deferred": False,
                 "rising_missed_tp1_counterfactual_submit_safety_action": (
@@ -2257,7 +2448,11 @@ def test_tp1_counterfactual_multi_horizon_does_not_call_target_first_a_recovery(
             "000813",
             "target-first",
             "holding_observation",
-            {"current_price_observed": 10130},
+            {
+                "current_price_observed": 10130,
+                "market_data_effective_best_bid": 10130,
+                "market_data_effective_best_ask": 10140,
+            },
             emitted_at="2026-07-14T09:01:00+09:00",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -2266,7 +2461,11 @@ def test_tp1_counterfactual_multi_horizon_does_not_call_target_first_a_recovery(
             "000813",
             "target-first",
             "holding_observation",
-            {"current_price_observed": 9900},
+            {
+                "current_price_observed": 9900,
+                "market_data_effective_best_bid": 9900,
+                "market_data_effective_best_ask": 9910,
+            },
             emitted_at="2026-07-14T09:05:00+09:00",
             pipeline="HOLDING_PIPELINE",
         ),
@@ -2299,6 +2498,87 @@ def test_tp1_counterfactual_multi_horizon_does_not_call_target_first_a_recovery(
         "first_recovery_horizon_min": None,
         "reason": "not_observed",
     }
+    summary = report["summary"]
+    assert summary["rising_missed_tp1_counterfactual_direct_target_first_count"] == 1
+    assert (
+        summary[
+            "rising_missed_tp1_counterfactual_direct_target_first_unique_symbol_count"
+        ]
+        == 1
+    )
+    assert (
+        summary[
+            "rising_missed_tp1_counterfactual_direct_target_first_source_quality_gap_count"
+        ]
+        == 0
+    )
+    assert (
+        summary["rising_missed_tp1_counterfactual_direct_target_first_row_export_count"]
+        == 1
+    )
+    assert (
+        summary[
+            "rising_missed_tp1_counterfactual_direct_target_first_row_omitted_count"
+        ]
+        == 0
+    )
+    assert not summary[
+        "rising_missed_tp1_counterfactual_direct_target_first_row_export_truncated"
+    ]
+    assert summary[
+        "rising_missed_tp1_counterfactual_direct_target_first_selector_counts"
+    ] == [{"selector_reason": "rising_missed_tp1_lane_not_eligible", "count": 1}]
+    assert summary[
+        "rising_missed_tp1_counterfactual_direct_target_first_ai_action_counts"
+    ] == [{"ai_action": "unknown", "count": 1}]
+    assert summary["rising_missed_tp1_counterfactual_detail_row_export_count"] == 1
+    assert summary["rising_missed_tp1_counterfactual_detail_row_omitted_count"] == 0
+    assert (
+        summary["rising_missed_tp1_counterfactual_detail_row_export_truncated"] is False
+    )
+    direct_rows = report["rising_missed_tp1_counterfactual_direct_target_first_rows"]
+    assert len(direct_rows) == 1
+    assert direct_rows[0]["stock_code"] == "000813"
+    assert direct_rows[0]["entry_price_source"] == (
+        "market_data_effective_bbo:best_ask"
+    )
+    assert direct_rows[0]["first_hit_price_source"] == (
+        "market_data_effective_bbo:best_bid"
+    )
+    assert direct_rows[0]["decision_authority"] == (
+        "source_only_tp1_direct_target_first_attribution"
+    )
+    assert direct_rows[0]["actual_order_submitted"] is False
+    assert direct_rows[0]["broker_order_forbidden"] is True
+
+
+def test_tp1_direct_target_first_attribution_excludes_unknown_venue_session():
+    base = {
+        "gross_first_hit_label": "gross_target_first",
+        "entry_executable_bbo_state": "pass",
+        "entry_price_source": "market_data_effective_bbo:best_ask",
+        "first_hit_ts": "2026-07-14T09:01:00+09:00",
+        "first_hit_price_source": "market_data_effective_bbo:best_bid",
+        "stock_code": "000814",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+    }
+    summary, rows = mod._tp1_counterfactual_direct_target_first_attribution(
+        [
+            base,
+            {**base, "stock_code": "000815", "effective_venue": "unknown"},
+            {**base, "stock_code": "000816", "first_hit_price_source": None},
+        ]
+    )
+
+    assert summary["rising_missed_tp1_counterfactual_direct_target_first_count"] == 1
+    assert (
+        summary[
+            "rising_missed_tp1_counterfactual_direct_target_first_source_quality_gap_count"
+        ]
+        == 2
+    )
+    assert [row["stock_code"] for row in rows] == ["000814"]
 
 
 def test_tp1_counterfactual_submit_safety_is_aggregated_without_label_duplication(
@@ -2623,6 +2903,25 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
                 "micro_source_state": "fresh_ws_order_flow_delta",
             }
         ],
+        "rising_missed_tp1_counterfactual_direct_target_first_rows": [
+            {
+                "candidate_ts": "2026-07-02T09:00:00",
+                "stock_code": "000901",
+                "stock_name": "context",
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+                "selector_reason": "rising_missed_tp1_lane_not_eligible",
+                "ai_action": "WAIT",
+                "entry_price": 1000.0,
+                "entry_price_source": "market_data_effective_bbo:best_ask",
+                "first_hit_ts": "2026-07-02T09:01:00+09:00",
+                "first_hit_move_pct": 1.3,
+                "first_hit_price_source": "market_data_effective_bbo:best_bid",
+                "decision_authority": (
+                    "source_only_tp1_direct_target_first_attribution"
+                ),
+            }
+        ],
         "first_touch_regression_rows": [
             {
                 "record_id": "101",
@@ -2662,6 +2961,9 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
     assert "submit_safety_source_quality_unknown_missing_field_counts" in markdown
     assert "## TP1 Counterfactual First-hit Labels" in markdown
     assert "ws_age_ms=50.0" in markdown
+    assert "## TP1 Direct Target-first Attribution" in markdown
+    assert "entry_source=market_data_effective_bbo:best_ask" in markdown
+    assert "first_hit_source=market_data_effective_bbo:best_bid" in markdown
     assert "## Dynamic-age Post-apply Attribution" in markdown
     assert "horizons=1m:n=2/mfe=0.1/mae=-0.2" in markdown
 

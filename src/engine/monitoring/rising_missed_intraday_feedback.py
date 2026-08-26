@@ -81,6 +81,7 @@ TP1_ADVERSE_STOP_PCT = -0.70
 TP1_COST_RESERVE_PCT = 0.30
 TP1_NET_TARGET_PCT = 1.00
 TP1_LABEL_HORIZON_SEC = 20 * 60
+TP1_DETAIL_ROW_EXPORT_LIMIT = 200
 TP1_POST_BLOCK_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
 BACKOFF_EXECUTABLE_HORIZONS_MIN = (1, 3, 5, 10)
 TP1_POST_BLOCK_MIN_FRESH_PRICE_SAMPLES = 2
@@ -115,6 +116,8 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "market_session_bucket",
         "mark_price_at_submit",
         "market_data_effective_price_source",
+        "market_data_effective_best_ask",
+        "market_data_effective_best_bid",
         "market_data_freshness_state",
         "market_data_rest_age_basis",
         "market_data_rest_quote_age_ms",
@@ -122,6 +125,18 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "market_data_ws_quote_age_ms",
         "market_data_ws_rest_gap_bps",
         "pre_submit_ws_snapshot_refresh_latest_price",
+        "pre_submit_ws_snapshot_refresh_best_ask",
+        "pre_submit_ws_snapshot_refresh_best_bid",
+        "best_ask_at_submit",
+        "best_bid_at_submit",
+        "entry_ai_price_ws_snapshot_refresh_best_ask",
+        "entry_ai_price_ws_snapshot_refresh_best_bid",
+        "pre_submit_rest_orderbook_refresh_best_ask",
+        "pre_submit_rest_orderbook_refresh_best_bid",
+        "pre_submit_quote_refresh_best_ask",
+        "pre_submit_quote_refresh_best_bid",
+        "executable_buy_price",
+        "executable_sell_price",
         "quantity",
         "rising_missed_effective_venue",
         "rising_missed_market_session_bucket",
@@ -130,6 +145,8 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "rising_missed_nxt_post_block_horizon_sec",
         "rising_missed_nxt_post_block_max_move_pct",
         "rising_missed_nxt_post_block_min_move_pct",
+        "rising_missed_nxt_post_block_ws_0d_best_ask",
+        "rising_missed_nxt_post_block_ws_0d_best_bid",
         "rising_missed_nxt_post_block_sampler_outcome_label",
         "rising_missed_tp1_actual_watch_delta_pct",
         "rising_missed_tp1_ai_action",
@@ -2998,12 +3015,15 @@ def _tp1_post_block_measurement_state(
     observation_watermark: datetime | None,
     horizon_end: datetime,
     observed_price_event_count: int,
+    non_executable_price_event_count: int = 0,
 ) -> str:
     """Classify whether a bounded post-block window is actually measurable."""
 
     if observation_watermark is None or observation_watermark < horizon_end:
         return "pending_horizon"
     if observed_price_event_count <= 0:
+        if non_executable_price_event_count > 0:
+            return "source_gap_non_executable_price_only"
         return "source_gap_no_post_block_price"
     if observed_price_event_count < TP1_POST_BLOCK_MIN_FRESH_PRICE_SAMPLES:
         return "source_gap_insufficient_post_block_price"
@@ -3043,6 +3063,7 @@ def _tp1_post_block_horizon_measurements(
             "horizon_sec": horizon_min * 60,
             "horizon_end": candidate_ts + timedelta(minutes=horizon_min),
             "observed_price_event_count": 0,
+            "non_executable_price_event_count": 0,
             "first_hit_label": None,
             "first_hit_ts": None,
             "first_hit_move_pct": None,
@@ -3130,9 +3151,16 @@ def _tp1_post_block_horizon_measurements(
                 )
             continue
 
-        price, price_source = _tp1_observation_price(subsequent)
-        if price is None or price <= 0:
+        executable_bid, _executable_ask, bbo_source = _event_executable_bbo(subsequent)
+        if executable_bid is None or executable_bid <= 0:
+            mark_price, _mark_source = _tp1_observation_price(subsequent)
+            if mark_price is not None and mark_price > 0:
+                for measurement in measurements.values():
+                    if event_ts <= measurement["horizon_end"]:
+                        measurement["non_executable_price_event_count"] += 1
             continue
+        price = executable_bid
+        price_source = f"{bbo_source}:best_bid"
         move_pct = ((price - entry_price) / entry_price) * 100.0
         for measurement in measurements.values():
             if event_ts > measurement["horizon_end"]:
@@ -3203,6 +3231,9 @@ def _tp1_post_block_horizon_measurements(
             observation_watermark=observation_watermark,
             horizon_end=measurement["horizon_end"],
             observed_price_event_count=measurement["observed_price_event_count"],
+            non_executable_price_event_count=measurement[
+                "non_executable_price_event_count"
+            ],
         )
         if measurement["first_hit_label"] is not None:
             outcome_label = measurement["first_hit_label"]
@@ -3219,6 +3250,9 @@ def _tp1_post_block_horizon_measurements(
                 "outcome_label": outcome_label,
                 "source_quality_state": measurement_state,
                 "observed_price_event_count": measurement["observed_price_event_count"],
+                "non_executable_price_event_count": measurement[
+                    "non_executable_price_event_count"
+                ],
                 "first_hit_ts": measurement["first_hit_ts"],
                 "first_hit_move_pct": (
                     round(float(measurement["first_hit_move_pct"]), 4)
@@ -3434,10 +3468,12 @@ def _load_tp1_label_event_projection(
         fields = _fields(row)
         stage = str(row.get("stage") or "")
         price, _price_source = _tp1_observation_price(row)
+        executable_bid, executable_ask, _bbo_source = _event_executable_bbo(row)
         fee, tax = _tp1_actual_costs(fields)
         if (
             _tp1_label_candidate_kind(row)
             or (price is not None and price > 0)
+            or (executable_bid is not None and executable_ask is not None)
             or stage.startswith("rising_missed_nxt_post_block_")
             or fee is not None
             or tax is not None
@@ -3488,10 +3524,23 @@ def _build_tp1_first_hit_labels(
             continue
         seen_keys.add(dedupe_key)
         candidate_ts = _tp1_label_timestamp(candidate_ts_text)
-        entry_price, entry_price_source = _tp1_observation_price(candidate)
-        label = "input_unavailable"
+        entry_executable_bid, entry_executable_ask, entry_bbo_source = (
+            _event_executable_bbo(candidate)
+        )
+        entry_price = entry_executable_ask
+        entry_price_source = (
+            f"{entry_bbo_source}:best_ask"
+            if entry_price is not None and entry_price > 0
+            else "missing_or_invalid_executable_ask"
+        )
+        label = (
+            "source_gap_missing_executable_entry_bbo"
+            if candidate_ts is not None
+            else "input_unavailable"
+        )
         first_hit_ts = None
         first_hit_move_pct = None
+        first_hit_price_source = None
         max_move_pct = None
         min_move_pct = None
         observed_event_count = 0
@@ -3557,6 +3606,7 @@ def _build_tp1_first_hit_labels(
             label = str(primary_horizon.get("outcome_label") or label)
             first_hit_ts = primary_horizon.get("first_hit_ts")
             first_hit_move_pct = primary_horizon.get("first_hit_move_pct")
+            first_hit_price_source = primary_horizon.get("first_hit_price_source")
             max_move_pct = primary_horizon.get("max_move_pct")
             min_move_pct = primary_horizon.get("min_move_pct")
             observed_event_count = _safe_int(
@@ -3607,6 +3657,14 @@ def _build_tp1_first_hit_labels(
                 "evaluation_id": evaluation_id or None,
                 "entry_price": entry_price,
                 "entry_price_source": entry_price_source,
+                "entry_executable_best_bid": entry_executable_bid,
+                "entry_executable_best_ask": entry_executable_ask,
+                "entry_executable_bbo_state": (
+                    "pass"
+                    if entry_executable_bid is not None
+                    and entry_executable_ask is not None
+                    else "source_gap_missing_or_invalid"
+                ),
                 "gross_first_hit_label": label,
                 "first_hit_ts": first_hit_ts,
                 "first_hit_move_pct": (
@@ -3614,6 +3672,7 @@ def _build_tp1_first_hit_labels(
                     if first_hit_move_pct is not None
                     else None
                 ),
+                "first_hit_price_source": first_hit_price_source,
                 "max_move_pct_within_20m": (
                     round(max_move_pct, 4) if max_move_pct is not None else None
                 ),
@@ -3780,10 +3839,23 @@ def _build_tp1_counterfactual_first_hit_labels(
         seen_keys.add(dedupe_key)
 
         candidate_ts = _tp1_label_timestamp(candidate_ts_text)
-        entry_price, entry_price_source = _tp1_observation_price(candidate)
-        label = "input_unavailable"
+        entry_executable_bid, entry_executable_ask, entry_bbo_source = (
+            _event_executable_bbo(candidate)
+        )
+        entry_price = entry_executable_ask
+        entry_price_source = (
+            f"{entry_bbo_source}:best_ask"
+            if entry_price is not None and entry_price > 0
+            else "missing_or_invalid_executable_ask"
+        )
+        label = (
+            "source_gap_missing_executable_entry_bbo"
+            if candidate_ts is not None
+            else "input_unavailable"
+        )
         first_hit_ts = None
         first_hit_move_pct = None
+        first_hit_price_source = None
         max_move_pct = None
         min_move_pct = None
         observed_event_count = 0
@@ -3897,6 +3969,7 @@ def _build_tp1_counterfactual_first_hit_labels(
             label = str(primary_horizon.get("outcome_label") or label)
             first_hit_ts = primary_horizon.get("first_hit_ts")
             first_hit_move_pct = primary_horizon.get("first_hit_move_pct")
+            first_hit_price_source = primary_horizon.get("first_hit_price_source")
             max_move_pct = primary_horizon.get("max_move_pct")
             min_move_pct = primary_horizon.get("min_move_pct")
             observed_event_count = _safe_int(
@@ -3928,6 +4001,14 @@ def _build_tp1_counterfactual_first_hit_labels(
                 **_tp1_counterfactual_decision_context(fields),
                 "entry_price": entry_price,
                 "entry_price_source": entry_price_source,
+                "entry_executable_best_bid": entry_executable_bid,
+                "entry_executable_best_ask": entry_executable_ask,
+                "entry_executable_bbo_state": (
+                    "pass"
+                    if entry_executable_bid is not None
+                    and entry_executable_ask is not None
+                    else "source_gap_missing_or_invalid"
+                ),
                 "gross_first_hit_label": label,
                 "first_hit_ts": first_hit_ts,
                 "first_hit_move_pct": (
@@ -3935,6 +4016,7 @@ def _build_tp1_counterfactual_first_hit_labels(
                     if first_hit_move_pct is not None
                     else None
                 ),
+                "first_hit_price_source": first_hit_price_source,
                 "max_move_pct_within_20m": (
                     round(max_move_pct, 4) if max_move_pct is not None else None
                 ),
@@ -3977,6 +4059,111 @@ def _build_tp1_counterfactual_first_hit_labels(
             "adverse_stop_first", 0
         ),
     }, labels
+
+
+def _tp1_counterfactual_direct_target_first_attribution(
+    labels: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Keep the directly executable upside cohort attributable and source-only.
+
+    The general TP1 detail table is payload bounded.  A small direct-target
+    attribution table prevents later consumers from mistaking that export cap
+    for the complete missed-opportunity population.  Complete counts remain in
+    the summary while the compact detail table is independently payload bounded.
+    """
+
+    target_label_candidates = [
+        row
+        for row in labels
+        if row.get("gross_first_hit_label") == "gross_target_first"
+        and row.get("entry_executable_bbo_state") == "pass"
+        and str(row.get("entry_price_source") or "").endswith(":best_ask")
+        and row.get("first_hit_ts") not in (None, "", "-")
+    ]
+    eligible = [
+        row
+        for row in target_label_candidates
+        if str(row.get("first_hit_price_source") or "").endswith(":best_bid")
+        and row.get("effective_venue") in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+        and str(row.get("market_session_bucket") or "").strip() not in {"", "unknown"}
+    ]
+    selector_counts = Counter(
+        str(row.get("selector_reason") or "unknown") for row in eligible
+    )
+    ai_action_counts = Counter(
+        str(row.get("ai_action") or "unknown") for row in eligible
+    )
+    venue_session_counts = Counter(
+        (
+            str(row.get("effective_venue") or "unknown"),
+            str(row.get("market_session_bucket") or "unknown"),
+        )
+        for row in eligible
+    )
+    compact_rows = [
+        {
+            "record_id": row.get("record_id"),
+            "evaluation_id": row.get("evaluation_id"),
+            "candidate_ts": row.get("candidate_ts"),
+            "stock_code": row.get("stock_code"),
+            "stock_name": row.get("stock_name"),
+            "effective_venue": row.get("effective_venue"),
+            "market_session_bucket": row.get("market_session_bucket"),
+            "selector_reason": row.get("selector_reason"),
+            "ai_action": row.get("ai_action"),
+            "counterfactual_action": row.get("counterfactual_action"),
+            "entry_price": row.get("entry_price"),
+            "entry_price_source": row.get("entry_price_source"),
+            "first_hit_ts": row.get("first_hit_ts"),
+            "first_hit_move_pct": row.get("first_hit_move_pct"),
+            "first_hit_price_source": row.get("first_hit_price_source"),
+            "decision_authority": ("source_only_tp1_direct_target_first_attribution"),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "forbidden_uses": FORBIDDEN_USES,
+        }
+        for row in eligible
+    ]
+    return {
+        "rising_missed_tp1_counterfactual_direct_target_first_count": len(eligible),
+        "rising_missed_tp1_counterfactual_direct_target_first_source_quality_gap_count": (
+            len(target_label_candidates) - len(eligible)
+        ),
+        "rising_missed_tp1_counterfactual_direct_target_first_unique_symbol_count": len(
+            {
+                str(row.get("stock_code") or "")
+                for row in eligible
+                if row.get("stock_code")
+            }
+        ),
+        "rising_missed_tp1_counterfactual_direct_target_first_selector_counts": [
+            {"selector_reason": key, "count": value}
+            for key, value in selector_counts.most_common()
+        ],
+        "rising_missed_tp1_counterfactual_direct_target_first_ai_action_counts": [
+            {"ai_action": key, "count": value}
+            for key, value in ai_action_counts.most_common()
+        ],
+        "rising_missed_tp1_counterfactual_direct_target_first_venue_session_counts": [
+            {
+                "effective_venue": venue,
+                "market_session_bucket": session,
+                "count": count,
+            }
+            for (venue, session), count in sorted(venue_session_counts.items())
+        ],
+        "rising_missed_tp1_counterfactual_direct_target_first_row_export_count": min(
+            len(compact_rows), TP1_DETAIL_ROW_EXPORT_LIMIT
+        ),
+        "rising_missed_tp1_counterfactual_direct_target_first_row_omitted_count": max(
+            0, len(compact_rows) - TP1_DETAIL_ROW_EXPORT_LIMIT
+        ),
+        "rising_missed_tp1_counterfactual_direct_target_first_row_export_truncated": (
+            len(compact_rows) > TP1_DETAIL_ROW_EXPORT_LIMIT
+        ),
+    }, compact_rows
 
 
 def _aggregate_nxt_post_block_outcomes(
@@ -6612,6 +6799,12 @@ def build_report(
             observation_watermark=tp1_observation_watermark,
         )
     )
+    (
+        tp1_counterfactual_direct_target_summary,
+        tp1_counterfactual_direct_target_rows,
+    ) = _tp1_counterfactual_direct_target_first_attribution(
+        tp1_counterfactual_label_rows
+    )
     tp1_counterfactual_multi_horizon_summary = (
         _tp1_counterfactual_multi_horizon_summary(tp1_counterfactual_label_rows)
     )
@@ -6894,6 +7087,22 @@ def build_report(
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "rising_missed_tp1_counterfactual_direct_target_first_attribution": {
+                "metric_role": "source_only_missed_opportunity_attribution",
+                "decision_authority": (
+                    "source_only_tp1_direct_target_first_attribution"
+                ),
+                "window_policy": "same_day_intraday_pipeline_events",
+                "sample_floor": "1_direct_target_first_executable_bbo_label",
+                "primary_decision_metric": (
+                    "rising_missed_tp1_counterfactual_direct_target_first_count"
+                ),
+                "source_quality_gate": (
+                    "executable_best_ask_entry_and_executable_best_bid_"
+                    "target_before_adverse_with_explicit_venue_session"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
             "rising_missed_nxt_session_observation": {
                 "metric_role": "source_quality_gate",
                 "decision_authority": "observe_only_no_runtime_mutation",
@@ -7128,7 +7337,18 @@ def build_report(
             **tp1_label_summary,
             **tp1_counterfactual_summary,
             **tp1_counterfactual_label_summary,
+            **tp1_counterfactual_direct_target_summary,
             **tp1_counterfactual_multi_horizon_summary,
+            "rising_missed_tp1_counterfactual_detail_row_export_count": min(
+                len(tp1_counterfactual_label_rows), TP1_DETAIL_ROW_EXPORT_LIMIT
+            ),
+            "rising_missed_tp1_counterfactual_detail_row_omitted_count": max(
+                0,
+                len(tp1_counterfactual_label_rows) - TP1_DETAIL_ROW_EXPORT_LIMIT,
+            ),
+            "rising_missed_tp1_counterfactual_detail_row_export_truncated": (
+                len(tp1_counterfactual_label_rows) > TP1_DETAIL_ROW_EXPORT_LIMIT
+            ),
             "rising_missed_tp1_counterfactual_multi_horizon_by_effective_venue": (
                 tp1_counterfactual_multi_horizon_by_effective_venue
             ),
@@ -7180,8 +7400,11 @@ def build_report(
             :200
         ],
         "rising_missed_tp1_counterfactual_first_hit_label_rows": tp1_counterfactual_label_rows[
-            :200
+            :TP1_DETAIL_ROW_EXPORT_LIMIT
         ],
+        "rising_missed_tp1_counterfactual_direct_target_first_rows": (
+            tp1_counterfactual_direct_target_rows[:TP1_DETAIL_ROW_EXPORT_LIMIT]
+        ),
         "rising_missed_nxt_session_observation_rows": nxt_session_rows[:200],
         "rising_missed_nxt_order_resolution_rows": nxt_order_rows[:200],
         "rising_missed_nxt_post_block_price_sampler_rows": nxt_post_block_sampler_rows[
@@ -7320,6 +7543,28 @@ def write_outputs(
         f"{summary.get('rising_missed_tp1_counterfactual_risk_counts')}",
         f"- rising_missed_tp1_counterfactual_gross_label_counts: "
         f"{summary.get('rising_missed_tp1_counterfactual_gross_label_counts')}",
+        f"- rising_missed_tp1_counterfactual_direct_target_first_count: "
+        f"{summary.get('rising_missed_tp1_counterfactual_direct_target_first_count')}",
+        f"- rising_missed_tp1_counterfactual_direct_target_first_unique_symbol_count: "
+        f"{summary.get('rising_missed_tp1_counterfactual_direct_target_first_unique_symbol_count')}",
+        f"- rising_missed_tp1_counterfactual_direct_target_first_source_quality_gap_count: "
+        f"{summary.get('rising_missed_tp1_counterfactual_direct_target_first_source_quality_gap_count')}",
+        f"- rising_missed_tp1_counterfactual_direct_target_first_selector_counts: "
+        f"{summary.get('rising_missed_tp1_counterfactual_direct_target_first_selector_counts')}",
+        f"- rising_missed_tp1_counterfactual_direct_target_first_ai_action_counts: "
+        f"{summary.get('rising_missed_tp1_counterfactual_direct_target_first_ai_action_counts')}",
+        f"- rising_missed_tp1_counterfactual_direct_target_first_row_export_count: "
+        f"{summary.get('rising_missed_tp1_counterfactual_direct_target_first_row_export_count')}",
+        f"- rising_missed_tp1_counterfactual_direct_target_first_row_omitted_count: "
+        f"{summary.get('rising_missed_tp1_counterfactual_direct_target_first_row_omitted_count')}",
+        f"- rising_missed_tp1_counterfactual_direct_target_first_row_export_truncated: "
+        f"{summary.get('rising_missed_tp1_counterfactual_direct_target_first_row_export_truncated')}",
+        f"- rising_missed_tp1_counterfactual_detail_row_export_count: "
+        f"{summary.get('rising_missed_tp1_counterfactual_detail_row_export_count')}",
+        f"- rising_missed_tp1_counterfactual_detail_row_omitted_count: "
+        f"{summary.get('rising_missed_tp1_counterfactual_detail_row_omitted_count')}",
+        f"- rising_missed_tp1_counterfactual_detail_row_export_truncated: "
+        f"{summary.get('rising_missed_tp1_counterfactual_detail_row_export_truncated')}",
         f"- rising_missed_tp1_counterfactual_multi_horizon_coverage_counts: "
         f"{summary.get('rising_missed_tp1_counterfactual_multi_horizon_coverage_counts')}",
         f"- rising_missed_tp1_counterfactual_multi_horizon_outcome_counts: "
@@ -7711,6 +7956,19 @@ def write_outputs(
             "spread={spread_ratio} true_ofi={true_ofi_ewma} pressure={pressure_ewma} "
             "depth={depth_imbalance_ewma} tick_accel={tick_acceleration} "
             "micro_state={micro_source_state}".format(**item)
+        )
+    lines.extend(["", "## TP1 Direct Target-first Attribution", ""])
+    for item in (
+        report.get("rising_missed_tp1_counterfactual_direct_target_first_rows") or []
+    ):
+        lines.append(
+            "- ts={candidate_ts} code={stock_code} name={stock_name} "
+            "venue={effective_venue} session={market_session_bucket} "
+            "selector={selector_reason} ai_action={ai_action} "
+            "entry={entry_price} entry_source={entry_price_source} "
+            "first_hit_ts={first_hit_ts} first_hit_move_pct={first_hit_move_pct} "
+            "first_hit_source={first_hit_price_source} "
+            "decision_authority={decision_authority}".format(**item)
         )
     lines.extend(["", "## TP1 Counterfactual Multi-horizon Coverage", ""])
     for item in (
