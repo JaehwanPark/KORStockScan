@@ -5965,6 +5965,74 @@ def test_pipeline_heartbeat_is_generated_only_for_exposure_stages() -> None:
     assert scanner["main_lifecycle_heartbeat"] is False
 
 
+def test_same_day_position_does_not_claim_carry_in_custody() -> None:
+    stock = {
+        "id": 710,
+        "code": "005930",
+        "scanner_generation_id": "005930:SCANPROM-710:r1",
+        "buy_time": BASE + timedelta(minutes=1),
+    }
+
+    fields = pipeline_lifecycle_fields_safe(
+        stock,
+        "005930",
+        pipeline="HOLDING_PIPELINE",
+        source_stage="holding_started",
+        source_fields={},
+        observed_at=BASE + timedelta(minutes=2),
+    )
+
+    assert "main_lifecycle_carry_in_custody_schema" not in fields
+    assert "main_lifecycle_origin" not in fields
+
+
+def test_carry_in_uses_prior_buy_time_when_holding_started_at_is_same_day() -> None:
+    stock = {
+        "id": 711,
+        "code": "005930",
+        "scanner_generation_id": "005930:SCANPROM-711:r1",
+        "holding_started_at": BASE + timedelta(minutes=1),
+        "buy_time": BASE - timedelta(days=1),
+    }
+
+    fields = pipeline_lifecycle_fields_safe(
+        stock,
+        "005930",
+        pipeline="HOLDING_PIPELINE",
+        source_stage="holding_started",
+        source_fields={},
+        observed_at=BASE + timedelta(minutes=2),
+    )
+
+    assert fields["main_lifecycle_carry_in_custody_schema"] == (
+        journal.CARRY_IN_CUSTODY_SCHEMA
+    )
+    assert fields["main_lifecycle_carry_in_entry_source"] == "stock.buy_time"
+
+
+def test_direct_journal_cannot_spoof_pipeline_attested_carry_in() -> None:
+    identity = _identity("carry-spoof")
+    row = build_transition(
+        **identity,
+        trade_date=TARGET_DATE,
+        stage="holding",
+        observed_at=BASE.isoformat(),
+        venue="KRX",
+        session_bucket="krx_regular",
+        data={
+            "carry_in_custody_schema": journal.CARRY_IN_CUSTODY_SCHEMA,
+            "lifecycle_origin": "preexisting_position_custody",
+            "carry_in_entry_observed_at": (BASE - timedelta(days=1)).isoformat(),
+            "carry_in_entry_source": "stock.buy_time",
+        },
+    )
+
+    validated, reason = paired._validated_transition(row, target_date=TARGET_DATE)
+
+    assert validated is None
+    assert reason == "transition_carry_in_requires_pipeline_attestation"
+
+
 def test_pipeline_lifecycle_preserves_venue_provenance_and_rejects_nan() -> None:
     stock = {
         "id": 708,

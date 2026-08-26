@@ -23,9 +23,18 @@ LEGACY_DESIGN_VERSION = "exact_no_micro_vs_micro_prompt_v1"
 CURRENT_DESIGN_VERSION = "current_micro_vs_ask_depletion_prompt_v1"
 CURRENT_DESIGN_ACTIVATION_DATE = "2026-08-25"
 
-PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA = (
+LEGACY_PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA = (
     "micro_reversion_provider_ablation_sample_floor_v1"
 )
+PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA = (
+    "micro_reversion_provider_ablation_sample_floor_v2"
+)
+# The current three-arm design started on 2026-08-25, but the exact probe and
+# residual submitted-quantity lineage required by the Provider sample floor was
+# fixed in bridge v1.5 on 2026-08-26.  Earlier current-design materializations
+# remain immutable audit evidence and must neither count toward nor poison the
+# stricter floor.
+PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE = "2026-08-26"
 PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS = 30
 PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS = 5
 PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS = 20
@@ -501,6 +510,14 @@ __all__ = (
     "DESIGN_VERSION_FIELD",
     "LEGACY_DESIGN_VERSION",
     "CURRENT_DESIGN_VERSION",
+    "CURRENT_DESIGN_ACTIVATION_DATE",
+    "LEGACY_PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA",
+    "PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA",
+    "PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE",
+    "PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS",
+    "PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS",
+    "PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS",
+    "PROVIDER_ABLATION_FLOOR_REQUIRED_UNIQUE_SYMBOLS",
     "LEGACY_ARMS",
     "CURRENT_ARMS",
     "CURRENT_BASE_CONTROL_ARM",

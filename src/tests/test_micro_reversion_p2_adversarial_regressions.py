@@ -289,6 +289,7 @@ def _persisted_provider_floor_fixture(tmp_path, monkeypatch):
         "2026-08-27",
         "2026-08-28",
         "2026-08-31",
+        "2026-09-01",
     )
     for index, day in enumerate(days):
         report = _sample_floor_materialized_report(
@@ -329,7 +330,7 @@ def _persisted_provider_floor_fixture(tmp_path, monkeypatch):
     return (
         floor,
         reports[-1],
-        quality.micro_reversion_materialized_request_path(days[0]),
+        quality.micro_reversion_materialized_request_path(days[1]),
     )
 
 
@@ -433,7 +434,7 @@ def test_provider_floor_leaf_revalidates_full_canonical_window(
 
     validated = quality.validate_micro_reversion_provider_ablation_floor_artifact(
         floor,
-        expected_target_date="2026-08-31",
+        expected_target_date=floor["target_date"],
         current_materialized_report=current_materialized,
     )
 
@@ -451,9 +452,9 @@ def test_provider_floor_leaf_admits_exact_historical_materialized_generation(
 
     validated = quality.validate_micro_reversion_provider_ablation_floor_artifact(
         floor,
-        expected_target_date="2026-08-31",
+        expected_target_date=floor["target_date"],
         current_materialized_report=historical_materialized,
-        expected_materialized_target_date="2026-08-25",
+        expected_materialized_target_date="2026-08-26",
     )
 
     assert validated == floor
@@ -467,7 +468,7 @@ def test_provider_floor_leaf_rejects_historical_generation_not_in_floor_window(
         tmp_path, monkeypatch
     )
     outside = deepcopy(current_materialized)
-    outside["target_date"] = "2026-09-01"
+    outside["target_date"] = "2026-09-02"
 
     with pytest.raises(
         ValueError,
@@ -475,9 +476,9 @@ def test_provider_floor_leaf_rejects_historical_generation_not_in_floor_window(
     ):
         quality.validate_micro_reversion_provider_ablation_floor_artifact(
             floor,
-            expected_target_date="2026-08-31",
+            expected_target_date=floor["target_date"],
             current_materialized_report=outside,
-            expected_materialized_target_date="2026-09-01",
+            expected_materialized_target_date="2026-09-02",
         )
 
 
@@ -498,7 +499,7 @@ def test_provider_floor_validation_cache_loads_each_generation_once(
     for _ in range(2):
         quality.validate_micro_reversion_provider_ablation_floor_artifact(
             floor,
-            expected_target_date="2026-08-31",
+            expected_target_date=floor["target_date"],
             current_materialized_report=current_materialized,
             artifact_loader=counting_loader,
             validation_cache=validation_cache,
@@ -533,7 +534,7 @@ def test_provider_floor_validation_cache_finalizer_rejects_generation_change(
     validation_cache = quality.MicroReversionProviderFloorValidationCache()
     quality.validate_micro_reversion_provider_ablation_floor_artifact(
         floor,
-        expected_target_date="2026-08-31",
+        expected_target_date=floor["target_date"],
         current_materialized_report=current_materialized,
         validation_cache=validation_cache,
     )
@@ -567,7 +568,7 @@ def test_provider_floor_leaf_rejects_resealed_authority_alias(
     with pytest.raises(ValueError, match="provider_ablation_floor_fields_invalid"):
         quality.validate_micro_reversion_provider_ablation_floor_artifact(
             floor,
-            expected_target_date="2026-08-31",
+            expected_target_date=floor["target_date"],
             current_materialized_report=current_materialized,
         )
 
@@ -587,7 +588,7 @@ def test_provider_floor_leaf_rejects_missing_historical_canonical_artifact(
     ):
         quality.validate_micro_reversion_provider_ablation_floor_artifact(
             floor,
-            expected_target_date="2026-08-31",
+            expected_target_date=floor["target_date"],
             current_materialized_report=current_materialized,
         )
 
@@ -606,7 +607,7 @@ def test_provider_floor_leaf_rejects_divergent_dual_generation(
     with pytest.raises(ValueError, match="json_artifact_plain_gzip_conflict"):
         quality.validate_micro_reversion_provider_ablation_floor_artifact(
             floor,
-            expected_target_date="2026-08-31",
+            expected_target_date=floor["target_date"],
             current_materialized_report=current_materialized,
         )
 
@@ -631,7 +632,7 @@ def test_provider_floor_leaf_rejects_broken_symlink_generation(
     with pytest.raises(ValueError, match="json_artifact_path_type_invalid"):
         quality.validate_micro_reversion_provider_ablation_floor_artifact(
             floor,
-            expected_target_date="2026-08-31",
+            expected_target_date=floor["target_date"],
             current_materialized_report=current_materialized,
         )
 
@@ -695,7 +696,7 @@ def test_provider_floor_producer_censuses_broken_symlink_as_invalid_present_day(
     assert rebuilt["pass"] is False
     assert rebuilt["status"] == "blocked_invalid_materialized_history"
     assert any(
-        finding.startswith("materialized_contract_invalid:2026-08-25:")
+        finding.startswith("materialized_contract_invalid:2026-08-26:")
         for finding in rebuilt["contract_findings"]
     )
 
@@ -2695,9 +2696,8 @@ def test_post_snapshot_raw_rewrite_is_rejected_against_independent_source(
         depth_rows=rewritten_depth,
         entry_pipeline_rows=rewritten_pipeline,
     )
-    assert (
-        rewritten_bridge["rows"][0]["future_outcome"]["outcome_eligibility"]
-        == "eligible"
+    assert rewritten_bridge["rows"][0]["future_outcome"]["outcome_eligibility"] == (
+        "eligible_observation_only" if source_kind == "entry_pipeline" else "eligible"
     )
     assert (
         rewritten_bridge["rows"][0][bridge.TACTICAL_EVIDENCE_SCHEMA]

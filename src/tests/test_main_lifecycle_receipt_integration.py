@@ -2519,6 +2519,141 @@ def test_current_receipt_rows_preserve_lifecycle_but_fail_close_raw_fill_gap(
     assert row["allowed_runtime_apply"] is False
 
 
+def test_prior_day_carry_in_preserves_exact_nxt_exit_receipt_without_entry_fill(
+    tmp_path: Path,
+) -> None:
+    events: list[dict[str, Any]] = []
+    kst = timezone(timedelta(hours=9))
+    carry_entry_at = datetime(2026, 8, 25, 15, 10, tzinfo=kst)
+    holding_at = datetime(2026, 8, 26, 7, 55, tzinfo=kst)
+    exit_submit_at = datetime(2026, 8, 26, 8, 5, tzinfo=kst)
+    exit_received_at = datetime(2026, 8, 26, 8, 5, 1, tzinfo=kst)
+    exit_occurred_at = datetime(2026, 8, 26, 8, 5, 0, tzinfo=kst)
+    stock = {
+        "id": 1001,
+        "code": "225570",
+        "name": "CARRY",
+        "scanner_generation_id": "carry-attempt-1001",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "buy_time": carry_entry_at,
+    }
+
+    def append_stage(stage: str, observed_at: datetime, **source_fields: Any) -> None:
+        fields = dict(source_fields)
+        fields.update(
+            pipeline_lifecycle_fields_safe(
+                stock,
+                stock["code"],
+                pipeline="HOLDING_PIPELINE",
+                source_stage=stage,
+                source_fields=fields,
+                observed_at=observed_at,
+            )
+        )
+        events.append(
+            {
+                "event_type": "pipeline_event",
+                "pipeline": "HOLDING_PIPELINE",
+                "stage": stage,
+                "stock_name": stock["name"],
+                "stock_code": stock["code"],
+                "record_id": stock["id"],
+                "fields": fields,
+            }
+        )
+
+    append_stage(
+        "holding_started",
+        holding_at,
+        pipeline_lifecycle_population_scope="real_record_bound",
+        holding_context_venue="KRX",
+        holding_context_session="krx_regular",
+        bbo_observed=True,
+        depth_observed=True,
+    )
+    append_stage(
+        "sell_order_sent",
+        exit_submit_at,
+        pipeline_lifecycle_population_scope="real_record_bound",
+        holding_context_venue="NXT",
+        holding_context_session="nxt_premarket",
+        qty=1,
+        requested_qty=1,
+        submitted_qty=1,
+        broker_order_no="0001566",
+        broker_order_no_list="0001566",
+        broker_order_qty_list="0001566:1",
+        actual_order_submitted=True,
+        lifecycle_submission_leg_contract="exact_broker_single_order_leg_v1",
+        lifecycle_submission_time_source=(
+            "pipeline_emit_after_broker_success_response"
+        ),
+    )
+    receipt = _exact_sell_execution_stock(
+        order_no="0001566",
+        execution_no="0000008",
+        code=stock["code"],
+        order_qty=1,
+        cumulative_qty=1,
+        received_at=exit_received_at.isoformat(),
+        occurred_at=exit_occurred_at.isoformat(),
+        intended_route="NXT",
+        intended_effective_venue="NXT",
+    )
+    receipt.update(
+        {
+            "903": "10380",
+            "910": "10380",
+            "914": "10380",
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+            "holding_context_venue": "NXT",
+            "holding_context_session": "nxt_premarket",
+            "main_lifecycle_exit_qty": 1,
+            "main_lifecycle_exit_price": 10_380,
+            "main_lifecycle_broker_reconciled": True,
+            "main_lifecycle_reconciled_final_exit": True,
+            "main_lifecycle_fees_taxes_krw": 3,
+            "main_lifecycle_slippage_krw": 1,
+            "main_lifecycle_slippage_basis_price": 10_380,
+            "main_lifecycle_slippage_basis_source": "exact_exit_receipt",
+            "main_lifecycle_realized_net_pnl_krw": 10,
+        }
+    )
+    append_stage("sell_completed", exit_received_at, **receipt)
+
+    source = tmp_path / "carry-pipeline.jsonl"
+    source.write_text(
+        "".join(json.dumps(row, sort_keys=True, default=str) + "\n" for row in events),
+        encoding="utf-8",
+    )
+    report = build_daily_report(
+        "2026-08-26",
+        source_path=source,
+        reviewed_cost_profile_sha256=COST_HASH,
+        reviewed_cost_profile_verified=True,
+        symbol_master_artifact_sha256=SYMBOL_HASH,
+        symbol_master_artifact_verified=True,
+        write=False,
+    )
+
+    assert report["source_invalid_transition_count"] == 0
+    assert report["custody_carry_lifecycle_count"] == 1
+    assert report["custody_carry_final_exit_reconciled_count"] == 1
+    row = report["rows"][0]
+    assert row["terminal_state"] == "CUSTODY_CARRY_FINAL_EXIT_RECONCILED"
+    assert row["lifecycle_origin"] == "preexisting_position_custody"
+    assert row["carry_in_entry_source"] == "stock.buy_time"
+    assert row["entry_fill_qty"] == 0.0
+    assert row["broker_execution_unique_count"] == 1
+    assert row["broker_execution_exit_covered_qty"] == 1.0
+    assert row["exit_qty"] == 1.0
+    assert row["promotion_evidence_eligible"] is False
+    assert (
+        "custody_carry_in_entry_lifecycle_non_promotable" in row["promotion_blockers"]
+    )
+
+
 def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

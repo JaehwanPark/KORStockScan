@@ -89,6 +89,7 @@ from src.engine.scalping.micro_reversion.replay_ablation_contract import (
     CURRENT_DESIGN_ACTIVATION_DATE,
     CURRENT_DESIGN_VERSION,
     LEGACY_DESIGN_VERSION,
+    PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE,
     PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS,
     PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS,
     PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS,
@@ -14266,6 +14267,7 @@ def validate_micro_reversion_provider_ablation_floor_artifact(
         "schema",
         "target_date",
         "current_design_activation_date",
+        "eligible_source_contract_activation_date",
         "lookback_calendar_days",
         "ablation_design_version",
         "required_trading_days",
@@ -14278,6 +14280,7 @@ def validate_micro_reversion_provider_ablation_floor_artifact(
         "parent_census_sha256",
         "symbol_census_sha256",
         "included_artifacts",
+        "excluded_pre_source_contract_artifact_dates",
         "contract_findings",
         "pass",
         "status",
@@ -14306,8 +14309,13 @@ def validate_micro_reversion_provider_ablation_floor_artifact(
     except ValueError as exc:
         raise ValueError("provider_ablation_floor_target_date_invalid") from exc
     activation = date.fromisoformat(CURRENT_DESIGN_ACTIVATION_DATE)
+    source_contract_activation = date.fromisoformat(
+        PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE
+    )
     if target < activation or materialized_target < activation:
         raise ValueError("provider_ablation_floor_current_design_required")
+    if materialized_target < source_contract_activation:
+        raise ValueError("provider_ablation_floor_eligible_source_contract_required")
     if materialized_target > target:
         raise ValueError("provider_ablation_floor_materialized_after_floor_target")
     if not is_krx_trading_day(target) or not is_krx_trading_day(materialized_target):
@@ -14316,6 +14324,8 @@ def validate_micro_reversion_provider_ablation_floor_artifact(
         floor.get("schema") != PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA
         or floor.get("target_date") != expected_target_date
         or floor.get("current_design_activation_date") != CURRENT_DESIGN_ACTIVATION_DATE
+        or floor.get("eligible_source_contract_activation_date")
+        != PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE
         or floor.get("lookback_calendar_days")
         != PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS
         or floor.get("ablation_design_version") != CURRENT_DESIGN_VERSION
@@ -14341,6 +14351,7 @@ def validate_micro_reversion_provider_ablation_floor_artifact(
         target - timedelta(days=PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS - 1),
     )
     canonical_materialized_paths: dict[str, Path] = {}
+    expected_excluded_pre_source_contract_dates: set[str] = set()
     for offset in range((target - window_start).days + 1):
         day = window_start + timedelta(days=offset)
         date_key = day.isoformat()
@@ -14358,12 +14369,30 @@ def validate_micro_reversion_provider_ablation_floor_artifact(
         }
         if not present_roles:
             continue
+        if day < source_contract_activation:
+            expected_excluded_pre_source_contract_dates.add(date_key)
+            continue
         if present_roles != set(logical_paths):
             raise ValueError(
                 "provider_ablation_floor_orphan_companion_generation:"
                 f"{date_key}:{','.join(sorted(present_roles))}"
             )
         canonical_materialized_paths[date_key] = logical_paths["materialized"]
+
+    excluded_pre_source_contract_dates = floor.get(
+        "excluded_pre_source_contract_artifact_dates"
+    )
+    if (
+        not isinstance(excluded_pre_source_contract_dates, list)
+        or any(
+            not isinstance(value, str) for value in excluded_pre_source_contract_dates
+        )
+        or excluded_pre_source_contract_dates
+        != sorted(expected_excluded_pre_source_contract_dates)
+    ):
+        raise ValueError(
+            "provider_ablation_floor_pre_source_contract_exclusion_census_invalid"
+        )
 
     expected_entry_fields = {
         "target_date",

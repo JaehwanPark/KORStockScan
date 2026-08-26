@@ -2259,6 +2259,7 @@ def test_final_cumulative_sell_closes_custody_but_keeps_unit_gap_source_only(
         lifecycle_stock_code="123456",
         lifecycle_venue="KRX",
         lifecycle_observed_at="2026-08-25T09:00:03+09:00",
+        lifecycle_trade_date="2026-08-25",
         fields=final_fields,
     )
     assert data is not None

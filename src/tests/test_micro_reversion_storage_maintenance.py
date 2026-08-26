@@ -977,9 +977,17 @@ def test_report_artifact_maintenance_rejects_dangling_root_symlink(
     assert root.is_symlink()
 
 
-def test_report_artifact_maintenance_scopes_current_p2_authority_from_legacy_inputs(
+@pytest.mark.parametrize(
+    "floor_schema",
+    [
+        storage_maintenance_module.LEGACY_PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA,
+        storage_maintenance_module.PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA,
+    ],
+)
+def test_report_artifact_maintenance_scopes_current_p2_authority_from_floor_schemas(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    floor_schema: str,
 ) -> None:
     root = tmp_path / "reports"
     root.mkdir()
@@ -990,7 +998,7 @@ def test_report_artifact_maintenance_scopes_current_p2_authority_from_legacy_inp
         target_date,
     )
     floor_content = {
-        "schema": "micro_reversion_provider_ablation_sample_floor_v1",
+        "schema": floor_schema,
         "target_date": target_date,
         **_STORAGE_CURRENT_P2_SOURCE_ONLY,
     }

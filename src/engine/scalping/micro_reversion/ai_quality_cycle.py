@@ -40,6 +40,8 @@ from src.engine.scalping.main_lifecycle_journal import (
     BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA,
     BROKER_EXECUTION_RECEIVE_TIME_SOURCE,
     BROKER_EXECUTION_TIMING_SCHEMA,
+    CARRY_IN_CUSTODY_SCHEMA,
+    CARRY_IN_CUSTODY_REQUIRED_DATE,
     JOURNAL_SCHEMA,
     KIWOOM_OFFICIAL_REFERENCE_SHA,
     PIPELINE_IDENTITY_SCHEMA,
@@ -65,6 +67,7 @@ from src.engine.scalping.micro_reversion.replay_ablation_contract import (
     CURRENT_DESIGN_VERSION,
     LEGACY_ARMS,
     LEGACY_DESIGN_VERSION,
+    PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE,
     PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS,
     PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS,
     PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS,
@@ -587,11 +590,17 @@ def _provider_ablation_sample_floor_from_reports(
 
     target = date.fromisoformat(target_date)
     activation = date.fromisoformat(CURRENT_DESIGN_ACTIVATION_DATE)
+    source_contract_activation = date.fromisoformat(
+        PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE
+    )
     if target < activation:
         body = {
             "schema": PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA,
             "target_date": target_date,
             "current_design_activation_date": CURRENT_DESIGN_ACTIVATION_DATE,
+            "eligible_source_contract_activation_date": (
+                PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE
+            ),
             "lookback_calendar_days": PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS,
             "ablation_design_version": LEGACY_DESIGN_VERSION,
             "required_trading_days": 0,
@@ -604,6 +613,7 @@ def _provider_ablation_sample_floor_from_reports(
             "parent_census_sha256": _sha256([]),
             "symbol_census_sha256": _sha256([]),
             "included_artifacts": [],
+            "excluded_pre_source_contract_artifact_dates": [],
             "contract_findings": [],
             "pass": True,
             "status": "not_applicable_before_current_design",
@@ -613,6 +623,7 @@ def _provider_ablation_sample_floor_from_reports(
         return {**body, "floor_content_sha256": _sha256(body)}
     parents: dict[str, tuple[str, str]] = {}
     included_artifacts: list[dict[str, Any]] = []
+    excluded_pre_source_contract_artifact_dates: list[str] = []
     findings: list[str] = []
     expected_arms = set(arm_set_for_design(CURRENT_DESIGN_VERSION))
     for expected_date, logical_path, raw_report, companions in sorted(
@@ -625,6 +636,9 @@ def _provider_ablation_sample_floor_from_reports(
             continue
         if report_date < activation or report_date > target:
             findings.append(f"materialized_date_outside_current_design:{expected_date}")
+            continue
+        if report_date < source_contract_activation:
+            excluded_pre_source_contract_artifact_dates.append(expected_date)
             continue
         try:
             report = dict(raw_report)
@@ -769,6 +783,9 @@ def _provider_ablation_sample_floor_from_reports(
         "schema": PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA,
         "target_date": target_date,
         "current_design_activation_date": CURRENT_DESIGN_ACTIVATION_DATE,
+        "eligible_source_contract_activation_date": (
+            PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE
+        ),
         "lookback_calendar_days": PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS,
         "ablation_design_version": CURRENT_DESIGN_VERSION,
         "required_trading_days": PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS,
@@ -781,6 +798,9 @@ def _provider_ablation_sample_floor_from_reports(
         "parent_census_sha256": _sha256(parent_ids),
         "symbol_census_sha256": _sha256(symbols),
         "included_artifacts": included_artifacts,
+        "excluded_pre_source_contract_artifact_dates": sorted(
+            set(excluded_pre_source_contract_artifact_dates)
+        ),
         "contract_findings": sorted(set(findings)),
         "pass": passed,
         "status": (
@@ -3332,7 +3352,9 @@ def _validate_current_execution_artifact(
         "blocking_execution_exclusions"
     ) != expected_blocking_exclusions or report.get(
         "blocking_execution_exclusion_count"
-    ) != len(expected_blocking_exclusions):
+    ) != len(
+        expected_blocking_exclusions
+    ):
         raise ValueError("current_execution_blocking_exclusion_census_mismatch")
     report_status = report.get("status")
     if (
@@ -3768,6 +3790,26 @@ def _lifecycle_report_contract_findings(
     report: Mapping[str, Any], *, rows: Sequence[Any]
 ) -> list[str]:
     findings: list[str] = []
+    try:
+        carry_contract_required = date.fromisoformat(
+            str(report.get("target_date") or "")
+        ) >= date.fromisoformat(CARRY_IN_CUSTODY_REQUIRED_DATE)
+    except ValueError:
+        carry_contract_required = True
+    carry_top_level_fields = {
+        "custody_carry_schema",
+        "custody_carry_lifecycle_count",
+        "custody_carry_final_exit_reconciled_count",
+    }
+    present_carry_top_level_fields = {
+        field for field in carry_top_level_fields if field in report
+    }
+    carry_top_level_contract_declared = bool(present_carry_top_level_fields)
+    if (
+        carry_top_level_contract_declared
+        and present_carry_top_level_fields != carry_top_level_fields
+    ):
+        findings.append("custody_carry_top_level_contract_incomplete")
     findings.extend(_pipeline_owner_exclusion_manifest_findings(report, rows=rows))
     findings.extend(_historical_lifecycle_diagnostic_recovery_findings(report))
     for field, expected in LIFECYCLE_REPORT_AUTHORITY_CONTRACT.items():
@@ -3881,6 +3923,14 @@ def _lifecycle_report_contract_findings(
         findings.append("lifecycle_row_census_mismatch")
     expected_population_counts: Counter[str] = Counter()
     expected_sim_scope_real_order_violation_count = 0
+    expected_custody_carry_count = 0
+    expected_custody_carry_final_exit_count = 0
+    carry_row_fields = {
+        "carry_in_custody_schema",
+        "lifecycle_origin",
+        "carry_in_entry_observed_at",
+        "carry_in_entry_source",
+    }
     for row in row_dicts:
         lifecycle_id = str(row.get("main_lifecycle_id") or "missing")
         population_scope = str(row.get("lifecycle_population_scope") or "")
@@ -3973,26 +4023,118 @@ def _lifecycle_report_contract_findings(
                 "lifecycle_sim_scope_real_order_incident_contract_invalid:"
                 f"{lifecycle_id}"
             )
+        present_carry_row_fields = {field for field in carry_row_fields if field in row}
+        carry_row_contract_declared = bool(present_carry_row_fields)
+        if carry_row_contract_declared and present_carry_row_fields != carry_row_fields:
+            findings.append(
+                f"lifecycle_custody_carry_contract_incomplete:{lifecycle_id}"
+            )
+        carry_in_custody = row.get("carry_in_custody_schema") == (
+            CARRY_IN_CUSTODY_SCHEMA
+        )
+        if carry_in_custody:
+            expected_custody_carry_count += 1
+            try:
+                carry_entry_at = datetime.fromisoformat(
+                    str(row.get("carry_in_entry_observed_at") or "")
+                )
+                if carry_entry_at.tzinfo is None:
+                    raise ValueError("carry_in_timestamp_not_timezone_aware")
+                carry_entry_at = carry_entry_at.astimezone(KST)
+                carry_entry_before_target = carry_entry_at.date() < date.fromisoformat(
+                    str(report.get("target_date") or "")
+                )
+            except (TypeError, ValueError):
+                carry_entry_before_target = False
+            carry_terminal_state = row.get("terminal_state")
+            carry_final_reconciled = carry_terminal_state == (
+                "CUSTODY_CARRY_FINAL_EXIT_RECONCILED"
+            )
+            carry_exit_qty = _finite_number(row.get("exit_qty"))
+            carry_exit_covered_qty = _finite_number(
+                row.get("broker_execution_exit_covered_qty")
+            )
+            carry_broker_execution_count = _native_nonnegative_int(
+                row.get("broker_execution_unique_count")
+            )
+            carry_terminal_contract_valid = bool(
+                (
+                    carry_final_reconciled
+                    and (carry_exit_qty or 0.0) > 0.0
+                    and (carry_exit_covered_qty or 0.0) >= (carry_exit_qty or 0.0)
+                    and (carry_broker_execution_count or 0) > 0
+                    and row.get("observed_real_order_evidence") is True
+                    and population_scope == LIFECYCLE_POPULATION_REAL_SUBMITTED
+                    and row.get("right_censored") is False
+                )
+                or (
+                    carry_terminal_state == "CUSTODY_CARRY_HELD"
+                    and row.get("right_censored") is True
+                )
+            )
+            if carry_final_reconciled:
+                expected_custody_carry_final_exit_count += 1
+            if (
+                row.get("lifecycle_origin") != "preexisting_position_custody"
+                or row.get("carry_in_entry_source")
+                not in {"stock.holding_started_at", "stock.buy_time"}
+                or not carry_entry_before_target
+                or carry_terminal_state
+                not in {
+                    "CUSTODY_CARRY_HELD",
+                    "CUSTODY_CARRY_FINAL_EXIT_RECONCILED",
+                }
+                or not carry_terminal_contract_valid
+                or (_finite_number(row.get("entry_fill_qty")) or 0.0) != 0.0
+                or row.get("promotion_evidence_eligible") is not False
+                or row.get("row_source_quality_gate_pass") is not False
+                or not isinstance(promotion_blockers, list)
+                or "custody_carry_in_entry_lifecycle_non_promotable"
+                not in promotion_blockers
+            ):
+                findings.append(
+                    f"lifecycle_custody_carry_contract_invalid:{lifecycle_id}"
+                )
+        elif carry_contract_required or carry_row_contract_declared:
+            if (
+                present_carry_row_fields != carry_row_fields
+                or row.get("carry_in_custody_schema") is not None
+                or row.get("lifecycle_origin") != "same_trade_date_lifecycle"
+                or row.get("carry_in_entry_observed_at") is not None
+                or row.get("carry_in_entry_source") is not None
+                or str(row.get("terminal_state") or "").startswith("CUSTODY_CARRY_")
+            ):
+                findings.append(f"lifecycle_noncarry_contract_invalid:{lifecycle_id}")
     canonical_population_counts = {
         scope: expected_population_counts.get(scope, 0)
         for scope in sorted(LIFECYCLE_POPULATION_SCOPES)
     }
     if report.get("lifecycle_population_scope_counts") != (canonical_population_counts):
         findings.append("lifecycle_population_scope_census_mismatch")
-    if (
-        report.get("real_submitted_lifecycle_count")
-        != (canonical_population_counts[LIFECYCLE_POPULATION_REAL_SUBMITTED])
+    if report.get("real_submitted_lifecycle_count") != (
+        canonical_population_counts[LIFECYCLE_POPULATION_REAL_SUBMITTED]
     ):
         findings.append("real_submitted_lifecycle_census_mismatch")
-    if (
-        report.get("candidate_observation_lifecycle_count")
-        != (canonical_population_counts[LIFECYCLE_POPULATION_CANDIDATE_OBSERVATION])
+    if report.get("candidate_observation_lifecycle_count") != (
+        canonical_population_counts[LIFECYCLE_POPULATION_CANDIDATE_OBSERVATION]
     ):
         findings.append("candidate_observation_lifecycle_census_mismatch")
     if report.get("sim_scope_real_order_contract_violation_count") != (
         expected_sim_scope_real_order_violation_count
     ):
         findings.append("sim_scope_real_order_contract_violation_census_mismatch")
+    if (
+        carry_contract_required
+        or carry_top_level_contract_declared
+        or expected_custody_carry_count > 0
+    ) and (
+        present_carry_top_level_fields != carry_top_level_fields
+        or report.get("custody_carry_schema") != CARRY_IN_CUSTODY_SCHEMA
+        or report.get("custody_carry_lifecycle_count") != expected_custody_carry_count
+        or report.get("custody_carry_final_exit_reconciled_count")
+        != expected_custody_carry_final_exit_count
+    ):
+        findings.append("custody_carry_top_level_census_mismatch")
     global_blockers = report.get("global_source_quality_gate_blockers")
     global_has_sim_scope_blocker = bool(
         isinstance(global_blockers, list)
@@ -7231,6 +7373,40 @@ def _source_only_gap_diagnostics(
         if lifecycle_available
         else 0
     )
+    lifecycle_receipt_custody_gap_examples: list[dict[str, Any]] = []
+    lifecycle_rows = (lifecycle_report or {}).get("rows") if lifecycle_available else []
+    if isinstance(lifecycle_rows, list):
+        for lifecycle_row in lifecycle_rows:
+            if (
+                len(lifecycle_receipt_custody_gap_examples) >= 10
+                or not isinstance(lifecycle_row, Mapping)
+                or lifecycle_row.get("lifecycle_population_scope")
+                != LIFECYCLE_POPULATION_REAL_SUBMITTED
+                or lifecycle_row.get("broker_execution_unique_count") != 0
+            ):
+                continue
+            lifecycle_receipt_custody_gap_examples.append(
+                {
+                    "main_lifecycle_id": lifecycle_row.get("main_lifecycle_id"),
+                    "attempt_id": lifecycle_row.get("attempt_id"),
+                    "record_id": lifecycle_row.get("record_id"),
+                    "stock_code": lifecycle_row.get("stock_code"),
+                    "venue": lifecycle_row.get("venue"),
+                    "session_bucket": lifecycle_row.get("session_bucket"),
+                    "observed_actual_broker_order_submitted": lifecycle_row.get(
+                        "observed_actual_broker_order_submitted"
+                    ),
+                    "observed_real_order_evidence": lifecycle_row.get(
+                        "observed_real_order_evidence"
+                    ),
+                    "invalid_transition_reasons": list(
+                        lifecycle_row.get("invalid_transition_reasons") or []
+                    ),
+                    "source_population_scopes": list(
+                        lifecycle_row.get("source_population_scopes") or []
+                    ),
+                }
+            )
     rolling_reason_counts = Counter(
         str(row.get("reason") or "")
         for row in rolling_exclusions
@@ -7373,6 +7549,23 @@ def _source_only_gap_diagnostics(
         "pipeline_lifecycle_instrumentation_gap_count": lifecycle_pipeline_gap,
         "real_submitted_lifecycle_count": lifecycle_real_submitted,
         "broker_execution_unique_count": lifecycle_broker_execution_unique,
+        "lifecycle_receipt_custody_gap_example_count": len(
+            lifecycle_receipt_custody_gap_examples
+        ),
+        "lifecycle_receipt_custody_gap_examples": (
+            lifecycle_receipt_custody_gap_examples
+        ),
+        "lifecycle_receipt_custody_gap_examples_sha256": _sha256(
+            lifecycle_receipt_custody_gap_examples
+        ),
+        "lifecycle_source_path": (
+            (lifecycle_report or {}).get("source_path") if lifecycle_available else None
+        ),
+        "lifecycle_source_raw_sha256": (
+            (lifecycle_report or {}).get("source_raw_sha256")
+            if lifecycle_available
+            else None
+        ),
         "execution_report_materialized_companion_binding_mismatch_count": (
             companion_binding_mismatch_count
         ),

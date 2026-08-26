@@ -40,6 +40,8 @@ from .provider_budget import AUTHORITY_CONTRACT as PROVIDER_BUDGET_AUTHORITY_CON
 from .replay_ablation_contract import (
     CURRENT_DESIGN_ACTIVATION_DATE,
     CURRENT_DESIGN_VERSION,
+    LEGACY_PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA,
+    PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA,
     SOURCE_ONLY_AUTHORITY_CONTRACT as CURRENT_P2_SOURCE_ONLY_AUTHORITY_CONTRACT,
     SOURCE_ONLY_FALSE_AUTHORITY_ALIASES as CURRENT_P2_FALSE_AUTHORITY_ALIASES,
 )
@@ -227,7 +229,12 @@ IMMUTABLE_SOURCE_ARTIFACT_CONTRACTS = tuple(
         ),
         (
             r"micro_reversion_provider_ablation_sample_floor_(\d{4}-\d{2}-\d{2})\.json",
-            "micro_reversion_provider_ablation_sample_floor_v1",
+            frozenset(
+                {
+                    LEGACY_PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA,
+                    PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA,
+                }
+            ),
             "floor_content_sha256",
         ),
         (
@@ -794,10 +801,16 @@ def _validate_immutable_source_artifact(
         raise ValueError("immutable_source_artifact_contract_missing")
     expected_schema, hash_field = contract
     payload, raw_sha256 = _read_owned_json_with_raw_sha256(logical_path)
-    if payload.get("schema") != expected_schema:
+    actual_schema = payload.get("schema")
+    expected_schemas = (
+        expected_schema
+        if isinstance(expected_schema, frozenset)
+        else frozenset({expected_schema})
+    )
+    if not isinstance(actual_schema, str) or actual_schema not in expected_schemas:
         raise ValueError("immutable_source_artifact_schema_invalid")
     embedded_target_date = payload.get("target_date")
-    if expected_schema == "scalp_micro_reversion_symbol_master_v1":
+    if actual_schema == "scalp_micro_reversion_symbol_master_v1":
         if (
             embedded_target_date not in (None, "")
             or payload.get("artifact_id")

@@ -940,6 +940,10 @@ def _lifecycle_report(
         "trade_date": target_date,
         "venue": "KRX",
         "session_bucket": "KRX_REGULAR",
+        "lifecycle_origin": "same_trade_date_lifecycle",
+        "carry_in_custody_schema": None,
+        "carry_in_entry_observed_at": None,
+        "carry_in_entry_source": None,
         "decision_trace_ids": [trace_id],
         "decision_trace_context_path": [
             {
@@ -1149,6 +1153,9 @@ def _lifecycle_report(
         "broker_submission_custody_order_count": 0,
         "broker_submission_custody_pending_order_count": 0,
         "sim_scope_real_order_contract_violation_count": 0,
+        "custody_carry_schema": cycle.CARRY_IN_CUSTODY_SCHEMA,
+        "custody_carry_lifecycle_count": 0,
+        "custody_carry_final_exit_reconciled_count": 0,
         "reviewed_cost_profile_sha256": cost_artifact_sha256,
         "reviewed_cost_profile_verified": True,
         "symbol_master_artifact_sha256": symbol_master_artifact_sha256,
@@ -2031,6 +2038,118 @@ def test_lifecycle_validator_rejects_broker_row_laundered_as_candidate():
     )
 
 
+def test_lifecycle_validator_rejects_forged_carry_final_without_exit_receipt_coverage():
+    target_date = "2026-08-26"
+    report = _lifecycle_report(
+        target_date,
+        trace_id="trace-carry-final",
+        eligible=False,
+    )
+    row = report["rows"][0]
+    row.update(
+        {
+            "lifecycle_origin": "preexisting_position_custody",
+            "carry_in_custody_schema": cycle.CARRY_IN_CUSTODY_SCHEMA,
+            "carry_in_entry_observed_at": "2026-08-25T15:10:00+09:00",
+            "carry_in_entry_source": "stock.buy_time",
+            "terminal_state": "CUSTODY_CARRY_FINAL_EXIT_RECONCILED",
+            "right_censored": False,
+            "entry_fill_qty": 0.0,
+            "promotion_evidence_eligible": False,
+            "row_source_quality_gate_pass": False,
+            "promotion_blockers": ["custody_carry_in_entry_lifecycle_non_promotable"],
+        }
+    )
+    report["custody_carry_lifecycle_count"] = 1
+    report["custody_carry_final_exit_reconciled_count"] = 1
+
+    valid_findings = cycle._lifecycle_report_contract_findings(
+        report,
+        rows=report["rows"],
+    )
+    assert not any(
+        finding.startswith("lifecycle_custody_carry_contract_invalid:")
+        for finding in valid_findings
+    )
+
+    row["broker_execution_exit_covered_qty"] = 0.0
+    forged_findings = cycle._lifecycle_report_contract_findings(
+        report,
+        rows=report["rows"],
+    )
+    assert any(
+        finding.startswith("lifecycle_custody_carry_contract_invalid:")
+        for finding in forged_findings
+    )
+
+
+def test_lifecycle_validator_preserves_pre_activation_immutable_report_compatibility():
+    legacy = _lifecycle_report(
+        "2026-08-26",
+        trace_id="trace-pre-carry-contract",
+    )
+    for field in (
+        "custody_carry_schema",
+        "custody_carry_lifecycle_count",
+        "custody_carry_final_exit_reconciled_count",
+    ):
+        legacy.pop(field)
+    for field in (
+        "carry_in_custody_schema",
+        "lifecycle_origin",
+        "carry_in_entry_observed_at",
+        "carry_in_entry_source",
+    ):
+        legacy["rows"][0].pop(field)
+
+    legacy_findings = cycle._lifecycle_report_contract_findings(
+        legacy,
+        rows=legacy["rows"],
+    )
+    assert not any("custody_carry" in finding for finding in legacy_findings)
+    assert not any(
+        "lifecycle_noncarry_contract_invalid" in finding for finding in legacy_findings
+    )
+
+    partial_legacy = deepcopy(legacy)
+    partial_legacy["rows"][0]["lifecycle_origin"] = "same_trade_date_lifecycle"
+    partial_findings = cycle._lifecycle_report_contract_findings(
+        partial_legacy,
+        rows=partial_legacy["rows"],
+    )
+    assert any(
+        finding.startswith("lifecycle_custody_carry_contract_incomplete:")
+        for finding in partial_findings
+    )
+
+    required = _lifecycle_report(
+        cycle.CARRY_IN_CUSTODY_REQUIRED_DATE,
+        trace_id="trace-required-carry-contract",
+    )
+    for field in (
+        "custody_carry_schema",
+        "custody_carry_lifecycle_count",
+        "custody_carry_final_exit_reconciled_count",
+    ):
+        required.pop(field)
+    for field in (
+        "carry_in_custody_schema",
+        "lifecycle_origin",
+        "carry_in_entry_observed_at",
+        "carry_in_entry_source",
+    ):
+        required["rows"][0].pop(field)
+    required_findings = cycle._lifecycle_report_contract_findings(
+        required,
+        rows=required["rows"],
+    )
+    assert "custody_carry_top_level_census_mismatch" in required_findings
+    assert any(
+        finding.startswith("lifecycle_noncarry_contract_invalid:")
+        for finding in required_findings
+    )
+
+
 def test_lifecycle_index_rejects_missing_producer_content_hash():
     target_date = "2026-08-14"
     report = _lifecycle_report(target_date, trace_id="trace-1")
@@ -2903,7 +3022,7 @@ def test_historical_execution_rejects_self_rehashed_provider_and_join_receipts(
     elif mutation == "provider_attempt_hash":
         report["results"][0]["replay_result"]["candidate_attempts"][0][
             "provider_provenance"
-        ]["provider_budget_attempt_identity_sha256"] = "x" * 64
+        ]["provider_budget_attempt_identity_sha256"] = ("x" * 64)
         _reseal_execution_result_ids(report)
     elif mutation == "provider_cost_underreported":
         report["provider_budget"]["committed_cost_usd"] = "0.01"
@@ -2991,9 +3110,9 @@ def test_explicit_legacy_requires_request_exact_hash_and_version_binding(mutatio
     )
     report["ablation_design_version"] = cycle.LEGACY_DESIGN_VERSION
     report["ablation_arms"] = list(cycle.EXPECTED_ARMS)
-    report["three_arm_evaluation"]["ablation_design_version"] = (
-        cycle.LEGACY_DESIGN_VERSION
-    )
+    report["three_arm_evaluation"][
+        "ablation_design_version"
+    ] = cycle.LEGACY_DESIGN_VERSION
     report["three_arm_evaluation"]["ablation_arms"] = list(cycle.EXPECTED_ARMS)
     for ref, result in zip(report["request_refs"], report["results"]):
         ref["ablation_design_version"] = cycle.LEGACY_DESIGN_VERSION
@@ -4032,16 +4151,16 @@ def test_provider_ablation_floor_blocks_one_day_and_passes_exact_5_20_10(
         lambda report: cycle._sha256(report["request_ids"]),
     )
     one_day = _sample_floor_materialized_report(
-        "2026-08-25", parent_start=0, parent_count=1
+        "2026-08-26", parent_start=0, parent_count=1
     )
     blocked = cycle._provider_ablation_sample_floor_from_reports(
-        target_date="2026-08-25",
+        target_date="2026-08-26",
         materialized_reports=[
             (
-                "2026-08-25",
+                "2026-08-26",
                 Path("one.json"),
                 one_day,
-                _sample_floor_companions("2026-08-25"),
+                _sample_floor_companions("2026-08-26"),
             )
         ],
     )
@@ -4059,11 +4178,12 @@ def test_provider_ablation_floor_blocks_one_day_and_passes_exact_5_20_10(
                 "2026-08-27",
                 "2026-08-28",
                 "2026-08-31",
+                "2026-09-01",
             )
         )
     ]
     passed = cycle._provider_ablation_sample_floor_from_reports(
-        target_date="2026-08-31",
+        target_date="2026-09-01",
         materialized_reports=[
             (
                 report["target_date"],
@@ -4078,6 +4198,7 @@ def test_provider_ablation_floor_blocks_one_day_and_passes_exact_5_20_10(
     assert passed["observed_trading_days"] == 5
     assert passed["observed_common_parent_count"] == 20
     assert passed["observed_unique_symbol_count"] == 10
+    assert passed["excluded_pre_source_contract_artifact_dates"] == ["2026-08-25"]
     assert passed["floor_content_sha256"] == cycle._sha256(
         {key: value for key, value in passed.items() if key != "floor_content_sha256"}
     )
@@ -5048,7 +5169,7 @@ def test_provider_ablation_floor_accepts_bound_empty_day_without_counting_it(
     monkeypatch,
 ) -> None:
     empty = _sample_floor_materialized_report(
-        "2026-08-25", parent_start=0, parent_count=0
+        "2026-08-26", parent_start=0, parent_count=0
     )
     lineage_calls = []
     monkeypatch.setattr(
@@ -5057,13 +5178,13 @@ def test_provider_ablation_floor_accepts_bound_empty_day_without_counting_it(
         lambda **kwargs: lineage_calls.append(kwargs),
     )
     result = cycle._provider_ablation_sample_floor_from_reports(
-        target_date="2026-08-25",
+        target_date="2026-08-26",
         materialized_reports=[
             (
-                "2026-08-25",
+                "2026-08-26",
                 Path("empty.json"),
                 empty,
-                _sample_floor_companions("2026-08-25"),
+                _sample_floor_companions("2026-08-26"),
             )
         ],
     )
@@ -5080,12 +5201,12 @@ def test_provider_ablation_floor_accepts_bound_empty_day_without_counting_it(
 
 def test_provider_ablation_floor_rejects_detached_empty_day() -> None:
     empty = _sample_floor_materialized_report(
-        "2026-08-25", parent_start=0, parent_count=0
+        "2026-08-26", parent_start=0, parent_count=0
     )
 
     result = cycle._provider_ablation_sample_floor_from_reports(
-        target_date="2026-08-25",
-        materialized_reports=[("2026-08-25", Path("empty.json"), empty, {})],
+        target_date="2026-08-26",
+        materialized_reports=[("2026-08-26", Path("empty.json"), empty, {})],
     )
 
     assert result["status"] == "blocked_invalid_materialized_history"
@@ -5093,6 +5214,24 @@ def test_provider_ablation_floor_rejects_detached_empty_day() -> None:
         "provider_floor_lineage_companions_missing" in finding
         for finding in result["contract_findings"]
     )
+
+
+def test_provider_ablation_floor_excludes_pre_source_contract_artifact() -> None:
+    pre_contract = _sample_floor_materialized_report(
+        "2026-08-25", parent_start=0, parent_count=1, valid=False
+    )
+
+    result = cycle._provider_ablation_sample_floor_from_reports(
+        target_date="2026-08-26",
+        materialized_reports=[
+            ("2026-08-25", Path("pre-contract.json"), pre_contract, {})
+        ],
+    )
+
+    assert result["status"] == "keep_collecting_provider_ablation_floor"
+    assert result["contract_findings"] == []
+    assert result["included_artifacts"] == []
+    assert result["excluded_pre_source_contract_artifact_dates"] == ["2026-08-25"]
 
 
 def test_pre_provider_capacity_recheck_catches_state_flip(tmp_path, monkeypatch):
@@ -5466,6 +5605,60 @@ def test_source_gap_diagnostics_names_bridge_and_lifecycle_root_causes() -> None
     assert all(
         row["actual_order_submitted"] is False for row in diagnostics["workorders"]
     )
+
+
+def test_source_gap_diagnostics_binds_receipt_gap_to_exact_lifecycle() -> None:
+    target_date = "2026-08-26"
+    lifecycle_report = {
+        "target_date": target_date,
+        "promotion_evidence_eligible_count": 0,
+        "broker_execution_provenance_gap_count": 0,
+        "pipeline_lifecycle_instrumentation_gap_count": 1,
+        "real_submitted_lifecycle_count": 1,
+        "broker_execution_unique_count": 0,
+        "source_path": "/tmp/pipeline_events_2026-08-26.jsonl.gz",
+        "source_raw_sha256": "a" * 64,
+        "rows": [
+            {
+                "main_lifecycle_id": f"mlc-{'b' * 32}",
+                "attempt_id": "carry-attempt",
+                "record_id": "1001",
+                "stock_code": "225570",
+                "venue": "KRX",
+                "session_bucket": "krx_regular",
+                "lifecycle_population_scope": "real_submitted",
+                "broker_execution_unique_count": 0,
+                "observed_actual_broker_order_submitted": False,
+                "observed_real_order_evidence": True,
+                "invalid_transition_reasons": [
+                    "scanner_transition_must_start_lifecycle"
+                ],
+                "source_population_scopes": ["real_record_bound"],
+            }
+        ],
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    lifecycle_report["artifact_content_sha256"] = cycle._content_hash(
+        lifecycle_report, "artifact_content_sha256"
+    )
+
+    diagnostics = cycle._source_only_gap_diagnostics(
+        target_date=target_date,
+        observer_canary={"status": "pass"},
+        bridge_report=None,
+        lifecycle_report=lifecycle_report,
+    )
+
+    assert diagnostics["lifecycle_receipt_custody_gap_example_count"] == 1
+    example = diagnostics["lifecycle_receipt_custody_gap_examples"][0]
+    assert example["main_lifecycle_id"] == f"mlc-{'b' * 32}"
+    assert example["invalid_transition_reasons"] == [
+        "scanner_transition_must_start_lifecycle"
+    ]
+    assert diagnostics["lifecycle_receipt_custody_gap_examples_sha256"] == (
+        cycle._sha256(diagnostics["lifecycle_receipt_custody_gap_examples"])
+    )
+    assert diagnostics["lifecycle_source_raw_sha256"] == "a" * 64
 
 
 def test_source_gap_diagnostics_hold_replay_until_queue_loss_has_scoped_receipt():

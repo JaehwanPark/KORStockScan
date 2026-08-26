@@ -127,7 +127,7 @@
   "path_capture_sha256": "9bfe3b27b7cf529bc5c6f6d3fc71c7a729948a545b6674c81312af437969cd53",
   "p2_replay_sha256": "2cc8cb78aa4c827afa9c894022bc130e10daaf596ae9f3d963a589fa89904b96",
   "onset_quality_sha256": "595658610c7ba829f8f274c8ff56b64e0c1209c395724b1845c78d99640e8974",
-  "storage_maintenance_sha256": "54f676c3bbde0fd81572fa1b46e49b4d5047a7159df93f635e7b43ab972d4f4e",
+  "storage_maintenance_sha256": "cc72b533aed4081283ed1cb4d48e50239b13215e3c828bc98139d3bcb7325f9f",
   "kiwoom_websocket_sha256": "db0a562fd2146a04558e102a8bbdf375e134f5183309650f84197816b66bae17",
   "canary_guard_config_sha256": "68f48fee8d9f66f0625b33b1aceea3277328439f7e162ecec16f90a9ce44ac83",
   "source_exclusion_manifest_sha256": "f9e9c0b9cad91c9b300e818b91921f4cfae850ab0fe3666ba9e49bd686fac0f8",
@@ -227,6 +227,14 @@
       "previous": "ef55251de07c9880447ad3e9426f6ada9a8d6ffb2ca6ca149899cc383b4052e1,51333ff3c0e6c4062a47d3193f54b3dff1bb2757642a79c5d1bb200fd1678840,28a1b8355003d979fd02a4d43a7e8144bc252d14698fa934068b8d56b7daabd5",
       "current": "095e0a33a2caf8efad7521ffc18e1558177f5ba9cdd691c64c255f3288ede281,db0a562fd2146a04558e102a8bbdf375e134f5183309650f84197816b66bae17,68f48fee8d9f66f0625b33b1aceea3277328439f7e162ecec16f90a9ce44ac83",
       "reason": "guard_config_is_the_single_owner_for_latency_only_confirmation_and_severe_multiplier;_provider_replay_and_r3_remain_blocked_from_the_first_breach;_three_consecutive_ten_second_snapshots_between_one_and_two_times_the_frozen_limit_stop_local_capture;_severe_or_non_latency_failures_stop_immediately;_same_5000x5_0b_callback_preflight_zero_drop_zero_worker_error_external_p95_0.028250ms_external_p99_0.059521ms_internal_p95_0.026474ms_internal_p99_0.058760ms_frozen_limits_unchanged",
+      "runtime_effect": false
+    },
+    {
+      "updated_at_kst": "2026-08-26T23:31:36+09:00",
+      "field": "storage_maintenance_sha256",
+      "previous": "54f676c3bbde0fd81572fa1b46e49b4d5047a7159df93f635e7b43ab972d4f4e",
+      "current": "cc72b533aed4081283ed1cb4d48e50239b13215e3c828bc98139d3bcb7325f9f",
+      "reason": "immutable_provider_floor_storage_accepts_both_the_legacy_v1_schema_and_the_current_v2_design_provenance_schema;_observer_callback_sources_measurements_and_frozen_limits_unchanged",
       "runtime_effect": false
     }
   ],

@@ -42,6 +42,8 @@ BROKER_EXECUTION_SOURCE_TYPE = "00"
 BROKER_EXECUTION_ORDERING_TIME_SOURCE = "broker_execution_received_at"
 BROKER_EXECUTION_OCCURRENCE_TIME_SOURCE = "official_fid_908"
 BROKER_EXECUTION_RECEIVE_TIME_SOURCE = "websocket_packet_ingress"
+CARRY_IN_CUSTODY_SCHEMA = "main_lifecycle_carry_in_custody_v1"
+CARRY_IN_CUSTODY_REQUIRED_DATE = "2026-08-27"
 BROKER_EXECUTION_MAX_RECEIVE_LAG_SEC = 60.0
 BROKER_EXECUTION_MAX_NEGATIVE_LAG_SEC = 2.0
 _BROKER_EXECUTION_V2_ONLY_FIELDS = frozenset(
@@ -255,6 +257,10 @@ _ALLOWED_DATA_FIELDS = frozenset(
         "session_exposure_start_at",
         "session_exposure_end_at",
         "heartbeat",
+        "carry_in_custody_schema",
+        "lifecycle_origin",
+        "carry_in_entry_observed_at",
+        "carry_in_entry_source",
     }
 )
 _SENSITIVE_KEY_PARTS = (
@@ -1461,6 +1467,13 @@ def pipeline_lifecycle_fields_safe(
                 source_stage=normalized_source_stage,
             ),
         }
+        result.update(
+            _pipeline_carry_in_custody_fields(
+                stock,
+                lifecycle_stage=lifecycle_stage,
+                lifecycle_trade_date=lifecycle_trade_date,
+            )
+        )
         if decision_trace_id:
             result["main_lifecycle_decision_trace_id"] = decision_trace_id
         return result
@@ -1470,6 +1483,53 @@ def pipeline_lifecycle_fields_safe(
         except Exception:
             pass
         return {}
+
+
+def _pipeline_carry_in_custody_fields(
+    stock: Mapping[str, Any],
+    *,
+    lifecycle_stage: str,
+    lifecycle_trade_date: str,
+) -> dict[str, Any]:
+    """Attest prior-day custody without reconstructing an entry fill."""
+
+    if lifecycle_stage not in {"holding", "exit"}:
+        return {}
+    try:
+        trade_date = date.fromisoformat(lifecycle_trade_date)
+    except ValueError:
+        return {}
+    for source_field in ("holding_started_at", "buy_time"):
+        raw_value = stock.get(source_field)
+        if raw_value in (None, "", 0, "0"):
+            continue
+        try:
+            if isinstance(raw_value, datetime):
+                entry_at = raw_value
+            elif isinstance(raw_value, (int, float)) and not isinstance(
+                raw_value, bool
+            ):
+                entry_at = datetime.fromtimestamp(float(raw_value), tz=KST)
+            else:
+                entry_at = datetime.fromisoformat(str(raw_value).strip())
+            entry_at = (
+                entry_at.replace(tzinfo=KST)
+                if entry_at.tzinfo is None
+                else entry_at.astimezone(KST)
+            )
+        except (OSError, OverflowError, TypeError, ValueError):
+            continue
+        if entry_at.date() >= trade_date:
+            continue
+        return {
+            "main_lifecycle_carry_in_custody_schema": CARRY_IN_CUSTODY_SCHEMA,
+            "main_lifecycle_origin": "preexisting_position_custody",
+            "main_lifecycle_carry_in_entry_observed_at": entry_at.isoformat(
+                timespec="microseconds"
+            ),
+            "main_lifecycle_carry_in_entry_source": f"stock.{source_field}",
+        }
+    return {}
 
 
 def _aware_datetime(value: datetime | str | None) -> datetime:
@@ -2063,6 +2123,8 @@ __all__ = [
     "BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA",
     "BROKER_EXECUTION_RECEIVE_TIME_SOURCE",
     "BROKER_EXECUTION_SOURCE_TYPE",
+    "CARRY_IN_CUSTODY_SCHEMA",
+    "CARRY_IN_CUSTODY_REQUIRED_DATE",
     "JOURNAL_SCHEMA",
     "KIWOOM_OFFICIAL_REFERENCE_SHA",
     "MAX_TRANSITION_BYTES",

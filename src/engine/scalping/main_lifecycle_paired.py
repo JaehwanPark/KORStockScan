@@ -38,6 +38,7 @@ from src.engine.scalping.main_lifecycle_journal import (
     BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA,
     BROKER_EXECUTION_RECEIVE_TIME_SOURCE,
     BROKER_EXECUTION_TIMING_SCHEMA,
+    CARRY_IN_CUSTODY_SCHEMA,
     JOURNAL_SCHEMA,
     KIWOOM_OFFICIAL_REFERENCE_SHA,
     PIPELINE_IDENTITY_SCHEMA,
@@ -1172,9 +1173,54 @@ def _pipeline_transition_data(
     lifecycle_stock_code: str,
     lifecycle_venue: str,
     lifecycle_observed_at: str,
+    lifecycle_trade_date: str,
     legacy_unattested_receive_clock_diagnostic: bool = False,
 ) -> tuple[dict[str, Any] | None, str | None]:
     data: dict[str, Any] = {}
+    carry_source_fields = {
+        "main_lifecycle_carry_in_custody_schema",
+        "main_lifecycle_origin",
+        "main_lifecycle_carry_in_entry_observed_at",
+        "main_lifecycle_carry_in_entry_source",
+    }
+    present_carry_fields = {
+        field_name
+        for field_name in carry_source_fields
+        if fields.get(field_name) is not None and fields.get(field_name) != ""
+    }
+    if present_carry_fields:
+        if present_carry_fields != carry_source_fields:
+            return None, "pipeline_carry_in_custody_contract_incomplete"
+        carry_entry_source = _pipeline_text(
+            fields.get("main_lifecycle_carry_in_entry_source")
+        )
+        carry_entry_observed_at = _pipeline_text(
+            fields.get("main_lifecycle_carry_in_entry_observed_at")
+        )
+        try:
+            carry_entry_at = _aware_datetime(carry_entry_observed_at).astimezone(KST)
+            carry_trade_date = date.fromisoformat(lifecycle_trade_date)
+        except (TypeError, ValueError):
+            return None, "pipeline_carry_in_custody_timestamp_invalid"
+        if (
+            lifecycle_stage not in {"holding", "exit"}
+            or fields.get("main_lifecycle_carry_in_custody_schema")
+            != CARRY_IN_CUSTODY_SCHEMA
+            or fields.get("main_lifecycle_origin") != "preexisting_position_custody"
+            or carry_entry_source not in {"stock.holding_started_at", "stock.buy_time"}
+            or carry_entry_at.date() >= carry_trade_date
+        ):
+            return None, "pipeline_carry_in_custody_contract_invalid"
+        data.update(
+            {
+                "carry_in_custody_schema": CARRY_IN_CUSTODY_SCHEMA,
+                "lifecycle_origin": "preexisting_position_custody",
+                "carry_in_entry_observed_at": carry_entry_at.isoformat(
+                    timespec="microseconds"
+                ),
+                "carry_in_entry_source": carry_entry_source,
+            }
+        )
     if source_stage not in SUBMISSION_CUSTODY_SOURCE_STAGES and any(
         fields.get(name) is not None and fields.get(name) != ""
         for name in (
@@ -1767,6 +1813,7 @@ def _validated_pipeline_transition(
             _pipeline_text(fields.get("main_lifecycle_venue")) or "UNKNOWN"
         ),
         lifecycle_observed_at=observed_at,
+        lifecycle_trade_date=target_date,
         legacy_unattested_receive_clock_diagnostic=(
             legacy_unattested_receive_clock_diagnostic
         ),
@@ -1834,6 +1881,16 @@ def _validated_transition(
         # source-stage provenance nor those raw fields and must not claim the
         # receive-clock skew bypass contract.
         return None, "transition_submission_custody_requires_pipeline_attestation"
+    if any(
+        direct_data.get(field_name) is not None and direct_data.get(field_name) != ""
+        for field_name in (
+            "carry_in_custody_schema",
+            "lifecycle_origin",
+            "carry_in_entry_observed_at",
+            "carry_in_entry_source",
+        )
+    ):
+        return None, "transition_carry_in_requires_pipeline_attestation"
     for key, expected in AUTHORITY_CONTRACT.items():
         if raw_row.get(key) != expected:
             return None, f"transition_authority_contract_mismatch:{key}"
@@ -1866,6 +1923,9 @@ class _LifecycleAccumulator:
     trade_date: str
     venue: str
     session_bucket: str
+    carry_in_custody: bool = False
+    carry_in_entry_observed_at: str | None = None
+    carry_in_entry_source: str | None = None
     stage_counts: dict[str, int] = field(default_factory=dict)
     transition_count: int = 0
     invalid_transition_count: int = 0
@@ -2019,6 +2079,12 @@ class _LifecycleAccumulator:
 
     @classmethod
     def from_transition(cls, row: Mapping[str, Any]) -> _LifecycleAccumulator:
+        data = row.get("data")
+        carry_data = data if isinstance(data, Mapping) else {}
+        carry_in_custody = (
+            carry_data.get("carry_in_custody_schema") == CARRY_IN_CUSTODY_SCHEMA
+            and carry_data.get("lifecycle_origin") == "preexisting_position_custody"
+        )
         return cls(
             main_lifecycle_id=str(row["main_lifecycle_id"]),
             record_id=str(row["record_id"]),
@@ -2027,6 +2093,17 @@ class _LifecycleAccumulator:
             trade_date=str(row["trade_date"]),
             venue=str(row["venue"]),
             session_bucket=str(row["session_bucket"]),
+            carry_in_custody=carry_in_custody,
+            carry_in_entry_observed_at=(
+                str(carry_data.get("carry_in_entry_observed_at"))
+                if carry_in_custody
+                else None
+            ),
+            carry_in_entry_source=(
+                str(carry_data.get("carry_in_entry_source"))
+                if carry_in_custody
+                else None
+            ),
         )
 
     def _invalid(self, reason: str) -> None:
@@ -2049,9 +2126,29 @@ class _LifecycleAccumulator:
         stage = str(row.get("stage") or "")
         data = row.get("data")
         assert isinstance(data, dict)
+        row_carry_in = data.get("carry_in_custody_schema") == CARRY_IN_CUSTODY_SCHEMA
+        if self.carry_in_custody:
+            if (
+                not row_carry_in
+                or data.get("lifecycle_origin") != "preexisting_position_custody"
+                or data.get("carry_in_entry_observed_at")
+                != self.carry_in_entry_observed_at
+                or data.get("carry_in_entry_source") != self.carry_in_entry_source
+            ):
+                return "carry_in_custody_lineage_conflict"
+            if stage not in {"holding", "exit"}:
+                return "carry_in_custody_stage_invalid"
+        elif row_carry_in or data.get("lifecycle_origin") == (
+            "preexisting_position_custody"
+        ):
+            return "carry_in_custody_after_noncarry_start"
         if self.final_exit_at is not None or self.terminal_no_fill_at is not None:
             return "transition_after_terminal"
-        if self.transition_count == 0 and stage != "scanner":
+        if (
+            self.transition_count == 0
+            and stage != "scanner"
+            and not (self.carry_in_custody and stage in {"holding", "exit"})
+        ):
             return "scanner_transition_must_start_lifecycle"
         if stage == "scanner" and any(
             existing_stage != "scanner" for existing_stage in self.stage_counts
@@ -2082,7 +2179,11 @@ class _LifecycleAccumulator:
             return "fill_before_submit"
         if stage == "fill" and "exit" in self.stage_counts:
             return "fill_after_exit_phase"
-        if stage == "holding" and self.first_fill_at is None:
+        if (
+            stage == "holding"
+            and self.first_fill_at is None
+            and not self.carry_in_custody
+        ):
             return "holding_before_fill"
         if stage == "scale_in":
             if self.first_fill_at is None:
@@ -2093,6 +2194,7 @@ class _LifecycleAccumulator:
             stage == "exit"
             and data.get("terminal_no_fill") is not True
             and self.first_fill_at is None
+            and not self.carry_in_custody
         ):
             return "exit_before_fill"
         trace_id = str(data.get("decision_trace_id") or "").strip()
@@ -3421,9 +3523,17 @@ class _LifecycleAccumulator:
             if (quantity is None) != (price is None):
                 self._invalid("exit_price_qty_pair_incomplete")
             if quantity is not None and price is not None:
-                open_qty_before = self.open_qty
-                self._apply_exit(quantity, price)
-                if self.open_qty < open_qty_before:
+                exit_applied = False
+                if self.carry_in_custody:
+                    self.exit_qty += quantity
+                    self.exit_amount_krw += quantity * price
+                    self.exit_execution_leg_count += 1
+                    exit_applied = True
+                else:
+                    open_qty_before = self.open_qty
+                    self._apply_exit(quantity, price)
+                    exit_applied = self.open_qty < open_qty_before
+                if exit_applied:
                     if (
                         trusted_broker_late_arrival_reordered
                         and broker_execution_state == "new"
@@ -3468,7 +3578,7 @@ class _LifecycleAccumulator:
                 self.final_exit_source_sequence = source_sequence
                 self.final_exit_execution_at = execution_occurred_at
                 self.final_exit_reconciled = data.get("broker_reconciled") is True
-                if self.first_fill_at is None:
+                if self.first_fill_at is None and not self.carry_in_custody:
                     self._invalid("final_exit_without_fill")
                 if self.open_qty > _QUANTITY_EPSILON:
                     self._invalid("final_exit_leaves_open_quantity")
@@ -3508,6 +3618,16 @@ class _LifecycleAccumulator:
         return "no_fill"
 
     def _terminal_state(self) -> tuple[str, bool]:
+        if self.carry_in_custody:
+            if (
+                self.final_exit_at is not None
+                and self.final_exit_reconciled
+                and self.exit_qty > _QUANTITY_EPSILON
+                and self.broker_execution_exit_covered_qty + _QUANTITY_EPSILON
+                >= self.exit_qty
+            ):
+                return "CUSTODY_CARRY_FINAL_EXIT_RECONCILED", False
+            return "CUSTODY_CARRY_HELD", True
         if self.terminal_no_fill_at is not None and self.first_fill_at is None:
             return "TERMINAL_NO_FILL", False
         if (
@@ -3564,6 +3684,8 @@ class _LifecycleAccumulator:
         )
 
         blockers: list[str] = []
+        if self.carry_in_custody:
+            blockers.append("custody_carry_in_entry_lifecycle_non_promotable")
         sim_scope_real_order_contract_violation_count = int(
             self.observed_real_order_evidence
             and "sim_observation_only" in self.source_population_scopes
@@ -3571,7 +3693,10 @@ class _LifecycleAccumulator:
         missing_stages = sorted(_REQUIRED_COMPLETE_STAGES - self.stage_counts.keys())
         if missing_stages:
             blockers.append("missing_required_stages:" + ",".join(missing_stages))
-        if terminal_state != "FINAL_EXIT_RECONCILED":
+        if terminal_state not in {
+            "FINAL_EXIT_RECONCILED",
+            "CUSTODY_CARRY_FINAL_EXIT_RECONCILED",
+        }:
             blockers.append("reconciled_final_exit_required")
         if actual_duration is None:
             blockers.append("official_first_fill_to_final_exit_duration_required")
@@ -3749,6 +3874,16 @@ class _LifecycleAccumulator:
             "session_bucket": self.session_bucket,
             "origin_venue": self.venue,
             "origin_session_bucket": self.session_bucket,
+            "lifecycle_origin": (
+                "preexisting_position_custody"
+                if self.carry_in_custody
+                else "same_trade_date_lifecycle"
+            ),
+            "carry_in_custody_schema": (
+                CARRY_IN_CUSTODY_SCHEMA if self.carry_in_custody else None
+            ),
+            "carry_in_entry_observed_at": self.carry_in_entry_observed_at,
+            "carry_in_entry_source": self.carry_in_entry_source,
             "stage_context_path": [
                 {
                     "stage": stage,
@@ -4203,6 +4338,8 @@ def _lifecycle_window_exclusion_taxonomies(
             taxonomies.add("cross_lifecycle_identity_conflict")
         elif reason == "sim_scope_real_order_contract_violation":
             taxonomies.add("source_authority_contract_violation")
+        elif reason == "custody_carry_in_entry_lifecycle_non_promotable":
+            taxonomies.add("custody_carry_in_nonpromotion")
         elif reason.startswith("broker_execution_") or reason in {
             "actual_broker_order_submission_required",
             "official_first_fill_to_final_exit_duration_required",
@@ -6017,6 +6154,14 @@ def build_daily_report(
     sim_scope_real_order_contract_violation_count = sum(
         int(row["sim_scope_real_order_contract_violation_count"]) for row in rows
     )
+    custody_carry_lifecycle_count = sum(
+        int(row.get("carry_in_custody_schema") == CARRY_IN_CUSTODY_SCHEMA)
+        for row in rows
+    )
+    custody_carry_final_exit_reconciled_count = sum(
+        int(row["terminal_state"] == "CUSTODY_CARRY_FINAL_EXIT_RECONCILED")
+        for row in rows
+    )
     candidate_row_gate_failure_count = sum(
         1
         for row in rows
@@ -6253,6 +6398,11 @@ def build_daily_report(
         ),
         "sim_scope_real_order_contract_violation_count": (
             sim_scope_real_order_contract_violation_count
+        ),
+        "custody_carry_schema": CARRY_IN_CUSTODY_SCHEMA,
+        "custody_carry_lifecycle_count": custody_carry_lifecycle_count,
+        "custody_carry_final_exit_reconciled_count": (
+            custody_carry_final_exit_reconciled_count
         ),
         "broker_execution_official_reference_sha": (KIWOOM_OFFICIAL_REFERENCE_SHA),
         "source_kind": source_kind,
