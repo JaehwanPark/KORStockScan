@@ -27,6 +27,15 @@ def _reset_state_handler_trading_rules(monkeypatch):
     monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", None)
     monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", None)
     monkeypatch.setattr(state_handlers, "datetime", datetime)
+    monkeypatch.setattr(
+        state_handlers,
+        "_order_terminal_inventory_reconciliation",
+        lambda *_args, expected_runtime_qty, **_kwargs: (
+            True,
+            "test_terminal_absence_and_inventory_exact",
+            expected_runtime_qty,
+        ),
+    )
 
 
 def _base_order(**overrides):
@@ -305,6 +314,81 @@ def test_pending_order_reprices_once(monkeypatch):
     assert stock["pending_entry_orders"][0]["entry_reprice_parent_ord_no"] == "0033470"
     assert stock["entry_reprice_child_ord_no"] == "0034000"
     assert "entry_reprice_resubmit_submitted" in [stage for stage, _ in events]
+
+
+def test_pending_order_does_not_resubmit_without_terminal_cancel_proof(monkeypatch):
+    import src.engine.sniper_state_handlers as handlers
+
+    now = 1000.0
+    stock = {
+        "id": 1,
+        "name": "테스트",
+        "strategy": "SCALPING",
+        "order_time": now - 16.0,
+        "pending_entry_orders": [
+            {
+                **_base_order(sent_at=now - 16.0),
+                "tag": "normal",
+                "tif": "DAY",
+            }
+        ],
+    }
+    events = []
+    calls = {"cancel": 0, "buy": 0, "refresh": 0}
+
+    monkeypatch.setattr(handlers.time, "time", lambda: now)
+    monkeypatch.setattr(
+        handlers.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda code, now=None: {
+            "best_bid": 39855,
+            "best_ask": 39915,
+            "observer_healthy": True,
+            "unstable_quote_observed": False,
+            "observer_last_quote_age_ms": 120.0,
+            "orderbook_micro": {"micro_state": "neutral"},
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: events.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_order_terminal_inventory_reconciliation",
+        lambda *_args, **_kwargs: (False, "order_still_open", None),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_request_broker_snapshot_refresh",
+        lambda *args, **kwargs: calls.__setitem__("refresh", calls["refresh"] + 1),
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: calls.__setitem__("cancel", calls["cancel"] + 1)
+        or {"return_code": "0", "ord_no": "0033622"},
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: calls.__setitem__("buy", calls["buy"] + 1),
+    )
+
+    result = handlers._maybe_reprice_pending_entry_order(
+        stock, "466920", "SCALPING", timeout_sec=60
+    )
+
+    assert result == "pending_terminal"
+    assert calls == {"cancel": 1, "buy": 0, "refresh": 1}
+    assert stock["entry_reprice_cancel_terminal_pending"] is True
+    assert stock["entry_reprice_cancel_terminal_reason"] == "order_still_open"
+    assert stock["pending_entry_orders"][0]["status"] == "OPEN"
+    assert (
+        stock["pending_entry_orders"][0]["entry_reprice_cancel_terminal_pending"]
+        is True
+    )
 
 
 def test_rising_missed_initial_reprice_blocks_stale_tp1_direction_context(

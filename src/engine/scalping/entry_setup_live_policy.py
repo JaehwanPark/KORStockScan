@@ -16,7 +16,7 @@ import os
 import shlex
 import tempfile
 import threading
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -52,6 +52,8 @@ EXPECTED_CANDIDATE_SELECTION_POLICY = (
     "deterministic_outcome_blind_setup_state_symbol_round_robin_v3"
 )
 EXPLORATION_MAX_DAILY_PROBES = 3
+PREOPEN_CANDIDATE_CUTOFF_KST = dt_time(7, 35)
+EFFECTIVE_DATE_POLICY = "first_available_krx_preopen_v1"
 PERFORMANCE_PROMOTION_ERROR_CODES = frozenset(
     {
         "krx_batch_promotion_gate_not_passed",
@@ -317,6 +319,35 @@ def _next_krx_trading_date(source_date: str) -> str:
             return current.isoformat()
         current += timedelta(days=1)
     raise RuntimeError(f"next_krx_trading_date_unresolved:{source_date}")
+
+
+def _candidate_effective_date(
+    *, source_date: str, generated_at: datetime | str
+) -> str:
+    source = date.fromisoformat(source_date)
+    if isinstance(generated_at, str):
+        current = datetime.fromisoformat(generated_at)
+    elif isinstance(generated_at, datetime):
+        current = generated_at
+    else:
+        raise TypeError("candidate_generated_at_invalid")
+    current = (
+        current.replace(tzinfo=KST)
+        if current.tzinfo is None
+        else current.astimezone(KST)
+    )
+    if current.date() < source:
+        raise ValueError("candidate_generated_before_source_date")
+
+    nominal = date.fromisoformat(_next_krx_trading_date(source_date))
+    if current.date() < nominal:
+        return nominal.isoformat()
+    if (
+        is_krx_trading_day(current.date())
+        and current.time().replace(tzinfo=None) < PREOPEN_CANDIDATE_CUTOFF_KST
+    ):
+        return current.date().isoformat()
+    return _next_krx_trading_date(current.date().isoformat())
 
 
 def live_candidate_path(source_date: str) -> Path:
@@ -714,7 +745,14 @@ def build_live_candidate(
     batch_report: dict[str, Any],
     detailed_report: dict[str, Any],
     detailed_path: Path,
+    generated_at: datetime | None = None,
 ) -> dict[str, Any]:
+    current = generated_at or datetime.now(KST)
+    current = (
+        current.replace(tzinfo=KST)
+        if current.tzinfo is None
+        else current.astimezone(KST)
+    )
     errors = _candidate_source_errors(
         source_date=source_date,
         batch_report=batch_report,
@@ -746,8 +784,13 @@ def build_live_candidate(
     candidate = {
         "schema": LIVE_CANDIDATE_SCHEMA,
         "source_date": source_date,
-        "effective_date": _next_krx_trading_date(source_date),
-        "generated_at": datetime.now(KST).isoformat(),
+        "effective_date": _candidate_effective_date(
+            source_date=source_date,
+            generated_at=current,
+        ),
+        "effective_date_policy": EFFECTIVE_DATE_POLICY,
+        "preopen_candidate_cutoff_kst": PREOPEN_CANDIDATE_CUTOFF_KST.isoformat(),
+        "generated_at": current.isoformat(),
         "status": (
             "live_auto_apply_ready"
             if performance_ready
@@ -819,7 +862,7 @@ def build_live_candidate(
             "detailed_report_path": str(detailed_path),
             "detailed_report_sha256": detailed_sha256,
         },
-        "activation_mode": "next_krx_trading_date_preopen_only",
+        "activation_mode": "first_available_krx_trading_date_preopen_only",
         "operator_approval_required": False,
         "operator_disable_env": CANARY_ENV_KEY,
         "risk_contract": {
@@ -876,7 +919,11 @@ def build_live_candidate(
 
 
 def publish_live_candidate(
-    *, source_date: str, batch_report: dict[str, Any], write: bool
+    *,
+    source_date: str,
+    batch_report: dict[str, Any],
+    write: bool,
+    generated_at: datetime | None = None,
 ) -> dict[str, Any]:
     detailed_path = detailed_report_path(source_date)
     candidate = build_live_candidate(
@@ -884,6 +931,7 @@ def publish_live_candidate(
         batch_report=batch_report,
         detailed_report=_read_json(detailed_path),
         detailed_path=detailed_path,
+        generated_at=generated_at,
     )
     path = live_candidate_path(source_date)
     if write:
@@ -912,12 +960,23 @@ def _validate_candidate_artifact(
     errors: list[str] = []
     source_date = str(candidate.get("source_date") or "")
     try:
-        expected_effective_date = _next_krx_trading_date(source_date)
+        expected_effective_date = _candidate_effective_date(
+            source_date=source_date,
+            generated_at=candidate.get("generated_at"),
+        )
     except (TypeError, ValueError, RuntimeError):
         expected_effective_date = None
-        errors.append("candidate_source_date_invalid")
+        errors.append("candidate_effective_date_schedule_invalid")
     if expected_effective_date != target_date:
-        errors.append("candidate_next_trading_date_mismatch")
+        errors.append("candidate_effective_date_schedule_mismatch")
+    if (
+        candidate.get("effective_date_policy") != EFFECTIVE_DATE_POLICY
+        or candidate.get("preopen_candidate_cutoff_kst")
+        != PREOPEN_CANDIDATE_CUTOFF_KST.isoformat()
+        or candidate.get("activation_mode")
+        != "first_available_krx_trading_date_preopen_only"
+    ):
+        errors.append("candidate_effective_date_policy_invalid")
     if candidate.get("schema") != LIVE_CANDIDATE_SCHEMA:
         errors.append("candidate_schema_invalid")
     canary_mode = str(candidate.get("canary_mode") or "")
@@ -940,6 +999,11 @@ def _validate_candidate_artifact(
         candidate.get("runtime_effect") is not False
         or candidate.get("actual_order_submitted") is not False
         or candidate.get("broker_order_forbidden") is not True
+        or candidate.get("effective_date_policy") != EFFECTIVE_DATE_POLICY
+        or candidate.get("preopen_candidate_cutoff_kst")
+        != PREOPEN_CANDIDATE_CUTOFF_KST.isoformat()
+        or candidate.get("activation_mode")
+        != "first_available_krx_trading_date_preopen_only"
     ):
         errors.append("candidate_authority_contract_invalid")
     if (
@@ -1050,6 +1114,11 @@ def _runtime_candidate_contract_errors(
         or candidate.get("runtime_effect") is not False
         or candidate.get("actual_order_submitted") is not False
         or candidate.get("broker_order_forbidden") is not True
+        or candidate.get("effective_date_policy") != EFFECTIVE_DATE_POLICY
+        or candidate.get("preopen_candidate_cutoff_kst")
+        != PREOPEN_CANDIDATE_CUTOFF_KST.isoformat()
+        or candidate.get("activation_mode")
+        != "first_available_krx_trading_date_preopen_only"
     ):
         errors.append("runtime_candidate_authority_contract_invalid")
     if (

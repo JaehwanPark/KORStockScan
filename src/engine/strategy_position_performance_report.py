@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from collections import defaultdict
 from datetime import date, datetime
 import json
@@ -886,3 +887,30 @@ def build_strategy_position_performance_report(
             for row in rows
         ]
         return _build_report_payload(target_date, fact_rows, row_payloads)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Synchronize exact trade performance facts for a target date."
+    )
+    parser.add_argument(
+        "--date",
+        dest="target_date",
+        default=date.today().isoformat(),
+        help="Target date (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--print",
+        dest="print_stdout",
+        action="store_true",
+        help="Print the synchronization summary as JSON.",
+    )
+    args = parser.parse_args(argv)
+    result = sync_trade_performance_for_date(args.target_date)
+    if args.print_stdout:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

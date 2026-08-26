@@ -12229,6 +12229,66 @@ def test_candidate_execution_checkpoint_retry_does_not_expand_distinct_quota():
     assert metadata["contract_pass"] is True
 
 
+def test_complete_candidate_census_contract_is_bounded_and_tamper_evident():
+    pending = [
+        {
+            "paired_replay_id": f"pair-{index}",
+            "stock_code": f"{index:06d}",
+        }
+        for index in range(3)
+    ]
+    _selected, metadata = quality.select_pending_candidate_execution_requests(
+        pending,
+        max_new_requests=5,
+    )
+
+    assert metadata["policy"] == "complete_eligible_census"
+    assert quality.candidate_execution_selection_contract_pass(
+        metadata,
+        max_new_requests=5,
+    )
+    assert not quality.candidate_execution_selection_contract_pass(
+        {**metadata, "deferred_new_count": 1},
+        max_new_requests=5,
+    )
+    assert not quality.candidate_execution_selection_contract_pass(
+        {**metadata, "distinct_execution_count": 6},
+        max_new_requests=5,
+    )
+
+
+def test_round_robin_candidate_selection_contract_rejects_census_or_cap_drift():
+    pending = [
+        {
+            "paired_replay_id": f"pair-{index}",
+            "stock_code": f"{index:06d}",
+        }
+        for index in range(8)
+    ]
+    _selected, metadata = quality.select_pending_candidate_execution_requests(
+        pending,
+        max_new_requests=5,
+    )
+
+    assert metadata["policy"] == quality.CANDIDATE_EXECUTION_SELECTION_POLICY
+    assert quality.candidate_execution_selection_contract_pass(
+        metadata,
+        max_new_requests=5,
+    )
+    assert not quality.candidate_execution_selection_contract_pass(
+        {**metadata, "deferred_new_count": 2},
+        max_new_requests=5,
+    )
+    assert not quality.candidate_execution_selection_contract_pass(
+        {**metadata, "distinct_execution_cap": 6},
+        max_new_requests=5,
+    )
+    assert not quality.candidate_execution_selection_contract_pass(
+        {**metadata, "distinct_execution_count": 6},
+        max_new_requests=5,
+    )
+
+
 def test_stale_selection_policy_does_not_consume_new_checkpoint_quota():
     existing = {
         "requests": [

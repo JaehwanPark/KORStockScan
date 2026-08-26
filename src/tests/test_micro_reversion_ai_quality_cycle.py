@@ -2903,7 +2903,7 @@ def test_historical_execution_rejects_self_rehashed_provider_and_join_receipts(
     elif mutation == "provider_attempt_hash":
         report["results"][0]["replay_result"]["candidate_attempts"][0][
             "provider_provenance"
-        ]["provider_budget_attempt_identity_sha256"] = ("x" * 64)
+        ]["provider_budget_attempt_identity_sha256"] = "x" * 64
         _reseal_execution_result_ids(report)
     elif mutation == "provider_cost_underreported":
         report["provider_budget"]["committed_cost_usd"] = "0.01"
@@ -2991,9 +2991,9 @@ def test_explicit_legacy_requires_request_exact_hash_and_version_binding(mutatio
     )
     report["ablation_design_version"] = cycle.LEGACY_DESIGN_VERSION
     report["ablation_arms"] = list(cycle.EXPECTED_ARMS)
-    report["three_arm_evaluation"][
-        "ablation_design_version"
-    ] = cycle.LEGACY_DESIGN_VERSION
+    report["three_arm_evaluation"]["ablation_design_version"] = (
+        cycle.LEGACY_DESIGN_VERSION
+    )
     report["three_arm_evaluation"]["ablation_arms"] = list(cycle.EXPECTED_ARMS)
     for ref, result in zip(report["request_refs"], report["results"]):
         ref["ablation_design_version"] = cycle.LEGACY_DESIGN_VERSION
@@ -4179,8 +4179,9 @@ def test_execution_floor_locator_accepts_exact_later_as_of_generation(
     monkeypatch.setattr(
         cycle,
         "provider_ablation_floor_path",
-        lambda day: tmp_path
-        / f"micro_reversion_provider_ablation_sample_floor_{day}.json",
+        lambda day: (
+            tmp_path / f"micro_reversion_provider_ablation_sample_floor_{day}.json"
+        ),
     )
     later_path = cycle.provider_ablation_floor_path("2026-08-31").absolute()
 
@@ -4918,7 +4919,7 @@ def test_historical_backfill_prior_physical_ledger_requires_checkpoint_binding(
     assert findings == (
         []
         if checkpoint_bound
-        else ["prior_provider_ledger_orphan_reservation:" "2026-08-26:request-1:1"]
+        else ["prior_provider_ledger_orphan_reservation:2026-08-26:request-1:1"]
     )
 
 
@@ -5298,6 +5299,30 @@ def test_observer_provider_gate_blocks_unscoped_loss_but_not_clean_canary():
     )
 
 
+def test_observer_stage_gate_keeps_local_labels_but_holds_provider_and_r3():
+    blocked = cycle._observer_source_only_stage_gate(
+        {"source_path": "/tmp/canary.json", "status": "stop_required"}
+    )
+
+    assert blocked["observer_blocks_action_neutral_label_generation"] is False
+    assert blocked["observer_blocks_provider_floor_materialization"] is False
+    assert blocked["observer_blocks_provider_replay"] is True
+    assert blocked["observer_blocks_r3_promotion"] is True
+    assert blocked["blocker_code"] == "micro_observer_canary_stop_required"
+    assert blocked["runtime_effect"] is False
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["broker_order_forbidden"] is True
+
+    clean = cycle._observer_source_only_stage_gate(
+        {"source_path": "/tmp/canary.json", "status": "pass"}
+    )
+    assert clean["observer_blocks_action_neutral_label_generation"] is False
+    assert clean["observer_blocks_provider_floor_materialization"] is False
+    assert clean["observer_blocks_provider_replay"] is False
+    assert clean["observer_blocks_r3_promotion"] is False
+    assert clean["blocker_code"] is None
+
+
 def test_observer_canary_requires_running_or_reconciled_closed_lifecycle(
     tmp_path,
 ) -> None:
@@ -5482,6 +5507,62 @@ def test_source_gap_diagnostics_hold_replay_until_queue_loss_has_scoped_receipt(
     ]
     assert [row["owner"] for row in diagnostics["workorders"]] == [
         "MicroReversionForwardCollectorContinuity"
+    ]
+
+
+def test_source_gap_diagnostics_surfaces_rejected_execution_and_companion_gaps():
+    target_date = "2026-08-25"
+    bridge_report = {
+        "target_date": target_date,
+        "summary": {
+            "micro_context_eligible_primary_episode_count": 3,
+            "exclusion_counts": {},
+        },
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    bridge_report["report_content_sha256"] = cycle._content_hash(
+        bridge_report, "report_content_sha256"
+    )
+    lifecycle_report = {
+        "target_date": target_date,
+        "promotion_evidence_eligible_count": 0,
+        "broker_execution_provenance_gap_count": 0,
+        "pipeline_lifecycle_instrumentation_gap_count": 36,
+        "real_submitted_lifecycle_count": 15,
+        "broker_execution_unique_count": 0,
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    lifecycle_report["artifact_content_sha256"] = cycle._content_hash(
+        lifecycle_report, "artifact_content_sha256"
+    )
+
+    diagnostics = cycle._source_only_gap_diagnostics(
+        target_date=target_date,
+        observer_canary={"status": "pass"},
+        bridge_report=bridge_report,
+        lifecycle_report=lifecycle_report,
+        rolling_exclusions=[
+            {"reason": "execution_report_materialized_companion_binding_mismatch"},
+            {"reason": "lifecycle_exact_join_missing"},
+        ],
+    )
+
+    assert diagnostics["blocker_codes"] == [
+        "main_lifecycle_execution_receipt_custody_gap:36"
+    ]
+    assert (
+        diagnostics["execution_report_materialized_companion_binding_mismatch_count"]
+        == 1
+    )
+    assert diagnostics["lifecycle_exact_join_missing_count"] == 1
+    workorder = diagnostics["workorders"][0]
+    assert workorder["owner"] == "RuntimeExecutionReceiptCustodyRepair"
+    assert workorder["reason_codes"] == [
+        "pipeline_lifecycle_instrumentation_gap_count=36",
+        "real_submitted_lifecycle_count=15",
+        "broker_execution_unique_count=0",
+        "execution_report_materialized_companion_binding_mismatch_count=1",
+        "lifecycle_exact_join_missing_count=1",
     ]
 
 

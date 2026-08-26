@@ -7,6 +7,31 @@ from types import SimpleNamespace
 from src.engine import daily_threshold_cycle_report as report_mod
 
 
+def test_completed_rows_loader_prefers_exact_performance_fact_economics():
+    sql = report_mod._completed_rows_sql()
+
+    assert "LEFT JOIN trade_performance_facts tpf" in sql
+    assert "tpf.status = 'COMPLETED'" in sql
+    assert "tpf.sell_price > 0" in sql
+    assert "tpf.sell_time IS NOT NULL" in sql
+    assert "COALESCE(tpf.sell_price, rh.sell_price)" in sql
+    assert "COALESCE(tpf.profit_rate, rh.profit_rate)" in sql
+    assert "trade_performance_fact_exact_receipt" in sql
+    assert "COALESCE(tpf.profit_rate, rh.profit_rate) IS NOT NULL" in sql
+
+
+def test_threshold_ai_cost_rejects_partial_env_price_contract(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_AI_INPUT_COST_PER_1M_USD", "0")
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_THRESHOLD_AI_OUTPUT_COST_PER_1M_USD", raising=False
+    )
+
+    assert report_mod._threshold_ai_estimated_cost("gpt-5.5", 10, 5) == (
+        None,
+        "missing_price_contract",
+    )
+
+
 def test_save_threshold_calibration_report_declares_runtime_handoff_contract_version(
     tmp_path, monkeypatch
 ):
@@ -2149,7 +2174,8 @@ def test_openai_threshold_ai_correction_uses_strict_schema_and_deep_model(monkey
     assert status["input_tokens"] == 123
     assert status["output_tokens"] == 45
     assert status["total_tokens"] == 168
-    assert status["cost_estimate_status"] == "missing_price_contract"
+    assert status["estimated_cost_usd"] == 0.0
+    assert status["cost_estimate_status"] == "operator_zero_cost_default"
     assert captured["model"] == "gpt-5.5"
     assert captured["reasoning"]["effort"] == "high"
     assert captured["text"]["format"]["type"] == "json_schema"

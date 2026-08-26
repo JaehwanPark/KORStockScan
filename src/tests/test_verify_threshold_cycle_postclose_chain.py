@@ -9,6 +9,23 @@ import pytest
 from src.engine import verify_threshold_cycle_postclose_chain as mod
 
 
+def test_threshold_ev_reconciliation_mismatch_is_a_verifier_issue():
+    assert mod._threshold_ev_reconciliation_issues(
+        {
+            "daily_ev_summary": {
+                "trade_review_snapshot_reconciliation": {"count_match": False}
+            }
+        }
+    ) == ["threshold_cycle_ev_trade_review_calibration_count_mismatch"]
+    assert mod._threshold_ev_reconciliation_issues(
+        {
+            "daily_ev_summary": {
+                "trade_review_snapshot_reconciliation": {"count_match": True}
+            }
+        }
+    ) == []
+
+
 def test_workorder_source_fingerprint_detects_changed_bytes(tmp_path):
     source = tmp_path / "source.json"
     source.write_text('{"value":1}', encoding="utf-8")

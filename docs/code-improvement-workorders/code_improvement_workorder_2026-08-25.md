@@ -29,9 +29,9 @@
 - stage_hook_runtime_scaffold: `-`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-08-25.json`
 - microstructure_reaction_context: `/home/ubuntu/KORStockScan/data/report/microstructure_reaction_context/microstructure_reaction_context_2026-08-25.json`
-- generated_at: `2026-08-26T03:17:28+09:00`
-- generation_id: `2026-08-25-594547614453`
-- source_hash: `5945476144532af11fcd704b24f95d0ec6af341bd33c0d891eb664dada4791c6`
+- generated_at: `2026-08-26T08:25:28+09:00`
+- generation_id: `2026-08-25-17693bf12daf`
+- source_hash: `17693bf12daf6822d4ecf2993793a7dafbbccc0ba25a31fbb2b6fc86a3613fa5`
 
 ## 운영 원칙
 
@@ -53,8 +53,8 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-08-25-3491e6c413df`
-- previous_source_hash: `3491e6c413dfe17d5828455f6c4a670819f20ece1f163d09d9199f10b0ee6272`
+- previous_generation_id: `2026-08-25-594547614453`
+- previous_source_hash: `5945476144532af11fcd704b24f95d0ec6af341bd33c0d891eb664dada4791c6`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

@@ -1247,6 +1247,15 @@ def test_scale_in_policy_source_only_contract_closes_without_directive(
         item["candidate_id"] == candidate_id
         for item in report["codex_workorder_directives"]
     )
+    blocker = next(
+        item
+        for item in report["conversion_blocker_rank"]
+        if item["conversion_candidate_id"] == candidate_id
+    )
+    assert blocker["blocker_class"] == "sample_floor"
+    assert blocker["next_repair_action"] == (
+        "paired_add_lifecycle_replay_or_final_label_missing"
+    )
 
 
 def test_scale_in_policy_bare_exclusion_still_emits_contract_directive(

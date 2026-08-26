@@ -168,9 +168,19 @@ def test_batch_runs_krx_and_nxt_as_separate_outcome_blind_cohorts(
                 "candidate_exposure_unique_symbol_count": 8,
                 "promotion_quality_gate_pass": False,
                 "candidate_execution_selection": {
-                    "policy": quality.CANDIDATE_EXECUTION_SELECTION_POLICY,
+                    "policy": (
+                        "complete_eligible_census"
+                        if venue == "NXT"
+                        else quality.CANDIDATE_EXECUTION_SELECTION_POLICY
+                    ),
                     "outcome_blind": True,
                     "contract_pass": True,
+                    "eligible_pending_count": 30,
+                    "selected_execution_count": 30,
+                    "deferred_new_count": 0,
+                    "distinct_execution_count": 30,
+                    "distinct_execution_cap": 30,
+                    "distinct_execution_cap_pass": True,
                     "checkpoint_evaluated_setup_state_counts": {"READY": 30},
                 },
             },
@@ -195,6 +205,9 @@ def test_batch_runs_krx_and_nxt_as_separate_outcome_blind_cohorts(
     assert all(
         row["candidate_execution_selection"]["outcome_blind"] is True
         for row in report["cohorts"]
+    )
+    assert report["cohorts"][1]["candidate_execution_selection"]["policy"] == (
+        "complete_eligible_census"
     )
     persisted = json.loads(batch.batch_status_path("2026-08-06").read_text())
     assert persisted["status"] == "completed_offline_only"

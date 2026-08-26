@@ -218,13 +218,14 @@ def _cohort_result(
             or report.get("provider_failed_count") != 0
             or report.get("candidate_provider_none_count") != 0
             or not isinstance(selection, dict)
-            or selection.get("policy") != quality.CANDIDATE_EXECUTION_SELECTION_POLICY
+            or not quality.candidate_execution_selection_contract_pass(
+                selection,
+                max_new_requests=max_new_requests,
+            )
             or not _selection_checkpoint_contract_pass(
                 selection,
                 evaluated_request_count=request_count,
             )
-            or selection.get("outcome_blind") is not True
-            or selection.get("contract_pass") is not True
         ):
             raise RuntimeError(
                 f"candidate_execution_contract_failed:{venue}:{session_bucket}"
@@ -386,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-new-requests-per-cohort", type=int, default=30)
     parser.add_argument("--candidate-workers", type=int, default=2)
     parser.add_argument("--candidate-timeout-sec", type=float, default=45.0)
-    parser.add_argument("--predecessor-wait-sec", type=int, default=14400)
+    parser.add_argument("--predecessor-wait-sec", type=int, default=43200)
     parser.add_argument("--predecessor-interval-sec", type=int, default=30)
     parser.add_argument("--no-require-predecessor", action="store_true")
     parser.add_argument("--write", action="store_true")

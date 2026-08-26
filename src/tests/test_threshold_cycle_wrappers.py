@@ -27,6 +27,27 @@ def test_postclose_wrapper_executes_syntax_checked_immutable_snapshot():
     assert 'rm -f -- "$wrapper_snapshot"' in script
 
 
+def test_postclose_wrapper_syncs_exact_trade_facts_before_daily_calibration():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+
+    sync_idx = script.index("src.engine.strategy_position_performance_report")
+    calibration_idx = script.index(
+        "src.engine.daily_threshold_cycle_report", sync_idx
+    )
+    ev_idx = script.index(
+        'run_threshold_cycle_ev_and_wait "pre_workorder"', calibration_idx
+    )
+
+    assert sync_idx < calibration_idx < ev_idx
+    sync_block = script[
+        script.rindex('if [ "$SKIP_DB" != "true" ]; then', 0, sync_idx) : calibration_idx
+    ]
+    assert 'reason=skip_db' in sync_block
+    assert 'src.engine.strategy_position_performance_report' in sync_block
+
+
 def test_postclose_wrapper_snapshot_is_removed_when_child_fails(tmp_path):
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     preamble = script[: script.index('PROJECT_DIR="${PROJECT_DIR:-')]
@@ -805,6 +826,7 @@ def test_postclose_done_controller_wrapper_runs_controller_and_skips_codex_runne
     assert "--allow-wrapper-rerun" in script
     assert "--predecessor-timeout-sec" in script
     assert "POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC" in script
+    assert 'POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC:-43200' in script
     assert "$PROJECT_DIR/venv/Scripts/python.exe" in script
     assert 'RUN_CODEX="${POSTCLOSE_DONE_CONTROLLER_RUN_CODEX:-false}"' in script
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL_POLICY" in script
@@ -1494,7 +1516,8 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     assert "AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS" in runner
     assert 'MAX_ATTEMPTS="${AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS:-3}"' in runner
     assert 'if [ "$batch_rc" -eq 3 ]' in runner
-    assert "predecessor timeout; not retrying" in runner
+    assert 'AI_ENTRY_SETUP_REPLAY_PREDECESSOR_WAIT_SEC:-43200' in runner
+    assert "predecessor bounded wait exhausted" in runner
     assert "sleep 15" in runner
     assert "run_bot.sh" not in runner
     assert "tmux" not in runner
@@ -2143,6 +2166,7 @@ def test_tuning_monitoring_waits_for_threshold_postclose_done_by_default():
     assert 'if [[ "$waited" -ge "$PREDECESSOR_WAIT_SEC" ]]' in failed_branch
     assert "reason=threshold_cycle_postclose_failed waited=${waited}s" in failed_branch
     assert "predecessor failed; waiting for recovery" in failed_branch
+    assert 'TUNING_MONITORING_PREDECESSOR_WAIT_SEC:-43200' in script
 
 
 def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():

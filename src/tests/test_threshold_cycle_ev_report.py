@@ -633,6 +633,7 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert not report["daily_ev_summary"]["trade_review_snapshot_reconciliation"][
         "count_match"
     ]
+    assert "trade_review_calibration_count_mismatch" in report["warnings"]
     assert report["daily_ev_summary"]["realized_pnl_krw"] == -282
     assert report["summary"]["status"] == "warning"
     assert report["summary"]["real_sample"] == 3

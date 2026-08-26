@@ -3416,6 +3416,11 @@ def build_threshold_cycle_ev_report(
         if same_day_source_split_present
         else _safe_float(trade_metrics.get("avg_profit_rate"), 0.0)
     )
+    trade_review_count_match = bool(
+        trade_review_completed == completed
+        and trade_review_win == win
+        and trade_review_loss == loss
+    )
     budget_pass = _safe_int(perf_metrics.get("budget_pass_events"), 0)
     submitted = _safe_int(perf_metrics.get("order_bundle_submitted_events"), 0)
     submitted_rate = round((submitted / budget_pass) * 100.0, 2) if budget_pass else 0.0
@@ -3505,6 +3510,11 @@ def build_threshold_cycle_ev_report(
                 if source_quality_preflight_blocked(source_quality_preflight_gate)
                 else ""
             ),
+            (
+                "trade_review_calibration_count_mismatch"
+                if same_day_source_split_present and not trade_review_count_match
+                else ""
+            ),
         ]
         if message
     ]
@@ -3549,11 +3559,7 @@ def build_threshold_cycle_ev_report(
                 "win_trades": trade_review_win,
                 "loss_trades": trade_review_loss,
                 "open_trades": _safe_int(trade_metrics.get("open_trades"), 0),
-                "count_match": (
-                    trade_review_completed == completed
-                    and trade_review_win == win
-                    and trade_review_loss == loss
-                ),
+                "count_match": trade_review_count_match,
                 "decision_authority": "diagnostic_only_when_same_day_source_split_present",
             },
             "full_fill_completed_avg_profit_rate_pct": round(

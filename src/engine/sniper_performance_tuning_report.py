@@ -1649,6 +1649,36 @@ def _resolve_trend_max_dates(override: int | None = None) -> int:
     return 20
 
 
+def _trade_history_rows_sql() -> str:
+    return """
+        SELECT
+            rh.id, rh.rec_date, rh.stock_code, rh.stock_name,
+            rh.status, rh.strategy,
+            COALESCE(tpf.buy_price, rh.buy_price) AS buy_price,
+            COALESCE(tpf.buy_qty, rh.buy_qty) AS buy_qty,
+            COALESCE(tpf.buy_time, rh.buy_time) AS buy_time,
+            COALESCE(tpf.sell_price, rh.sell_price) AS sell_price,
+            COALESCE(tpf.sell_time, rh.sell_time) AS sell_time,
+            COALESCE(tpf.profit_rate, rh.profit_rate) AS profit_rate,
+            tpf.recommendation_id AS performance_fact_id,
+            tpf.realized_pnl_krw AS performance_fact_realized_pnl_krw
+        FROM recommendation_history rh
+        LEFT JOIN trade_performance_facts tpf
+          ON tpf.recommendation_id = rh.id
+         AND tpf.status = 'COMPLETED'
+         AND tpf.buy_price > 0
+         AND tpf.buy_qty > 0
+         AND tpf.buy_time IS NOT NULL
+         AND tpf.sell_price > 0
+         AND tpf.sell_time IS NOT NULL
+        WHERE rh.rec_date >= :oldest_date
+          AND rh.rec_date <= :target_date
+        ORDER BY rh.rec_date DESC,
+                 COALESCE(tpf.sell_time, rh.sell_time, tpf.buy_time, rh.buy_time) DESC NULLS LAST,
+                 rh.stock_code
+        """
+
+
 def _fetch_trade_history_rows(
     target_date: str, max_dates: int = 20
 ) -> tuple[list[dict], list[str], list[str]]:
@@ -1690,23 +1720,7 @@ def _fetch_trade_history_rows(
             oldest = min(recent_dates)
             result = (
                 conn.execute(
-                    text("""
-                    SELECT
-                        rh.id, rh.rec_date, rh.stock_code, rh.stock_name,
-                        rh.status, rh.strategy, rh.buy_price, rh.buy_qty,
-                        rh.buy_time, rh.sell_price, rh.sell_time,
-                        COALESCE(tpf.profit_rate, rh.profit_rate) AS profit_rate,
-                        tpf.recommendation_id AS performance_fact_id,
-                        tpf.realized_pnl_krw AS performance_fact_realized_pnl_krw
-                    FROM recommendation_history rh
-                    LEFT JOIN trade_performance_facts tpf
-                      ON tpf.recommendation_id = rh.id
-                    WHERE rh.rec_date >= :oldest_date
-                      AND rh.rec_date <= :target_date
-                    ORDER BY rh.rec_date DESC,
-                             COALESCE(rh.sell_time, rh.buy_time) DESC NULLS LAST,
-                             rh.stock_code
-                    """),
+                    text(_trade_history_rows_sql()),
                     {"oldest_date": oldest, "target_date": target_date_obj},
                 )
                 .mappings()

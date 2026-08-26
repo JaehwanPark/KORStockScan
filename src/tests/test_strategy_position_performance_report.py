@@ -3,6 +3,21 @@ from contextlib import contextmanager
 from src.engine import strategy_position_performance_report as report_mod
 
 
+def test_main_synchronizes_target_date_without_building_provider_or_runtime_work(
+    monkeypatch,
+):
+    calls = []
+    monkeypatch.setattr(
+        report_mod,
+        "sync_trade_performance_for_date",
+        lambda target_date: calls.append(target_date)
+        or {"target_date": target_date, "fact_count": 8},
+    )
+
+    assert report_mod.main(["--date", "2026-08-25"]) == 0
+    assert calls == ["2026-08-25"]
+
+
 def test_build_trade_fact_rows_normalizes_strategy_and_exit_fields(monkeypatch):
     monkeypatch.setattr(
         report_mod,

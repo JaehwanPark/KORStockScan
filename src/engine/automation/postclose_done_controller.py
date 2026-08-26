@@ -80,6 +80,7 @@ MARKER_RECONCILIATION_LOG_ISSUES = {
     "postclose_fail_marker_present",
 }
 EV_WORKORDER_STALE_ISSUES = {
+    "threshold_cycle_ev_trade_review_calibration_count_mismatch",
     "threshold_cycle_ev_stale_before_code_improvement_workorder",
     "threshold_cycle_ev_stale_before_pattern_lab_currentness_audit",
     "threshold_cycle_ev_stale_before_pattern_lab_propagation_audit",
@@ -1178,7 +1179,19 @@ def _recovery_actions(
             ]
         )
         return actions
-    if "runtime_apply_gap_audit_stale_before_threshold_preopen_apply" in issues:
+    runtime_gap_stale_issue = (
+        "runtime_apply_gap_audit_stale_before_threshold_preopen_apply"
+    )
+    runtime_gap_other_actionable_issues = {
+        issue
+        for issue in issues
+        if issue != runtime_gap_stale_issue
+        and issue not in DONE_ACCEPTABLE_WARNING_ISSUES
+    }
+    if (
+        runtime_gap_stale_issue in issues
+        and not runtime_gap_other_actionable_issues
+    ):
         actions.extend(
             [
                 _build_runtime_apply_gap_audit_action(target_date, verification),
@@ -1191,6 +1204,17 @@ def _recovery_actions(
     if EV_WORKORDER_STALE_ISSUES & set(issues):
         actions.extend(
             [
+                RecoveryAction(
+                    "sync_exact_trade_performance_facts",
+                    [
+                        _python_bin(),
+                        "-m",
+                        "src.engine.strategy_position_performance_report",
+                        "--date",
+                        target_date,
+                    ],
+                    "exact execution fact sync before daily calibration refresh",
+                ),
                 RecoveryAction(
                     "refresh_daily_threshold_cycle_report",
                     [
@@ -1296,10 +1320,17 @@ def _recovery_actions(
         return actions
     if "runtime_apply_gap" in issue_text:
         actions.append(_build_runtime_apply_gap_audit_action(target_date, verification))
-    if (
+    workorder_refresh_required = bool(
         "code_improvement_workorder" in issue_text
         or not _workorder_path(target_date).exists()
-    ):
+    )
+    downstream_refresh_required = bool(
+        verification.get("missing_downstream_links")
+        or verification.get("stale_downstream_links")
+        or verification.get("source_generation_warnings")
+        or verification.get("missing_required_artifacts")
+    )
+    if workorder_refresh_required and not downstream_refresh_required:
         actions.append(
             RecoveryAction(
                 "refresh_code_improvement_workorder",
@@ -1307,39 +1338,42 @@ def _recovery_actions(
                 "workorder source or lineage issue",
             )
         )
-    if (
-        verification.get("missing_downstream_links")
-        or verification.get("stale_downstream_links")
-        or verification.get("source_generation_warnings")
-        or verification.get("missing_required_artifacts")
-    ):
-        actions.extend(
-            [
+    if downstream_refresh_required:
+        actions.append(
+            RecoveryAction(
+                "refresh_threshold_cycle_ev",
+                [
+                    _python_bin(),
+                    "-m",
+                    "src.engine.threshold_cycle_ev_report",
+                    "--date",
+                    target_date,
+                    *_threshold_ev_scope_args(verification),
+                ],
+                "downstream EV source refresh",
+            )
+        )
+        if workorder_refresh_required:
+            actions.append(
                 RecoveryAction(
-                    "refresh_threshold_cycle_ev",
-                    [
-                        _python_bin(),
-                        "-m",
-                        "src.engine.threshold_cycle_ev_report",
-                        "--date",
-                        target_date,
-                        *_threshold_ev_scope_args(verification),
-                    ],
-                    "downstream EV source refresh",
-                ),
-                RecoveryAction(
-                    "refresh_runtime_approval_summary",
-                    [
-                        _python_bin(),
-                        "-m",
-                        "src.engine.runtime_approval_summary",
-                        "--date",
-                        target_date,
-                        *_runtime_approval_scope_args(verification),
-                    ],
-                    "runtime summary source refresh",
-                ),
-            ]
+                    "refresh_code_improvement_workorder",
+                    _workorder_command(target_date, verification),
+                    "final workorder fingerprint refresh after EV",
+                )
+            )
+        actions.append(
+            RecoveryAction(
+                "refresh_runtime_approval_summary",
+                [
+                    _python_bin(),
+                    "-m",
+                    "src.engine.runtime_approval_summary",
+                    "--date",
+                    target_date,
+                    *_runtime_approval_scope_args(verification),
+                ],
+                "runtime summary source refresh after EV and workorder",
+            )
         )
     return actions
 
@@ -1389,7 +1423,7 @@ def build_postclose_done_controller(
     *,
     max_attempts: int = 3,
     predecessor_wait_sec: float = 60.0,
-    predecessor_timeout_sec: float = 14400.0,
+    predecessor_timeout_sec: float = 43200.0,
     allow_wrapper_rerun: bool = False,
     require_codex_completed: bool = False,
     dry_run: bool = False,
@@ -1661,7 +1695,7 @@ def main(argv: list[str] | None = None) -> int:
         "--predecessor-timeout-sec",
         type=float,
         default=float(
-            os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC", "14400")
+            os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC", "43200")
         ),
     )
     parser.add_argument("--allow-wrapper-rerun", action="store_true")

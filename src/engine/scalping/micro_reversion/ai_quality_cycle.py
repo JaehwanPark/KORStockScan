@@ -3332,9 +3332,7 @@ def _validate_current_execution_artifact(
         "blocking_execution_exclusions"
     ) != expected_blocking_exclusions or report.get(
         "blocking_execution_exclusion_count"
-    ) != len(
-        expected_blocking_exclusions
-    ):
+    ) != len(expected_blocking_exclusions):
         raise ValueError("current_execution_blocking_exclusion_census_mismatch")
     report_status = report.get("status")
     if (
@@ -3981,12 +3979,14 @@ def _lifecycle_report_contract_findings(
     }
     if report.get("lifecycle_population_scope_counts") != (canonical_population_counts):
         findings.append("lifecycle_population_scope_census_mismatch")
-    if report.get("real_submitted_lifecycle_count") != (
-        canonical_population_counts[LIFECYCLE_POPULATION_REAL_SUBMITTED]
+    if (
+        report.get("real_submitted_lifecycle_count")
+        != (canonical_population_counts[LIFECYCLE_POPULATION_REAL_SUBMITTED])
     ):
         findings.append("real_submitted_lifecycle_census_mismatch")
-    if report.get("candidate_observation_lifecycle_count") != (
-        canonical_population_counts[LIFECYCLE_POPULATION_CANDIDATE_OBSERVATION]
+    if (
+        report.get("candidate_observation_lifecycle_count")
+        != (canonical_population_counts[LIFECYCLE_POPULATION_CANDIDATE_OBSERVATION])
     ):
         findings.append("candidate_observation_lifecycle_census_mismatch")
     if report.get("sim_scope_real_order_contract_violation_count") != (
@@ -7072,12 +7072,36 @@ def _observer_provider_gate_blocker(
     return None
 
 
+def _observer_source_only_stage_gate(
+    observer_canary: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Separate deterministic label work from Provider/promotion authority.
+
+    Exact bridge/materialized companions are sufficient to build an
+    action-neutral label without a network call.  An unscoped observer gap
+    must still hold Provider replay and R3 promotion, but it must not suppress
+    that independently validated local artifact.
+    """
+
+    blocker = _observer_provider_gate_blocker(observer_canary)
+    return {
+        "schema": "main_ai_quality_observer_source_only_stage_gate_v1",
+        "observer_blocks_action_neutral_label_generation": False,
+        "observer_blocks_provider_floor_materialization": False,
+        "observer_blocks_provider_replay": blocker is not None,
+        "observer_blocks_r3_promotion": blocker is not None,
+        "blocker_code": blocker,
+        **OFFLINE_AUTHORITY,
+    }
+
+
 def _source_only_gap_diagnostics(
     *,
     target_date: str,
     observer_canary: Mapping[str, Any],
     bridge_report: Mapping[str, Any] | None,
     lifecycle_report: Mapping[str, Any] | None,
+    rolling_exclusions: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Make producer gaps durable and actionable without runtime authority."""
 
@@ -7178,6 +7202,48 @@ def _source_only_gap_diagnostics(
         if lifecycle_available
         else 0
     )
+    lifecycle_pipeline_gap = (
+        nonnegative_int(
+            (lifecycle_report or {}).get(
+                "pipeline_lifecycle_instrumentation_gap_count"
+            ),
+            "pipeline_lifecycle_instrumentation_gap_count",
+            missing_is_zero=True,
+        )
+        if lifecycle_available
+        else 0
+    )
+    lifecycle_real_submitted = (
+        nonnegative_int(
+            (lifecycle_report or {}).get("real_submitted_lifecycle_count"),
+            "real_submitted_lifecycle_count",
+            missing_is_zero=True,
+        )
+        if lifecycle_available
+        else 0
+    )
+    lifecycle_broker_execution_unique = (
+        nonnegative_int(
+            (lifecycle_report or {}).get("broker_execution_unique_count"),
+            "broker_execution_unique_count",
+            missing_is_zero=True,
+        )
+        if lifecycle_available
+        else 0
+    )
+    rolling_reason_counts = Counter(
+        str(row.get("reason") or "")
+        for row in rolling_exclusions
+        if isinstance(row, Mapping) and str(row.get("reason") or "")
+    )
+    companion_binding_mismatch_count = int(
+        rolling_reason_counts.get(
+            "execution_report_materialized_companion_binding_mismatch", 0
+        )
+    )
+    lifecycle_exact_join_missing_count = int(
+        rolling_reason_counts.get("lifecycle_exact_join_missing", 0)
+    )
     workorders: list[dict[str, Any]] = []
     blocker_codes: list[str] = []
 
@@ -7234,16 +7300,64 @@ def _source_only_gap_diagnostics(
                 "ambiguous SOR rows remain excluded without inferred venue"
             ),
         )
-    if lifecycle_available and lifecycle_eligible <= 0 and lifecycle_gap > 0:
-        blocker_codes.append(
-            f"main_lifecycle_broker_execution_provenance_gap:{lifecycle_gap}"
+    current_lifecycle_receipt_gap = bool(
+        lifecycle_available
+        and lifecycle_eligible <= 0
+        and (
+            lifecycle_gap > 0
+            or lifecycle_pipeline_gap > 0
+            or (lifecycle_real_submitted > 0 and lifecycle_broker_execution_unique <= 0)
         )
+    )
+    if current_lifecycle_receipt_gap:
+        if lifecycle_gap > 0:
+            blocker_codes.append(
+                f"main_lifecycle_broker_execution_provenance_gap:{lifecycle_gap}"
+            )
+        else:
+            blocker_codes.append(
+                "main_lifecycle_execution_receipt_custody_gap:"
+                f"{max(lifecycle_pipeline_gap, lifecycle_real_submitted)}"
+            )
+    if (
+        current_lifecycle_receipt_gap
+        or companion_binding_mismatch_count > 0
+        or lifecycle_exact_join_missing_count > 0
+    ):
+        reason_codes = []
+        if lifecycle_gap > 0:
+            reason_codes.append(
+                f"broker_execution_provenance_gap_count={lifecycle_gap}"
+            )
+        if lifecycle_pipeline_gap > 0:
+            reason_codes.append(
+                f"pipeline_lifecycle_instrumentation_gap_count={lifecycle_pipeline_gap}"
+            )
+        if lifecycle_real_submitted > 0:
+            reason_codes.extend(
+                [
+                    f"real_submitted_lifecycle_count={lifecycle_real_submitted}",
+                    "broker_execution_unique_count="
+                    f"{lifecycle_broker_execution_unique}",
+                ]
+            )
+        if companion_binding_mismatch_count > 0:
+            reason_codes.append(
+                "execution_report_materialized_companion_binding_mismatch_count="
+                f"{companion_binding_mismatch_count}"
+            )
+        if lifecycle_exact_join_missing_count > 0:
+            reason_codes.append(
+                "lifecycle_exact_join_missing_count="
+                f"{lifecycle_exact_join_missing_count}"
+            )
         add_workorder(
             "RuntimeExecutionReceiptCustodyRepair",
-            [f"broker_execution_provenance_gap_count={lifecycle_gap}"],
+            reason_codes,
             (
                 "official raw execution envelope/order/execution identity is complete for "
-                "at least one reconciled lifecycle while custody and order authority remain unchanged"
+                "at least one reconciled lifecycle; materialized execution companions bind "
+                "to their exact request census; custody and order authority remain unchanged"
             ),
         )
     if contract_findings:
@@ -7256,6 +7370,13 @@ def _source_only_gap_diagnostics(
         "integrated_route_proof_missing_count": route_proof_missing,
         "lifecycle_promotion_eligible_count": lifecycle_eligible,
         "broker_execution_provenance_gap_count": lifecycle_gap,
+        "pipeline_lifecycle_instrumentation_gap_count": lifecycle_pipeline_gap,
+        "real_submitted_lifecycle_count": lifecycle_real_submitted,
+        "broker_execution_unique_count": lifecycle_broker_execution_unique,
+        "execution_report_materialized_companion_binding_mismatch_count": (
+            companion_binding_mismatch_count
+        ),
+        "lifecycle_exact_join_missing_count": lifecycle_exact_join_missing_count,
         "contract_findings": sorted(set(contract_findings)),
         "blocker_codes": blocker_codes,
         "workorders": workorders,
@@ -8181,8 +8302,7 @@ def _run_bounded_historical_provider_backfill(
         )
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         blockers.append(
-            "historical_provider_backfill_discovery_blocked:"
-            f"{type(exc).__name__}:{exc}"
+            f"historical_provider_backfill_discovery_blocked:{type(exc).__name__}:{exc}"
         )
         return steps, admissions, 0, False, blockers
 
@@ -8453,6 +8573,7 @@ def run_cycle(
         latest_path=selected_paths["observer_canary_latest"],
         daily_path=selected_paths["observer_canary_daily"],
     )
+    observer_stage_gate = _observer_source_only_stage_gate(observer_canary)
     steps: list[dict[str, Any]] = []
     blockers: list[str] = []
     prepared: dict[str, Any] = {}
@@ -8786,10 +8907,6 @@ def run_cycle(
                     f"materialized_artifact_invalid:{type(exc).__name__}:{exc}"
                 )
 
-    observer_blocker = _observer_provider_gate_blocker(observer_canary)
-    if observer_blocker and observer_blocker not in blockers:
-        blockers.append(observer_blocker)
-
     if not blockers:
         try:
             bridge = _load_json_auto(selected_paths["bridge_report"])
@@ -8811,33 +8928,49 @@ def run_cycle(
             blockers.append(f"action_neutral_label_failed:{type(exc).__name__}:{exc}")
 
     if execute_provider_replay and not blockers:
-        provider_ablation_sample_floor = _collect_provider_ablation_sample_floor(
-            target_date=target_date,
-            current_materialized=materialized,
-            current_companions={
-                "source_bundle": source_bundle,
-                "prepared": prepared,
-                "bridge": bridge,
-                "paired": paired_report,
-                "paths": {
-                    "source_bundle": str(selected_paths["source_bundle"]),
-                    "prepared": str(selected_paths["prepared"]),
-                    "bridge": str(selected_paths["bridge_report"]),
-                    "paired": str(selected_paths["paired_report"]),
+        try:
+            provider_ablation_sample_floor = _collect_provider_ablation_sample_floor(
+                target_date=target_date,
+                current_materialized=materialized,
+                current_companions={
+                    "source_bundle": source_bundle,
+                    "prepared": prepared,
+                    "bridge": bridge,
+                    "paired": paired_report,
+                    "paths": {
+                        "source_bundle": str(selected_paths["source_bundle"]),
+                        "prepared": str(selected_paths["prepared"]),
+                        "bridge": str(selected_paths["bridge_report"]),
+                        "paired": str(selected_paths["paired_report"]),
+                    },
                 },
-            },
-            selected_paths=selected_paths,
-        )
-        if write:
-            _atomic_write_json(
-                selected_paths["provider_ablation_floor"],
-                provider_ablation_sample_floor,
+                selected_paths=selected_paths,
             )
-        if provider_ablation_sample_floor.get("pass") is not True:
+            if write:
+                _atomic_write_json(
+                    selected_paths["provider_ablation_floor"],
+                    provider_ablation_sample_floor,
+                )
+            if provider_ablation_sample_floor.get("pass") is not True:
+                blockers.append(
+                    "ask_depletion_provider_ablation_sample_floor_not_met:"
+                    f"{provider_ablation_sample_floor.get('status') or 'unknown'}"
+                )
+        except (
+            FileNotFoundError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
             blockers.append(
-                "ask_depletion_provider_ablation_sample_floor_not_met:"
-                f"{provider_ablation_sample_floor.get('status') or 'unknown'}"
+                "ask_depletion_provider_ablation_sample_floor_failed:"
+                f"{type(exc).__name__}:{exc}"
             )
+
+    observer_blocker = observer_stage_gate.get("blocker_code")
+    if observer_blocker and observer_blocker not in blockers:
+        blockers.append(str(observer_blocker))
 
     if execute_provider_replay and not blockers:
         if provider_authority_binding.get(
@@ -9064,6 +9197,16 @@ def run_cycle(
                 "counterfactual_entry_diagnostic"
             ],
         )
+        source_gap_diagnostics = _source_only_gap_diagnostics(
+            target_date=target_date,
+            observer_canary=observer_canary,
+            bridge_report=bridge_diagnostic_report,
+            lifecycle_report=lifecycle_diagnostic_report,
+            rolling_exclusions=(rolling.get("exclusions") or []),
+        )
+        for blocker in source_gap_diagnostics["blocker_codes"]:
+            if blocker not in blockers:
+                blockers.append(blocker)
         if write:
             # Persist the referenced companion before either consumer.  A
             # diagnostic write failure must not leave a newly published
@@ -9120,6 +9263,7 @@ def run_cycle(
             **OFFLINE_AUTHORITY,
         },
         "observer_canary": observer_canary,
+        "observer_source_only_stage_gate": observer_stage_gate,
         "source_gap_diagnostics": source_gap_diagnostics,
         "source_only_gap_workorders": source_gap_diagnostics["workorders"],
         "economic_reference_path": str(selected_paths["economic_reference"]),

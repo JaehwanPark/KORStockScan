@@ -1131,31 +1131,42 @@ def _import_sqlalchemy():
     return create_engine, text
 
 
-def _default_completed_rows_loader(start_date: str, end_date: str) -> list[dict]:
-    create_engine, text = _import_sqlalchemy()
-    engine = create_engine(
-        POSTGRES_URL, pool_pre_ping=True, connect_args={"connect_timeout": 5}
-    )
-    query = text("""
+def _completed_rows_sql() -> str:
+    return """
         SELECT
+            rh.id AS record_id,
             rh.rec_date,
             rh.stock_code,
             rh.stock_name,
             rh.status,
             rh.strategy,
-            rh.buy_price,
-            rh.buy_qty,
-            rh.buy_time,
-            rh.sell_price,
-            rh.sell_time,
-            rh.profit_rate,
-            rh.add_count,
-            rh.avg_down_count,
-            rh.pyramid_count,
+            COALESCE(tpf.buy_price, rh.buy_price) AS buy_price,
+            COALESCE(tpf.buy_qty, rh.buy_qty) AS buy_qty,
+            COALESCE(tpf.buy_time, rh.buy_time) AS buy_time,
+            COALESCE(tpf.sell_price, rh.sell_price) AS sell_price,
+            COALESCE(tpf.sell_time, rh.sell_time) AS sell_time,
+            COALESCE(tpf.profit_rate, rh.profit_rate) AS profit_rate,
+            COALESCE(tpf.add_count, rh.add_count) AS add_count,
+            COALESCE(tpf.avg_down_count, rh.avg_down_count) AS avg_down_count,
+            COALESCE(tpf.pyramid_count, rh.pyramid_count) AS pyramid_count,
             rh.last_add_type,
+            CASE
+                WHEN tpf.recommendation_id IS NOT NULL
+                     AND tpf.profit_rate IS NOT NULL
+                THEN 'trade_performance_fact_exact_receipt'
+                ELSE 'recommendation_history'
+            END AS completed_economics_source,
             dsq.volume AS daily_volume,
             dsq.marcap AS marcap
         FROM recommendation_history rh
+        LEFT JOIN trade_performance_facts tpf
+          ON tpf.recommendation_id = rh.id
+         AND tpf.status = 'COMPLETED'
+         AND tpf.buy_price > 0
+         AND tpf.buy_qty > 0
+         AND tpf.buy_time IS NOT NULL
+         AND tpf.sell_price > 0
+         AND tpf.sell_time IS NOT NULL
         LEFT JOIN LATERAL (
             SELECT volume, marcap
             FROM daily_stock_quotes dsq
@@ -1167,9 +1178,17 @@ def _default_completed_rows_loader(start_date: str, end_date: str) -> list[dict]
         WHERE rh.rec_date >= :start_date
           AND rh.rec_date <= :end_date
           AND rh.status = 'COMPLETED'
-          AND rh.profit_rate IS NOT NULL
+          AND COALESCE(tpf.profit_rate, rh.profit_rate) IS NOT NULL
         ORDER BY rh.rec_date DESC, rh.stock_code
-        """)
+        """
+
+
+def _default_completed_rows_loader(start_date: str, end_date: str) -> list[dict]:
+    create_engine, text = _import_sqlalchemy()
+    engine = create_engine(
+        POSTGRES_URL, pool_pre_ping=True, connect_args={"connect_timeout": 5}
+    )
+    query = text(_completed_rows_sql())
     with engine.connect() as conn:
         return [
             dict(row)
@@ -15343,11 +15362,15 @@ def _response_usage_telemetry(response: Any) -> dict:
 def _threshold_ai_estimated_cost(
     model_name: str, input_tokens: int | None, output_tokens: int | None
 ) -> tuple[float | None, str]:
+    input_contract = os.getenv("KORSTOCKSCAN_THRESHOLD_AI_INPUT_COST_PER_1M_USD")
+    output_contract = os.getenv("KORSTOCKSCAN_THRESHOLD_AI_OUTPUT_COST_PER_1M_USD")
+    if (input_contract is None) != (output_contract is None):
+        return None, "missing_price_contract"
     input_rate = _safe_float(
-        os.getenv("KORSTOCKSCAN_THRESHOLD_AI_INPUT_COST_PER_1M_USD"), None
+        input_contract if input_contract is not None else "0", None
     )
     output_rate = _safe_float(
-        os.getenv("KORSTOCKSCAN_THRESHOLD_AI_OUTPUT_COST_PER_1M_USD"), None
+        output_contract if output_contract is not None else "0", None
     )
     if input_tokens is None or output_tokens is None:
         return None, "missing_token_usage"
@@ -15356,7 +15379,12 @@ def _threshold_ai_estimated_cost(
     estimated = (
         (input_tokens * input_rate) + (output_tokens * output_rate)
     ) / 1_000_000
-    return round(float(estimated), 8), "estimated_from_env_price_contract"
+    status = (
+        "estimated_from_env_price_contract"
+        if input_contract is not None and output_contract is not None
+        else "operator_zero_cost_default"
+    )
+    return round(float(estimated), 8), status
 
 
 def _call_openai_threshold_ai_correction(

@@ -33,6 +33,7 @@ from src.utils.jsonl_io import (
 from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
+POSTCLOSE_ROLLOVER_MAX_AGE = timedelta(hours=12)
 REPORT_SCHEMA = "main_ai_quality_runtime_family_cycle_v1"
 SOURCE_REPORT_SCHEMA = "main_ai_quality_runtime_promotion_source_v1"
 STANDING_AUTHORIZATION_PATH = (
@@ -219,6 +220,19 @@ def _cli_now_for_phase(*, phase: str, target_day: date, current: datetime) -> da
     if phase == "preopen" and current_kst.date() != target_day:
         raise ValueError("preopen_runtime_target_date_not_current_kst_date")
     return current_kst
+
+
+def _postclose_write_time_valid(*, target_day: date, current: datetime) -> bool:
+    """Allow a bounded cross-midnight tail without opening historical writes."""
+
+    if current.tzinfo is None:
+        raise ValueError("runtime_family_now_must_be_timezone_aware")
+    current_kst = current.astimezone(KST)
+    window_start = datetime.combine(target_day, datetime.min.time(), tzinfo=KST)
+    window_end = datetime.combine(
+        target_day + timedelta(days=1), datetime.min.time(), tzinfo=KST
+    ) + POSTCLOSE_ROLLOVER_MAX_AGE
+    return window_start <= current_kst < window_end
 
 
 def _matching_partition(
@@ -1092,7 +1106,11 @@ def _postclose_locked(
     approval_dir: Path = approval.APPROVAL_DIR,
     apply_receipt_dir: Path = approval.APPLY_RECEIPT_DIR,
 ) -> dict[str, Any]:
-    if write and now.astimezone(KST).date().isoformat() != target_date:
+    target_day = date.fromisoformat(target_date)
+    if write and not _postclose_write_time_valid(
+        target_day=target_day,
+        current=now,
+    ):
         raise ValueError("postclose_runtime_family_write_target_date_not_current")
     authorization = _read_current_authority_receipt(STANDING_AUTHORIZATION_PATH).payload
     r3_path = ai_quality_cycle.r3_manifest_path(target_date)

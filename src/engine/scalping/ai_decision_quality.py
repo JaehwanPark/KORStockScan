@@ -28092,6 +28092,57 @@ def select_pending_candidate_execution_requests(
     }
 
 
+def candidate_execution_selection_contract_pass(
+    selection: dict[str, Any] | None,
+    *,
+    max_new_requests: int,
+) -> bool:
+    """Accept only the bounded round-robin policy or its complete-census case."""
+
+    if not isinstance(selection, dict):
+        return False
+    if (
+        selection.get("outcome_blind") is not True
+        or selection.get("contract_pass") is not True
+    ):
+        return False
+    try:
+        eligible_pending = int(selection.get("eligible_pending_count"))
+        selected_execution = int(selection.get("selected_execution_count"))
+        deferred_new = int(selection.get("deferred_new_count"))
+        distinct_execution = int(selection.get("distinct_execution_count"))
+    except (TypeError, ValueError):
+        return False
+    if (
+        min(
+            eligible_pending,
+            selected_execution,
+            deferred_new,
+            distinct_execution,
+        )
+        < 0
+        or selection.get("distinct_execution_cap_pass") is not True
+    ):
+        return False
+    limit = int(max_new_requests)
+    policy = str(selection.get("policy") or "")
+    if policy == "complete_eligible_census":
+        if deferred_new != 0 or selected_execution != eligible_pending:
+            return False
+        if limit <= 0:
+            return selection.get("distinct_execution_cap") is None
+    elif policy == CANDIDATE_EXECUTION_SELECTION_POLICY:
+        if limit <= 0 or selected_execution + deferred_new != eligible_pending:
+            return False
+    else:
+        return False
+    try:
+        declared_cap = int(selection.get("distinct_execution_cap"))
+    except (TypeError, ValueError):
+        return False
+    return declared_cap == limit and distinct_execution <= limit
+
+
 def _valid_checkpoint_attempted_pair_ids(
     existing_report: dict[str, Any],
     *,
@@ -30526,22 +30577,10 @@ def main(argv: list[str] | None = None) -> int:
                 existing_selection = existing_report.get(
                     "candidate_execution_selection"
                 )
-                existing_selection_policy = (
-                    str(existing_selection.get("policy") or "")
-                    if isinstance(existing_selection, dict)
-                    else ""
-                )
-                existing_selection_contract_pass = bool(
-                    isinstance(existing_selection, dict)
-                    and existing_selection.get("outcome_blind") is True
-                    and existing_selection.get("contract_pass") is True
-                    and (
-                        existing_selection_policy
-                        == CANDIDATE_EXECUTION_SELECTION_POLICY
-                        or (
-                            args.candidate_max_new_requests <= 0
-                            and existing_selection_policy == "complete_eligible_census"
-                        )
+                existing_selection_contract_pass = (
+                    candidate_execution_selection_contract_pass(
+                        existing_selection,
+                        max_new_requests=args.candidate_max_new_requests,
                     )
                 )
                 request_by_pair = {

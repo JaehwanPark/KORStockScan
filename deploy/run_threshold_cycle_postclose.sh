@@ -1815,6 +1815,17 @@ else
   fi
 fi
 
+# Refresh exact execution-derived facts after the NXT session before the
+# calibration reads completed trades.  The recovery controller uses the same
+# explicit ordering rather than hiding this database write in a report build.
+if [ "$SKIP_DB" != "true" ]; then
+  wait_for_postclose_resources "strategy_position_performance_sync"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.strategy_position_performance_report \
+    --date "$TARGET_DATE"
+else
+  echo "[threshold-cycle] skip exact trade fact sync target_date=$TARGET_DATE reason=skip_db"
+fi
+
 ai_review_json="$PROJECT_DIR/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_${TARGET_DATE}_postclose.json"
 ai_review_md="$PROJECT_DIR/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_${TARGET_DATE}_postclose.md"
 ai_correction_attempt=1

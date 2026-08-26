@@ -2251,6 +2251,12 @@ def _aggressive_push_targets(ledger: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 def _conversion_blocker_class(row: dict[str, Any]) -> str:
+    exclusion_reason = str(row.get("runtime_exclusion_reason") or "").strip()
+    if (
+        row.get("explicit_runtime_exclusion") is True
+        and exclusion_reason == SCALE_IN_POLICY_EXCLUSION_REASON
+    ):
+        return "sample_floor"
     text = " ".join(
         str(row.get(key) or "")
         for key in (
@@ -2262,6 +2268,7 @@ def _conversion_blocker_class(row: dict[str, Any]) -> str:
             "bridge_state",
             "preopen_apply_state",
             "post_apply_attribution_state",
+            "runtime_exclusion_reason",
         )
     ).lower()
     if "key" in text or "catalog" in text or "lineage" in text:
@@ -2329,6 +2336,7 @@ def _conversion_blocker_rank(
                     ),
                     "next_repair_action": row.get("recommended_resolution")
                     or row.get("failure_reason")
+                    or row.get("runtime_exclusion_reason")
                     or "close_bridge_contract",
                     "acceptance_test": "runtime_apply_bridge emits explicit live-auto bridge contract or candidate remains source-only with blocker evidence",
                 }
@@ -2368,6 +2376,7 @@ def _conversion_blocker_rank(
                 ),
                 "next_repair_action": row.get("recommended_resolution")
                 or row.get("failure_reason")
+                or row.get("runtime_exclusion_reason")
                 or f"close_{blocker_class}",
                 "acceptance_test": "candidate exits runtime gap ledger or is explicitly closed with source-only/non-runtime authority",
             }

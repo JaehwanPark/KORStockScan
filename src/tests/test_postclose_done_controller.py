@@ -271,6 +271,53 @@ def test_postclose_done_controller_refreshes_recoverable_sources(monkeypatch, tm
         item["action"] == "refresh_code_improvement_workorder"
         for item in report["actions"]
     )
+    action_names = [item["action"] for item in report["actions"]]
+    assert action_names.index("refresh_threshold_cycle_ev") < action_names.index(
+        "refresh_code_improvement_workorder"
+    ) < action_names.index("refresh_runtime_approval_summary")
+
+
+def test_generic_fingerprint_repair_refreshes_ev_before_final_workorder():
+    actions = mod._recovery_actions(
+        "2026-08-25",
+        {
+            "source_generation_warnings": [
+                "code_improvement_workorder_source_fingerprint_sha256_mismatch:threshold_cycle_ev"
+            ]
+        },
+        allow_wrapper_rerun=False,
+    )
+
+    assert [action.action for action in actions] == [
+        "refresh_threshold_cycle_ev",
+        "refresh_code_improvement_workorder",
+        "refresh_runtime_approval_summary",
+    ]
+
+
+def test_runtime_gap_stale_does_not_mask_fingerprint_repair():
+    actions = mod._recovery_actions(
+        "2026-08-25",
+        {
+            "stale_downstream_links": [
+                "runtime_apply_gap_audit_stale_before_threshold_preopen_apply"
+            ],
+            "source_generation_warnings": [
+                "code_improvement_workorder_source_fingerprint_sha256_mismatch:threshold_cycle_ev"
+            ],
+            "conversion_kpi": {
+                "warnings": ["active_or_hypothesis_preopen_handoff_pending"]
+            },
+        },
+        allow_wrapper_rerun=False,
+    )
+
+    assert [action.action for action in actions] == [
+        "refresh_runtime_apply_gap_audit",
+        "refresh_threshold_cycle_ev",
+        "refresh_code_improvement_workorder",
+        "refresh_runtime_approval_summary",
+    ]
 
 
 def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_wrapper_rerun(
@@ -319,6 +366,7 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
 
     joined = "\n".join(" ".join(cmd) for cmd in calls)
     assert report["status"] == "done"
+    assert "strategy_position_performance_report" in joined
     assert "daily_threshold_cycle_report" in joined
     assert "--ai-correction-provider openai" in joined
     assert "--reuse-ai-review-if-valid" in joined
@@ -332,6 +380,7 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
     assert "runtime_approval_summary" in joined
     action_names = [item["action"] for item in report["actions"]]
     assert action_names == [
+        "sync_exact_trade_performance_facts",
         "refresh_daily_threshold_cycle_report",
         "refresh_threshold_cycle_ev",
         "refresh_pattern_lab_currentness_audit",
@@ -353,7 +402,25 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
         report["root_cause"]
         == "threshold_cycle_ev_stale_before_code_improvement_workorder"
     )
-    assert report["selected_recovery_action"] == "refresh_daily_threshold_cycle_report"
+    assert report["selected_recovery_action"] == "sync_exact_trade_performance_facts"
+
+
+def test_ev_trade_count_mismatch_uses_exact_fact_then_calibration_recovery():
+    actions = mod._recovery_actions(
+        "2026-08-25",
+        {
+            "handoff_warnings": [
+                "threshold_cycle_ev_trade_review_calibration_count_mismatch"
+            ]
+        },
+        allow_wrapper_rerun=False,
+    )
+
+    assert [action.action for action in actions[:3]] == [
+        "sync_exact_trade_performance_facts",
+        "refresh_daily_threshold_cycle_report",
+        "refresh_threshold_cycle_ev",
+    ]
 
 
 def test_postclose_done_controller_reconciles_done_marker_without_full_wrapper_rerun(

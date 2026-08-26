@@ -3,6 +3,17 @@ import json
 from src.engine import sniper_performance_tuning_report as report_mod
 
 
+def test_trade_history_rows_prefers_exact_performance_fact_economics():
+    sql = report_mod._trade_history_rows_sql()
+
+    assert "tpf.status = 'COMPLETED'" in sql
+    assert "tpf.sell_price > 0" in sql
+    assert "tpf.sell_time IS NOT NULL" in sql
+    assert "COALESCE(tpf.sell_price, rh.sell_price)" in sql
+    assert "COALESCE(tpf.sell_time, rh.sell_time)" in sql
+    assert "COALESCE(tpf.profit_rate, rh.profit_rate)" in sql
+
+
 def test_performance_tuning_report_prefers_jsonl_events(monkeypatch, tmp_path):
     data_dir = tmp_path / "data"
     pipeline_dir = data_dir / "pipeline_events"

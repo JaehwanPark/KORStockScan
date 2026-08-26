@@ -13,6 +13,7 @@ from src.engine.scalping.entry_setup_evidence import (
 
 SOURCE_DATE = "2026-08-06"
 TARGET_DATE = "2026-08-07"
+POSTCLOSE_GENERATED_AT = datetime(2026, 8, 6, 21, 5, tzinfo=policy.KST)
 
 
 def _configure_paths(monkeypatch, tmp_path):
@@ -199,6 +200,7 @@ def _write_ready_chain(monkeypatch, tmp_path):
         source_date=SOURCE_DATE,
         batch_report=batch,
         write=True,
+        generated_at=POSTCLOSE_GENERATED_AT,
     )
     activation = policy.write_preopen_activation(target_date=TARGET_DATE)
     return published, activation
@@ -252,6 +254,44 @@ def test_passed_postclose_candidate_activates_only_next_day_krx(monkeypatch, tmp
     assert nxt["selected_prompt_version"] == (
         DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
     )
+
+
+def test_delayed_candidate_rolls_to_first_preopen_not_already_consumed(
+    monkeypatch, tmp_path
+):
+    _configure_paths(monkeypatch, tmp_path)
+    detailed = _valid_detailed_report()
+    policy._atomic_write_json(policy.detailed_report_path(SOURCE_DATE), detailed)
+    batch = _valid_batch_report()
+    policy._atomic_write_json(policy.batch_report_path(SOURCE_DATE), batch)
+
+    before_cutoff = policy.publish_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        write=False,
+        generated_at=datetime(2026, 8, 7, 7, 34, tzinfo=policy.KST),
+    )
+    after_cutoff = policy.publish_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        write=True,
+        generated_at=datetime(2026, 8, 7, 8, 19, tzinfo=policy.KST),
+    )
+
+    assert before_cutoff["effective_date"] == "2026-08-07"
+    assert after_cutoff["effective_date"] == "2026-08-10"
+    candidate = policy._read_json(policy.live_candidate_path(SOURCE_DATE))
+    assert candidate["effective_date_policy"] == policy.EFFECTIVE_DATE_POLICY
+    assert candidate["preopen_candidate_cutoff_kst"] == "07:35:00"
+    assert policy._validate_candidate_artifact(
+        candidate,
+        target_date="2026-08-10",
+        candidate_path=policy.live_candidate_path(SOURCE_DATE),
+        runtime_env={
+            **_valid_runtime_env(),
+            "KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE": "2026-08-10",
+        },
+    ) == []
 
 
 def test_runtime_falls_back_when_probe_first_contract_is_missing(monkeypatch, tmp_path):
@@ -354,6 +394,7 @@ def test_failed_promotion_writes_inactive_preopen_fallback(monkeypatch, tmp_path
         source_date=SOURCE_DATE,
         batch_report=batch,
         write=True,
+        generated_at=POSTCLOSE_GENERATED_AT,
     )
     activation = policy.write_preopen_activation(target_date=TARGET_DATE)
 
@@ -440,6 +481,7 @@ def test_negative_performance_can_use_guarded_one_share_exploration(
         source_date=SOURCE_DATE,
         batch_report=batch,
         write=True,
+        generated_at=POSTCLOSE_GENERATED_AT,
     )
     activation = policy.write_preopen_activation(target_date=TARGET_DATE)
     candidate = policy._read_json(policy.live_candidate_path(SOURCE_DATE))
@@ -548,6 +590,7 @@ def test_preopen_activation_validates_supplied_launcher_env_not_cron_process_env
         source_date=SOURCE_DATE,
         batch_report=batch,
         write=True,
+        generated_at=POSTCLOSE_GENERATED_AT,
     )
     for key in _valid_runtime_env():
         monkeypatch.delenv(key, raising=False)
@@ -573,6 +616,7 @@ def test_preopen_honors_explicit_process_level_operator_off(monkeypatch, tmp_pat
         source_date=SOURCE_DATE,
         batch_report=batch,
         write=True,
+        generated_at=POSTCLOSE_GENERATED_AT,
     )
     monkeypatch.setenv(policy.CANARY_ENV_KEY, "false")
 

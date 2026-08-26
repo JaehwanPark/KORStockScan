@@ -1062,6 +1062,23 @@ def test_postclose_runtime_control_write_rejects_historical_target(
         )
 
 
+def test_postclose_runtime_control_allows_bounded_cross_midnight_tail() -> None:
+    target_day = datetime(2026, 8, 25, tzinfo=KST).date()
+
+    assert mod._postclose_write_time_valid(
+        target_day=target_day,
+        current=datetime(2026, 8, 26, 2, 47, tzinfo=KST),
+    )
+    assert not mod._postclose_write_time_valid(
+        target_day=target_day,
+        current=datetime(2026, 8, 26, 12, 0, tzinfo=KST),
+    )
+    assert not mod._postclose_write_time_valid(
+        target_day=target_day,
+        current=datetime(2026, 8, 24, 23, 59, tzinfo=KST),
+    )
+
+
 def test_preopen_write_rejects_noncanonical_queue_before_any_publish(
     tmp_path: Path,
 ) -> None:

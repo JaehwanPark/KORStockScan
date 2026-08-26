@@ -120,6 +120,24 @@ def _workorder_source_fingerprint_issues(
     return sorted(set(issues))
 
 
+def _threshold_ev_reconciliation_issues(ev_report: dict[str, Any]) -> list[str]:
+    daily = (
+        ev_report.get("daily_ev_summary")
+        if isinstance(ev_report.get("daily_ev_summary"), dict)
+        else {}
+    )
+    reconciliation = (
+        daily.get("trade_review_snapshot_reconciliation")
+        if isinstance(daily.get("trade_review_snapshot_reconciliation"), dict)
+        else {}
+    )
+    return (
+        ["threshold_cycle_ev_trade_review_calibration_count_mismatch"]
+        if reconciliation.get("count_match") is False
+        else []
+    )
+
+
 _READY_RE = re.compile(
     r"artifact ready label=(?P<label>\S+) path=(?P<path>\S+) waited=(?P<waited>\d+)s(?: json_valid=(?P<json_valid>\w+))?"
 )
@@ -7300,7 +7318,9 @@ def build_threshold_cycle_postclose_verification(
             stale_downstream_links.append(
                 "runtime_approval_summary_stale_before_pattern_lab_ai_review"
             )
-    source_generation_warnings: list[str] = []
+    source_generation_warnings: list[str] = _threshold_ev_reconciliation_issues(
+        ev_report
+    )
     freshness_sources = {
         "threshold_cycle_calibration": threshold_cycle_calibration,
         "threshold_cycle_ai_review": threshold_cycle_ai_review,
