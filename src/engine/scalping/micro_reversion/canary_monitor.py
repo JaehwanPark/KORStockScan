@@ -70,6 +70,8 @@ class CanaryGuard:
     minimum_callback_samples: int
     producer_callback_latency_p95_max_ms: float
     producer_callback_latency_p99_max_ms: float
+    latency_breach_confirmation_snapshots: int
+    latency_breach_immediate_multiplier: float
     snapshot_stale_after_sec: float
     config_sha256: str
 
@@ -150,11 +152,21 @@ def load_canary_guard(path: Path | str = DEFAULT_GUARD_PATH) -> CanaryGuard:
     minimum_samples = _positive_int(limits.get("minimum_callback_samples"))
     p95_max = _positive_float(limits.get("producer_callback_latency_p95_max_ms"))
     p99_max = _positive_float(limits.get("producer_callback_latency_p99_max_ms"))
+    latency_confirmation_snapshots = _positive_int(
+        payload.get("latency_breach_confirmation_snapshots")
+    )
+    latency_immediate_multiplier = _positive_float(
+        payload.get("latency_breach_immediate_multiplier")
+    )
     stale_after = _positive_float(limits.get("snapshot_stale_after_sec"))
     if not baseline_id or minimum_samples is None:
         raise ValueError("canary guard baseline/sample floor is invalid")
     if p95_max is None or p99_max is None or p95_max > p99_max:
         raise ValueError("canary latency limits are invalid")
+    if latency_confirmation_snapshots is None:
+        raise ValueError("canary latency confirmation floor is invalid")
+    if latency_immediate_multiplier is None or latency_immediate_multiplier <= 1.0:
+        raise ValueError("canary immediate latency multiplier is invalid")
     if stale_after is None:
         raise ValueError("canary snapshot freshness limit is invalid")
     return CanaryGuard(
@@ -162,6 +174,8 @@ def load_canary_guard(path: Path | str = DEFAULT_GUARD_PATH) -> CanaryGuard:
         minimum_callback_samples=minimum_samples,
         producer_callback_latency_p95_max_ms=p95_max,
         producer_callback_latency_p99_max_ms=p99_max,
+        latency_breach_confirmation_snapshots=latency_confirmation_snapshots,
+        latency_breach_immediate_multiplier=latency_immediate_multiplier,
         snapshot_stale_after_sec=stale_after,
         config_sha256=hashlib.sha256(raw).hexdigest(),
     )
@@ -340,6 +354,12 @@ def evaluate_canary_snapshot(
         "observed_latency_p99_ms": p99_ms,
         "latency_p95_max_ms": guard.producer_callback_latency_p95_max_ms,
         "latency_p99_max_ms": guard.producer_callback_latency_p99_max_ms,
+        "latency_breach_confirmation_snapshots": (
+            guard.latency_breach_confirmation_snapshots
+        ),
+        "latency_breach_immediate_multiplier": (
+            guard.latency_breach_immediate_multiplier
+        ),
         "minimum_callback_samples": guard.minimum_callback_samples,
         "snapshot_stale_after_sec": guard.snapshot_stale_after_sec,
     }

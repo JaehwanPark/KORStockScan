@@ -29,6 +29,8 @@ def _guard() -> CanaryGuard:
         minimum_callback_samples=1_000,
         producer_callback_latency_p95_max_ms=1.0,
         producer_callback_latency_p99_max_ms=2.0,
+        latency_breach_confirmation_snapshots=3,
+        latency_breach_immediate_multiplier=2.0,
         snapshot_stale_after_sec=30.0,
         config_sha256="test-sha",
     )
@@ -68,6 +70,8 @@ def _write_guard(path: Path) -> None:
             (
                 f'schema = "{CANARY_GUARD_SCHEMA}"',
                 'baseline_id = "test-baseline"',
+                "latency_breach_confirmation_snapshots = 3",
+                "latency_breach_immediate_multiplier = 2.0",
                 "",
                 "[limits]",
                 "minimum_callback_samples = 1000",
@@ -91,6 +95,8 @@ def test_guard_loader_and_healthy_snapshot_contract(tmp_path) -> None:
     assert evaluation["status"] == "healthy_observer_canary"
     assert evaluation["stop_required"] is False
     assert evaluation["latency_guard_armed"] is True
+    assert evaluation["latency_breach_confirmation_snapshots"] == 3
+    assert evaluation["latency_breach_immediate_multiplier"] == 2.0
 
 
 def test_low_disk_warning_does_not_stop_healthy_lossless_capture() -> None:

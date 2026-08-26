@@ -347,8 +347,9 @@ def test_0d_callback_latency_does_not_poison_frozen_0b_canary_metric(
         "source_quality_gate",
         "forbidden_uses",
     } <= set(depth_contract)
-    assert "satisfy_or_bypass_0b_callback_latency_canary" in (
-        depth_contract["forbidden_uses"]
+    assert (
+        "satisfy_or_bypass_0b_callback_latency_canary"
+        in (depth_contract["forbidden_uses"])
     )
     assert {
         "metric_role",
@@ -1526,6 +1527,160 @@ def test_ws_canary_guard_stops_observer_without_stopping_bot(monkeypatch) -> Non
     assert "worker_error_count=1" in (
         manager._micro_reversion_forward_collector_stop_reason
     )
+
+
+def test_ws_canary_guard_confirms_latency_only_breach_before_observer_stop(
+    monkeypatch,
+) -> None:
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    close_calls = []
+    monkeypatch.setattr(
+        manager,
+        "_close_micro_reversion_forward_collector",
+        lambda: close_calls.append("observer_close"),
+    )
+    payload = {
+        "canary_guard": {
+            "stop_required": True,
+            "stop_reasons": [
+                "producer_callback_latency_p99_exceeded:2.100000>2.000000"
+            ],
+            "observed_latency_p99_ms": 2.1,
+            "latency_p99_max_ms": 2.0,
+            "latency_breach_confirmation_snapshots": 3,
+            "latency_breach_immediate_multiplier": 2.0,
+        }
+    }
+
+    manager._enforce_micro_reversion_canary_guard(payload)
+    manager._enforce_micro_reversion_canary_guard(payload)
+
+    assert close_calls == []
+    assert manager._micro_reversion_canary_latency_breach_count == 2
+    assert manager._micro_reversion_forward_collector_stop_reason == ""
+
+    manager._enforce_micro_reversion_canary_guard(payload)
+
+    assert close_calls == ["observer_close"]
+    assert manager._started is True
+    assert manager._micro_reversion_canary_latency_breach_count == 3
+    assert manager._micro_reversion_forward_collector_stop_reason == (
+        "producer_callback_latency_p99_exceeded:2.100000>2.000000"
+    )
+
+
+def test_ws_canary_guard_resets_latency_confirmation_after_healthy_snapshot(
+    monkeypatch,
+) -> None:
+    manager = KiwoomWSManager("test-token")
+    close_calls = []
+    monkeypatch.setattr(
+        manager,
+        "_close_micro_reversion_forward_collector",
+        lambda: close_calls.append("observer_close"),
+    )
+    breach = {
+        "canary_guard": {
+            "stop_required": True,
+            "stop_reasons": [
+                "producer_callback_latency_p95_exceeded:1.100000>1.000000"
+            ],
+            "observed_latency_p95_ms": 1.1,
+            "latency_p95_max_ms": 1.0,
+            "latency_breach_confirmation_snapshots": 3,
+            "latency_breach_immediate_multiplier": 2.0,
+        }
+    }
+
+    manager._enforce_micro_reversion_canary_guard(breach)
+    manager._enforce_micro_reversion_canary_guard(
+        {"canary_guard": {"stop_required": False, "stop_reasons": []}}
+    )
+    manager._enforce_micro_reversion_canary_guard(breach)
+
+    assert close_calls == []
+    assert manager._micro_reversion_canary_latency_breach_count == 1
+
+
+def test_ws_canary_snapshot_exposes_latency_confirmation_count(
+    monkeypatch,
+) -> None:
+    manager = KiwoomWSManager("test-token")
+    manager._micro_reversion_canary_latency_breach_count = 2
+
+    class Snapshot:
+        def as_dict(self):
+            return {"observer_runtime_loaded": True}
+
+    class Collector:
+        def runtime_snapshot(self):
+            return Snapshot()
+
+    manager._micro_reversion_forward_collector = Collector()
+
+    snapshot = manager.micro_reversion_forward_collector_snapshot()
+
+    assert snapshot["canary_latency_breach_consecutive_count"] == 2
+
+
+def test_ws_canary_guard_stops_severe_latency_breach_immediately(
+    monkeypatch,
+) -> None:
+    manager = KiwoomWSManager("test-token")
+    close_calls = []
+    monkeypatch.setattr(
+        manager,
+        "_close_micro_reversion_forward_collector",
+        lambda: close_calls.append("observer_close"),
+    )
+
+    manager._enforce_micro_reversion_canary_guard(
+        {
+            "canary_guard": {
+                "stop_required": True,
+                "stop_reasons": [
+                    "producer_callback_latency_p99_exceeded:4.000000>2.000000"
+                ],
+                "observed_latency_p99_ms": 4.0,
+                "latency_p99_max_ms": 2.0,
+                "latency_breach_confirmation_snapshots": 3,
+                "latency_breach_immediate_multiplier": 2.0,
+            }
+        }
+    )
+
+    assert close_calls == ["observer_close"]
+    assert manager._micro_reversion_canary_latency_breach_count == 0
+
+
+def test_ws_canary_guard_fails_closed_when_latency_policy_provenance_is_missing(
+    monkeypatch,
+) -> None:
+    manager = KiwoomWSManager("test-token")
+    manager._micro_reversion_canary_latency_breach_count = 1
+    close_calls = []
+    monkeypatch.setattr(
+        manager,
+        "_close_micro_reversion_forward_collector",
+        lambda: close_calls.append("observer_close"),
+    )
+
+    manager._enforce_micro_reversion_canary_guard(
+        {
+            "canary_guard": {
+                "stop_required": True,
+                "stop_reasons": [
+                    "producer_callback_latency_p99_exceeded:2.100000>2.000000"
+                ],
+                "observed_latency_p99_ms": 2.1,
+                "latency_p99_max_ms": 2.0,
+            }
+        }
+    )
+
+    assert close_calls == ["observer_close"]
+    assert manager._micro_reversion_canary_latency_breach_count == 0
 
 
 def test_ws_canary_auto_stop_is_latched_for_manager_lifetime(monkeypatch) -> None:

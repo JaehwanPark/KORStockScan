@@ -380,6 +380,7 @@ class KiwoomWSManager:
         self._micro_reversion_canary_snapshot_lock = threading.Lock()
         self._micro_reversion_canary_monitor_stop_event = threading.Event()
         self._micro_reversion_canary_monitor_thread = None
+        self._micro_reversion_canary_latency_breach_count = 0
 
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -751,7 +752,9 @@ class KiwoomWSManager:
         quote_source = (
             "0B_inline_best_quote"
             if inline_complete
-            else "partial_inline_best_quote" if inline_partial else "missing_best_quote"
+            else "partial_inline_best_quote"
+            if inline_partial
+            else "missing_best_quote"
         )
 
         if inline_complete:
@@ -2257,7 +2260,7 @@ class KiwoomWSManager:
             self._micro_reversion_forward_collector_error = type(exc).__name__
             self._micro_reversion_forward_collector_stop_reason = reason
             log_error(
-                "[WS] micro-reversion reconnect epoch fail-closed " f"({reason}): {exc}"
+                f"[WS] micro-reversion reconnect epoch fail-closed ({reason}): {exc}"
             )
             # Collector shutdown can drain writers for up to ten seconds.  Do
             # not hold the websocket bootstrap coroutine (and therefore live
@@ -2343,6 +2346,9 @@ class KiwoomWSManager:
             snapshot["canary_auto_stop_reason"] = (
                 self._micro_reversion_forward_collector_stop_reason or None
             )
+            snapshot["canary_latency_breach_consecutive_count"] = int(
+                self._micro_reversion_canary_latency_breach_count
+            )
             return snapshot
         except Exception as exc:
             self._micro_reversion_forward_collector_error = type(exc).__name__
@@ -2421,9 +2427,66 @@ class KiwoomWSManager:
     def _enforce_micro_reversion_canary_guard(self, monitor_payload):
         guard = (monitor_payload or {}).get("canary_guard") or {}
         if not guard.get("stop_required"):
+            self._micro_reversion_canary_latency_breach_count = 0
             return
         reasons = tuple(str(row) for row in guard.get("stop_reasons") or ())
         reason = ";".join(reasons) or "unspecified_canary_guard_failure"
+        latency_only = bool(reasons) and all(
+            row.startswith("producer_callback_latency_p95_exceeded:")
+            or row.startswith("producer_callback_latency_p99_exceeded:")
+            for row in reasons
+        )
+        latency_metric_pairs = []
+        if any(
+            row.startswith("producer_callback_latency_p95_exceeded:") for row in reasons
+        ):
+            latency_metric_pairs.append(
+                (
+                    guard.get("observed_latency_p95_ms"),
+                    guard.get("latency_p95_max_ms"),
+                )
+            )
+        if any(
+            row.startswith("producer_callback_latency_p99_exceeded:") for row in reasons
+        ):
+            latency_metric_pairs.append(
+                (
+                    guard.get("observed_latency_p99_ms"),
+                    guard.get("latency_p99_max_ms"),
+                )
+            )
+        try:
+            latency_confirmation_snapshots = int(
+                guard["latency_breach_confirmation_snapshots"]
+            )
+            latency_immediate_multiplier = float(
+                guard["latency_breach_immediate_multiplier"]
+            )
+            if latency_confirmation_snapshots <= 0:
+                raise ValueError("invalid latency confirmation floor")
+            if latency_immediate_multiplier <= 1.0:
+                raise ValueError("invalid immediate latency multiplier")
+            severe_latency = latency_only and any(
+                float(observed) >= float(limit) * latency_immediate_multiplier
+                for observed, limit in latency_metric_pairs
+            )
+        except (KeyError, TypeError, ValueError):
+            # Missing or malformed enforcement provenance cannot safely earn
+            # a delayed observer shutdown.
+            severe_latency = latency_only
+        if latency_only and not severe_latency:
+            self._micro_reversion_canary_latency_breach_count += 1
+            if (
+                self._micro_reversion_canary_latency_breach_count
+                < latency_confirmation_snapshots
+            ):
+                # The persisted guard remains stop_required from the first
+                # breach, so Provider replay and R3 stay fail-closed.  Keep
+                # local source capture alive until the rolling 0B latency
+                # breach persists across independent monitor snapshots.
+                return
+        else:
+            self._micro_reversion_canary_latency_breach_count = 0
         if not self._micro_reversion_forward_collector_stop_reason:
             self._micro_reversion_forward_collector_stop_reason = reason
             log_error(

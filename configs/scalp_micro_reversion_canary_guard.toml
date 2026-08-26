@@ -3,7 +3,10 @@ baseline_id = "main_server_synthetic_0b_20260813T090755+0900"
 baseline_artifact = "docs/audit-reports/2026-08-13-scalp-micro-reversion-callback-latency-baseline-depth-source.json.txt"
 baseline_scope = "main_server_same_valid_synthetic_0b_observer_off_on_preflight_only"
 derivation = "max(absolute_floor, five_times_max_observed_internal_percentile)"
-immediate_stop_policy = "any_nonzero_declared_stop_metric_or_frozen_latency_limit_breach"
+immediate_stop_policy = "any_nonzero_declared_stop_metric_or_latency_at_or_above_two_times_frozen_limit"
+latency_only_stop_policy = "three_consecutive_ten_second_snapshots_between_one_and_two_times_frozen_limit"
+latency_breach_confirmation_snapshots = 3
+latency_breach_immediate_multiplier = 2.0
 forbidden_uses = [
   "strategy_edge_or_ev_claim",
   "p2_policy_selection",
