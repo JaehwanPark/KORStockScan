@@ -6357,6 +6357,34 @@ def test_extract_ai_overlap_snapshot_keeps_consistent_observed_zero_provenance()
     assert snapshot["intraday_range_pct_observation_state"].startswith("observed_")
 
 
+def test_extract_ai_overlap_snapshot_accepts_feature_packet_range_provenance():
+    class FeatureEngine:
+        @staticmethod
+        def _extract_scalping_features(ws_data, ticks, candles):
+            return {
+                "distance_from_day_high_pct": 0.0,
+                "intraday_range_pct": 16.0,
+                "distance_from_day_high_pct_observation_state": (
+                    "observed_feature_packet_recent_candles"
+                ),
+                "intraday_range_pct_observation_state": (
+                    "observed_feature_packet_recent_candles"
+                ),
+            }
+
+    snapshot = _extract_ai_overlap_snapshot(
+        ws_data={"curr_price": 3008},
+        recent_candles=[{"고가": 3008, "저가": 2593}],
+        ai_engine=FeatureEngine(),
+    )
+
+    assert snapshot["distance_from_day_high_pct"] == 0.0
+    assert snapshot["distance_from_day_high_pct_observation_state"].startswith(
+        "observed_"
+    )
+    assert snapshot["intraday_range_pct_observation_state"].startswith("observed_")
+
+
 def test_extract_ai_overlap_snapshot_ignores_price_change_heuristic_tick_direction():
     snapshot = _extract_ai_overlap_snapshot(
         ws_data={

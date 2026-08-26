@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import signal
@@ -819,6 +820,9 @@ def test_postclose_done_controller_wrapper_runs_controller_and_skips_codex_runne
     script = Path("deploy/run_postclose_done_controller.sh").read_text(encoding="utf-8")
 
     controller_idx = script.index("src.engine.automation.postclose_done_controller")
+    entry_setup_idx = script.index(
+        'runner_path="$PROJECT_DIR/deploy/run_ai_entry_setup_paired_replay_postclose.sh"'
+    )
     codex_idx = script.index("src.engine.automation.codex_workorder_runner")
 
     assert "[START] postclose_done_controller" in script
@@ -860,7 +864,151 @@ def test_postclose_done_controller_wrapper_runs_controller_and_skips_codex_runne
     assert "disabled_by_default" in script
     assert "[WARN] codex_workorder_runner" not in script
     assert 'codex_status" != "completed"' in script
-    assert controller_idx < codex_idx
+    assert controller_idx < entry_setup_idx < codex_idx
+
+
+def test_postclose_done_controller_retriggers_late_entry_setup_follower_idempotently():
+    script = Path("deploy/run_postclose_done_controller.sh").read_text(encoding="utf-8")
+
+    assert (
+        'RUN_ENTRY_SETUP_REPLAY_FOLLOWUP="${POSTCLOSE_DONE_CONTROLLER_RUN_ENTRY_SETUP_REPLAY_FOLLOWUP:-true}"'
+        in script
+    )
+    assert (
+        'ENTRY_SETUP_REPLAY_FOLLOWUP_WAIT_SEC="${POSTCLOSE_DONE_CONTROLLER_ENTRY_SETUP_REPLAY_FOLLOWUP_WAIT_SEC:-0}"'
+        in script
+    )
+    assert (
+        'ENTRY_SETUP_REPLAY_ACTIVE_WAIT_SEC="${POSTCLOSE_DONE_CONTROLLER_ENTRY_SETUP_REPLAY_ACTIVE_WAIT_SEC:-3600}"'
+        in script
+    )
+    assert (
+        'ENTRY_SETUP_REPLAY_ACTIVE_POLL_SEC="${POSTCLOSE_DONE_CONTROLLER_ENTRY_SETUP_REPLAY_ACTIVE_POLL_SEC:-15}"'
+        in script
+    )
+    assert 'controller_status" != "done"' in script
+    assert 'date -d "${TARGET_DATE} 21:05:00"' in script
+    assert "awaiting_fixed_2105_trigger" in script
+    assert 'batch.get("status") != "completed_offline_only"' in script
+    assert 'candidate.get("source_date") != target_date' in script
+    assert "candidate_path.resolve() != expected_candidate_path.resolve()" in script
+    assert 'candidate.get("effective_date_policy") != "first_available_krx_preopen_v1"' in script
+    assert 'candidate.get("preopen_candidate_cutoff_kst") != "07:35:00"' in script
+    assert "candidate_contract_hash_missing_or_invalid" in script
+    assert (
+        'candidate.get("artifact_sha256") != candidate_ref.get("artifact_sha256")'
+        in script
+    )
+    assert "terminal_ready:validated_batch_and_candidate" in script
+    assert 'while ! flock -n "$lock_path" -c true' in script
+    assert "active_runner_timeout" in script
+    assert (
+        'AI_ENTRY_SETUP_REPLAY_PREDECESSOR_WAIT_SEC="$ENTRY_SETUP_REPLAY_FOLLOWUP_WAIT_SEC"'
+        in script
+    )
+    assert "nonterminal_after_runner" in script
+    assert "[FAIL] ai_entry_setup_replay_followup" in script
+    assert "run_bot.sh" not in script
+    assert "systemctl restart" not in script
+
+
+def test_postclose_done_controller_entry_setup_terminal_validator(tmp_path: Path):
+    script = Path("deploy/run_postclose_done_controller.sh").read_text(encoding="utf-8")
+    function_start = script.index("entry_setup_replay_followup_state()")
+    heredoc_start = script.index("<<'PY'\n", function_start) + len("<<'PY'\n")
+    heredoc_end = script.index("\nPY\n", heredoc_start)
+    validator = script[heredoc_start:heredoc_end]
+
+    target_date = "2026-08-25"
+    candidate_path = (
+        tmp_path
+        / "data"
+        / "threshold_cycle"
+        / "bounded_live_candidates"
+        / f"entry_setup_v2_14_bounded_live_candidate_{target_date}.json"
+    )
+    candidate_path.parent.mkdir(parents=True)
+    candidate = {
+        "source_date": target_date,
+        "status": "bounded_exploration_apply_ready",
+        "effective_date": "2026-08-27",
+        "effective_date_policy": "first_available_krx_preopen_v1",
+        "preopen_candidate_cutoff_kst": "07:35:00",
+        "candidate_contract_sha256": "c" * 64,
+    }
+    candidate["artifact_sha256"] = hashlib.sha256(
+        json.dumps(
+            candidate,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    batch_path = (
+        tmp_path
+        / "data"
+        / "report"
+        / "ai_entry_setup_paired_replay_batch"
+        / f"ai_entry_setup_paired_replay_batch_{target_date}.json"
+    )
+    batch_path.parent.mkdir(parents=True)
+    batch = {
+        "target_date": target_date,
+        "status": "completed_offline_only",
+        "krx_bounded_live_candidate": {
+            "path": str(candidate_path),
+            "status": candidate["status"],
+            "effective_date": candidate["effective_date"],
+            "artifact_sha256": candidate["artifact_sha256"],
+        },
+    }
+    batch_path.write_text(json.dumps(batch), encoding="utf-8")
+
+    def validate() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-", str(tmp_path), target_date, str(batch_path)],
+            input=validator,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    result = validate()
+    assert result.returncode == 0
+    assert result.stdout.strip() == "terminal_ready:validated_batch_and_candidate"
+
+    candidate["blocking_reasons"] = ["tampered_without_hash_refresh"]
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    result = validate()
+    assert result.returncode == 0
+    assert result.stdout.strip() == (
+        "retry_required:candidate_artifact_self_hash_mismatch"
+    )
+
+    candidate.pop("blocking_reasons")
+    candidate["artifact_sha256"] = hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in candidate.items() if key != "artifact_sha256"},
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    batch["krx_bounded_live_candidate"]["artifact_sha256"] = "stale-batch-hash"
+    batch_path.write_text(json.dumps(batch), encoding="utf-8")
+    result = validate()
+    assert result.returncode == 0
+    assert result.stdout.strip() == "retry_required:candidate_hash_mismatch"
+
+    batch["status"] = "running"
+    batch_path.write_text(json.dumps(batch), encoding="utf-8")
+    result = validate()
+    assert result.returncode == 0
+    assert result.stdout.strip() == "retry_required:batch_status_running"
 
 
 def test_postclose_done_controller_cron_installs_2010_once():

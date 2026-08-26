@@ -90,7 +90,7 @@
 ## AI Correction
 - status: `pass`
 - ai_status: `parsed`
-- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 123460, 'input_context_chars': 122050, 'input_context_hash': '68497171e89e18dae77b98edb06de863eae0c4dc5511fec2011cd5cc0eb5f40f', 'elapsed_ms': 72420, 'output_chars': 13362, 'input_tokens': 35288, 'output_tokens': 6120, 'total_tokens': 41408, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
+- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 123974, 'input_context_chars': 122564, 'input_context_hash': '747118375b31704b1ec43d095b226681f60ad1d2e8b2c73b1d29cfe8968c03eb', 'elapsed_ms': 69038, 'output_chars': 12214, 'input_tokens': 35381, 'output_tokens': 6323, 'total_tokens': 41704, 'estimated_cost': 0.0, 'estimated_cost_usd': 0.0, 'cost_estimate_status': 'estimated_from_env_price_contract'}`
 - blocking_runtime_candidate_families: `['entry_split_order_plan', 'holding_exit_decision_matrix_advisory', 'lifecycle_decision_matrix_runtime', 'score65_74_recovery_probe']`
 - parse_warnings: `[]`
 - interpretation: `AI correction parsed successfully`
@@ -227,11 +227,11 @@
 - gap_affected_handoff_count: `0`
 
 ## Workorder Snapshot
-- generation_id: `2026-08-25-594547614453`
-- source_hash: `5945476144532af11fcd704b24f95d0ec6af341bd33c0d891eb664dada4791c6`
+- generation_id: `2026-08-25-17693bf12daf`
+- source_hash: `17693bf12daf6822d4ecf2993793a7dafbbccc0ba25a31fbb2b6fc86a3613fa5`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-08-25-3491e6c413df`
-- previous_source_hash: `3491e6c413dfe17d5828455f6c4a670819f20ece1f163d09d9199f10b0ee6272`
+- previous_generation_id: `2026-08-25-594547614453`
+- previous_source_hash: `5945476144532af11fcd704b24f95d0ec6af341bd33c0d891eb664dada4791c6`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

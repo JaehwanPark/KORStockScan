@@ -46501,6 +46501,12 @@ def _extract_ai_overlap_snapshot(
             )
             feature_distance = feature_map.get("distance_from_day_high_pct")
             feature_range = feature_map.get("intraday_range_pct")
+            feature_distance_state = str(
+                feature_map.get("distance_from_day_high_pct_observation_state") or ""
+            )
+            feature_range_state = str(
+                feature_map.get("intraday_range_pct_observation_state") or ""
+            )
             if feature_distance not in (None, "", "-", "None", "none", "null"):
                 feature_distance_value = float(feature_distance)
                 observed_distance = snapshot.get("distance_from_day_high_pct")
@@ -46511,10 +46517,14 @@ def _extract_ai_overlap_snapshot(
                 if (
                     observed_distance is not None
                     and observed_distance_state.startswith("observed_")
-                    and abs(float(observed_distance) - feature_distance_value) <= 1e-9
+                    and abs(float(observed_distance) - feature_distance_value) <= 5e-4
                 ):
                     snapshot["distance_from_day_high_pct_observation_state"] = (
                         f"{observed_distance_state}_feature_packet_consistent"
+                    )
+                elif feature_distance_state.startswith("observed_"):
+                    snapshot["distance_from_day_high_pct_observation_state"] = (
+                        feature_distance_state
                     )
                 else:
                     snapshot["distance_from_day_high_pct_observation_state"] = (
@@ -46531,10 +46541,14 @@ def _extract_ai_overlap_snapshot(
                 if (
                     observed_range is not None
                     and observed_range_state.startswith("observed_")
-                    and abs(float(observed_range) - feature_range_value) <= 1e-9
+                    and abs(float(observed_range) - feature_range_value) <= 5e-4
                 ):
                     snapshot["intraday_range_pct_observation_state"] = (
                         f"{observed_range_state}_feature_packet_consistent"
+                    )
+                elif feature_range_state.startswith("observed_"):
+                    snapshot["intraday_range_pct_observation_state"] = (
+                        feature_range_state
                     )
                 else:
                     snapshot["intraday_range_pct_observation_state"] = (

@@ -186,6 +186,7 @@ def test_write_ws_snapshot_preserves_realtime_type_and_trade_tick_provenance(
                     "ts": 999.5,
                     "price": 10200,
                     "volume": 3,
+                    "cum_volume": 1234,
                     "strength": 121.5,
                     "source": "0B",
                     "nested": {"ignored": True},
@@ -218,5 +219,7 @@ def test_write_ws_snapshot_preserves_realtime_type_and_trade_tick_provenance(
     assert stock["last_0b_ts"] == 999.5
     assert stock["last_0b_age_ms"] == 1500.0
     assert stock["last_trade_tick"]["price"] == 10200
+    assert stock["last_trade_tick"]["cum_volume"] == 1234
+    assert stock["last_trade_cum_volume"] == 1234
     assert "nested" not in stock["last_trade_tick"]
     assert stock["last_trade_tick_age_ms"] == 1500.0

@@ -27,7 +27,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v1"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v2"
 
 FORBIDDEN_USES = [
     "EV",
@@ -468,6 +468,11 @@ def _dashboard_snapshot_rows(
             and non_trade_fresh
             and (age_0b_ms is None or age_0b_ms >= stale_ms)
         )
+        last_trade_cum_volume = _to_float(raw.get("last_trade_cum_volume"))
+        if last_trade_cum_volume is None:
+            last_trade_cum_volume = _to_float(
+                _dictish(raw.get("last_trade_tick")).get("cum_volume")
+            )
         rows.append(
             {
                 "stock_code": str(stock_code),
@@ -483,7 +488,7 @@ def _dashboard_snapshot_rows(
                 "last_0d_age_sec": (
                     round(age_0d_ms / 1000.0, 3) if age_0d_ms is not None else None
                 ),
-                "last_trade_cum_volume": None,
+                "last_trade_cum_volume": last_trade_cum_volume,
                 "trade_tick_quiet": trade_tick_quiet,
                 "repair_recommended": False,
                 "repair_reason": "dashboard_snapshot_subscription_state_unavailable",
@@ -540,6 +545,23 @@ def _pipeline_event_class(row: dict[str, Any], *, stale_ms: float) -> dict[str, 
     decision_stage_stale_backoff = bool(
         reason_values & decision_stage_stale_backoff_reasons
     )
+    stale_backoff_reason = next(
+        (
+            reason
+            for reason in (
+                str(row.get("scanner_ws_stale_backoff_reason") or "").strip(),
+                str(row.get("fast_precheck_observed_reason") or "").strip(),
+                str(row.get("fast_precheck_reason") or "").strip(),
+                str(row.get("source_quality_block_reason") or "").strip(),
+                str(row.get("reason") or "").strip(),
+                str(row.get("skip_reason") or "").strip(),
+                str(row.get("risk_state") or "").strip(),
+                str(row.get("zero_context_blocker") or "").strip(),
+            )
+            if reason in decision_stage_stale_backoff_reasons
+        ),
+        "not_applicable",
+    )
     trade_tick_quiet = (
         _boolish(row.get("trade_tick_quiet"))
         or "trade_tick_quiet" in reason_values
@@ -581,6 +603,53 @@ def _pipeline_event_class(row: dict[str, Any], *, stale_ms: float) -> dict[str, 
     scout_related = "scout" in stage.lower() or "rising_missed" in json.dumps(
         row, ensure_ascii=False
     )
+    stage_lower = stage.lower()
+    if "watch_eviction" in stage_lower:
+        watchlist_outcome = "evicted"
+    elif "watch_retained" in stage_lower:
+        watchlist_outcome = "retained"
+    else:
+        watchlist_outcome = "decision_stage_only"
+
+    repair_cycle_state = str(row.get("ws_repair_cycle_state") or "").strip()
+    repair_required_observed = "ws_subscription_repair_required" in row
+    repair_batch_required_observed = "ws_repair_batch_required" in row
+    repair_required = _boolish(row.get("ws_subscription_repair_required"))
+    repair_batch_required = _boolish(row.get("ws_repair_batch_required"))
+    if not repair_cycle_state:
+        if repair_required or repair_batch_required:
+            repair_cycle_state = "repair_required_without_cycle_state"
+        else:
+            repair_cycle_state = "not_observed"
+    repair_recheck_reason = str(
+        row.get("fast_precheck_ws_stale_backoff_recheck_reason")
+        or row.get("scanner_ws_stale_backoff_recheck_reason")
+        or "not_observed"
+    ).strip()
+
+    last_trade_cum_volume = _to_float(row.get("last_trade_cum_volume"))
+    if last_trade_cum_volume is None:
+        last_trade_tick = _dictish(row.get("last_trade_tick"))
+        last_trade_cum_volume = _to_float(last_trade_tick.get("cum_volume"))
+    signed_tape_volume_observed = any(
+        _to_float(row.get(key)) is not None
+        for key in (
+            "market_data_signed_tape_buy_volume",
+            "market_data_signed_tape_sell_volume",
+        )
+    )
+    if not trade_tick_quiet:
+        quiet_volume_provenance = "not_applicable"
+    elif last_trade_cum_volume is not None:
+        quiet_volume_provenance = (
+            "cumulative_volume_positive"
+            if last_trade_cum_volume > 0
+            else "cumulative_volume_zero"
+        )
+    elif signed_tape_volume_observed:
+        quiet_volume_provenance = "signed_tape_only_cumulative_volume_missing"
+    else:
+        quiet_volume_provenance = "cumulative_volume_missing"
 
     return {
         "stage": stage,
@@ -604,6 +673,20 @@ def _pipeline_event_class(row: dict[str, Any], *, stale_ms: float) -> dict[str, 
         "age_0d_ms": age_0d,
         "repair_reason": repair_reason,
         "freshness_state": freshness_state or "-",
+        "stale_backoff_reason": stale_backoff_reason,
+        "stale_backoff_repair_cycle_state": repair_cycle_state,
+        "stale_backoff_recheck_reason": repair_recheck_reason,
+        "stale_backoff_watchlist_outcome": watchlist_outcome,
+        "both_ws_stale_repair_required": (
+            "required"
+            if repair_required or repair_batch_required
+            else (
+                "not_required"
+                if repair_required_observed or repair_batch_required_observed
+                else "not_observed"
+            )
+        ),
+        "trade_tick_quiet_volume_provenance": quiet_volume_provenance,
     }
 
 
@@ -619,6 +702,7 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     multi_route_rows: list[dict[str, Any]] = []
     subscription_stale_like_rows: list[dict[str, Any]] = []
     observed_stale_like_rows: list[dict[str, Any]] = []
+    quiet_cumulative_volume_provenance: Counter = Counter()
     quota_units = 0
     for row in rows:
         state = str(row.get("freshness_state") or "unknown")
@@ -640,6 +724,13 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             multi_route_rows.append(row)
         if _boolish(row.get("trade_tick_quiet")):
             quiet_rows.append(row)
+            cumulative_volume = _to_float(row.get("last_trade_cum_volume"))
+            if cumulative_volume is None:
+                quiet_cumulative_volume_provenance["cumulative_volume_missing"] += 1
+            elif cumulative_volume > 0:
+                quiet_cumulative_volume_provenance["cumulative_volume_positive"] += 1
+            else:
+                quiet_cumulative_volume_provenance["cumulative_volume_zero"] += 1
         if _boolish(row.get("repair_recommended")):
             repair_rows.append(row)
         if state in {"stale", "no_tick"}:
@@ -658,6 +749,9 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "observed_stale_like_rate_pct": _rate_pct(len(observed_stale_like_rows), total),
         "trade_tick_quiet_count": len(quiet_rows),
         "trade_tick_quiet_rate_pct": _rate_pct(len(quiet_rows), total),
+        "trade_tick_quiet_cumulative_volume_provenance_counts": dict(
+            quiet_cumulative_volume_provenance
+        ),
         "repair_recommended_count": len(repair_rows),
         "registered_item_quota_units": quota_units,
         "registered_route_counts": dict(route_counts),
@@ -702,6 +796,24 @@ def _build_workorders(
 ) -> list[dict[str, Any]]:
     counts = summary["pipeline_counts"]
     snapshot = summary["snapshot_summary"]
+    causal = summary.get("causal_attribution") or {}
+    quiet_volume_counts = (causal.get("trade_tick_quiet") or {}).get(
+        "cumulative_volume_provenance_counts", {}
+    ) or {}
+    quiet_volume_observed_count = sum(
+        int(quiet_volume_counts.get(key, 0) or 0)
+        for key in ("cumulative_volume_positive", "cumulative_volume_zero")
+    )
+    quiet_volume_observed_count += sum(
+        int(
+            (
+                snapshot.get("trade_tick_quiet_cumulative_volume_provenance_counts")
+                or {}
+            ).get(key, 0)
+            or 0
+        )
+        for key in ("cumulative_volume_positive", "cumulative_volume_zero")
+    )
     orders: list[dict[str, Any]] = []
     base = {
         "target_date": target_date,
@@ -743,6 +855,9 @@ def _build_workorders(
         orders.append(
             {
                 **base,
+                "decision": "defer_evidence",
+                "next_action": "recheck_after_postclose",
+                "implementation_state": "implemented_in_source_report",
                 "order_id": "order_ws_decision_stage_stale_backoff_attribution",
                 "title": "WS decision-stage stale backoff attribution",
                 "priority": 1,
@@ -753,11 +868,13 @@ def _build_workorders(
                 ),
                 "evidence": [
                     "decision_stage_stale_backoff_count="
-                    f"{counts.get('decision_stage_stale_backoff', 0)}"
+                    f"{counts.get('decision_stage_stale_backoff', 0)}",
+                    "causal_attribution="
+                    f"{causal.get('decision_stage_stale_backoff', {})}",
                 ],
                 "files_likely_touched": [
                     "src/engine/kiwoom_websocket.py",
-                    "src/engine/sniper.py",
+                    "src/engine/sniper_state_handlers.py",
                     "src/engine/monitoring/intraday_ws_freshness_monitor.py",
                     "src/tests/test_intraday_ws_freshness_monitor.py",
                 ],
@@ -772,6 +889,13 @@ def _build_workorders(
         orders.append(
             {
                 **base,
+                "decision": "defer_evidence",
+                "next_action": "recheck_after_postclose",
+                "implementation_state": (
+                    "implemented_in_source_report"
+                    if quiet_volume_observed_count > 0
+                    else "implemented_pending_new_dashboard_snapshot"
+                ),
                 "order_id": "order_ws_trade_tick_quiet_low_liquidity_classification",
                 "title": "WS trade tick quiet low-liquidity classification",
                 "priority": 2,
@@ -784,6 +908,10 @@ def _build_workorders(
                     f"pipeline_trade_tick_quiet_count={counts.get('trade_tick_quiet', 0)}",
                     f"fresh_0d_stale_0b_count={counts.get('fresh_0d_stale_0b', 0)}",
                     f"snapshot_trade_tick_quiet_count={snapshot.get('trade_tick_quiet_count', 0)}",
+                    "cumulative_volume_provenance="
+                    f"{(causal.get('trade_tick_quiet') or {}).get('cumulative_volume_provenance_counts', {})}",
+                    "snapshot_cumulative_volume_provenance="
+                    f"{snapshot.get('trade_tick_quiet_cumulative_volume_provenance_counts', {})}",
                 ],
                 "files_likely_touched": [
                     "src/engine/kiwoom_websocket.py",
@@ -800,6 +928,9 @@ def _build_workorders(
         orders.append(
             {
                 **base,
+                "decision": "defer_evidence",
+                "next_action": "recheck_after_postclose",
+                "implementation_state": "implemented_in_source_report",
                 "order_id": "order_ws_total_stale_escalation",
                 "title": "WS total stale escalation",
                 "priority": 1,
@@ -807,7 +938,10 @@ def _build_workorders(
                     "Treat rows where both trade and orderbook websocket freshness are stale as "
                     "subscription/connection quality incidents and verify repair evidence after postclose."
                 ),
-                "evidence": [f"both_ws_stale_count={counts.get('both_ws_stale', 0)}"],
+                "evidence": [
+                    f"both_ws_stale_count={counts.get('both_ws_stale', 0)}",
+                    "repair_attribution=" f"{causal.get('both_ws_stale', {})}",
+                ],
                 "files_likely_touched": [
                     "src/engine/kiwoom_websocket.py",
                     "src/engine/monitoring/quote_stale_frequency_report.py",
@@ -890,6 +1024,9 @@ def build_report(
         symbol_counts = _nested_counters_from_mapping(
             (cached_state or {}).get("symbol_counts")
         )
+        provenance_counts = _nested_counters_from_mapping(
+            (cached_state or {}).get("provenance_counts")
+        )
         total_events = int((cached_state or {}).get("total_events") or 0)
     except (TypeError, ValueError):
         cached_state = None
@@ -899,6 +1036,7 @@ def build_report(
         stage_counts = defaultdict(Counter)
         time_bucket_counts = defaultdict(Counter)
         symbol_counts = defaultdict(Counter)
+        provenance_counts = defaultdict(Counter)
         total_events = 0
     appended_event_count = 0
     invalid_json_line_count = 0
@@ -955,6 +1093,25 @@ def build_report(
                     time_bucket_counts[key][bucket] += 1
                     if code:
                         symbol_counts[key][code] += 1
+            if item.get("decision_stage_stale_backoff"):
+                for dimension in (
+                    "stale_backoff_reason",
+                    "stale_backoff_repair_cycle_state",
+                    "stale_backoff_recheck_reason",
+                    "stale_backoff_watchlist_outcome",
+                ):
+                    provenance_counts[dimension][str(item.get(dimension))] += 1
+            if item.get("both_ws_stale"):
+                provenance_counts["both_ws_stale_repair_cycle_state"][
+                    str(item.get("stale_backoff_repair_cycle_state"))
+                ] += 1
+                provenance_counts["both_ws_stale_repair_required"][
+                    str(item.get("both_ws_stale_repair_required"))
+                ] += 1
+            if item.get("trade_tick_quiet"):
+                provenance_counts["trade_tick_quiet_volume_provenance"][
+                    str(item.get("trade_tick_quiet_volume_provenance"))
+                ] += 1
         invalid_json_line_count += int(progress["invalid_json_line_count"])
         end_identity = _source_identity(actual_path)
         source_identity_stable = bool(
@@ -1003,6 +1160,9 @@ def build_report(
                 },
                 "symbol_counts": {
                     key: dict(counter) for key, counter in symbol_counts.items()
+                },
+                "provenance_counts": {
+                    key: dict(counter) for key, counter in provenance_counts.items()
                 },
                 "total_events": total_events,
             },
@@ -1081,6 +1241,40 @@ def build_report(
             key: _counter_rows(counter, key_name="stock_code")
             for key, counter in sorted(symbol_counts.items())
         },
+        "causal_attribution": {
+            "decision_stage_stale_backoff": {
+                "sample_count": int(counts.get("decision_stage_stale_backoff", 0)),
+                "reason_counts": dict(
+                    provenance_counts.get("stale_backoff_reason", Counter())
+                ),
+                "repair_cycle_state_counts": dict(
+                    provenance_counts.get("stale_backoff_repair_cycle_state", Counter())
+                ),
+                "recheck_reason_counts": dict(
+                    provenance_counts.get("stale_backoff_recheck_reason", Counter())
+                ),
+                "watchlist_outcome_counts": dict(
+                    provenance_counts.get("stale_backoff_watchlist_outcome", Counter())
+                ),
+            },
+            "both_ws_stale": {
+                "sample_count": int(counts.get("both_ws_stale", 0)),
+                "repair_cycle_state_counts": dict(
+                    provenance_counts.get("both_ws_stale_repair_cycle_state", Counter())
+                ),
+                "repair_required_counts": dict(
+                    provenance_counts.get("both_ws_stale_repair_required", Counter())
+                ),
+            },
+            "trade_tick_quiet": {
+                "sample_count": int(counts.get("trade_tick_quiet", 0)),
+                "cumulative_volume_provenance_counts": dict(
+                    provenance_counts.get(
+                        "trade_tick_quiet_volume_provenance", Counter()
+                    )
+                ),
+            },
+        },
     }
     workorders = _build_workorders(summary, target_date=target_date)
     summary["workorder_directives"] = workorders
@@ -1091,6 +1285,9 @@ def build_report(
             for item in workorders
             if item.get("decision") == "implement_now"
             and item.get("runtime_effect") is False
+        ),
+        "defer_evidence_count": sum(
+            1 for item in workorders if item.get("decision") == "defer_evidence"
         ),
         "provider_none_incident_count": int(counts.get("provider_none", 0)),
         "runtime_effect": False,
@@ -1126,6 +1323,7 @@ def _render_monitor_markdown(report: dict[str, Any]) -> str:
             f"- input_processing: `{report.get('input_processing')}`",
             f"- pipeline_counts: `{report.get('pipeline_counts')}`",
             f"- pipeline_rates: `{report.get('pipeline_rates')}`",
+            f"- causal_attribution: `{report.get('causal_attribution')}`",
             "- subscription_snapshot_path: "
             f"`{report.get('subscription_snapshot_path')}`",
             "- subscription_snapshot_provenance: "
@@ -1151,6 +1349,7 @@ def _render_monitor_markdown(report: dict[str, Any]) -> str:
         lines.append(
             "- "
             f"`{order.get('order_id')}` priority={order.get('priority')} "
+            f"decision={order.get('decision')} "
             f"runtime_effect={order.get('runtime_effect')} title={order.get('title')}"
         )
     return "\n".join(lines) + "\n"

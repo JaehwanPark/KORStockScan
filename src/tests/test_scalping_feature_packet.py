@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from src.engine import ai_engine_openai as openai_module
 from src.engine.ai_engine_openai import GPTSniperEngine
 from src.engine.scalping_feature_packet import (
+    SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS,
     SCALP_FEATURE_PACKET_VERSION,
     SCALP_FEATURE_PACKET_QUOTE_STALE_MS,
     build_scalping_feature_audit_fields,
@@ -197,6 +198,46 @@ def test_extract_scalping_feature_packet_exposes_stage1_supply_fields():
     assert packet["minute_candle_context_quality"] == "fresh_bar_window"
     assert packet["minute_candle_latest_age_ms"] == 12000
     assert packet["minute_candle_window_fresh"] is True
+    assert packet["distance_from_day_high_pct_observation_state"].startswith(
+        "observed_"
+    )
+    assert packet["intraday_range_pct_observation_state"].startswith("observed_")
+
+
+def test_extract_scalping_feature_packet_tolerates_next_minute_bucket_clock_skew():
+    candles = _sample_candles()
+    candles[-1]["체결시간"] = "20260826104900"
+
+    packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        _sample_ticks(),
+        candles,
+        now=datetime.strptime("10:48:59", "%H:%M:%S"),
+    )
+
+    assert packet["minute_candle_latest_age_ms"] == 0
+    assert packet["minute_candle_context_quality"] == "fresh_bar_window"
+    assert packet["minute_candle_window_fresh"] is True
+    assert packet["micro_vwap_available"] is True
+
+
+def test_extract_scalping_feature_packet_rejects_future_bar_beyond_clock_skew():
+    candles = _sample_candles()
+    candles[-1]["체결시간"] = "20260826104900"
+
+    packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        _sample_ticks(),
+        candles,
+        now=datetime.strptime("10:48:57", "%H:%M:%S"),
+    )
+
+    assert packet["minute_candle_latest_age_ms"] > (
+        SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS
+    )
+    assert packet["minute_candle_context_quality"] == "stale_bar_window"
+    assert packet["minute_candle_window_fresh"] is False
+    assert packet["micro_vwap_available"] is False
 
 
 def test_extract_scalping_feature_packet_marks_micro_vwap_unavailable_without_candles():

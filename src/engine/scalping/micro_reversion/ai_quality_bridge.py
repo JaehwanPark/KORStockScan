@@ -97,7 +97,7 @@ THREE_ARM_SCHEMA = "micro_reversion_ai_quality_three_arm_manifest_v1"
 THREE_ARM_REQUEST_SCHEMA = "micro_reversion_ai_quality_three_arm_requests_v1"
 REPORT_SCHEMA = "micro_reversion_ai_quality_bridge_v1"
 BRIDGE_CONFIG_SCHEMA = "micro_reversion_ai_quality_bridge_config_v1"
-BRIDGE_PRODUCER_VERSION = "micro_reversion_ai_quality_bridge_v1_4"
+BRIDGE_PRODUCER_VERSION = "micro_reversion_ai_quality_bridge_v1_5"
 RELEVANT_SOURCE_CACHE_SCHEMA = "micro_reversion_relevant_source_cache_v1"
 RELEVANT_SOURCE_CACHE_INDEX_VERSION = "relevant_source_sqlite_v1"
 DEFAULT_RELEVANT_SOURCE_CACHE_ROOT = (
@@ -4390,22 +4390,112 @@ def _entry_pipeline_allocator_provenance(
             return "NXT"
         return "UNKNOWN"
 
-    expected_route_venue = route_venue(trace_route)
-    semantic_events: dict[tuple[str, int, str], dict[str, Any]] = {}
-    # Only broker-bound submission stages can resolve an earlier sizing
-    # revalidation. Repeated budget/latency observations legitimately carry
-    # different quantities as price and available cash move; choosing the
-    # latest such row would manufacture quantity authority. A submitted leg
-    # or bundle, by contrast, is the exact quantity that crossed the broker
-    # boundary and may safely own the outcome-only notional evaluation.
-    submission_stages = frozenset(
-        {
+    def submitted_order_quantities(
+        *, stage: str, fields: Mapping[str, Any]
+    ) -> dict[str, int]:
+        """Return exact broker-order quantities carried by one pipeline row.
+
+        Allocator ``effective_qty`` is the planned total.  Probe-first rows keep
+        that total while submitting only the first leg, so it must never be
+        treated as the quantity that crossed the broker boundary.  Bind only
+        explicit order-number/quantity pairs and let the caller deduplicate the
+        probe, leg, bundle-summary, and residual views of the same order.
+        """
+
+        if stage not in {
             "order_bundle_submitted",
             "order_leg_sent",
             "probe_submitted",
-        }
-    )
-    submitted_semantic_keys: set[tuple[str, int, str]] = set()
+            "residual_submitted",
+        } or str(fields.get("actual_order_submitted") or "").strip().lower() not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return {}
+
+        orders: dict[str, int] = {}
+
+        def add(order_no: Any, quantity: Any) -> None:
+            normalized_order_no = str(order_no or "").strip()
+            normalized_quantity = _nonnegative_int(quantity)
+            if (
+                not normalized_order_no
+                or normalized_order_no in {"-", "None", "none", "null"}
+                or normalized_quantity is None
+                or normalized_quantity <= 0
+            ):
+                return
+            previous = orders.get(normalized_order_no)
+            if previous is not None and previous != normalized_quantity:
+                raise ValueError(
+                    "entry_pipeline_allocator_broker_order_qty_conflict"
+                )
+            orders[normalized_order_no] = normalized_quantity
+
+        order_qty_list = str(fields.get("broker_order_qty_list") or "").strip()
+        if order_qty_list:
+            for token in order_qty_list.split(","):
+                normalized_token = token.strip()
+                if not normalized_token:
+                    continue
+                if ":" not in normalized_token:
+                    raise ValueError(
+                        "entry_pipeline_allocator_broker_order_qty_list_invalid"
+                    )
+                order_no, quantity = normalized_token.rsplit(":", 1)
+                if (
+                    not str(order_no or "").strip()
+                    or (_nonnegative_int(quantity) or 0) <= 0
+                ):
+                    raise ValueError(
+                        "entry_pipeline_allocator_broker_order_qty_list_invalid"
+                    )
+                add(order_no, quantity)
+
+        if stage in {"order_leg_sent", "probe_submitted", "residual_submitted"}:
+            direct_order_no = (
+                fields.get("broker_order_no")
+                or fields.get("order_no")
+                or fields.get("ord_no")
+            )
+            direct_qty = next(
+                (
+                    fields.get(field)
+                    for field in ("submitted_qty", "qty", "requested_qty")
+                    if fields.get(field) not in (None, "")
+                ),
+                None,
+            )
+            add(
+                direct_order_no,
+                direct_qty,
+            )
+            if not orders:
+                raise ValueError(
+                    "entry_pipeline_allocator_broker_order_qty_missing"
+                )
+        elif not orders and _nonnegative_int(fields.get("submitted_leg_count")) == 1:
+            add(
+                fields.get("broker_order_no")
+                or fields.get("order_no")
+                or fields.get("ord_no"),
+                fields.get("submitted_qty"),
+            )
+        if stage == "order_bundle_submitted" and not orders:
+            raise ValueError("entry_pipeline_allocator_broker_order_qty_missing")
+        return orders
+
+    expected_route_venue = route_venue(trace_route)
+    semantic_events: dict[tuple[str, int, str], dict[str, Any]] = {}
+    # Repeated budget/latency observations legitimately carry different
+    # planned totals as price and available cash move.  A broker-bound row may
+    # still be only the first one-share probe.  Grant allocator outcome
+    # authority only after exact, deduplicated broker-order quantities sum to
+    # the selected central allocation.  A partial probe/residual submission is
+    # useful observation evidence but cannot manufacture full-notional EV.
+    broker_bound_semantic_keys: set[tuple[str, int, str]] = set()
     matching_row_count = 0
     for row in entry_pipeline_rows:
         if not isinstance(row, Mapping) or row.get("pipeline") != "ENTRY_PIPELINE":
@@ -4513,30 +4603,35 @@ def _entry_pipeline_allocator_provenance(
             "effective_qty": effective_qty,
             "quantity_owner": owner,
         }
+        row_submitted_orders = submitted_order_quantities(stage=stage, fields=fields)
+        if row_submitted_orders:
+            event_identity["submitted_order_quantities"] = [
+                {
+                    "broker_order_no": order_no,
+                    "submitted_qty": quantity,
+                }
+                for order_no, quantity in sorted(row_submitted_orders.items())
+            ]
         joined = semantic_events.setdefault(
             key,
             {
                 "semantic": semantic,
                 "source_event_sha256s": set(),
                 "event_timestamps_ms": [],
+                "submitted_order_quantities": {},
             },
         )
         joined["source_event_sha256s"].add(_sha256(event_identity))
         joined["event_timestamps_ms"].append(emitted_ms)
-        broker_order_no = str(
-            fields.get("broker_order_no")
-            or fields.get("order_no")
-            or fields.get("ord_no")
-            or ""
-        ).strip()
-        if (
-            stage in submission_stages
-            and str(fields.get("actual_order_submitted") or "").strip().lower()
-            in {"1", "true", "yes", "on"}
-            and broker_order_no
-            and broker_order_no not in {"-", "None", "none", "null"}
-        ):
-            submitted_semantic_keys.add(key)
+        for order_no, submitted_qty in row_submitted_orders.items():
+            previous = joined["submitted_order_quantities"].get(order_no)
+            if previous is not None and previous != submitted_qty:
+                raise ValueError(
+                    "entry_pipeline_allocator_broker_order_qty_conflict"
+                )
+            joined["submitted_order_quantities"][order_no] = submitted_qty
+        if row_submitted_orders:
+            broker_bound_semantic_keys.add(key)
     if not semantic_events:
         return {
             "status": "allocator_provenance_missing",
@@ -4549,10 +4644,30 @@ def _entry_pipeline_allocator_provenance(
             "effective_qty": None,
             "matching_row_count": 0,
             "deduplicated_event_count": 0,
+            "allocator_semantic_count": 0,
+            "allocator_submitted_semantic_count": 0,
+            "submitted_qty": None,
+            "submission_coverage_pct": None,
+            "fully_submitted_semantic_count": 0,
+            "allocator_provenance_error": None,
         }
+    fully_submitted_semantic_keys: set[tuple[str, int, str]] = set()
+    submitted_qty_by_key: dict[tuple[str, int, str], int] = {}
+    for key, event in semantic_events.items():
+        submitted_qty = sum(event["submitted_order_quantities"].values())
+        submitted_qty_by_key[key] = submitted_qty
+        planned_qty = key[1]
+        if submitted_qty > planned_qty:
+            raise ValueError("entry_pipeline_allocator_submitted_qty_exceeds_effective")
+        if submitted_qty == planned_qty:
+            fully_submitted_semantic_keys.add(key)
     selected_key: tuple[str, int, str] | None = None
-    if len(submitted_semantic_keys) == 1:
-        selected_key = next(iter(submitted_semantic_keys))
+    if (
+        len(fully_submitted_semantic_keys) == 1
+        and len(broker_bound_semantic_keys) == 1
+        and fully_submitted_semantic_keys == broker_bound_semantic_keys
+    ):
+        selected_key = next(iter(fully_submitted_semantic_keys))
     if selected_key is None:
         all_source_hashes = sorted(
             {
@@ -4566,11 +4681,20 @@ def _entry_pipeline_allocator_provenance(
             for event in semantic_events.values()
             for timestamp in event["event_timestamps_ms"]
         )
+        sole_key = next(iter(semantic_events)) if len(semantic_events) == 1 else None
+        sole_submitted_qty = (
+            submitted_qty_by_key.get(sole_key) if sole_key is not None else None
+        )
+        sole_planned_qty = sole_key[1] if sole_key is not None else None
         return {
             "status": (
-                "allocator_provenance_not_submitted_observation_only"
-                if len(semantic_events) == 1
-                else "allocator_provenance_conflict_observation_only"
+                "allocator_provenance_conflict_observation_only"
+                if len(semantic_events) != 1 or len(broker_bound_semantic_keys) > 1
+                else (
+                    "allocator_provenance_partial_submission_observation_only"
+                    if sole_submitted_qty
+                    else "allocator_provenance_not_submitted_observation_only"
+                )
             ),
             "quantity_authority": "standardized_one_share_observation_only",
             "allocator_event_sha256": None,
@@ -4582,7 +4706,16 @@ def _entry_pipeline_allocator_provenance(
             "matching_row_count": matching_row_count,
             "deduplicated_event_count": len(semantic_events),
             "allocator_semantic_count": len(semantic_events),
-            "allocator_submitted_semantic_count": len(submitted_semantic_keys),
+            "allocator_submitted_semantic_count": len(broker_bound_semantic_keys),
+            "submitted_qty": sole_submitted_qty,
+            "submission_coverage_pct": (
+                None
+                if not sole_planned_qty or sole_submitted_qty is None
+                else round(sole_submitted_qty / sole_planned_qty * 100.0, 6)
+            ),
+            "fully_submitted_semantic_count": len(
+                fully_submitted_semantic_keys
+            ),
         }
     joined = semantic_events[selected_key]
     semantic = joined["semantic"]
@@ -4591,6 +4724,15 @@ def _entry_pipeline_allocator_provenance(
     allocator_event = {
         **semantic,
         "source_event_sha256s": source_event_sha256s,
+        "submitted_order_quantities": [
+            {
+                "broker_order_no": order_no,
+                "submitted_qty": quantity,
+            }
+            for order_no, quantity in sorted(
+                joined["submitted_order_quantities"].items()
+            )
+        ],
     }
     return {
         "status": "central_allocator_provenance_joined",
@@ -4604,7 +4746,10 @@ def _entry_pipeline_allocator_provenance(
         "matching_row_count": matching_row_count,
         "deduplicated_event_count": 1,
         "allocator_semantic_count": len(semantic_events),
-        "allocator_submitted_semantic_count": len(submitted_semantic_keys),
+        "allocator_submitted_semantic_count": len(broker_bound_semantic_keys),
+        "submitted_qty": submitted_qty_by_key[selected_key],
+        "submission_coverage_pct": 100.0,
+        "fully_submitted_semantic_count": len(fully_submitted_semantic_keys),
     }
 
 
@@ -6093,6 +6238,9 @@ def build_future_outcome(
         "deduplicated_event_count": 0,
         "allocator_semantic_count": 0,
         "allocator_submitted_semantic_count": 0,
+        "submitted_qty": None,
+        "submission_coverage_pct": None,
+        "fully_submitted_semantic_count": 0,
         "allocator_provenance_error": None,
     }
     if stage in entry_like_stages:
@@ -6123,6 +6271,9 @@ def build_future_outcome(
                 "deduplicated_event_count": 0,
                 "allocator_semantic_count": 0,
                 "allocator_submitted_semantic_count": 0,
+                "submitted_qty": None,
+                "submission_coverage_pct": None,
+                "fully_submitted_semantic_count": 0,
                 "allocator_provenance_error": error_code,
             }
         depth_capacity = _nonnegative_int(
@@ -6776,6 +6927,13 @@ def build_future_outcome(
         ),
         "allocator_submitted_semantic_count": allocator_provenance.get(
             "allocator_submitted_semantic_count", 0
+        ),
+        "allocator_submitted_qty": allocator_provenance.get("submitted_qty"),
+        "allocator_submission_coverage_pct": allocator_provenance.get(
+            "submission_coverage_pct"
+        ),
+        "allocator_fully_submitted_semantic_count": allocator_provenance.get(
+            "fully_submitted_semantic_count", 0
         ),
         "allocator_provenance_error": allocator_provenance.get(
             "allocator_provenance_error"
@@ -9890,7 +10048,7 @@ def build_bridge_report(
             "trace_symbol_linked_row_count"
         ],
         "outcome_join_mode": (
-            "central_allocator_provenance_outcome_only"
+            "exact_broker_submission_quantity_reconciliation"
             if verified_pipeline_rows_by_trace_symbol
             else "standardized_one_share_observation_only"
         ),
@@ -10470,6 +10628,19 @@ def build_bridge_report(
     allocator_join_contract_gap = bool(sum(allocator_error_counts.values()) > 0)
     allocator_valid_join_available = allocator_outcome_joined > 0
     allocator_all_rows_contract_clean = not allocator_join_contract_gap
+    partial_allocator_submission_count = allocator_status_counts.get(
+        "allocator_provenance_partial_submission_observation_only", 0
+    )
+    if verified_pipeline_rows_by_trace_symbol:
+        pipeline_source_contract["outcome_join_mode"] = (
+            "central_allocator_full_submission_outcome_only"
+            if allocator_valid_join_available
+            else (
+                "partial_submission_standardized_one_share_observation_only"
+                if partial_allocator_submission_count > 0
+                else "standardized_one_share_observation_only"
+            )
+        )
     pipeline_missing_observation_only = bool(
         pipeline_source_status == "missing_observation_only"
         and any(
@@ -10569,6 +10740,9 @@ def build_bridge_report(
                 )
             ),
             "entry_pipeline_allocator_outcome_joined_count": (allocator_outcome_joined),
+            "entry_pipeline_allocator_partial_submission_count": (
+                partial_allocator_submission_count
+            ),
             "entry_pipeline_allocator_status_counts": dict(allocator_status_counts),
             "entry_pipeline_allocator_error_counts": dict(allocator_error_counts),
             "entry_pipeline_allocator_join_contract_gap": (allocator_join_contract_gap),
@@ -10587,7 +10761,15 @@ def build_bridge_report(
                 else (
                     "report_only_contract_gap"
                     if allocator_join_contract_gap
-                    else "source_quality_eligible"
+                    else (
+                        "source_quality_eligible_full_submission_outcome_only"
+                        if allocator_valid_join_available
+                        else (
+                            "partial_submission_standardized_one_share_observation_only"
+                            if partial_allocator_submission_count > 0
+                            else "no_allocator_join_standardized_one_share_observation_only"
+                        )
+                    )
                 )
             ),
             "entry_pipeline_source_status": pipeline_source_status,

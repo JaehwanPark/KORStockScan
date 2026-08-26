@@ -20,7 +20,7 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-from src.utils.constants import DATA_DIR, POSTGRES_URL, PROJECT_ROOT
+from src.utils.constants import DATA_DIR, POSTGRES_URL
 
 SCHEMA_VERSION = "BD_FBUY_ACCUM_PRE_V1"
 ARTIFACT_DIR = DATA_DIR / "runtime" / "bd_fbuy_accum_pre"
@@ -816,6 +816,7 @@ def _ws_snapshot_last_trade_tick(value: Any) -> dict[str, Any]:
         "ts",
         "price",
         "volume",
+        "cum_volume",
         "strength",
         "trade_time",
         "trade_ts",
@@ -891,6 +892,11 @@ def write_ws_snapshot(
             "last_0b_ts": realtime_type_ts.get("0B", 0.0),
             "last_0b_age_ms": _ws_snapshot_age_ms(realtime_type_ts.get("0B"), now_ts),
             "last_trade_tick": last_trade_tick,
+            "last_trade_cum_volume": (
+                _safe_int(last_trade_tick.get("cum_volume"))
+                if last_trade_tick.get("cum_volume") not in (None, "")
+                else None
+            ),
             "last_trade_tick_age_ms": _ws_snapshot_age_ms(
                 last_trade_tick.get("ts"), now_ts
             ),

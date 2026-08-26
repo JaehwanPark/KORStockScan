@@ -10,8 +10,8 @@
 
 | metric | value |
 | --- | ---: |
-| completed_valid | 44 |
-| exit_only | 42 |
+| completed_valid | 48 |
+| exit_only | 46 |
 | avg_down_wait | 1 |
 | pyramid_wait | 1 |
 | compact_exit_signal | 34 |
@@ -23,9 +23,9 @@
 
 | field | known |
 | --- | ---: |
-| price_known | 44 |
-| volume_known | 40 |
-| time_known | 44 |
+| price_known | 48 |
+| volume_known | 44 |
+| time_known | 48 |
 
 ## Policy Counts
 
@@ -38,19 +38,19 @@
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| price_10k_30k | exit_only | -0.648 | - | 27 | -0.3034 | 0.3333 | candidate_weight_source |
+| price_10k_30k | exit_only | -0.5895 | - | 28 | -0.2621 | 0.3214 | candidate_weight_source |
 | price_30k_70k | insufficient_sample | - | - | - | - | - | insufficient_sample |
-| price_gte_70k | exit_only | -0.6815 | - | 7 | -0.0662 | 0.2857 | candidate_weight_source |
-| price_lt_10k | exit_only | -0.7676 | - | 7 | -0.0856 | 0.1429 | candidate_weight_source |
+| price_gte_70k | exit_only | -0.6431 | - | 7 | -0.0658 | 0.2857 | candidate_weight_source |
+| price_lt_10k | exit_only | -0.4341 | - | 10 | 0.105 | 0.1 | candidate_weight_source |
 
 ## Volume Bucket
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| volume_2m_10m | exit_only | -0.7906 | - | 12 | -0.2014 | 0.25 | candidate_weight_source |
-| volume_500k_2m | exit_only | -0.0059 | - | 10 | 0.45 | 0.2 | candidate_weight_source |
+| volume_2m_10m | exit_only | -0.6226 | - | 14 | -0.11 | 0.2143 | candidate_weight_source |
+| volume_500k_2m | exit_only | 0.0724 | - | 11 | 0.4864 | 0.1818 | candidate_weight_source |
 | volume_gte_10m | insufficient_sample | - | - | - | - | - | insufficient_sample |
-| volume_lt_500k | exit_only | -0.4372 | - | 12 | 0.1083 | 0.25 | candidate_weight_source |
+| volume_lt_500k | exit_only | -0.3417 | - | 13 | 0.1594 | 0.2308 | candidate_weight_source |
 | volume_unknown | insufficient_sample | - | - | - | - | - | insufficient_sample |
 
 ## Time Bucket
@@ -58,9 +58,9 @@
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | time_0900_0930 | insufficient_sample | - | - | - | - | - | insufficient_sample |
-| time_0930_1030 | exit_only | -0.7327 | - | 9 | -0.1547 | 0.3333 | candidate_weight_source |
-| time_1030_1400 | exit_only | -0.1874 | - | 24 | 0.2032 | 0.2083 | candidate_weight_source |
-| time_1400_1530 | exit_only | -1.8515 | - | 7 | -1.9067 | 0.5714 | candidate_weight_source |
+| time_0930_1030 | exit_only | -0.5979 | - | 10 | -0.063 | 0.3 | candidate_weight_source |
+| time_1030_1400 | exit_only | -0.1277 | - | 26 | 0.222 | 0.1923 | candidate_weight_source |
+| time_1400_1530 | exit_only | -1.6616 | - | 8 | -1.5626 | 0.5 | candidate_weight_source |
 
 ## Eligible But Not Chosen
 

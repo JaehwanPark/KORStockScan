@@ -682,13 +682,19 @@ def _current_cost_catalog_payload(
 
 
 def _entry_pipeline_allocator_row(
-    *, quantity: int = 50, formula_version: str = "entry_type_5stage_cap25_v1"
+    *,
+    quantity: int = 50,
+    formula_version: str = "entry_type_5stage_cap25_v1",
+    stage: str = "order_bundle_submitted",
+    broker_order_no: str = "0000101",
+    submitted_qty: int | None = None,
 ) -> dict:
+    exact_submitted_qty = quantity if submitted_qty is None else submitted_qty
     return {
         "schema_version": 1,
         "event_type": "pipeline_event",
         "pipeline": "ENTRY_PIPELINE",
-        "stage": "order_bundle_submitted",
+        "stage": stage,
         "stock_code": "000001",
         "record_id": 101,
         "emitted_at": "2026-08-14T09:00:11.100+09:00",
@@ -702,7 +708,11 @@ def _entry_pipeline_allocator_row(
             "market_session_bucket": "krx_regular",
             "market_data_route": "krx_only",
             "actual_order_submitted": True,
-            "broker_order_no": "0000101",
+            "broker_order_no": broker_order_no,
+            "order_no": broker_order_no,
+            "submitted_qty": exact_submitted_qty,
+            "submitted_leg_count": 1,
+            "broker_order_qty_list": f"{broker_order_no}:{exact_submitted_qty}",
         },
     }
 
@@ -2003,6 +2013,85 @@ def test_entry_outcome_intended_but_not_submitted_qty_is_observation_only() -> N
     assert outcome["economic_promotion_evidence_eligible"] is False
 
 
+def test_probe_only_submission_cannot_claim_full_allocator_notional() -> None:
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+        verified_symbol_metadata=_verified_symbol_metadata(),
+    )
+    probe = _entry_pipeline_allocator_row(
+        quantity=40,
+        stage="probe_submitted",
+        submitted_qty=1,
+    )
+
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=[],
+        entry_pipeline_rows=[probe],
+        config=_verified_config(),
+    )
+
+    assert outcome["allocator_provenance_status"] == (
+        "allocator_provenance_partial_submission_observation_only"
+    )
+    assert outcome["counterfactual_quantity"] == 1
+    assert outcome["effective_qty"] is None
+    assert outcome["allocator_submitted_qty"] == 1
+    assert outcome["allocator_submission_coverage_pct"] == pytest.approx(2.5)
+    assert outcome["allocator_fully_submitted_semantic_count"] == 0
+    assert outcome["notional_net_profit_eligible"] is False
+    assert outcome["economic_promotion_evidence_eligible"] is False
+
+
+def test_probe_and_residual_exact_orders_unlock_allocator_outcome_only() -> None:
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+        verified_symbol_metadata=_verified_symbol_metadata(),
+    )
+    probe = _entry_pipeline_allocator_row(
+        quantity=40,
+        stage="probe_submitted",
+        broker_order_no="0000101",
+        submitted_qty=1,
+    )
+    duplicate_leg = deepcopy(probe)
+    duplicate_leg["stage"] = "order_leg_sent"
+    duplicate_leg["emitted_at"] = "2026-08-14T09:00:11.200+09:00"
+    residual = _entry_pipeline_allocator_row(
+        quantity=40,
+        stage="residual_submitted",
+        broker_order_no="0000102",
+        submitted_qty=39,
+    )
+    residual["emitted_at"] = "2026-08-14T09:00:12.100+09:00"
+
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=[],
+        entry_pipeline_rows=[probe, duplicate_leg, residual],
+        config=_verified_config(),
+    )
+
+    assert outcome["allocator_provenance_status"] == (
+        "central_allocator_provenance_joined"
+    )
+    assert outcome["effective_qty"] == 40
+    assert outcome["allocator_submitted_qty"] == 40
+    assert outcome["allocator_submission_coverage_pct"] == 100.0
+    assert outcome["allocator_fully_submitted_semantic_count"] == 1
+    assert outcome["notional_net_profit_eligible"] is True
+
+
 def test_submitted_krx_allocator_can_bind_exact_venue_when_route_is_omitted() -> None:
     evidence = build_tactical_evidence(
         trace=_trace(),
@@ -2103,6 +2192,61 @@ def test_allocator_join_fails_closed_on_causal_scope_mismatch(mutation, reason) 
     assert outcome["counterfactual_quantity"] == 1
     assert outcome["notional_net_profit_eligible"] is False
     assert outcome["economic_promotion_evidence_eligible"] is False
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        (
+            lambda row: row["fields"].update(
+                {"broker_order_qty_list": "0000101:not-a-number"}
+            ),
+            "entry_pipeline_allocator_broker_order_qty_list_invalid",
+        ),
+        (
+            lambda row: row["fields"].update(
+                {
+                    "broker_order_qty_list": "",
+                    "submitted_qty": None,
+                    "broker_order_no": "",
+                    "order_no": "",
+                    "ord_no": "",
+                }
+            ),
+            "entry_pipeline_allocator_broker_order_qty_missing",
+        ),
+    ],
+)
+def test_allocator_join_fails_closed_on_broker_quantity_contract_gap(
+    mutation, reason
+) -> None:
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+    )
+    allocator = _entry_pipeline_allocator_row(
+        quantity=5,
+        stage="probe_submitted",
+        submitted_qty=1,
+    )
+    mutation(allocator)
+
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=[],
+        entry_pipeline_rows=[allocator],
+        config=_verified_config(),
+    )
+
+    assert outcome["allocator_provenance_status"] == (
+        "allocator_provenance_invalid_observation_only"
+    )
+    assert outcome["allocator_provenance_error"] == reason
+    assert outcome["notional_net_profit_eligible"] is False
 
 
 def test_scale_in_outcome_delegates_quantity_owner() -> None:
@@ -4101,7 +4245,15 @@ def test_bridge_report_records_outcome_only_pipeline_source_census() -> None:
     assert source["trace_symbol_linked_row_count"] == 2
     assert source["canonical_entry_pipeline_row_count"] == 2
     assert source["trace_symbol_linked_noncanonical_row_count"] == 0
+    assert source["outcome_join_mode"] == (
+        "central_allocator_full_submission_outcome_only"
+    )
     assert report["summary"]["entry_pipeline_allocator_outcome_joined_count"] == 1
+    assert report["summary"]["entry_pipeline_allocator_partial_submission_count"] == 0
+    assert report["summary"]["entry_pipeline_allocator_tuning_input_allowed"] is True
+    assert report["summary"]["entry_pipeline_allocator_decision_authority"] == (
+        "source_quality_eligible_full_submission_outcome_only"
+    )
     assert report["summary"]["entry_pipeline_allocator_status_counts"] == {
         "central_allocator_provenance_joined": 1
     }
@@ -4225,6 +4377,53 @@ def test_bridge_report_records_outcome_only_pipeline_source_census() -> None:
                 "source_snapshot_stable": True,
             },
         )
+
+
+def test_bridge_report_keeps_partial_probe_out_of_allocator_tuning_input() -> None:
+    probe = _entry_pipeline_allocator_row(
+        quantity=50,
+        stage="probe_submitted",
+        submitted_qty=1,
+    )
+    report = build_bridge_report(
+        target_date="2026-08-14",
+        traces=[_trace()],
+        payloads=[_payload()],
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+        entry_pipeline_rows=[probe],
+        entry_pipeline_source={
+            "status": "available_hash_verified",
+            "logical_source_path": "/test/pipeline_events_2026-08-14.jsonl",
+            "source_path": "/test/pipeline_events_2026-08-14.jsonl",
+            "source_compression": "plain",
+            "source_bytes": 123,
+            "source_sha256": "c" * 64,
+            "source_content_sha256": "d" * 64,
+            "source_content_bytes": 456,
+            "source_line_count": 1,
+            "source_nonempty_line_count": 1,
+            "source_json_object_row_count": 1,
+            "source_snapshot_stable": True,
+        },
+        verified_symbol_metadata_by_trace={"trace-1": _verified_symbol_metadata()},
+    )
+
+    assert report["entry_pipeline_source"]["outcome_join_mode"] == (
+        "partial_submission_standardized_one_share_observation_only"
+    )
+    assert report["summary"]["entry_pipeline_allocator_outcome_joined_count"] == 0
+    assert report["summary"]["entry_pipeline_allocator_partial_submission_count"] == 1
+    assert report["summary"]["entry_pipeline_allocator_tuning_input_allowed"] is False
+    assert report["summary"]["entry_pipeline_allocator_decision_authority"] == (
+        "partial_submission_standardized_one_share_observation_only"
+    )
+    outcome = report["rows"][0]["future_outcome"]
+    assert outcome["allocator_submitted_qty"] == 1
+    assert outcome["allocator_submission_coverage_pct"] == 2.0
+    assert outcome["notional_net_profit_eligible"] is False
 
 
 def test_cli_defaults_pipeline_path_and_missing_source_to_observation_only(

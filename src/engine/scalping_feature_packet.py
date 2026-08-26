@@ -12,6 +12,7 @@ from src.engine.scalping.microstructure_reaction_context import (
 SCALP_FEATURE_PACKET_VERSION = "scalp_feature_packet_v1"
 SCALP_FEATURE_PACKET_QUOTE_STALE_MS = 3000
 SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS = 180_000
+SCALP_FEATURE_PACKET_MINUTE_CANDLE_FUTURE_SKEW_SEC = 2
 
 
 def _safe_number(value, default=0.0):
@@ -316,7 +317,14 @@ def _minute_candle_time_quality(recent_candles, ws_data, ticks, *, now=None) -> 
     ref_sec, ref_source = _reference_seconds_of_day(ws_data, ticks, now=now)
     age_sec = ref_sec - sec
     if age_sec < 0:
-        age_sec += 24 * 3600
+        future_skew_sec = sec - ref_sec
+        if future_skew_sec <= SCALP_FEATURE_PACKET_MINUTE_CANDLE_FUTURE_SKEW_SEC:
+            # A minute bar can be stamped at its bucket boundary a fraction
+            # ahead of the latest tick/reference clock.  Treat that bounded
+            # skew as current instead of wrapping it into a 24-hour-old bar.
+            age_sec = 0
+        else:
+            age_sec += 24 * 3600
     age_ms = max(0, int(age_sec * 1000))
     fresh = age_ms <= SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS
     base.update(
@@ -436,6 +444,21 @@ def extract_scalping_feature_packet(
     )
     intraday_range_pct = (
         round(((high_price - low_price) / low_price) * 100, 3) if low_price > 0 else 0.0
+    )
+    candle_highs = list(snapshot.get("candle_highs") or [])
+    candle_lows = list(snapshot.get("candle_lows") or [])
+    distance_from_day_high_pct_observation_state = (
+        "observed_feature_packet_recent_candles"
+        if curr_price > 0 and candle_highs
+        else "not_evaluated"
+    )
+    intraday_range_pct_observation_state = (
+        "observed_feature_packet_recent_candles"
+        if curr_price > 0
+        and candle_highs
+        and candle_lows
+        and high_price >= low_price > 0
+        else "not_evaluated"
     )
 
     buy_vol_10 = 0
@@ -800,6 +823,12 @@ def extract_scalping_feature_packet(
         "large_buy_print_detected": large_buy_print_detected,
         "distance_from_day_high_pct": distance_from_day_high_pct,
         "intraday_range_pct": intraday_range_pct,
+        "distance_from_day_high_pct_observation_state": (
+            distance_from_day_high_pct_observation_state
+        ),
+        "intraday_range_pct_observation_state": (
+            intraday_range_pct_observation_state
+        ),
         "volume_ratio_pct": volume_ratio_pct,
         "curr_vs_micro_vwap_bp": curr_vs_micro_vwap_bp,
         "micro_vwap_available": micro_vwap_available,
@@ -987,6 +1016,12 @@ def build_scalping_feature_audit_fields(packet):
         "large_buy_print_detected": payload.get("large_buy_print_detected", False),
         "distance_from_day_high_pct": payload.get("distance_from_day_high_pct", "-"),
         "intraday_range_pct": payload.get("intraday_range_pct", "-"),
+        "distance_from_day_high_pct_observation_state": payload.get(
+            "distance_from_day_high_pct_observation_state", "not_evaluated"
+        ),
+        "intraday_range_pct_observation_state": payload.get(
+            "intraday_range_pct_observation_state", "not_evaluated"
+        ),
         "volume_ratio_pct": payload.get("volume_ratio_pct", "-"),
         "recent_5tick_seconds": payload.get("recent_5tick_seconds", "-"),
         "prev_5tick_seconds": payload.get("prev_5tick_seconds", "-"),

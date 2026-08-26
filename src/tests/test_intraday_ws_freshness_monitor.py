@@ -34,6 +34,7 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
                     "ws_last_0b_age_ms": "50000",
                     "ws_last_0d_age_ms": "4000",
                     "source_quality_block_reason": "trade_tick_quiet",
+                    "last_trade_cum_volume": "1234",
                 },
                 code="000101",
             ),
@@ -45,6 +46,8 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
                     "repair_reason": "subscription_stale",
                     "ws_last_0b_age_ms": "61000",
                     "ws_last_0d_age_ms": "61000",
+                    "ws_repair_cycle_state": "ws_reg_reissued_waiting_snapshot",
+                    "ws_subscription_repair_required": True,
                 },
                 code="000202",
             ),
@@ -117,6 +120,9 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
     assert report["pipeline_counts"]["both_ws_stale"] == 1
     assert report["pipeline_counts"]["fresh_0d_stale_0b"] == 1
     assert report["snapshot_summary"]["trade_tick_quiet_count"] == 1
+    assert report["snapshot_summary"][
+        "trade_tick_quiet_cumulative_volume_provenance_counts"
+    ] == {"cumulative_volume_positive": 1}
     assert report["snapshot_summary"]["repair_recommended_count"] == 1
     assert report["snapshot_summary"]["registered_item_quota_units"] == 3
     assert report["snapshot_summary"]["registered_route_counts"] == {
@@ -130,6 +136,12 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
         "_NX": 1,
     }
     assert report["snapshot_summary"]["multi_route_registered_count"] == 1
+    assert report["causal_attribution"]["trade_tick_quiet"][
+        "cumulative_volume_provenance_counts"
+    ] == {"cumulative_volume_positive": 1}
+    assert report["causal_attribution"]["both_ws_stale"][
+        "repair_cycle_state_counts"
+    ] == {"ws_reg_reissued_waiting_snapshot": 1}
     assert (
         report["snapshot_summary"]["route_repair_policy"]
         == "remove_then_reg_required_for_route_transition"
@@ -148,6 +160,13 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
     assert all(
         item["allowed_runtime_apply"] is False
         for item in report["workorder_directives"]
+    )
+    decisions = {
+        item["order_id"]: item["decision"] for item in report["workorder_directives"]
+    }
+    assert decisions["order_ws_total_stale_escalation"] == "defer_evidence"
+    assert decisions["order_ws_trade_tick_quiet_low_liquidity_classification"] == (
+        "defer_evidence"
     )
 
 
@@ -365,6 +384,7 @@ def test_build_report_uses_same_day_live_dashboard_snapshot_fallback(
                             "0D": 100.0,
                         },
                         "last_0b_age_ms": 45000.0,
+                        "last_trade_cum_volume": 1234,
                         "last_ws_market_route": "krx_regular",
                         "last_ws_market_suffix": "",
                     },
@@ -403,6 +423,12 @@ def test_build_report_uses_same_day_live_dashboard_snapshot_fallback(
     }
     assert report["snapshot_summary"]["row_count"] == 3
     assert report["snapshot_summary"]["trade_tick_quiet_count"] == 1
+    assert (
+        report["snapshot_summary"]["top_trade_tick_quiet_symbols"][0][
+            "last_trade_cum_volume"
+        ]
+        == 1234.0
+    )
     assert report["snapshot_summary"]["repair_recommended_count"] == 0
     assert report["snapshot_summary"]["subscription_stale_like_count"] == 0
     assert report["snapshot_summary"]["observed_stale_like_count"] == 1
@@ -501,6 +527,10 @@ def test_build_report_surfaces_explicit_scanner_stale_backoff_separately(tmp_pat
                     "skip_reason": "scanner_fast_precheck_budget_reallocated",
                     "fast_precheck_observed_reason": "scanner_ws_stale_backoff_active",
                     "scanner_ws_stale_backoff_reason": "persistent_ws_gap",
+                    "ws_repair_cycle_state": "ws_reg_reissued_waiting_snapshot",
+                    "scanner_ws_stale_backoff_recheck_reason": (
+                        "not_applicable_active_backoff"
+                    ),
                     "ws_last_strength_history_age_ms": "7886.226",
                 },
                 code="047920",
@@ -533,6 +563,17 @@ def test_build_report_surfaces_explicit_scanner_stale_backoff_separately(tmp_pat
     contract = report["decision_stage_stale_backoff_metric_contract"]
     assert contract["runtime_effect"] is False
     assert contract["decision_authority"] == "instrumentation_only_no_runtime_mutation"
+    attribution = report["causal_attribution"]["decision_stage_stale_backoff"]
+    assert attribution["reason_counts"] == {"persistent_ws_gap": 1}
+    assert attribution["repair_cycle_state_counts"] == {
+        "ws_reg_reissued_waiting_snapshot": 1
+    }
+    assert attribution["recheck_reason_counts"] == {"not_applicable_active_backoff": 1}
+    assert attribution["watchlist_outcome_counts"] == {"decision_stage_only": 1}
+    order = report["workorder_directives"][0]
+    assert order["decision"] == "defer_evidence"
+    assert order["next_action"] == "recheck_after_postclose"
+    assert order["implementation_state"] == "implemented_in_source_report"
 
 
 def test_write_report_outputs_monitor_and_workorder_files(tmp_path, monkeypatch):
