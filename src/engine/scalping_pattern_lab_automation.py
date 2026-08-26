@@ -660,6 +660,106 @@ def _source_only_order_provenance(order: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _attach_existing_family_companion_provenance(
+    orders: list[dict[str, Any]],
+) -> None:
+    """Close duplicate qualitative orders only when exact metric provenance exists."""
+
+    companion_contracts = {
+        "order_ai_threshold_dominance": {
+            "source_order_id": "order_ai_threshold_miss_ev_recovery",
+            "source_contract": "scalping_ai_threshold_miss_source_metric_v1",
+            "required_source_fields": ["total_blocked", "block_ratio", "days"],
+            "implemented_scope": (
+                "score65_74_recovery_probe_ai_threshold_dominance_provenance"
+            ),
+        }
+    }
+    orders_by_id = {
+        str(order.get("order_id") or ""): order
+        for order in orders
+        if str(order.get("order_id") or "")
+    }
+    for target_order_id, spec in companion_contracts.items():
+        target = orders_by_id.get(target_order_id)
+        source = orders_by_id.get(spec["source_order_id"])
+        if not target or not source or target.get("implementation_status"):
+            continue
+        source_provenance = source.get("implementation_provenance")
+        if not isinstance(source_provenance, dict):
+            continue
+        source_snapshot = source_provenance.get("source_metric_snapshot")
+        if not isinstance(source_snapshot, dict):
+            continue
+        required_fields = spec["required_source_fields"]
+        source_fields = source_provenance.get("source_fields")
+        same_family = bool(target.get("mapped_family")) and (
+            target.get("mapped_family") == source.get("mapped_family")
+        )
+        source_contract_ok = (
+            source.get("implementation_status") == "implemented"
+            and source_provenance.get("source_contract") == spec["source_contract"]
+            and isinstance(source_fields, list)
+            and all(field in source_fields for field in required_fields)
+            and all(field in source_snapshot for field in required_fields)
+        )
+        runtime_authority_ok = (
+            target.get("runtime_effect") is False
+            and target.get("allowed_runtime_apply") is False
+            and target.get("decision_authority") == DECISION_AUTHORITY
+            and source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is False
+            and source_provenance.get("runtime_effect") is False
+            and source_provenance.get("allowed_runtime_apply") is False
+            and source_provenance.get("decision_authority") == DECISION_AUTHORITY
+        )
+        if not (same_family and source_contract_ok and runtime_authority_ok):
+            continue
+        target.update(
+            {
+                "implementation_status": "implemented",
+                "implementation_checks": [
+                    {
+                        "name": "companion_source_metric_contract",
+                        "status": "pass",
+                        "source_order_id": spec["source_order_id"],
+                        "source_contract": spec["source_contract"],
+                        "required_source_fields": required_fields,
+                    },
+                    {
+                        "name": "same_family_contract",
+                        "status": "pass",
+                        "mapped_family": target.get("mapped_family"),
+                    },
+                    {
+                        "name": "runtime_authority_contract",
+                        "status": "pass",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "decision_authority": DECISION_AUTHORITY,
+                    },
+                ],
+                "implementation_provenance": {
+                    "implementation_type": (
+                        "pattern_lab_existing_family_companion_source_metric"
+                    ),
+                    "implemented_scope": spec["implemented_scope"],
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": DECISION_AUTHORITY,
+                    "source_report_type": "scalping_pattern_lab_automation",
+                    "source_order_id": spec["source_order_id"],
+                    "source_contract": spec["source_contract"],
+                    "source_fields": list(required_fields),
+                    "source_metric_snapshot": {
+                        field: source_snapshot[field] for field in required_fields
+                    },
+                    "mapped_family": target.get("mapped_family"),
+                },
+            }
+        )
+
+
 def _code_improvement_orders(
     findings: list[dict[str, Any]], solo_findings: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -754,6 +854,7 @@ def _code_improvement_orders(
                 ),
             }
         )
+    _attach_existing_family_companion_provenance(orders)
     return orders
 
 

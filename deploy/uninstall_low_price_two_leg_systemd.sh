@@ -87,6 +87,16 @@ TIMERS=(
   korstockscan-low-price-two-leg-nhn-morning.timer
   korstockscan-low-price-two-leg-nhn-late-morning-preflight.timer
   korstockscan-low-price-two-leg-nhn-late-morning.timer
+  korstockscan-low-price-two-leg-sd-biosensor-morning-preflight.timer
+  korstockscan-low-price-two-leg-sd-biosensor-morning.timer
+  korstockscan-low-price-two-leg-sd-biosensor-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-sd-biosensor-late-morning.timer
+  korstockscan-low-price-two-leg-sd-biosensor-midday-preflight.timer
+  korstockscan-low-price-two-leg-sd-biosensor-midday.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-afternoon.timer
+  korstockscan-low-price-two-leg-samsung-ea-midday-preflight.timer
+  korstockscan-low-price-two-leg-samsung-ea-midday.timer
 )
 SERVICES=(
   korstockscan-low-price-two-leg@samsung_heavy_midday.service
@@ -173,6 +183,16 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@nhn_morning.service
   korstockscan-low-price-two-leg@nhn_late_morning.service
   korstockscan-low-price-two-leg-preflight@nhn_late_morning.service
+  korstockscan-low-price-two-leg@sd_biosensor_morning.service
+  korstockscan-low-price-two-leg-preflight@sd_biosensor_morning.service
+  korstockscan-low-price-two-leg@sd_biosensor_late_morning.service
+  korstockscan-low-price-two-leg-preflight@sd_biosensor_late_morning.service
+  korstockscan-low-price-two-leg@sd_biosensor_midday.service
+  korstockscan-low-price-two-leg-preflight@sd_biosensor_midday.service
+  korstockscan-low-price-two-leg@doosan_enerbility_afternoon.service
+  korstockscan-low-price-two-leg-preflight@doosan_enerbility_afternoon.service
+  korstockscan-low-price-two-leg@samsung_ea_midday.service
+  korstockscan-low-price-two-leg-preflight@samsung_ea_midday.service
 )
 FILES=(
   korstockscan-low-price-two-leg@.service

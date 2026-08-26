@@ -215,6 +215,13 @@ def test_pattern_lab_automation_marks_source_only_existing_family_orders_closed(
                 "days": 4,
             }
         ],
+        priority=[
+            {
+                "label": "AI threshold dominance",
+                "judgment": "warning",
+                "why": "blocked_ai_score_share is dominant",
+            }
+        ],
     )
     monkeypatch.setattr(mod, "CLAUDE_LAB_DIR", claude_dir)
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "report")
@@ -232,6 +239,17 @@ def test_pattern_lab_automation_marks_source_only_existing_family_orders_closed(
         ]
         == "scalping_ai_threshold_miss_source_metric_v1"
     )
+    dominance_order = orders["order_ai_threshold_dominance"]
+    assert dominance_order["implementation_status"] == "implemented"
+    assert dominance_order["implementation_provenance"]["source_order_id"] == (
+        "order_ai_threshold_miss_ev_recovery"
+    )
+    assert dominance_order["implementation_provenance"]["source_metric_snapshot"] == {
+        "total_blocked": 17,
+        "block_ratio": 55.5,
+        "days": 4,
+    }
+    assert dominance_order["implementation_provenance"]["runtime_effect"] is False
     assert (
         orders["order_partial_only_표류_전용_timeout_report_only"][
             "implementation_status"
@@ -261,3 +279,69 @@ def test_pattern_lab_automation_marks_source_only_existing_family_orders_closed(
             == "contract_defined_waiting_sample"
         )
         assert order["implementation_provenance"]["runtime_effect"] is False
+
+
+def test_existing_family_companion_provenance_fails_closed_on_runtime_authority():
+    target = {
+        "order_id": "order_ai_threshold_dominance",
+        "mapped_family": "score65_74_recovery_probe",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": mod.DECISION_AUTHORITY,
+    }
+    source = {
+        "order_id": "order_ai_threshold_miss_ev_recovery",
+        "mapped_family": "score65_74_recovery_probe",
+        "implementation_status": "implemented",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "implementation_provenance": {
+            "source_contract": "scalping_ai_threshold_miss_source_metric_v1",
+            "source_fields": ["total_blocked", "block_ratio", "days"],
+            "source_metric_snapshot": {
+                "total_blocked": 17,
+                "block_ratio": 55.5,
+                "days": 4,
+            },
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": mod.DECISION_AUTHORITY,
+        },
+    }
+
+    mod._attach_existing_family_companion_provenance([target, source])
+
+    assert "implementation_status" not in target
+
+
+def test_existing_family_companion_provenance_fails_closed_on_target_authority():
+    target = {
+        "order_id": "order_ai_threshold_dominance",
+        "mapped_family": "score65_74_recovery_probe",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "decision_authority": mod.DECISION_AUTHORITY,
+    }
+    source = {
+        "order_id": "order_ai_threshold_miss_ev_recovery",
+        "mapped_family": "score65_74_recovery_probe",
+        "implementation_status": "implemented",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "implementation_provenance": {
+            "source_contract": "scalping_ai_threshold_miss_source_metric_v1",
+            "source_fields": ["total_blocked", "block_ratio", "days"],
+            "source_metric_snapshot": {
+                "total_blocked": 17,
+                "block_ratio": 55.5,
+                "days": 4,
+            },
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": mod.DECISION_AUTHORITY,
+        },
+    }
+
+    mod._attach_existing_family_companion_provenance([target, source])
+
+    assert "implementation_status" not in target

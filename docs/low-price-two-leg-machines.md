@@ -2,7 +2,7 @@
 
 ## Scope
 
-Forty independent regular-session profiles implement the user-selected active
+Forty-five independent regular-session profiles implement the user-selected active
 scope. Every profile owns its process, lock, durable state,
 authority artifact, and exact broker-order ledger.
 
@@ -28,7 +28,7 @@ authority artifact, and exact broker-order ledger.
 | `samsung_ea_morning` | 삼성E&A `028050` | SOR regular | 09:45 through 09:59 |
 | `samsung_ea_late_morning` | 삼성E&A `028050` | SOR regular | 10:05 through 10:14 |
 | `samsung_ea_afternoon` | 삼성E&A `028050` | SOR regular | 14:05 through 14:34 |
-| `sk_telecom_late_morning` | SK텔레콤 `017670` | SOR regular | 10:45 through 10:59 |
+| `sk_telecom_late_morning` | SK텔레콤 `017670` | SOR regular | 10:45 through 10:54 |
 | `hanse_morning` | 한세실업 `105630` | SOR regular | 09:15 through 09:44 |
 | `hanse_afternoon` | 한세실업 `105630` | SOR regular | 14:20 through 14:29 |
 | `cj_cgv_midday` | CJ CGV `079160` | SOR regular | 13:20 through 13:49 |
@@ -38,16 +38,21 @@ authority artifact, and exact broker-order ledger.
 | `cj_cgv_late_morning` | CJ CGV `079160` | SOR regular | 10:00 through 10:09 |
 | `kepco_late_morning` | 한국전력 `015760` | SOR regular | 10:00 through 10:59 |
 | `kepco_midday` | 한국전력 `015760` | SOR regular | 13:30 through 13:49 |
-| `hanse_late_morning` | 한세실업 `105630` | SOR regular | 10:00 through 10:59 |
+| `hanse_late_morning` | 한세실업 `105630` | SOR regular | 10:00 through 10:19 |
 | `hanse_midday` | 한세실업 `105630` | SOR regular | 13:20 through 13:49 |
 | `nhn_afternoon` | NHN `181710` | SOR regular | 14:00 through 14:40 |
 | `youngone_morning` | 영원무역 `111770` | SOR regular | 09:20 through 09:39 |
 | `youngone_afternoon` | 영원무역 `111770` | SOR regular | 14:30 through 14:40 |
 | `sk_eternix_late_morning` | SK이터닉스 `475150` | SOR regular | 10:45 through 10:54 |
-| `mirae_asset_late_morning` | 미래에셋증권 `006800` | SOR regular | 10:00 through 10:59 |
+| `mirae_asset_late_morning` | 미래에셋증권 `006800` | SOR regular | 10:00 through 10:29 |
 | `kepco_morning` | 한국전력 `015760` | SOR regular | 09:35 through 09:59 |
 | `nhn_morning` | NHN `181710` | SOR regular | 09:40 through 09:49 |
 | `nhn_late_morning` | NHN `181710` | SOR regular | 10:30 through 10:49 |
+| `sd_biosensor_morning` | 에스디바이오센서 `137310` | SOR regular | 09:30 through 09:49 |
+| `sd_biosensor_late_morning` | 에스디바이오센서 `137310` | SOR regular | 10:40 through 10:59 |
+| `sd_biosensor_midday` | 에스디바이오센서 `137310` | SOR regular | 13:25 through 13:54 |
+| `doosan_enerbility_afternoon` | 두산에너빌리티 `034020` | SOR regular | 14:10 through 14:29 |
+| `samsung_ea_midday` | 삼성E&A `028050` | SOR regular | 13:20 through 13:49 |
 
 The original 30-day calibration and 16-day untouched holdout selected independent entry
 contracts: Samsung Heavy midday uses 30 bars, drawdown at least 0.75%, and
@@ -307,6 +312,43 @@ service still requires its same-day preflight authority before it can start.
 Quantity, no-stop custody, SOR routing, broker guards, provider, and another
 machine's order ledger are unchanged.
 
+## 2026-08-26 recommendation implementation
+
+The tracked `data/config/low_price_two_leg_expanded_profile_evidence_2026-08-26.json`
+binds the 57-trading-day source report canonical hash, all 12 positive
+calibration/holdout recommendations, and the explicit user implementation
+instruction. The exact-date transition keeps the 40-profile generation through
+2026-08-26 and selects 45 profiles only from 2026-08-27. Existing orders and
+held positions remain bound to their original policy snapshot.
+
+Seven existing profiles adopt the reviewed entry-generation rows:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---:|---|---:|---:|
+| `sk_eternix_late_morning` | 10:45~10:54 | 15 | 1.75% | 0.20% | close/-1 tick | 5 | +4 ticks |
+| `cj_cgv_late_morning` | 10:00~10:09 | 15 | 0.50% | 0.35% | close/-1 tick | 5 | +4 ticks |
+| `mirae_asset_late_morning` | 10:00~10:29 | 20 | 1.00% | 0.35% | -1/-2 ticks | 5 | +4 ticks |
+| `kepco_morning` | 09:35~09:59 | 15 | 0.50% | 0.75% | close/-1 tick | 5 | +4 ticks |
+| `nhn_late_morning` | 10:30~10:49 | 30 | 0.50% | 0.50% | close/-1 tick | 5 | +4 ticks |
+| `sk_telecom_late_morning` | 10:45~10:54 | 30 | 0.75% | 0.20% | close/-1 tick | 5 | +4 ticks |
+| `hanse_late_morning` | 10:00~10:19 | 20 | 0.75% | 0.20% | close/-1 tick | 5 | +4 ticks |
+
+Five new independent profiles are added:
+
+| Profile | Scan bars | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---|---:|---:|---|---:|---:|
+| `sd_biosensor_morning` | 09:30~09:49 | 15 | 0.75% | 0.75% | close/-1 tick | 5 | +2 ticks |
+| `sd_biosensor_late_morning` | 10:40~10:59 | 30 | 0.50% | 0.50% | close/-1 tick | 5 | +2 ticks |
+| `sd_biosensor_midday` | 13:25~13:54 | 20 | 0.75% | 0.20% | close/-1 tick | 5 | +2 ticks |
+| `doosan_enerbility_afternoon` | 14:10~14:29 | 15 | 0.75% | 0.05% | close/-1 tick | 5 | +2 ticks |
+| `samsung_ea_midday` | 13:20~13:49 | 30 | 1.00% | 0.75% | close/-1 tick | 5 | +2 ticks |
+
+The wrappers and ten exact timers cover every new profile. Preflight still
+requires the exact-date applied policy, immutable evidence, main-bot presence,
+manual-owner exclusion, shared token, and all broker/order guards. This revision
+does not change provider route, quantity, no-stop custody, or another owner's
+orders.
+
 ## Runtime authority and isolation
 
 The live service is fail-closed unless all of the following are true for the
@@ -409,7 +451,7 @@ profile may propose one tightening axis for the next PREOPEN:
 - drawdown from the profile baseline to at most `baseline + 0.25%p`, or
 - near-low proximity from the profile baseline to at most `baseline - 0.10%p`.
 
-Across all twenty-seven profiles and the existing Samsung regular machines, at most one
+Across all forty-five profiles and the existing Samsung regular machines, at most one
 profile/machine and one entry axis may change per day.  The Samsung candidate is
 produced first; if it owns a valid mutation, or its same-date candidate is
 invalid, the lower-price family carries all policies forward. Quantity is fixed

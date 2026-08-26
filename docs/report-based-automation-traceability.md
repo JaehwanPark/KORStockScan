@@ -5,6 +5,11 @@
 
 이 문서는 report 기반 자동화가 누락되지 않도록 `산출물 -> 소비자 -> 적용 단계 -> owner`를 추적하는 registry다. 최종 목표는 기대값/순이익 극대화지만, report 산출물이 곧바로 runtime threshold 변경으로 이어지지는 않는다.
 
+저가주 two-leg exact-date inventory는 `2026-08-24=35`, `2026-08-25~26=40`,
+`2026-08-27 이후=45` 프로필이다. 2026-08-27 세대는 8월 26일 사용자 승인
+추천 12건(기존 로직 7, 신규 프로필 5)을 immutable evidence hash와 PREOPEN
+applied-policy 검증으로만 소비하며, 이전 주문·보유는 신호일 snapshot을 유지한다.
+
 ## 1. 자동화 단계
 
 | 단계 | 상태 | 의미 | live 영향 |

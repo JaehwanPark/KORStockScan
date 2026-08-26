@@ -1,6 +1,6 @@
 # 2026-08-26 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-08-26T17:05:01+09:00
+- generated_at: 2026-08-26T20:18:37+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -65,7 +65,7 @@
 - record_id= code=023160 name=태광 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.38 final=None ai=50.0 tick=1.0 micro_vwap=-11.82
 - record_id= code=130660 name=한전산업 label=pyramid_open_unresolved blocker=profit_not_enough profit=-0.0 final=None ai=48.0 tick=2.5 micro_vwap=-12.09
 - record_id= code=103590 name=일진전기 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.2 final=None ai=50.0 tick=0.2 micro_vwap=32.39
-- record_id= code=062040 name=산일전기 label=pyramid_open_unresolved blocker=micro_vwap_overheated profit=1.26 final=None ai=60.0 tick=1.0 micro_vwap=162.04
+- record_id= code=062040 name=산일전기 label=pyramid_open_unresolved blocker=micro_vwap_overheated profit=1.26 final=None ai=50.0 tick=0.25 micro_vwap=26.54
 
 ## Real Scale-In Performance Rows
 

@@ -169,6 +169,12 @@
   - 판정 기준: `process_order_cancellation`은 non-dict/truthy 응답이나 오류 메시지를 성공으로 간주하지 않고 explicit broker `code=0` ACK를 요구한다. ACK 뒤에도 exact BUY execution receipt, 원주문 terminal 상태, KRX/NXT 전체 잔고를 대사해 부분체결 수량만 immutable owner에 결속한 뒤 DB/memory를 `HOLDING` 또는 terminal entry state로 전환한다. Direct-call census는 late-parent replacement BUY, S15 recovery/no-fill/partial-fill BUY, entry timeout/SOR retry/reprice bundle, pending-add/scale-in, generic cancellation을 각각 독립 crash boundary와 terminal-proof acceptance로 닫는다.
   - 금지: `취소가능수량|잔고|주문없음` 문자열, 단일 venue 잔고, 추정 수량만으로 phantom holding·부분체결 완료를 만들거나 신규 주문 권한을 열지 않는다. 이 항목은 현재 main SELL/R3 수정 범위와 분리하며 별도 구현·리뷰 전에는 완료 처리하지 않는다.
 
+- [x] `[LowPriceRecommendationImplementation0826] 8월 26일 저가주 에피소드 추천 12건 exact-date 구현·리뷰` (`Due: 2026-08-26`, `Slot: POSTCLOSE`, `TimeWindow: 21:30~23:59`, `Track: ScalpingLogic`)
+  - Source: [low_price_two_leg_expanded_candidate_research_2026-08-26.json](/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-08-26.json), [low_price_two_leg_expanded_profile_evidence_2026-08-26.json](/home/ubuntu/KORStockScan/data/config/low_price_two_leg_expanded_profile_evidence_2026-08-26.json), [low-price-two-leg-machines.md](/home/ubuntu/KORStockScan/docs/low-price-two-leg-machines.md)
+  - 구현: 2026-08-27 exact-date 경계에서 기존 entry 로직 7건과 신규 독립 profile 5건을 반영해 40→45개 세대로 전환한다. 2026-08-26 이하 조회는 40개 snapshot을 유지하며 기존 주문·보유 custody를 재해석하지 않는다.
+  - 권한 경계: quantity, provider, main bot, broker/order guard, hard safety, 다른 owner 주문은 변경하지 않는다. 신규 profile은 same-day applied policy·evidence hash·manual owner·preflight authority가 모두 유효할 때만 시작한다.
+  - 결과: PREOPEN read-only build는 `candidate_validated_profile_revision_applied`, 45 profiles, 12 evidence `ready`, applied payload `valid`를 반환했다. 신규 5개 profile의 preflight/live timer 10개를 포함한 90개 timer가 enabled·`NeedDaemonReload=no`이고 모두 2026-08-27 정확 시각을 가리킨다. 오늘 `kepco_afternoon`은 두 매수 10주 leg와 두 target order를 소유한 20주 `TARGET_OPEN` 정상 custody라 중지·취소하지 않았다. 표적 및 관련 525 tests, Ruff, format, compile, `bash -n`, systemd verify, parser, `git diff --check`가 모두 통과했고 최종 리뷰 finding은 0건이다.
+
 
 
 

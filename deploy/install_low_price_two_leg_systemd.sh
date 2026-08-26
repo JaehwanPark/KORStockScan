@@ -89,6 +89,16 @@ UNITS=(
   korstockscan-low-price-two-leg-nhn-morning.timer
   korstockscan-low-price-two-leg-nhn-late-morning-preflight.timer
   korstockscan-low-price-two-leg-nhn-late-morning.timer
+  korstockscan-low-price-two-leg-sd-biosensor-morning-preflight.timer
+  korstockscan-low-price-two-leg-sd-biosensor-morning.timer
+  korstockscan-low-price-two-leg-sd-biosensor-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-sd-biosensor-late-morning.timer
+  korstockscan-low-price-two-leg-sd-biosensor-midday-preflight.timer
+  korstockscan-low-price-two-leg-sd-biosensor-midday.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-afternoon.timer
+  korstockscan-low-price-two-leg-samsung-ea-midday-preflight.timer
+  korstockscan-low-price-two-leg-samsung-ea-midday.timer
 )
 TIMERS=(
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
@@ -171,6 +181,16 @@ TIMERS=(
   korstockscan-low-price-two-leg-nhn-morning.timer
   korstockscan-low-price-two-leg-nhn-late-morning-preflight.timer
   korstockscan-low-price-two-leg-nhn-late-morning.timer
+  korstockscan-low-price-two-leg-sd-biosensor-morning-preflight.timer
+  korstockscan-low-price-two-leg-sd-biosensor-morning.timer
+  korstockscan-low-price-two-leg-sd-biosensor-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-sd-biosensor-late-morning.timer
+  korstockscan-low-price-two-leg-sd-biosensor-midday-preflight.timer
+  korstockscan-low-price-two-leg-sd-biosensor-midday.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-afternoon.timer
+  korstockscan-low-price-two-leg-samsung-ea-midday-preflight.timer
+  korstockscan-low-price-two-leg-samsung-ea-midday.timer
 )
 RETIRED_DAEWOO_UNITS=(
   korstockscan-low-price-two-leg-daewoo-ec-midday-preflight.timer
@@ -218,6 +238,7 @@ owners = {
     "079160": "cj_cgv_low_price_two_leg_owner",
     "002900": "tym_low_price_two_leg_owner",
     "111770": "youngone_low_price_two_leg_owner",
+    "137310": "sd_biosensor_low_price_two_leg_owner",
     "181710": "nhn_low_price_two_leg_owner",
     "475150": "sk_eternix_low_price_two_leg_owner",
 }
@@ -229,4 +250,4 @@ PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed forty lower-price profile timers; retired Daewoo units were removed"
+echo "installed forty-five lower-price profile timers; retired Daewoo units were removed"
