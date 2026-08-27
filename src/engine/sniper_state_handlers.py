@@ -55314,6 +55314,75 @@ def _entry_setup_exploration_submit_cap_guard(
     return fields
 
 
+def _commit_entry_setup_exploration_probe_cap(
+    stock: dict | None,
+    code: str,
+    broker_order_no: str,
+    *,
+    now_ts: float,
+) -> bool:
+    """Commit every broker-accepted exploration order to the durable cap."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    if not _truthy_field(
+        stock.get("entry_opportunity_recheck_exploration_probe_only")
+    ):
+        return False
+    trade_date = datetime.fromtimestamp(now_ts, _KST).date().isoformat()
+    ledger_committed = False
+    try:
+        durable_count = record_exploration_probe_submission(
+            trade_date=trade_date,
+            stock_code=code,
+            broker_order_no=broker_order_no,
+        )
+    except (OSError, ValueError) as exc:
+        try:
+            mark_exploration_probe_cap_fail_closed(
+                trade_date=trade_date,
+                reason=str(exc),
+            )
+        except OSError:
+            pass
+        durable_count = _safe_int(
+            stock.get("entry_setup_live_policy_max_daily_exploration_probes"),
+            0,
+        )
+        _ENTRY_OPPORTUNITY_RECHECK_STATE.sync_exploration_probe_submit_count(
+            durable_count
+        )
+        log_error(
+            f"[ENTRY_SETUP_EXPLORATION_CAP] {stock.get('name')}({code}) "
+            f"ledger write failed: {exc}"
+        )
+    else:
+        ledger_committed = True
+        _ENTRY_OPPORTUNITY_RECHECK_STATE.sync_exploration_probe_submit_count(
+            durable_count
+        )
+    _log_entry_pipeline(
+        stock,
+        code,
+        (
+            "entry_setup_exploration_probe_cap_committed"
+            if ledger_committed
+            else "entry_setup_exploration_probe_cap_fail_closed"
+        ),
+        entry_setup_exploration_daily_probe_count=durable_count,
+        entry_setup_exploration_max_daily_probes=_safe_int(
+            stock.get("entry_setup_live_policy_max_daily_exploration_probes"),
+            0,
+        ),
+        entry_setup_exploration_cap_basis="durable_broker_accepted_probe_orders",
+        entry_setup_exploration_cap_ledger_ok=ledger_committed,
+        broker_order_no=str(broker_order_no or "").strip(),
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        runtime_effect=True,
+    )
+    return ledger_committed
+
+
 def _score65_74_recovery_probe_repeat_guard(
     stock: dict | None,
     code: str | None,
@@ -69758,6 +69827,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             msg=msg,
             entry_orders=successful_orders,
         )
+        _commit_entry_setup_exploration_probe_cap(
+            stock,
+            code,
+            ord_no,
+            now_ts=now_ts,
+        )
         if bool(planned_order.get("entry_split_order_probe_first_applied")):
             probe_bundle_id = str(
                 planned_order.get("entry_split_order_probe_bundle_id") or ""
@@ -69817,71 +69892,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     {"effective_venue": entry_execution_cohort},
                 ),
             )
-            if stock.get("entry_opportunity_recheck_exploration_probe_only"):
-                exploration_ledger_committed = False
-                try:
-                    durable_exploration_count = record_exploration_probe_submission(
-                        trade_date=datetime.fromtimestamp(now_ts, _KST)
-                        .date()
-                        .isoformat(),
-                        stock_code=code,
-                        broker_order_no=ord_no,
-                    )
-                except (OSError, ValueError) as exc:
-                    try:
-                        mark_exploration_probe_cap_fail_closed(
-                            trade_date=datetime.fromtimestamp(now_ts, _KST)
-                            .date()
-                            .isoformat(),
-                            reason=str(exc),
-                        )
-                    except OSError:
-                        pass
-                    durable_exploration_count = _safe_int(
-                        stock.get(
-                            "entry_setup_live_policy_max_daily_exploration_probes"
-                        ),
-                        0,
-                    )
-                    _ENTRY_OPPORTUNITY_RECHECK_STATE.sync_exploration_probe_submit_count(
-                        durable_exploration_count
-                    )
-                    log_error(
-                        f"[ENTRY_SETUP_EXPLORATION_CAP] {stock.get('name')}({code}) "
-                        f"ledger write failed: {exc}"
-                    )
-                else:
-                    exploration_ledger_committed = True
-                    _ENTRY_OPPORTUNITY_RECHECK_STATE.sync_exploration_probe_submit_count(
-                        durable_exploration_count
-                    )
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    (
-                        "entry_setup_exploration_probe_cap_committed"
-                        if exploration_ledger_committed
-                        else "entry_setup_exploration_probe_cap_fail_closed"
-                    ),
-                    entry_setup_exploration_daily_probe_count=(
-                        _ENTRY_OPPORTUNITY_RECHECK_STATE.daily_exploration_probe_submit_count
-                    ),
-                    entry_setup_exploration_max_daily_probes=_safe_int(
-                        stock.get(
-                            "entry_setup_live_policy_max_daily_exploration_probes"
-                        ),
-                        0,
-                    ),
-                    entry_setup_exploration_cap_basis=(
-                        "durable_broker_accepted_probe_orders"
-                    ),
-                    entry_setup_exploration_cap_ledger_ok=(
-                        exploration_ledger_committed
-                    ),
-                    actual_order_submitted=True,
-                    broker_order_forbidden=False,
-                    runtime_effect=True,
-                )
         log_info(
             f"[LATENCY_ENTRY_ORDER_SENT] {stock.get('name')}({code}) "
             f"tag={request['tag']} qty={qty} price={broker_price} guard_price={price} "

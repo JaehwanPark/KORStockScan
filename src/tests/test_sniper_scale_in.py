@@ -42764,6 +42764,122 @@ def test_exploration_submit_cap_guard_rechecks_qty_and_durable_count(monkeypatch
     )
 
 
+def test_broker_accepted_non_split_exploration_order_commits_durable_cap(monkeypatch):
+    stock = {
+        "name": "V2.14 NORMAL LEG",
+        "entry_opportunity_recheck_exploration_probe_only": True,
+        "entry_setup_live_policy_max_daily_exploration_probes": 3,
+    }
+    calls = []
+    logs = []
+    synced = []
+    monkeypatch.setattr(
+        state_handlers,
+        "record_exploration_probe_submission",
+        lambda **kwargs: calls.append(kwargs) or 2,
+    )
+    monkeypatch.setattr(
+        state_handlers._ENTRY_OPPORTUNITY_RECHECK_STATE,
+        "sync_exploration_probe_submit_count",
+        lambda count: synced.append(count),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    committed = state_handlers._commit_entry_setup_exploration_probe_cap(
+        stock,
+        "006220",
+        "0026339",
+        now_ts=datetime(
+            2026, 8, 27, 9, 59, tzinfo=state_handlers._KST
+        ).timestamp(),
+    )
+
+    assert committed is True
+    assert calls == [
+        {
+            "trade_date": "2026-08-27",
+            "stock_code": "006220",
+            "broker_order_no": "0026339",
+        }
+    ]
+    assert synced == [2]
+    assert logs == [
+        (
+            "entry_setup_exploration_probe_cap_committed",
+            {
+                "entry_setup_exploration_daily_probe_count": 2,
+                "entry_setup_exploration_max_daily_probes": 3,
+                "entry_setup_exploration_cap_basis": (
+                    "durable_broker_accepted_probe_orders"
+                ),
+                "entry_setup_exploration_cap_ledger_ok": True,
+                "broker_order_no": "0026339",
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "runtime_effect": True,
+            },
+        )
+    ]
+
+
+def test_broker_accepted_exploration_order_ledger_failure_fails_closed(monkeypatch):
+    stock = {
+        "name": "V2.14 FAIL CLOSED",
+        "entry_opportunity_recheck_exploration_probe_only": True,
+        "entry_setup_live_policy_max_daily_exploration_probes": 3,
+    }
+    failures = []
+    logs = []
+    synced = []
+
+    def fail_record(**_kwargs):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(
+        state_handlers,
+        "record_exploration_probe_submission",
+        fail_record,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "mark_exploration_probe_cap_fail_closed",
+        lambda **kwargs: failures.append(kwargs),
+    )
+    monkeypatch.setattr(
+        state_handlers._ENTRY_OPPORTUNITY_RECHECK_STATE,
+        "sync_exploration_probe_submit_count",
+        lambda count: synced.append(count),
+    )
+    monkeypatch.setattr(state_handlers, "log_error", lambda *_args: None)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    committed = state_handlers._commit_entry_setup_exploration_probe_cap(
+        stock,
+        "488280",
+        "0027440",
+        now_ts=datetime(
+            2026, 8, 27, 10, 5, tzinfo=state_handlers._KST
+        ).timestamp(),
+    )
+
+    assert committed is False
+    assert failures == [
+        {"trade_date": "2026-08-27", "reason": "disk unavailable"}
+    ]
+    assert synced == [3]
+    assert logs[0][0] == "entry_setup_exploration_probe_cap_fail_closed"
+    assert logs[0][1]["entry_setup_exploration_cap_ledger_ok"] is False
+    assert logs[0][1]["entry_setup_exploration_daily_probe_count"] == 3
+
+
 def test_holding_recent_ws_blocks_divergent_rest_quote_recovery(monkeypatch):
     state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
     pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
