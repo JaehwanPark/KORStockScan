@@ -2165,6 +2165,7 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             ticks,
             recent_candles=recent_candles,
             strategy="SCALPING",
+            metadata_extra={"position_tag": "S15_FAST"},
             candle_context=candle_context,
         )
 

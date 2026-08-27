@@ -7931,6 +7931,18 @@ class GPTSniperEngine:
             ).strip()
             entry_setup_live_policy = resolve_live_prompt_policy(
                 configured_prompt_version=configured_entry_prompt_version,
+                position_tag=(
+                    metadata_extra.get("position_tag")
+                    if isinstance(metadata_extra, dict)
+                    else None
+                )
+                or pre_prompt_snapshot.get("position_tag")
+                or (
+                    candle_context.get("position_tag")
+                    if isinstance(candle_context, dict)
+                    else None
+                )
+                or (ws_data.get("position_tag") if isinstance(ws_data, dict) else None),
                 effective_venue=(
                     pre_prompt_snapshot.get("effective_venue")
                     or (
@@ -11175,6 +11187,16 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 strategy="SCALPING",
                 cache_profile="condition_entry",
                 prompt_profile="watching",
+                metadata_extra={
+                    "position_tag": str(
+                        (
+                            condition_profile.get("position_tag")
+                            if isinstance(condition_profile, dict)
+                            else getattr(condition_profile, "position_tag", None)
+                        )
+                        or "CONDITION"
+                    ).strip()
+                },
                 candle_context=candle_context,
             )
             return normalize_condition_entry_from_scalping_result(result)

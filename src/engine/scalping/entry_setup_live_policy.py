@@ -34,8 +34,8 @@ from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
-LIVE_CANDIDATE_SCHEMA = "entry_setup_v2_14_bounded_live_candidate_v1"
-PREOPEN_ACTIVATION_SCHEMA = "entry_setup_v2_14_preopen_activation_v1"
+LIVE_CANDIDATE_SCHEMA = "entry_setup_v2_14_bounded_live_candidate_v2"
+PREOPEN_ACTIVATION_SCHEMA = "entry_setup_v2_14_preopen_activation_v2"
 BATCH_SCHEMA = "ai_entry_setup_paired_replay_batch_v1"
 DETAILED_REPORT_SCHEMA = "ai_prompt_detailed_paired_replay_v1"
 LIVE_CANDIDATE_DIR = DATA_DIR / "threshold_cycle" / "bounded_live_candidates"
@@ -45,6 +45,7 @@ BATCH_REPORT_DIR = DATA_DIR / "report" / "ai_entry_setup_paired_replay_batch"
 CANARY_ENV_KEY = "KORSTOCKSCAN_ENTRY_SETUP_V2_14_KRX_CANARY_ENABLED"
 CANARY_VENUE = "KRX"
 CANARY_SESSION = "KRX_REGULAR"
+CANARY_POSITION_TAGS = ("SCANNER",)
 CLEAN_TUNING_BASELINE_DATE = "2026-06-05"
 PERFORMANCE_CANARY_MODE = "performance_bounded"
 EXPLORATION_CANARY_MODE = "one_share_exploration"
@@ -866,6 +867,7 @@ def build_live_candidate(
         "operator_approval_required": False,
         "operator_disable_env": CANARY_ENV_KEY,
         "risk_contract": {
+            "eligible_position_tags": list(CANARY_POSITION_TAGS),
             "one_share_probe_first_required": True,
             "ai_full_entry_forbidden": True,
             "fresh_submit_revalidation_required": True,
@@ -1128,6 +1130,8 @@ def _runtime_candidate_contract_errors(
         errors.append("runtime_candidate_cohort_invalid")
     risk_contract = candidate.get("risk_contract")
     risk_contract = risk_contract if isinstance(risk_contract, dict) else {}
+    if risk_contract.get("eligible_position_tags") != list(CANARY_POSITION_TAGS):
+        errors.append("runtime_candidate_position_owner_scope_invalid")
     for key in (
         "one_share_probe_first_required",
         "ai_full_entry_forbidden",
@@ -1243,6 +1247,9 @@ def build_preopen_activation(
         "broker_order_forbidden": True,
         "activation_contract": {
             "preopen_only": True,
+            "eligible_position_tags": candidate_risk_contract.get(
+                "eligible_position_tags"
+            ),
             "one_share_probe_first_required": True,
             "ai_full_entry_forbidden": True,
             "residual_multi_leg_forbidden": candidate_risk_contract.get(
@@ -1299,6 +1306,7 @@ def resolve_live_prompt_policy(
     configured_prompt_version: str,
     effective_venue: Any,
     session_bucket: Any,
+    position_tag: Any = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     current = (now or datetime.now(KST)).astimezone(KST)
@@ -1314,6 +1322,7 @@ def resolve_live_prompt_policy(
         "target_date": target_date,
         "effective_venue": _normalize_venue(effective_venue),
         "session_bucket": _normalize_session(session_bucket),
+        "position_tag": str(position_tag or "").strip().upper(),
         "activation_path": str(activation_path(target_date)),
         "runtime_effect": False,
         "canary_mode": None,
@@ -1329,6 +1338,9 @@ def resolve_live_prompt_policy(
         or result["session_bucket"] != CANARY_SESSION
     ):
         result["status"] = "fallback_non_krx_regular_cohort"
+        return result
+    if result["position_tag"] not in CANARY_POSITION_TAGS:
+        result["status"] = "fallback_position_owner_out_of_scope"
         return result
     runtime_contract_errors = _runtime_probe_contract_errors(target_date=target_date)
     if runtime_contract_errors:
@@ -1384,6 +1396,8 @@ def resolve_live_prompt_policy(
         or _normalize_venue(activation.get("effective_venue")) != CANARY_VENUE
         or _normalize_session(activation.get("session_bucket")) != CANARY_SESSION
         or activation_contract.get("preopen_only") is not True
+        or activation_contract.get("eligible_position_tags")
+        != list(CANARY_POSITION_TAGS)
         or activation_contract.get("one_share_probe_first_required") is not True
         or activation_contract.get("ai_full_entry_forbidden") is not True
         or activation_contract.get("nxt_control_unchanged") is not True

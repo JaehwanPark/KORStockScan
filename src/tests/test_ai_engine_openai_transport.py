@@ -3386,6 +3386,7 @@ def test_analyze_target_operator_promotes_decision_quality_v2_7(monkeypatch):
 def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch):
     engine = _build_engine()
     captured = {}
+    live_policy_kwargs = {}
     monkeypatch.setattr(
         openai_module,
         "TRADING_RULES",
@@ -3398,10 +3399,10 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
             OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=True,
         ),
     )
-    monkeypatch.setattr(
-        openai_module,
-        "resolve_live_prompt_policy",
-        lambda **_kwargs: {
+
+    def _resolve_live_policy(**kwargs):
+        live_policy_kwargs.update(kwargs)
+        return {
             "enabled": True,
             "status": "active_bounded_krx_canary",
             "canary_mode": "performance_bounded",
@@ -3415,7 +3416,12 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
             "activation_artifact_sha256": "activation-sha",
             "candidate_contract_sha256": "candidate-sha",
             "runtime_effect": True,
-        },
+        }
+
+    monkeypatch.setattr(
+        openai_module,
+        "resolve_live_prompt_policy",
+        _resolve_live_policy,
     )
     setup_evidence = build_entry_setup_evidence(
         exact_payload={"current": {"price": 10100}},
@@ -3484,6 +3490,7 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
         _sample_candles(),
         strategy="SCALPING",
         prompt_profile="watching",
+        metadata_extra={"position_tag": "SCANNER"},
         candle_context=candle_context,
     )
 
@@ -3518,6 +3525,7 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
     assert captured["metadata_extra"]["entry_setup_live_policy_status"] == (
         "active_bounded_krx_canary"
     )
+    assert live_policy_kwargs["position_tag"] == "SCANNER"
     assert result["ai_prompt_version"] == (
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
     )

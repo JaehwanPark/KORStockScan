@@ -374,6 +374,7 @@ def get_detailed_reason(code):
                 ws_data,
                 recent_ticks,
                 recent_candles,
+                metadata_extra={"position_tag": target.get("position_tag")},
                 candle_context=candle_context,
             )
             ai_action = ai_decision.get("action", "WAIT")
@@ -514,6 +515,9 @@ def get_realtime_ai_scores(codes):
                     ws_data,
                     ticks,
                     candles,
+                    metadata_extra={
+                        "position_tag": (target.get("position_tag") if target else None)
+                    },
                     candle_context=candle_context,
                 )
                 scores[code] = ai_decision.get("score", 50)

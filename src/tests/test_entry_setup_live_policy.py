@@ -219,10 +219,12 @@ def test_passed_postclose_candidate_activates_only_next_day_krx(monkeypatch, tmp
     )
     assert candidate["promotion_metrics"]["candidate_exposure_decision_count"] == 12
     assert candidate["canary_mode"] == policy.PERFORMANCE_CANARY_MODE
+    assert candidate["risk_contract"]["eligible_position_tags"] == ["SCANNER"]
     assert candidate["entry_setup_evidence_version"] == ENTRY_SETUP_EVIDENCE_VERSION
     assert activation["entry_structure_phase_policy_version"] == (
         STRUCTURE_PHASE_POLICY_VERSION
     )
+    assert activation["activation_contract"]["eligible_position_tags"] == ["SCANNER"]
 
     krx = policy.resolve_live_prompt_policy(
         configured_prompt_version=(
@@ -230,6 +232,7 @@ def test_passed_postclose_candidate_activates_only_next_day_krx(monkeypatch, tmp
         ),
         effective_venue="KRX",
         session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
         now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
     )
     assert krx["enabled"] is True
@@ -248,12 +251,34 @@ def test_passed_postclose_candidate_activates_only_next_day_krx(monkeypatch, tmp
         ),
         effective_venue="NXT",
         session_bucket="NXT_AFTERMARKET",
+        position_tag="SCANNER",
         now=datetime(2026, 8, 7, 16, 0, tzinfo=policy.KST),
     )
     assert nxt["enabled"] is False
     assert nxt["selected_prompt_version"] == (
         DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
     )
+
+
+def test_live_policy_falls_back_for_unknown_or_non_scanner_owner(monkeypatch, tmp_path):
+    _write_ready_chain(monkeypatch, tmp_path)
+
+    for position_tag in (None, "", "OPEN_RECLAIM", "VWAP_RECLAIM"):
+        resolved = policy.resolve_live_prompt_policy(
+            configured_prompt_version=(
+                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+            ),
+            effective_venue="KRX",
+            session_bucket="KRX_REGULAR",
+            position_tag=position_tag,
+            now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
+        )
+
+        assert resolved["enabled"] is False
+        assert resolved["status"] == "fallback_position_owner_out_of_scope"
+        assert resolved["selected_prompt_version"] == (
+            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        )
 
 
 def test_delayed_candidate_rolls_to_first_preopen_not_already_consumed(
@@ -304,6 +329,7 @@ def test_runtime_falls_back_when_probe_first_contract_is_missing(monkeypatch, tm
         ),
         effective_venue="KRX",
         session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
         now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
     )
 
@@ -326,6 +352,7 @@ def test_runtime_falls_back_when_candidate_is_tampered(monkeypatch, tmp_path):
         ),
         effective_venue="KRX",
         session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
         now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
     )
 
@@ -353,6 +380,25 @@ def test_preexisting_candidate_without_current_phase_contract_falls_back(
     )
 
 
+def test_candidate_without_position_owner_scope_fails_closed(monkeypatch, tmp_path):
+    _write_ready_chain(monkeypatch, tmp_path)
+    candidate_path = policy.live_candidate_path(SOURCE_DATE)
+    candidate = policy._read_json(candidate_path)
+    candidate["risk_contract"].pop("eligible_position_tags")
+    candidate["artifact_sha256"] = policy._canonical_sha256(
+        {key: value for key, value in candidate.items() if key != "artifact_sha256"}
+    )
+    policy._atomic_write_json(candidate_path, candidate)
+
+    activation = policy.build_preopen_activation(target_date=TARGET_DATE)
+
+    assert activation["status"] == "inactive_fallback_v2_13"
+    assert (
+        "runtime_candidate_position_owner_scope_invalid"
+        in activation["blocking_reasons"]
+    )
+
+
 def test_runtime_rejects_preexisting_activation_without_current_phase_contract(
     monkeypatch, tmp_path
 ):
@@ -372,6 +418,7 @@ def test_runtime_rejects_preexisting_activation_without_current_phase_contract(
         ),
         effective_venue="KRX",
         session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
         now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
     )
 
@@ -498,6 +545,7 @@ def test_negative_performance_can_use_guarded_one_share_exploration(
         ),
         effective_venue="KRX",
         session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
         now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
     )
     assert resolved["enabled"] is True
@@ -639,6 +687,7 @@ def test_running_process_with_previous_runtime_date_falls_back(monkeypatch, tmp_
         ),
         effective_venue="KRX",
         session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
         now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
     )
 

@@ -5334,9 +5334,11 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     clock = {"now": now_ts}
     logs = []
     snapshots = []
+    ai_calls = []
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
+            ai_calls.append((args, kwargs))
             clock["now"] = response_completed_at
             return {
                 "action": "WAIT",
@@ -5464,6 +5466,7 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     assert (
         logs[-1][1]["ai_call_trigger_reason"] == "pre_submit_entry_ai_authority_retry"
     )
+    assert ai_calls[-1][1]["metadata_extra"]["position_tag"] == "SCANNER"
     assert snapshots
 
 

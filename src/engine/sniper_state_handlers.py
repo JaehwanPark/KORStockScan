@@ -39274,6 +39274,9 @@ def _retry_entry_ai_submit_authority_before_block(
             prompt_profile="watching",
             metadata_extra={
                 "record_id": (stock or {}).get("id"),
+                "position_tag": normalize_position_tag(
+                    "SCALPING", (stock or {}).get("position_tag")
+                ),
                 "sim_record_id": (stock or {}).get("sim_record_id"),
                 "sim_parent_record_id": (stock or {}).get("sim_parent_record_id"),
                 "entry_adm_candidate_id": (stock or {}).get("entry_adm_candidate_id"),
@@ -59658,6 +59661,9 @@ def _resolve_scanner_async_entry_ai(
                 prompt_profile="watching",
                 metadata_extra={
                     "record_id": stock_snapshot.get("id"),
+                    "position_tag": normalize_position_tag(
+                        "SCALPING", stock_snapshot.get("position_tag")
+                    ),
                     "sim_record_id": stock_snapshot.get("sim_record_id"),
                     "sim_parent_record_id": stock_snapshot.get("sim_parent_record_id"),
                     "entry_adm_candidate_id": stock_snapshot.get(
@@ -61054,6 +61060,7 @@ def _handle_watching_strategy_branch(
                                     prompt_profile="watching",
                                     metadata_extra={
                                         "record_id": stock.get("id"),
+                                        "position_tag": pos_tag,
                                         "sim_record_id": stock.get("sim_record_id"),
                                         "sim_parent_record_id": stock.get(
                                             "sim_parent_record_id"
@@ -61512,6 +61519,7 @@ def _handle_watching_strategy_branch(
                                     cache_profile="numeric_consistency_recheck",
                                     metadata_extra={
                                         "record_id": stock.get("id"),
+                                        "position_tag": pos_tag,
                                         "sim_record_id": stock.get("sim_record_id"),
                                         "sim_parent_record_id": stock.get(
                                             "sim_parent_record_id"
@@ -61757,6 +61765,7 @@ def _handle_watching_strategy_branch(
                                     cache_profile="early_accel_strong_bundle_recheck",
                                     metadata_extra={
                                         "record_id": stock.get("id"),
+                                        "position_tag": pos_tag,
                                         "sim_record_id": stock.get("sim_record_id"),
                                         "sim_parent_record_id": stock.get(
                                             "sim_parent_record_id"
