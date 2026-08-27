@@ -1008,9 +1008,8 @@ def test_20260821_profile_revision_validates_but_does_not_apply_source_generatio
 
     assert status == "candidate_validated_profile_revision_applied"
     assert revised["policy_mutations"] == []
-    assert (
-        revised["profiles"][profile_id]["policy"]
-        == (PROFILE_20260821_BASELINE_POLICIES[profile_id])
+    assert revised["profiles"][profile_id]["policy"] == (
+        PROFILE_20260821_BASELINE_POLICIES[profile_id]
     )
     assert revised["profiles"][profile_id]["selection_status"] == (
         "profile_revision_same_stage_mutation_not_applied"
@@ -1252,6 +1251,143 @@ def test_machine_state_and_order_ledger_are_bound_to_one_profile(tmp_path):
     assert state["signal_features"]["source"] == (
         "kiwoom_ka10080_010140_AL_completed_1m"
     )
+
+
+def test_machine_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkeypatch):
+    profile = PROFILES["samsung_heavy_midday"]
+    gateway = FakeGateway(profile.profile_id)
+    monkeypatch.setattr(
+        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_delay",
+        lambda **kwargs: (
+            3,
+            {
+                "status": "applied",
+                "policy_hash": "a" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+            },
+        ),
+    )
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    first_at = _profile_run_at(profile.profile_id)
+
+    armed = machine.run_once(first_at)
+    waiting = machine.run_once(first_at + timedelta(seconds=2))
+    submitted = machine.run_once(first_at + timedelta(seconds=3))
+
+    assert armed["pending_entry_confirmation"]["delay_sec"] == 3
+    assert waiting["status"] == "READY"
+    assert gateway.buy_calls == [22_650, 22_600]
+    assert submitted["signal_features"]["signal_decision_at"] == first_at.isoformat()
+    assert submitted["signal_features"]["entry_confirmation_delay_sec"] == 3
+
+
+def test_machine_one_second_delay_survives_six_second_live_poll(tmp_path, monkeypatch):
+    profile = PROFILES["samsung_heavy_midday"]
+    gateway = FakeGateway(profile.profile_id)
+    monkeypatch.setattr(
+        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_delay",
+        lambda **kwargs: (
+            1,
+            {
+                "status": "applied",
+                "policy_hash": "a" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+            },
+        ),
+    )
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    first_at = _profile_run_at(profile.profile_id)
+
+    machine.run_once(first_at)
+    assert machine._next_loop_delay_sec(interval_sec=6, now=first_at) == 1.0
+    assert (
+        machine._next_loop_delay_sec(
+            interval_sec=6, now=first_at + timedelta(milliseconds=500)
+        )
+        == 0.5
+    )
+    submitted = machine.run_once(first_at + timedelta(seconds=6))
+
+    assert gateway.buy_calls == [22_650, 22_600]
+    assert submitted["signal_features"]["entry_confirmation_delay_sec"] == 1
+
+
+def test_machine_discards_entry_confirmation_after_recheck_window(
+    tmp_path, monkeypatch
+):
+    profile = PROFILES["samsung_heavy_midday"]
+    gateway = FakeGateway(profile.profile_id)
+    monkeypatch.setattr(
+        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_delay",
+        lambda **kwargs: (
+            3,
+            {
+                "status": "applied",
+                "policy_hash": "a" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+            },
+        ),
+    )
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    first_at = _profile_run_at(profile.profile_id)
+
+    machine.run_once(first_at)
+    expired = machine.run_once(first_at + timedelta(seconds=14))
+
+    assert gateway.buy_calls == []
+    assert expired["pending_entry_confirmation"] is None
+    assert expired["last_action"] == "entry_confirmation_invalidated"
+    assert expired["blocked_reason"] == ""
+
+
+def test_machine_blocks_malformed_persisted_entry_confirmation(tmp_path, monkeypatch):
+    profile = PROFILES["samsung_heavy_midday"]
+    gateway = FakeGateway(profile.profile_id)
+    monkeypatch.setattr(
+        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_delay",
+        lambda **kwargs: (
+            3,
+            {
+                "status": "applied",
+                "policy_hash": "a" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+            },
+        ),
+    )
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    first_at = _profile_run_at(profile.profile_id)
+    machine.run_once(first_at)
+    machine._state["pending_entry_confirmation"]["signal_close"] = "invalid"
+
+    blocked = machine.run_once(first_at + timedelta(seconds=1))
+
+    assert gateway.buy_calls == []
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["blocked_reason"] == "state_pending_entry_confirmation_invalid"
 
 
 def test_terminal_partial_fill_does_not_report_whole_episode_as_unfilled(tmp_path):
@@ -1693,9 +1829,9 @@ def test_research_evidence_gate_validates_each_selected_profile(tmp_path):
         )[0]
         for profile in legacy_profiles
     )
-    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"]["scan_start"] = (
-        "13:19"
-    )
+    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"][
+        "scan_start"
+    ] = "13:19"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert not validate_research_evidence(
         PROFILES["samsung_heavy_midday"], path, expected_sha256=digest
@@ -2594,9 +2730,8 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     )
     assert migrated_status == "candidate_applied"
     assert set(migrated["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
-    assert (
-        migrated["profiles"]["mirae_asset_morning"]["policy"]
-        == (PRE_RECOMMENDATION_BASELINE_POLICIES["mirae_asset_morning"])
+    assert migrated["profiles"]["mirae_asset_morning"]["policy"] == (
+        PRE_RECOMMENDATION_BASELINE_POLICIES["mirae_asset_morning"]
     )
 
     pre_expanded_v2 = json.loads(json.dumps(candidate))
@@ -2633,9 +2768,8 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     )
     assert expanded_status == "candidate_applied"
     assert set(expanded_applied["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
-    assert (
-        expanded_applied["profiles"]["kakao_morning"]["policy"]
-        == (PRE_RECOMMENDATION_BASELINE_POLICIES["kakao_morning"])
+    assert expanded_applied["profiles"]["kakao_morning"]["policy"] == (
+        PRE_RECOMMENDATION_BASELINE_POLICIES["kakao_morning"]
     )
 
     source_gap_report = json.loads(json.dumps(report))

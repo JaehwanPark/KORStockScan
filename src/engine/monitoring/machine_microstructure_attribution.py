@@ -136,7 +136,9 @@ METRIC_CONTRACT = {
 }
 MICRO_ENTRY_CONFIRMATION_CONTRACT = {
     "metric_role": "widget_episode_entry_microstructure_source_only_comparison",
-    "decision_authority": "postclose_source_only_no_runtime_authority",
+    "decision_authority": (
+        "postclose_source_only_input_to_exact_date_entry_timing_tuning"
+    ),
     "window_policy": (
         "exact_owner_symbol_venue_session_entry_anchor_then_1s_3s_5s_bbo_and_"
         "fixed_anchor_ask_depletion"
@@ -155,6 +157,7 @@ MICRO_ENTRY_CONFIRMATION_CONTRACT = {
         "cross_owner_or_cross_entry_state_pooling",
         "broker_order_submission_cancel_or_automated_sell",
         "same_day_or_preopen_runtime_policy_mutation",
+        "entry_timing_apply_without_cumulative_floor_and_exact_date_policy",
         "quantity_target_cooldown_daily_cap_or_stop_mutation",
         "provider_bot_broker_guard_or_hard_safety_change",
         "missing_micro_data_as_zero_or_neutral_confirmation",
@@ -1637,6 +1640,10 @@ def _widget_actual_execution_inventory(
             ),
             "entry_notional_krw": round(buy_notional, 3),
             "quantity": buy_qty,
+            "buy_leg_count": len(buy_submit_orders),
+            "scale_in_buy_leg_count": sum(
+                order.get("order_role") == "SCALE_IN_BUY" for order in buy_submit_orders
+            ),
             "quantity_basis": "actual_widget_filled_quantity",
             "entry_fill_status": "filled" if buy_qty > 0 else "unfilled",
             "realized": realized,
@@ -2624,12 +2631,18 @@ def _signal_anchor(row: dict[str, Any]) -> tuple[datetime | None, float | None]:
     signal = features.get("signal_bar") or {}
     if isinstance(signal, dict):
         # Compatibility for early synthetic/research fixtures.
-        timestamp = _parse_owner_ts(signal.get("timestamp") or signal.get("at"))
+        timestamp = _parse_owner_ts(
+            features.get("signal_decision_at")
+            or signal.get("decision_at")
+            or signal.get("timestamp")
+            or signal.get("at")
+        )
         price = _finite_float(signal.get("close_price") or signal.get("close"))
     else:
-        # The durable regular-two-leg producer contract stores an aware ISO
-        # timestamp in signal_bar and the price in the sibling signal_close.
-        timestamp = _parse_owner_ts(signal)
+        # Keep the completed-bar timestamp for legacy owner diagnostics. New
+        # entry-timing anchors are emitted separately from signal_decision_at;
+        # this fallback is never policy-eligible by itself.
+        timestamp = _parse_owner_ts(features.get("signal_decision_at") or signal)
         price = _finite_float(features.get("signal_close"))
     return timestamp, price
 
@@ -2661,17 +2674,28 @@ def _episode_inventory(
         / "low_price_two_leg_expanded_candidate_research"
         / f"low_price_two_leg_expanded_candidate_research_{target_date}.json"
     )
+    samsung_path = (
+        report_root
+        / "samsung_machine_entry_tuning"
+        / f"samsung_machine_entry_tuning_{target_date}.json"
+    )
     tuning_schemas = (
         "low_price_two_leg_tuning_report_v3",
         "low_price_two_leg_tuning_report_v4",
         "low_price_two_leg_tuning_report_v5",
     )
     expansion_schemas = ("low_price_two_leg_expanded_candidate_research_v5",)
+    samsung_schemas = tuple(
+        f"samsung_machine_entry_tuning_report_v{version}" for version in range(2, 7)
+    )
     tuning = _read_target_json(
         tuning_path, target_date, expected_schemas=tuning_schemas
     )
     expansion = _read_target_json(
         expansion_path, target_date, expected_schemas=expansion_schemas
+    )
+    samsung = _read_target_json(
+        samsung_path, target_date, expected_schemas=samsung_schemas
     )
     episode_round_trip_cost_pct = _finite_float((tuning or {}).get("cost_pct"))
     episode_round_trip_cost_provenance = "low_price_two_leg_tuning.cost_pct"
@@ -2750,6 +2774,12 @@ def _episode_inventory(
                 )
                 continue
             anchor_at, anchor_price = _signal_anchor(payload)
+            signal_features = payload.get("signal_features") or {}
+            decision_at = (
+                _parse_owner_ts(signal_features.get("signal_decision_at"))
+                if isinstance(signal_features, dict)
+                else None
+            )
             if (
                 anchor_at is not None
                 and anchor_at.astimezone(KST).date().isoformat() != target_date
@@ -2808,6 +2838,7 @@ def _episode_inventory(
                         ),
                         "lifecycle_stage": "entry",
                         "anchor_role": "episode_signal_bar",
+                        "entry_timing_decision_anchor_valid": False,
                         "owner_round_trip_cost_pct": episode_round_trip_cost_pct,
                         "owner_round_trip_cost_provenance": (
                             episode_round_trip_cost_provenance
@@ -2909,6 +2940,76 @@ def _episode_inventory(
                         and target_filled_qty == buy_filled_qty
                     )
                     if valid_buy_fill:
+                        leg_gross_return_pct = _finite_float(
+                            leg.get("gross_no_slippage_return_pct")
+                        )
+                        leg_net_return_pct = _finite_float(leg.get("net_profit_pct"))
+                        leg_round_trip_cost_pct = (
+                            leg_gross_return_pct - leg_net_return_pct
+                            if leg_gross_return_pct is not None
+                            and leg_net_return_pct is not None
+                            and leg_gross_return_pct >= leg_net_return_pct
+                            else episode_round_trip_cost_pct
+                        )
+                        signal_leg_outcome = {
+                            "leg_id": leg_id,
+                            "holding_duration_ms": holding_duration_ms,
+                            "gross_no_slippage_return_pct": leg_gross_return_pct,
+                            "cost_aware_net_return_pct": leg_net_return_pct,
+                            "entry_notional_krw": (fill_price * buy_filled_qty),
+                            "quantity": buy_filled_qty,
+                            "quantity_basis": "broker_confirmed_fill",
+                            "exit_price": target_fill_price,
+                            "exit_at": (
+                                target_filled_at.isoformat()
+                                if target_filled_at is not None
+                                else None
+                            ),
+                            "realized": realized,
+                        }
+                        if decision_at is not None:
+                            anchors.append(
+                                {
+                                    "anchor_id": (
+                                        f"{lifecycle_id}:{leg_id}:signal_decision"
+                                    ),
+                                    "lifecycle_id": lifecycle_id,
+                                    "owner": "episode",
+                                    "scope_id": profile_id,
+                                    "symbol": row["symbol"],
+                                    "session": row["session"],
+                                    "expected_venues": ["SOR"],
+                                    "expected_session_buckets": ["SOR_REGULAR"],
+                                    "anchor_at": decision_at.isoformat(),
+                                    "anchor_price": fill_price,
+                                    "anchor_price_provenance": (
+                                        "broker_confirmed_baseline_fill_price"
+                                    ),
+                                    "owner_entry_limit_price": _finite_float(
+                                        leg.get("entry_price")
+                                    ),
+                                    "owner_target_price": target_price,
+                                    "lifecycle_stage": "entry",
+                                    "anchor_role": "episode_signal_decision_leg",
+                                    "entry_timing_decision_anchor_valid": True,
+                                    "owner_round_trip_cost_pct": (
+                                        episode_round_trip_cost_pct
+                                    ),
+                                    "owner_round_trip_cost_provenance": (
+                                        episode_round_trip_cost_provenance
+                                    ),
+                                    "owner_outcome": signal_leg_outcome,
+                                    "owner_lifecycle_contract_valid": True,
+                                    "owner_policy_tuning_eligible": owner_row_eligible,
+                                    "owner_timing_custody_observation_eligible": (
+                                        held_inventory_only_gap
+                                    ),
+                                    "owner_source_quality": payload.get(
+                                        "source_quality"
+                                    ),
+                                    "actual_order_submitted": True,
+                                }
+                            )
                         anchors.append(
                             {
                                 "anchor_id": f"{lifecycle_id}:{leg_id}:buy_fill",
@@ -2924,26 +3025,11 @@ def _episode_inventory(
                                 "owner_target_price": target_price,
                                 "lifecycle_stage": "entry",
                                 "anchor_role": "episode_buy_fill_confirmed",
-                                "owner_round_trip_cost_pct": (
-                                    episode_round_trip_cost_pct
-                                ),
+                                "owner_round_trip_cost_pct": leg_round_trip_cost_pct,
                                 "owner_round_trip_cost_provenance": (
                                     episode_round_trip_cost_provenance
                                 ),
-                                "owner_outcome": {
-                                    "leg_id": leg_id,
-                                    "holding_duration_ms": holding_duration_ms,
-                                    "gross_no_slippage_return_pct": _finite_float(
-                                        leg.get("gross_no_slippage_return_pct")
-                                    ),
-                                    "cost_aware_net_return_pct": _finite_float(
-                                        leg.get("net_profit_pct")
-                                    ),
-                                    "entry_notional_krw": (fill_price * buy_filled_qty),
-                                    "quantity": buy_filled_qty,
-                                    "quantity_basis": "broker_confirmed_fill",
-                                    "realized": realized,
-                                },
+                                "owner_outcome": signal_leg_outcome,
                                 "owner_lifecycle_contract_valid": True,
                                 "owner_policy_tuning_eligible": owner_row_eligible,
                                 "owner_source_quality": payload.get("source_quality"),
@@ -3021,6 +3107,249 @@ def _episode_inventory(
                 row["owner_anchor_contract_status"] = "invalid"
                 row["lifecycle_instrumentation_gaps"].append(
                     "owner_source_quality_not_diagnostic_eligible"
+                )
+
+    samsung_machine_contracts = {
+        "morning": {"scope_id": "morning", "strategy": "morning"},
+        "morning_reentry": {
+            "scope_id": "morning_sor_reentry",
+            "strategy": "morning_sor_reentry",
+        },
+        "midday": {"scope_id": "midday", "strategy": "midday"},
+        "afternoon": {"scope_id": "afternoon", "strategy": "afternoon"},
+    }
+    samsung_machines = ((samsung or {}).get("daily") or {}).get("machines") or {}
+    if isinstance(samsung_machines, dict):
+        for machine, contract in samsung_machine_contracts.items():
+            payload = samsung_machines.get(machine)
+            if not isinstance(payload, dict):
+                continue
+            scope_id = str(contract["scope_id"])
+            profile_id = f"samsung:{scope_id}"
+            features = payload.get("signal_features") or {}
+            routes = {
+                str(leg.get("route") or "")
+                for leg in payload.get("legs") or []
+                if isinstance(leg, dict) and str(leg.get("route") or "")
+            }
+            if machine == "morning" and not routes and isinstance(features, dict):
+                routes = {
+                    str(route)
+                    for route in features.get("routes") or []
+                    if str(route) in {"NXT", "SOR"}
+                }
+            route = next(iter(routes)) if len(routes) == 1 else ""
+            session = "NXT_PREMARKET" if route == "NXT" else "KRX_REGULAR"
+            expected_venue = "NXT" if route == "NXT" else "SOR"
+            expected_bucket = "NXT_PREMARKET" if route == "NXT" else "SOR_REGULAR"
+            source_quality_reasons = {
+                str(reason) for reason in payload.get("source_quality_reasons") or []
+            }
+            held_inventory_only_gap = bool(
+                payload.get("source_quality") == "gap"
+                and source_quality_reasons == {"held_or_unresolved_inventory"}
+            )
+            owner_row_eligible = bool(
+                payload.get("attempted") is True
+                and payload.get("eligible_for_cumulative_tuning") is True
+                and payload.get("source_quality") == "pass"
+            )
+            owner_diagnostic_eligible = bool(
+                payload.get("attempted") is True
+                and (owner_row_eligible or held_inventory_only_gap)
+            )
+            row = profiles.setdefault(profile_id, {})
+            row.update(
+                {
+                    "profile_id": profile_id,
+                    "symbol": "005930",
+                    "session": session,
+                    "scope": "active_samsung_episode_owner",
+                    "expected_venues": [expected_venue],
+                    "owner_inventory_source": "samsung_target_date_postclose_report",
+                    "owner_source_quality": payload.get("source_quality"),
+                    "attempted": payload.get("attempted") is True,
+                    "owner_policy_tuning_eligible": owner_row_eligible,
+                    "owner_anchor_contract_status": "not_applicable_no_attempt",
+                    "lifecycle_instrumentation_gaps": [],
+                }
+            )
+            identity_valid = bool(
+                (samsung or {}).get("symbol") == "005930"
+                and payload.get("machine") == machine
+                and payload.get("target_date") == target_date
+                and isinstance(features, dict)
+                and features.get("strategy") == contract["strategy"]
+                and route in {"NXT", "SOR"}
+            )
+            decision_at = (
+                _owner_ts_on_target_date(
+                    features.get("signal_decision_at"), target_date
+                )
+                if isinstance(features, dict)
+                else None
+            )
+            if not identity_valid:
+                row["owner_policy_tuning_eligible"] = False
+                row["owner_anchor_contract_status"] = "invalid"
+                row["lifecycle_instrumentation_gaps"].append(
+                    "samsung_owner_identity_or_route_contract_invalid"
+                )
+                continue
+            if not owner_diagnostic_eligible:
+                if payload.get("attempted") is True:
+                    row["owner_anchor_contract_status"] = "invalid"
+                    row["lifecycle_instrumentation_gaps"].append(
+                        "samsung_owner_source_quality_not_diagnostic_eligible"
+                    )
+                continue
+            if decision_at is None:
+                row["owner_policy_tuning_eligible"] = False
+                row["owner_anchor_contract_status"] = "invalid"
+                row["lifecycle_instrumentation_gaps"].append(
+                    "signal_decision_timestamp_missing_or_invalid"
+                )
+                continue
+            lifecycle_id = f"episode:{scope_id}:{decision_at.isoformat()}"
+            lifecycle_invalid = False
+            emitted_decision_anchor = False
+            for leg_index, leg in enumerate(payload.get("legs") or [], start=1):
+                if not isinstance(leg, dict):
+                    lifecycle_invalid = True
+                    row["lifecycle_instrumentation_gaps"].append(
+                        f"leg_{leg_index}:payload_invalid"
+                    )
+                    continue
+                leg_id = str(leg.get("leg_id") or leg_index)
+                buy_filled_qty_value = _finite_float(leg.get("buy_filled_qty"))
+                buy_filled_qty = (
+                    int(buy_filled_qty_value)
+                    if buy_filled_qty_value is not None
+                    and buy_filled_qty_value > 0
+                    and buy_filled_qty_value.is_integer()
+                    else 0
+                )
+                buy_filled_at = _owner_ts_on_target_date(
+                    leg.get("buy_filled_at"), target_date
+                )
+                fill_price = _finite_float(leg.get("fill_price"))
+                target_filled_qty_value = _finite_float(leg.get("target_filled_qty"))
+                target_filled_qty = (
+                    int(target_filled_qty_value)
+                    if target_filled_qty_value is not None
+                    and target_filled_qty_value >= 0
+                    and target_filled_qty_value.is_integer()
+                    else 0
+                )
+                target_filled_at = _owner_ts_on_target_date(
+                    leg.get("target_filled_at"), target_date
+                )
+                target_fill_price = _finite_float(leg.get("target_fill_price"))
+                target_price = _finite_float(leg.get("target_price"))
+                valid_buy_fill = bool(
+                    buy_filled_qty > 0
+                    and buy_filled_at is not None
+                    and buy_filled_at >= decision_at
+                    and fill_price is not None
+                    and fill_price > 0
+                    and str(leg.get("route") or "") == route
+                )
+                if buy_filled_qty > 0 and not valid_buy_fill:
+                    lifecycle_invalid = True
+                    row["lifecycle_instrumentation_gaps"].append(
+                        f"{leg_id}:buy_fill_contract_invalid"
+                    )
+                    continue
+                if not valid_buy_fill:
+                    continue
+                realized = bool(
+                    leg.get("completed") is True
+                    and target_filled_qty == buy_filled_qty
+                    and target_filled_at is not None
+                    and target_filled_at >= buy_filled_at
+                    and target_fill_price is not None
+                    and target_fill_price > 0
+                )
+                if leg.get("completed") is True and not realized:
+                    lifecycle_invalid = True
+                    row["lifecycle_instrumentation_gaps"].append(
+                        f"{leg_id}:target_fill_contract_invalid"
+                    )
+                gross_return = (
+                    (target_fill_price / fill_price - 1.0) * 100.0 if realized else None
+                )
+                net_return = _finite_float(leg.get("equal_weight_profit_pct"))
+                owner_outcome = {
+                    "leg_id": leg_id,
+                    "holding_duration_ms": (
+                        round(
+                            (target_filled_at - buy_filled_at).total_seconds() * 1000.0
+                        )
+                        if realized
+                        else None
+                    ),
+                    "gross_no_slippage_return_pct": gross_return,
+                    "cost_aware_net_return_pct": net_return,
+                    "entry_notional_krw": fill_price * buy_filled_qty,
+                    "quantity": buy_filled_qty,
+                    "quantity_basis": "broker_confirmed_fill",
+                    "exit_price": target_fill_price if realized else None,
+                    "exit_at": target_filled_at.isoformat() if realized else None,
+                    "realized": realized,
+                }
+                anchors.append(
+                    {
+                        "anchor_id": f"{lifecycle_id}:{leg_id}:signal_decision",
+                        "lifecycle_id": lifecycle_id,
+                        "owner": "episode",
+                        "scope_id": scope_id,
+                        "symbol": "005930",
+                        "session": session,
+                        "expected_venues": [expected_venue],
+                        "expected_session_buckets": [expected_bucket],
+                        "anchor_at": decision_at.isoformat(),
+                        "anchor_price": fill_price,
+                        "anchor_price_provenance": (
+                            "broker_confirmed_baseline_fill_price"
+                        ),
+                        "owner_entry_limit_price": _finite_float(
+                            leg.get("entry_price")
+                        ),
+                        "owner_target_price": target_price,
+                        "lifecycle_stage": "entry",
+                        "anchor_role": "episode_signal_decision_leg",
+                        "entry_timing_decision_anchor_valid": True,
+                        "owner_round_trip_cost_pct": _finite_float(
+                            (samsung or {}).get("cost_pct")
+                        ),
+                        "owner_round_trip_cost_provenance": (
+                            "samsung_machine_entry_tuning.cost_pct"
+                        ),
+                        "owner_outcome": owner_outcome,
+                        "owner_lifecycle_contract_valid": True,
+                        "owner_policy_tuning_eligible": owner_row_eligible,
+                        "owner_timing_custody_observation_eligible": (
+                            held_inventory_only_gap
+                        ),
+                        "owner_source_quality": payload.get("source_quality"),
+                        "actual_order_submitted": True,
+                    }
+                )
+                emitted_decision_anchor = True
+            if lifecycle_invalid:
+                row["owner_anchor_contract_status"] = "invalid"
+                row["owner_policy_tuning_eligible"] = False
+                for anchor in anchors:
+                    if anchor.get("lifecycle_id") == lifecycle_id:
+                        anchor["owner_lifecycle_contract_valid"] = False
+                        anchor["owner_policy_tuning_eligible"] = False
+            elif emitted_decision_anchor:
+                row["owner_anchor_contract_status"] = "valid"
+            else:
+                row["owner_policy_tuning_eligible"] = False
+                row["owner_anchor_contract_status"] = "invalid"
+                row["lifecycle_instrumentation_gaps"].append(
+                    "broker_confirmed_buy_fill_missing"
                 )
 
     prior_reconciliations = (tuning or {}).get("prior_state_reconciliations") or {}
@@ -3472,6 +3801,12 @@ def _episode_inventory(
                 expansion,
                 target_date=target_date,
                 expected_schemas=expansion_schemas,
+            ),
+            "samsung_machine_entry_tuning": _source(
+                samsung_path,
+                samsung,
+                target_date=target_date,
+                expected_schemas=samsung_schemas,
             ),
         },
     )
@@ -4062,9 +4397,14 @@ def _micro_context(
         if is_excluded(payload):
             inventory[symbol]["source_excluded_row_count"] += 1
             continue
-        valid_depth, timestamp, bid_depth, _, depth_best_bid, _ = _validate_depth_row(
-            payload
-        )
+        (
+            valid_depth,
+            timestamp,
+            bid_depth,
+            ask_depth,
+            depth_best_bid,
+            depth_best_ask,
+        ) = _validate_depth_row(payload)
         if (
             valid_depth
             and timestamp is not None
@@ -4097,7 +4437,10 @@ def _micro_context(
                         "timestamp": timestamp,
                         "best_bid": depth_best_bid,
                         "best_bid_qty": int(payload["best_bid_qty"]),
+                        "best_ask": depth_best_ask,
+                        "best_ask_qty": int(payload["best_ask_qty"]),
                         "bid_depth": bid_depth,
+                        "ask_depth": ask_depth,
                     }
                 )
                 windows[anchor["anchor_id"]]["raw_depth_rows"].append(dict(payload))
@@ -4204,6 +4547,7 @@ _ENTRY_CONFIRMATION_ANCHOR_ROLES = frozenset(
         "actual_widget_daily_cap_blocked_entry_signal",
         "counterfactual_calibration_entry",
         "prospective_widget_research_entry",
+        "episode_signal_decision_leg",
         "episode_signal_bar",
         "prospective_episode_research_signal",
     }
@@ -4638,6 +4982,19 @@ def _anchor_result(
             )
             best_bid = float(horizon_row["best_bid"]) if observed else None
             best_ask = float(horizon_row["best_ask"]) if observed else None
+            horizon_depth = (
+                fillable_depth_context(horizon_row)
+                if observed and horizon_row is not None
+                else None
+            )
+            ask_depth_backed = bool(
+                horizon_depth is not None
+                and best_ask is not None
+                and horizon_depth.get("best_ask") == best_ask
+                and required_exit_quantity is not None
+                and int(horizon_depth.get("best_ask_qty") or 0)
+                >= required_exit_quantity
+            )
             entry_confirmation_bbo_horizons[str(horizon_sec)] = {
                 "observed": (
                     observed
@@ -4669,6 +5026,14 @@ def _anchor_result(
                     else None
                 ),
                 "quote_age_from_horizon_ms": quote_age_ms if observed else None,
+                "required_entry_quantity": required_exit_quantity,
+                "available_best_ask_quantity": (
+                    int(horizon_depth["best_ask_qty"])
+                    if horizon_depth is not None
+                    and horizon_depth.get("best_ask_qty") is not None
+                    else None
+                ),
+                "depth_backed": ask_depth_backed if observed else None,
             }
         profit_touches: dict[str, dict[str, Any]] = {}
         for threshold in GROSS_PROFIT_TOUCH_BPS:
@@ -4823,6 +5188,8 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         is not True
     ]
     source_gaps: list[str] = []
+    if result.get("entry_timing_decision_anchor_valid") is False:
+        source_gaps.append("actual_signal_decision_timestamp_missing")
     if result.get("micro_context_status") != "matched":
         source_gaps.append(str(result.get("micro_context_status") or "unknown"))
     source_gaps.extend(f"bbo_{horizon}s_missing" for horizon in missing_bbo)
@@ -4880,6 +5247,12 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "anchor_id": result.get("anchor_id"),
         "lifecycle_id": result.get("lifecycle_id"),
         "owner": result.get("owner"),
+        "scope_id": result.get("scope_id"),
+        "entry_timing_scope_id": (
+            f"{result.get('symbol')}:{result.get('session')}"
+            if result.get("owner") == "widget"
+            else result.get("scope_id")
+        ),
         "symbol": result.get("symbol"),
         "session": result.get("session"),
         "anchor_at": result.get("anchor_at"),
@@ -4890,6 +5263,16 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "source_gap_reasons": sorted(set(source_gaps)),
         "actual_order_submitted": result.get("actual_order_submitted") is True,
         "owner_outcome": result.get("owner_outcome"),
+        "owner_entry_limit_price": result.get("owner_entry_limit_price"),
+        "owner_target_price": result.get("owner_target_price"),
+        "owner_round_trip_cost_pct": result.get("owner_round_trip_cost_pct"),
+        "owner_policy_tuning_eligible": (
+            result.get("owner_policy_tuning_eligible") is True
+        ),
+        "owner_timing_custody_observation_eligible": (
+            result.get("owner_timing_custody_observation_eligible") is True
+        ),
+        "anchor_price": (result.get("metrics") or {}).get("reference_price"),
         "entry_confirmation_bbo_horizons": bbo_horizons,
         "entry_ask_depletion": ask_report,
         "runtime_effect": False,
@@ -4908,18 +5291,27 @@ def _micro_entry_confirmation_summary(
         for result in results
         if (row := _entry_confirmation_label(result)) is not None
     ]
-    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(
+        list
+    )
     for row in rows:
         grouped[
             (
                 str(row["owner"]),
+                str(row.get("scope_id") or ""),
                 str(row["symbol"]),
                 str(row["session"]),
                 str(row["entry_state"]),
             )
         ].append(row)
     cohorts: list[dict[str, Any]] = []
-    for (owner, symbol, session, entry_state), cohort_rows in sorted(grouped.items()):
+    for (
+        owner,
+        scope_id,
+        symbol,
+        session,
+        entry_state,
+    ), cohort_rows in sorted(grouped.items()):
         eligible_rows = [
             row
             for row in cohort_rows
@@ -4935,6 +5327,7 @@ def _micro_entry_confirmation_summary(
         cohorts.append(
             {
                 "owner": owner,
+                "scope_id": scope_id,
                 "symbol": symbol,
                 "session": session,
                 "entry_state": entry_state,

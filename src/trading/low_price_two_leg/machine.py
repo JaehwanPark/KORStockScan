@@ -49,6 +49,9 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
             legacy_schema=f"low_price_two_leg_{profile.profile_id}_legacy_unsupported",
             live_enabled=live_enabled,
             ownership_source=ownership_source,
+            entry_timing_owner="episode",
+            entry_timing_scope_id=profile.profile_id,
+            entry_timing_session=profile.session,
         )
 
     def _validate_state_contract(self, now) -> bool:

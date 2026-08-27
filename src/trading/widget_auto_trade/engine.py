@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import os
 import time
+import hashlib
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, time as datetime_time, timedelta
+from datetime import date, datetime, time as datetime_time, timedelta
 from functools import lru_cache
 from inspect import Parameter, signature
 from pathlib import Path
@@ -26,6 +27,10 @@ from src.engine.risk.manual_control_exclusion import (
 )
 from src.engine.trade_pause_control import is_buy_side_paused
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_up_by_bps
+from src.trading.config.machine_entry_timing_policy import (
+    ENTRY_CONFIRMATION_MAX_LATE_SEC,
+    resolve_entry_confirmation_delay,
+)
 from src.trading.widget_auto_trade.gateway import (
     ExecutionSnapshot,
     KiwoomSharedTokenOrderGateway,
@@ -620,6 +625,7 @@ class WidgetSignalAutoTrader:
             "last_take_profit_attempt_at": None,
             "last_source_state": None,
             "last_blocked_source_exit_signal_id": None,
+            "pending_entry_confirmation": None,
         }
 
     def _save(self) -> None:
@@ -839,6 +845,18 @@ class WidgetSignalAutoTrader:
         now: datetime,
         **fields: Any,
     ) -> None:
+        pending_confirmation = symbol_state.get("pending_entry_confirmation")
+        if isinstance(pending_confirmation, dict):
+            symbol_state["pending_entry_confirmation"] = None
+            self._save()
+            self._event(
+                "entry_confirmation_invalidated",
+                spec,
+                now,
+                signal_id=str(pending_confirmation.get("signal_id") or ""),
+                reason=reason,
+                entry_confirmation_delay_sec=pending_confirmation.get("delay_sec"),
+            )
         if (
             symbol_state.get("last_entry_block_signal_id") == signal_id
             and symbol_state.get("last_entry_block_reason") == reason
@@ -874,6 +892,90 @@ class WidgetSignalAutoTrader:
             return None, None
         fresh = spec.contract.snapshot_is_fresh(payload, now=now)
         return (context, snapshot_at) if fresh else (None, None)
+
+    @staticmethod
+    def _snapshot_entry_confirmation_identity(
+        *,
+        spec: WidgetSpec,
+        payload: dict[str, Any],
+        advisory: dict[str, Any],
+        context: Any,
+        now: datetime,
+    ) -> str:
+        """Build a stable confirmation identity for a non-event setup.
+
+        ``observed_at`` is refreshed by the collector even when the actionable
+        setup is unchanged.  Using it as the identity would turn a learned
+        1/3/5-second confirmation into repeated invalidation.  The completed
+        bar plus the decision-bearing setup fields stay stable across snapshot
+        refreshes, while a changed setup or a later bar creates a new signal.
+        """
+
+        observation = payload.get("observation")
+        observation = observation if isinstance(observation, dict) else {}
+        latest_bar = observation.get("latest_completed_bar")
+        if not isinstance(latest_bar, dict):
+            latest_bar = payload.get("latest_completed_bar")
+        latest_bar = latest_bar if isinstance(latest_bar, dict) else {}
+        derived = advisory.get("derived")
+        derived = derived if isinstance(derived, dict) else {}
+        continuity = advisory.get("continuity")
+        continuity = continuity if isinstance(continuity, dict) else {}
+        identity = {
+            "symbol": spec.code,
+            "trade_date": now.date().isoformat(),
+            "session": context.name,
+            "state": advisory.get("state"),
+            "trigger": advisory.get("trigger"),
+            "entry_price_low": advisory.get("entry_price_low"),
+            "entry_price_high": advisory.get("entry_price_high"),
+            "completed_bar_source_time": latest_bar.get("source_time"),
+            "confirmed_support": derived.get("confirmed_support"),
+            "recent_resistance": derived.get("recent_resistance"),
+            "recent_resistance_reclaimed": derived.get("recent_resistance_reclaimed"),
+            "break_bar_source_time": continuity.get("break_bar_source_time"),
+            "reclaim_bar_source_times": continuity.get("reclaim_bar_source_times"),
+        }
+        if not identity["completed_bar_source_time"]:
+            # Without a completed-bar episode anchor, do not merge refreshed
+            # snapshots into one confirmation window.
+            identity["snapshot_observed_at_fallback"] = advisory.get("observed_at")
+        digest = hashlib.sha256(
+            json.dumps(
+                identity,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return f"SETUP:{digest}"
+
+    @staticmethod
+    def _pending_entry_confirmation_is_valid(value: Any, *, target_date: date) -> bool:
+        if not isinstance(value, dict):
+            return False
+        armed_at = _timestamp(value.get("armed_at"))
+        due_at = _timestamp(value.get("due_at"))
+        delay = value.get("delay_sec")
+        provenance = value.get("policy_provenance")
+        return bool(
+            armed_at is not None
+            and due_at is not None
+            and not isinstance(delay, bool)
+            and isinstance(delay, int)
+            and delay in {1, 3, 5}
+            and abs((due_at - armed_at).total_seconds() - delay) <= 0.001
+            and armed_at.date() == target_date
+            and str(value.get("signal_id") or "")
+            and str(value.get("confirmation_identity") or "")
+            and str(value.get("source_state") or "")
+            and str(value.get("session") or "")
+            and str(value.get("route") or "") in {"KRX", "NXT"}
+            and isinstance(provenance, dict)
+            and provenance.get("status") == "applied"
+            and provenance.get("target_date") == target_date.isoformat()
+            and len(str(provenance.get("policy_hash") or "")) == 64
+        )
 
     def _entry_signal(
         self,
@@ -1545,8 +1647,7 @@ class WidgetSignalAutoTrader:
             and order.get("signal_id") == entry_signal_id
         ]
         if not entry_orders or not all(
-            order.get("status") == "FAILED"
-            and order.get("broker_accepted") is False
+            order.get("status") == "FAILED" and order.get("broker_accepted") is False
             for order in entry_orders
         ):
             return False
@@ -1635,12 +1736,8 @@ class WidgetSignalAutoTrader:
             now=now,
             source_signal_id=source_signal_id,
             rejection_fingerprint=fingerprint,
-            rejected_return_code=symbol_state.get(
-                "entry_submit_rejected_return_code"
-            ),
-            rejected_return_msg=symbol_state.get(
-                "entry_submit_rejected_return_msg"
-            ),
+            rejected_return_code=symbol_state.get("entry_submit_rejected_return_code"),
+            rejected_return_msg=symbol_state.get("entry_submit_rejected_return_msg"),
             retry_cooldown_until=cooldown_until.isoformat(),
             retry_cooldown_remaining_sec=remaining_sec,
             actual_order_submitted=False,
@@ -2186,6 +2283,18 @@ class WidgetSignalAutoTrader:
                 )
             exit_signal_id = None
         if source_exit_action_invalid:
+            pending_confirmation = symbol_state.get("pending_entry_confirmation")
+            if isinstance(pending_confirmation, dict):
+                symbol_state["pending_entry_confirmation"] = None
+                self._save()
+                self._event(
+                    "entry_confirmation_invalidated",
+                    spec,
+                    now,
+                    signal_id=str(pending_confirmation.get("signal_id") or ""),
+                    reason="source_exit_policy_invalid",
+                    entry_confirmation_delay_sec=pending_confirmation.get("delay_sec"),
+                )
             self._maybe_submit_take_profit(spec, symbol_state, now)
             return
         if exit_signal_id and exit_signal_id != symbol_state.get("exit_signal_id"):
@@ -2211,12 +2320,36 @@ class WidgetSignalAutoTrader:
         # the same snapshot.  Re-entry is possible only after the producer has
         # cleared that final-exit event and emitted a new entry episode.
         if symbol_state.get("exit_requested") or exit_signal_id:
+            pending_confirmation = symbol_state.get("pending_entry_confirmation")
+            if isinstance(pending_confirmation, dict):
+                symbol_state["pending_entry_confirmation"] = None
+                self._save()
+                self._event(
+                    "entry_confirmation_invalidated",
+                    spec,
+                    now,
+                    signal_id=str(pending_confirmation.get("signal_id") or ""),
+                    reason="final_exit_dominates_entry",
+                    entry_confirmation_delay_sec=pending_confirmation.get("delay_sec"),
+                )
             return
 
         # The fixed-target policy observes source EXIT without forcing a sell,
         # but that bearish snapshot must not create fresh exposure. Keep only
         # the already-owned quantity's target order covered in this cycle.
         if source_exit_observed:
+            pending_confirmation = symbol_state.get("pending_entry_confirmation")
+            if isinstance(pending_confirmation, dict):
+                symbol_state["pending_entry_confirmation"] = None
+                self._save()
+                self._event(
+                    "entry_confirmation_invalidated",
+                    spec,
+                    now,
+                    signal_id=str(pending_confirmation.get("signal_id") or ""),
+                    reason="source_exit_observed",
+                    entry_confirmation_delay_sec=pending_confirmation.get("delay_sec"),
+                )
             self._maybe_submit_take_profit(spec, symbol_state, now)
             return
 
@@ -2224,10 +2357,72 @@ class WidgetSignalAutoTrader:
         self._maybe_submit_take_profit(spec, symbol_state, now)
 
         entry_signal = self._entry_signal(spec, payload, now)
-        if entry_signal is None or symbol_state.get("entry_episode_open"):
+        if entry_signal is None:
+            pending_confirmation = symbol_state.get("pending_entry_confirmation")
+            if isinstance(pending_confirmation, dict):
+                symbol_state["pending_entry_confirmation"] = None
+                self._save()
+                self._event(
+                    "entry_confirmation_invalidated",
+                    spec,
+                    now,
+                    signal_id=str(pending_confirmation.get("signal_id") or ""),
+                    reason="source_signal_no_longer_actionable",
+                    entry_confirmation_delay_sec=pending_confirmation.get("delay_sec"),
+                )
+            return
+        if symbol_state.get("entry_episode_open"):
             return
         signal_id, source_state, structural_block_reason, entry_policy = entry_signal
+        pending_confirmation = symbol_state.get("pending_entry_confirmation")
+        if (
+            pending_confirmation is not None
+            and not self._pending_entry_confirmation_is_valid(
+                pending_confirmation, target_date=now.date()
+            )
+        ):
+            symbol_state["pending_entry_confirmation"] = None
+            self._save()
+            self._event(
+                "entry_confirmation_invalidated",
+                spec,
+                now,
+                signal_id=(
+                    str(pending_confirmation.get("signal_id") or "")
+                    if isinstance(pending_confirmation, dict)
+                    else ""
+                ),
+                reason="persisted_confirmation_contract_invalid",
+            )
+            return
+        if isinstance(pending_confirmation, dict):
+            pending_due_at = _timestamp(pending_confirmation.get("due_at"))
+            if pending_due_at is not None and now > pending_due_at + timedelta(
+                seconds=ENTRY_CONFIRMATION_MAX_LATE_SEC
+            ):
+                symbol_state["pending_entry_confirmation"] = None
+                self._save()
+                self._event(
+                    "entry_confirmation_invalidated",
+                    spec,
+                    now,
+                    signal_id=str(pending_confirmation.get("signal_id") or ""),
+                    reason="confirmation_recheck_window_expired",
+                    entry_confirmation_delay_sec=pending_confirmation.get("delay_sec"),
+                )
+                return
         if structural_block_reason:
+            if isinstance(pending_confirmation, dict):
+                symbol_state["pending_entry_confirmation"] = None
+                self._save()
+                self._event(
+                    "entry_confirmation_invalidated",
+                    spec,
+                    now,
+                    signal_id=str(pending_confirmation.get("signal_id") or ""),
+                    reason=structural_block_reason,
+                    entry_confirmation_delay_sec=pending_confirmation.get("delay_sec"),
+                )
             advisory = payload.get("advisory")
             advisory = advisory if isinstance(advisory, dict) else {}
             derived = advisory.get("derived")
@@ -2364,6 +2559,18 @@ class WidgetSignalAutoTrader:
                 return
         route = self._route(payload)
         if route not in {"KRX", "NXT"}:
+            pending_confirmation = symbol_state.get("pending_entry_confirmation")
+            if isinstance(pending_confirmation, dict):
+                symbol_state["pending_entry_confirmation"] = None
+                self._save()
+                self._event(
+                    "entry_confirmation_invalidated",
+                    spec,
+                    now,
+                    signal_id=str(pending_confirmation.get("signal_id") or ""),
+                    reason="entry_route_invalid",
+                    entry_confirmation_delay_sec=pending_confirmation.get("delay_sec"),
+                )
             return
         exclusion = evaluate_manual_control_exclusion(spec.code)
         operator_source = manual_control_operator_exclusion_source(spec.code)
@@ -2388,6 +2595,128 @@ class WidgetSignalAutoTrader:
                 now=now,
             )
             return
+        timing_session = spec.contract.session_context(now).name
+        timing_scope_id = f"{spec.code}:{timing_session}"
+        advisory = payload.get("advisory")
+        advisory = advisory if isinstance(advisory, dict) else {}
+        confirmation_identity = (
+            signal_id
+            if spec.event_based
+            else self._snapshot_entry_confirmation_identity(
+                spec=spec,
+                payload=payload,
+                advisory=advisory,
+                context=spec.contract.session_context(now),
+                now=now,
+            )
+        )
+        pending_confirmation = symbol_state.get("pending_entry_confirmation")
+        confirmation_delay_sec = 0
+        timing_policy_provenance: dict[str, Any] = {}
+        if isinstance(pending_confirmation, dict):
+            same_signal = bool(
+                pending_confirmation.get("confirmation_identity")
+                == confirmation_identity
+                and pending_confirmation.get("source_state") == source_state
+                and pending_confirmation.get("session") == timing_session
+                and pending_confirmation.get("route") == route
+            )
+            if not same_signal:
+                symbol_state["pending_entry_confirmation"] = None
+                self._save()
+                self._event(
+                    "entry_confirmation_invalidated",
+                    spec,
+                    now,
+                    signal_id=str(pending_confirmation.get("signal_id") or ""),
+                    reason="source_signal_identity_changed",
+                    replacement_signal_id=signal_id,
+                    entry_confirmation_delay_sec=pending_confirmation.get("delay_sec"),
+                )
+                pending_confirmation = None
+            else:
+                signal_id = str(pending_confirmation["signal_id"])
+                due_at = _timestamp(pending_confirmation.get("due_at"))
+                if due_at is None:
+                    symbol_state["pending_entry_confirmation"] = None
+                    self._save()
+                    self._event(
+                        "entry_confirmation_invalidated",
+                        spec,
+                        now,
+                        signal_id=signal_id,
+                        reason="persisted_confirmation_due_at_invalid",
+                    )
+                    return
+                if now < due_at:
+                    return
+                confirmation_delay_sec = int(pending_confirmation["delay_sec"])
+                timing_policy_provenance = dict(
+                    pending_confirmation.get("policy_provenance") or {}
+                )
+                active_delay, active_provenance = resolve_entry_confirmation_delay(
+                    target_date=now.date(),
+                    owner="widget",
+                    scope_id=timing_scope_id,
+                    symbol=spec.code,
+                    session=timing_session,
+                    entry_state=source_state,
+                )
+                if (
+                    active_delay != confirmation_delay_sec
+                    or active_provenance.get("status") != "applied"
+                    or active_provenance.get("policy_hash")
+                    != timing_policy_provenance.get("policy_hash")
+                ):
+                    symbol_state["pending_entry_confirmation"] = None
+                    self._save()
+                    self._event(
+                        "entry_confirmation_invalidated",
+                        spec,
+                        now,
+                        signal_id=signal_id,
+                        reason="entry_timing_policy_revalidation_failed",
+                        entry_confirmation_delay_sec=confirmation_delay_sec,
+                        active_policy_status=active_provenance.get("status"),
+                    )
+                    return
+        if pending_confirmation is None:
+            (
+                confirmation_delay_sec,
+                timing_policy_provenance,
+            ) = resolve_entry_confirmation_delay(
+                target_date=now.date(),
+                owner="widget",
+                scope_id=timing_scope_id,
+                symbol=spec.code,
+                session=timing_session,
+                entry_state=source_state,
+            )
+            if confirmation_delay_sec > 0:
+                due_at = now + timedelta(seconds=confirmation_delay_sec)
+                symbol_state["pending_entry_confirmation"] = {
+                    "signal_id": signal_id,
+                    "confirmation_identity": confirmation_identity,
+                    "source_state": source_state,
+                    "session": timing_session,
+                    "route": route,
+                    "armed_at": now.isoformat(),
+                    "due_at": due_at.isoformat(),
+                    "delay_sec": confirmation_delay_sec,
+                    "policy_provenance": timing_policy_provenance,
+                }
+                self._save()
+                self._event(
+                    "entry_confirmation_armed",
+                    spec,
+                    now,
+                    signal_id=signal_id,
+                    source_state=source_state,
+                    due_at=due_at.isoformat(),
+                    entry_confirmation_delay_sec=confirmation_delay_sec,
+                    timing_policy_hash=timing_policy_provenance.get("policy_hash"),
+                )
+                return
         for key in (
             "entry_submit_rejected_at",
             "entry_submit_rejected_signal_id",
@@ -2411,12 +2740,15 @@ class WidgetSignalAutoTrader:
             symbol_state.pop(key, None)
         symbol_state.update(
             {
+                "pending_entry_confirmation": None,
                 "entry_episode_open": True,
                 "entry_signal_id": signal_id,
                 "entry_source_state": source_state,
                 "entry_route": route,
                 "entry_session": spec.contract.session_context(now).name,
                 "entry_consumed_at": now.isoformat(),
+                "entry_confirmation_delay_sec": confirmation_delay_sec,
+                "entry_timing_policy_provenance": timing_policy_provenance,
                 "execution_policy_id": (
                     entry_policy["policy_id"] if entry_policy else None
                 ),
@@ -2461,12 +2793,8 @@ class WidgetSignalAutoTrader:
                     "entry_episode_open": False,
                     "entry_submit_rejected_at": now.isoformat(),
                     "entry_submit_rejected_signal_id": signal_id,
-                    "entry_submit_rejected_return_code": entry_order.get(
-                        "return_code"
-                    ),
-                    "entry_submit_rejected_return_msg": entry_order.get(
-                        "return_msg"
-                    ),
+                    "entry_submit_rejected_return_code": entry_order.get("return_code"),
+                    "entry_submit_rejected_return_msg": entry_order.get("return_msg"),
                     "entry_submit_rejected_fingerprint": rejection_fingerprint,
                     "entry_submit_rejected_cooldown_sec": cooldown_sec,
                     "entry_submit_rejected_cooldown_until": (

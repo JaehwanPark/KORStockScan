@@ -9,6 +9,7 @@ from src.engine.monitoring.machine_microstructure_attribution import (
     OBJECTIVE_CANDIDATE_BINDING_SCHEMA,
     OBJECTIVE_FOLLOWUP_METRIC_CONTRACT,
     _fast_lifecycle_objective_followup,
+    _episode_inventory,
     _lifecycle_objective_summary,
     _micro_entry_confirmation_summary,
     _rolling_source_contract_recovery,
@@ -919,12 +920,14 @@ def test_new_episode_symbol_without_micro_is_explicit_gap_not_zero_return(tmp_pa
     assert report["collection_feedback"]["effective_date"] == "2026-08-18"
     assert report["collection_feedback"]["active_owner_full_coverage"] is True
     assert report["collection_feedback"]["active_owner_overflow_count"] == 0
-    assert report["collection_feedback"]["selected_active_owner_count"] == report[
-        "collection_feedback"
-    ]["active_owner_candidate_count"]
-    assert report["collection_feedback"]["selected_symbol_count"] >= report[
-        "collection_feedback"
-    ]["active_owner_candidate_count"]
+    assert (
+        report["collection_feedback"]["selected_active_owner_count"]
+        == report["collection_feedback"]["active_owner_candidate_count"]
+    )
+    assert (
+        report["collection_feedback"]["selected_symbol_count"]
+        >= report["collection_feedback"]["active_owner_candidate_count"]
+    )
     assert report["collection_feedback"]["overflow_symbol_count"] > 0
     assert report["collection_feedback"]["manual_control_exclusion_applied"] is False
     assert report["policy_change_readiness"]["policy_change_allowed"] is False
@@ -1012,6 +1015,68 @@ def test_active_episode_signal_bar_gets_micro_path_metrics(tmp_path):
     assert lifecycle["matched_entry_fill_anchor_count"] == 1
     assert lifecycle["matched_exit_anchor_count"] == 1
     assert lifecycle["timed_owner_outcome_count"] == 1
+
+
+def test_samsung_episode_decision_timestamp_enters_entry_timing_inventory(tmp_path):
+    target_date = "2026-08-27"
+    report_root = tmp_path / "report"
+    _write_json(
+        report_root
+        / "samsung_machine_entry_tuning"
+        / f"samsung_machine_entry_tuning_{target_date}.json",
+        {
+            "schema": "samsung_machine_entry_tuning_report_v6",
+            "target_date": target_date,
+            "symbol": "005930",
+            "cost_pct": 0.2,
+            "daily": {
+                "machines": {
+                    "midday": {
+                        "machine": "midday",
+                        "target_date": target_date,
+                        "attempted": True,
+                        "eligible_for_cumulative_tuning": True,
+                        "source_quality": "pass",
+                        "source_quality_reasons": [],
+                        "signal_features": {
+                            "strategy": "midday",
+                            "signal_decision_at": "2026-08-27T13:15:00+09:00",
+                        },
+                        "legs": [
+                            {
+                                "leg_id": "signal_close",
+                                "route": "SOR",
+                                "buy_filled_qty": 10,
+                                "buy_filled_at": "2026-08-27T13:15:01+09:00",
+                                "entry_price": 100_000,
+                                "fill_price": 100_000,
+                                "target_price": 100_500,
+                                "target_filled_qty": 10,
+                                "target_filled_at": "2026-08-27T13:16:00+09:00",
+                                "target_fill_price": 100_500,
+                                "completed": True,
+                                "equal_weight_profit_pct": 0.3,
+                            }
+                        ],
+                    }
+                }
+            },
+        },
+    )
+
+    profiles, anchors, sources = _episode_inventory(target_date, report_root)
+
+    row = profiles["samsung:midday"]
+    assert row["owner_anchor_contract_status"] == "valid"
+    assert row["owner_policy_tuning_eligible"] is True
+    assert sources["samsung_machine_entry_tuning"]["status"] == "loaded"
+    assert len(anchors) == 1
+    assert anchors[0]["scope_id"] == "midday"
+    assert anchors[0]["session"] == "KRX_REGULAR"
+    assert anchors[0]["anchor_role"] == "episode_signal_decision_leg"
+    assert anchors[0]["owner_entry_limit_price"] == 100_000
+    assert anchors[0]["owner_target_price"] == 100_500
+    assert anchors[0]["owner_outcome"]["realized"] is True
 
 
 def test_held_episode_keeps_diagnostic_anchors_but_never_tuning_authority(tmp_path):

@@ -1504,6 +1504,16 @@ if [ "$RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION" = "true" ] || [ "$RUN_MACHINE_MIC
     "$PROJECT_DIR/data/report/machine_microstructure_attribution/machine_microstructure_attribution_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/machine_microstructure_attribution/machine_microstructure_attribution_${TARGET_DATE}.md" \
     "machine_microstructure_attribution"
+  wait_for_postclose_resources "machine_entry_timing_tuning"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
+    -m src.engine.automation.machine_entry_timing_tuning \
+    --target-date "$TARGET_DATE" \
+    --write \
+    --print-summary
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/machine_entry_timing_tuning/machine_entry_timing_tuning_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/machine_entry_timing_tuning/machine_entry_timing_tuning_${TARGET_DATE}.md" \
+    "machine_entry_timing_tuning"
 fi
 if [ "$RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL" = "true" ] || [ "$RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL" = "1" ]; then
   wait_for_postclose_resources "machine_microstructure_policy_approval"

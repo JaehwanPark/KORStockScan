@@ -162,7 +162,24 @@ def _write_source_quality(source_quality_dir: Path, trade_date: str) -> None:
 
 def test_extracts_actual_two_leg_outcome_without_broker_identifiers(tmp_path: Path):
     state_path = tmp_path / "state.json"
-    state_path.write_text(json.dumps(_state("midday", "2026-08-11")), encoding="utf-8")
+    payload = _state("midday", "2026-08-11")
+    payload["signal_features"].update(
+        {
+            "signal_decision_at": "2026-08-11T14:00:01+09:00",
+            "entry_confirmation_delay_sec": 3,
+            "entry_timing_policy_provenance": {
+                "status": "applied",
+                "policy_hash": "c" * 64,
+            },
+        }
+    )
+    payload["legs"][0].update(
+        {
+            "buy_filled_at": "2026-08-11T14:00:04+09:00",
+            "target_filled_at": "2026-08-11T14:01:00+09:00",
+        }
+    )
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
 
     row = extract_machine_row(
         machine="midday",
@@ -177,6 +194,10 @@ def test_extracts_actual_two_leg_outcome_without_broker_identifiers(tmp_path: Pa
     serialized = json.dumps(row)
     assert "SECRET" not in serialized
     assert row["legs"][0]["equal_weight_profit_pct"] == pytest.approx(0.085714)
+    assert row["legs"][0]["buy_filled_at"] == "2026-08-11T14:00:04+09:00"
+    assert row["legs"][0]["target_filled_at"] == "2026-08-11T14:01:00+09:00"
+    assert row["signal_features"]["signal_decision_at"] == ("2026-08-11T14:00:01+09:00")
+    assert row["signal_features"]["entry_confirmation_delay_sec"] == 3
 
 
 def test_ten_share_partial_fill_uses_filled_quantity_for_notional_ev(

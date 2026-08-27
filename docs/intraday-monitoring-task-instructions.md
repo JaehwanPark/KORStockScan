@@ -158,6 +158,7 @@ Smoothing은 순간 tick·호가·OFI/QI 흔들림으로 action이 왕복하는 
 - entry price, target tick, cooldown, 완료 episode 상한 후보를 동일 policy version의 Control과 비교한다.
 - source-quality, 미체결, partial fill, 미청산 custody와 실제 terminal sample을 분리한다.
 - exact-date policy와 rollback이 있는 단일 bounded axis만 다음 PREOPEN 후보가 될 수 있다.
+- `micro_entry_confirmation`은 clean-baseline exact owner·symbol·session·entry-state와 실제 완료 outcome을 누적해 `0/1/3/5초` 진입 확인 지연만 고를 수 있다. 당일 completed holdout, 20 completed outcome, 5/10/20일 비용차감 EV, BBO/depth·0B/0D source-quality, delayed-entry feasibility 90%, completed paired coverage 95%, right-censored 20% 이하 floor를 모두 통과한 전체 owner 중 한 scope만 다음 exact-date policy에 반영하고, 미달이면 즉시진입 `0초`를 유지한다. 지연 뒤에는 같은 원천 signal과 기존 entry guard를 전부 다시 확인하며 coarse steady poll도 pending deadline에는 짧게 깨운다.
 - 위젯 calibration은 메인 봇 또는 에피소드 runtime을 변경하지 않는다.
 
 ### 3.5 에피소드 튜닝
@@ -166,6 +167,7 @@ Smoothing은 순간 tick·호가·OFI/QI 흔들림으로 action이 왕복하는 
 - clean baseline 이후 rolling/cumulative 결과와 최신 거래일 holdout을 사용한다.
 - 미청산 episode는 completed EV에서 제외하고 custody 부담과 자본점유를 별도 지표로 보존한다.
 - 신규 profile과 기존 profile 변경을 분리하고 exact-date transition hash와 PREOPEN 적용 여부를 확인한다.
+- 진입 확인 지연 연구는 완성 1분봉 시각이 아니라 원장에 영속된 실제 `signal_decision_at`만 anchor로 사용한다. 이 값이 없는 legacy episode는 진단에는 남기되 진입시점 정책 표본에서는 제외한다.
 - 수량, provider, bot, broker guard와 legacy custody는 자동 calibration 축이 아니다.
 
 ## 4. 시작 시 공통 확인

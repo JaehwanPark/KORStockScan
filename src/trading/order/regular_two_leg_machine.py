@@ -11,7 +11,7 @@ import json
 import os
 import tempfile
 import time as time_module
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Protocol
 from zoneinfo import ZoneInfo
@@ -23,6 +23,10 @@ from src.trading.order.episode_quantity import (
     EPISODE_LEG_QUANTITY,
     EPISODE_TOTAL_QUANTITY,
     SUPPORTED_OWNED_LEG_QUANTITIES,
+)
+from src.trading.config.machine_entry_timing_policy import (
+    ENTRY_CONFIRMATION_MAX_LATE_SEC,
+    resolve_entry_confirmation_delay,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -76,6 +80,7 @@ def _fresh_state(now: datetime, schema: str) -> dict:
         "signal_bar": "",
         "signal_close": 0,
         "signal_features": {},
+        "pending_entry_confirmation": None,
         "legs": [],
         "position_qty": 0,
         "blocked_reason": "",
@@ -107,6 +112,9 @@ class SamsungRegularTwoLegMachine:
         ownership_source: Callable[
             [object], str
         ] = manual_control_operator_exclusion_source,
+        entry_timing_owner: str = "episode",
+        entry_timing_scope_id: str | None = None,
+        entry_timing_session: str = "KRX_REGULAR",
     ) -> None:
         self.gateway = gateway
         self.state_path = Path(state_path)
@@ -120,6 +128,9 @@ class SamsungRegularTwoLegMachine:
         self.legacy_schema = legacy_schema
         self.live_enabled = bool(live_enabled)
         self.ownership_source = ownership_source
+        self.entry_timing_owner = entry_timing_owner
+        self.entry_timing_scope_id = entry_timing_scope_id or strategy_name
+        self.entry_timing_session = entry_timing_session
         self._state = self._load_state()
 
     def _legacy_state(self, payload: dict) -> dict:
@@ -198,6 +209,7 @@ class SamsungRegularTwoLegMachine:
         # They are reported as a source-quality gap, rather than blocking an
         # already-owned order or position during an in-place deployment.
         payload.setdefault("signal_features", {})
+        payload.setdefault("pending_entry_confirmation", None)
         for leg in payload.get("legs", []):
             if not isinstance(leg, dict):
                 continue
@@ -348,6 +360,39 @@ class SamsungRegularTwoLegMachine:
         if not isinstance(self._state.get("signal_features"), dict):
             self._block(now, "state_signal_features_invalid")
             return False
+        pending_confirmation = self._state.get("pending_entry_confirmation")
+        if pending_confirmation is not None:
+            if not isinstance(pending_confirmation, dict):
+                self._block(now, "state_pending_entry_confirmation_invalid")
+                return False
+            try:
+                armed_at = datetime.fromisoformat(
+                    str(pending_confirmation.get("armed_at") or "")
+                )
+                due_at = datetime.fromisoformat(
+                    str(pending_confirmation.get("due_at") or "")
+                )
+                delay_sec = int(pending_confirmation.get("delay_sec"))
+                signal_close = int(pending_confirmation.get("signal_close") or 0)
+            except (TypeError, ValueError):
+                self._block(now, "state_pending_entry_confirmation_invalid")
+                return False
+            provenance = pending_confirmation.get("policy_provenance")
+            if (
+                armed_at.tzinfo is None
+                or due_at.tzinfo is None
+                or isinstance(pending_confirmation.get("delay_sec"), bool)
+                or abs((due_at - armed_at).total_seconds() - delay_sec) > 0.001
+                or delay_sec not in {1, 3, 5}
+                or not str(pending_confirmation.get("signal_bar") or "")
+                or signal_close <= 0
+                or not isinstance(provenance, dict)
+                or provenance.get("status") != "applied"
+                or len(str(provenance.get("policy_hash") or "")) != 64
+                or provenance.get("target_date") != self._state.get("trade_date")
+            ):
+                self._block(now, "state_pending_entry_confirmation_invalid")
+                return False
         owned = self._state.get("owned_order_nos")
         if not isinstance(owned, list) or any(
             not isinstance(x, str) or not x.strip() for x in owned
@@ -821,7 +866,77 @@ class SamsungRegularTwoLegMachine:
         if transient_source_wait:
             self._state["blocked_reason"] = ""
         latest_iso = latest.timestamp.isoformat()
-        if self._state.get("last_evaluated_bar") == latest_iso:
+        pending_confirmation = self._state.get("pending_entry_confirmation")
+        confirmed_pending = False
+        signal = None
+        if isinstance(pending_confirmation, dict):
+            signal = self.policy.evaluate(list(source.bars))
+            same_signal = bool(
+                signal is not None
+                and latest_iso == pending_confirmation.get("signal_bar")
+                and int(signal.signal_bar.close_price)
+                == int(pending_confirmation.get("signal_close") or 0)
+            )
+            if not same_signal:
+                self._state["pending_entry_confirmation"] = None
+                self._record(
+                    now,
+                    "entry_confirmation_invalidated",
+                    prior_signal_bar=pending_confirmation.get("signal_bar"),
+                    current_completed_bar=latest_iso,
+                    reason="signal_no_longer_same_and_actionable",
+                )
+                pending_confirmation = None
+            else:
+                due_at = datetime.fromisoformat(str(pending_confirmation["due_at"]))
+                if now < due_at:
+                    self._state.update(
+                        {
+                            "last_action": "entry_confirmation_wait",
+                            "blocked_reason": "",
+                        }
+                    )
+                    self._save()
+                    return self.snapshot()
+                if now > due_at + timedelta(seconds=ENTRY_CONFIRMATION_MAX_LATE_SEC):
+                    self._state["pending_entry_confirmation"] = None
+                    self._record(
+                        now,
+                        "entry_confirmation_invalidated",
+                        prior_signal_bar=pending_confirmation.get("signal_bar"),
+                        reason="confirmation_recheck_window_expired",
+                    )
+                    return self.snapshot()
+                active_delay, active_provenance = resolve_entry_confirmation_delay(
+                    target_date=now.date(),
+                    owner=self.entry_timing_owner,
+                    scope_id=self.entry_timing_scope_id,
+                    symbol=str(self.policy.symbol),
+                    session=self.entry_timing_session,
+                    entry_state="UNSPECIFIED",
+                )
+                if (
+                    active_delay != int(pending_confirmation["delay_sec"])
+                    or active_provenance.get("status") != "applied"
+                    or active_provenance.get("policy_hash")
+                    != (pending_confirmation.get("policy_provenance") or {}).get(
+                        "policy_hash"
+                    )
+                ):
+                    self._state["pending_entry_confirmation"] = None
+                    self._record(
+                        now,
+                        "entry_confirmation_invalidated",
+                        prior_signal_bar=pending_confirmation.get("signal_bar"),
+                        reason="entry_timing_policy_revalidation_failed",
+                        active_policy_status=active_provenance.get("status"),
+                    )
+                    return self.snapshot()
+                confirmed_pending = True
+        if (
+            not confirmed_pending
+            and self._state.get("last_evaluated_bar") == latest_iso
+        ):
             if transient_source_wait:
                 self._record(now, "sor_minute_source_recovered", bar=latest_iso)
             return self.snapshot()
@@ -839,7 +954,8 @@ class SamsungRegularTwoLegMachine:
             self._save()
             return self.snapshot()
         self._state["last_evaluated_bar"] = latest_iso
-        signal = self.policy.evaluate(list(source.bars))
+        if signal is None:
+            signal = self.policy.evaluate(list(source.bars))
         if signal is None:
             self._record(now, "bar_evaluated_no_signal", bar=latest_iso)
             return self.snapshot()
@@ -872,9 +988,45 @@ class SamsungRegularTwoLegMachine:
             )
             self._save()
             return self.snapshot()
+        if confirmed_pending:
+            delay_sec = int(pending_confirmation["delay_sec"])
+            signal_decision_at = str(pending_confirmation["armed_at"])
+            timing_policy_provenance = dict(
+                pending_confirmation.get("policy_provenance") or {}
+            )
+        else:
+            delay_sec, timing_policy_provenance = resolve_entry_confirmation_delay(
+                target_date=now.date(),
+                owner=self.entry_timing_owner,
+                scope_id=self.entry_timing_scope_id,
+                symbol=str(self.policy.symbol),
+                session=self.entry_timing_session,
+                entry_state="UNSPECIFIED",
+            )
+            signal_decision_at = now.isoformat()
+            if delay_sec > 0:
+                due_at = now + timedelta(seconds=delay_sec)
+                self._state["pending_entry_confirmation"] = {
+                    "signal_bar": latest_iso,
+                    "signal_close": int(latest.close_price),
+                    "armed_at": signal_decision_at,
+                    "due_at": due_at.isoformat(),
+                    "delay_sec": delay_sec,
+                    "policy_provenance": timing_policy_provenance,
+                }
+                self._record(
+                    now,
+                    "entry_confirmation_armed",
+                    signal_bar=latest_iso,
+                    delay_sec=delay_sec,
+                    due_at=due_at.isoformat(),
+                    timing_policy_hash=timing_policy_provenance.get("policy_hash"),
+                )
+                return self.snapshot()
         self._state.update(
             {
                 "attempt_consumed": True,
+                "pending_entry_confirmation": None,
                 "signal_bar": latest_iso,
                 "signal_close": latest.close_price,
                 "signal_features": {
@@ -887,7 +1039,10 @@ class SamsungRegularTwoLegMachine:
                     "symbol": str(self.policy.symbol),
                     "source": (f"kiwoom_ka10080_{self.policy.symbol}_AL_completed_1m"),
                     "signal_bar": latest_iso,
+                    "signal_decision_at": signal_decision_at,
                     "signal_close": int(latest.close_price),
+                    "entry_confirmation_delay_sec": delay_sec,
+                    "entry_timing_policy_provenance": timing_policy_provenance,
                     "rolling_high": int(signal.rolling_high),
                     "rolling_low": int(signal.rolling_low),
                     "observed_drawdown_pct": float(signal.drawdown_pct),
@@ -924,6 +1079,8 @@ class SamsungRegularTwoLegMachine:
             now,
             "two_leg_entry_armed",
             signal_bar=latest_iso,
+            signal_decision_at=signal_decision_at,
+            entry_confirmation_delay_sec=delay_sec,
             drawdown_pct=signal.drawdown_pct,
             near_low_pct=signal.near_low_pct,
         )
@@ -984,11 +1141,39 @@ class SamsungRegularTwoLegMachine:
     def run_forever(self, *, interval_sec: float = 2.0) -> None:
         while True:
             self.run_once()
-            time_module.sleep(max(0.2, float(interval_sec)))
+            time_module.sleep(self._next_loop_delay_sec(interval_sec=interval_sec))
 
     def run_until_terminal(self, *, interval_sec: float = 2.0) -> dict:
         while True:
             state = self.run_once()
             if state.get("status") in {"COMPLETE", "NO_TRADE", "HELD", "BLOCKED"}:
                 return state
-            time_module.sleep(max(0.2, float(interval_sec)))
+            time_module.sleep(self._next_loop_delay_sec(interval_sec=interval_sec))
+
+    def _next_loop_delay_sec(
+        self, *, interval_sec: float, now: datetime | None = None
+    ) -> float:
+        """Wake at an armed confirmation deadline instead of the coarse poll.
+
+        Lower-price launchers intentionally use a six-second steady-state poll.
+        A selected one/three/five-second entry timing policy must nevertheless
+        be consumed at its own deadline.  This changes only the next evaluation
+        time; broker, signal, price, quantity, and exit behavior remain owned by
+        the existing machine path.
+        """
+
+        base_delay = max(0.2, float(interval_sec))
+        pending = self._state.get("pending_entry_confirmation")
+        if not isinstance(pending, dict):
+            return base_delay
+        try:
+            due_at = datetime.fromisoformat(str(pending.get("due_at") or ""))
+        except ValueError:
+            return base_delay
+        if due_at.tzinfo is None:
+            return base_delay
+        current = (now or datetime.now(tz=KST)).astimezone(KST)
+        remaining = (due_at.astimezone(KST) - current).total_seconds()
+        if remaining <= 0:
+            return min(base_delay, 0.2)
+        return min(base_delay, max(0.02, remaining))

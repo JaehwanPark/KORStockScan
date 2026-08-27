@@ -283,12 +283,14 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "submitted": submitted,
         "filled": filled,
         "fill_price": fill_price,
+        "buy_filled_at": str(leg.get("buy_filled_at") or "") or None,
         "target_submitted": target_submitted,
         "target_price": target_price,
         "position_qty": position_qty,
         "buy_filled_qty": buy_filled_qty,
         "target_filled_qty": target_filled_qty,
         "target_fill_price": target_fill_price,
+        "target_filled_at": str(leg.get("target_filled_at") or "") or None,
         "exit_fill_source": exit_fill_source or None,
         "profit_exit_price": profit_exit_price if completed else 0,
         "profit_price_source": profit_price_source,
@@ -420,6 +422,16 @@ def _sanitize_signal_features(machine: str, raw: Any) -> dict[str, Any]:
         "strategy": str(raw.get("strategy") or ""),
         "source": str(raw.get("source") or ""),
         "signal_bar": str(raw.get("signal_bar") or ""),
+        "signal_close": _as_int(raw.get("signal_close")),
+        "signal_decision_at": str(raw.get("signal_decision_at") or ""),
+        "entry_confirmation_delay_sec": _as_int(
+            raw.get("entry_confirmation_delay_sec")
+        ),
+        "entry_timing_policy_provenance": (
+            dict(raw.get("entry_timing_policy_provenance"))
+            if isinstance(raw.get("entry_timing_policy_provenance"), dict)
+            else {}
+        ),
         "required_drawdown_pct": _as_float(raw.get("required_drawdown_pct")),
         "target_ticks": _as_int(raw.get("target_ticks")),
         "runtime_policy_source": str(raw.get("runtime_policy_source") or ""),

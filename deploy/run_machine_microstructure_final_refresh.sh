@@ -33,6 +33,16 @@ attribution_rc=0
   --write \
   --print-summary || attribution_rc=$?
 
+entry_timing_rc=0
+if ((attribution_rc == 0)); then
+  "$PYTHON_BIN" -m src.engine.automation.machine_entry_timing_tuning \
+    --target-date "$completed_target_date" \
+    --write \
+    --print-summary || entry_timing_rc=$?
+else
+  entry_timing_rc=0
+fi
+
 policy_rc=0
 "$PYTHON_BIN" -m src.engine.automation.machine_microstructure_policy_approval \
   --phase postclose \
@@ -48,17 +58,20 @@ builder_rc=0
   --completed-machine-source-date "$completed_target_date" || builder_rc=$?
 
 # The builder is the durable fallback and therefore has highest failure
-# priority.  Policy/notification failure is next, followed by attribution and
-# expansion.  All four codes remain visible in the journal even when an
+# priority. Policy/notification failure is next, followed by entry timing,
+# attribution, and expansion. All codes remain visible in the journal even when an
 # earlier producer failed and the later fallback steps still ran.
-printf '[MACHINE_MICRO_FINAL_REFRESH] target_date=%s expansion_rc=%s attribution_rc=%s policy_rc=%s builder_rc=%s\n' \
-  "$completed_target_date" "$expansion_rc" "$attribution_rc" "$policy_rc" "$builder_rc" >&2
+printf '[MACHINE_MICRO_FINAL_REFRESH] target_date=%s expansion_rc=%s attribution_rc=%s entry_timing_rc=%s policy_rc=%s builder_rc=%s\n' \
+  "$completed_target_date" "$expansion_rc" "$attribution_rc" "$entry_timing_rc" "$policy_rc" "$builder_rc" >&2
 
 if ((builder_rc != 0)); then
   exit "$builder_rc"
 fi
 if ((policy_rc != 0)); then
   exit "$policy_rc"
+fi
+if ((entry_timing_rc != 0)); then
+  exit "$entry_timing_rc"
 fi
 if ((attribution_rc != 0)); then
   exit "$attribution_rc"

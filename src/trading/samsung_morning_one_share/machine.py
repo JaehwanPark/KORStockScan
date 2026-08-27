@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -14,6 +14,10 @@ from src.trading.order.episode_quantity import (
     EPISODE_TOTAL_QUANTITY,
 )
 from src.trading.order.regular_two_leg_machine import KST, SamsungRegularTwoLegMachine
+from src.trading.config.machine_entry_timing_policy import (
+    ENTRY_CONFIRMATION_MAX_LATE_SEC,
+    resolve_entry_confirmation_delay,
+)
 from src.trading.samsung_morning_one_share.policy import (
     DEFAULT_POLICY,
     EntryWindow,
@@ -519,17 +523,124 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             )
             self._save()
             return self.snapshot()
+        timing_session = "NXT_PREMARKET" if route == "NXT" else "KRX_REGULAR"
+        pending_confirmation = self._state.get("pending_entry_confirmation")
+        confirmation_delay_sec = 0
+        timing_policy_provenance: dict = {}
+        signal_decision_at = now.isoformat()
+        if isinstance(pending_confirmation, dict):
+            same_signal = bool(
+                pending_confirmation.get("signal_bar") == str(signal_bar)
+                and int(pending_confirmation.get("signal_close") or 0) == open_price
+                and pending_confirmation.get("route") == route
+                and pending_confirmation.get("session") == timing_session
+            )
+            if not same_signal:
+                self._state["pending_entry_confirmation"] = None
+                self._record(
+                    now,
+                    "entry_confirmation_invalidated",
+                    reason="opening_signal_no_longer_same",
+                    prior_signal_bar=pending_confirmation.get("signal_bar"),
+                    current_signal_bar=str(signal_bar),
+                )
+                return self.snapshot()
+            due_at = datetime.fromisoformat(str(pending_confirmation["due_at"]))
+            if now < due_at:
+                self._state.update(
+                    {"last_action": "entry_confirmation_wait", "blocked_reason": ""}
+                )
+                self._save()
+                return self.snapshot()
+            if now > due_at + timedelta(seconds=ENTRY_CONFIRMATION_MAX_LATE_SEC):
+                self._state["pending_entry_confirmation"] = None
+                self._record(
+                    now,
+                    "entry_confirmation_invalidated",
+                    reason="confirmation_recheck_window_expired",
+                    prior_signal_bar=pending_confirmation.get("signal_bar"),
+                )
+                return self.snapshot()
+            confirmation_delay_sec = int(pending_confirmation["delay_sec"])
+            timing_policy_provenance = dict(
+                pending_confirmation.get("policy_provenance") or {}
+            )
+            active_delay, active_provenance = resolve_entry_confirmation_delay(
+                target_date=now.date(),
+                owner=self.entry_timing_owner,
+                scope_id=self.entry_timing_scope_id,
+                symbol=str(self.policy.symbol),
+                session=timing_session,
+                entry_state="UNSPECIFIED",
+            )
+            if (
+                active_delay != confirmation_delay_sec
+                or active_provenance.get("status") != "applied"
+                or active_provenance.get("policy_hash")
+                != timing_policy_provenance.get("policy_hash")
+            ):
+                self._state["pending_entry_confirmation"] = None
+                self._record(
+                    now,
+                    "entry_confirmation_invalidated",
+                    reason="entry_timing_policy_revalidation_failed",
+                    active_policy_status=active_provenance.get("status"),
+                )
+                return self.snapshot()
+            signal_decision_at = str(pending_confirmation["armed_at"])
+        else:
+            confirmation_delay_sec, timing_policy_provenance = (
+                resolve_entry_confirmation_delay(
+                    target_date=now.date(),
+                    owner=self.entry_timing_owner,
+                    scope_id=self.entry_timing_scope_id,
+                    symbol=str(self.policy.symbol),
+                    session=timing_session,
+                    entry_state="UNSPECIFIED",
+                )
+            )
+            if confirmation_delay_sec > 0:
+                due_at = now + timedelta(seconds=confirmation_delay_sec)
+                self._state["pending_entry_confirmation"] = {
+                    "signal_bar": str(signal_bar),
+                    "signal_close": open_price,
+                    "route": route,
+                    "session": timing_session,
+                    "armed_at": signal_decision_at,
+                    "due_at": due_at.isoformat(),
+                    "delay_sec": confirmation_delay_sec,
+                    "policy_provenance": timing_policy_provenance,
+                }
+                self._record(
+                    now,
+                    "entry_confirmation_armed",
+                    route=route,
+                    signal_bar=str(signal_bar),
+                    delay_sec=confirmation_delay_sec,
+                    due_at=due_at.isoformat(),
+                    timing_policy_hash=timing_policy_provenance.get("policy_hash"),
+                )
+                return self.snapshot()
+        signal_features = self._signal_features(
+            route=route,
+            signal_bar=signal_bar,
+            open_price=open_price,
+            plans=plans,
+        )
+        signal_features.update(
+            {
+                "signal_decision_at": signal_decision_at,
+                "entry_confirmation_delay_sec": confirmation_delay_sec,
+                "entry_timing_policy_provenance": timing_policy_provenance,
+            }
+        )
         self._state.update(
             {
                 "attempt_consumed": True,
+                "pending_entry_confirmation": None,
                 "signal_bar": signal_bar,
                 "signal_close": open_price,
-                "signal_features": self._signal_features(
-                    route=route,
-                    signal_bar=signal_bar,
-                    open_price=open_price,
-                    plans=plans,
-                ),
+                "signal_features": signal_features,
                 "legs": [_morning_leg(plan, route) for plan in plans],
                 "blocked_reason": "",
             }

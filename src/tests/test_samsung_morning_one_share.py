@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import pytest
 
@@ -122,6 +122,42 @@ def test_nxt_fills_submit_independent_two_tick_targets_and_complete(tmp_path):
     assert closed["status"] == "COMPLETE"
     assert closed["position_qty"] == 0
     assert len(gateway.buy_calls) == 2
+
+
+def test_nxt_entry_confirmation_delay_changes_only_submission_time(
+    tmp_path, monkeypatch
+):
+    gateway = FakeGateway()
+    calls: list[dict] = []
+
+    def timing_policy(**kwargs):
+        calls.append(kwargs)
+        return (
+            3,
+            {
+                "status": "applied",
+                "policy_hash": "a" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+            },
+        )
+
+    monkeypatch.setattr(
+        "src.trading.samsung_morning_one_share.machine.resolve_entry_confirmation_delay",
+        timing_policy,
+    )
+    machine = _machine(tmp_path, gateway)
+    armed_at = _at(11, 8, 1)
+
+    armed = machine.run_once(armed_at)
+    submitted = machine.run_once(armed_at + timedelta(seconds=3))
+
+    assert armed["status"] == "READY"
+    assert armed["attempt_consumed"] is False
+    assert armed["pending_entry_confirmation"]["delay_sec"] == 3
+    assert gateway.buy_calls == [("NXT", 291_500), ("NXT", 291_000)]
+    assert submitted["signal_features"]["signal_decision_at"] == armed_at.isoformat()
+    assert submitted["signal_features"]["entry_confirmation_delay_sec"] == 3
+    assert all(call["session"] == "NXT_PREMARKET" for call in calls)
 
 
 def test_nxt_cancel_must_reconcile_before_sor_regular_fallback(tmp_path):

@@ -29,24 +29,22 @@ def test_postclose_wrapper_executes_syntax_checked_immutable_snapshot():
 
 
 def test_postclose_wrapper_syncs_exact_trade_facts_before_daily_calibration():
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     sync_idx = script.index("src.engine.strategy_position_performance_report")
-    calibration_idx = script.index(
-        "src.engine.daily_threshold_cycle_report", sync_idx
-    )
+    calibration_idx = script.index("src.engine.daily_threshold_cycle_report", sync_idx)
     ev_idx = script.index(
         'run_threshold_cycle_ev_and_wait "pre_workorder"', calibration_idx
     )
 
     assert sync_idx < calibration_idx < ev_idx
     sync_block = script[
-        script.rindex('if [ "$SKIP_DB" != "true" ]; then', 0, sync_idx) : calibration_idx
+        script.rindex(
+            'if [ "$SKIP_DB" != "true" ]; then', 0, sync_idx
+        ) : calibration_idx
     ]
-    assert 'reason=skip_db' in sync_block
-    assert 'src.engine.strategy_position_performance_report' in sync_block
+    assert "reason=skip_db" in sync_block
+    assert "src.engine.strategy_position_performance_report" in sync_block
 
 
 def test_postclose_wrapper_snapshot_is_removed_when_child_fails(tmp_path):
@@ -571,7 +569,10 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     attribution_idx = script.index(
         "-m src.engine.monitoring.machine_microstructure_attribution"
     )
-    assert tuning_idx < expansion_idx < attribution_idx
+    entry_timing_idx = script.index(
+        "-m src.engine.automation.machine_entry_timing_tuning"
+    )
+    assert tuning_idx < expansion_idx < attribution_idx < entry_timing_idx
     assert 'wait_for_postclose_resources "machine_microstructure_attribution"' in script
     assert "machine_microstructure_attribution_${TARGET_DATE}.json" in script
     assert (
@@ -581,7 +582,7 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     approval_idx = script.index(
         "-m src.engine.automation.machine_microstructure_policy_approval"
     )
-    assert attribution_idx < approval_idx
+    assert entry_timing_idx < approval_idx
     assert "--phase postclose" in script
     assert (
         "machine_microstructure_policy_approval_postclose_${TARGET_DATE}.json" in script
@@ -617,6 +618,9 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     attribution_refresh_idx = final_refresh.index(
         '"$PYTHON_BIN" -m src.engine.monitoring.machine_microstructure_attribution'
     )
+    entry_timing_refresh_idx = final_refresh.index(
+        '"$PYTHON_BIN" -m src.engine.automation.machine_entry_timing_tuning'
+    )
     approval_refresh_idx = final_refresh.index(
         '"$PYTHON_BIN" -m src.engine.automation.machine_microstructure_policy_approval'
     )
@@ -626,6 +630,7 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     assert (
         expansion_refresh_idx
         < attribution_refresh_idx
+        < entry_timing_refresh_idx
         < approval_refresh_idx
         < checklist_refresh_idx
     )
@@ -640,6 +645,7 @@ def _run_machine_microstructure_final_refresh(
     *,
     expansion_rc=0,
     attribution_rc=0,
+    entry_timing_rc=0,
     policy_rc=0,
     builder_rc=0,
     target_date_rc=0,
@@ -662,6 +668,8 @@ def _run_machine_microstructure_final_refresh(
                 '    exit "${FAKE_EXPANSION_RC:-0}" ;;',
                 '  *"machine_microstructure_attribution"*)',
                 '    exit "${FAKE_ATTRIBUTION_RC:-0}" ;;',
+                '  *"machine_entry_timing_tuning"*)',
+                '    exit "${FAKE_ENTRY_TIMING_RC:-0}" ;;',
                 '  *"machine_microstructure_policy_approval"*)',
                 '    exit "${FAKE_POLICY_RC:-0}" ;;',
                 '  *"build_next_stage2_checklist"*)',
@@ -681,6 +689,7 @@ def _run_machine_microstructure_final_refresh(
         "FINAL_REFRESH_CALL_LOG": str(call_log),
         "FAKE_EXPANSION_RC": str(expansion_rc),
         "FAKE_ATTRIBUTION_RC": str(attribution_rc),
+        "FAKE_ENTRY_TIMING_RC": str(entry_timing_rc),
         "FAKE_POLICY_RC": str(policy_rc),
         "FAKE_BUILDER_RC": str(builder_rc),
         "FAKE_COMPLETED_TARGET_DATE": completed_target_date,
@@ -704,19 +713,25 @@ def test_machine_microstructure_final_refresh_success_order_and_flags(tmp_path):
     result, calls = _run_machine_microstructure_final_refresh(tmp_path)
 
     assert result.returncode == 0
-    assert len(calls) == 4
+    assert len(calls) == 5
     assert "widget_collector_expansion_recommendation" in calls[0]
     assert "--target-date 2026-08-14" in calls[0]
     assert "--write --notify --source-wait-sec 900 --source-poll-sec 30" in calls[0]
     assert "machine_microstructure_attribution" in calls[1]
     assert "--target-date 2026-08-14" in calls[1]
     assert "--write --print-summary" in calls[1]
-    assert "machine_microstructure_policy_approval" in calls[2]
+    assert "machine_entry_timing_tuning" in calls[2]
     assert "--target-date 2026-08-14" in calls[2]
-    assert "--notify-objective-followups" in calls[2]
-    assert "build_next_stage2_checklist" in calls[3]
-    assert "--completed-machine-source-date 2026-08-14" in calls[3]
-    assert "expansion_rc=0 attribution_rc=0 policy_rc=0 builder_rc=0" in (result.stderr)
+    assert "--write --print-summary" in calls[2]
+    assert "machine_microstructure_policy_approval" in calls[3]
+    assert "--target-date 2026-08-14" in calls[3]
+    assert "--notify-objective-followups" in calls[3]
+    assert "build_next_stage2_checklist" in calls[4]
+    assert "--completed-machine-source-date 2026-08-14" in calls[4]
+    assert (
+        "expansion_rc=0 attribution_rc=0 entry_timing_rc=0 policy_rc=0 builder_rc=0"
+        in (result.stderr)
+    )
 
 
 def test_machine_microstructure_final_refresh_fails_before_children_when_date_resolution_fails(
@@ -756,11 +771,16 @@ def test_machine_microstructure_final_refresh_continues_after_upstream_failure(
     )
 
     assert result.returncode == expected_rc
-    assert len(calls) == 4
+    assert len(calls) == (4 if attribution_rc else 5)
     assert "widget_collector_expansion_recommendation" in calls[0]
     assert "machine_microstructure_attribution" in calls[1]
-    assert "machine_microstructure_policy_approval" in calls[2]
-    assert "build_next_stage2_checklist" in calls[3]
+    if attribution_rc:
+        assert "machine_microstructure_policy_approval" in calls[2]
+        assert "build_next_stage2_checklist" in calls[3]
+    else:
+        assert "machine_entry_timing_tuning" in calls[2]
+        assert "machine_microstructure_policy_approval" in calls[3]
+        assert "build_next_stage2_checklist" in calls[4]
 
 
 def test_machine_microstructure_final_refresh_prioritizes_builder_failure(tmp_path):
@@ -774,7 +794,22 @@ def test_machine_microstructure_final_refresh_prioritizes_builder_failure(tmp_pa
 
     assert result.returncode == 7
     assert len(calls) == 4
-    assert "expansion_rc=5 attribution_rc=4 policy_rc=3 builder_rc=7" in (result.stderr)
+    assert (
+        "expansion_rc=5 attribution_rc=4 entry_timing_rc=0 policy_rc=3 builder_rc=7"
+        in (result.stderr)
+    )
+
+
+def test_machine_microstructure_final_refresh_surfaces_entry_timing_failure(tmp_path):
+    result, calls = _run_machine_microstructure_final_refresh(
+        tmp_path,
+        entry_timing_rc=8,
+    )
+
+    assert result.returncode == 8
+    assert len(calls) == 5
+    assert "machine_entry_timing_tuning" in calls[2]
+    assert "entry_timing_rc=8" in result.stderr
 
 
 def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_without_bedrock_lite_shadow():
@@ -830,7 +865,7 @@ def test_postclose_done_controller_wrapper_runs_controller_and_skips_codex_runne
     assert "--allow-wrapper-rerun" in script
     assert "--predecessor-timeout-sec" in script
     assert "POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC" in script
-    assert 'POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC:-43200' in script
+    assert "POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC:-43200" in script
     assert "$PROJECT_DIR/venv/Scripts/python.exe" in script
     assert 'RUN_CODEX="${POSTCLOSE_DONE_CONTROLLER_RUN_CODEX:-false}"' in script
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL_POLICY" in script
@@ -892,7 +927,10 @@ def test_postclose_done_controller_retriggers_late_entry_setup_follower_idempote
     assert 'batch.get("status") != "completed_offline_only"' in script
     assert 'candidate.get("source_date") != target_date' in script
     assert "candidate_path.resolve() != expected_candidate_path.resolve()" in script
-    assert 'candidate.get("effective_date_policy") != "first_available_krx_preopen_v1"' in script
+    assert (
+        'candidate.get("effective_date_policy") != "first_available_krx_preopen_v1"'
+        in script
+    )
     assert 'candidate.get("preopen_candidate_cutoff_kst") != "07:35:00"' in script
     assert "candidate_contract_hash_missing_or_invalid" in script
     assert (
@@ -990,7 +1028,11 @@ def test_postclose_done_controller_entry_setup_terminal_validator(tmp_path: Path
     candidate.pop("blocking_reasons")
     candidate["artifact_sha256"] = hashlib.sha256(
         json.dumps(
-            {key: value for key, value in candidate.items() if key != "artifact_sha256"},
+            {
+                key: value
+                for key, value in candidate.items()
+                if key != "artifact_sha256"
+            },
             ensure_ascii=True,
             sort_keys=True,
             separators=(",", ":"),
@@ -1664,7 +1706,7 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     assert "AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS" in runner
     assert 'MAX_ATTEMPTS="${AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS:-3}"' in runner
     assert 'if [ "$batch_rc" -eq 3 ]' in runner
-    assert 'AI_ENTRY_SETUP_REPLAY_PREDECESSOR_WAIT_SEC:-43200' in runner
+    assert "AI_ENTRY_SETUP_REPLAY_PREDECESSOR_WAIT_SEC:-43200" in runner
     assert "predecessor bounded wait exhausted" in runner
     assert "sleep 15" in runner
     assert "run_bot.sh" not in runner
@@ -2314,7 +2356,7 @@ def test_tuning_monitoring_waits_for_threshold_postclose_done_by_default():
     assert 'if [[ "$waited" -ge "$PREDECESSOR_WAIT_SEC" ]]' in failed_branch
     assert "reason=threshold_cycle_postclose_failed waited=${waited}s" in failed_branch
     assert "predecessor failed; waiting for recovery" in failed_branch
-    assert 'TUNING_MONITORING_PREDECESSOR_WAIT_SEC:-43200' in script
+    assert "TUNING_MONITORING_PREDECESSOR_WAIT_SEC:-43200" in script
 
 
 def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():

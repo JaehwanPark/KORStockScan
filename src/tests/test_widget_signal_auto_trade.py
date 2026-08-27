@@ -358,9 +358,7 @@ def test_definitive_entry_rejection_cools_down_distinct_signal_before_retry(
     assert symbol_state["entry_signal_id"] == "ENTRY-1"
     assert symbol_state["entry_submit_rejected_return_code"] == "20"
     assert symbol_state["entry_submit_rejected_cooldown_sec"] == 60
-    assert recorder.events[-1]["event_type"] == (
-        "entry_episode_closed_submit_rejected"
-    )
+    assert recorder.events[-1]["event_type"] == ("entry_episode_closed_submit_rejected")
 
     # The same source event remains consumed, preventing rejection storms.
     trader.run_once(now.replace(second=1))
@@ -391,6 +389,96 @@ def test_definitive_entry_rejection_cools_down_distinct_signal_before_retry(
     assert "entry_submit_rejected_return_code" not in accepted["symbols"]["999999"]
     assert "entry_submit_rejected_return_msg" not in accepted["symbols"]["999999"]
     assert "entry_submit_rejected_cooldown_until" not in accepted["symbols"]["999999"]
+
+
+def test_widget_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkeypatch):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+    monkeypatch.setattr(
+        engine,
+        "resolve_entry_confirmation_delay",
+        lambda **kwargs: (
+            3,
+            {
+                "status": "applied",
+                "policy_hash": "b" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+            },
+        ),
+    )
+
+    armed = trader.run_once(now)
+    waiting = trader.run_once(now + timedelta(seconds=2))
+    submitted = trader.run_once(now + timedelta(seconds=3))
+
+    assert armed["symbols"]["999999"]["pending_entry_confirmation"]["delay_sec"] == 3
+    assert waiting["symbols"]["999999"]["entry_episode_open"] is False
+    assert gateway.buy_calls == [("999999", 1, "SOR")]
+    symbol_state = submitted["symbols"]["999999"]
+    assert symbol_state["entry_episode_open"] is True
+    assert symbol_state["entry_confirmation_delay_sec"] == 3
+    assert any(
+        event["event_type"] == "entry_confirmation_armed" for event in recorder.events
+    )
+
+
+def test_widget_discards_entry_confirmation_after_recheck_window(tmp_path, monkeypatch):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+    monkeypatch.setattr(
+        engine,
+        "resolve_entry_confirmation_delay",
+        lambda **kwargs: (
+            3,
+            {
+                "status": "applied",
+                "policy_hash": "b" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+            },
+        ),
+    )
+
+    trader.run_once(now)
+    expired_at = now + timedelta(seconds=14)
+    box["payload"] = _payload(expired_at, entry_id="ENTRY-1")
+    expired = trader.run_once(expired_at)
+
+    assert gateway.buy_calls == []
+    assert expired["symbols"]["999999"]["pending_entry_confirmation"] is None
+    assert recorder.events[-1]["event_type"] == "entry_confirmation_invalidated"
+    assert recorder.events[-1]["reason"] == "confirmation_recheck_window_expired"
+
+
+def test_widget_discards_malformed_persisted_entry_confirmation(tmp_path, monkeypatch):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+    monkeypatch.setattr(
+        engine,
+        "resolve_entry_confirmation_delay",
+        lambda **kwargs: (
+            3,
+            {
+                "status": "applied",
+                "policy_hash": "b" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+            },
+        ),
+    )
+    trader.run_once(now)
+    trader._state["symbols"]["999999"]["pending_entry_confirmation"][
+        "delay_sec"
+    ] = "invalid"
+    next_at = now + timedelta(seconds=1)
+    box["payload"] = _payload(next_at, entry_id="ENTRY-1")
+
+    discarded = trader.run_once(next_at)
+
+    assert gateway.buy_calls == []
+    assert discarded["symbols"]["999999"]["pending_entry_confirmation"] is None
+    assert recorder.events[-1]["reason"] == "persisted_confirmation_contract_invalid"
 
 
 def test_persisted_definitive_entry_rejection_is_recovered_on_next_cycle(
@@ -428,10 +516,7 @@ def test_persisted_definitive_entry_rejection_is_recovered_on_next_cycle(
 
     assert gateway.buy_calls == []
     assert recovered["symbols"]["999999"]["entry_episode_open"] is False
-    assert (
-        recovered["symbols"]["999999"]["entry_submit_rejected_cooldown_sec"]
-        == 60
-    )
+    assert recovered["symbols"]["999999"]["entry_submit_rejected_cooldown_sec"] == 60
     assert recorder.events[-1]["event_type"] == (
         "entry_episode_recovered_submit_rejected"
     )
@@ -448,10 +533,7 @@ def test_definitive_entry_rejection_cooldown_has_zero_second_rollback(
     trader.gateway = gateway
 
     rejected = trader.run_once(now)
-    assert (
-        rejected["symbols"]["999999"]["entry_submit_rejected_cooldown_sec"]
-        == 0
-    )
+    assert rejected["symbols"]["999999"]["entry_submit_rejected_cooldown_sec"] == 0
 
     retry_at = now.replace(second=2)
     box["payload"] = _payload(retry_at, entry_id="ENTRY-2")
@@ -1490,6 +1572,74 @@ def test_samsung_style_contract_does_not_require_top_level_strategy_profile(
 
     assert context is not None
     assert snapshot_at == now
+
+
+def test_non_event_signal_identity_survives_snapshot_refresh_but_not_setup_change(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": {}}
+    trader, _, _ = _trader(tmp_path, monkeypatch, box)
+    spec = WidgetSpec(
+        code="005930",
+        name="Samsung",
+        snapshot_path=Path("unused.json"),
+        contract=FakeSamsungContractWithoutTopLevelProfile,
+        event_based=False,
+    )
+    payload = {
+        "status": "ok",
+        "symbol": "005930",
+        "market_venue": "KRX",
+        "observed_at_kst": now.isoformat(),
+        "observation": {"latest_completed_bar": {"source_time": "20260810100000"}},
+        "advisory": {
+            "valid": True,
+            "state": "ENTRY_READY",
+            "session": "KRX_REGULAR",
+            "observed_at": now.isoformat(),
+            "trigger": "confirmed_retest_early_reversal",
+            "entry_price_low": 230_000,
+            "entry_price_high": 230_500,
+            "derived": {
+                "confirmed_support": 229_500,
+                "recent_resistance": 230_500,
+                "recent_resistance_reclaimed": True,
+            },
+        },
+    }
+
+    context = spec.contract.session_context(now)
+    first = trader._snapshot_entry_confirmation_identity(
+        spec=spec,
+        payload=payload,
+        advisory=payload["advisory"],
+        context=context,
+        now=now,
+    )
+    refreshed = json.loads(json.dumps(payload))
+    refreshed_at = now + timedelta(seconds=3)
+    refreshed["observed_at_kst"] = refreshed_at.isoformat()
+    refreshed["advisory"]["observed_at"] = refreshed_at.isoformat()
+    second = trader._snapshot_entry_confirmation_identity(
+        spec=spec,
+        payload=refreshed,
+        advisory=refreshed["advisory"],
+        context=spec.contract.session_context(refreshed_at),
+        now=refreshed_at,
+    )
+    changed = json.loads(json.dumps(refreshed))
+    changed["advisory"]["entry_price_high"] = 231_000
+    third = trader._snapshot_entry_confirmation_identity(
+        spec=spec,
+        payload=changed,
+        advisory=changed["advisory"],
+        context=spec.contract.session_context(refreshed_at),
+        now=refreshed_at,
+    )
+
+    assert first == second
+    assert third != first
 
 
 def test_samsung_execution_blocks_entry_without_recent_resistance_reclaim(

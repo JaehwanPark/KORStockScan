@@ -17,13 +17,16 @@ def test_threshold_ev_reconciliation_mismatch_is_a_verifier_issue():
             }
         }
     ) == ["threshold_cycle_ev_trade_review_calibration_count_mismatch"]
-    assert mod._threshold_ev_reconciliation_issues(
-        {
-            "daily_ev_summary": {
-                "trade_review_snapshot_reconciliation": {"count_match": True}
+    assert (
+        mod._threshold_ev_reconciliation_issues(
+            {
+                "daily_ev_summary": {
+                    "trade_review_snapshot_reconciliation": {"count_match": True}
+                }
             }
-        }
-    ) == []
+        )
+        == []
+    )
 
 
 def test_workorder_source_fingerprint_detects_changed_bytes(tmp_path):
@@ -347,6 +350,61 @@ def test_samsung_machine_entry_postclose_contract_validates_windows_and_candidat
         report, candidate, target_date=target_date
     )
     assert "tuning_window_contract_invalid" in invalid["issues"]
+
+
+def test_machine_entry_timing_postclose_contract_binds_report_and_applied_policy(
+    tmp_path: Path,
+):
+    from src.engine.automation.machine_entry_timing_tuning import (
+        REPORT_SCHEMA,
+        build_applied_policy,
+    )
+
+    target_date = "2026-08-27"
+    effective_date = "2026-08-28"
+    report_path = tmp_path / f"machine_entry_timing_tuning_{target_date}.json"
+    policy_dir = tmp_path / "policy"
+    report = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "effective_date": effective_date,
+        "decision": "baseline_immediate_entry_carry_forward",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "target_source_ready": True,
+        "winner": None,
+        "same_stage_owner_guard": {"mutation_present": False},
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    applied = build_applied_policy(report, source_report_path=report_path)
+    policy_dir.mkdir()
+    policy_path = policy_dir / f"machine_entry_timing_policy_{effective_date}.json"
+    policy_path.write_text(json.dumps(applied), encoding="utf-8")
+
+    status = mod._machine_entry_timing_postclose_contract_status(
+        report,
+        applied,
+        target_date=target_date,
+        report_path=report_path,
+        policy_dir=policy_dir,
+    )
+
+    assert status["status"] == "pass"
+    assert status["baseline_immediate"] is True
+    report_path.write_text(json.dumps({**report, "decision": "tampered"}))
+    invalid = mod._machine_entry_timing_postclose_contract_status(
+        report,
+        applied,
+        target_date=target_date,
+        report_path=report_path,
+        policy_dir=policy_dir,
+    )
+    assert invalid["status"] == "fail"
+    assert any(
+        issue.startswith("applied_policy_invalid:") for issue in invalid["issues"]
+    )
 
 
 def _smoothing_journal(sample_floor: int, *, arm_id: str) -> dict:

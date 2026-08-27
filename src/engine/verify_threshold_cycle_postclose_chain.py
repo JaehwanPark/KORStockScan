@@ -172,6 +172,8 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "low_price_two_leg_expanded_candidate_research",
     "samsung_machine_entry_tuning",
     "samsung_machine_entry_policy_candidate",
+    "machine_entry_timing_tuning",
+    "machine_entry_timing_policy",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
@@ -473,6 +475,78 @@ def _samsung_machine_entry_postclose_contract_status(
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+    }
+
+
+def _machine_entry_timing_postclose_contract_status(
+    report: dict[str, Any],
+    applied: dict[str, Any],
+    *,
+    target_date: str,
+    report_path: Path,
+    policy_dir: Path,
+) -> dict[str, Any]:
+    from src.engine.automation.machine_entry_timing_tuning import REPORT_SCHEMA
+    from src.trading.config.machine_entry_timing_policy import (
+        load_applied_policy,
+        policy_path,
+    )
+
+    issues: list[str] = []
+    effective_date = _next_krx_trading_day(target_date)
+    if not report:
+        issues.append("report_missing_or_invalid")
+    else:
+        if report.get("schema") != REPORT_SCHEMA:
+            issues.append("report_schema_invalid")
+        if report.get("target_date") != target_date:
+            issues.append("report_target_date_mismatch")
+        if report.get("effective_date") != effective_date:
+            issues.append("report_effective_date_mismatch")
+        if report.get("target_source_ready") is not True:
+            issues.append("target_attribution_source_not_ready")
+        if (
+            report.get("runtime_effect") is not False
+            or report.get("actual_order_submitted") is not False
+            or report.get("broker_order_forbidden") is not True
+        ):
+            issues.append("report_authority_invalid")
+        winner = report.get("winner")
+        guard = report.get("same_stage_owner_guard") or {}
+        if winner is not None and guard.get("mutation_present") is not False:
+            issues.append("winner_same_stage_conflict_invalid")
+    expected_policy_path = policy_path(
+        date.fromisoformat(effective_date), policy_dir=policy_dir
+    )
+    if (
+        expected_policy_path
+        != policy_dir / f"machine_entry_timing_policy_{effective_date}.json"
+    ):
+        issues.append("policy_path_contract_invalid")
+    loaded, reason = load_applied_policy(
+        target_date=date.fromisoformat(effective_date),
+        policy_dir=policy_dir,
+        source_report_dir=report_path.parent,
+    )
+    if loaded is None:
+        issues.append(f"applied_policy_invalid:{reason}")
+    elif loaded != applied:
+        issues.append("applied_policy_loaded_payload_mismatch")
+    if applied:
+        declared_report_path = Path(str(applied.get("source_report") or ""))
+        if not declared_report_path.is_absolute():
+            declared_report_path = PROJECT_ROOT / declared_report_path
+        if declared_report_path.resolve() != report_path.resolve():
+            issues.append("applied_policy_source_report_path_mismatch")
+        expected_scope_count = 1 if isinstance(report.get("winner"), dict) else 0
+        if len(applied.get("scopes") or {}) != expected_scope_count:
+            issues.append("applied_policy_scope_count_mismatch")
+    return {
+        "status": "fail" if issues else "pass",
+        "issues": sorted(set(issues)),
+        "runtime_effect": bool(loaded is not None and (loaded.get("scopes") or {})),
+        "baseline_immediate": bool(loaded is not None and not loaded.get("scopes")),
+        "effective_date": effective_date,
     }
 
 
@@ -1824,6 +1898,14 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "samsung_machine_entry_tuning": REPORT_DIR
         / "samsung_machine_entry_tuning"
         / f"samsung_machine_entry_tuning_{target_date}.json",
+        "machine_entry_timing_tuning": REPORT_DIR
+        / "machine_entry_timing_tuning"
+        / f"machine_entry_timing_tuning_{target_date}.json",
+        "machine_entry_timing_policy": PROJECT_ROOT
+        / "data"
+        / "runtime"
+        / "machine_entry_timing_policy"
+        / f"machine_entry_timing_policy_{next_day}.json",
         "samsung_machine_entry_policy_candidate": PROJECT_ROOT
         / "data"
         / "threshold_cycle"
@@ -6145,6 +6227,35 @@ def build_threshold_cycle_postclose_verification(
             f"samsung_machine_entry_{issue}"
             for issue in samsung_machine_entry_postclose["issues"]
         )
+    machine_entry_timing_report = _load_json(paths["machine_entry_timing_tuning"])
+    machine_entry_timing_policy = _load_json(paths["machine_entry_timing_policy"])
+    machine_entry_timing_verification_enabled = bool(
+        execution_contract_flags.get("machine_microstructure_attribution") is True
+        or paths["machine_entry_timing_tuning"].exists()
+        or paths["machine_entry_timing_policy"].exists()
+    )
+    machine_entry_timing_postclose = (
+        _machine_entry_timing_postclose_contract_status(
+            machine_entry_timing_report,
+            machine_entry_timing_policy,
+            target_date=target_date,
+            report_path=paths["machine_entry_timing_tuning"],
+            policy_dir=paths["machine_entry_timing_policy"].parent,
+        )
+        if machine_entry_timing_verification_enabled
+        else {
+            "status": "not_enabled",
+            "issues": [],
+            "runtime_effect": False,
+            "baseline_immediate": True,
+            "effective_date": _next_krx_trading_day(target_date),
+        }
+    )
+    if machine_entry_timing_postclose["status"] == "fail":
+        log_issues.extend(
+            f"machine_entry_timing_{issue}"
+            for issue in machine_entry_timing_postclose["issues"]
+        )
     threshold_cycle_daily = _load_json(paths["threshold_cycle_daily"])
     threshold_cycle_calibration = _load_json(paths["threshold_cycle_calibration"])
     threshold_cycle_ai_review = _load_json(
@@ -7802,6 +7913,7 @@ def build_threshold_cycle_postclose_verification(
         "missing_required_artifacts": missing_required_artifacts,
         "low_price_two_leg_postclose": low_price_two_leg_postclose,
         "samsung_machine_entry_postclose": samsung_machine_entry_postclose,
+        "machine_entry_timing_postclose": machine_entry_timing_postclose,
         "smoothing_source_only_path_journal": smoothing_source_only_path_journal,
         "limit_down_watch": limit_down_watch_status,
         "workorder_snapshot": {
