@@ -451,7 +451,7 @@ profile may propose one tightening axis for the next PREOPEN:
 - drawdown from the profile baseline to at most `baseline + 0.25%p`, or
 - near-low proximity from the profile baseline to at most `baseline - 0.10%p`.
 
-Across all forty-five profiles and the existing Samsung regular machines, at most one
+Across all forty-six profiles and the existing Samsung regular machines, at most one
 profile/machine and one entry axis may change per day.  The Samsung candidate is
 produced first; if it owns a valid mutation, or its same-date candidate is
 invalid, the lower-price family carries all policies forward. Quantity is fixed
@@ -487,7 +487,13 @@ closed. A valid 2026-08-20 bounded tuning mutation is still checked against its
 same-stage user-approved revision; the 27-profile baseline owns the transition.
 The artifact enumerates the 15 profiles affected by the combined approvals, so
 an unrelated ignored mutation is labeled separately rather than attributed to
-user approval.
+user approval. Subsequent exact-date generations contain 35 profiles from
+2026-08-24, 40 from 2026-08-25, and 45 from 2026-08-27. The user-approved
+2026-08-27 postclose generation takes effect only on 2026-08-28: it revises
+eight existing profiles and adds `sk_telecom_morning`, producing 46 profiles.
+Its nine-row evidence hash and source-report hash are checked independently;
+target dates through 2026-08-27 continue to resolve the immutable 45-profile
+generation so open orders and held custody are never reinterpreted.
 
 ## Daily implementation-candidate recommendation
 

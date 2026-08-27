@@ -151,6 +151,21 @@ def test_config_accepts_fifteen_bounded_research_watch_symbols(tmp_path):
     assert len(config["symbols"]) == 15
 
 
+def test_default_config_carries_20260827_research_watch_lineage():
+    config = watch.load_config(observed_date=date(2026, 8, 28))
+    symbols = {row["stock_code"]: row for row in config["symbols"]}
+
+    assert len(symbols) == 13
+    assert set(symbols) >= {"361610", "488280"}
+    for code in ("361610", "488280"):
+        assert symbols[code]["source_target_date"] == "2026-08-27"
+        assert symbols[code]["source_report_sha256"] == (
+            "d5c5669c1eabb663ac2714ed253de97034453ca24c6e1c8b66f55107a9f7e385"
+        )
+    assert config["runtime_effect"] is False
+    assert config["allowed_runtime_apply"] is False
+
+
 def test_config_rejects_more_than_fifteen_research_watch_symbols(tmp_path):
     symbols = [(f"{index:06d}", f"테스트{index}") for index in range(1, 17)]
     report_path = tmp_path / "report.json"

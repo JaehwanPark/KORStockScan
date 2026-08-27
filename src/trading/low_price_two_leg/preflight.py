@@ -20,6 +20,7 @@ from src.trading.low_price_two_leg.profiles import (
     PROFILE_REVISION_20260824_EFFECTIVE_DATE,
     PROFILE_REVISION_20260825_EFFECTIVE_DATE,
     PROFILE_REVISION_20260827_EFFECTIVE_DATE,
+    PROFILE_REVISION_20260828_EFFECTIVE_DATE,
     PROFILES,
     MachineProfile,
     get_profile,
@@ -220,11 +221,49 @@ RECOMMENDATION_20260826_PROFILE_MAP = {
     "doosan_enerbility_afternoon": "existing_034020_afternoon",
     "samsung_ea_midday": "existing_028050_midday",
 }
+RECOMMENDATION_20260827_EVIDENCE_PATH = (
+    DATA_DIR / "config" / "low_price_two_leg_expanded_profile_evidence_2026-08-27.json"
+)
+RECOMMENDATION_20260827_EVIDENCE_SHA256 = (
+    "12f750f9d719c8d4042574586ac85823f42a4afb429c239c710302d90847be56"
+)
+RECOMMENDATION_20260827_SOURCE_SHA256 = (
+    "110b09ab2e48907175854dc4720a3532613cfbf37ecf786bcc6eeb58ac408dce"
+)
+RECOMMENDATION_20260827_PROFILE_MAP = {
+    "kepco_late_morning": "logic_kepco_late_morning",
+    "cj_cgv_midday": "logic_cj_cgv_midday",
+    "mirae_asset_late_morning": "logic_mirae_asset_late_morning",
+    "sd_biosensor_late_morning": "logic_sd_biosensor_late_morning",
+    "sd_biosensor_morning": "logic_sd_biosensor_morning",
+    "hanse_late_morning": "logic_hanse_late_morning",
+    "samsung_ea_midday": "logic_samsung_ea_midday",
+    "samsung_ea_afternoon": "logic_samsung_ea_afternoon",
+    "sk_telecom_morning": "existing_017670_morning",
+}
 
 
 def _research_evidence_contract(
     profile: MachineProfile, *, target_date: date | None = None
 ) -> dict:
+    recommendation_20260827_profile_id = (
+        RECOMMENDATION_20260827_PROFILE_MAP.get(profile.profile_id)
+        if target_date is None
+        or target_date >= PROFILE_REVISION_20260828_EFFECTIVE_DATE
+        else None
+    )
+    if recommendation_20260827_profile_id:
+        return {
+            "path": RECOMMENDATION_20260827_EVIDENCE_PATH,
+            "sha256": RECOMMENDATION_20260827_EVIDENCE_SHA256,
+            "schema": "low_price_two_leg_user_approved_profile_evidence_v6",
+            "start_date": "2026-06-05",
+            "end_date": "2026-08-27",
+            "trading_date_count": 58,
+            "window": "2026-06-05_through_2026-08-27_58_trading_days",
+            "report_profile_id": recommendation_20260827_profile_id,
+            "source_report_sha256": RECOMMENDATION_20260827_SOURCE_SHA256,
+        }
     recommendation_20260826_profile_id = (
         RECOMMENDATION_20260826_PROFILE_MAP.get(profile.profile_id)
         if target_date is None

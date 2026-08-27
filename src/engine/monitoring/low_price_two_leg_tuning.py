@@ -115,6 +115,7 @@ PROFILE_FIRST_OPERATIONAL_DATES = {
     "sd_biosensor_midday": date(2026, 8, 27),
     "doosan_enerbility_afternoon": date(2026, 8, 27),
     "samsung_ea_midday": date(2026, 8, 27),
+    "sk_telecom_morning": date(2026, 8, 28),
 }
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {
@@ -740,9 +741,7 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         else (
             "broker_target_fill_price"
             if completed and target_fill_price > 0
-            else "configured_target_price_proxy"
-            if completed
-            else "not_completed"
+            else "configured_target_price_proxy" if completed else "not_completed"
         )
     )
     net_profit_pct = (

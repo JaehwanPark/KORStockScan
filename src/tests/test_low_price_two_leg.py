@@ -55,6 +55,7 @@ from src.trading.low_price_two_leg.preflight import (
     RECOMMENDATION_20260821_PROFILE_MAP,
     RECOMMENDATION_20260824_PROFILE_MAP,
     RECOMMENDATION_20260826_PROFILE_MAP,
+    RECOMMENDATION_20260827_PROFILE_MAP,
     build_authority_artifact,
     evaluate_preflight,
     validate_research_evidence,
@@ -82,10 +83,10 @@ from src.trading.low_price_two_leg.profiles import (
     KEPCO_MIDDAY_WINDOW,
     MIRAE_ASSET_MIDDAY_WINDOW,
     MIRAE_ASSET_MORNING_WINDOW,
-    MIRAE_ASSET_LATE_MORNING_REVISED_WINDOW,
+    MIRAE_ASSET_LATE_MORNING_20260828_WINDOW,
     NHN_LATE_MORNING_WINDOW,
     NHN_MORNING_WINDOW,
-    SAMSUNG_EA_AFTERNOON_WINDOW,
+    SAMSUNG_EA_AFTERNOON_20260828_WINDOW,
     SAMSUNG_EA_LATE_MORNING_WINDOW,
     SAMSUNG_EA_MORNING_WINDOW,
     SAMSUNG_EA_MIDDAY_WINDOW,
@@ -96,6 +97,7 @@ from src.trading.low_price_two_leg.profiles import (
     PROFILES_20260824_PRIOR,
     PROFILES_20260825_PRIOR,
     PROFILES_20260827_PRIOR,
+    PROFILES_20260828_PRIOR,
     PRE_RECOMMENDATION_PROFILES,
     SAMSUNG_HEAVY_MIDDAY_WINDOW,
     SK_ETERNIX_MIDDAY_WINDOW,
@@ -104,9 +106,10 @@ from src.trading.low_price_two_leg.profiles import (
     SK_ETERNIX_AFTERNOON_REVISED_WINDOW,
     SK_TELECOM_AFTERNOON_WINDOW,
     SK_TELECOM_LATE_MORNING_REVISED_WINDOW,
+    SK_TELECOM_MORNING_WINDOW,
     SD_BIOSENSOR_LATE_MORNING_WINDOW,
     SD_BIOSENSOR_MIDDAY_WINDOW,
-    SD_BIOSENSOR_MORNING_WINDOW,
+    SD_BIOSENSOR_MORNING_20260828_WINDOW,
     TYM_AFTERNOON_WINDOW,
     TYM_MIDDAY_WINDOW,
     NHN_AFTERNOON_WINDOW,
@@ -221,7 +224,7 @@ class FakeSession:
         return self.responses.pop(0)
 
 
-def test_profiles_are_exact_sixteen_symbols_and_forty_five_independent_sessions():
+def test_profiles_are_exact_sixteen_symbols_and_forty_six_independent_sessions():
     assert {key: (item.symbol, item.session) for key, item in PROFILES.items()} == {
         "samsung_heavy_midday": ("010140", "midday"),
         "samsung_heavy_afternoon": ("010140", "afternoon"),
@@ -244,6 +247,7 @@ def test_profiles_are_exact_sixteen_symbols_and_forty_five_independent_sessions(
         "samsung_ea_late_morning": ("028050", "late_morning"),
         "samsung_ea_afternoon": ("028050", "afternoon"),
         "sk_telecom_late_morning": ("017670", "late_morning"),
+        "sk_telecom_morning": ("017670", "morning"),
         "hanse_morning": ("105630", "morning"),
         "hanse_afternoon": ("105630", "afternoon"),
         "cj_cgv_midday": ("079160", "midday"),
@@ -290,13 +294,14 @@ def test_profiles_are_exact_sixteen_symbols_and_forty_five_independent_sessions(
         KAKAO_MIDDAY_WINDOW,
         SK_TELECOM_AFTERNOON_WINDOW,
         SK_TELECOM_LATE_MORNING_REVISED_WINDOW,
+        SK_TELECOM_MORNING_WINDOW,
         SK_ETERNIX_AFTERNOON_REVISED_WINDOW,
         HANSE_MORNING_WINDOW,
         HANSE_AFTERNOON_WINDOW,
         SAMSUNG_EA_MORNING_WINDOW,
         SAMSUNG_EA_MIDDAY_WINDOW,
         SAMSUNG_EA_LATE_MORNING_WINDOW,
-        SAMSUNG_EA_AFTERNOON_WINDOW,
+        SAMSUNG_EA_AFTERNOON_20260828_WINDOW,
         CJ_CGV_MIDDAY_WINDOW,
         CJ_CGV_AFTERNOON_WINDOW,
         TYM_MIDDAY_WINDOW,
@@ -310,11 +315,11 @@ def test_profiles_are_exact_sixteen_symbols_and_forty_five_independent_sessions(
         YOUNGONE_MORNING_WINDOW,
         YOUNGONE_AFTERNOON_REVISED_WINDOW,
         SK_ETERNIX_LATE_MORNING_WINDOW,
-        MIRAE_ASSET_LATE_MORNING_REVISED_WINDOW,
+        MIRAE_ASSET_LATE_MORNING_20260828_WINDOW,
         KEPCO_MORNING_WINDOW,
         NHN_MORNING_WINDOW,
         NHN_LATE_MORNING_WINDOW,
-        SD_BIOSENSOR_MORNING_WINDOW,
+        SD_BIOSENSOR_MORNING_20260828_WINDOW,
         SD_BIOSENSOR_LATE_MORNING_WINDOW,
         SD_BIOSENSOR_MIDDAY_WINDOW,
         DOOSAN_ENERBILITY_AFTERNOON_WINDOW,
@@ -469,6 +474,7 @@ def test_live_systemd_unit_requires_fresh_preflight_and_does_not_restart_on_guar
         ("kepco_afternoon", "13:55:00", "13:59:00"),
         ("sk_eternix_afternoon", "13:55:00", "13:59:00"),
         ("sk_telecom_late_morning", "10:40:00", "10:44:00"),
+        ("sk_telecom_morning", "09:05:00", "09:09:00"),
         ("hanse_morning", "09:10:00", "09:14:00"),
         ("hanse_afternoon", "14:15:00", "14:19:00"),
         ("cj_cgv_midday", "13:15:00", "13:19:00"),
@@ -741,7 +747,7 @@ def test_all_twelve_20260826_recommendations_bind_exact_next_profiles():
         live_profile_id,
         report_profile_id,
     ) in RECOMMENDATION_20260826_PROFILE_MAP.items():
-        profile = PROFILES[live_profile_id]
+        profile = PROFILES_20260828_PRIOR[live_profile_id]
         policy = profile.policy
         assert recommendations[report_profile_id]["recommended_spot"] == {
             "scan_start": policy.scan_start.strftime("%H:%M"),
@@ -754,6 +760,41 @@ def test_all_twelve_20260826_recommendations_bind_exact_next_profiles():
             "target_ticks": policy.target_ticks,
         }
         assert validate_research_evidence(profile, target_date=date(2026, 8, 27)) == (
+            True,
+            "ready",
+        )
+
+
+def test_all_nine_20260827_recommendations_bind_exact_next_profiles():
+    evidence_path = (
+        Path(__file__).resolve().parents[2]
+        / "data"
+        / "config"
+        / "low_price_two_leg_expanded_profile_evidence_2026-08-27.json"
+    )
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+
+    assert len(RECOMMENDATION_20260827_PROFILE_MAP) == 9
+    assert set(RECOMMENDATION_20260827_PROFILE_MAP.values()) == set(recommendations)
+    for (
+        live_profile_id,
+        report_profile_id,
+    ) in RECOMMENDATION_20260827_PROFILE_MAP.items():
+        profile = PROFILES[live_profile_id]
+        policy = profile.policy
+        assert policy.quantity == 20
+        assert recommendations[report_profile_id]["recommended_spot"] == {
+            "scan_start": policy.scan_start.strftime("%H:%M"),
+            "scan_end": policy.scan_last_bar.strftime("%H:%M"),
+            "lookback_bars": policy.lookback_bars,
+            "rolling_high_drawdown_pct": policy.rolling_high_drawdown_pct,
+            "rolling_low_proximity_pct": policy.rolling_low_proximity_pct,
+            "entry_offsets_ticks": list(policy.entry_offsets_ticks),
+            "entry_valid_completed_bars": policy.entry_valid_completed_bars,
+            "target_ticks": policy.target_ticks,
+        }
+        assert validate_research_evidence(profile, target_date=date(2026, 8, 28)) == (
             True,
             "ready",
         )
@@ -901,8 +942,11 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
     thursday_generation, _ = build_applied_policy(
         target_date=date(2026, 8, 27), candidate_dir=tmp_path / "none"
     )
+    friday_generation, _ = build_applied_policy(
+        target_date=date(2026, 8, 28), candidate_dir=tmp_path / "none"
+    )
     assert set(wednesday_generation["profiles"]) == set(PROFILES_20260827_PRIOR)
-    assert set(thursday_generation["profiles"]) == set(PROFILES)
+    assert set(thursday_generation["profiles"]) == set(PROFILES_20260828_PRIOR)
     assert thursday_generation["profile_revision_transition"] == {
         "effective_target_date": "2026-08-27",
         "source_date": "2026-08-26",
@@ -922,6 +966,29 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
         "existing_order_effect": "none_preserve_prior_policy_custody",
     }
     assert validate_applied(thursday_generation, target_date=date(2026, 8, 27)) == (
+        True,
+        "valid",
+    )
+    assert set(friday_generation["profiles"]) == set(PROFILES)
+    assert friday_generation["profile_revision_transition"] == {
+        "effective_target_date": "2026-08-28",
+        "source_date": "2026-08-27",
+        "before_profile_count": 45,
+        "after_profile_count": 46,
+        "recommendation_count": 9,
+        "new_profile_count": 1,
+        "logic_revision_count": 8,
+        "approved_profile_ids": sorted(RECOMMENDATION_20260827_PROFILE_MAP),
+        "evidence_path": (
+            "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-27.json"
+        ),
+        "evidence_canonical_sha256": (
+            "12f750f9d719c8d4042574586ac85823f42a4afb429c239c710302d90847be56"
+        ),
+        "decision_authority": "explicit_user_directed_profile_revision_2026_08_27",
+        "existing_order_effect": "none_preserve_prior_policy_custody",
+    }
+    assert validate_applied(friday_generation, target_date=date(2026, 8, 28)) == (
         True,
         "valid",
     )

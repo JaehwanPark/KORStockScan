@@ -1,0 +1,117 @@
+{
+  "schema": "low_price_two_leg_user_approved_profile_evidence_v6",
+  "start_date": "2026-06-05",
+  "end_date": "2026-08-27",
+  "trading_date_count": 58,
+  "runtime_effect": false,
+  "allowed_runtime_apply": false,
+  "actual_order_submitted": false,
+  "broker_order_forbidden": true,
+  "approval": {
+    "approver": "user_explicit_implementation_instruction_2026_08_27",
+    "effective_target_date": "2026-08-28",
+    "scope": "all_nine_2026_08_27_final_recommendations",
+    "recommendation_count": 9,
+    "logic_revision_count": 8,
+    "new_profile_count": 1,
+    "existing_order_effect": "none_preserve_prior_policy_custody"
+  },
+  "source_report": {
+    "schema": "low_price_two_leg_expanded_candidate_research_v5",
+    "path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-08-27.json",
+    "canonical_sha256": "110b09ab2e48907175854dc4720a3532613cfbf37ecf786bcc6eeb58ac408dce"
+  },
+  "source_meta": {
+    "006800": {"source_quality_status": "PASS", "trading_date_count": 58, "invalid_row_count": 0, "duplicate_row_count": 0},
+    "015760": {"source_quality_status": "PASS", "trading_date_count": 58, "invalid_row_count": 0, "duplicate_row_count": 0},
+    "017670": {"source_quality_status": "PASS", "trading_date_count": 58, "invalid_row_count": 0, "duplicate_row_count": 0},
+    "028050": {"source_quality_status": "PASS", "trading_date_count": 58, "invalid_row_count": 0, "duplicate_row_count": 0},
+    "079160": {"source_quality_status": "PASS", "trading_date_count": 58, "invalid_row_count": 0, "duplicate_row_count": 0},
+    "105630": {"source_quality_status": "PASS", "trading_date_count": 58, "invalid_row_count": 0, "duplicate_row_count": 0},
+    "137310": {"source_quality_status": "PASS", "trading_date_count": 58, "invalid_row_count": 0, "duplicate_row_count": 0}
+  },
+  "profiles": {},
+  "recommendations": [
+    {
+      "profile_id": "logic_kepco_late_morning", "symbol": "015760", "session": "late_morning",
+      "recommended_spot": {"scan_start": "10:00", "scan_end": "10:59", "lookback_bars": 60, "rolling_high_drawdown_pct": 2.0, "rolling_low_proximity_pct": 0.2, "entry_offsets_ticks": [0, -1], "entry_valid_completed_bars": 5, "target_ticks": 4},
+      "implementation_status": "source_only_requires_review_and_user_approval", "runtime_effect": false,
+      "calibration_first_half_ev_pct": 0.29217, "calibration_second_half_ev_pct": 0.348976,
+      "calibration": {"signal_episodes": 20, "completed_legs": 37, "notional_weighted_ev_pct": 0.316502},
+      "full": {"completed_legs": 42, "notional_weighted_ev_pct": 0.317854},
+      "holdout": {"signal_episodes": 3, "completed_legs": 5, "held_legs": 0, "notional_weighted_ev_pct": 0.327727}
+    },
+    {
+      "profile_id": "logic_cj_cgv_midday", "symbol": "079160", "session": "midday",
+      "recommended_spot": {"scan_start": "13:20", "scan_end": "13:49", "lookback_bars": 20, "rolling_high_drawdown_pct": 0.75, "rolling_low_proximity_pct": 0.2, "entry_offsets_ticks": [0, -1], "entry_valid_completed_bars": 5, "target_ticks": 4},
+      "implementation_status": "source_only_requires_review_and_user_approval", "runtime_effect": false,
+      "calibration_first_half_ev_pct": 0.260829, "calibration_second_half_ev_pct": 0.307001,
+      "calibration": {"signal_episodes": 6, "completed_legs": 10, "notional_weighted_ev_pct": 0.29285},
+      "full": {"completed_legs": 18, "notional_weighted_ev_pct": 0.307623},
+      "holdout": {"signal_episodes": 7, "completed_legs": 8, "held_legs": 2, "notional_weighted_ev_pct": 0.31897}
+    },
+    {
+      "profile_id": "logic_mirae_asset_late_morning", "symbol": "006800", "session": "late_morning",
+      "recommended_spot": {"scan_start": "10:00", "scan_end": "10:19", "lookback_bars": 45, "rolling_high_drawdown_pct": 1.0, "rolling_low_proximity_pct": 0.75, "entry_offsets_ticks": [-1, -2], "entry_valid_completed_bars": 5, "target_ticks": 4},
+      "implementation_status": "source_only_requires_review_and_user_approval", "runtime_effect": false,
+      "calibration_first_half_ev_pct": 0.29886, "calibration_second_half_ev_pct": 0.301489,
+      "calibration": {"signal_episodes": 27, "completed_legs": 46, "notional_weighted_ev_pct": 0.299884},
+      "full": {"completed_legs": 60, "notional_weighted_ev_pct": 0.30306},
+      "holdout": {"signal_episodes": 8, "completed_legs": 14, "held_legs": 1, "notional_weighted_ev_pct": 0.315996}
+    },
+    {
+      "profile_id": "logic_sd_biosensor_late_morning", "symbol": "137310", "session": "late_morning",
+      "recommended_spot": {"scan_start": "10:40", "scan_end": "10:59", "lookback_bars": 30, "rolling_high_drawdown_pct": 0.5, "rolling_low_proximity_pct": 0.35, "entry_offsets_ticks": [0, -1], "entry_valid_completed_bars": 5, "target_ticks": 4},
+      "implementation_status": "source_only_requires_review_and_user_approval", "runtime_effect": false,
+      "calibration_first_half_ev_pct": 0.364741, "calibration_second_half_ev_pct": 0.407114,
+      "calibration": {"signal_episodes": 15, "completed_legs": 27, "notional_weighted_ev_pct": 0.381151},
+      "full": {"completed_legs": 43, "notional_weighted_ev_pct": 0.353866},
+      "holdout": {"signal_episodes": 11, "completed_legs": 16, "held_legs": 3, "notional_weighted_ev_pct": 0.315965}
+    },
+    {
+      "profile_id": "logic_sd_biosensor_morning", "symbol": "137310", "session": "morning",
+      "recommended_spot": {"scan_start": "09:30", "scan_end": "09:39", "lookback_bars": 15, "rolling_high_drawdown_pct": 0.5, "rolling_low_proximity_pct": 0.75, "entry_offsets_ticks": [0, -1], "entry_valid_completed_bars": 5, "target_ticks": 4},
+      "implementation_status": "source_only_requires_review_and_user_approval", "runtime_effect": false,
+      "calibration_first_half_ev_pct": 0.296356, "calibration_second_half_ev_pct": 0.393728,
+      "calibration": {"signal_episodes": 20, "completed_legs": 33, "notional_weighted_ev_pct": 0.337775},
+      "full": {"completed_legs": 50, "notional_weighted_ev_pct": 0.327889},
+      "holdout": {"signal_episodes": 12, "completed_legs": 17, "held_legs": 4, "notional_weighted_ev_pct": 0.310621}
+    },
+    {
+      "profile_id": "logic_hanse_late_morning", "symbol": "105630", "session": "late_morning",
+      "recommended_spot": {"scan_start": "10:00", "scan_end": "10:19", "lookback_bars": 30, "rolling_high_drawdown_pct": 0.75, "rolling_low_proximity_pct": 0.75, "entry_offsets_ticks": [0, -1], "entry_valid_completed_bars": 5, "target_ticks": 4},
+      "implementation_status": "source_only_requires_review_and_user_approval", "runtime_effect": false,
+      "calibration_first_half_ev_pct": 0.21413, "calibration_second_half_ev_pct": 0.200785,
+      "calibration": {"signal_episodes": 19, "completed_legs": 31, "notional_weighted_ev_pct": 0.207617},
+      "full": {"completed_legs": 41, "notional_weighted_ev_pct": 0.205997},
+      "holdout": {"signal_episodes": 6, "completed_legs": 10, "held_legs": 0, "notional_weighted_ev_pct": 0.201012}
+    },
+    {
+      "profile_id": "logic_samsung_ea_midday", "symbol": "028050", "session": "midday",
+      "recommended_spot": {"scan_start": "13:20", "scan_end": "13:49", "lookback_bars": 20, "rolling_high_drawdown_pct": 1.0, "rolling_low_proximity_pct": 0.75, "entry_offsets_ticks": [0, -1], "entry_valid_completed_bars": 5, "target_ticks": 4},
+      "implementation_status": "source_only_requires_review_and_user_approval", "runtime_effect": false,
+      "calibration_first_half_ev_pct": 0.27222, "calibration_second_half_ev_pct": 0.245568,
+      "calibration": {"signal_episodes": 15, "completed_legs": 26, "notional_weighted_ev_pct": 0.258991},
+      "full": {"completed_legs": 31, "notional_weighted_ev_pct": 0.245804},
+      "holdout": {"signal_episodes": 3, "completed_legs": 5, "held_legs": 0, "notional_weighted_ev_pct": 0.183447}
+    },
+    {
+      "profile_id": "logic_samsung_ea_afternoon", "symbol": "028050", "session": "afternoon",
+      "recommended_spot": {"scan_start": "14:15", "scan_end": "14:34", "lookback_bars": 60, "rolling_high_drawdown_pct": 0.5, "rolling_low_proximity_pct": 0.2, "entry_offsets_ticks": [0, -1], "entry_valid_completed_bars": 5, "target_ticks": 4},
+      "implementation_status": "source_only_requires_review_and_user_approval", "runtime_effect": false,
+      "calibration_first_half_ev_pct": 0.233781, "calibration_second_half_ev_pct": 0.269366,
+      "calibration": {"signal_episodes": 17, "completed_legs": 31, "notional_weighted_ev_pct": 0.247547},
+      "full": {"completed_legs": 41, "notional_weighted_ev_pct": 0.215283},
+      "holdout": {"signal_episodes": 8, "completed_legs": 10, "held_legs": 3, "notional_weighted_ev_pct": 0.150417}
+    },
+    {
+      "profile_id": "existing_017670_morning", "symbol": "017670", "session": "morning",
+      "recommended_spot": {"scan_start": "09:10", "scan_end": "09:29", "lookback_bars": 30, "rolling_high_drawdown_pct": 1.5, "rolling_low_proximity_pct": 0.5, "entry_offsets_ticks": [0, -1], "entry_valid_completed_bars": 5, "target_ticks": 2},
+      "implementation_status": "source_only_requires_review_and_user_approval", "runtime_effect": false,
+      "calibration_first_half_ev_pct": 0.025352, "calibration_second_half_ev_pct": 0.041984,
+      "calibration": {"signal_episodes": 7, "completed_legs": 14, "notional_weighted_ev_pct": 0.032192},
+      "full": {"completed_legs": 22, "notional_weighted_ev_pct": 0.026792},
+      "holdout": {"signal_episodes": 4, "completed_legs": 8, "held_legs": 0, "notional_weighted_ev_pct": 0.017924}
+    }
+  ]
+}

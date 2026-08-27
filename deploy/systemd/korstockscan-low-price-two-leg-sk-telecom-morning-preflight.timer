@@ -1,0 +1,11 @@
+[Unit]
+Description=Preflight SK Telecom morning two-leg episode machine
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:05:00 Asia/Seoul
+AccuracySec=1s
+Persistent=false
+Unit=korstockscan-low-price-two-leg-preflight@sk_telecom_morning.service
+
+[Install]
+WantedBy=timers.target

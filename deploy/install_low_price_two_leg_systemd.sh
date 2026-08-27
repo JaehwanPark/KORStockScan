@@ -51,6 +51,8 @@ UNITS=(
   korstockscan-low-price-two-leg-samsung-ea-afternoon.timer
   korstockscan-low-price-two-leg-sk-telecom-late-morning-preflight.timer
   korstockscan-low-price-two-leg-sk-telecom-late-morning.timer
+  korstockscan-low-price-two-leg-sk-telecom-morning-preflight.timer
+  korstockscan-low-price-two-leg-sk-telecom-morning.timer
   korstockscan-low-price-two-leg-hanse-morning-preflight.timer
   korstockscan-low-price-two-leg-hanse-morning.timer
   korstockscan-low-price-two-leg-hanse-afternoon-preflight.timer
@@ -143,6 +145,8 @@ TIMERS=(
   korstockscan-low-price-two-leg-samsung-ea-afternoon.timer
   korstockscan-low-price-two-leg-sk-telecom-late-morning-preflight.timer
   korstockscan-low-price-two-leg-sk-telecom-late-morning.timer
+  korstockscan-low-price-two-leg-sk-telecom-morning-preflight.timer
+  korstockscan-low-price-two-leg-sk-telecom-morning.timer
   korstockscan-low-price-two-leg-hanse-morning-preflight.timer
   korstockscan-low-price-two-leg-hanse-morning.timer
   korstockscan-low-price-two-leg-hanse-afternoon-preflight.timer
@@ -250,4 +254,4 @@ PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed forty-five lower-price profile timers; retired Daewoo units were removed"
+echo "installed forty-six lower-price profile timers; retired Daewoo units were removed"

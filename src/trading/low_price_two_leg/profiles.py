@@ -30,6 +30,7 @@ DOOSAN_ENERBILITY_LATE_MORNING_REVISED_WINDOW = (time(10, 15), time(10, 34))
 KAKAO_MIDDAY_WINDOW = (time(13, 20), time(13, 39))
 SAMSUNG_EA_AFTERNOON_WINDOW = (time(14, 5), time(14, 34))
 SK_TELECOM_AFTERNOON_WINDOW = (time(14, 25), time(14, 34))
+SK_TELECOM_MORNING_WINDOW = (time(9, 10), time(9, 29))
 SK_TELECOM_LATE_MORNING_WINDOW = (time(10, 45), time(10, 59))
 SK_TELECOM_LATE_MORNING_REVISED_WINDOW = (time(10, 45), time(10, 54))
 SK_ETERNIX_AFTERNOON_REVISED_WINDOW = (time(14, 15), time(14, 40))
@@ -52,19 +53,23 @@ YOUNGONE_AFTERNOON_REVISED_WINDOW = (time(14, 30), time(14, 39))
 SK_ETERNIX_LATE_MORNING_WINDOW = (time(10, 45), time(10, 54))
 MIRAE_ASSET_LATE_MORNING_WINDOW = (time(10, 0), time(10, 59))
 MIRAE_ASSET_LATE_MORNING_REVISED_WINDOW = (time(10, 0), time(10, 29))
+MIRAE_ASSET_LATE_MORNING_20260828_WINDOW = (time(10, 0), time(10, 19))
 KEPCO_MORNING_WINDOW = (time(9, 35), time(9, 59))
 NHN_MORNING_WINDOW = (time(9, 40), time(9, 49))
 NHN_LATE_MORNING_WINDOW = (time(10, 30), time(10, 49))
 SD_BIOSENSOR_MORNING_WINDOW = (time(9, 30), time(9, 49))
+SD_BIOSENSOR_MORNING_20260828_WINDOW = (time(9, 30), time(9, 39))
 SD_BIOSENSOR_LATE_MORNING_WINDOW = (time(10, 40), time(10, 59))
 SD_BIOSENSOR_MIDDAY_WINDOW = (time(13, 25), time(13, 54))
 DOOSAN_ENERBILITY_AFTERNOON_WINDOW = (time(14, 10), time(14, 29))
 SAMSUNG_EA_MIDDAY_WINDOW = (time(13, 20), time(13, 49))
+SAMSUNG_EA_AFTERNOON_20260828_WINDOW = (time(14, 15), time(14, 34))
 PROFILE_REVISION_20260819_EFFECTIVE_DATE = date(2026, 8, 19)
 PROFILE_REVISION_20260821_EFFECTIVE_DATE = date(2026, 8, 21)
 PROFILE_REVISION_20260824_EFFECTIVE_DATE = date(2026, 8, 24)
 PROFILE_REVISION_20260825_EFFECTIVE_DATE = date(2026, 8, 25)
 PROFILE_REVISION_20260827_EFFECTIVE_DATE = date(2026, 8, 27)
+PROFILE_REVISION_20260828_EFFECTIVE_DATE = date(2026, 8, 28)
 # Compatibility alias for consumers that own the first recommendation transition.
 PROFILE_REVISION_EFFECTIVE_DATE = PROFILE_REVISION_20260819_EFFECTIVE_DATE
 ALLOWED_SYMBOLS = frozenset(
@@ -111,6 +116,7 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         KAKAO_MIDDAY_WINDOW,
         SAMSUNG_EA_AFTERNOON_WINDOW,
         SK_TELECOM_AFTERNOON_WINDOW,
+        SK_TELECOM_MORNING_WINDOW,
         SK_TELECOM_LATE_MORNING_WINDOW,
         SK_TELECOM_LATE_MORNING_REVISED_WINDOW,
         SK_ETERNIX_AFTERNOON_REVISED_WINDOW,
@@ -133,14 +139,17 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         SK_ETERNIX_LATE_MORNING_WINDOW,
         MIRAE_ASSET_LATE_MORNING_WINDOW,
         MIRAE_ASSET_LATE_MORNING_REVISED_WINDOW,
+        MIRAE_ASSET_LATE_MORNING_20260828_WINDOW,
         KEPCO_MORNING_WINDOW,
         NHN_MORNING_WINDOW,
         NHN_LATE_MORNING_WINDOW,
         SD_BIOSENSOR_MORNING_WINDOW,
+        SD_BIOSENSOR_MORNING_20260828_WINDOW,
         SD_BIOSENSOR_LATE_MORNING_WINDOW,
         SD_BIOSENSOR_MIDDAY_WINDOW,
         DOOSAN_ENERBILITY_AFTERNOON_WINDOW,
         SAMSUNG_EA_MIDDAY_WINDOW,
+        SAMSUNG_EA_AFTERNOON_20260828_WINDOW,
     }
 )
 
@@ -1537,6 +1546,125 @@ PROFILES.update(
 )
 
 
+# The 2026-08-27 postclose recommendations become a separate exact-date
+# generation on 2026-08-28. The prior inventory remains immutable so active
+# orders and held custody keep their original profile contract.
+PROFILES_20260828_PRIOR = dict(PROFILES)
+_REVISION_20260828_SOURCE = (
+    "clean_baseline_42d_calibration_16d_holdout_user_approved_v7"
+)
+
+
+def _revise_20260828(
+    profile_id: str,
+    *,
+    window: tuple[time, time] | None = None,
+    lookback_bars: int,
+    drawdown_pct: float,
+    near_low_pct: float,
+    entry_offsets_ticks: tuple[int, int] = (0, -1),
+    entry_valid_completed_bars: int = 5,
+    target_ticks: int,
+) -> MachineProfile:
+    prior = PROFILES_20260828_PRIOR[profile_id]
+    selected_window = window or (prior.policy.scan_start, prior.policy.scan_last_bar)
+    return replace(
+        prior,
+        policy=replace(
+            prior.policy,
+            scan_start=selected_window[0],
+            scan_last_bar=selected_window[1],
+            lookback_bars=lookback_bars,
+            rolling_high_drawdown_pct=drawdown_pct,
+            rolling_low_proximity_pct=near_low_pct,
+            entry_offsets_ticks=entry_offsets_ticks,
+            entry_valid_completed_bars=entry_valid_completed_bars,
+            target_ticks=target_ticks,
+            runtime_policy_source=_REVISION_20260828_SOURCE,
+            runtime_policy_hash="",
+        ),
+    )
+
+
+PROFILES = dict(PROFILES_20260828_PRIOR)
+PROFILES.update(
+    {
+        "kepco_late_morning": _revise_20260828(
+            "kepco_late_morning",
+            lookback_bars=60,
+            drawdown_pct=2.00,
+            near_low_pct=0.20,
+            target_ticks=4,
+        ),
+        "cj_cgv_midday": _revise_20260828(
+            "cj_cgv_midday",
+            lookback_bars=20,
+            drawdown_pct=0.75,
+            near_low_pct=0.20,
+            target_ticks=4,
+        ),
+        "mirae_asset_late_morning": _revise_20260828(
+            "mirae_asset_late_morning",
+            window=MIRAE_ASSET_LATE_MORNING_20260828_WINDOW,
+            lookback_bars=45,
+            drawdown_pct=1.00,
+            near_low_pct=0.75,
+            entry_offsets_ticks=(-1, -2),
+            target_ticks=4,
+        ),
+        "sd_biosensor_late_morning": _revise_20260828(
+            "sd_biosensor_late_morning",
+            lookback_bars=30,
+            drawdown_pct=0.50,
+            near_low_pct=0.35,
+            target_ticks=4,
+        ),
+        "sd_biosensor_morning": _revise_20260828(
+            "sd_biosensor_morning",
+            window=SD_BIOSENSOR_MORNING_20260828_WINDOW,
+            lookback_bars=15,
+            drawdown_pct=0.50,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "hanse_late_morning": _revise_20260828(
+            "hanse_late_morning",
+            lookback_bars=30,
+            drawdown_pct=0.75,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "samsung_ea_midday": _revise_20260828(
+            "samsung_ea_midday",
+            lookback_bars=20,
+            drawdown_pct=1.00,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "samsung_ea_afternoon": _revise_20260828(
+            "samsung_ea_afternoon",
+            window=SAMSUNG_EA_AFTERNOON_20260828_WINDOW,
+            lookback_bars=60,
+            drawdown_pct=0.50,
+            near_low_pct=0.20,
+            target_ticks=4,
+        ),
+    }
+)
+PROFILES["sk_telecom_morning"] = _profile(
+    "sk_telecom_morning",
+    "017670",
+    "SK텔레콤",
+    "morning",
+    window=SK_TELECOM_MORNING_WINDOW,
+    lookback_bars=30,
+    drawdown_pct=1.50,
+    near_low_pct=0.50,
+    target_ticks=2,
+    runtime_policy_source=_REVISION_20260828_SOURCE,
+)
+
+
 def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
     if target_date < PROFILE_REVISION_20260819_EFFECTIVE_DATE:
         return PRE_RECOMMENDATION_PROFILES
@@ -1548,6 +1676,8 @@ def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
         return PROFILES_20260825_PRIOR
     if target_date < PROFILE_REVISION_20260827_EFFECTIVE_DATE:
         return PROFILES_20260827_PRIOR
+    if target_date < PROFILE_REVISION_20260828_EFFECTIVE_DATE:
+        return PROFILES_20260828_PRIOR
     return PROFILES
 
 
