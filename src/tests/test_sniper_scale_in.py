@@ -26927,6 +26927,10 @@ def test_send_buy_order_market_maps_ioc_limit_to_best_ioc(monkeypatch):
 def test_watching_state_rejects_deprecated_fallback_bundle(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
+    class DummyEventBus:
+        def publish(self, *args, **kwargs):
+            return None
+
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -26944,6 +26948,7 @@ def test_watching_state_rejects_deprecated_fallback_bundle(monkeypatch):
     state_handlers.LAST_LOG_TIMES = {}
     state_handlers.DB = _DummyDB()
     state_handlers.KIWOOM_TOKEN = "token"
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", DummyEventBus())
 
     sent_orders = []
 

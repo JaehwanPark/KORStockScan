@@ -42,6 +42,7 @@ from src.engine.scalping.micro_reversion.depth_join import (
     validate_depth_row as validate_canonical_depth_row,
 )
 from src.engine.scalping.micro_reversion.collection_targets import (
+    COLLECTION_TARGET_SCHEMA,
     build_collection_targets,
     write_collection_targets,
 )
@@ -6135,6 +6136,23 @@ def build_report(
             "schema": collection_targets["schema"],
             "effective_date": collection_targets["effective_date"],
             "status": collection_targets["status"],
+            "coverage_policy": collection_targets["budget"]["coverage_policy"],
+            "coverage_stage": collection_targets["budget"]["coverage_stage"],
+            "runtime_registration_receipt_required": collection_targets["budget"][
+                "runtime_registration_receipt_required"
+            ],
+            "active_owner_full_coverage": collection_targets["budget"][
+                "active_owner_full_coverage"
+            ],
+            "active_owner_candidate_count": collection_targets["budget"][
+                "active_owner_candidate_count"
+            ],
+            "selected_active_owner_count": collection_targets["budget"][
+                "selected_active_owner_count"
+            ],
+            "active_owner_overflow_count": collection_targets["budget"][
+                "active_owner_overflow_count"
+            ],
             "selected_symbol_count": collection_targets["budget"][
                 "selected_symbol_count"
             ],
@@ -6155,9 +6173,18 @@ def build_report(
         }
     else:
         report["collection_feedback"] = {
-            "schema": "scalp_micro_reversion_collection_targets_v1",
+            "schema": COLLECTION_TARGET_SCHEMA,
             "effective_date": None,
             "status": "source_date_not_krx_trading_day_write_skipped",
+            "coverage_policy": (
+                "all_active_owner_symbols_then_bounded_prospective_rotation"
+            ),
+            "coverage_stage": "exact_date_target_manifest_selection",
+            "runtime_registration_receipt_required": True,
+            "active_owner_full_coverage": False,
+            "active_owner_candidate_count": 0,
+            "selected_active_owner_count": 0,
+            "active_owner_overflow_count": 0,
             "selected_symbol_count": 0,
             "repair_gap_selected_symbol_count": 0,
             "policy_sample_selected_symbol_count": 0,
@@ -6181,7 +6208,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         (
             "- Collection feedback: next-session source-only targets "
             f"`{report.get('collection_feedback', {}).get('selected_symbol_count', 0)}`; "
-            "repair gaps and bounded policy-sample rotation are included; "
+            "all active widget/episode owner symbols precede bounded prospective "
+            "policy-sample rotation; "
             "manual-control exclusions are not applied."
         ),
         "",

@@ -19469,6 +19469,10 @@ def _emit_scalp_entry_adm_snapshot(
         "buy_pressure_10t",
         "curr_vs_micro_vwap_bp",
         "curr_vs_ma5_bp",
+        "micro_vwap_available",
+        "minute_candle_context_quality",
+        "minute_candle_window_fresh",
+        "minute_candle_latest_age_ms",
     )
     source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
     source_quality_fields = (

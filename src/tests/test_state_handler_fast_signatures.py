@@ -2358,6 +2358,47 @@ def test_entry_adm_snapshot_records_feature_parity_and_numeric_consistency(monke
     assert "runtime-apply" in fields["forbidden_uses"]
 
 
+def test_entry_adm_snapshot_preserves_minute_candle_provenance(monkeypatch):
+    logs = []
+
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 8,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "scalp_pre_ai_gate_context": {},
+        "last_watching_ai_source_quality_fields": {
+            "curr_vs_micro_vwap_bp": "11.400",
+            "micro_vwap_available": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "minute_candle_window_fresh": True,
+            "minute_candle_latest_age_ms": 12000,
+        },
+    }
+    handlers._emit_scalp_entry_adm_snapshot(
+        stock,
+        "123456",
+        "ai_confirmed",
+        ai_decision={"action": "WAIT", "score": 62},
+        chosen_action="NO_BUY_AI",
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+    )
+
+    stage, fields = logs[0]
+    assert stage == "scalp_entry_action_decision_snapshot"
+    assert fields["curr_vs_micro_vwap_bp"] == "11.400"
+    assert fields["micro_vwap_available"] is True
+    assert fields["minute_candle_context_quality"] == "fresh_bar_window"
+    assert fields["minute_candle_window_fresh"] is True
+    assert fields["minute_candle_latest_age_ms"] == 12000
+
+
 def test_ai_ops_log_fields_preserve_tick_acceleration_ratio_raw_precision():
     fields = handlers._build_ai_ops_log_fields(
         {

@@ -329,7 +329,7 @@ def test_loader_rejects_non_trading_source_date_even_for_next_trading_day(
     assert rejected["registration_items"] == []
 
 
-def test_stable_priority_cohort_round_robin_has_bounded_symbol_coverage():
+def test_active_owner_symbols_are_not_delayed_by_research_rotation_budget():
     gaps = [
         {
             "owner": "episode",
@@ -351,6 +351,10 @@ def test_stable_priority_cohort_round_robin_has_bounded_symbol_coverage():
             "priority_cohort_deterministic_round_robin"
         )
         assert payload["budget"]["overflow_rotates_on_next_effective_date"] is False
+        assert payload["budget"]["coverage_stage"] == (
+            "exact_date_target_manifest_selection"
+        )
+        assert payload["budget"]["runtime_registration_receipt_required"] is True
 
     assert observed == {"111111", "222222", "333333", "444444", "555555", "666666"}
 
@@ -402,8 +406,8 @@ def test_symbol_and_venue_round_robins_do_not_phase_lock():
         report = _report(gaps)
         report["target_date"] = source_date
         payload = build_collection_targets(report, max_symbols=1)
-        selected = payload["selected_targets"][0]
-        observed_venues[selected["symbol"]].add(selected["expected_venue"])
+        for selected in payload["selected_targets"]:
+            observed_venues[selected["symbol"]].add(selected["expected_venue"])
         assert payload["budget"]["venue_rotation_policy"] == (
             "independent_symbol_phase_after_selection_cohort_cycle"
         )
@@ -439,7 +443,7 @@ def test_single_symbol_budget_keeps_active_owner_ahead_of_prospective_owner():
     assert [row["symbol"] for row in payload["selected_targets"]] == ["111111"]
 
 
-def test_active_owner_overflow_does_not_reserve_a_prospective_slot():
+def test_active_owner_full_coverage_precedes_prospective_rotation_budget():
     gaps = [
         {
             "owner": "episode",
@@ -464,12 +468,21 @@ def test_active_owner_overflow_does_not_reserve_a_prospective_slot():
 
     payload = build_collection_targets(_report(gaps), max_symbols=2)
 
+    assert [row["symbol"] for row in payload["selected_targets"]] == [
+        "111111",
+        "222222",
+        "333333",
+    ]
     assert all(row["active_owner"] for row in payload["selected_targets"])
     assert payload["budget"]["prospective_reserve_applied"] == 0
-    assert payload["budget"]["active_owner_overflow_count"] == 1
+    assert payload["budget"]["active_owner_candidate_count"] == 3
+    assert payload["budget"]["selected_active_owner_count"] == 3
+    assert payload["budget"]["active_owner_overflow_count"] == 0
+    assert payload["budget"]["active_owner_full_coverage"] is True
+    assert [row["symbol"] for row in payload["overflow_targets"]] == ["444444"]
 
 
-def test_actual_widget_execution_precedes_other_active_owner_with_tight_budget():
+def test_actual_widget_execution_priority_does_not_drop_other_active_owner():
     payload = build_collection_targets(
         _report(
             [
@@ -494,5 +507,189 @@ def test_actual_widget_execution_precedes_other_active_owner_with_tight_budget()
         max_symbols=1,
     )
 
-    assert [row["symbol"] for row in payload["selected_targets"]] == ["222222"]
+    assert [row["symbol"] for row in payload["selected_targets"]] == [
+        "222222",
+        "111111",
+    ]
     assert payload["selected_targets"][0]["actual_execution_observed"] is True
+
+
+def test_loader_rejects_false_active_owner_full_coverage_claim(tmp_path):
+    payload = build_collection_targets(
+        _report(
+            [
+                {
+                    "owner": "episode",
+                    "scope_id": "active_episode",
+                    "scope_kind": "active_episode_owner",
+                    "symbol": "111111",
+                    "expected_venues": ["SOR"],
+                    "gap_class": "micro_symbol_not_observed",
+                }
+            ]
+        )
+    )
+    payload["budget"]["selected_active_owner_count"] = 0
+    write_collection_targets(payload, root=tmp_path)
+
+    rejected = load_exact_date_collection_targets("2026-08-18", root=tmp_path)
+
+    assert rejected["status"] == "invalid_budget_contract"
+    assert rejected["registration_items"] == []
+
+
+def test_loader_rejects_active_owner_hidden_in_prospective_overflow(tmp_path):
+    payload = build_collection_targets(
+        _report(
+            [
+                {
+                    "owner": "episode",
+                    "scope_id": "active_episode",
+                    "scope_kind": "active_episode_owner",
+                    "symbol": "111111",
+                    "expected_venues": ["SOR"],
+                    "gap_class": "micro_symbol_not_observed",
+                },
+                {
+                    "owner": "widget",
+                    "scope_id": "prospective_widget",
+                    "scope_kind": "prospective_widget_research",
+                    "symbol": "222222",
+                    "expected_venues": ["KRX"],
+                    "gap_class": "micro_symbol_not_observed",
+                },
+            ]
+        ),
+        max_symbols=1,
+    )
+    payload["overflow_targets"][0]["active_owner"] = True
+    write_collection_targets(payload, root=tmp_path)
+
+    rejected = load_exact_date_collection_targets("2026-08-18", root=tmp_path)
+
+    assert rejected["status"] == "invalid_budget_contract"
+    assert rejected["registration_items"] == []
+
+
+@pytest.mark.parametrize("invalid_value", [None, 0, 1, "true", "false"])
+def test_loader_rejects_non_boolean_selected_active_owner(tmp_path, invalid_value):
+    payload = build_collection_targets(
+        _report(
+            [
+                {
+                    "owner": "episode",
+                    "scope_id": "active_episode",
+                    "scope_kind": "active_episode_owner",
+                    "symbol": "111111",
+                    "expected_venues": ["SOR"],
+                    "gap_class": "micro_symbol_not_observed",
+                }
+            ]
+        )
+    )
+    payload["selected_targets"][0]["active_owner"] = invalid_value
+    write_collection_targets(payload, root=tmp_path)
+
+    rejected = load_exact_date_collection_targets("2026-08-18", root=tmp_path)
+
+    assert rejected["status"] == "invalid_budget_contract"
+    assert rejected["registration_items"] == []
+
+
+def test_loader_rejects_overflow_count_mismatch(tmp_path):
+    payload = build_collection_targets(
+        _report(
+            [
+                {
+                    "owner": "widget",
+                    "scope_id": "prospective_widget",
+                    "scope_kind": "prospective_widget_research",
+                    "symbol": "222222",
+                    "expected_venues": ["KRX"],
+                    "gap_class": "micro_symbol_not_observed",
+                }
+            ]
+        ),
+        max_symbols=1,
+    )
+    payload["budget"]["overflow_symbol_count"] = 1
+    write_collection_targets(payload, root=tmp_path)
+
+    rejected = load_exact_date_collection_targets("2026-08-18", root=tmp_path)
+
+    assert rejected["status"] == "invalid_budget_contract"
+    assert rejected["registration_items"] == []
+
+
+def test_loader_rejects_selected_prospective_count_above_research_budget(tmp_path):
+    payload = build_collection_targets(
+        _report(
+            [
+                {
+                    "owner": "widget",
+                    "scope_id": "prospective_widget",
+                    "scope_kind": "prospective_widget_research",
+                    "symbol": "222222",
+                    "expected_venues": ["KRX"],
+                    "gap_class": "micro_symbol_not_observed",
+                }
+            ]
+        ),
+        max_symbols=1,
+    )
+    extra = dict(payload["selected_targets"][0])
+    extra["symbol"] = "333333"
+    extra["registration_item"] = "333333"
+    payload["selected_targets"].append(extra)
+    payload["budget"]["selected_symbol_count"] = 2
+    payload["budget"]["selected_prospective_owner_count"] = 2
+    payload["budget"]["max_symbols"] = 2
+    write_collection_targets(payload, root=tmp_path)
+
+    rejected = load_exact_date_collection_targets("2026-08-18", root=tmp_path)
+
+    assert rejected["status"] == "invalid_budget_contract"
+    assert rejected["registration_items"] == []
+
+
+def test_active_owner_capacity_excess_fails_instead_of_silent_overflow():
+    gaps = [
+        {
+            "owner": "episode",
+            "scope_id": f"active_{index:06d}",
+            "scope_kind": "active_episode_owner",
+            "symbol": f"{index:06d}",
+            "expected_venues": ["SOR"],
+            "gap_class": "micro_symbol_not_observed",
+        }
+        for index in range(1, 202)
+    ]
+
+    with pytest.raises(
+        ValueError, match="active_owner_collection_target_capacity_exceeded"
+    ):
+        build_collection_targets(_report(gaps), max_symbols=1)
+
+
+def test_loader_remains_compatible_with_exact_date_v1_artifact(tmp_path):
+    payload = build_collection_targets(
+        _report(
+            [
+                {
+                    "owner": "widget",
+                    "scope_id": "legacy_widget",
+                    "scope_kind": "active_widget_owner",
+                    "symbol": "555555",
+                    "expected_venues": ["KRX"],
+                    "gap_class": "micro_symbol_not_observed",
+                }
+            ]
+        )
+    )
+    payload["schema"] = "scalp_micro_reversion_collection_targets_v1"
+    write_collection_targets(payload, root=tmp_path)
+
+    loaded = load_exact_date_collection_targets("2026-08-18", root=tmp_path)
+
+    assert loaded["status"] == "loaded"
+    assert loaded["registration_items"] == ["555555"]

@@ -21,7 +21,11 @@ from src.utils.constants import DATA_DIR
 from src.utils.market_day import count_krx_trading_days, is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
-COLLECTION_TARGET_SCHEMA = "scalp_micro_reversion_collection_targets_v1"
+LEGACY_COLLECTION_TARGET_SCHEMA = "scalp_micro_reversion_collection_targets_v1"
+COLLECTION_TARGET_SCHEMA = "scalp_micro_reversion_collection_targets_v2"
+COLLECTION_TARGET_SCHEMAS = frozenset(
+    {LEGACY_COLLECTION_TARGET_SCHEMA, COLLECTION_TARGET_SCHEMA}
+)
 COLLECTION_TARGET_ROOT = (
     DATA_DIR / "runtime" / "scalp_micro_reversion_collection_targets"
 )
@@ -30,6 +34,7 @@ COLLECTION_TARGET_MAX_SYMBOLS_ENV = (
 )
 DEFAULT_COLLECTION_TARGET_MAX_SYMBOLS = 4
 MAX_COLLECTION_TARGET_MAX_SYMBOLS = 8
+MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS = 200
 REPAIRABLE_GAPS = frozenset(
     {
         "micro_date_partition_missing",
@@ -40,12 +45,16 @@ REPAIRABLE_GAPS = frozenset(
 )
 POLICY_SAMPLE_ACCUMULATION = "micro_policy_sample_accumulation"
 COLLECTION_TARGET_METRIC_CONTRACT = {
-    "metric_role": "producer_consumer_coverage_repair_and_policy_sample_budget",
+    "metric_role": (
+        "full_active_owner_collection_coverage_and_bounded_prospective_sample_budget"
+    ),
     "decision_authority": "next_session_market_data_observation_only",
-    "window_policy": ("exact_next_krx_trading_date_bounded_dynamic_universe_rotation"),
+    "window_policy": (
+        "exact_next_krx_trading_date_all_active_owner_symbols_then_bounded_prospective"
+    ),
     "sample_floor": "not_an_economic_or_policy_promotion_metric",
     "primary_decision_metric": (
-        "repairable_gap_and_policy_sample_coverage_within_daily_symbol_budget"
+        "all_active_owner_symbol_coverage_before_prospective_policy_samples"
     ),
     "source_quality_gate": (
         "exact_source_and_effective_dates_valid_symbol_route_and_source_only_authority"
@@ -150,7 +159,7 @@ def build_collection_targets(
     if not is_krx_trading_day(source_date):
         raise ValueError("collection_target_source_date_not_krx_trading_day")
     effective_date = _next_krx_trading_date(source_date)
-    budget = _bounded_max_symbols(max_symbols)
+    research_budget = _bounded_max_symbols(max_symbols)
     merged: dict[str, dict[str, Any]] = {}
 
     def merge_scope(scope: dict[str, Any], *, collection_reason: str) -> None:
@@ -298,39 +307,28 @@ def build_collection_targets(
 
     active_rows = [row for row in candidates if row["active_owner"]]
     prospective_rows = [row for row in candidates if not row["active_owner"]]
-    prospective_reserve = 0
-    if active_rows:
-        prospective_reserve = (
-            min(len(prospective_rows), 1)
-            if budget >= 2 and len(active_rows) < budget
-            else 0
-        )
-        active_budget = min(len(active_rows), budget - prospective_reserve)
-        prospective_budget = min(len(prospective_rows), budget - active_budget)
-    else:
-        active_budget = 0
-        prospective_budget = min(len(prospective_rows), budget)
+    if len(active_rows) > MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS:
+        raise ValueError("active_owner_collection_target_capacity_exceeded")
+
+    # Active widget/episode owners are the collection universe, not candidates
+    # competing for the research rotation budget. Intraday 0B/0D gaps cannot
+    # be reconstructed after the fact, so dropping an active symbol here would
+    # permanently remove its entry/stop/target microstructure evidence. The
+    # bounded daily budget now applies only to prospective research symbols.
+    prospective_budget = min(
+        len(prospective_rows), max(0, research_budget - len(active_rows))
+    )
     active_candidates = _priority_round_robin(
         active_rows,
         rotation_index=rotation_index,
-        step=active_budget,
+        step=len(active_rows),
     )
     prospective_candidates = _priority_round_robin(
         prospective_rows,
         rotation_index=rotation_index,
         step=prospective_budget,
     )
-    selected = (
-        active_candidates[:active_budget] + prospective_candidates[:prospective_budget]
-    )
-    remaining = budget - len(selected)
-    if remaining > 0:
-        selected.extend(active_candidates[active_budget : active_budget + remaining])
-        remaining = budget - len(selected)
-    if remaining > 0:
-        selected.extend(
-            prospective_candidates[prospective_budget : prospective_budget + remaining]
-        )
+    selected = active_candidates + prospective_candidates[:prospective_budget]
     selected_keys = {row["symbol"] for row in selected}
     overflow = [row for row in candidates if row["symbol"] not in selected_keys]
     for rows in (selected, overflow):
@@ -357,7 +355,7 @@ def build_collection_targets(
         "generated_at_kst": generated.astimezone(KST).isoformat(),
         "status": "ready" if selected else "no_repairable_gap",
         "decision": (
-            "bounded_source_only_collection_feedback_ready"
+            "active_owner_full_coverage_source_only_collection_ready"
             if selected
             else "no_source_only_collection_feedback_required"
         ),
@@ -373,7 +371,10 @@ def build_collection_targets(
             "manual_control_exclusion_applied": False,
         },
         "budget": {
-            "max_symbols": budget,
+            # Compatibility field: this is the effective selected-universe
+            # ceiling, not the prospective research budget in schema v2.
+            "max_symbols": max(len(active_rows), research_budget),
+            "research_symbol_budget": research_budget,
             "selected_symbol_count": len(selected),
             "overflow_symbol_count": len(overflow),
             "rotation_key": effective_key,
@@ -383,15 +384,23 @@ def build_collection_targets(
                 "independent_symbol_phase_after_selection_cohort_cycle"
             ),
             "overflow_rotates_on_next_effective_date": False,
-            "bounded_rotation_condition": "stable_priority_cohort_and_daily_budget",
+            "coverage_policy": (
+                "all_active_owner_symbols_then_bounded_prospective_rotation"
+            ),
+            "coverage_stage": "exact_date_target_manifest_selection",
+            "runtime_registration_receipt_required": True,
+            "active_owner_budget_bypass": True,
+            "active_owner_full_coverage": True,
+            "bounded_rotation_condition": (
+                "prospective_only_stable_priority_cohort_and_daily_budget"
+            ),
             "active_owner_candidate_count": len(active_rows),
-            "selected_active_owner_count": sum(
-                1 for row in selected if row["active_owner"]
-            ),
-            "active_owner_overflow_count": sum(
-                1 for row in overflow if row["active_owner"]
-            ),
-            "prospective_reserve_applied": prospective_reserve,
+            "selected_active_owner_count": len(active_rows),
+            "active_owner_overflow_count": 0,
+            "selected_prospective_owner_count": prospective_budget,
+            "prospective_overflow_count": len(prospective_rows)
+            - prospective_budget,
+            "prospective_reserve_applied": prospective_budget,
         },
         "selected_targets": selected,
         "overflow_targets": overflow,
@@ -459,7 +468,7 @@ def load_exact_date_collection_targets(
         source_date_valid = False
     valid = bool(
         isinstance(payload, dict)
-        and payload.get("schema") == COLLECTION_TARGET_SCHEMA
+        and payload.get("schema") in COLLECTION_TARGET_SCHEMAS
         and payload.get("effective_date") == effective_date
         and source_date_valid
         and isinstance(authority, dict)
@@ -481,19 +490,62 @@ def load_exact_date_collection_targets(
         }
     budget = payload.get("budget")
     selected_targets = payload.get("selected_targets")
+    overflow_targets = payload.get("overflow_targets")
+    schema = payload.get("schema")
     try:
         declared_max = int((budget or {}).get("max_symbols"))
         declared_selected = int((budget or {}).get("selected_symbol_count"))
+        declared_overflow = int((budget or {}).get("overflow_symbol_count"))
     except (TypeError, ValueError):
         declared_max = 0
         declared_selected = -1
-    if (
-        not isinstance(budget, dict)
-        or not isinstance(selected_targets, list)
-        or not 1 <= declared_max <= MAX_COLLECTION_TARGET_MAX_SYMBOLS
-        or declared_selected != len(selected_targets)
-        or len(selected_targets) > declared_max
-    ):
+        declared_overflow = -1
+    legacy_budget_valid = bool(
+        schema == LEGACY_COLLECTION_TARGET_SCHEMA
+        and 1 <= declared_max <= MAX_COLLECTION_TARGET_MAX_SYMBOLS
+        and isinstance(selected_targets, list)
+        and declared_selected == len(selected_targets)
+        and len(selected_targets) <= declared_max
+    )
+    try:
+        research_budget = int((budget or {}).get("research_symbol_budget"))
+        active_candidates = int((budget or {}).get("active_owner_candidate_count"))
+        selected_active = int((budget or {}).get("selected_active_owner_count"))
+        active_overflow = int((budget or {}).get("active_owner_overflow_count"))
+        selected_prospective = int(
+            (budget or {}).get("selected_prospective_owner_count")
+        )
+        prospective_overflow = int((budget or {}).get("prospective_overflow_count"))
+    except (TypeError, ValueError):
+        research_budget = 0
+        active_candidates = -1
+        selected_active = -1
+        active_overflow = -1
+        selected_prospective = -1
+        prospective_overflow = -1
+    v2_budget_valid = bool(
+        schema == COLLECTION_TARGET_SCHEMA
+        and isinstance(selected_targets, list)
+        and isinstance(overflow_targets, list)
+        and 1 <= research_budget <= MAX_COLLECTION_TARGET_MAX_SYMBOLS
+        and 1 <= declared_max <= MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS
+        and declared_selected == len(selected_targets)
+        and declared_overflow == len(overflow_targets)
+        and len(selected_targets) <= declared_max
+        and budget.get("coverage_policy")
+        == "all_active_owner_symbols_then_bounded_prospective_rotation"
+        and budget.get("coverage_stage") == "exact_date_target_manifest_selection"
+        and budget.get("runtime_registration_receipt_required") is True
+        and budget.get("active_owner_budget_bypass") is True
+        and budget.get("active_owner_full_coverage") is True
+        and active_candidates == selected_active
+        and active_overflow == 0
+        and declared_selected == selected_active + selected_prospective
+        and selected_prospective <= max(0, research_budget - selected_active)
+        and prospective_overflow == len(overflow_targets)
+        and declared_max == max(active_candidates, research_budget)
+    )
+    if not isinstance(budget, dict) or not (legacy_budget_valid or v2_budget_valid):
         return {
             "status": "invalid_budget_contract",
             "path": str(path),
@@ -501,10 +553,19 @@ def load_exact_date_collection_targets(
         }
     items: list[str] = []
     seen_symbols: set[str] = set()
+    selected_active_count = 0
     for row in selected_targets:
         if not isinstance(row, dict) or row.get("observation_allowed") is not True:
             return {
                 "status": "invalid_target_contract",
+                "path": str(path),
+                "registration_items": [],
+            }
+        if schema == COLLECTION_TARGET_SCHEMA and not isinstance(
+            row.get("active_owner"), bool
+        ):
+            return {
+                "status": "invalid_budget_contract",
                 "path": str(path),
                 "registration_items": [],
             }
@@ -530,7 +591,30 @@ def load_exact_date_collection_targets(
                 "registration_items": [],
             }
         seen_symbols.add(symbol)
+        selected_active_count += int(row.get("active_owner") is True)
         items.append(item)
+    if schema == COLLECTION_TARGET_SCHEMA and selected_active_count != selected_active:
+        return {
+            "status": "invalid_budget_contract",
+            "path": str(path),
+            "registration_items": [],
+        }
+    if schema == COLLECTION_TARGET_SCHEMA:
+        overflow_symbols: set[str] = set()
+        for row in overflow_targets:
+            symbol = _normalize_symbol(row.get("symbol")) if isinstance(row, dict) else ""
+            if (
+                not symbol
+                or symbol in seen_symbols
+                or symbol in overflow_symbols
+                or row.get("active_owner") is not False
+            ):
+                return {
+                    "status": "invalid_budget_contract",
+                    "path": str(path),
+                    "registration_items": [],
+                }
+            overflow_symbols.add(symbol)
     return {
         "status": "loaded",
         "path": str(path),

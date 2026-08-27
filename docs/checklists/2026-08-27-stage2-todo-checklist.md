@@ -103,6 +103,11 @@
   - 상태별 다음 액션: `IMPLEMENTATION_REQUIRED`는 source-only rolling paired policy 연구를 구현하고, `EVIDENCE_ACCUMULATING`은 exact-date floor 충족까지 수집·재검증한다. `CANDIDATE_QUEUE_HANDOFF|COMPLETE`는 closed 상태이므로 report에서 제외되고 다음 refresh에서 builder-owned 항목이 제거된다.
   - 권한 경계: 이 POSTCLOSE 후속 항목은 source-only 구현·검증 작업이며 runtime env, 실주문, target/timeout/cooldown/cap, threshold, provider/bot, hard safety 또는 broker guard 변경 권한이 없다.
 
+- [x] `[WidgetEpisodeMicroCollectionCoverage0827] active 위젯·에피소드 전 종목 micro-entry 수집 대상 보장` (`Due: 2026-08-27`, `Slot: POSTCLOSE`, `TimeWindow: 21:30~21:45`, `Track: ScalpingLogic`)
+  - Source: [collection_targets.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/collection_targets.py), [machine_microstructure_attribution.py](/home/ubuntu/KORStockScan/src/engine/monitoring/machine_microstructure_attribution.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 완료 판정: active widget/episode 고유 symbol은 일 4종목 prospective research budget을 우회해 전량 선택하고 `active_owner_candidate_count == selected_active_owner_count`, `active_owner_overflow_count=0`을 exact-date v2 artifact와 loader가 검증한다. prospective 종목만 active 선택 후 남는 research budget에서 회전한다.
+  - 권한 경계: 이 변경은 0B/0D source-only market-data 수집 대상만 넓힌다. BUY/SELL, target, stop, quantity, cooldown, daily cap, provider/bot, broker guard와 실주문 권한은 변경하지 않는다.
+
 - [ ] `[AutomationTriggerDecisionSummary0827] 자동화체인 trigger decision run/skip 요약 및 wrapper marker 대조 확인` (`Due: 2026-08-27`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~21:55`, `Track: RuntimeStability`)
   - Source: [automation_chain_trigger_decision_2026-08-26.json](/home/ubuntu/KORStockScan/data/report/automation_chain_trigger_decision/automation_chain_trigger_decision_2026-08-26.json), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)
   - 판정 기준: trigger decision summary의 total_steps=`14`, run_count=`9`, skip_count=`0`, source_missing_count=`4`, force_override_count=`0`, run_steps_sample=`lifecycle_window_rolling5d, lifecycle_window_rolling10d, lifecycle_window_mtd, pattern_lab_currentness_audit, pattern_lab_ai_review`, skip_steps_sample=`-`, top_reasons=`output_missing_or_unreadable:8, disabled_by_runtime_policy:5, upstream_drift_signal:5, source_missing_or_unreadable:4, upstream_artifact_newer:1`를 확인하고 wrapper 로그의 `[SKIP] threshold-cycle postclose ... trigger_decision=skip` marker와 대조한다.
@@ -117,6 +122,7 @@
   - Source: [entry_setup_v2_14_bounded_live_candidate_2026-08-26.json](/home/ubuntu/KORStockScan/data/threshold_cycle/bounded_live_candidates/entry_setup_v2_14_bounded_live_candidate_2026-08-26.json), [entry_setup_live_policy.py](/home/ubuntu/KORStockScan/src/engine/scalping/entry_setup_live_policy.py), [ai_quality_bridge.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/ai_quality_bridge.py), [threshold_runtime_env_2026-08-27.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-08-27.json)
   - 판정 기준: 07:35 PREOPEN activation이 source/effective date·candidate/file/prompt contract hash·probe-first active date·1주·일 3회 durable cap을 정확히 검증하고, KRX regular 해당 V2.14 cohort 외 normal entry와 `position_sizing_dynamic_formula`를 변경하지 않아야 한다. terminal 1주는 `allocator_provenance_partial_submission_observation_only`로만 귀속하고 notional EV·중앙배분 승격 표본에서 제외한다.
   - 장중 확인: V2.14 eligible/decision/probe-intent/submit 수, 일 cap block, 일반 V2.13/normal submit 수와 오늘의 submit drought를 분리한다. V2.14가 일반 메인 BUY를 대체하거나 partial 표본이 full allocator 표본에 유입되면 fail-closed로 판정한다.
+  - 2026-08-27 재리뷰 판정: 현재 source producer/activation/loader는 candidate·activation v2 schema를 일관되게 생성·검증하고 targeted test를 통과했다. 당일 생성된 v1 candidate·activation은 현재 PID 이전 산출물이라 현 loader가 `fallback_activation_contract_invalid`로 V2.13에 fail-closed했으며, v2 exact-date PREOPEN 산출물과 신규 PID 자연 호출 전에는 V2.14 반영으로 판정하지 않는다.
   - 권한 경계: 이 항목은 자연 표본 acceptance이며 PREOPEN env, prompt selection, requested quantity/cap, provider, bot, broker/order/hard-safety를 수동 변경하는 권한이 아니다. 계약 결손은 V2.13 자동 fallback으로 닫고 전략적 비활성·완화는 사용자 지시 후 별도 판정한다.
 
 - [ ] `[WidgetEpisodeExactDatePreopen0827] 위젯·저가주 에피소드 exact-date 기동·custody 수용검증` (`Due: 2026-08-27`, `Slot: PREOPEN`, `TimeWindow: 08:55~14:30`, `Track: ScalpingLogic`)
@@ -124,6 +130,11 @@
   - 판정 기준: 장기 실행 위젯 서비스가 날짜 전환 후 verified `080220` policy를 dynamic spec으로 편입하고, 저가주 최초 preflight가 2026-08-27 applied policy 45개·profile revision 12건·evidence hash를 재검증해야 한다. 신규 profile 5개의 preflight/live timer는 정확 시각에 1회만 시작하고 owner 중복주문은 0건이어야 한다.
   - custody 경계: `kepco_afternoon` 2026-08-26 state의 20주·target order 2건은 기존 owner로 대사한다. 미해결·보유가 남아 있으면 해당 profile의 신규 진입을 정상 차단하고 취소·재제출·다른 owner 수량 흡수를 하지 않는다. terminal 영수증 후에만 다음 exact-date attempt를 연다.
   - 권한 경계: 이 항목은 자연 기동·broker reconciliation 확인이며 main/widget/episode process 수동 재기동, 실주문·취소, target/quantity/provider/broker guard 변경 권한이 아니다.
+
+- [ ] `[HoldingFlowProviderRouteAuthority0828] holding_flow Provider route Plan/PID 정합성 승인·수용검증` (`Due: 2026-08-28`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:50`, `Track: RuntimeStability`)
+  - Source: [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 현재 판정: Plan은 `holding_flow=Bedrock Nova Lite v2 primary -> OpenAI failback`을 소유하지만 launcher/current PID는 `OpenAI primary -> Bedrock Nova Lite v2 fallback`을 사용했고 자연 호출도 OpenAI로 관측됐다. 중앙 router와 양방향 failback 테스트는 정상이라 code transport 결함이 아니라 `env_mapping + user_authority` blocker다.
+  - acceptance: 사용자가 Provider route 변경을 별도 승인한 경우에만 launcher before/after·rollback을 기록하고 우아한 재기동 뒤 새 PID env, Bedrock primary provider audit row, OpenAI failback smoke, holding 결과 provenance를 확인한다. 승인 전에는 현재 route와 프로세스를 변경하지 않는다.
 
 
 

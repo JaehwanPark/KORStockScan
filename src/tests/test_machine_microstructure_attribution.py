@@ -917,7 +917,14 @@ def test_new_episode_symbol_without_micro_is_explicit_gap_not_zero_return(tmp_pa
         for gap in report["producer_consumer_gaps"]
     )
     assert report["collection_feedback"]["effective_date"] == "2026-08-18"
-    assert report["collection_feedback"]["selected_symbol_count"] == 4
+    assert report["collection_feedback"]["active_owner_full_coverage"] is True
+    assert report["collection_feedback"]["active_owner_overflow_count"] == 0
+    assert report["collection_feedback"]["selected_active_owner_count"] == report[
+        "collection_feedback"
+    ]["active_owner_candidate_count"]
+    assert report["collection_feedback"]["selected_symbol_count"] >= report[
+        "collection_feedback"
+    ]["active_owner_candidate_count"]
     assert report["collection_feedback"]["overflow_symbol_count"] > 0
     assert report["collection_feedback"]["manual_control_exclusion_applied"] is False
     assert report["policy_change_readiness"]["policy_change_allowed"] is False
@@ -2052,9 +2059,18 @@ def test_nontrading_attribution_skips_collection_feedback_write_contract(tmp_pat
     )
 
     assert report["collection_feedback"] == {
-        "schema": "scalp_micro_reversion_collection_targets_v1",
+        "schema": "scalp_micro_reversion_collection_targets_v2",
         "effective_date": None,
         "status": "source_date_not_krx_trading_day_write_skipped",
+        "coverage_policy": (
+            "all_active_owner_symbols_then_bounded_prospective_rotation"
+        ),
+        "coverage_stage": "exact_date_target_manifest_selection",
+        "runtime_registration_receipt_required": True,
+        "active_owner_full_coverage": False,
+        "active_owner_candidate_count": 0,
+        "selected_active_owner_count": 0,
+        "active_owner_overflow_count": 0,
         "selected_symbol_count": 0,
         "repair_gap_selected_symbol_count": 0,
         "policy_sample_selected_symbol_count": 0,
