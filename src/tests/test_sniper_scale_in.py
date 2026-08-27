@@ -42880,6 +42880,38 @@ def test_broker_accepted_exploration_order_ledger_failure_fails_closed(monkeypat
     assert logs[0][1]["entry_setup_exploration_daily_probe_count"] == 3
 
 
+def test_broker_acceptance_cap_commit_precedes_fallible_local_staging(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_commit_entry_setup_exploration_probe_cap",
+        lambda *_args, **_kwargs: calls.append("cap_committed") or True,
+    )
+
+    def fail_stage(**_kwargs):
+        calls.append("stage_started")
+        raise RuntimeError("local staging failed")
+
+    monkeypatch.setattr(state_handlers, "_stage_buy_order_submission", fail_stage)
+
+    with pytest.raises(RuntimeError, match="local staging failed"):
+        state_handlers._stage_broker_accepted_entry_order(
+            {"entry_opportunity_recheck_exploration_probe_only": True},
+            "062040",
+            "0032341",
+            now_ts=datetime(
+                2026, 8, 27, 10, 39, tzinfo=state_handlers._KST
+            ).timestamp(),
+            curr_price=193_100,
+            requested_qty=1,
+            msg="accepted",
+            entry_orders=[{"ord_no": "0032341"}],
+        )
+
+    assert calls == ["cap_committed", "stage_started"]
+
+
 def test_holding_recent_ws_blocks_divergent_rest_quote_recovery(monkeypatch):
     state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
     pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)

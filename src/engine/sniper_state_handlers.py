@@ -55383,6 +55383,35 @@ def _commit_entry_setup_exploration_probe_cap(
     return ledger_committed
 
 
+def _stage_broker_accepted_entry_order(
+    stock: dict,
+    code: str,
+    broker_order_no: str,
+    *,
+    now_ts: float,
+    curr_price: int,
+    requested_qty: int,
+    msg: str,
+    entry_orders: list[dict],
+) -> None:
+    """Persist broker acceptance before any fallible local order staging."""
+
+    _commit_entry_setup_exploration_probe_cap(
+        stock,
+        code,
+        broker_order_no,
+        now_ts=now_ts,
+    )
+    _stage_buy_order_submission(
+        stock=stock,
+        code=code,
+        curr_price=curr_price,
+        requested_qty=requested_qty,
+        msg=msg,
+        entry_orders=entry_orders,
+    )
+
+
 def _score65_74_recovery_probe_repeat_guard(
     stock: dict | None,
     code: str | None,
@@ -69819,19 +69848,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
             }
         )
-        _stage_buy_order_submission(
+        _stage_broker_accepted_entry_order(
             stock=stock,
             code=code,
+            broker_order_no=ord_no,
+            now_ts=now_ts,
             curr_price=curr_price,
             requested_qty=requested_qty,
             msg=msg,
             entry_orders=successful_orders,
-        )
-        _commit_entry_setup_exploration_probe_cap(
-            stock,
-            code,
-            ord_no,
-            now_ts=now_ts,
         )
         if bool(planned_order.get("entry_split_order_probe_first_applied")):
             probe_bundle_id = str(
