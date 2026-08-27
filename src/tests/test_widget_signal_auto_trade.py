@@ -627,9 +627,15 @@ def _samsung_policy_payload(now, *, entry_id="ENTRY-1", exit_id=None, price=100_
     return payload
 
 
-def _fill(gateway, order_no, qty=1, price=1000):
+def _fill(gateway, order_no, qty=1, price=1000, execution_venue=""):
     gateway.snapshots[order_no] = ExecutionSnapshot(
-        True, True, qty, 0, qty, fill_price=price
+        True,
+        True,
+        qty,
+        0,
+        qty,
+        fill_price=price,
+        execution_venue=execution_venue,
     )
 
 
@@ -1354,7 +1360,7 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
 
     trader.run_once(now)
     assert gateway.limit_sell_calls == []
-    _fill(gateway, "B1", price=234_000)
+    _fill(gateway, "B1", price=234_000, execution_venue="NXT")
     state = trader.run_once(now)
 
     assert gateway.limit_sell_calls == [("999999", 1, "SOR", 236_500)]
@@ -1362,6 +1368,10 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
     assert take_profit["order_role"] == engine.ORDER_ROLE_TAKE_PROFIT
     assert take_profit["parent_entry_signal_id"] == "ENTRY-1"
     assert take_profit["limit_price"] == 236_500
+    entry_order = state["symbols"]["999999"]["orders"][0]
+    assert entry_order["market_venue"] == "KRX"
+    assert entry_order["broker_route"] == "SOR"
+    assert entry_order["broker_execution_venue"] == "NXT"
     assert recorder.events[-1]["schema"] == engine.EVENT_SCHEMA
     assert recorder.events[-1]["order_role"] == engine.ORDER_ROLE_TAKE_PROFIT
     assert recorder.events[-1]["parent_entry_signal_id"] == "ENTRY-1"
@@ -1377,6 +1387,7 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
     assert reconciled["fill_price"] == 234_000
     assert reconciled["market_venue"] == "KRX"
     assert reconciled["broker_route"] == "SOR"
+    assert reconciled["broker_execution_venue"] == "NXT"
     assert reconciled["submitted_at"] == now.isoformat()
 
     restarted = WidgetSignalAutoTrader(
@@ -1390,6 +1401,32 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
     )
     restarted.run_once(now)
     assert gateway.limit_sell_calls == [("999999", 1, "SOR", 236_500)]
+
+
+def test_execution_venue_change_is_journaled_once_without_fill_change(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+
+    trader.run_once(now)
+    gateway.snapshots["B1"] = ExecutionSnapshot(
+        True, True, 0, 1, 1, execution_venue="NXT"
+    )
+    trader.run_once(now)
+    trader.run_once(now)
+
+    venue_events = [
+        event
+        for event in recorder.events
+        if event["event_type"] == "order_execution_reconciled"
+        and event["order_no"] == "B1"
+    ]
+    assert len(venue_events) == 1
+    assert venue_events[0]["filled_qty"] == 0
+    assert venue_events[0]["remaining_qty"] == 1
+    assert venue_events[0]["broker_execution_venue"] == "NXT"
 
 
 def test_partial_buy_fills_receive_only_incremental_take_profit_coverage(
@@ -2137,6 +2174,7 @@ def test_gateway_reconciles_only_exact_documented_order_row():
                         "cntr_qty": "0000000001",
                         "cntr_uv": "0000234000",
                         "ord_remnq": "0000000002",
+                        "dmst_stex_tp": "KRX",
                     },
                     {
                         "ord_no": "0000999",
@@ -2169,6 +2207,277 @@ def test_gateway_reconciles_only_exact_documented_order_row():
     assert snapshot.filled_qty == 1
     assert snapshot.remaining_qty == 2
     assert snapshot.fill_price == 234000
+    assert snapshot.execution_venue == "KRX"
+
+
+def test_gateway_reconciles_sor_order_across_actual_execution_venue():
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {
+                "acnt_ord_cntr_prps_dtl": [
+                    {
+                        "ord_no": "0064588",
+                        "stk_cd": "A005930",
+                        "ord_qty": "20",
+                        "cntr_qty": "0",
+                        "ord_remnq": "20",
+                        "dmst_stex_tp": "NXT",
+                    },
+                    {
+                        "ord_no": "0069999",
+                        "stk_cd": "A005930",
+                        "ord_qty": "20",
+                        "cntr_qty": "20",
+                        "ord_remnq": "0",
+                        "dmst_stex_tp": "KRX",
+                    },
+                ],
+                "return_code": 0,
+            }
+
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, *args, **kwargs):
+            self.calls.append(kwargs)
+            return Response()
+
+    session = Session()
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=session, token_loader=lambda: "cached-token"
+    )
+
+    snapshot = gateway.execution_snapshot(
+        code="005930", order_no="0064588", route="SOR", order_date="2026-08-27"
+    )
+
+    assert session.calls[0]["json"]["dmst_stex_tp"] == "%"
+    assert snapshot.source_ok is True
+    assert snapshot.found is True
+    assert snapshot.order_qty == 20
+    assert snapshot.filled_qty == 0
+    assert snapshot.remaining_qty == 20
+    assert snapshot.execution_venue == "NXT"
+
+
+def test_gateway_normalizes_compatible_numeric_execution_venue():
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {
+                "acnt_ord_cntr_prps_dtl": [
+                    {
+                        "ord_no": "0064588",
+                        "stk_cd": "A005930",
+                        "ord_qty": "20",
+                        "cntr_qty": "0",
+                        "ord_remnq": "20",
+                        "stex_tp": "2",
+                    }
+                ],
+                "return_code": 0,
+            }
+
+    class Session:
+        @staticmethod
+        def post(*args, **kwargs):
+            return Response()
+
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=Session(), token_loader=lambda: "cached-token"
+    )
+
+    snapshot = gateway.execution_snapshot(
+        code="005930", order_no="0064588", route="SOR", order_date="2026-08-27"
+    )
+
+    assert snapshot.source_ok is True
+    assert snapshot.execution_venue == "NXT"
+
+
+def test_gateway_fails_closed_on_conflicting_execution_venue_fields():
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {
+                "acnt_ord_cntr_prps_dtl": [
+                    {
+                        "ord_no": "0064588",
+                        "stk_cd": "A005930",
+                        "ord_qty": "20",
+                        "cntr_qty": "0",
+                        "ord_remnq": "20",
+                        "dmst_stex_tp": "KRX",
+                        "stex_tp": "2",
+                    }
+                ],
+                "return_code": 0,
+            }
+
+    class Session:
+        @staticmethod
+        def post(*args, **kwargs):
+            return Response()
+
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=Session(), token_loader=lambda: "cached-token"
+    )
+
+    snapshot = gateway.execution_snapshot(
+        code="005930", order_no="0064588", route="SOR", order_date="2026-08-27"
+    )
+
+    assert snapshot.source_ok is False
+    assert snapshot.found is True
+    assert snapshot.error == "ambiguous_execution_venue"
+
+
+def test_gateway_fails_closed_on_invalid_execution_venue_field():
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {
+                "acnt_ord_cntr_prps_dtl": [
+                    {
+                        "ord_no": "0064588",
+                        "stk_cd": "A005930",
+                        "ord_qty": "20",
+                        "cntr_qty": "0",
+                        "ord_remnq": "20",
+                        "dmst_stex_tp": "UNKNOWN",
+                    }
+                ],
+                "return_code": 0,
+            }
+
+    class Session:
+        @staticmethod
+        def post(*args, **kwargs):
+            return Response()
+
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=Session(), token_loader=lambda: "cached-token"
+    )
+
+    snapshot = gateway.execution_snapshot(
+        code="005930", order_no="0064588", route="SOR", order_date="2026-08-27"
+    )
+
+    assert snapshot.source_ok is False
+    assert snapshot.found is True
+    assert snapshot.error == "invalid_execution_venue"
+
+
+def test_gateway_fails_closed_when_exact_order_spans_multiple_execution_venues():
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {
+                "acnt_ord_cntr_prps_dtl": [
+                    {
+                        "ord_no": "0064588",
+                        "stk_cd": "A005930",
+                        "ord_qty": "20",
+                        "cntr_qty": "0",
+                        "ord_remnq": "20",
+                        "dmst_stex_tp": venue,
+                    }
+                    for venue in ("KRX", "NXT")
+                ],
+                "return_code": 0,
+            }
+
+    class Session:
+        @staticmethod
+        def post(*args, **kwargs):
+            return Response()
+
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=Session(), token_loader=lambda: "cached-token"
+    )
+
+    snapshot = gateway.execution_snapshot(
+        code="005930", order_no="0064588", route="SOR", order_date="2026-08-27"
+    )
+
+    assert snapshot.source_ok is False
+    assert snapshot.found is True
+    assert snapshot.error == "ambiguous_execution_venue"
+
+
+def test_gateway_fails_closed_when_filled_descendants_span_multiple_venues():
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {
+                "acnt_ord_cntr_prps_dtl": [
+                    {
+                        "ord_no": "0040442",
+                        "orig_ord_no": "0000000",
+                        "stk_cd": "A042660",
+                        "ord_qty": "2",
+                        "cntr_qty": "0",
+                        "ord_remnq": "0",
+                        "dmst_stex_tp": "SOR",
+                    },
+                    {
+                        "ord_no": "0041229",
+                        "ori_ord": "0040442",
+                        "stk_cd": "A042660",
+                        "ord_qty": "1",
+                        "cntr_qty": "1",
+                        "ord_remnq": "0",
+                        "dmst_stex_tp": "KRX",
+                    },
+                    {
+                        "ord_no": "0041230",
+                        "orig_ord_no": "0040442",
+                        "stk_cd": "A042660",
+                        "ord_qty": "1",
+                        "cntr_qty": "1",
+                        "ord_remnq": "0",
+                        "dmst_stex_tp": "NXT",
+                    },
+                ],
+                "return_code": 0,
+            }
+
+    class Session:
+        @staticmethod
+        def post(*args, **kwargs):
+            return Response()
+
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=Session(), token_loader=lambda: "cached-token"
+    )
+
+    snapshot = gateway.execution_snapshot(
+        code="042660", order_no="0040442", route="SOR", order_date="2026-08-27"
+    )
+
+    assert snapshot.source_ok is False
+    assert snapshot.found is True
+    assert snapshot.error == "ambiguous_execution_venue"
 
 
 def test_gateway_reconciles_filled_same_symbol_successor_order_chain():

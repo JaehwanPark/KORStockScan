@@ -1691,6 +1691,56 @@ def test_build_next_stage2_checklist_hands_off_main_ai_source_gap_workorders(
     )
 
 
+def test_build_next_stage2_checklist_preserves_full_main_ai_acceptance_contract(
+    monkeypatch, tmp_path
+) -> None:
+    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
+        monkeypatch, tmp_path
+    )
+    source_date = "2026-08-21"
+    _write_json(
+        ev_dir / f"threshold_cycle_ev_{source_date}.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    report = _main_ai_quality_report(
+        source_date, ["RuntimeExecutionReceiptCustodyRepair"]
+    )
+    acceptance = (
+        "official raw execution envelope/order/execution identity is complete for "
+        "at least one reconciled lifecycle; materialized execution companions bind "
+        "to their exact request census; custody and order authority remain unchanged"
+    )
+    workorder = dict(report["source_only_gap_workorders"][0])
+    workorder["acceptance_test"] = acceptance
+    workorder_content = {
+        key: value
+        for key, value in workorder.items()
+        if key not in {"schema", "workorder_id", "status"}
+    }
+    workorder["workorder_id"] = (
+        f"main-ai-gap-{mod._canonical_sha256(workorder_content)[:24]}"
+    )
+    report["source_only_gap_workorders"] = [workorder]
+    report["source_gap_diagnostics"]["workorders"] = [workorder]
+    report["artifact_content_sha256"] = mod._canonical_sha256(
+        {
+            key: value
+            for key, value in report.items()
+            if key != "artifact_content_sha256"
+        }
+    )
+    _write_json(
+        mod.MAIN_AI_QUALITY_REPORT_DIR
+        / f"main_ai_quality_r0_r3_cycle_{source_date}.json",
+        report,
+    )
+
+    summary = mod.build_next_stage2_checklist(source_date)
+
+    text = Path(summary["path"]).read_text(encoding="utf-8")
+    assert f"완료 조건: {acceptance}" in text
+
+
 def test_build_next_stage2_checklist_rejects_tampered_main_ai_workorder_report(
     monkeypatch, tmp_path
 ) -> None:

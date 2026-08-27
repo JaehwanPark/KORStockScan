@@ -82,6 +82,7 @@ DEFAULT_WIDGET_AUTO_TRADE_STATE_PATH = (
 )
 WIDGET_AUTO_TRADE_EVENT_SCHEMA = "widget_signal_auto_trade_event_v1"
 WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY = "operator_directed_widget_auto_trade_v1"
+WIDGET_BROKER_EXECUTION_VENUES = {"KRX", "NXT", "SOR"}
 WIDGET_SESSION_VENUES = {
     "NXT_PREMARKET": "NXT",
     "KRX_REGULAR": "KRX",
@@ -651,6 +652,9 @@ def _widget_state_order_index(
             order_no = str(order.get("order_no") or "").strip()
             requested_qty = _widget_numeric(order.get("requested_qty"))
             filled_qty = _widget_numeric(order.get("filled_qty"))
+            broker_execution_venue = (
+                str(order.get("broker_execution_venue") or "").strip().upper()
+            )
             if (
                 not str(symbol).isdigit()
                 or len(str(symbol)) != 6
@@ -663,6 +667,10 @@ def _widget_state_order_index(
                 or not filled_qty.is_integer()
                 or filled_qty < 0
                 or filled_qty > requested_qty
+                or (
+                    broker_execution_venue
+                    and broker_execution_venue not in WIDGET_BROKER_EXECUTION_VENUES
+                )
             ):
                 errors.append(f"accepted_order_contract_invalid:{symbol}:{order_no}")
                 continue
@@ -1182,6 +1190,9 @@ def _widget_actual_execution_inventory(
             requested_qty = _widget_numeric(event.get("requested_qty"))
             filled_qty = _widget_numeric(event.get("filled_qty"))
             remaining_qty = _widget_numeric(event.get("remaining_qty"))
+            broker_execution_venue = (
+                str(event.get("broker_execution_venue") or "").strip().upper()
+            )
             if (
                 requested_qty is None
                 or not requested_qty.is_integer()
@@ -1195,6 +1206,10 @@ def _widget_actual_execution_inventory(
                 or remaining_qty < 0
                 or remaining_qty > requested_qty
                 or filled_qty + remaining_qty > requested_qty
+                or (
+                    broker_execution_venue
+                    and broker_execution_venue not in WIDGET_BROKER_EXECUTION_VENUES
+                )
             ):
                 contract_errors.append(f"reconcile_contract_invalid:{line_number}")
                 continue
@@ -1216,16 +1231,25 @@ def _widget_actual_execution_inventory(
         submit_requested = int(_widget_numeric(submit.get("requested_qty")) or 0)
         prior_filled = -1
         prior_remaining = submit_requested
+        prior_execution_venue = ""
         for row in sorted(rows, key=lambda value: value["_observed_at"]):
             filled = int(_widget_numeric(row.get("filled_qty")) or 0)
             remaining = int(_widget_numeric(row.get("remaining_qty")) or 0)
             row_requested = int(_widget_numeric(row.get("requested_qty")) or 0)
+            execution_venue = (
+                str(row.get("broker_execution_venue") or "").strip().upper()
+            )
             if (
                 row_requested != submit_requested
                 or row.get("order_role") != submit.get("order_role")
                 or row.get("side") != submit.get("side")
                 or filled < prior_filled
                 or remaining > prior_remaining
+                or (
+                    execution_venue
+                    and prior_execution_venue
+                    and execution_venue != prior_execution_venue
+                )
             ):
                 contract_errors.append(
                     f"reconciliation_sequence_invalid:{key[0]}:{key[1]}"
@@ -1233,6 +1257,7 @@ def _widget_actual_execution_inventory(
                 break
             prior_filled = filled
             prior_remaining = remaining
+            prior_execution_venue = execution_venue or prior_execution_venue
     for key in sorted(set(state_orders) & set(submit_rows)):
         state_order = state_orders[key]
         submit = submit_rows[key]
@@ -1252,6 +1277,23 @@ def _widget_actual_execution_inventory(
             )
         ):
             contract_errors.append(f"state_event_order_mismatch:{key[0]}:{key[1]}")
+            continue
+        state_execution_venue = (
+            str(state_order.get("broker_execution_venue") or "").strip().upper()
+        )
+        event_execution_venues = {
+            str(row.get("broker_execution_venue") or "").strip().upper()
+            for row in reconcile_rows.get(key) or []
+            if str(row.get("broker_execution_venue") or "").strip()
+        }
+        if len(event_execution_venues) > 1 or (
+            state_execution_venue
+            and event_execution_venues
+            and event_execution_venues != {state_execution_venue}
+        ):
+            contract_errors.append(
+                f"state_event_execution_venue_mismatch:{key[0]}:{key[1]}"
+            )
     source["actual_event_count"] = actual_event_count
     if contract_errors:
         source.update(
@@ -1269,6 +1311,17 @@ def _widget_actual_execution_inventory(
         state_order = state_orders.get(key) or {}
         rows = sorted(
             reconcile_rows.get(key) or [], key=lambda row: row["_observed_at"]
+        )
+        execution_venues = {
+            str(value).strip().upper()
+            for value in (
+                state_order.get("broker_execution_venue"),
+                *(row.get("broker_execution_venue") for row in rows),
+            )
+            if str(value or "").strip()
+        }
+        broker_execution_venue = (
+            next(iter(execution_venues)) if len(execution_venues) == 1 else None
         )
         positive_rows = [
             row for row in rows if (_widget_numeric(row.get("filled_qty")) or 0.0) > 0
@@ -1383,6 +1436,7 @@ def _widget_actual_execution_inventory(
             "full_fill_at": full_fill_at,
             "lifecycle_signal_id": lifecycle_signal_id,
             "market_venue": venue,
+            "broker_execution_venue": broker_execution_venue,
         }
         lifecycle_orders[(key[0], lifecycle_signal_id)].append(fact)
 
@@ -1499,6 +1553,26 @@ def _widget_actual_execution_inventory(
             or _widget_numeric(order.get("fill_price"))
             for order in sell_submit_orders
         }
+        entry_execution_venues = sorted(
+            {
+                str(order.get("broker_execution_venue") or "")
+                for order in buy_fill_orders
+                if order.get("broker_execution_venue")
+            }
+        )
+        exit_execution_venues = sorted(
+            {
+                str(order.get("broker_execution_venue") or "")
+                for order in sell_orders
+                if order.get("broker_execution_venue")
+            }
+        )
+        all_execution_venues = set(entry_execution_venues) | set(exit_execution_venues)
+        execution_venue_alignment_state = (
+            "unknown"
+            if not all_execution_venues
+            else "aligned" if all_execution_venues == {venue} else "cross_venue"
+        )
         timestamp_order_valid = bool(
             signal_at <= first_entry_submit_at
             and all(
@@ -1646,6 +1720,9 @@ def _widget_actual_execution_inventory(
             ),
             "quantity_basis": "actual_widget_filled_quantity",
             "entry_fill_status": "filled" if buy_qty > 0 else "unfilled",
+            "entry_execution_venues": entry_execution_venues,
+            "exit_execution_venues": exit_execution_venues,
+            "execution_venue_alignment_state": execution_venue_alignment_state,
             "realized": realized,
             "leg_id": "widget_episode",
             "timestamp_provenance": (
@@ -1660,6 +1737,7 @@ def _widget_actual_execution_inventory(
             and round_trip_cost_pct is not None
             and round_trip_cost_pct >= 0
             and advisory_source.get("status") != "contract_invalid"
+            and execution_venue_alignment_state != "cross_venue"
         )
         owner_cost_contract = {
             "owner_round_trip_cost_pct": round_trip_cost_pct,
@@ -1736,6 +1814,9 @@ def _widget_actual_execution_inventory(
                     "anchor_role": "actual_widget_entry_submit_accept_recorded",
                     "execution_order_role": order.get("order_role"),
                     "execution_order_no": order.get("order_no"),
+                    "eventual_broker_execution_venue": order.get(
+                        "broker_execution_venue"
+                    ),
                     **owner_cost_contract,
                     "owner_outcome": owner_outcome,
                     "owner_lifecycle_contract_valid": True,
@@ -1760,7 +1841,9 @@ def _widget_actual_execution_inventory(
                         "scope_id": scope_id,
                         "symbol": symbol,
                         "session": session,
-                        "expected_venues": [venue],
+                        "expected_venues": [
+                            str(order.get("broker_execution_venue") or venue)
+                        ],
                         "expected_session_buckets": [session],
                         "anchor_at": order["first_fill_at"].isoformat(),
                         "anchor_price": float(order["first_fill_price"]),
@@ -1772,6 +1855,7 @@ def _widget_actual_execution_inventory(
                         "anchor_role": "actual_widget_entry_partial_fill_reconciled",
                         "execution_order_role": order.get("order_role"),
                         "execution_order_no": order.get("order_no"),
+                        "broker_execution_venue": order.get("broker_execution_venue"),
                         **owner_cost_contract,
                         "owner_outcome": owner_outcome,
                         "owner_lifecycle_contract_valid": True,
@@ -1787,7 +1871,9 @@ def _widget_actual_execution_inventory(
                     "scope_id": scope_id,
                     "symbol": symbol,
                     "session": session,
-                    "expected_venues": [venue],
+                    "expected_venues": [
+                        str(order.get("broker_execution_venue") or venue)
+                    ],
                     "expected_session_buckets": [session],
                     "anchor_at": order["fill_at"].isoformat(),
                     "anchor_price": float(order["fill_price"]),
@@ -1801,6 +1887,7 @@ def _widget_actual_execution_inventory(
                     ),
                     "execution_order_role": order.get("order_role"),
                     "execution_order_no": order.get("order_no"),
+                    "broker_execution_venue": order.get("broker_execution_venue"),
                     **owner_cost_contract,
                     "owner_outcome": owner_outcome,
                     "owner_lifecycle_contract_valid": True,
@@ -1831,6 +1918,9 @@ def _widget_actual_execution_inventory(
                     "anchor_role": "actual_widget_exit_submit_accept_recorded",
                     "execution_order_role": order.get("order_role"),
                     "execution_order_no": order.get("order_no"),
+                    "eventual_broker_execution_venue": order.get(
+                        "broker_execution_venue"
+                    ),
                     **owner_cost_contract,
                     "owner_outcome": owner_outcome,
                     "owner_lifecycle_contract_valid": True,
@@ -1859,7 +1949,9 @@ def _widget_actual_execution_inventory(
                         "scope_id": scope_id,
                         "symbol": symbol,
                         "session": session,
-                        "expected_venues": [venue],
+                        "expected_venues": [
+                            str(order.get("broker_execution_venue") or venue)
+                        ],
                         "expected_session_buckets": [session],
                         "anchor_at": partial_fill_at.isoformat(),
                         "anchor_price": float(order["first_fill_price"]),
@@ -1869,6 +1961,7 @@ def _widget_actual_execution_inventory(
                         "anchor_role": ("actual_widget_exit_partial_fill_reconciled"),
                         "execution_order_role": order.get("order_role"),
                         "execution_order_no": order.get("order_no"),
+                        "broker_execution_venue": order.get("broker_execution_venue"),
                         **owner_cost_contract,
                         "owner_outcome": owner_outcome,
                         "owner_lifecycle_contract_valid": True,
@@ -1885,7 +1978,9 @@ def _widget_actual_execution_inventory(
                     "scope_id": scope_id,
                     "symbol": symbol,
                     "session": session,
-                    "expected_venues": [venue],
+                    "expected_venues": (
+                        exit_execution_venues if exit_execution_venues else [venue]
+                    ),
                     "expected_session_buckets": [session],
                     "anchor_at": exit_at.isoformat(),
                     "anchor_price": sell_notional / sell_qty,
@@ -1896,6 +1991,7 @@ def _widget_actual_execution_inventory(
                         if realized
                         else "actual_widget_exit_partial_fill_reconciled"
                     ),
+                    "broker_execution_venues": exit_execution_venues,
                     **owner_cost_contract,
                     "owner_outcome": owner_outcome,
                     "owner_lifecycle_contract_valid": True,

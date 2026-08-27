@@ -3155,6 +3155,7 @@ def test_actual_widget_execution_journal_is_attributed_as_real_lifecycle(tmp_pat
                             "order_role": "ENTRY_BUY",
                             "signal_id": signal_id,
                             "market_venue": "KRX",
+                            "broker_execution_venue": "KRX",
                             "requested_qty": 10,
                             "filled_qty": 10,
                             "fill_price": 10_000,
@@ -3168,6 +3169,7 @@ def test_actual_widget_execution_journal_is_attributed_as_real_lifecycle(tmp_pat
                             "order_role": "FINAL_EXIT_SELL",
                             "signal_id": "EXIT-1",
                             "market_venue": "KRX",
+                            "broker_execution_venue": "KRX",
                             "requested_qty": 10,
                             "filled_qty": 10,
                             "fill_price": 10_100,
@@ -3222,6 +3224,7 @@ def test_actual_widget_execution_journal_is_attributed_as_real_lifecycle(tmp_pat
                 filled_qty=5,
                 remaining_qty=5,
                 fill_price=9_950,
+                broker_execution_venue="KRX",
             ),
             event(
                 "order_execution_reconciled",
@@ -3233,6 +3236,7 @@ def test_actual_widget_execution_journal_is_attributed_as_real_lifecycle(tmp_pat
                 filled_qty=10,
                 remaining_qty=0,
                 fill_price=10_000,
+                broker_execution_venue="KRX",
             ),
             event(
                 "order_submitted",
@@ -3254,6 +3258,7 @@ def test_actual_widget_execution_journal_is_attributed_as_real_lifecycle(tmp_pat
                 filled_qty=5,
                 remaining_qty=5,
                 fill_price=10_050,
+                broker_execution_venue="KRX",
             ),
             event(
                 "order_execution_reconciled",
@@ -3264,6 +3269,7 @@ def test_actual_widget_execution_journal_is_attributed_as_real_lifecycle(tmp_pat
                 requested_qty=10,
                 filled_qty=10,
                 remaining_qty=0,
+                broker_execution_venue="KRX",
             ),
         ],
     )
@@ -3330,11 +3336,19 @@ def test_actual_widget_execution_journal_is_attributed_as_real_lifecycle(tmp_pat
         if row["anchor_role"] == "actual_widget_entry_fill_reconciled"
     )
     assert full_fill_anchor["execution_order_role"] == "ENTRY_BUY"
+    assert full_fill_anchor["broker_execution_venue"] == "KRX"
     assert full_fill_anchor["owner_round_trip_cost_pct"] == 0.2
     assert report["summary"]["matched_anchor_count_by_stage"]["entry_partial_fill"] == 1
     assert report["summary"]["matched_anchor_count_by_stage"]["entry_submit"] == 1
     assert report["summary"]["matched_anchor_count_by_stage"]["exit_submit"] == 1
     assert report["summary"]["matched_anchor_count_by_stage"]["exit_partial_fill"] == 1
+    submit_anchor = next(
+        row
+        for row in actual_scope["anchor_results"]
+        if row["anchor_role"] == "actual_widget_entry_submit_accept_recorded"
+    )
+    assert "broker_execution_venue" not in submit_anchor
+    assert submit_anchor["eventual_broker_execution_venue"] == "KRX"
     objective = report["fast_lifecycle_objective_alignment"]
     actual_cohort = objective["gross_no_slippage_diagnostic"]["cohorts"][
         "actual_widget_execution"
@@ -3348,6 +3362,9 @@ def test_actual_widget_execution_journal_is_attributed_as_real_lifecycle(tmp_pat
     )
     assert actual_outcome["signal_to_entry_submit_record_ms"] == 1_000
     assert actual_outcome["entry_submit_record_to_first_fill_confirmation_ms"] == 500
+    assert actual_outcome["entry_execution_venues"] == ["KRX"]
+    assert actual_outcome["exit_execution_venues"] == ["KRX"]
+    assert actual_outcome["execution_venue_alignment_state"] == "aligned"
     assert (
         actual_outcome["first_fill_confirmation_to_first_exit_submit_record_ms"]
         == 1_500
@@ -3752,6 +3769,187 @@ def test_widget_accepted_submit_without_exact_date_state_is_contract_invalid(tmp
     assert source["contract_errors"] == [
         "accepted_submit_without_exact_date_state:005930:B1"
     ]
+
+
+def test_widget_state_event_execution_venue_mismatch_is_contract_invalid(tmp_path):
+    target_date = "2026-08-14"
+    report_root = tmp_path / "report"
+    state_path = tmp_path / "widget_state.json"
+    signal_id = "005930:2026-08-14:ENTRY:KRX_REGULAR:2026-08-14T10:00:00+09:00"
+    _write_json(
+        state_path,
+        {
+            "schema_version": 1,
+            "execution_authority": "operator_directed_widget_auto_trade_v1",
+            "active_date": target_date,
+            "symbols": {
+                "005930": {
+                    "orders": [
+                        {
+                            "broker_accepted": True,
+                            "order_no": "B1",
+                            "order_date": target_date,
+                            "side": "BUY",
+                            "order_role": "ENTRY_BUY",
+                            "signal_id": signal_id,
+                            "market_venue": "KRX",
+                            "broker_execution_venue": "NXT",
+                            "requested_qty": 10,
+                            "filled_qty": 10,
+                            "fill_price": 10_000,
+                        }
+                    ]
+                }
+            },
+            "history": [],
+        },
+    )
+    base = {
+        "schema": "widget_signal_auto_trade_event_v1",
+        "trade_date": target_date,
+        "symbol": "005930",
+        "execution_authority": "operator_directed_widget_auto_trade_v1",
+        "decision_authority": "operator_directed_widget_auto_trade_v1",
+        "runtime_effect": True,
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "order_no": "B1",
+        "order_role": "ENTRY_BUY",
+        "side": "BUY",
+        "requested_qty": 10,
+        "signal_id": signal_id,
+        "market_venue": "KRX",
+    }
+    _write_jsonl(
+        report_root
+        / "widget_signal_auto_trade_events"
+        / "widget_signal_auto_trade_events_20260814.jsonl",
+        [
+            {
+                **base,
+                "event_type": "order_submitted",
+                "observed_at": "2026-08-14T10:00:01+09:00",
+            },
+            {
+                **base,
+                "event_type": "order_execution_reconciled",
+                "observed_at": "2026-08-14T10:00:02+09:00",
+                "filled_qty": 10,
+                "remaining_qty": 0,
+                "fill_price": 10_000,
+                "broker_execution_venue": "KRX",
+            },
+        ],
+    )
+
+    _, anchors, sources = _widget_inventory(
+        target_date, report_root, widget_state_path=state_path
+    )
+
+    assert anchors == []
+    source = sources["actual_execution_events"]
+    assert source["status"] == "contract_invalid"
+    assert "state_event_execution_venue_mismatch:005930:B1" in source["contract_errors"]
+
+
+def test_widget_cross_venue_fill_is_separated_from_signal_venue_tuning(tmp_path):
+    target_date = "2026-08-14"
+    report_root = tmp_path / "report"
+    state_path = tmp_path / "widget_state.json"
+    signal_id = "005930:2026-08-14:ENTRY:KRX_REGULAR:2026-08-14T10:00:00+09:00"
+    _write_json(
+        state_path,
+        {
+            "schema_version": 1,
+            "execution_authority": "operator_directed_widget_auto_trade_v1",
+            "active_date": target_date,
+            "symbols": {
+                "005930": {
+                    "orders": [
+                        {
+                            "broker_accepted": True,
+                            "order_no": "B1",
+                            "order_date": target_date,
+                            "side": "BUY",
+                            "order_role": "ENTRY_BUY",
+                            "signal_id": signal_id,
+                            "market_venue": "KRX",
+                            "broker_execution_venue": "NXT",
+                            "requested_qty": 10,
+                            "filled_qty": 10,
+                            "fill_price": 10_000,
+                            "status": "FILLED",
+                            "last_reconciled_at": "2026-08-14T10:00:02+09:00",
+                        }
+                    ]
+                }
+            },
+            "history": [],
+        },
+    )
+    base = {
+        "schema": "widget_signal_auto_trade_event_v1",
+        "trade_date": target_date,
+        "symbol": "005930",
+        "execution_authority": "operator_directed_widget_auto_trade_v1",
+        "decision_authority": "operator_directed_widget_auto_trade_v1",
+        "runtime_effect": True,
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "order_no": "B1",
+        "order_role": "ENTRY_BUY",
+        "side": "BUY",
+        "requested_qty": 10,
+        "signal_id": signal_id,
+        "market_venue": "KRX",
+    }
+    _write_jsonl(
+        report_root
+        / "widget_signal_auto_trade_events"
+        / "widget_signal_auto_trade_events_20260814.jsonl",
+        [
+            {
+                **base,
+                "event_type": "order_submitted",
+                "observed_at": "2026-08-14T10:00:01+09:00",
+                "limit_price": 10_000,
+            },
+            {
+                **base,
+                "event_type": "order_execution_reconciled",
+                "observed_at": "2026-08-14T10:00:02+09:00",
+                "filled_qty": 10,
+                "remaining_qty": 0,
+                "fill_price": 10_000,
+                "broker_execution_venue": "NXT",
+            },
+        ],
+    )
+
+    _, anchors, sources = _widget_inventory(
+        target_date, report_root, widget_state_path=state_path
+    )
+
+    assert sources["actual_execution_events"]["status"] == "loaded"
+    signal = next(
+        row for row in anchors if row["anchor_role"] == "actual_widget_entry_signal"
+    )
+    submit = next(
+        row
+        for row in anchors
+        if row["anchor_role"] == "actual_widget_entry_submit_accept_recorded"
+    )
+    fill = next(
+        row
+        for row in anchors
+        if row["anchor_role"] == "actual_widget_entry_fill_reconciled"
+    )
+    assert signal["owner_policy_tuning_eligible"] is False
+    assert signal["owner_outcome"]["execution_venue_alignment_state"] == "cross_venue"
+    assert submit["expected_venues"] == ["KRX"]
+    assert submit["eventual_broker_execution_venue"] == "NXT"
+    assert fill["expected_venues"] == ["NXT"]
+    assert fill["broker_execution_venue"] == "NXT"
 
 
 def test_widget_partial_only_anchor_uses_latest_confirmation_not_first(tmp_path):

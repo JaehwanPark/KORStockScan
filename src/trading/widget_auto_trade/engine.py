@@ -1405,12 +1405,21 @@ class WidgetSignalAutoTrader:
             requested = _positive_int(order.get("requested_qty"))
             prior_filled = _positive_int(order.get("filled_qty"))
             prior_status = str(order.get("status") or "")
+            prior_execution_venue = str(
+                order.get("broker_execution_venue") or ""
+            ).strip()
             filled = min(requested, max(prior_filled, snapshot.filled_qty))
             remaining = min(max(0, requested - filled), snapshot.remaining_qty)
             order["filled_qty"] = filled
             order["remaining_qty"] = remaining
             if snapshot.fill_price is not None:
                 order["fill_price"] = snapshot.fill_price
+            if snapshot.execution_venue:
+                # Preserve the signal/intent market_venue and broker_route,
+                # while recording where a SOR order actually resides.  This
+                # is reconciliation provenance only and never changes submit,
+                # cancel, price, quantity, or owner authority.
+                order["broker_execution_venue"] = snapshot.execution_venue
             order["last_reconciled_at"] = now.isoformat()
             if remaining == 0:
                 order["status"] = (
@@ -1419,7 +1428,15 @@ class WidgetSignalAutoTrader:
                     else "PARTIAL_CANCELED" if filled else "CANCELED"
                 )
             changed = True
-            if filled != prior_filled or order.get("status") != prior_status:
+            execution_venue_changed = bool(
+                snapshot.execution_venue
+                and snapshot.execution_venue != prior_execution_venue
+            )
+            if (
+                filled != prior_filled
+                or order.get("status") != prior_status
+                or execution_venue_changed
+            ):
                 self._event(
                     "order_execution_reconciled",
                     spec,
@@ -1437,6 +1454,7 @@ class WidgetSignalAutoTrader:
                     fill_price=order.get("fill_price"),
                     market_venue=order.get("market_venue"),
                     broker_route=order.get("broker_route"),
+                    broker_execution_venue=order.get("broker_execution_venue"),
                     submitted_at=order.get("submitted_at"),
                     scale_in_leg_index=order.get("scale_in_leg_index"),
                     actual_order_submitted=True,

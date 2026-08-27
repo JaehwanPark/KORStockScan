@@ -147,9 +147,11 @@ def _load_main_ai_quality_workorders(
     if not path.is_file():
         return (
             [],
-            "missing_artifact"
-            if source_date >= MAIN_AI_QUALITY_CHECKLIST_CONTRACT_START_DATE
-            else "not_available",
+            (
+                "missing_artifact"
+                if source_date >= MAIN_AI_QUALITY_CHECKLIST_CONTRACT_START_DATE
+                else "not_available"
+            ),
         )
     try:
         raw = path.read_bytes()
@@ -931,9 +933,18 @@ def _machine_microstructure_approval_pending_summary(
     return ", ".join(rendered) + suffix + source_gap
 
 
-def _compact_inline_value(value: Any, *, fallback: str = "-") -> str:
+def _compact_inline_value(
+    value: Any,
+    *,
+    fallback: str = "-",
+    max_length: int | None = 160,
+) -> str:
     rendered = " ".join(str(value or "").replace("`", "'").split()).strip()
-    return rendered[:160] if rendered else fallback
+    if not rendered:
+        return fallback
+    if max_length is None or len(rendered) <= max_length:
+        return rendered
+    return rendered[:max_length]
 
 
 def _machine_microstructure_objective_followup_summary(
@@ -1263,7 +1274,13 @@ def _build_tasks(
             _compact_inline_value(reason)
             for reason in workorder.get("reason_codes") or []
         )
-        acceptance = _compact_inline_value(workorder.get("acceptance_test"))
+        # Acceptance is an executable contract, not a display-only summary.
+        # Preserve it in full so the next-day task never ends with a truncated
+        # or semantically incomplete condition.
+        acceptance = _compact_inline_value(
+            workorder.get("acceptance_test"),
+            max_length=None,
+        )
         if owner == "MicroReversionForwardCollectorContinuity":
             slot = "PREOPEN"
             time_window = "08:40~08:45"

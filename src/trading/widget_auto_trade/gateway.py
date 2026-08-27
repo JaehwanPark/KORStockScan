@@ -20,11 +20,9 @@ from src.utils import kiwoom_utils
 
 KIWOOM_OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
-    "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-12T14:42:04+09:00",
+    "commit_sha": "e1b32486a2d4c055d78e62d78711133f1458401e",
+    "retrieved_at_kst": "2026-08-27T19:34:00+09:00",
     "inspected_paths": [
-        "kiwoom_docs/주문.md",
-        "kiwoom_docs/계좌.md",
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
         "postman/kiwoom-openapi.postman_collection.json",
@@ -54,6 +52,7 @@ class ExecutionSnapshot:
     fill_price: int | None = None
     source_api: str = "kt00007"
     error: str = ""
+    execution_venue: str = ""
 
 
 def _positive_int(value: object) -> int:
@@ -81,6 +80,41 @@ def _same_order_no(left: object, right: object) -> bool:
     return bool(
         left_text and right_text and left_text.lstrip("0") == right_text.lstrip("0")
     )
+
+
+_EXECUTION_VENUE_ALIASES = {
+    "1": "KRX",
+    "2": "NXT",
+    "KRX": "KRX",
+    "NXT": "NXT",
+    "SOR": "SOR",
+}
+
+
+def _execution_venues(row: dict[str, Any]) -> set[str]:
+    """Return canonical venue values without hiding conflicting broker fields."""
+
+    venues: set[str] = set()
+    for field in ("dmst_stex_tp", "stex_tp"):
+        raw = str(row.get(field) or "").strip().upper()
+        if raw in _EXECUTION_VENUE_ALIASES:
+            venues.add(_EXECUTION_VENUE_ALIASES[raw])
+    return venues
+
+
+def _execution_venue_invalid(row: dict[str, Any]) -> bool:
+    return any(
+        raw and raw not in _EXECUTION_VENUE_ALIASES
+        for raw in (
+            str(row.get(field) or "").strip().upper()
+            for field in ("dmst_stex_tp", "stex_tp")
+        )
+    )
+
+
+def _execution_venue(row: dict[str, Any]) -> str:
+    venues = _execution_venues(row)
+    return next(iter(venues)) if len(venues) == 1 else ""
 
 
 def resolve_widget_broker_route(route: str) -> str:
@@ -373,7 +407,12 @@ class KiwoomSharedTokenOrderGateway:
             "sell_tp": "0",
             "stk_cd": clean_code,
             "fr_ord_no": "",
-            "dmst_stex_tp": clean_route,
+            # A SOR order can be materialized by the broker as either a KRX or
+            # NXT order.  The official kt00007 contract supports "%" for an
+            # all-venue read.  Keep direct KRX/NXT orders scoped to their
+            # immutable venue, but reconcile SOR through the account-wide
+            # venue selector and still require the exact order number + code.
+            "dmst_stex_tp": "%" if clean_route == "SOR" else clean_route,
         }
         pages: list[dict[str, Any]] = []
         cont_yn = "N"
@@ -417,6 +456,28 @@ class KiwoomSharedTokenOrderGateway:
         if not matches:
             return ExecutionSnapshot(True, False, 0, 0, 0)
 
+        if any(_execution_venue_invalid(item) for item in matches):
+            return ExecutionSnapshot(
+                source_ok=False,
+                found=True,
+                filled_qty=0,
+                remaining_qty=0,
+                order_qty=0,
+                error="invalid_execution_venue",
+            )
+        observed_venues = {
+            venue for item in matches for venue in _execution_venues(item)
+        }
+        if len(observed_venues) > 1:
+            return ExecutionSnapshot(
+                source_ok=False,
+                found=True,
+                filled_qty=0,
+                remaining_qty=0,
+                order_qty=0,
+                error="ambiguous_execution_venue",
+            )
+
         # The queried order number is immutable for this executor; retain the
         # row with the greatest confirmed fill in case the broker returns more
         # than one status representation.
@@ -444,8 +505,9 @@ class KiwoomSharedTokenOrderGateway:
                 remaining_qty = order_qty - filled_qty
 
         # A broker correction/replacement receives a new order number and
-        # points at the owned order through orig_ord_no.  The original row then
-        # looks canceled even when its direct successor filled.  Follow only a
+        # points at the owned order through canonical kt00007 `ori_ord` (with
+        # legacy aliases accepted).  The original row then looks canceled even
+        # when its direct successor filled.  Follow only a
         # same-symbol descendant chain, and only when the exact root reports no
         # fill and an explicit zero remainder.  This avoids attributing an
         # unrelated account order or guessing through an ambiguous partial
@@ -459,7 +521,8 @@ class KiwoomSharedTokenOrderGateway:
                 for candidate in all_rows:
                     candidate_no = _order_no(candidate.get("ord_no"))
                     original_no = _order_no(
-                        candidate.get("orig_ord_no")
+                        candidate.get("ori_ord")
+                        or candidate.get("orig_ord_no")
                         or candidate.get("orgn_ord_no")
                         or candidate.get("org_ord_no")
                     )
@@ -496,6 +559,32 @@ class KiwoomSharedTokenOrderGateway:
                     continue
                 filled_descendants.append(candidate)
             if filled_descendants:
+                if any(
+                    _execution_venue_invalid(candidate)
+                    for candidate in filled_descendants
+                ):
+                    return ExecutionSnapshot(
+                        source_ok=False,
+                        found=True,
+                        filled_qty=0,
+                        remaining_qty=0,
+                        order_qty=0,
+                        error="invalid_execution_venue",
+                    )
+                descendant_venues = {
+                    venue
+                    for candidate in filled_descendants
+                    for venue in _execution_venues(candidate)
+                }
+                if len(descendant_venues) > 1:
+                    return ExecutionSnapshot(
+                        source_ok=False,
+                        found=True,
+                        filled_qty=0,
+                        remaining_qty=0,
+                        order_qty=0,
+                        error="ambiguous_execution_venue",
+                    )
                 successor = max(
                     filled_descendants,
                     key=lambda candidate: _positive_int(candidate.get("cntr_qty")),
@@ -515,4 +604,5 @@ class KiwoomSharedTokenOrderGateway:
             remaining_qty=remaining_qty,
             order_qty=order_qty,
             fill_price=_positive_int(row.get("cntr_uv", row.get("cntr_pric"))) or None,
+            execution_venue=_execution_venue(row),
         )

@@ -1438,6 +1438,30 @@ def test_entry_phase_cannot_regress_after_holding(tmp_path: Path) -> None:
     assert report["promotion_ready"] is False
 
 
+def test_scanner_recheck_before_submit_does_not_regress_lifecycle(
+    tmp_path: Path,
+) -> None:
+    attempt_id = "pre-submit-scanner-recheck"
+    identity = _identity(attempt_id, record_id=f"record-{attempt_id}")
+    rows = _complete_lifecycle(attempt_id)
+    submit_index = next(
+        index for index, row in enumerate(rows) if row["stage"] == "submit"
+    )
+    rows[submit_index:submit_index] = [
+        _event(identity, "scanner", 1.25),
+        _event(identity, "entry_decision", 1.5, data={"action": "BUY"}),
+    ]
+    source = tmp_path / "pre_submit_scanner_recheck.jsonl"
+    _write_jsonl(source, rows)
+
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    row = report["rows"][0]
+
+    assert row["invalid_transition_reasons"] == []
+    assert row["stage_counts"]["scanner"] == 2
+    assert row["stage_counts"]["entry_decision"] == 2
+
+
 def test_pipeline_and_journal_rows_never_complete_each_other(
     tmp_path: Path,
 ) -> None:
@@ -3677,6 +3701,55 @@ def test_pipeline_partial_full_replay_is_deduped_by_exact_execution_identity(
     assert row["invalid_transition_count"] == 0
     assert report["runtime_effect"] is False
     assert report["order_authority"] is False
+
+
+def test_pipeline_integrated_sor_uses_order_leg_fill_state_not_bundle_label() -> None:
+    stock = {
+        "id": 713,
+        "name": "TEST",
+        "code": "005930",
+        "scanner_generation_id": "005930:SCANPROM-713:r1",
+        "effective_venue": "KRX",
+        "market_session_bucket": "regular",
+    }
+    raw_execution = _broker_raw_fields(
+        order_no="0000713",
+        execution_no="0001713",
+        order_qty=1,
+        cumulative_qty=1,
+        cumulative_amount=10_000,
+        remaining_qty=0,
+        execution_price=10_000,
+        unit_qty=1,
+        second=3,
+    )
+    raw_execution.update({"2134": "0", "2135": "SOR", "2136": "Y"})
+    event = _pipeline_event(
+        stock=stock,
+        pipeline="HOLDING_PIPELINE",
+        source_stage="position_rebased_after_fill",
+        second=3,
+        fields={
+            "fill_quality": "PARTIAL_FILL",
+            "fill_qty": 1,
+            "fill_price": 10_000,
+            **raw_execution,
+        },
+    )
+
+    transition, error, in_scope = paired._validated_pipeline_transition(
+        event,
+        target_date=TARGET_DATE,
+    )
+
+    assert error is None
+    assert in_scope is True
+    assert transition is not None
+    assert transition["data"]["fill_state"] == "full"
+    assert transition["data"]["broker_execution_fill_state"] == "full"
+    assert transition["data"]["broker_execution_provenance_state"] == (
+        "identity_complete_venue_unresolved"
+    )
 
 
 def test_conflicting_execution_identity_is_blocked_without_double_count(

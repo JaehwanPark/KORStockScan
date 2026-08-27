@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-08-26 21:20:17
-분석 기간: 2026-06-05 ~ 2026-08-26
+생성일: 2026-08-27 21:21:08
+분석 기간: 2026-06-05 ~ 2026-08-27
 
 ---
 
@@ -11,16 +11,15 @@
 
 | 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |
 |---|---:|---:|---:|---:|---|
-| full_fill | 254 | 66.1% | +0.430% | +11.470% | ✓ |
+| full_fill | 256 | 66.4% | +0.435% | +13.350% | ✓ |
 | split-entry | 32 | 43.8% | -0.180% | -31.370% | ✓ |
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=7`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=71.4%`, `gatekeeper_eval_ms_p95=0ms`, `budget_pass_to_submitted_rate=0.0%`
+- `WAIT65~79 total_candidates=16`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=50.0%`, `gatekeeper_eval_ms_p95=0ms`, `budget_pass_to_submitted_rate=0.6%`
 
-- `AI threshold dominance`: 경고 — `blocked_ai_score_share=71.4%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
-- `Budget pass without submit`: 경고 — `budget_pass=762`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
+- `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
 
 ### 1-2. 손실 패턴 Top 5
 
@@ -52,13 +51,13 @@
 ### 1-3. 수익 패턴 Top 5
 
 **#1** — 코호트: `full_fill` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
-- 빈도: 135건 | 손익 중앙값: +1.050% | 기여손익: +176.800%
+- 빈도: 136건 | 손익 중앙값: +1.060% | 기여손익: +178.030%
 
-**#2** — 코호트: `split-entry` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
+**#2** — 코호트: `full_fill` / 청산규칙: `scalp_low_profit_stagnation_hard_exit` / 진입모드: `normal`
+- 빈도: 27건 | 손익 중앙값: +0.550% | 기여손익: +15.680%
+
+**#3** — 코호트: `split-entry` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
 - 빈도: 13건 | 손익 중앙값: +1.100% | 기여손익: +15.160%
-
-**#3** — 코호트: `full_fill` / 청산규칙: `scalp_low_profit_stagnation_hard_exit` / 진입모드: `normal`
-- 빈도: 26건 | 손익 중앙값: +0.550% | 기여손익: +15.030%
 
 **#4** — 코호트: `full_fill` / 청산규칙: `scalp_ai_momentum_decay` / 진입모드: `normal`
 - 빈도: 2건 | 손익 중앙값: +1.080% | 기여손익: +2.160%
@@ -69,16 +68,16 @@
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 66495건 | 차단 비율: 99.3% | 관찰 일수: 42일
+- 차단 건수 합계: 68498건 | 차단 비율: 99.4% | 관찰 일수: 43일
 
 **#2** — `overbought gate miss`
-- 차단 건수 합계: 9619건 | 차단 비율: 95.6% | 관찰 일수: 42일
+- 차단 건수 합계: 9957건 | 차단 비율: 95.7% | 관찰 일수: 43일
 
 **#3** — `latency guard miss`
-- 차단 건수 합계: 8696건 | 차단 비율: 95.2% | 관찰 일수: 42일
+- 차단 건수 합계: 9193건 | 차단 비율: 95.4% | 관찰 일수: 43일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 42일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 43일
 
 ---
 

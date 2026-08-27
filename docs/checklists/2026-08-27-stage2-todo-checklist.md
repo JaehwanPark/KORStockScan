@@ -165,6 +165,30 @@
   - 현재 판정: Plan은 `holding_flow=Bedrock Nova Lite v2 primary -> OpenAI failback`을 소유하지만 launcher/current PID는 `OpenAI primary -> Bedrock Nova Lite v2 fallback`을 사용했고 자연 호출도 OpenAI로 관측됐다. 중앙 router와 양방향 failback 테스트는 정상이라 code transport 결함이 아니라 `env_mapping + user_authority` blocker다.
   - acceptance: 사용자가 Provider route 변경을 별도 승인한 경우에만 launcher before/after·rollback을 기록하고 우아한 재기동 뒤 새 PID env, Bedrock primary provider audit row, OpenAI failback smoke, holding 결과 provenance를 확인한다. 승인 전에는 현재 route와 프로세스를 변경하지 않는다.
 
+- [ ] `[WidgetSorCrossVenueReconcileRuntime0828] 위젯 SOR→NXT 실제 venue 미체결 reconciliation 런타임 수용검증` (`Due: 2026-08-28`, `Slot: PREOPEN`, `TimeWindow: 08:50~09:00`, `Track: ScalpingLogic`)
+  - Source: [gateway.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/gateway.py), [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [widget_signal_auto_trade_state.json](/home/ubuntu/KORStockScan/data/runtime/widget_signal_auto_trade_state.json)
+  - 2026-08-27 19:30 판정: 삼성전자 위젯 target 20주는 18:17에 기존 KRX/SOR 주문 `0052539`가 terminal 처리된 뒤 동일 가격 268,500원·동일 수량의 신규 주문 `0064588`로 승계됐다. broker `ka10075`는 신규 주문을 NXT 미체결 20주로 반환했지만 현재 service는 `kt00007 dmst_stex_tp=SOR`로 조회해 `reconcile_not_found_count=75`를 누적했다. broker 활성 매도는 종목별 1건으로 중복주문은 아니다.
+  - 구현: official `Kiwoom-Securities/Kiwoom-REST-API@e1b32486a2d4c055d78e62d78711133f1458401e`의 `kt00007 dmst_stex_tp=%` 전체 venue 조회 계약을 재확인했다. SOR 주문만 `%`로 read-only 조회하되 exact 주문번호+종목을 유지하고, 동일 identity·정정 descendant가 복수 actual venue에 나타나거나 venue 필드가 invalid/conflict이면 fail-closed하며, venue-only 변경도 event journal에 기록하도록 보완했다. `broker_execution_venue`는 signal venue와 분리해 attribution consumer까지 전달하고 cross-venue lifecycle은 fill/exit anchor를 actual venue로 분리한 뒤 policy tuning에서 제외한다. 제출·취소·가격·수량·owner 권한은 변경하지 않았다.
+  - acceptance: 이 주문이 terminal이 되거나 owner별 broker 재대사 후 안전한 신규 process 반영이 허용된 시점에 새 PID/service commit을 확인한다. 그 뒤 exact 주문이 `found=true`, `remaining_qty=20`, `broker_execution_venue=NXT`로 대사되고 `reconcile_not_found_count`가 더 이상 증가하지 않으며, 중복 매도·취소·reprice 0건을 확인한다.
+  - 권한 경계: 현재 20주 활성 미체결을 취소·재제출하거나 위젯 service/main bot을 장중 재기동하지 않는다. 이 항목은 `runtime_hook + safety_or_broker_guard`로 열어 두고 현재 프로세스 반영을 실주문 승격 근거로 사용하지 않는다.
+
+- [ ] `[PostcloseWriterOwnedLogRotationContract0828] 21:00 active writer log rotation 장기 반복 blocker 계약 해소` (`Due: 2026-08-28`, `Slot: POSTCLOSE`, `TimeWindow: 20:50~21:10`, `Track: RuntimeStability`)
+  - Source: [run_logs_rotation_cleanup_cron.sh](/home/ubuntu/KORStockScan/deploy/run_logs_rotation_cleanup_cron.sh), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [log_rotation_cleanup_cron.log](/home/ubuntu/KORStockScan/logs/log_rotation_cleanup_cron.log), [log_rotation_cleanup_writer_defer_state.json](/home/ubuntu/KORStockScan/tmp/log_rotation_cleanup_writer_defer_state.json)
+  - 2026-08-27 판정: 21:00 wrapper는 21:03:49 `[FAIL]`로 종료했고 7개 writer defer가 연속 5회로 escalation 되었다. `active_rotation_status=disabled_pending_writer_owner`라서 active log 6개와 quiet하지 않은 archive 1개를 fail-closed 보존했으며 원본 손상·강제 unlink·불완전 gzip 건수는 0건이다. 이 상태는 최근 10일 창에서 3회 이상 반복된 `repeat_unresolved_structural_blocker`다.
+  - 다음 보완: 각 active log의 실제 single writer owner와 reopen/rollover 계약을 registry에 고정하고, writer가 close·rename·reopen 또는 동등한 atomic handoff를 소유하게 한다. cleanup은 owner receipt가 있는 closed generation만 no-clobber gzip/roundtrip 검증하고 active file을 직접 rename·delete하지 않는다.
+  - acceptance: 대상 writer 전체가 owner·PID/cgroup·generation·close/reopen receipt를 남기고, 동시 write 중 rotate 0건, loss/duplicate byte 0건, gzip roundtrip/hash pass, `writer_defer_escalated=0`, `writer_defer_state_failures=0`, wrapper latest `[DONE]`을 같은 target date에서 확인한다.
+  - 권한 경계: writer owner·atomic rollover 계약이 닫히기 전에 활성 log를 강제 rotate·truncate·delete하지 않고, 이 storage 보완을 bot/provider/order/threshold/safety 변경 근거로 사용하지 않는다.
+
+## 2026-08-27 장후 튜닝결과 점검 기록
+
+- 최종 상태: `YELLOW`. EOD와 main postclose wrapper는 대상일 `[DONE]`, final verifier는 허용 warning 1건(`limit_down_watch_ordered_path_not_observed`), DONE controller는 `status=done`으로 닫혔다. tuning monitoring, 20:10 widget evaluation, 재시도 후 21:15 machine final refresh, paired replay, 20:50 archive와 21:55 detector도 terminal이다.
+- source quality: `tuning_input_allowed=true`, event 283,384건·stage 177개, hard-blocking contract gap 0건·unknown-token stage 0개다. invalid scalp-entry action snapshot 3건은 `raw_row_exclusion`으로 격리했고 수익 0 또는 정상 row로 보간하지 않았다.
+- 계산·lineage: main lifecycle 1,754건을 보존하면서 invalid transition은 3,212건에서 63건, pipeline lifecycle instrumentation gap은 1건에서 0건으로 줄었다. exact broker-order fill과 broad bundle label의 충돌은 exact receipt를 우선하도록 보완했고 scanner recheck는 submit 이전만 허용했다. 남은 exact venue/custody 결손은 sample/evidence blocker로 유지한다.
+- AI·micro: 대상일 AI correction과 paired replay provider는 `openai`이고 parsed/schema/receipt 계약을 확인했으며 `provider=none`은 없었다. R0→R3 재생성은 ask-depletion Provider ablation 표본 floor 미달로 `source_only_candidate_blocked_current_run`에 fail-closed했고 Provider 추가 호출이나 runtime/order authority를 만들지 않았다.
+- workorder 2-pass: 최종 `generation_id=2026-08-27-7da7ef4efe38`, `source_hash=7da7ef4efe386033deb624ba58121bbd6ea649f731be52b5185b2a8ad894ccdf`가 두 pass에서 안정됐고 selected 49건은 모두 `attach_existing_family`, `implement_now=0`, `runtime_effect=true=0`, new/removed/decision-changed order 0건이다. 기존 family attribution 46건과 visibility/non-implement 3건을 분리 유지했고 신규 implement 항목은 없으며 review-required 및 sample·handoff 항목만 보류했다.
+- process·보관: 예상 process는 terminal 또는 근거 있는 custody/active 상태로 분류했다. 21:00 log rotation은 active writer 7건의 연속 defer 5회로 `[FAIL]`했지만 원본 7건을 보존했고 손상·강제 unlink·불완전 gzip은 0건이다. 이 반복 구조 결함은 `PostcloseWriterOwnedLogRotationContract0828`로 이월했다.
+- runtime 경계: 위젯 NXT 미체결 20주와 `kepco_afternoon` HELD 20주가 남아 owner/broker reconciliation 없이 service·bot을 재기동하지 않았다. 실주문·취소·reprice·수량·provider route·threshold·hard safety 변경도 수행하지 않았다.
+
 
 
 ## Project/Calendar 동기화

@@ -1601,10 +1601,14 @@ def _pipeline_transition_data(
             if timing_data is None:
                 return None, timing_error or "pipeline_broker_execution_timing_invalid"
             data.update(timing_data)
-        if (
-            lifecycle_stage == "fill"
-            and broker_provenance.get("broker_execution_provenance_state") == "complete"
-        ):
+        if lifecycle_stage == "fill" and broker_provenance.get(
+            "broker_execution_provenance_state"
+        ) in {"complete", "identity_complete_venue_unresolved"}:
+            # Partial/full is an exact broker-order quantity property. An
+            # integrated SOR receipt may leave the underlying KRX/NXT venue
+            # unresolved while still proving that the materialized order leg
+            # is fully filled. Do not retain the broader bundle-level
+            # PARTIAL_FILL label in that case.
             data["fill_state"] = broker_provenance["broker_execution_fill_state"]
     elif any(
         _pipeline_text(fields.get(field))
@@ -2151,7 +2155,8 @@ class _LifecycleAccumulator:
         ):
             return "scanner_transition_must_start_lifecycle"
         if stage == "scanner" and any(
-            existing_stage != "scanner" for existing_stage in self.stage_counts
+            existing_stage in self.stage_counts
+            for existing_stage in {"submit", "fill", "holding", "scale_in", "exit"}
         ):
             return "scanner_after_entry_phase"
         if stage == "entry_decision":
