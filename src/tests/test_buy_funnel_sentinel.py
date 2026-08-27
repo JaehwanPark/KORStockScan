@@ -2027,6 +2027,72 @@ def test_followup_route_is_report_only_for_upstream_threshold(monkeypatch, tmp_p
     assert report["followup"]["runtime_effect"] == "report_only_no_mutation"
 
 
+def test_before_scheduled_sentinel_start_is_not_yet_due(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event("2026-05-06", "09:01:00", "budget_pass", record_id=1),
+            _event("2026-05-06", "09:02:00", "budget_pass", record_id=2),
+            _event("2026-05-06", "09:03:00", "budget_pass", record_id=3),
+        ],
+    )
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "09:04:59"),
+    )
+
+    assert report["classification"]["primary"] == "NOT_YET_DUE"
+    assert report["classification"]["matches"] == []
+    assert report["classification"]["reasons"] == [
+        "sentinel session window has not opened"
+    ]
+    assert report["classification"]["submit_drought_handoff_state"] == "not_required"
+    assert report["entry_submit_drought_contract"]["critical"] is False
+    lineage = report["current"]["session"]["budget_ai_lineage"]
+    assert lineage["status"] == "not_applicable_before_sentinel_start"
+    assert lineage["canonical_source_state"] == (
+        "instrumentation_gap_parent_ai_trace_missing"
+    )
+    assert report["followup"] == {
+        "route": "not_yet_due",
+        "owner": "scheduled_buy_funnel_sentinel",
+        "operator_action_required": False,
+        "runtime_effect": "report_only_no_mutation",
+        "next_artifact": "buy_funnel_sentinel_in_session",
+    }
+    assert report["recommended_actions"] == [
+        "Wait for the sentinel session window; no runtime action is required."
+    ]
+
+
+def test_empty_budget_ai_lineage_is_no_current_signal() -> None:
+    lineage = sentinel._budget_ai_lineage_summary([])
+
+    assert lineage["status"] == "no_current_signal"
+    assert lineage["ai_trace_count"] == 0
+    assert lineage["budget_or_block_event_count"] == 0
+    assert lineage["lineage_contract_missing_event_count"] == 0
+
+
+def test_scheduled_sentinel_start_evaluates_runtime_ops(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "09:05:00"),
+    )
+
+    assert report["classification"]["primary"] == "RUNTIME_OPS"
+    assert report["classification"]["matches"] == ["RUNTIME_OPS"]
+    assert report["followup"]["route"] == "runtime_ops_playbook"
+    assert report["current"]["session"]["budget_ai_lineage"]["status"] == (
+        "no_current_signal"
+    )
+
+
 def test_followup_route_auto_handoffs_submit_drought_even_when_runtime_ops_primary():
     actions = sentinel._recommend_actions(
         {

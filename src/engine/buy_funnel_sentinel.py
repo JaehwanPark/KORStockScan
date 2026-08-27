@@ -103,6 +103,7 @@ BLOCKER_STAGES = {
 }
 DEFAULT_WINDOWS = (5, 10, 30)
 SESSION_START = time(9, 0)
+SENTINEL_START = time(9, 5)
 SENTINEL_END = time(15, 20)
 SUBMIT_DROUGHT_MIN_AI_UNIQUE = 20
 SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
@@ -814,7 +815,9 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         if join_eligible_events
         else 0.0
     )
-    if linked_block:
+    if not ai_trace_result_events and not lineage_events:
+        status = "no_current_signal"
+    elif linked_block:
         status = "explicit_ai_trace_budget_block_observed"
     elif linked_pass:
         status = "explicit_ai_trace_budget_pass_only"
@@ -1858,7 +1861,8 @@ def _classify(
     submitted_unique = int(unique.get("order_bundle_submitted", 0) or 0)
     latest = _parse_iso_datetime(_safe_str(current.get("latest_event_at")))
     stale_sec = int((as_of - latest).total_seconds()) if latest else None
-    during_sentinel_hours = SESSION_START <= as_of.time() <= SENTINEL_END
+    before_sentinel_hours = as_of.time() < SENTINEL_START
+    during_sentinel_hours = SENTINEL_START <= as_of.time() <= SENTINEL_END
 
     baseline_budget_to_ai = None
     baseline_submitted_to_ai = None
@@ -1873,8 +1877,9 @@ def _classify(
     reasons: list[str] = []
     matches: list[str] = []
 
-    runtime_ops = current["event_count"] == 0 or (
-        during_sentinel_hours and stale_sec is not None and stale_sec > 600
+    runtime_ops = not before_sentinel_hours and (
+        current["event_count"] == 0
+        or (during_sentinel_hours and stale_sec is not None and stale_sec > 600)
     )
     if runtime_ops:
         matches.append("RUNTIME_OPS")
@@ -1941,21 +1946,27 @@ def _classify(
         )
     submit_drought_root_cause = _latency_drought_root_cause_summary(current)
 
-    primary = "NORMAL"
-    if "RUNTIME_OPS" in matches:
-        primary = "RUNTIME_OPS"
-    elif "SUBMIT_DROUGHT_CRITICAL" in matches:
-        primary = "SUBMIT_DROUGHT_CRITICAL"
-    elif "PRICE_GUARD_DROUGHT" in matches:
-        primary = "PRICE_GUARD_DROUGHT"
-    elif "UPSTREAM_AI_THRESHOLD" in matches and (
-        budget_to_ai < 35.0 or baseline_budget_to_ai is not None
-    ):
-        primary = "UPSTREAM_AI_THRESHOLD"
-    elif "LATENCY_DROUGHT" in matches:
-        primary = "LATENCY_DROUGHT"
-    elif "UPSTREAM_AI_THRESHOLD" in matches:
-        primary = "UPSTREAM_AI_THRESHOLD"
+    if before_sentinel_hours:
+        matches = []
+        reasons = ["sentinel session window has not opened"]
+        submit_drought_critical = False
+
+    primary = "NOT_YET_DUE" if before_sentinel_hours else "NORMAL"
+    if not before_sentinel_hours:
+        if "RUNTIME_OPS" in matches:
+            primary = "RUNTIME_OPS"
+        elif "SUBMIT_DROUGHT_CRITICAL" in matches:
+            primary = "SUBMIT_DROUGHT_CRITICAL"
+        elif "PRICE_GUARD_DROUGHT" in matches:
+            primary = "PRICE_GUARD_DROUGHT"
+        elif "UPSTREAM_AI_THRESHOLD" in matches and (
+            budget_to_ai < 35.0 or baseline_budget_to_ai is not None
+        ):
+            primary = "UPSTREAM_AI_THRESHOLD"
+        elif "LATENCY_DROUGHT" in matches:
+            primary = "LATENCY_DROUGHT"
+        elif "UPSTREAM_AI_THRESHOLD" in matches:
+            primary = "UPSTREAM_AI_THRESHOLD"
 
     secondary = [item for item in matches if item != primary]
     if primary == "NORMAL":
@@ -1993,6 +2004,10 @@ def _recommend_actions(classification: dict[str, Any]) -> list[str]:
     )
     if "SUBMIT_DROUGHT_CRITICAL" in matches:
         primary = "SUBMIT_DROUGHT_CRITICAL"
+    if primary == "NOT_YET_DUE":
+        return [
+            "Wait for the sentinel session window; no runtime action is required.",
+        ]
     if primary == "RUNTIME_OPS":
         return [
             "Check WS/token/event stream health immediately.",
@@ -2031,6 +2046,14 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     )
     if "SUBMIT_DROUGHT_CRITICAL" in matches:
         primary = "SUBMIT_DROUGHT_CRITICAL"
+    if primary == "NOT_YET_DUE":
+        return {
+            "route": "not_yet_due",
+            "owner": "scheduled_buy_funnel_sentinel",
+            "operator_action_required": False,
+            "runtime_effect": "report_only_no_mutation",
+            "next_artifact": "buy_funnel_sentinel_in_session",
+        }
     if primary == "RUNTIME_OPS":
         return {
             "route": "runtime_ops_playbook",
@@ -2559,6 +2582,18 @@ def build_buy_funnel_sentinel_report(
         )
 
     classification = _classify(session_summary, baseline_summary, as_of=as_of)
+    if classification.get("primary") == "NOT_YET_DUE":
+        for summary in (session_summary, *windows.values()):
+            lineage = (
+                summary.get("budget_ai_lineage")
+                if isinstance(summary.get("budget_ai_lineage"), dict)
+                else {}
+            )
+            summary["budget_ai_lineage"] = {
+                **lineage,
+                "canonical_source_state": lineage.get("status"),
+                "status": "not_applicable_before_sentinel_start",
+            }
     followup = _followup_route(classification)
     recommended_actions = _recommend_actions(classification)
     entry_submit_drought_contract = _entry_submit_drought_contract(
