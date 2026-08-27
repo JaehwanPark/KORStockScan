@@ -121,6 +121,139 @@ def test_replay_does_not_use_scale_in_minute_high_after_fill() -> None:
     assert trades[0]["exit_reason"] == "fixed_average_take_profit"
 
 
+def test_replay_applies_same_episode_source_support_break_before_target() -> None:
+    rows = [
+        {
+            **_row(0, state="ENTRY_READY", previous_state="WATCH"),
+            "episode_sequence": 1,
+            "entry_event_id": "ENTRY-1",
+            "structural_support": 99.0,
+        },
+        {
+            **_row(1, current=98.0, high=102.0),
+            "episode_sequence": 1,
+            "exit_event_reason": "confirmed_support_break",
+            "exit_event_reference_price": 98.0,
+            "exit_event_at": datetime(2026, 8, 11, 10, 1, 5, tzinfo=KST),
+        },
+    ]
+    session = SessionSpec("KRX_REGULAR", "KRX", ("14:30:00",), False, (), False)
+
+    trades = _simulate_day(
+        rows,
+        session=session,
+        add_triggers_bps=(),
+        target_bps=100,
+        max_entries=1,
+        cutoff="14:30:00",
+        cooldown_minutes=5,
+        source_final_exit_action="sell_own_filled_quantity",
+    )
+
+    assert trades[0]["exit_reason"] == "confirmed_support_break"
+    assert trades[0]["exit_price"] == 98.0
+    assert trades[0]["exit_price_provenance"] == ("source_final_exit_reference_price")
+    assert trades[0]["gross_return_pct"] == -2.0
+    assert trades[0]["net_return_pct"] == -2.2
+
+
+def test_replay_observe_only_owner_does_not_inherit_source_final_exit() -> None:
+    rows = [
+        {**_row(0, state="ENTRY_READY", previous_state="WATCH"), "episode_sequence": 1},
+        {
+            **_row(1, current=101.0, high=101.0),
+            "episode_sequence": 1,
+            "exit_event_reason": "confirmed_support_break",
+            "exit_event_reference_price": 98.0,
+        },
+    ]
+    session = SessionSpec("KRX_REGULAR", "KRX", ("14:30:00",), False, (), False)
+
+    trades = _simulate_day(
+        rows,
+        session=session,
+        add_triggers_bps=(),
+        target_bps=100,
+        max_entries=1,
+        cutoff="14:30:00",
+        cooldown_minutes=5,
+        source_final_exit_action="observe_only_no_forced_sell",
+    )
+
+    assert trades[0]["exit_reason"] == "fixed_average_take_profit"
+    assert trades[0]["exit_price"] == 101.0
+    assert trades[0]["exit_price_provenance"] == ("fixed_average_take_profit_target")
+
+
+def test_optional_entry_event_requires_exact_source_only_contract() -> None:
+    event = {
+        "event_id": "999999:2026-08-11:ENTRY:1:100010",
+        "event_type": "ENTRY",
+        "episode_sequence": 1,
+        "observed_at": "2026-08-11T10:00:10+09:00",
+        "state": "ENTRY_READY",
+        "entry_price_high": 100.0,
+        "target_price": 101.0,
+        "structural_support": 99.0,
+        "source_quality_status": "PASS",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "runtime_effect": False,
+    }
+
+    assert calibration._optional_lifecycle_event_valid(
+        event,
+        expected_type="ENTRY",
+        symbol="999999",
+        source_date=date(2026, 8, 11),
+        episode_sequence=1,
+    )
+    assert not calibration._optional_lifecycle_event_valid(
+        {**event, "observed_at": "2026-08-10T23:59:59+09:00"},
+        expected_type="ENTRY",
+        symbol="999999",
+        source_date=date(2026, 8, 11),
+        episode_sequence=1,
+    )
+    assert not calibration._optional_lifecycle_event_valid(
+        {**event, "structural_support": None},
+        expected_type="ENTRY",
+        symbol="999999",
+        source_date=date(2026, 8, 11),
+        episode_sequence=1,
+    )
+
+
+def test_replay_rejects_regressed_source_exit_event_time() -> None:
+    rows = [
+        {
+            **_row(0, state="ENTRY_READY", previous_state="WATCH"),
+            "episode_sequence": 1,
+        },
+        {
+            **_row(1, current=98.0, high=102.0),
+            "episode_sequence": 1,
+            "exit_event_reason": "confirmed_support_break",
+            "exit_event_reference_price": 98.0,
+            "exit_event_at": datetime(2026, 8, 11, 9, 59, 59, tzinfo=KST),
+        },
+    ]
+    session = SessionSpec("KRX_REGULAR", "KRX", ("14:30:00",), False, (), False)
+
+    trades = _simulate_day(
+        rows,
+        session=session,
+        add_triggers_bps=(),
+        target_bps=100,
+        max_entries=1,
+        cutoff="14:30:00",
+        cooldown_minutes=5,
+        source_final_exit_action="sell_own_filled_quantity",
+    )
+
+    assert trades[0]["exit_reason"] == "fixed_average_take_profit"
+
+
 def test_daily_entry_caps_compare_one_through_five_and_require_positive_tail_ev() -> (
     None
 ):
@@ -999,3 +1132,67 @@ def test_widget_report_consumes_prior_micro_diagnostic_without_policy_effect(
         loaded["symbols"]["999999"]["sessions"]
         == missing["symbols"]["999999"]["sessions"]
     )
+
+
+def test_build_report_blocks_malformed_source_rows_even_with_pass_rows(
+    tmp_path, monkeypatch
+) -> None:
+    session = SessionSpec("KRX_REGULAR", "KRX", ("14:30:00",), False, (), False)
+    spec = SymbolSpec(
+        symbol="999999",
+        name="synthetic",
+        observation_dir=tmp_path / "observations",
+        prefix="synthetic",
+        sessions=(session,),
+        add_trigger_arms=((),),
+        target_bps_values=(50,),
+        max_entries_values=(1,),
+        minimum_signal_dates=2,
+        minimum_trades=2,
+        analysis_start_date=date(2026, 6, 5),
+        minimum_qualified_observation_dates=0,
+    )
+    audit = {
+        "raw_line_count": 2,
+        "accepted_row_count": 1,
+        "invalid_json_or_object_count": 0,
+        "required_contract_missing_count": 0,
+        "invalid_observed_at_or_date_count": 0,
+        "invalid_price_or_bar_time_count": 0,
+        "invalid_optional_lifecycle_event_count": 1,
+        "expected_source_blocked_without_completed_bar_count": 0,
+        "excluded_row_count": 1,
+        "raw_row_exclusion_applied": True,
+    }
+    monkeypatch.setattr(calibration, "SPECS", (spec,))
+    monkeypatch.setattr(
+        calibration,
+        "_load_rows",
+        lambda _spec, *, target_date: ([_row(0)], ["synthetic.jsonl"], audit),
+    )
+    monkeypatch.setattr(
+        calibration,
+        "_calibrate_session",
+        lambda *_args, **_kwargs: {"decision": "insufficient_source"},
+    )
+    monkeypatch.setattr(
+        calibration,
+        "_load_execution_quality",
+        lambda *_args, **_kwargs: {
+            "status": "BLOCKED",
+            "runtime_apply_allowed": False,
+        },
+    )
+
+    report = calibration.build_report(
+        target_date=date(2026, 8, 14),
+        machine_microstructure_report_dir=tmp_path / "missing_micro",
+    )
+
+    symbol = report["symbols"]["999999"]
+    assert symbol["source_quality_status"] == "BLOCKED"
+    assert symbol["source_contract_valid"] is False
+    assert symbol["source_contract_gap_codes"] == [
+        "invalid_optional_lifecycle_event_count"
+    ]
+    assert report["source_quality_status"] == "BLOCKED"

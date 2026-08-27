@@ -10,8 +10,10 @@ from src.engine.monitoring.machine_microstructure_attribution import (
     OBJECTIVE_FOLLOWUP_METRIC_CONTRACT,
     _fast_lifecycle_objective_followup,
     _lifecycle_objective_summary,
+    _micro_entry_confirmation_summary,
     _rolling_source_contract_recovery,
     _validate_stream_row,
+    _widget_advisory_event_index,
     _widget_inventory,
     archive_exact_date_canary_snapshot,
     build_report as build_attribution_report,
@@ -22,8 +24,205 @@ from src.engine.monitoring.machine_microstructure_attribution import (
 from src.engine.scalping.micro_reversion.collection_targets import (
     build_collection_targets,
 )
+from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+def test_widget_advisory_index_accepts_both_producer_timestamp_suffixes(tmp_path):
+    target_date = "2026-08-27"
+    path = (
+        tmp_path
+        / "widget_symbol_advisory_observation"
+        / "widget_symbol_advisory_034020_20260827.jsonl"
+    )
+
+    def payload(event_id: str, sequence: int, observed_at: str) -> dict:
+        return {
+            "symbol": "034020",
+            "observed_at_kst": observed_at,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "advisory": {"session": "KRX_REGULAR"},
+            "episode": {
+                "sequence": sequence,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "runtime_effect": False,
+            },
+            "entry_event": {
+                "event_id": event_id,
+                "event_type": "ENTRY",
+                "episode_sequence": sequence,
+                "observed_at": observed_at,
+                "state": "ENTRY_READY",
+                "entry_price_high": 10_000,
+                "target_price": 10_100,
+                "structural_support": 9_900,
+                "source_quality_status": "PASS",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "runtime_effect": False,
+            },
+            "exit_event": None,
+        }
+
+    _write_jsonl(
+        path,
+        [
+            payload(
+                "034020:2026-08-27:ENTRY:01:091600",
+                1,
+                "2026-08-27T09:16:00+09:00",
+            ),
+            payload(
+                "034020:2026-08-27:ENTRY:02:20260827095500",
+                2,
+                "2026-08-27T09:55:00+09:00",
+            ),
+        ],
+    )
+
+    entries, _, episodes, source = _widget_advisory_event_index(
+        target_date=target_date,
+        report_root=tmp_path,
+    )
+
+    assert source["status"] == "loaded"
+    assert len(entries) == 2
+    assert len(episodes) == 2
+
+
+def test_widget_advisory_index_blocks_episode_identity_conflict(tmp_path):
+    target_date = "2026-08-27"
+    path = (
+        tmp_path
+        / "widget_symbol_advisory_observation"
+        / "widget_symbol_advisory_034020_20260827.jsonl"
+    )
+    common = {
+        "symbol": "034020",
+        "observed_at_kst": "2026-08-27T09:16:00+09:00",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "advisory": {"session": "KRX_REGULAR"},
+        "episode": {
+            "sequence": 1,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        },
+        "exit_event": None,
+    }
+
+    def entry(event_id: str, *, event_sequence: int) -> dict:
+        return {
+            "event_id": event_id,
+            "event_type": "ENTRY",
+            "episode_sequence": event_sequence,
+            "observed_at": "2026-08-27T09:16:00+09:00",
+            "state": "ENTRY_READY",
+            "entry_price_high": 10_000,
+            "target_price": 10_100,
+            "structural_support": 9_900,
+            "source_quality_status": "PASS",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        }
+
+    _write_jsonl(
+        path,
+        [
+            {
+                **common,
+                "entry_event": entry(
+                    "034020:2026-08-27:ENTRY:01:091600", event_sequence=1
+                ),
+            },
+            {
+                **common,
+                "entry_event": entry(
+                    "034020:2026-08-27:ENTRY:01:091601", event_sequence=1
+                ),
+            },
+            {
+                **common,
+                "entry_event": entry(
+                    "034020:2026-08-27:ENTRY:01:091602", event_sequence=2
+                ),
+            },
+        ],
+    )
+
+    _, _, _, source = _widget_advisory_event_index(
+        target_date=target_date,
+        report_root=tmp_path,
+    )
+
+    assert source["status"] == "contract_invalid"
+    assert any(
+        value.startswith("advisory_episode_event_conflict:")
+        for value in source["contract_errors"]
+    )
+    assert any(
+        value.startswith("advisory_entry_event_invalid:")
+        for value in source["contract_errors"]
+    )
+
+
+def test_widget_advisory_index_quarantines_non_scalar_event_fields(tmp_path):
+    target_date = "2026-08-27"
+    path = (
+        tmp_path
+        / "widget_symbol_advisory_observation"
+        / "widget_symbol_advisory_034020_20260827.jsonl"
+    )
+    _write_jsonl(
+        path,
+        [
+            {
+                "symbol": "034020",
+                "observed_at_kst": "2026-08-27T09:16:00+09:00",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "advisory": {"session": "KRX_REGULAR"},
+                "episode": {
+                    "sequence": 1,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                },
+                "entry_event": {
+                    "event_id": "034020:2026-08-27:ENTRY:01:091600",
+                    "event_type": "ENTRY",
+                    "episode_sequence": {"invalid": 1},
+                    "observed_at": "2026-08-27T09:16:00+09:00",
+                    "state": {"invalid": "ENTRY_READY"},
+                    "entry_price_high": 10_000,
+                    "target_price": 10_100,
+                    "structural_support": 9_900,
+                    "source_quality_status": "PASS",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                },
+                "exit_event": None,
+            }
+        ],
+    )
+
+    entries, _, _, source = _widget_advisory_event_index(
+        target_date=target_date,
+        report_root=tmp_path,
+    )
+
+    assert entries == {}
+    assert source["status"] == "contract_invalid"
+    assert any(
+        value.startswith("advisory_entry_event_invalid:")
+        for value in source["contract_errors"]
+    )
 
 
 def build_report(*args, **kwargs):
@@ -119,6 +318,260 @@ def _depth_row(
     }
 
 
+def test_episode_style_widget_signal_joins_advisory_exit_and_daily_cap_observation(
+    tmp_path,
+):
+    target_date = "2026-08-27"
+    report_root = tmp_path / "report"
+    state_path = tmp_path / "state.json"
+    entry_signal_id = "080220:2026-08-27:ENTRY:01:20260827100000"
+    exit_signal_id = "080220:2026-08-27:EXIT:01:20260827100100"
+    blocked_signal_id = "080220:2026-08-27:ENTRY:02:20260827101000"
+    _write_json(
+        state_path,
+        {
+            "schema_version": 1,
+            "execution_authority": "operator_directed_widget_auto_trade_v1",
+            "active_date": target_date,
+            "symbols": {
+                "080220": {
+                    "entry_signal_id": entry_signal_id,
+                    "orders": [
+                        {
+                            "broker_accepted": True,
+                            "order_no": "B1",
+                            "order_date": target_date,
+                            "side": "BUY",
+                            "order_role": "ENTRY_BUY",
+                            "signal_id": entry_signal_id,
+                            "market_venue": "KRX",
+                            "requested_qty": 10,
+                            "filled_qty": 10,
+                            "fill_price": 10_000,
+                            "status": "FILLED",
+                            "last_reconciled_at": "2026-08-27T10:00:02+09:00",
+                        },
+                        {
+                            "broker_accepted": True,
+                            "order_no": "S1",
+                            "order_date": target_date,
+                            "side": "SELL",
+                            "order_role": "FINAL_EXIT_SELL",
+                            "signal_id": exit_signal_id,
+                            "parent_entry_signal_id": entry_signal_id,
+                            "market_venue": "KRX",
+                            "requested_qty": 10,
+                            "filled_qty": 10,
+                            "fill_price": 9_900,
+                            "limit_price": 9_900,
+                            "status": "FILLED",
+                            "last_reconciled_at": "2026-08-27T10:01:02+09:00",
+                        },
+                    ],
+                }
+            },
+            "history": [],
+        },
+    )
+
+    def actual_event(event_type: str, observed_at: str, **fields):
+        return {
+            "schema": "widget_signal_auto_trade_event_v1",
+            "event_type": event_type,
+            "observed_at": observed_at,
+            "trade_date": target_date,
+            "symbol": "080220",
+            "execution_authority": "operator_directed_widget_auto_trade_v1",
+            "decision_authority": "operator_directed_widget_auto_trade_v1",
+            "runtime_effect": True,
+            "actual_order_submitted": True,
+            "broker_order_forbidden": False,
+            **fields,
+        }
+
+    _write_jsonl(
+        report_root
+        / "widget_signal_auto_trade_events"
+        / "widget_signal_auto_trade_events_20260827.jsonl",
+        [
+            actual_event(
+                "order_submitted",
+                "2026-08-27T10:00:01+09:00",
+                order_no="B1",
+                order_role="ENTRY_BUY",
+                side="BUY",
+                requested_qty=10,
+                signal_id=entry_signal_id,
+                market_venue="KRX",
+            ),
+            actual_event(
+                "order_execution_reconciled",
+                "2026-08-27T10:00:02+09:00",
+                order_no="B1",
+                order_role="ENTRY_BUY",
+                side="BUY",
+                requested_qty=10,
+                filled_qty=10,
+                remaining_qty=0,
+                fill_price=10_000,
+            ),
+            actual_event(
+                "order_submitted",
+                "2026-08-27T10:01:01+09:00",
+                order_no="S1",
+                order_role="FINAL_EXIT_SELL",
+                side="SELL",
+                requested_qty=10,
+                signal_id=exit_signal_id,
+                parent_entry_signal_id=entry_signal_id,
+                market_venue="KRX",
+            ),
+            actual_event(
+                "order_execution_reconciled",
+                "2026-08-27T10:01:02+09:00",
+                order_no="S1",
+                order_role="FINAL_EXIT_SELL",
+                side="SELL",
+                requested_qty=10,
+                filled_qty=10,
+                remaining_qty=0,
+                fill_price=9_900,
+            ),
+            {
+                **actual_event(
+                    "entry_blocked_daily_entry_limit",
+                    "2026-08-27T10:10:01+09:00",
+                    signal_id=blocked_signal_id,
+                    completed_entry_count=1,
+                ),
+                "actual_order_submitted": False,
+            },
+        ],
+    )
+
+    def advisory_row(
+        observed_at: str,
+        sequence: int,
+        *,
+        entry_event: dict | None = None,
+        exit_event: dict | None = None,
+    ) -> dict:
+        return {
+            "symbol": "080220",
+            "observed_at_kst": observed_at,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "advisory": {"session": "KRX_REGULAR"},
+            "episode": {
+                "sequence": sequence,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "runtime_effect": False,
+            },
+            "entry_event": entry_event,
+            "exit_event": exit_event,
+        }
+
+    def entry_event(event_id: str, observed_at: str, state: str, price: int) -> dict:
+        return {
+            "event_id": event_id,
+            "event_type": "ENTRY",
+            "observed_at": observed_at,
+            "state": state,
+            "entry_price_high": price,
+            "target_price": price + 100,
+            "structural_support": price - 100,
+            "source_quality_status": "PASS",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        }
+
+    def exit_event(event_id: str, observed_at: str, reason: str, price: int) -> dict:
+        return {
+            "event_id": event_id,
+            "event_type": "EXIT",
+            "observed_at": observed_at,
+            "reason": reason,
+            "reference_exit_price": price,
+            "source_quality_status": "PASS",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        }
+
+    _write_jsonl(
+        report_root
+        / "widget_symbol_advisory_observation"
+        / "widget_symbol_advisory_080220_20260827.jsonl",
+        [
+            advisory_row(
+                "2026-08-27T10:00:00+09:00",
+                1,
+                entry_event=entry_event(
+                    entry_signal_id,
+                    "2026-08-27T10:00:00+09:00",
+                    "ENTRY_READY",
+                    10_000,
+                ),
+            ),
+            advisory_row(
+                "2026-08-27T10:01:00+09:00",
+                1,
+                exit_event=exit_event(
+                    exit_signal_id,
+                    "2026-08-27T10:01:00+09:00",
+                    "confirmed_support_break",
+                    9_900,
+                ),
+            ),
+            advisory_row(
+                "2026-08-27T10:10:00+09:00",
+                2,
+                entry_event=entry_event(
+                    blocked_signal_id,
+                    "2026-08-27T10:10:00+09:00",
+                    "ENTRY_CAUTION",
+                    9_800,
+                ),
+            ),
+            advisory_row(
+                "2026-08-27T10:12:00+09:00",
+                2,
+                exit_event=exit_event(
+                    "080220:2026-08-27:EXIT:02:20260827101200",
+                    "2026-08-27T10:12:00+09:00",
+                    "target_observed",
+                    9_900,
+                ),
+            ),
+        ],
+    )
+
+    _, anchors, sources = _widget_inventory(
+        target_date,
+        report_root,
+        widget_state_path=state_path,
+    )
+
+    actual_signal = next(
+        row for row in anchors if row.get("anchor_role") == "actual_widget_entry_signal"
+    )
+    outcome = actual_signal["owner_outcome"]
+    assert actual_signal["entry_state"] == "ENTRY_READY"
+    assert outcome["exit_reason"] == "confirmed_support_break"
+    assert outcome["cost_aware_net_return_pct"] == -1.22785
+    assert outcome["modeled_total_cost_krw"] == 227.85
+    assert outcome["modeled_costs_broker_receipt_exact"] is False
+    blocked = sources["actual_execution_events"][
+        "blocked_daily_entry_limit_opportunities"
+    ]
+    assert len(blocked) == 1
+    assert blocked[0]["signal_id"] == blocked_signal_id
+    assert blocked[0]["source_only_exit_reason"] == "target_observed"
+    assert blocked[0]["actual_order_submitted"] is False
+
+
 def test_dynamic_widget_symbol_is_matched_without_changing_owner_policy(tmp_path):
     target_date = "2026-08-14"
     report_root = tmp_path / "report"
@@ -130,6 +583,8 @@ def test_dynamic_widget_symbol_is_matched_without_changing_owner_policy(tmp_path
         {
             "schema": "widget_auto_trade_policy_calibration_report_v1",
             "target_date": target_date,
+            "round_trip_cost_pct": 0.2,
+            "comparison_cost_contract": comparison_cost_contract(target_date),
             "symbols": {
                 "999999": {
                     "name": "dynamic",
@@ -188,6 +643,230 @@ def test_dynamic_widget_symbol_is_matched_without_changing_owner_policy(tmp_path
     assert (
         report["promotion_candidate_intake_contract"]["consumer"]
         == "src.engine.automation.machine_microstructure_policy_approval"
+    )
+    assert (
+        report["micro_entry_confirmation"]["summary"]["source_quality_blocked_count"]
+        == 1
+    )
+
+
+def test_widget_calibration_cost_contract_mismatch_blocks_policy_tuning(
+    tmp_path: Path,
+) -> None:
+    target_date = "2026-08-18"
+    report_root = tmp_path / "report"
+    calibration = {
+        "schema": "widget_auto_trade_policy_calibration_report_v1",
+        "target_date": target_date,
+        "round_trip_cost_pct": 0.23,
+        "comparison_cost_contract": {
+            **comparison_cost_contract(target_date),
+            "contract_sha256": "mismatched",
+        },
+        "symbols": {
+            "999999": {
+                "name": "dynamic",
+                "sessions": {
+                    "KRX_REGULAR": {
+                        "selected_trades": [
+                            {
+                                "trade_date": target_date,
+                                "entry_at": "2026-08-18T10:00:00+09:00",
+                                "entry_price": 10_000,
+                                "exit_reason": "right_censored",
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    _write_json(
+        report_root
+        / "widget_auto_trade_policy_calibration"
+        / f"widget_auto_trade_policy_calibration_{target_date}.json",
+        calibration,
+    )
+
+    _, anchors, sources = _widget_inventory(
+        target_date,
+        report_root,
+        widget_state_path=tmp_path / "missing_widget_state.json",
+    )
+
+    assert anchors[0]["owner_policy_tuning_eligible"] is False
+    assert sources["comparison_cost"]["status"] == (
+        "calibration_declared_cost_mismatch"
+    )
+    assert sources["comparison_cost"]["optional_when_absent"] is False
+
+
+def test_micro_entry_confirmation_keeps_owner_and_entry_state_cohorts_separate():
+    def result(owner: str, state: str, role: str) -> dict:
+        return {
+            "anchor_id": f"{owner}:{state}",
+            "lifecycle_id": f"lifecycle:{owner}:{state}",
+            "owner": owner,
+            "symbol": "005930",
+            "session": "KRX_REGULAR",
+            "entry_state": state,
+            "anchor_role": role,
+            "micro_context_status": "matched",
+            "actual_order_submitted": owner == "widget",
+            "owner_outcome": {
+                "realized": True,
+                "cost_aware_net_return_pct": 0.1,
+            },
+            "metrics": {
+                "entry_confirmation_bbo_horizons": {
+                    str(horizon): {
+                        "observed": True,
+                        "bid_return_bps": 0.0,
+                    }
+                    for horizon in (1, 3, 5)
+                },
+                "entry_ask_depletion": {
+                    "source_quality_status": "eligible_source_only_feature_ablation",
+                    "source_gap_reasons": [],
+                    "horizons": [
+                        {
+                            "horizon_ms": horizon * 1000,
+                            "eligible_for_feature_ablation": True,
+                            "refill_ratio": 0.0,
+                            "aggressive_buy_trade_backed_ratio": 1.0,
+                            "downward_reprice_observed": False,
+                        }
+                        for horizon in (1, 3, 5)
+                    ],
+                },
+            },
+        }
+
+    summary = _micro_entry_confirmation_summary(
+        [
+            result("widget", "ENTRY_READY", "actual_widget_entry_signal"),
+            result("episode", "UNSPECIFIED", "episode_signal_bar"),
+        ],
+        widget_sources={"actual_execution_events": {}},
+        target_date="2026-08-27",
+    )
+
+    assert summary["summary"]["owner_state_cohort_count"] == 2
+    assert all(
+        row["classification"] == "supportive_confirmation_candidate"
+        for row in summary["entry_anchors"]
+    )
+    assert {
+        (row["owner"], row["entry_state"]) for row in summary["owner_state_cohorts"]
+    } == {("widget", "ENTRY_READY"), ("episode", "UNSPECIFIED")}
+
+
+def test_daily_cap_reallocation_requires_realized_cost_bound_prior_entry() -> None:
+    target_date = "2026-08-27"
+    cost_contract = comparison_cost_contract(target_date)
+
+    def result(role: str, anchor_at: str, event_id: str, *, realized: bool) -> dict:
+        return {
+            "anchor_id": f"{role}:{event_id}",
+            "lifecycle_id": f"lifecycle:{event_id}",
+            "owner": "widget",
+            "symbol": "080220",
+            "session": "KRX_REGULAR",
+            "entry_state": "ENTRY_READY",
+            "anchor_at": anchor_at,
+            "anchor_role": role,
+            "source_entry_event_id": event_id,
+            "micro_context_status": "matched",
+            "actual_order_submitted": role == "actual_widget_entry_signal",
+            "owner_outcome": {
+                "realized": realized,
+                "cost_aware_net_return_pct": -1.0 if realized else None,
+                "cost_contract_sha256": cost_contract["contract_sha256"],
+            },
+            "metrics": {
+                "entry_confirmation_bbo_horizons": {
+                    str(horizon): {"observed": True, "bid_return_bps": 0.0}
+                    for horizon in (1, 3, 5)
+                },
+                "entry_ask_depletion": {
+                    "source_gap_reasons": [],
+                    "horizons": [
+                        {
+                            "horizon_ms": horizon * 1000,
+                            "eligible_for_feature_ablation": True,
+                            "refill_ratio": 0.1,
+                            "aggressive_buy_trade_backed_ratio": 0.8,
+                            "downward_reprice_observed": False,
+                        }
+                        for horizon in (1, 3, 5)
+                    ],
+                },
+            },
+        }
+
+    blocked_signal_id = "080220:2026-08-27:ENTRY:02:20260827101000"
+    opportunity = {
+        "symbol": "080220",
+        "signal_id": blocked_signal_id,
+        "observed_at": "2026-08-27T10:10:00+09:00",
+        "session": "KRX_REGULAR",
+        "entry_price": 10_000,
+        "source_only_exit_price": 10_100,
+        "source_only_exit_reason": "target_observed",
+    }
+    blocked_result = result(
+        "actual_widget_daily_cap_blocked_entry_signal",
+        "2026-08-27T10:10:00+09:00",
+        blocked_signal_id,
+        realized=False,
+    )
+
+    unresolved = _micro_entry_confirmation_summary(
+        [
+            result(
+                "actual_widget_entry_signal",
+                "2026-08-27T10:00:00+09:00",
+                "prior",
+                realized=False,
+            ),
+            blocked_result,
+        ],
+        widget_sources={
+            "actual_execution_events": {
+                "blocked_daily_entry_limit_opportunities": [opportunity]
+            }
+        },
+        target_date=target_date,
+    )
+    realized = _micro_entry_confirmation_summary(
+        [
+            result(
+                "actual_widget_entry_signal",
+                "2026-08-27T10:00:00+09:00",
+                "prior",
+                realized=True,
+            ),
+            blocked_result,
+        ],
+        widget_sources={
+            "actual_execution_events": {
+                "blocked_daily_entry_limit_opportunities": [opportunity]
+            }
+        },
+        target_date=target_date,
+    )
+
+    assert (
+        unresolved["daily_cap_reallocation_observations"][0]["comparison_status"]
+        == "source_quality_blocked"
+    )
+    assert (
+        realized["daily_cap_reallocation_observations"][0]["comparison_status"]
+        == "source_only_reallocation_evidence_ready"
+    )
+    assert (
+        realized["daily_cap_reallocation_observations"][0]["daily_cap_mutation_allowed"]
+        is False
     )
 
 

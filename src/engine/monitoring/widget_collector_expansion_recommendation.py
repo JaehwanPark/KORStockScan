@@ -30,6 +30,10 @@ from src.engine.scalping.ai_decision_trace import replay_source_input
 from src.engine.monitoring.widget_symbol_signal_policy_research import (
     SYMBOLS as RESEARCH_WIDGET_SYMBOLS,
 )
+from src.engine.monitoring.widget_comparison_cost import (
+    comparison_cost_contract,
+    cost_aware_return_pct,
+)
 from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 from src.utils.jsonl_io import iter_jsonl_objects_strict, read_json_object_strict
 from src.utils.market_day import is_krx_trading_day
@@ -55,7 +59,6 @@ MAX_RECOMMENDATIONS = 20
 MAX_ACTIVE_RESEARCH_WATCH_SYMBOLS = 15
 SHARED_COLLECTOR_REQUESTS_PER_MINUTE = 15
 SHARED_COLLECTOR_MEMORY_CAP_MB = 256
-ROUND_TRIP_COST_PCT = 0.20
 IMPLEMENTATION_REVIEW_MIN_SAMPLES = 5
 IMPLEMENTATION_REVIEW_MIN_TRADING_DATES = 3
 IMPLEMENTATION_REVIEW_MAX_MEDIAN_SPREAD_BP = 25.0
@@ -258,6 +261,7 @@ def _load_replay_history(
             "target_first_count": 0,
             "adverse_first_count": 0,
             "end_returns": [],
+            "cost_adjusted_end_returns": [],
             "mechanical_signal_count": 0,
             "pre_spread_candidate_count": 0,
             "trading_dates": set(),
@@ -346,6 +350,9 @@ def _load_replay_history(
             elif first_hit == "adverse_first":
                 item["adverse_first_count"] += 1
             item["end_returns"].append(end_return)
+            item["cost_adjusted_end_returns"].append(
+                cost_aware_return_pct(end_return, trade_date=report_date)
+            )
             item["mechanical_signal_count"] += row.get("mechanical_signal") is True
             item["pre_spread_candidate_count"] += (
                 row.get("mechanical_candidate_before_spread_gate") is True
@@ -443,12 +450,15 @@ def build_recommendation_report(
         target_first = int(item["target_first_count"])
         adverse_first = int(item["adverse_first_count"])
         decisive = target_first + adverse_first
-        end_returns = item["end_returns"]
-        equal_weight_ev = (
-            sum(end_returns) / len(end_returns) - ROUND_TRIP_COST_PCT
-            if end_returns
-            else 0.0
-        )
+        end_returns = item.get("cost_adjusted_end_returns")
+        if end_returns is None:
+            # Compatibility for callers that supply the former aggregate shape.
+            # Production history loading always prices each row by its own date.
+            end_returns = [
+                cost_aware_return_pct(value, trade_date=target_date)
+                for value in item.get("end_returns", [])
+            ]
+        equal_weight_ev = sum(end_returns) / len(end_returns) if end_returns else 0.0
         if samples < 2 or decisive < 1:
             exclusion_counts["sample_floor_not_met"] += 1
             continue
@@ -534,7 +544,10 @@ def build_recommendation_report(
                 "diagnostic_target_share_among_decisive_pct": round(target_share, 4),
                 "equal_weight_avg_profit_pct": round(equal_weight_ev, 6),
                 "source_quality_adjusted_ev_pct": round(equal_weight_ev, 6),
-                "round_trip_cost_pct": ROUND_TRIP_COST_PCT,
+                "round_trip_cost_pct": comparison_cost_contract(target_date)[
+                    "round_trip_cost_pct"
+                ],
+                "comparison_cost_policy": "effective_dated_per_replay_trade_date",
                 "source_quality_adjustment_policy": (
                     "exclude_ineligible_rows_then_equal_weight"
                 ),
@@ -611,6 +624,7 @@ def build_recommendation_report(
             "recommendations_ready" if recommendations else "no_qualified_candidate"
         ),
         "target_date": target_date.isoformat(),
+        "comparison_cost_contract": comparison_cost_contract(target_date),
         "generated_at": datetime.now(KST).isoformat(),
         "authority": AUTHORITY,
         "recommendations": recommendations,

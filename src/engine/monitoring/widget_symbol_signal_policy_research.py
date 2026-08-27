@@ -30,6 +30,10 @@ from src.trading.order.tick_utils import (
     move_price_by_ticks,
     move_price_up_by_bps,
 )
+from src.engine.monitoring.widget_comparison_cost import (
+    comparison_cost_contract,
+    cost_aware_return_pct,
+)
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
@@ -40,7 +44,6 @@ AUTHORITY = "widget_symbol_signal_policy_discovery_only"
 OWNER = "widget_symbol_auto_trade"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 HOLDOUT_DAYS = 16
-COST_PCT = 0.20
 OUTPUT_DIR = DATA_DIR / "report" / "widget_symbol_signal_policy_research"
 SYMBOLS = {
     "006800": "미래에셋증권",
@@ -625,14 +628,21 @@ def _exit_episode(
         if target_touched:
             exit_index, exit_price, reason = index, target_price, "target"
             break
-    net_return = (exit_price / entry_price - 1.0) * 100.0 - COST_PCT
+    trade_date = rows[entry_index].timestamp.date()
+    cost_contract = comparison_cost_contract(trade_date)
+    gross_return = (exit_price / entry_price - 1.0) * 100.0
+    net_return = cost_aware_return_pct(gross_return, trade_date=trade_date)
     return {
         "exit_index": exit_index,
         "exit_at": rows[exit_index].timestamp.isoformat(),
         "exit_price": exit_price,
         "exit_reason": reason,
         "target_price": target_price,
+        "gross_return_pct": round(gross_return, 6),
         "net_return_pct": round(net_return, 6),
+        "round_trip_cost_pct": cost_contract["round_trip_cost_pct"],
+        "cost_policy_id": cost_contract["policy_id"],
+        "cost_contract_sha256": cost_contract["contract_sha256"],
         "peak_price": peak,
         "peak_return_pct": round((peak / entry_price - 1.0) * 100.0, 6),
     }
@@ -1167,6 +1177,7 @@ def build_report(
         "metric_contract": METRIC_CONTRACT,
         "owner_contract": OWNER_CONTRACT,
         "official_reference": OFFICIAL_REFERENCE,
+        "comparison_cost_contract": comparison_cost_contract(end_date),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "collector_created": False,

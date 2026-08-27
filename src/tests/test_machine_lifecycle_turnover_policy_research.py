@@ -115,6 +115,22 @@ def _report(source_date: str, anchors: list[dict]) -> dict:
     }
 
 
+def test_counterfactual_accepts_effective_dated_widget_cost_contract() -> None:
+    anchor = _anchor(source_date="2026-08-27", lifecycle_number=1)
+    anchor["owner_round_trip_cost_pct"] = 0.23
+    anchor["owner_round_trip_cost_provenance"] = (
+        "widget_comparison_cost.effective_dated_contract"
+    )
+
+    leg = _counterfactual_leg(anchor, timeout_sec=60)
+
+    assert leg["eligible"] is True
+    assert leg["candidate_net_return_pct"] == 0.17
+    assert leg["round_trip_cost_provenance"] == (
+        "widget_comparison_cost.effective_dated_contract"
+    )
+
+
 def test_rolling_research_emits_one_source_only_design_required_candidate(
     tmp_path: Path,
 ):

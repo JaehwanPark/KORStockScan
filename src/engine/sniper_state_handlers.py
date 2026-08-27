@@ -19316,6 +19316,29 @@ def _emit_scalp_entry_adm_snapshot(
             for key, value in payload.items():
                 if key not in fields and value is not None:
                     fields[key] = value
+    if fields.get("ai_decision_evaluation_status") in (
+        None,
+        "",
+        "-",
+        "None",
+        "none",
+        "null",
+    ):
+        result_source = str(fields.get("ai_result_source") or "").strip().lower()
+        transport_timeout = result_source == "timeout" or _truthy_field(
+            fields.get("openai_timeout_like")
+        ) or _truthy_field(
+            fields.get("openai_http_timeout_budget_exhausted")
+        )
+        fields["ai_decision_evaluation_status"] = (
+            "not_evaluated_transport_timeout"
+            if transport_timeout
+            else (
+                "evaluated"
+                if result_source in {"live", "prior_valid"}
+                else "not_evaluated_provider_or_preflight"
+            )
+        )
     latency_reason = None
     if isinstance(latency_gate, dict):
         latency_reason = latency_gate.get("reason") or latency_gate.get("block_reason")
@@ -21000,7 +21023,19 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
         "rising_missed_scout_pyramid_bridge_applied",
     ):
         if key in probe:
-            merged[key] = probe.get(key)
+            value = probe.get(key)
+            if key == "ai_score_source" and str(value or "").strip().lower() in {
+                "",
+                "-",
+                "none",
+                "null",
+                "unknown",
+                "not_available",
+            }:
+                # Keep the snapshot-level provenance when this probe has no
+                # score source of its own.
+                continue
+            merged[key] = value
     merged.update(_prefixed_micro_estimator_fields(probe, "scale_in_micro_estimator_"))
     return merged
 

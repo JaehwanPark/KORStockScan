@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -217,6 +218,51 @@ def test_adverse_first_recovery_uses_ev_and_keeps_responsive_confirmation(tmp_pa
     assert selected["required_actionable_confirmations"] == 2
     assert selected["cumulative_adverse_first_recovered_count"] == 1
     assert selected["source_quality_adjusted_ev_pct"] == 0.8
+
+
+def test_opportunity_cost_resolves_aware_timestamp_in_kst():
+    net_return, recovered = calibration._opportunity_net_return_proxy(
+        {
+            "target_return_pct": 1.0,
+            "first_hit": "target_first",
+            "entry_touched_at_kst": "2026-08-17T15:30:00+00:00",
+        }
+    )
+
+    assert recovered is False
+    assert net_return == 0.77
+
+
+def test_daily_report_rejects_nonfinite_cost_inputs(tmp_path):
+    spec = _spec(tmp_path)
+    target_date = date(2026, 8, 18)
+    report = _daily_report(target_date)
+    report["target_return_pct"] = math.nan
+
+    assert (
+        calibration._daily_report_issue(
+            report,
+            spec=spec,
+            target_date=target_date,
+        )
+        == "target_policy_missing_or_invalid"
+    )
+
+
+def test_opportunity_proxy_rejects_nonfinite_adverse_return():
+    try:
+        calibration._opportunity_net_return_proxy(
+            {
+                "target_return_pct": 1.0,
+                "first_hit": "adverse_first",
+                "mae_pct": math.inf,
+                "entry_touched_at_kst": "2026-08-18T10:00:00+09:00",
+            }
+        )
+    except ValueError as exc:
+        assert str(exc) == "widget_outcome_adverse_return_nonfinite"
+    else:
+        raise AssertionError("nonfinite adverse return must fail closed")
 
 
 def test_failed_daily_report_carries_latest_valid_policy(tmp_path):

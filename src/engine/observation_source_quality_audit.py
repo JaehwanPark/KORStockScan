@@ -4473,7 +4473,10 @@ def _blocked_observation_records_fail_closed_source_gap(
         provider_transport_failed_closed = (
             bool(str(fields.get("openai_transport_fail_closed_reason") or "").strip())
             and str(fields.get("ai_decision_evaluation_status") or "").strip().lower()
-            == "not_evaluated_provider_or_preflight"
+            in {
+                "not_evaluated_provider_or_preflight",
+                "not_evaluated_transport_timeout",
+            }
         )
         return (
             (

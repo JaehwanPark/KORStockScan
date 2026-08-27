@@ -16530,6 +16530,16 @@ def test_rising_missed_scout_pyramid_bridge_blocked_probe_preserves_runtime_prov
     assert merged["rising_missed_scout_pyramid_bridge_blockers"] == "quote_stale"
 
 
+def test_pyramid_probe_missing_ai_source_does_not_erase_snapshot_provenance():
+    merged = state_handlers._append_pyramid_probe_fields(
+        {"ai_score_source": "holding_ai_not_called"},
+        {"ai_score_source": "-", "current_ai_score": 50.0},
+    )
+
+    assert merged["ai_score_source"] == "holding_ai_not_called"
+    assert merged["current_ai_score"] == 50.0
+
+
 def test_scalping_pyramid_blocks_overheated_micro_vwap_before_signal():
     stock = {
         "pyramid_count": 0,

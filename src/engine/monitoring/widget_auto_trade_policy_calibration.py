@@ -33,6 +33,10 @@ from src.engine.monitoring.machine_microstructure_attribution import (
     OUTPUT_DIR as MACHINE_MICROSTRUCTURE_REPORT_DIR,
     load_prior_owner_diagnostic,
 )
+from src.engine.monitoring.widget_comparison_cost import (
+    comparison_cost_contract,
+    cost_aware_return_pct,
+)
 from src.engine.monitoring.samsung_widget_contract import (
     DEFAULT_OBSERVATION_DIR as SAMSUNG_OBSERVATION_DIR,
     KST,
@@ -58,7 +62,6 @@ from src.utils.market_day import is_krx_trading_day
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 DEFAULT_OUTPUT_DIR = Path("data/report/widget_auto_trade_policy_calibration")
 DEFAULT_EXECUTION_EVENT_DIR = Path("data/report/widget_signal_auto_trade_events")
-ROUND_TRIP_COST_PCT = 0.20
 ACTIONABLE_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
 POSTCLOSE_COMPLETE_TIME = time(20, 1)
 ENTRY_CAP_VALUES = tuple(range(1, 6))
@@ -313,6 +316,69 @@ def _positive_price(value: object) -> float | None:
     return parsed if parsed > 0 else None
 
 
+def _optional_lifecycle_event_valid(
+    event: dict[str, Any],
+    *,
+    expected_type: str,
+    symbol: str,
+    source_date: date,
+    episode_sequence: int | None,
+) -> bool:
+    event_id = str(event.get("event_id") or "").strip()
+    parts = event_id.split(":")
+    suffix = parts[4] if len(parts) == 5 else ""
+    suffix_valid = bool(
+        suffix.isdigit()
+        and (
+            len(suffix) == 6
+            or (len(suffix) == 14 and suffix.startswith(source_date.strftime("%Y%m%d")))
+        )
+    )
+    event_sequence = event.get("episode_sequence")
+    try:
+        event_at = datetime.fromisoformat(str(event.get("observed_at") or ""))
+    except ValueError:
+        event_at = None
+    if event_at is not None and event_at.tzinfo is not None:
+        event_at = event_at.astimezone(KST)
+    else:
+        event_at = None
+    return bool(
+        episode_sequence is not None
+        and len(parts) == 5
+        and parts[0] == symbol
+        and parts[1] == source_date.isoformat()
+        and parts[2] == expected_type
+        and parts[3].isdigit()
+        and int(parts[3]) == episode_sequence
+        and suffix_valid
+        and event.get("event_type") == expected_type
+        and event_sequence in {None, episode_sequence}
+        and event_at is not None
+        and event_at.date() == source_date
+        and event.get("source_quality_status") == "PASS"
+        and event.get("actual_order_submitted") is False
+        and event.get("broker_order_forbidden") is True
+        and event.get("runtime_effect") is False
+        and (
+            expected_type != "ENTRY"
+            or (
+                event.get("state") in ACTIONABLE_STATES
+                and _positive_price(event.get("entry_price_high")) is not None
+                and _positive_price(event.get("target_price")) is not None
+                and _positive_price(event.get("structural_support")) is not None
+            )
+        )
+        and (
+            expected_type != "EXIT"
+            or (
+                bool(str(event.get("reason") or "").strip())
+                and _positive_price(event.get("reference_exit_price")) is not None
+            )
+        )
+    )
+
+
 def _load_rows(
     spec: SymbolSpec, *, target_date: date
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, int | bool]]:
@@ -325,6 +391,8 @@ def _load_rows(
         "required_contract_missing_count": 0,
         "invalid_observed_at_or_date_count": 0,
         "invalid_price_or_bar_time_count": 0,
+        "invalid_optional_lifecycle_event_count": 0,
+        "expected_source_blocked_without_completed_bar_count": 0,
     }
     for path in sorted(spec.observation_dir.glob(f"{spec.prefix}_*.jsonl")):
         raw_date = path.stem.rsplit("_", 1)[-1]
@@ -348,8 +416,64 @@ def _load_rows(
                     continue
                 advisory = payload.get("advisory")
                 latest_bar = payload.get("latest_completed_bar")
-                if not isinstance(advisory, dict) or not isinstance(latest_bar, dict):
+                if not isinstance(advisory, dict):
                     audit_counts["required_contract_missing_count"] += 1
+                    continue
+                if not isinstance(latest_bar, dict):
+                    source_quality_status = str(
+                        (advisory.get("source_quality") or {}).get("status") or ""
+                    )
+                    if source_quality_status and source_quality_status != "PASS":
+                        audit_counts[
+                            "expected_source_blocked_without_completed_bar_count"
+                        ] += 1
+                    else:
+                        audit_counts["required_contract_missing_count"] += 1
+                    continue
+                entry_event = payload.get("entry_event")
+                exit_event = payload.get("exit_event")
+                episode = payload.get("episode")
+                if any(
+                    value is not None and not isinstance(value, dict)
+                    for value in (entry_event, exit_event, episode)
+                ):
+                    audit_counts["invalid_optional_lifecycle_event_count"] += 1
+                    continue
+                episode_sequence = (
+                    int(episode.get("sequence"))
+                    if isinstance(episode, dict)
+                    and not isinstance(episode.get("sequence"), bool)
+                    and isinstance(episode.get("sequence"), int)
+                    and int(episode["sequence"]) > 0
+                    else None
+                )
+                episode_contract_valid = bool(
+                    not isinstance(episode, dict)
+                    or (
+                        episode_sequence is not None
+                        and episode.get("actual_order_submitted") is False
+                        and episode.get("broker_order_forbidden") is True
+                        and episode.get("runtime_effect") is False
+                    )
+                )
+                if not episode_contract_valid:
+                    audit_counts["invalid_optional_lifecycle_event_count"] += 1
+                    continue
+                if any(
+                    isinstance(event, dict)
+                    and not _optional_lifecycle_event_valid(
+                        event,
+                        expected_type=expected_type,
+                        symbol=spec.symbol,
+                        source_date=source_date,
+                        episode_sequence=episode_sequence,
+                    )
+                    for event, expected_type in (
+                        (entry_event, "ENTRY"),
+                        (exit_event, "EXIT"),
+                    )
+                ):
+                    audit_counts["invalid_optional_lifecycle_event_count"] += 1
                     continue
                 try:
                     observed_at = datetime.fromisoformat(
@@ -400,6 +524,49 @@ def _load_rows(
                         "bar_at": bar_at,
                         "source_quality_status": str(
                             (advisory.get("source_quality") or {}).get("status") or ""
+                        ),
+                        "entry_event_id": (
+                            str(entry_event.get("event_id") or "")
+                            if isinstance(entry_event, dict)
+                            else ""
+                        ),
+                        "entry_event_state": (
+                            str(entry_event.get("state") or "")
+                            if isinstance(entry_event, dict)
+                            else ""
+                        ),
+                        "exit_event_id": (
+                            str(exit_event.get("event_id") or "")
+                            if isinstance(exit_event, dict)
+                            else ""
+                        ),
+                        "exit_event_reason": (
+                            str(exit_event.get("reason") or "")
+                            if isinstance(exit_event, dict)
+                            else ""
+                        ),
+                        "exit_event_reference_price": (
+                            _positive_price(exit_event.get("reference_exit_price"))
+                            if isinstance(exit_event, dict)
+                            else None
+                        ),
+                        "entry_event_at": (
+                            datetime.fromisoformat(str(entry_event["observed_at"]))
+                            .astimezone(KST)
+                            if isinstance(entry_event, dict)
+                            else None
+                        ),
+                        "exit_event_at": (
+                            datetime.fromisoformat(str(exit_event["observed_at"]))
+                            .astimezone(KST)
+                            if isinstance(exit_event, dict)
+                            else None
+                        ),
+                        "episode_sequence": (episode_sequence),
+                        "structural_support": (
+                            _positive_price(episode.get("structural_support"))
+                            if isinstance(episode, dict)
+                            else None
                         ),
                         "source_path": str(path),
                         "source_line_number": line_number,
@@ -455,6 +622,7 @@ def _simulate_day(
     cutoff: str,
     cooldown_minutes: int,
     force_exit_time: str | None = None,
+    source_final_exit_action: str = "sell_own_filled_quantity",
 ) -> list[dict[str, Any]]:
     entries = _entry_indices(
         rows,
@@ -475,11 +643,13 @@ def _simulate_day(
         ):
             continue
         initial_price = float(entry["current_price"])
+        entry_episode_sequence = entry.get("episode_sequence")
         last_fill_minute = entry["observed_at"].replace(second=0, microsecond=0)
         fills = [initial_price]
         next_leg_index = 0
         exit_index: int | None = None
         exit_price: float | None = None
+        exit_price_provenance: str | None = None
         exit_reason = "right_censored"
         path_rows = [
             (index, row)
@@ -504,11 +674,31 @@ def _simulate_day(
             target_price = average_price * (1.0 + target_bps / 10_000.0)
             if added_on_bar:
                 continue
+            source_exit_reason = str(row.get("exit_event_reason") or "")
+            source_exit_same_episode = bool(
+                source_exit_reason
+                and entry_episode_sequence is not None
+                and row.get("episode_sequence") == entry_episode_sequence
+                and isinstance(row.get("exit_event_at"), datetime)
+                and row["exit_event_at"] > entry["observed_at"]
+            )
+            if (
+                source_final_exit_action == "sell_own_filled_quantity"
+                and source_exit_same_episode
+            ):
+                exit_index = index
+                exit_price = float(
+                    row.get("exit_event_reference_price") or row["current_price"]
+                )
+                exit_price_provenance = "source_final_exit_reference_price"
+                exit_reason = source_exit_reason
+                break
             if float(row["current_price"]) >= target_price or (
                 row["bar_at"] > last_fill_minute and float(row["high"]) >= target_price
             ):
                 exit_index = index
                 exit_price = target_price
+                exit_price_provenance = "fixed_average_take_profit_target"
                 exit_reason = "fixed_average_take_profit"
                 break
             if (
@@ -518,12 +708,14 @@ def _simulate_day(
             ):
                 exit_index = index
                 exit_price = float(row["current_price"])
+                exit_price_provenance = "observed_current_price"
                 exit_reason = "preclose_market_exit"
                 break
         if exit_index is None and path_rows:
             exit_index, terminal = path_rows[-1]
             if session.force_flat:
                 exit_price = float(terminal["current_price"])
+                exit_price_provenance = "observed_current_price"
                 exit_reason = "session_terminal_fallback_exit"
         average_price = statistics.fmean(fills)
         gross_return_pct = (
@@ -531,8 +723,12 @@ def _simulate_day(
             if exit_price is not None
             else None
         )
+        cost_contract = comparison_cost_contract(entry["trade_date"])
         net_return_pct = (
-            gross_return_pct - ROUND_TRIP_COST_PCT
+            cost_aware_return_pct(
+                gross_return_pct,
+                trade_date=entry["trade_date"],
+            )
             if gross_return_pct is not None
             else None
         )
@@ -543,6 +739,8 @@ def _simulate_day(
                 "entry_at": entry["observed_at"].isoformat(),
                 "entry_price": initial_price,
                 "entry_state": entry["state"],
+                "entry_event_id": entry.get("entry_event_id") or None,
+                "structural_support": entry.get("structural_support"),
                 "filled_leg_count": len(fills),
                 "filled_prices": [round(value, 6) for value in fills],
                 "average_price": round(average_price, 6),
@@ -553,12 +751,16 @@ def _simulate_day(
                 ),
                 "exit_price": round(exit_price, 6) if exit_price is not None else None,
                 "exit_reason": exit_reason,
+                "exit_price_provenance": exit_price_provenance,
                 "gross_return_pct": (
                     round(gross_return_pct, 6) if gross_return_pct is not None else None
                 ),
                 "net_return_pct": (
                     round(net_return_pct, 6) if net_return_pct is not None else None
                 ),
+                "round_trip_cost_pct": cost_contract["round_trip_cost_pct"],
+                "cost_policy_id": cost_contract["policy_id"],
+                "cost_contract_sha256": cost_contract["contract_sha256"],
                 "source_path": entry["source_path"],
                 "source_line_number": entry["source_line_number"],
             }
@@ -1081,6 +1283,9 @@ def _calibrate_session(
                 cutoff=cutoff,
                 cooldown_minutes=cooldown,
                 force_exit_time=force_exit_time,
+                source_final_exit_action=SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL.get(
+                    spec.symbol, "observe_only_no_forced_sell"
+                ),
             )
         ]
 
@@ -1495,6 +1700,18 @@ def build_report(
         source_dates = sorted({row["trade_date"].isoformat() for row in rows})
         pass_row_count = sum(row["source_quality_status"] == "PASS" for row in rows)
         blocked_row_count = len(rows) - pass_row_count
+        source_contract_gap_codes = sorted(
+            key
+            for key in (
+                "invalid_json_or_object_count",
+                "required_contract_missing_count",
+                "invalid_observed_at_or_date_count",
+                "invalid_price_or_bar_time_count",
+                "invalid_optional_lifecycle_event_count",
+            )
+            if int(source_load_audit.get(key) or 0) > 0
+        )
+        source_contract_valid = not source_contract_gap_codes
         sessions = {
             session.session: _calibrate_session(
                 spec,
@@ -1523,7 +1740,11 @@ def build_report(
             "source_row_count": len(rows),
             "source_quality_pass_row_count": pass_row_count,
             "source_quality_blocked_row_count": blocked_row_count,
-            "source_quality_status": "PASS" if pass_row_count else "BLOCKED",
+            "source_quality_status": (
+                "PASS" if pass_row_count and source_contract_valid else "BLOCKED"
+            ),
+            "source_contract_valid": source_contract_valid,
+            "source_contract_gap_codes": source_contract_gap_codes,
             "source_load_audit": source_load_audit,
             "source_dates": source_dates,
             "actual_evidence_start_date": source_dates[0] if source_dates else None,
@@ -1578,11 +1799,17 @@ def build_report(
         "target_date": target_date.isoformat(),
         "effective_date": effective_date.isoformat(),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
-        "round_trip_cost_pct": ROUND_TRIP_COST_PCT,
+        "round_trip_cost_pct": comparison_cost_contract(target_date)[
+            "round_trip_cost_pct"
+        ],
+        "comparison_cost_contract": comparison_cost_contract(target_date),
         "source_paths": sorted(set(source_paths)),
         "source_quality_status": (
             "PASS"
-            if any(value["source_row_count"] > 0 for value in symbol_reports.values())
+            if any(
+                value["source_quality_status"] == "PASS"
+                for value in symbol_reports.values()
+            )
             else "BLOCKED"
         ),
         "statistically_ready_session_policy_count": statistically_ready_count,

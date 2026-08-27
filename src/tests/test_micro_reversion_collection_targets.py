@@ -184,6 +184,7 @@ def test_actual_widget_execution_gap_keeps_active_owner_collection_priority():
     target = payload["selected_targets"][0]
     assert target["symbol"] == "005930"
     assert target["active_owner"] is True
+    assert target["actual_execution_observed"] is True
     assert target["priority_class"] == "active_owner_collection"
     assert target["expected_venue"] == "KRX"
 
@@ -349,6 +350,7 @@ def test_stable_priority_cohort_round_robin_has_bounded_symbol_coverage():
         assert payload["budget"]["rotation_policy"] == (
             "priority_cohort_deterministic_round_robin"
         )
+        assert payload["budget"]["overflow_rotates_on_next_effective_date"] is False
 
     assert observed == {"111111", "222222", "333333", "444444", "555555", "666666"}
 
@@ -435,3 +437,62 @@ def test_single_symbol_budget_keeps_active_owner_ahead_of_prospective_owner():
     )
 
     assert [row["symbol"] for row in payload["selected_targets"]] == ["111111"]
+
+
+def test_active_owner_overflow_does_not_reserve_a_prospective_slot():
+    gaps = [
+        {
+            "owner": "episode",
+            "scope_id": f"active_{symbol}",
+            "scope_kind": "active_episode_owner",
+            "symbol": symbol,
+            "expected_venues": ["SOR"],
+            "gap_class": "micro_symbol_not_observed",
+        }
+        for symbol in ("111111", "222222", "333333")
+    ]
+    gaps.append(
+        {
+            "owner": "widget",
+            "scope_id": "prospective",
+            "scope_kind": "prospective_widget_research",
+            "symbol": "444444",
+            "expected_venues": ["SOR"],
+            "gap_class": "micro_symbol_not_observed",
+        }
+    )
+
+    payload = build_collection_targets(_report(gaps), max_symbols=2)
+
+    assert all(row["active_owner"] for row in payload["selected_targets"])
+    assert payload["budget"]["prospective_reserve_applied"] == 0
+    assert payload["budget"]["active_owner_overflow_count"] == 1
+
+
+def test_actual_widget_execution_precedes_other_active_owner_with_tight_budget():
+    payload = build_collection_targets(
+        _report(
+            [
+                {
+                    "owner": "episode",
+                    "scope_id": "active_episode",
+                    "scope_kind": "active_episode_owner",
+                    "symbol": "111111",
+                    "expected_venues": ["SOR"],
+                    "gap_class": "micro_symbol_not_observed",
+                },
+                {
+                    "owner": "widget",
+                    "scope_id": "actual_widget",
+                    "scope_kind": "active_widget_actual_execution",
+                    "symbol": "222222",
+                    "expected_venues": ["KRX"],
+                    "gap_class": "micro_symbol_not_observed",
+                },
+            ]
+        ),
+        max_symbols=1,
+    )
+
+    assert [row["symbol"] for row in payload["selected_targets"]] == ["222222"]
+    assert payload["selected_targets"][0]["actual_execution_observed"] is True

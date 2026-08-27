@@ -168,6 +168,7 @@ def build_collection_targets(
                 "collection_reasons": set(),
                 "expected_venues": set(),
                 "active_owner": False,
+                "actual_execution_observed": False,
             },
         )
         row["owners"].add(str(scope.get("owner") or "unknown"))
@@ -183,6 +184,10 @@ def build_collection_targets(
         }
         row["expected_venues"].update(value for value in venues if value)
         row["active_owner"] = row["active_owner"] or _is_active_gap(scope)
+        row["actual_execution_observed"] = bool(
+            row["actual_execution_observed"]
+            or scope.get("scope_kind") == "active_widget_actual_execution"
+        )
 
     for gap in attribution_report.get("producer_consumer_gaps") or ():
         if not isinstance(gap, dict) or gap.get("gap_class") not in REPAIRABLE_GAPS:
@@ -212,9 +217,11 @@ def build_collection_targets(
                         or (
                             "active_widget_owner"
                             if "active_widget_owner" in scope_kinds
-                            else scope_kinds[0]
-                            if scope_kinds
-                            else "prospective_widget_research"
+                            else (
+                                scope_kinds[0]
+                                if scope_kinds
+                                else "prospective_widget_research"
+                            )
                         ),
                         "symbol": payload.get("symbol") or scope_id,
                         "expected_venues": owner_scope_venues.get(owner_scope_id)
@@ -253,12 +260,14 @@ def build_collection_targets(
             (
                 3
                 if gap in {"micro_date_partition_missing", "micro_symbol_not_observed"}
-                else 2
-                if gap in REPAIRABLE_GAPS
-                else 1
+                else 2 if gap in REPAIRABLE_GAPS else 1
             )
             for gap in collection_reasons
         )
+        # Exact owned execution is the highest-value source-quality repair.
+        # This only changes next-session market-data observation priority.
+        if row["actual_execution_observed"]:
+            gap_priority += 10
         candidates.append(
             {
                 "symbol": symbol,
@@ -268,6 +277,7 @@ def build_collection_targets(
                 "gap_classes": gap_classes,
                 "collection_reasons": collection_reasons,
                 "active_owner": bool(row["active_owner"]),
+                "actual_execution_observed": bool(row["actual_execution_observed"]),
                 "priority_class": (
                     "active_owner_collection"
                     if row["active_owner"]
@@ -288,8 +298,13 @@ def build_collection_targets(
 
     active_rows = [row for row in candidates if row["active_owner"]]
     prospective_rows = [row for row in candidates if not row["active_owner"]]
+    prospective_reserve = 0
     if active_rows:
-        prospective_reserve = min(len(prospective_rows), 1) if budget >= 2 else 0
+        prospective_reserve = (
+            min(len(prospective_rows), 1)
+            if budget >= 2 and len(active_rows) < budget
+            else 0
+        )
         active_budget = min(len(active_rows), budget - prospective_reserve)
         prospective_budget = min(len(prospective_rows), budget - active_budget)
     else:
@@ -369,6 +384,14 @@ def build_collection_targets(
             ),
             "overflow_rotates_on_next_effective_date": False,
             "bounded_rotation_condition": "stable_priority_cohort_and_daily_budget",
+            "active_owner_candidate_count": len(active_rows),
+            "selected_active_owner_count": sum(
+                1 for row in selected if row["active_owner"]
+            ),
+            "active_owner_overflow_count": sum(
+                1 for row in overflow if row["active_owner"]
+            ),
+            "prospective_reserve_applied": prospective_reserve,
         },
         "selected_targets": selected,
         "overflow_targets": overflow,

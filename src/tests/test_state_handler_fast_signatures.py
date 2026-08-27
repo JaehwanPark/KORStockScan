@@ -989,6 +989,59 @@ def test_entry_adm_snapshot_keeps_current_ai_preflight_over_persisted_fallback(
     assert captured["tick_accel_source"] == "not_evaluated"
 
 
+def test_entry_adm_snapshot_marks_transport_timeout_not_evaluated(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: captured.update(fields),
+    )
+
+    handlers._emit_scalp_entry_adm_snapshot(
+        {"strategy": "SCALPING", "name": "test"},
+        "000000",
+        "ai_confirmed",
+        ai_decision={
+            "action": "DROP",
+            "score": 0,
+            "ai_result_source": "timeout",
+            "provider_called": True,
+            "openai_http_timeout_budget_exhausted": "True",
+            "openai_transport_fail_closed_reason": "request timed out",
+        },
+        ai_score=0,
+        chosen_action="NO_BUY_AI",
+    )
+
+    assert (
+        captured["ai_decision_evaluation_status"]
+        == "not_evaluated_transport_timeout"
+    )
+    assert captured["actual_order_submitted"] is False
+    assert captured["broker_order_forbidden"] is True
+
+    captured.clear()
+    handlers._emit_scalp_entry_adm_snapshot(
+        {"strategy": "SCALPING", "name": "test"},
+        "000000",
+        "ai_confirmed",
+        ai_decision={
+            "action": "DROP",
+            "score": 0,
+            "ai_result_source": "input_preflight_blocked",
+            "openai_timeout_like": "False",
+            "openai_http_timeout_budget_exhausted": "False",
+        },
+        ai_score=0,
+        chosen_action="NO_BUY_AI",
+    )
+    assert (
+        captured["ai_decision_evaluation_status"]
+        == "not_evaluated_provider_or_preflight"
+    )
+
+
 def test_gatekeeper_fast_signature_absorbs_small_noise():
     stock = {"position_tag": "MIDDLE"}
     ws_a = {

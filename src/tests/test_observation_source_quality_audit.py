@@ -989,6 +989,24 @@ def test_entry_preflight_block_accepts_explicit_fail_closed_candle_gap():
     )
 
 
+def test_entry_transport_timeout_accepts_explicit_fail_closed_candle_gap():
+    fields = {
+        "source_stage": "ai_confirmed",
+        "provider_called": True,
+        "openai_transport_fail_closed_reason": "request timed out",
+        "ai_decision_evaluation_status": "not_evaluated_transport_timeout",
+        "minute_candle_evaluation_state": "unavailable_fail_closed",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+    assert audit._blocked_observation_records_fail_closed_source_gap(
+        "scalp_entry_action_decision_snapshot",
+        fields,
+        source="minute_candle",
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     (

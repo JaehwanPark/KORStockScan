@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -46,11 +47,14 @@ from src.engine.monitoring.widget_advisory_calibration_policy import (
     POLICY_SCHEMA,
     WidgetCalibrationPolicyLoader,
 )
+from src.engine.monitoring.widget_comparison_cost import (
+    comparison_cost_contract,
+    round_trip_cost_pct,
+)
 from src.utils.market_day import is_krx_trading_day
 
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 CALIBRATION_HORIZON_MINUTES = 10
-ROUND_TRIP_COST_PCT = 0.20
 DEFAULT_OUTPUT_DIR = Path("data/report/widget_advisory_calibration")
 DAILY_STATUS_ALLOWLIST = {"observed", "no_mature_actionable_sample"}
 
@@ -240,11 +244,15 @@ def _daily_report_issue(
         target_return_pct = float(report.get("target_return_pct"))
     except (TypeError, ValueError):
         return "target_policy_missing_or_invalid"
+    if not math.isfinite(target_return_pct):
+        return "target_policy_missing_or_invalid"
     if abs(target_return_pct - spec.target_return_pct) > 1e-9:
         return "target_policy_mismatch"
     try:
         fallback_adverse_pct = float(report.get("fallback_adverse_pct"))
     except (TypeError, ValueError):
+        return "adverse_policy_missing_or_invalid"
+    if not math.isfinite(fallback_adverse_pct):
         return "adverse_policy_missing_or_invalid"
     if abs(fallback_adverse_pct - evaluation.FALLBACK_ADVERSE_PCT) > 1e-9:
         return "adverse_policy_mismatch"
@@ -300,8 +308,10 @@ def _load_cumulative_outcomes(
             or metric_contract.get("decision_authority")
             != "widget_advisory_evaluation_only"
             or report_target_return is None
+            or not math.isfinite(report_target_return)
             or abs(report_target_return - spec.target_return_pct) > 1e-9
             or report_fallback_adverse is None
+            or not math.isfinite(report_fallback_adverse)
             or abs(report_fallback_adverse - evaluation.FALLBACK_ADVERSE_PCT) > 1e-9
             or report.get("runtime_effect") is not False
             or report.get("actual_order_submitted") is not False
@@ -357,15 +367,34 @@ def _opportunity_net_return_proxy(outcome: dict[str, Any]) -> tuple[float, bool]
         target = float(outcome.get("target_return_pct"))
     except (TypeError, ValueError):
         target = 0.5
+    if not math.isfinite(target):
+        raise ValueError("widget_outcome_target_return_nonfinite")
     try:
         mfe = float(outcome.get("mfe_pct"))
     except (TypeError, ValueError):
-        mfe = 0.0
+        mfe = None
     recovered = bool(
-        outcome.get("first_hit") == "adverse_first" and mfe + 1e-9 >= target
+        outcome.get("first_hit") == "adverse_first"
+        and mfe is not None
+        and math.isfinite(mfe)
+        and mfe + 1e-9 >= target
     )
+    raw_entry_at = outcome.get("entry_touched_at_kst") or outcome.get(
+        "signal_observed_at_kst"
+    )
+    try:
+        trade_date_source: date | datetime = datetime.fromisoformat(
+            str(raw_entry_at or "")
+        )
+    except ValueError:
+        source_name = Path(str(outcome.get("source_report") or "")).stem
+        try:
+            trade_date_source = date.fromisoformat(source_name.rsplit("_", 1)[-1])
+        except ValueError as exc:
+            raise ValueError("widget_outcome_trade_date_missing") from exc
+    cost_pct = round_trip_cost_pct(trade_date_source)
     if outcome.get("first_hit") == "target_first" or recovered:
-        return target - ROUND_TRIP_COST_PCT, recovered
+        return target - cost_pct, recovered
     try:
         adverse = float(outcome.get("mae_pct"))
     except (TypeError, ValueError):
@@ -373,7 +402,9 @@ def _opportunity_net_return_proxy(outcome: dict[str, Any]) -> tuple[float, bool]
             adverse = float(outcome.get("fallback_adverse_pct"))
         except (TypeError, ValueError):
             adverse = -0.3
-    return min(0.0, adverse) - ROUND_TRIP_COST_PCT, recovered
+    if not math.isfinite(adverse):
+        raise ValueError("widget_outcome_adverse_return_nonfinite")
+    return min(0.0, adverse) - cost_pct, recovered
 
 
 def _bounded_step(previous: int, desired: int) -> int:
@@ -391,6 +422,7 @@ def _select_session_policy(
     outcomes: list[dict[str, Any]],
     session: str,
     daily_report_issue: str | None,
+    cost_as_of_date: date,
 ) -> dict[str, Any]:
     previous_value = int(previous["required_actionable_confirmations"])
     session_outcomes = [
@@ -447,7 +479,10 @@ def _select_session_policy(
         "source_quality_adjusted_ev_pct": (
             round(adjusted_ev, 6) if adjusted_ev is not None else None
         ),
-        "round_trip_cost_pct": ROUND_TRIP_COST_PCT,
+        "round_trip_cost_pct": comparison_cost_contract(cost_as_of_date)[
+            "round_trip_cost_pct"
+        ],
+        "comparison_cost_policy": "effective_dated_per_outcome_trade_date",
         "source_report_verification_issue": daily_report_issue,
         "rollback_value": previous_value,
         "rollback_condition": (
@@ -465,6 +500,7 @@ def build_calibration_policy(
     specs: tuple[WidgetSpec, ...] = WIDGET_SPECS,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     effective_date = _next_krx_trading_date(target_date)
+    comparison_cost = comparison_cost_contract(target_date)
     loader = WidgetCalibrationPolicyLoader(policy_dir)
     symbols: dict[str, Any] = {}
     report_symbols: dict[str, Any] = {}
@@ -503,6 +539,7 @@ def build_calibration_policy(
                 outcomes=outcomes,
                 session=session,
                 daily_report_issue=report_issue,
+                cost_as_of_date=target_date,
             )
         symbols[spec.symbol] = {
             "name": spec.name,
@@ -536,6 +573,7 @@ def build_calibration_policy(
             "PASS" if all_daily_reports_verified else "DEGRADED_SAFE_CARRY_FORWARD"
         ),
         "symbols": symbols,
+        "comparison_cost_contract": comparison_cost,
         "metric_contract": CALIBRATION_CONTRACT,
         "widget_runtime_effect": True,
         "trading_runtime_effect": False,
@@ -551,6 +589,7 @@ def build_calibration_policy(
         "policy_version": policy_version,
         "all_daily_reports_verified": all_daily_reports_verified,
         "symbols": report_symbols,
+        "comparison_cost_contract": comparison_cost,
         "metric_contract": CALIBRATION_CONTRACT,
         "policy_path": str(
             policy_dir / f"{POLICY_FILE_PREFIX}_{effective_date.isoformat()}.json"

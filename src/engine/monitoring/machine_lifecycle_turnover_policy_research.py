@@ -35,6 +35,7 @@ DECISION_ROLES = {
 }
 COST_PROVENANCE_ALLOWLIST = {
     "widget_auto_trade_policy_calibration.round_trip_cost_pct",
+    "widget_comparison_cost.effective_dated_contract",
     "low_price_two_leg_tuning.cost_pct",
     "low_price_two_leg_expanded_candidate_research.cost_pct",
 }

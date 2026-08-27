@@ -27,6 +27,10 @@ from src.engine.scalping.micro_reversion.p2_replay import (
     DEFAULT_SOURCE_EXCLUSION_MANIFEST,
     load_source_exclusion_manifest,
 )
+from src.engine.scalping.micro_reversion.ask_depletion import (
+    AskDepletionContext,
+    build_ask_depletion_report,
+)
 from src.engine.scalping.micro_reversion.path_journal import (
     MARKET_STREAM_CONTRACT_ID,
     MarketDepthPoint,
@@ -43,6 +47,10 @@ from src.engine.scalping.micro_reversion.collection_targets import (
 )
 from src.engine.monitoring.machine_lifecycle_turnover_policy_research import (
     build_rolling_paired_policy_research,
+)
+from src.engine.monitoring.widget_comparison_cost import (
+    comparison_cost_contract,
+    modeled_execution_economics,
 )
 from src.trading.low_price_two_leg.profiles import PROFILES
 from src.utils.constants import DATA_DIR
@@ -90,6 +98,8 @@ CANARY_COMPLETE_AFTER_KST = time(20, 0)
 GROSS_PROFIT_TOUCH_BPS = (1, 3, 5, 10, 20, 30, 50)
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 POSTCLOSE_COMPLETE_TIME = time(20, 0)
+ENTRY_CONFIRMATION_HORIZONS_SEC = (1, 3, 5)
+ENTRY_CONFIRMATION_MAX_QUOTE_AGE_SEC = 1
 
 METRIC_CONTRACT = {
     "metric_role": "machine_lifecycle_microstructure_diagnostic_context",
@@ -121,6 +131,33 @@ METRIC_CONTRACT = {
         "gross_no_slippage_diagnostic_as_live_or_policy_authority",
         "broker_order_submission",
         "provider_or_bot_or_cap_mutation",
+    ],
+}
+MICRO_ENTRY_CONFIRMATION_CONTRACT = {
+    "metric_role": "widget_episode_entry_microstructure_source_only_comparison",
+    "decision_authority": "postclose_source_only_no_runtime_authority",
+    "window_policy": (
+        "exact_owner_symbol_venue_session_entry_anchor_then_1s_3s_5s_bbo_and_"
+        "fixed_anchor_ask_depletion"
+    ),
+    "sample_floor": {
+        "observed_trading_days_per_owner_symbol_session_state": 5,
+        "unique_decision_lifecycles": 20,
+    },
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "source_quality_gate": (
+        "canonical_contiguous_0b_0d_exact_scope_latest_nonfuture_depth_and_"
+        "executable_bbo_without_missing_value_imputation"
+    ),
+    "forbidden_uses": [
+        "standalone_buy_wait_drop_or_exit_decision",
+        "cross_owner_or_cross_entry_state_pooling",
+        "broker_order_submission_cancel_or_automated_sell",
+        "same_day_or_preopen_runtime_policy_mutation",
+        "quantity_target_cooldown_daily_cap_or_stop_mutation",
+        "provider_bot_broker_guard_or_hard_safety_change",
+        "missing_micro_data_as_zero_or_neutral_confirmation",
+        "source_only_opportunity_as_realized_broker_profit",
     ],
 }
 FAST_LIFECYCLE_OBJECTIVE_CONTRACT = {
@@ -649,14 +686,272 @@ def _widget_state_order_index(
     return index, source
 
 
+def _widget_advisory_event_index(*, target_date: str, report_root: Path) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[tuple[str, str, int], dict[str, Any]],
+    dict[str, Any],
+]:
+    observation_dir = report_root / "widget_symbol_advisory_observation"
+    paths = sorted(
+        observation_dir.glob(
+            f"widget_symbol_advisory_*_{target_date.replace('-', '')}.jsonl"
+        )
+    )
+    entries: dict[str, dict[str, Any]] = {}
+    exits: dict[str, dict[str, Any]] = {}
+    episodes: dict[tuple[str, str, int], dict[str, Any]] = {}
+    errors: list[str] = []
+    row_count = 0
+    source_hash = hashlib.sha256()
+    for path in paths:
+        try:
+            raw_bytes = path.read_bytes()
+            raw_lines = raw_bytes.decode("utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            errors.append(f"advisory_unreadable:{path}")
+            continue
+        source_hash.update(path.name.encode("utf-8"))
+        source_hash.update(b"\0")
+        source_hash.update(raw_bytes)
+        for line_number, line in enumerate(raw_lines, start=1):
+            if not line.strip():
+                continue
+            row_count += 1
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                errors.append(f"advisory_json_invalid:{path.name}:{line_number}")
+                continue
+            if not isinstance(payload, dict):
+                errors.append(f"advisory_row_invalid:{path.name}:{line_number}")
+                continue
+            entry_event = payload.get("entry_event")
+            exit_event = payload.get("exit_event")
+            if entry_event is None and exit_event is None:
+                continue
+            observed_at = _owner_ts_on_target_date(
+                payload.get("observed_at_kst"), target_date
+            )
+            symbol = str(payload.get("symbol") or "")
+            advisory = payload.get("advisory")
+            episode = payload.get("episode")
+            session = (
+                str(advisory.get("session") or "") if isinstance(advisory, dict) else ""
+            )
+            sequence = (
+                int(episode.get("sequence"))
+                if isinstance(episode, dict)
+                and not isinstance(episode.get("sequence"), bool)
+                and isinstance(episode.get("sequence"), int)
+                else None
+            )
+            base_valid = bool(
+                observed_at is not None
+                and len(symbol) == 6
+                and symbol.isdigit()
+                and session in WIDGET_SESSION_VENUES
+                and payload.get("actual_order_submitted") is False
+                and payload.get("broker_order_forbidden") is True
+                and isinstance(episode, dict)
+                and sequence is not None
+                and sequence > 0
+                and episode.get("actual_order_submitted") is False
+                and episode.get("broker_order_forbidden") is True
+                and episode.get("runtime_effect") is False
+            )
+            if not base_valid:
+                errors.append(
+                    f"advisory_event_envelope_invalid:{path.name}:{line_number}"
+                )
+                continue
+            episode_key = (symbol, session, sequence)
+            episode_fact = episodes.setdefault(
+                episode_key,
+                {
+                    "symbol": symbol,
+                    "sequence": sequence,
+                    "session": session,
+                    "entry_event": None,
+                    "exit_event": None,
+                },
+            )
+            if episode_fact["session"] != session:
+                errors.append(f"advisory_episode_session_conflict:{symbol}:{sequence}")
+                continue
+            for event_name, raw_event, index in (
+                ("entry_event", entry_event, entries),
+                ("exit_event", exit_event, exits),
+            ):
+                if raw_event is None:
+                    continue
+                event_at = _owner_ts_on_target_date(
+                    (
+                        raw_event.get("observed_at")
+                        if isinstance(raw_event, dict)
+                        else None
+                    ),
+                    target_date,
+                )
+                event_id = (
+                    str(raw_event.get("event_id") or "").strip()
+                    if isinstance(raw_event, dict)
+                    else ""
+                )
+                expected_type = "ENTRY" if event_name == "entry_event" else "EXIT"
+                event_id_parts = event_id.split(":")
+                event_timestamp = event_id_parts[4] if len(event_id_parts) == 5 else ""
+                event_timestamp_valid = bool(
+                    event_timestamp.isdigit()
+                    and (
+                        len(event_timestamp) == 6
+                        or (
+                            len(event_timestamp) == 14
+                            and event_timestamp.startswith(target_date.replace("-", ""))
+                        )
+                    )
+                )
+                event_id_valid = bool(
+                    len(event_id_parts) == 5
+                    and event_id_parts[0] == symbol
+                    and event_id_parts[1] == target_date
+                    and event_id_parts[2] == expected_type
+                    and event_id_parts[3].isdigit()
+                    and int(event_id_parts[3]) == sequence
+                    and event_timestamp_valid
+                )
+                raw_episode_sequence = (
+                    raw_event.get("episode_sequence")
+                    if isinstance(raw_event, dict)
+                    else None
+                )
+                event_valid = bool(
+                    isinstance(raw_event, dict)
+                    and event_id_valid
+                    and (
+                        raw_episode_sequence is None or raw_episode_sequence == sequence
+                    )
+                    and event_at is not None
+                    and raw_event.get("event_type") == expected_type
+                    and raw_event.get("source_quality_status") == "PASS"
+                    and raw_event.get("actual_order_submitted") is False
+                    and raw_event.get("broker_order_forbidden") is True
+                    and raw_event.get("runtime_effect") is False
+                    and (
+                        expected_type != "ENTRY"
+                        or (
+                            raw_event.get("state") in ("ENTRY_CAUTION", "ENTRY_READY")
+                            and all(
+                                (_widget_numeric(raw_event.get(field)) or 0) > 0
+                                for field in (
+                                    "entry_price_high",
+                                    "target_price",
+                                    "structural_support",
+                                )
+                            )
+                        )
+                    )
+                    and (
+                        expected_type != "EXIT"
+                        or (
+                            str(raw_event.get("reason") or "").strip()
+                            and (
+                                _widget_numeric(raw_event.get("reference_exit_price"))
+                                or 0
+                            )
+                            > 0
+                        )
+                    )
+                )
+                if not event_valid:
+                    errors.append(
+                        f"advisory_{event_name}_invalid:{path.name}:{line_number}"
+                    )
+                    continue
+                normalized = {
+                    **raw_event,
+                    "symbol": symbol,
+                    "session": session,
+                    "episode_sequence": sequence,
+                    "event_at": event_at,
+                    "source_path": str(path),
+                    "source_line_number": line_number,
+                }
+                prior = index.get(event_id)
+                if prior is not None and any(
+                    prior.get(key) != normalized.get(key)
+                    for key in (
+                        "symbol",
+                        "session",
+                        "episode_sequence",
+                        "event_at",
+                        "state",
+                        "reason",
+                        "reference_exit_price",
+                    )
+                ):
+                    errors.append(f"advisory_event_identity_conflict:{event_id}")
+                    continue
+                episode_prior = episode_fact.get(event_name)
+                if (
+                    isinstance(episode_prior, dict)
+                    and episode_prior.get("event_id") != event_id
+                ):
+                    errors.append(
+                        "advisory_episode_event_conflict:"
+                        f"{symbol}:{session}:{sequence}:{event_name}"
+                    )
+                    continue
+                index[event_id] = normalized
+                episode_fact[event_name] = normalized
+    for (symbol, session, sequence), episode_fact in episodes.items():
+        entry = episode_fact.get("entry_event")
+        exit_event = episode_fact.get("exit_event")
+        if (
+            isinstance(entry, dict)
+            and isinstance(exit_event, dict)
+            and exit_event.get("event_at") < entry.get("event_at")
+        ):
+            errors.append(
+                f"advisory_episode_event_time_regression:{symbol}:{session}:{sequence}"
+            )
+    source = {
+        "paths": [str(path) for path in paths],
+        "status": (
+            "contract_invalid" if errors else "loaded" if paths else "not_observed"
+        ),
+        "optional_when_absent": True,
+        "target_date": target_date,
+        "sha256": source_hash.hexdigest() if paths else None,
+        "row_count": row_count,
+        "entry_event_count": len(entries),
+        "exit_event_count": len(exits),
+        "episode_count": len(episodes),
+        "contract_errors": sorted(set(errors)),
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    return entries, exits, episodes, source
+
+
 def _widget_actual_execution_inventory(
     *,
     target_date: str,
     report_root: Path,
     state_path: Path,
     symbols: dict[str, dict[str, Any]],
-    round_trip_cost_pct: float | None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    comparison_cost = (
+        comparison_cost_contract(target_date)
+        if date.fromisoformat(target_date) >= CLEAN_BASELINE_DATE
+        else None
+    )
+    round_trip_cost_pct = (
+        float(comparison_cost["round_trip_cost_pct"])
+        if comparison_cost is not None
+        else None
+    )
     event_path = (
         report_root
         / "widget_signal_auto_trade_events"
@@ -664,6 +959,12 @@ def _widget_actual_execution_inventory(
     )
     state_orders, state_source = _widget_state_order_index(
         target_date=target_date, state_path=state_path
+    )
+    advisory_entries, advisory_exits, advisory_episodes, advisory_source = (
+        _widget_advisory_event_index(
+            target_date=target_date,
+            report_root=report_root,
+        )
     )
     source: dict[str, Any] = {
         "path": str(event_path),
@@ -677,9 +978,12 @@ def _widget_actual_execution_inventory(
         "actual_lifecycle_count": 0,
         "contract_errors": [],
         "state_source": state_source,
+        "advisory_source": advisory_source,
+        "blocked_daily_entry_limit_opportunities": [],
         "timestamp_provenance": (
             "execution_loop_submit_record_and_broker_reconciliation_confirmation_time"
         ),
+        "comparison_cost_contract": comparison_cost,
     }
     if not event_path.exists():
         if state_source.get("status") == "contract_invalid":
@@ -714,11 +1018,12 @@ def _widget_actual_execution_inventory(
     reconcile_rows: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     contract_errors: list[str] = list(state_source.get("contract_errors") or [])
     actual_event_count = 0
-    relevant_types = {
+    blocked_daily_entry_limit_opportunities: list[dict[str, Any]] = []
+    relevant_types = (
         "order_submitted",
         "order_execution_reconciled",
         "take_profit_episode_completed",
-    }
+    )
     for line_number, line in enumerate(raw_lines, start=1):
         if not line.strip():
             continue
@@ -727,14 +1032,103 @@ def _widget_actual_execution_inventory(
         except json.JSONDecodeError:
             contract_errors.append(f"event_json_invalid:{line_number}")
             continue
-        if not isinstance(event, dict) or event.get("event_type") not in relevant_types:
+        if not isinstance(event, dict):
+            contract_errors.append(f"event_row_invalid:{line_number}")
+            continue
+        if event.get("event_type") == "entry_blocked_daily_entry_limit":
+            observed_at = _owner_ts_on_target_date(
+                event.get("observed_at"), target_date
+            )
+            symbol = str(event.get("symbol") or "")
+            signal_id = str(event.get("signal_id") or "").strip()
+            advisory_entry = advisory_entries.get(signal_id)
+            episode_fact = (
+                advisory_episodes.get(
+                    (
+                        symbol,
+                        str(advisory_entry["session"]),
+                        int(advisory_entry["episode_sequence"]),
+                    )
+                )
+                if advisory_entry is not None
+                else None
+            )
+            blocked_valid = bool(
+                event.get("schema") in (None, WIDGET_AUTO_TRADE_EVENT_SCHEMA)
+                and event.get("trade_date") == target_date
+                and observed_at is not None
+                and len(symbol) == 6
+                and symbol.isdigit()
+                and signal_id
+                and event.get("execution_authority")
+                == WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY
+                and event.get("decision_authority")
+                == WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY
+                and event.get("runtime_effect") is True
+                and event.get("actual_order_submitted") is False
+                and event.get("broker_order_forbidden") is False
+                and advisory_entry is not None
+                and advisory_entry.get("symbol") == symbol
+            )
+            if not blocked_valid:
+                contract_errors.append(
+                    f"blocked_daily_entry_limit_contract_invalid:{line_number}"
+                )
+                continue
+            advisory_exit = (
+                episode_fact.get("exit_event")
+                if isinstance(episode_fact, dict)
+                else None
+            )
+            blocked_daily_entry_limit_opportunities.append(
+                {
+                    "symbol": symbol,
+                    "signal_id": signal_id,
+                    "observed_at": observed_at.isoformat(),
+                    "session": advisory_entry["session"],
+                    "entry_state": advisory_entry.get("state"),
+                    "entry_price": _widget_numeric(
+                        advisory_entry.get("entry_price_high")
+                    ),
+                    "target_price": _widget_numeric(advisory_entry.get("target_price")),
+                    "structural_support": _widget_numeric(
+                        advisory_entry.get("structural_support")
+                    ),
+                    "episode_sequence": advisory_entry["episode_sequence"],
+                    "source_only_exit_event_id": (
+                        advisory_exit.get("event_id")
+                        if isinstance(advisory_exit, dict)
+                        else None
+                    ),
+                    "source_only_exit_reason": (
+                        advisory_exit.get("reason")
+                        if isinstance(advisory_exit, dict)
+                        else None
+                    ),
+                    "source_only_exit_price": (
+                        _widget_numeric(advisory_exit.get("reference_exit_price"))
+                        if isinstance(advisory_exit, dict)
+                        else None
+                    ),
+                    "source_only_exit_at": (
+                        advisory_exit["event_at"].isoformat()
+                        if isinstance(advisory_exit, dict)
+                        else None
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_fill_observed": False,
+                    "counterfactual_only": True,
+                }
+            )
+            continue
+        if event.get("event_type") not in relevant_types:
             continue
         actual_event_count += 1
         observed_at = _owner_ts_on_target_date(event.get("observed_at"), target_date)
         symbol = str(event.get("symbol") or "")
         schema = event.get("schema")
         base_valid = bool(
-            schema in {None, WIDGET_AUTO_TRADE_EVENT_SCHEMA}
+            schema in (None, WIDGET_AUTO_TRADE_EVENT_SCHEMA)
             and event.get("trade_date") == target_date
             and observed_at is not None
             and len(symbol) == 6
@@ -993,6 +1387,16 @@ def _widget_actual_execution_inventory(
         signal_contract = _widget_entry_signal_contract(
             signal_id, symbol=symbol, target_date=target_date
         )
+        advisory_entry = advisory_entries.get(signal_id)
+        if (
+            signal_contract is None
+            and advisory_entry is not None
+            and advisory_entry.get("symbol") == symbol
+        ):
+            signal_contract = (
+                str(advisory_entry["session"]),
+                advisory_entry["event_at"],
+            )
         initial_orders = [
             order for order in orders if order.get("order_role") == "ENTRY_BUY"
         ]
@@ -1128,6 +1532,15 @@ def _widget_actual_execution_inventory(
             if realized and buy_notional > 0
             else None
         )
+        execution_economics = (
+            modeled_execution_economics(
+                buy_notional_krw=buy_notional,
+                sell_notional_krw=sell_notional,
+                trade_date=target_date,
+            )
+            if realized and comparison_cost is not None
+            else None
+        )
         target_prices = [
             value
             for order in sell_submit_orders
@@ -1135,6 +1548,24 @@ def _widget_actual_execution_inventory(
             and (value := _widget_numeric(order.get("limit_price"))) is not None
             and value > 0
         ]
+        final_exit_events = [
+            event
+            for order in sell_orders
+            if order.get("order_role") == "FINAL_EXIT_SELL"
+            and (event := advisory_exits.get(str(order.get("signal_id") or "")))
+            is not None
+            and event.get("symbol") == symbol
+        ]
+        resolved_final_exit_reasons = {
+            str(event.get("reason") or "")
+            for event in final_exit_events
+            if isinstance(event, dict) and event.get("reason")
+        }
+        source_final_exit_reason = (
+            next(iter(resolved_final_exit_reasons))
+            if len(resolved_final_exit_reasons) == 1
+            else None
+        )
         owner_outcome = {
             "exit_at": exit_at.isoformat() if exit_at else None,
             "exit_price": sell_notional / sell_qty if sell_qty else None,
@@ -1145,8 +1576,17 @@ def _widget_actual_execution_inventory(
                     order.get("order_role") == "TAKE_PROFIT_SELL"
                     for order in sell_orders
                 )
-                else "final_exit_fill" if realized else "right_censored"
+                else (
+                    source_final_exit_reason
+                    if realized and source_final_exit_reason
+                    else "final_exit_fill" if realized else "right_censored"
+                )
             ),
+            "source_final_exit_event_ids": [
+                event["event_id"]
+                for event in final_exit_events
+                if isinstance(event, dict)
+            ],
             "holding_duration_ms": (
                 round((exit_at - first_fill_at).total_seconds() * 1000.0)
                 if realized and exit_at is not None and first_fill_at is not None
@@ -1174,8 +1614,24 @@ def _widget_actual_execution_inventory(
                 round(gross_return_pct, 8) if gross_return_pct is not None else None
             ),
             "cost_aware_net_return_pct": (
-                round(gross_return_pct - round_trip_cost_pct, 8)
-                if gross_return_pct is not None and round_trip_cost_pct is not None
+                execution_economics["modeled_net_return_pct"]
+                if execution_economics is not None
+                else None
+            ),
+            "modeled_total_cost_krw": (
+                execution_economics["modeled_total_cost_krw"]
+                if execution_economics is not None
+                else None
+            ),
+            "modeled_net_profit_krw": (
+                execution_economics["modeled_net_profit_krw"]
+                if execution_economics is not None
+                else None
+            ),
+            "modeled_costs_broker_receipt_exact": False,
+            "cost_contract_sha256": (
+                comparison_cost["contract_sha256"]
+                if comparison_cost is not None
                 else None
             ),
             "entry_notional_krw": round(buy_notional, 3),
@@ -1195,11 +1651,17 @@ def _widget_actual_execution_inventory(
             and initial_orders[0].get("full_fill_at") is not None
             and round_trip_cost_pct is not None
             and round_trip_cost_pct >= 0
+            and advisory_source.get("status") != "contract_invalid"
         )
         owner_cost_contract = {
             "owner_round_trip_cost_pct": round_trip_cost_pct,
             "owner_round_trip_cost_provenance": (
-                "widget_auto_trade_policy_calibration.round_trip_cost_pct"
+                "widget_comparison_cost.effective_dated_contract"
+            ),
+            "owner_round_trip_cost_contract_sha256": (
+                comparison_cost["contract_sha256"]
+                if comparison_cost is not None
+                else None
             ),
         }
         lifecycle_id = f"widget_actual:{symbol}:{signal_id}"
@@ -1223,6 +1685,17 @@ def _widget_actual_execution_inventory(
                 "owner_target_price": target_prices[-1] if target_prices else None,
                 "lifecycle_stage": "entry",
                 "anchor_role": "actual_widget_entry_signal",
+                "entry_state": (
+                    advisory_entry.get("state") if advisory_entry else None
+                ),
+                "structural_support": (
+                    _widget_numeric(advisory_entry.get("structural_support"))
+                    if advisory_entry
+                    else None
+                ),
+                "source_entry_event_id": (
+                    advisory_entry.get("event_id") if advisory_entry else None
+                ),
                 **owner_cost_contract,
                 "owner_outcome": owner_outcome,
                 "owner_lifecycle_contract_valid": True,
@@ -1422,16 +1895,107 @@ def _widget_actual_execution_inventory(
                     "actual_order_submitted": True,
                 }
             )
+    for opportunity in blocked_daily_entry_limit_opportunities:
+        symbol = str(opportunity["symbol"])
+        session = str(opportunity["session"])
+        venue = WIDGET_SESSION_VENUES[session]
+        signal_id = str(opportunity["signal_id"])
+        scope_id = f"actual_blocked:{symbol}:{session}"
+        row = symbols.setdefault(
+            symbol,
+            {
+                "symbol": symbol,
+                "name": None,
+                "scopes": [],
+                "owner_scope_ids": [],
+                "owner_scope_kinds": {},
+                "owner_scope_expected_venues": {},
+                "owner_anchor_contract_gaps": [],
+                "expected_venues": [],
+                "owner_inventory_source": ("exact_date_widget_execution_event_journal"),
+            },
+        )
+        for key, default in (
+            ("scopes", []),
+            ("owner_scope_ids", []),
+            ("owner_scope_kinds", {}),
+            ("owner_scope_expected_venues", {}),
+            ("owner_anchor_contract_gaps", []),
+            ("expected_venues", []),
+        ):
+            row.setdefault(key, default.copy())
+        if "active_widget_actual_execution" not in row["scopes"]:
+            row["scopes"].append("active_widget_actual_execution")
+        if scope_id not in row["owner_scope_ids"]:
+            row["owner_scope_ids"].append(scope_id)
+        row["owner_scope_kinds"][scope_id] = "active_widget_actual_execution"
+        row["owner_scope_expected_venues"][scope_id] = [venue]
+        if venue not in row["expected_venues"]:
+            row["expected_venues"].append(venue)
+        source_only_outcome = {
+            "exit_at": opportunity.get("source_only_exit_at"),
+            "exit_price": opportunity.get("source_only_exit_price"),
+            "exit_reason": opportunity.get("source_only_exit_reason"),
+            "realized": False,
+            "actual_order_submitted": False,
+            "broker_fill_observed": False,
+            "counterfactual_only": True,
+        }
+        lifecycle_id = f"widget_daily_cap_blocked:{symbol}:{signal_id}"
+        anchors.append(
+            {
+                "anchor_id": f"{lifecycle_id}:signal",
+                "lifecycle_id": lifecycle_id,
+                "owner": "widget",
+                "scope_id": scope_id,
+                "symbol": symbol,
+                "session": session,
+                "expected_venues": [venue],
+                "expected_session_buckets": [session],
+                "anchor_at": opportunity["observed_at"],
+                "anchor_price": opportunity.get("entry_price"),
+                "anchor_price_provenance": (
+                    "source_qualified_advisory_entry_price_no_broker_order"
+                ),
+                "owner_target_price": opportunity.get("target_price"),
+                "lifecycle_stage": "entry",
+                "anchor_role": ("actual_widget_daily_cap_blocked_entry_signal"),
+                "entry_state": opportunity.get("entry_state"),
+                "structural_support": opportunity.get("structural_support"),
+                "source_entry_event_id": signal_id,
+                "owner_round_trip_cost_pct": round_trip_cost_pct,
+                "owner_round_trip_cost_provenance": (
+                    "widget_comparison_cost.effective_dated_contract"
+                ),
+                "owner_round_trip_cost_contract_sha256": (
+                    comparison_cost["contract_sha256"]
+                    if comparison_cost is not None
+                    else None
+                ),
+                "owner_outcome": source_only_outcome,
+                "owner_lifecycle_contract_valid": True,
+                "owner_policy_tuning_eligible": False,
+                "actual_order_submitted": False,
+                "daily_entry_limit_blocked": True,
+            }
+        )
     for gap in instrumentation_gaps:
         parts = gap.split(":", 2)
         if len(parts) >= 2 and parts[1] in symbols:
             symbols[parts[1]].setdefault("owner_anchor_contract_gaps", []).append(
                 {"scope_id": f"actual:{parts[1]}:unknown", "reason": gap}
             )
+    advisory_contract_gaps = (
+        [f"advisory:{value}" for value in advisory_source.get("contract_errors") or []]
+        if advisory_source.get("status") == "contract_invalid"
+        else []
+    )
     source.update(
         {
             "status": (
-                "loaded_with_instrumentation_gaps" if instrumentation_gaps else "loaded"
+                "loaded_with_instrumentation_gaps"
+                if instrumentation_gaps or advisory_contract_gaps
+                else "loaded"
             ),
             "optional_when_absent": False,
             "grouped_lifecycle_count": len(lifecycle_orders),
@@ -1440,10 +2004,17 @@ def _widget_actual_execution_inventory(
                     str(anchor.get("lifecycle_id"))
                     for anchor in anchors
                     if anchor.get("lifecycle_id")
+                    and anchor.get("actual_order_submitted") is True
                 }
             ),
+            "source_only_blocked_entry_anchor_count": sum(
+                anchor.get("daily_entry_limit_blocked") is True for anchor in anchors
+            ),
             "anchor_count": len(anchors),
-            "contract_errors": instrumentation_gaps,
+            "contract_errors": instrumentation_gaps + advisory_contract_gaps,
+            "blocked_daily_entry_limit_opportunities": (
+                blocked_daily_entry_limit_opportunities
+            ),
         }
     )
     return anchors, source
@@ -1488,8 +2059,49 @@ def _widget_inventory(
     expansion = _read_target_json(
         expansion_path, target_date, expected_schemas=expansion_schemas
     )
-    widget_round_trip_cost_pct = _finite_float(
+    declared_widget_round_trip_cost_pct = _finite_float(
         (calibration or {}).get("round_trip_cost_pct")
+    )
+    widget_cost_contract = (
+        comparison_cost_contract(target_date)
+        if date.fromisoformat(target_date) >= CLEAN_BASELINE_DATE
+        else None
+    )
+    widget_round_trip_cost_pct = (
+        float(widget_cost_contract["round_trip_cost_pct"])
+        if widget_cost_contract is not None
+        else None
+    )
+    declared_widget_cost_contract = (
+        calibration.get("comparison_cost_contract")
+        if isinstance(calibration, dict)
+        else None
+    )
+    widget_cost_contract_matches = bool(
+        widget_cost_contract is None
+        or declared_widget_round_trip_cost_pct is None
+        or math.isclose(
+            declared_widget_round_trip_cost_pct,
+            float(widget_round_trip_cost_pct),
+            abs_tol=1e-12,
+        )
+    )
+    widget_cost_contract_ready = bool(
+        widget_cost_contract is not None
+        and isinstance(declared_widget_cost_contract, dict)
+        and declared_widget_cost_contract.get("contract_sha256")
+        == widget_cost_contract.get("contract_sha256")
+        and declared_widget_round_trip_cost_pct is not None
+        and widget_cost_contract_matches
+    )
+    declared_research_cost_contract = (
+        research.get("comparison_cost_contract") if isinstance(research, dict) else None
+    )
+    research_cost_contract_ready = bool(
+        widget_cost_contract is not None
+        and isinstance(declared_research_cost_contract, dict)
+        and declared_research_cost_contract.get("contract_sha256")
+        == widget_cost_contract.get("contract_sha256")
     )
     symbols: dict[str, dict[str, Any]] = {}
     anchors: list[dict[str, Any]] = []
@@ -1665,6 +2277,9 @@ def _widget_inventory(
                             "owner_lifecycle_contract_valid": (
                                 not resolved_exit_requested or resolved_exit_valid
                             ),
+                            "owner_policy_tuning_eligible": (
+                                widget_cost_contract_ready
+                            ),
                             "actual_order_submitted": False,
                         }
                     )
@@ -1705,6 +2320,9 @@ def _widget_inventory(
                                     "realized": True,
                                 },
                                 "owner_lifecycle_contract_valid": True,
+                                "owner_policy_tuning_eligible": (
+                                    widget_cost_contract_ready
+                                ),
                                 "actual_order_submitted": False,
                             }
                         )
@@ -1842,6 +2460,7 @@ def _widget_inventory(
                     "owner_lifecycle_contract_valid": (
                         not resolved_exit_requested or resolved_exit_valid
                     ),
+                    "owner_policy_tuning_eligible": research_cost_contract_ready,
                     "owner_round_trip_cost_pct": widget_round_trip_cost_pct,
                     "owner_round_trip_cost_provenance": (
                         "widget_auto_trade_policy_calibration.round_trip_cost_pct"
@@ -1919,7 +2538,6 @@ def _widget_inventory(
         report_root=report_root,
         state_path=widget_state_path,
         symbols=symbols,
-        round_trip_cost_pct=widget_round_trip_cost_pct,
     )
     anchors.extend(actual_anchors)
 
@@ -1933,6 +2551,49 @@ def _widget_inventory(
         symbols,
         anchors,
         {
+            "comparison_cost": {
+                "status": (
+                    "pre_clean_baseline_archive_only"
+                    if widget_cost_contract is None
+                    else (
+                        "not_observed"
+                        if calibration is None
+                        else (
+                            "calibration_declared_cost_missing"
+                            if declared_widget_round_trip_cost_pct is None
+                            else (
+                                "calibration_declared_cost_contract_missing_or_invalid"
+                                if not isinstance(declared_widget_cost_contract, dict)
+                                else (
+                                    "loaded"
+                                    if widget_cost_contract_ready
+                                    else "calibration_declared_cost_mismatch"
+                                )
+                            )
+                        )
+                    )
+                ),
+                "optional_when_absent": calibration is None,
+                "declared_round_trip_cost_pct": (declared_widget_round_trip_cost_pct),
+                "resolved_contract": widget_cost_contract,
+            },
+            "symbol_research_comparison_cost": {
+                "status": (
+                    "pre_clean_baseline_archive_only"
+                    if widget_cost_contract is None
+                    else (
+                        "not_observed"
+                        if research is None
+                        else (
+                            "loaded"
+                            if research_cost_contract_ready
+                            else "research_declared_cost_contract_missing_or_invalid"
+                        )
+                    )
+                ),
+                "optional_when_absent": research is None,
+                "resolved_contract": widget_cost_contract,
+            },
             "calibration": _source(
                 calibration_path,
                 calibration,
@@ -3299,8 +3960,10 @@ def _micro_context(
     windows: dict[str, dict[str, Any]] = {
         anchor["anchor_id"]: {
             "rows": [],
+            "raw_market_rows": [],
             "depth_rows": 0,
             "depth_points": [],
+            "raw_depth_rows": [],
             "shock_reference_count": 0,
         }
         for anchor in anchors
@@ -3382,6 +4045,7 @@ def _micro_context(
                         "sequence_epoch": payload.get("sequence_epoch"),
                     }
                 )
+                windows[anchor["anchor_id"]]["raw_market_rows"].append(dict(payload))
 
     for payload in _iter_relevant_rows(
         depth_paths, symbols, diagnostics=read_diagnostics
@@ -3435,6 +4099,7 @@ def _micro_context(
                         "bid_depth": bid_depth,
                     }
                 )
+                windows[anchor["anchor_id"]]["raw_depth_rows"].append(dict(payload))
 
     for payload in _iter_relevant_rows(
         ref_paths, symbols, diagnostics=read_diagnostics
@@ -3530,6 +4195,153 @@ def _invalid_contract_count_for_scope(
         ):
             total += int(raw_count or 0)
     return total
+
+
+_ENTRY_CONFIRMATION_ANCHOR_ROLES = frozenset(
+    {
+        "actual_widget_entry_signal",
+        "actual_widget_daily_cap_blocked_entry_signal",
+        "counterfactual_calibration_entry",
+        "prospective_widget_research_entry",
+        "episode_signal_bar",
+        "prospective_episode_research_signal",
+    }
+)
+
+
+def _entry_ask_depletion_feature(
+    anchor: dict[str, Any],
+    window: dict[str, Any],
+    *,
+    source_complete: bool,
+) -> dict[str, Any] | None:
+    if anchor.get("anchor_role") not in _ENTRY_CONFIRMATION_ANCHOR_ROLES:
+        return None
+    anchor_at = _parse_ts(anchor.get("anchor_at"))
+    if anchor_at is None:
+        return {
+            "source_quality_status": "source_gap",
+            "source_gap_reasons": ["decision_anchor_timestamp_invalid"],
+        }
+    raw_market_rows = [
+        dict(row)
+        for row in window.get("raw_market_rows") or []
+        if isinstance(row, dict)
+    ]
+    raw_depth_rows = [
+        dict(row) for row in window.get("raw_depth_rows") or [] if isinstance(row, dict)
+    ]
+    event_candidates: list[tuple[datetime, dict[str, Any]]] = []
+    for row in raw_market_rows:
+        timestamp = _parse_owner_ts(row.get("local_receive_timestamp"))
+        if (
+            timestamp is not None
+            and timestamp >= anchor_at
+            and timestamp <= anchor_at + timedelta(seconds=1)
+            and row.get("schema") == "scalp_micro_reversion_market_stream_point_v3"
+        ):
+            event_candidates.append((timestamp, row))
+    if not event_candidates:
+        return {
+            "source_quality_status": "source_gap",
+            "source_gap_reasons": ["canonical_0b_market_anchor_within_1s_missing"],
+        }
+    event_at, event_market = min(event_candidates, key=lambda item: item[0])
+    try:
+        sequence_epoch = int(event_market["sequence_epoch"])
+        market_sequence = int(event_market["source_sequence"])
+    except (KeyError, TypeError, ValueError):
+        return {
+            "source_quality_status": "source_gap",
+            "source_gap_reasons": ["canonical_0b_market_anchor_sequence_invalid"],
+        }
+    scope = (
+        str(event_market.get("symbol") or ""),
+        str(event_market.get("venue") or ""),
+        str(event_market.get("session_bucket") or ""),
+        sequence_epoch,
+    )
+    scoped_depth: list[tuple[datetime, dict[str, Any]]] = []
+    for row in raw_depth_rows:
+        timestamp = _parse_owner_ts(row.get("local_receive_timestamp"))
+        try:
+            row_epoch = int(row.get("sequence_epoch"))
+        except (TypeError, ValueError):
+            continue
+        if (
+            timestamp is not None
+            and (
+                str(row.get("symbol") or ""),
+                str(row.get("venue") or ""),
+                str(row.get("session_bucket") or ""),
+                row_epoch,
+            )
+            == scope
+        ):
+            scoped_depth.append((timestamp, row))
+    anchor_depth_candidates = [item for item in scoped_depth if item[0] < event_at]
+    anchor_depth = (
+        max(anchor_depth_candidates, key=lambda item: item[0])[1]
+        if anchor_depth_candidates
+        else None
+    )
+    scoped_market_times = [
+        timestamp
+        for row in raw_market_rows
+        if (
+            (timestamp := _parse_owner_ts(row.get("local_receive_timestamp")))
+            is not None
+            and str(row.get("symbol") or "") == scope[0]
+            and str(row.get("venue") or "") == scope[1]
+            and str(row.get("session_bucket") or "") == scope[2]
+            and row.get("sequence_epoch") == sequence_epoch
+        )
+    ]
+    observed_through = max(
+        [event_at, *scoped_market_times, *(item[0] for item in scoped_depth)]
+    )
+    context = AskDepletionContext(
+        event_id=f"entry_confirmation:{anchor['anchor_id']}:{market_sequence}",
+        anchor_role="shock_event",
+        symbol=scope[0],
+        venue=scope[1],
+        session_bucket=scope[2],
+        sequence_epoch=sequence_epoch,
+        anchor_event_local_receive_timestamp_ms=int(event_at.timestamp() * 1000),
+        event_market_source_sequence=market_sequence,
+        observed_through_local_receive_timestamp_ms=int(
+            observed_through.timestamp() * 1000
+        ),
+        depth_source_complete=source_complete,
+        market_source_complete=source_complete,
+    )
+    try:
+        report = build_ask_depletion_report(
+            context=context,
+            anchor_depth=anchor_depth,
+            depth_rows=[row for _, row in scoped_depth],
+            market_rows=raw_market_rows,
+            horizons_ms=(1_000, 3_000, 5_000),
+            top_depth_levels=(3, 5),
+            max_depth_age_ms=1_000,
+        ).as_dict()
+    except (KeyError, TypeError, ValueError) as exc:
+        return {
+            "source_quality_status": "source_gap",
+            "source_gap_reasons": [
+                f"ask_depletion_contract_error:{type(exc).__name__}:{exc}"
+            ],
+        }
+    report["decision_anchor_binding"] = {
+        "decision_anchor_id": anchor["anchor_id"],
+        "decision_anchor_at": anchor_at.isoformat(),
+        "market_anchor_at": event_at.isoformat(),
+        "market_anchor_offset_ms": round(
+            (event_at - anchor_at).total_seconds() * 1000.0
+        ),
+        "binding_policy": "first_canonical_0b_at_or_after_decision_within_1s",
+    }
+    return report
 
 
 def _anchor_result(
@@ -3674,6 +4486,19 @@ def _anchor_result(
             }
             for horizon in TIMEOUT_RESEARCH_HORIZONS_SEC
         },
+        "entry_confirmation_bbo_horizons": {
+            str(horizon): {
+                "observed": None,
+                "best_bid": None,
+                "best_ask": None,
+                "bid_return_bps": None,
+                "ask_return_bps": None,
+                "spread_bps": None,
+                "observation_offset_ms": None,
+                "quote_age_from_horizon_ms": None,
+            }
+            for horizon in ENTRY_CONFIRMATION_HORIZONS_SEC
+        },
         "gross_no_slippage_profit_touch": {
             str(threshold): {"touched": None, "time_ms": None}
             for threshold in GROSS_PROFIT_TOUCH_BPS
@@ -3783,6 +4608,67 @@ def _anchor_result(
                 ),
                 "depth_backed": depth_backed,
             }
+        entry_confirmation_bbo_horizons: dict[str, dict[str, Any]] = {}
+        for horizon_sec in ENTRY_CONFIRMATION_HORIZONS_SEC:
+            deadline = (
+                anchor_at + timedelta(seconds=horizon_sec)
+                if anchor_at is not None
+                else None
+            )
+            eligible_rows = [
+                row
+                for row in post
+                if deadline is not None
+                and row["timestamp"] <= deadline
+                and row.get("best_bid") is not None
+                and row.get("best_ask") is not None
+            ]
+            horizon_row = eligible_rows[-1] if eligible_rows else None
+            quote_age_ms = (
+                round((deadline - horizon_row["timestamp"]).total_seconds() * 1000.0)
+                if deadline is not None and horizon_row is not None
+                else None
+            )
+            observed = bool(
+                anchor.get("anchor_role") in _ENTRY_CONFIRMATION_ANCHOR_ROLES
+                and horizon_row is not None
+                and quote_age_ms is not None
+                and 0 <= quote_age_ms <= ENTRY_CONFIRMATION_MAX_QUOTE_AGE_SEC * 1000
+            )
+            best_bid = float(horizon_row["best_bid"]) if observed else None
+            best_ask = float(horizon_row["best_ask"]) if observed else None
+            entry_confirmation_bbo_horizons[str(horizon_sec)] = {
+                "observed": (
+                    observed
+                    if anchor.get("anchor_role") in _ENTRY_CONFIRMATION_ANCHOR_ROLES
+                    else None
+                ),
+                "best_bid": round(best_bid, 6) if best_bid is not None else None,
+                "best_ask": round(best_ask, 6) if best_ask is not None else None,
+                "bid_return_bps": (
+                    round((best_bid / reference - 1.0) * 10_000.0, 6)
+                    if best_bid is not None
+                    else None
+                ),
+                "ask_return_bps": (
+                    round((best_ask / reference - 1.0) * 10_000.0, 6)
+                    if best_ask is not None
+                    else None
+                ),
+                "spread_bps": (
+                    round((best_ask - best_bid) / best_bid * 10_000.0, 6)
+                    if best_bid is not None and best_ask is not None and best_bid > 0
+                    else None
+                ),
+                "observation_offset_ms": (
+                    round(
+                        (horizon_row["timestamp"] - anchor_at).total_seconds() * 1000.0
+                    )
+                    if observed and anchor_at is not None
+                    else None
+                ),
+                "quote_age_from_horizon_ms": quote_age_ms if observed else None,
+            }
         profit_touches: dict[str, dict[str, Any]] = {}
         for threshold in GROSS_PROFIT_TOUCH_BPS:
             hit = (
@@ -3889,9 +4775,15 @@ def _anchor_result(
                     "depth_backed": fillable_owner_target_hit is not None,
                 },
                 "fillable_bid_exit_horizons": fillable_bid_exit_horizons,
+                "entry_confirmation_bbo_horizons": (entry_confirmation_bbo_horizons),
                 "gross_no_slippage_profit_touch": profit_touches,
             }
         )
+    metrics["entry_ask_depletion"] = _entry_ask_depletion_feature(
+        anchor,
+        window,
+        source_complete=status == "matched",
+    )
     result = dict(anchor)
     result.update(
         {
@@ -3905,6 +4797,324 @@ def _anchor_result(
         }
     )
     return result
+
+
+def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
+    if result.get("anchor_role") not in _ENTRY_CONFIRMATION_ANCHOR_ROLES:
+        return None
+    metrics = result.get("metrics") or {}
+    bbo_horizons = metrics.get("entry_confirmation_bbo_horizons") or {}
+    ask_report = metrics.get("entry_ask_depletion")
+    missing_bbo = [
+        horizon
+        for horizon in ENTRY_CONFIRMATION_HORIZONS_SEC
+        if (bbo_horizons.get(str(horizon)) or {}).get("observed") is not True
+    ]
+    ask_horizons = {
+        int(row.get("horizon_ms") or 0): row
+        for row in (ask_report or {}).get("horizons") or []
+        if isinstance(row, dict)
+    }
+    missing_ask = [
+        horizon
+        for horizon in ENTRY_CONFIRMATION_HORIZONS_SEC
+        if (ask_horizons.get(horizon * 1000) or {}).get("eligible_for_feature_ablation")
+        is not True
+    ]
+    source_gaps: list[str] = []
+    if result.get("micro_context_status") != "matched":
+        source_gaps.append(str(result.get("micro_context_status") or "unknown"))
+    source_gaps.extend(f"bbo_{horizon}s_missing" for horizon in missing_bbo)
+    source_gaps.extend(
+        f"ask_depletion_{horizon}s_ineligible" for horizon in missing_ask
+    )
+    if isinstance(ask_report, dict):
+        source_gaps.extend(
+            str(value) for value in ask_report.get("source_gap_reasons") or []
+        )
+    if source_gaps:
+        label = "source_quality_blocked"
+    else:
+        eligible_ask = [
+            ask_horizons[horizon * 1000] for horizon in ENTRY_CONFIRMATION_HORIZONS_SEC
+        ]
+        bid_returns = [
+            float(bbo_horizons[str(horizon)]["bid_return_bps"])
+            for horizon in ENTRY_CONFIRMATION_HORIZONS_SEC
+        ]
+        refill_ratios = [
+            float(value)
+            for row in eligible_ask
+            if (value := _finite_float(row.get("refill_ratio"))) is not None
+        ]
+        trade_backed_ratios = [
+            float(value)
+            for row in eligible_ask
+            if (value := _finite_float(row.get("aggressive_buy_trade_backed_ratio")))
+            is not None
+        ]
+        adverse = bool(
+            min(bid_returns) <= -10.0
+            or (refill_ratios and max(refill_ratios) >= 1.0)
+            or any(row.get("downward_reprice_observed") is True for row in eligible_ask)
+        )
+        supportive = bool(
+            not adverse
+            and bid_returns[-1] >= 0.0
+            and bool(trade_backed_ratios)
+            and bool(refill_ratios)
+            and max(trade_backed_ratios) >= 0.5
+            and max(refill_ratios) < 0.5
+        )
+        label = (
+            "adverse_veto_candidate"
+            if adverse
+            else (
+                "supportive_confirmation_candidate"
+                if supportive
+                else "recheck_required"
+            )
+        )
+    return {
+        "anchor_id": result.get("anchor_id"),
+        "lifecycle_id": result.get("lifecycle_id"),
+        "owner": result.get("owner"),
+        "symbol": result.get("symbol"),
+        "session": result.get("session"),
+        "anchor_at": result.get("anchor_at"),
+        "entry_state": str(result.get("entry_state") or "UNSPECIFIED"),
+        "source_entry_event_id": result.get("source_entry_event_id"),
+        "anchor_role": result.get("anchor_role"),
+        "classification": label,
+        "source_gap_reasons": sorted(set(source_gaps)),
+        "actual_order_submitted": result.get("actual_order_submitted") is True,
+        "owner_outcome": result.get("owner_outcome"),
+        "entry_confirmation_bbo_horizons": bbo_horizons,
+        "entry_ask_depletion": ask_report,
+        "runtime_effect": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def _micro_entry_confirmation_summary(
+    results: list[dict[str, Any]],
+    *,
+    widget_sources: dict[str, Any],
+    target_date: str,
+) -> dict[str, Any]:
+    rows = [
+        row
+        for result in results
+        if (row := _entry_confirmation_label(result)) is not None
+    ]
+    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[
+            (
+                str(row["owner"]),
+                str(row["symbol"]),
+                str(row["session"]),
+                str(row["entry_state"]),
+            )
+        ].append(row)
+    cohorts: list[dict[str, Any]] = []
+    for (owner, symbol, session, entry_state), cohort_rows in sorted(grouped.items()):
+        eligible_rows = [
+            row
+            for row in cohort_rows
+            if row["classification"] != "source_quality_blocked"
+        ]
+        realized_net_returns = [
+            float(outcome["cost_aware_net_return_pct"])
+            for row in eligible_rows
+            if isinstance((outcome := row.get("owner_outcome")), dict)
+            and outcome.get("realized") is True
+            and _finite_float(outcome.get("cost_aware_net_return_pct")) is not None
+        ]
+        cohorts.append(
+            {
+                "owner": owner,
+                "symbol": symbol,
+                "session": session,
+                "entry_state": entry_state,
+                "sample_count": len(cohort_rows),
+                "source_quality_eligible_count": len(eligible_rows),
+                "classification_counts": {
+                    label: sum(row["classification"] == label for row in cohort_rows)
+                    for label in (
+                        "supportive_confirmation_candidate",
+                        "adverse_veto_candidate",
+                        "recheck_required",
+                        "source_quality_blocked",
+                    )
+                },
+                "source_quality_adjusted_ev_pct": (
+                    round(statistics.fmean(realized_net_returns), 8)
+                    if realized_net_returns
+                    else None
+                ),
+                "actual_realized_sample_count": len(realized_net_returns),
+                "policy_candidate_ready": False,
+            }
+        )
+
+    actual_entry_rows = [
+        row
+        for row in rows
+        if row["anchor_role"] == "actual_widget_entry_signal"
+        and row["actual_order_submitted"] is True
+    ]
+    blocked_entry_rows = [
+        row
+        for row in rows
+        if row["anchor_role"] == "actual_widget_daily_cap_blocked_entry_signal"
+    ]
+    actual_source = widget_sources.get("actual_execution_events") or {}
+    blocked_opportunities = (
+        actual_source.get("blocked_daily_entry_limit_opportunities") or []
+    )
+    cap_reallocation: list[dict[str, Any]] = []
+    cost_contract = (
+        comparison_cost_contract(target_date)
+        if date.fromisoformat(target_date) >= CLEAN_BASELINE_DATE
+        else None
+    )
+    for opportunity in blocked_opportunities:
+        if not isinstance(opportunity, dict):
+            continue
+        opportunity_at = _parse_owner_ts(opportunity.get("observed_at"))
+        prior_candidates = sorted(
+            [
+                row
+                for row in actual_entry_rows
+                if row["symbol"] == opportunity.get("symbol")
+                and row["session"] == opportunity.get("session")
+                and opportunity_at is not None
+                and (prior_at := _parse_owner_ts(row.get("anchor_at"))) is not None
+                and prior_at < opportunity_at
+            ],
+            key=lambda row: str(row.get("anchor_at") or ""),
+        )
+        blocked_confirmation = next(
+            (
+                row
+                for row in blocked_entry_rows
+                if row.get("source_entry_event_id") == opportunity.get("signal_id")
+            ),
+            None,
+        )
+        prior = prior_candidates[-1] if prior_candidates else None
+        prior_outcome = prior.get("owner_outcome") if isinstance(prior, dict) else None
+        prior_outcome_ready = bool(
+            isinstance(prior_outcome, dict)
+            and prior_outcome.get("realized") is True
+            and _finite_float(prior_outcome.get("cost_aware_net_return_pct"))
+            is not None
+            and prior_outcome.get("cost_contract_sha256")
+            == (cost_contract or {}).get("contract_sha256")
+        )
+        entry_price = _finite_float(opportunity.get("entry_price"))
+        exit_price = _finite_float(opportunity.get("source_only_exit_price"))
+        gross_return = (
+            (exit_price / entry_price - 1.0) * 100.0
+            if entry_price is not None
+            and entry_price > 0
+            and exit_price is not None
+            and exit_price > 0
+            else None
+        )
+        source_quality_ready = bool(
+            prior is not None
+            and prior["classification"] != "source_quality_blocked"
+            and prior_outcome_ready
+            and blocked_confirmation is not None
+            and blocked_confirmation["classification"] != "source_quality_blocked"
+            and opportunity.get("source_only_exit_reason")
+            and gross_return is not None
+        )
+        cap_reallocation.append(
+            {
+                **opportunity,
+                "prior_actual_anchor_id": prior.get("anchor_id") if prior else None,
+                "prior_actual_confirmation_classification": (
+                    prior.get("classification") if prior else None
+                ),
+                "prior_actual_realized": (
+                    prior_outcome.get("realized")
+                    if isinstance(prior_outcome, dict)
+                    else None
+                ),
+                "prior_actual_cost_aware_net_return_pct": (
+                    prior_outcome.get("cost_aware_net_return_pct")
+                    if isinstance(prior_outcome, dict)
+                    else None
+                ),
+                "blocked_opportunity_anchor_id": (
+                    blocked_confirmation.get("anchor_id")
+                    if blocked_confirmation
+                    else None
+                ),
+                "blocked_opportunity_confirmation_classification": (
+                    blocked_confirmation.get("classification")
+                    if blocked_confirmation
+                    else None
+                ),
+                "comparison_status": (
+                    "source_only_reallocation_evidence_ready"
+                    if source_quality_ready
+                    else "source_quality_blocked"
+                ),
+                "source_only_mark_gross_return_pct": (
+                    round(gross_return, 8) if gross_return is not None else None
+                ),
+                "source_only_mark_cost_aware_return_pct": (
+                    round(
+                        gross_return - float(cost_contract["round_trip_cost_pct"]),
+                        8,
+                    )
+                    if gross_return is not None and cost_contract is not None
+                    else None
+                ),
+                "cost_contract_sha256": (
+                    cost_contract["contract_sha256"]
+                    if cost_contract is not None
+                    else None
+                ),
+                "actual_order_submitted": False,
+                "broker_fill_observed": False,
+                "counterfactual_only": True,
+                "daily_cap_mutation_allowed": False,
+            }
+        )
+    return {
+        "schema": "machine_micro_entry_confirmation_v1",
+        "status": (
+            "source_only_evidence_accumulating" if rows else "no_entry_anchor_observed"
+        ),
+        "decision": "no_runtime_or_policy_change",
+        "metric_contract": MICRO_ENTRY_CONFIRMATION_CONTRACT,
+        "authority": {
+            "runtime_effect": False,
+            "trading_runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "policy_candidate_ready": False,
+        },
+        "summary": {
+            "entry_anchor_count": len(rows),
+            "source_quality_eligible_count": sum(
+                row["classification"] != "source_quality_blocked" for row in rows
+            ),
+            "source_quality_blocked_count": sum(
+                row["classification"] == "source_quality_blocked" for row in rows
+            ),
+            "owner_state_cohort_count": len(cohorts),
+            "daily_cap_reallocation_observation_count": len(cap_reallocation),
+        },
+        "owner_state_cohorts": cohorts,
+        "entry_anchors": rows,
+        "daily_cap_reallocation_observations": cap_reallocation,
+    }
 
 
 def _scope_micro_gap_class(
@@ -4520,6 +5730,11 @@ def build_report(
         )
         for anchor in anchors
     ]
+    micro_entry_confirmation = _micro_entry_confirmation_summary(
+        results,
+        widget_sources=widget_sources,
+        target_date=target_date,
+    )
     results_by_scope: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for result in results:
         results_by_scope[(result["owner"], result["scope_id"])].append(result)
@@ -4842,6 +6057,7 @@ def build_report(
         "rolling_policy_source_contract": rolling_policy_source_contract,
         "fast_lifecycle_objective_alignment": objective_alignment,
         "rolling_paired_policy_research": rolling_paired_policy_research,
+        "micro_entry_confirmation": micro_entry_confirmation,
         "objective_followups": objective_followups,
         "policy_change_readiness": POLICY_CHANGE_READINESS_CONTRACT,
         "promotion_candidate_intake_contract": PROMOTION_CANDIDATE_INTAKE_CONTRACT,
@@ -4879,6 +6095,17 @@ def build_report(
                 "summary"
             ]["cohort_count"],
             "policy_promotion_candidate_count": len(policy_promotion_candidates),
+            "micro_entry_confirmation_eligible_count": (
+                micro_entry_confirmation["summary"]["source_quality_eligible_count"]
+            ),
+            "micro_entry_confirmation_blocked_count": (
+                micro_entry_confirmation["summary"]["source_quality_blocked_count"]
+            ),
+            "daily_cap_reallocation_observation_count": (
+                micro_entry_confirmation["summary"][
+                    "daily_cap_reallocation_observation_count"
+                ]
+            ),
         },
         "consumers": {
             "widget_postclose_tuning": {
@@ -5033,6 +6260,34 @@ def render_markdown(report: dict[str, Any]) -> str:
                     + "`."
                 ),
                 "- Runtime family registration, PREOPEN apply, orders, and current owner policy remain unchanged.",
+                "",
+            ]
+        )
+    entry_confirmation = report.get("micro_entry_confirmation")
+    if isinstance(entry_confirmation, dict):
+        entry_summary = entry_confirmation.get("summary") or {}
+        lines.extend(
+            [
+                "## Micro Entry Confirmation",
+                "",
+                (
+                    "- Entry anchors: "
+                    f"`{entry_summary.get('entry_anchor_count', 0)}`; source-quality "
+                    f"eligible: `{entry_summary.get('source_quality_eligible_count', 0)}`; "
+                    f"blocked: `{entry_summary.get('source_quality_blocked_count', 0)}`."
+                ),
+                (
+                    "- Owner/state cohorts: "
+                    f"`{entry_summary.get('owner_state_cohort_count', 0)}`; daily-cap "
+                    "reallocation observations: "
+                    f"`{entry_summary.get('daily_cap_reallocation_observation_count', 0)}`."
+                ),
+                (
+                    "- The 1/3/5-second BBO and fixed-anchor ask-depletion axis is "
+                    "source-only. Missing 0B/0D is an explicit source-quality block, "
+                    "and widget/episode owners and entry states are not pooled."
+                ),
+                "- No BUY, exit, quantity, target, cooldown, or daily-cap mutation is authorized.",
                 "",
             ]
         )
