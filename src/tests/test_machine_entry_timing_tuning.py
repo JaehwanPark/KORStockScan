@@ -410,6 +410,107 @@ def test_source_report_requires_explicit_clean_baseline_contract(
     assert report["rejected_source_artifacts"] == [
         {"source_date": target_date.isoformat(), "path": str(source_path)}
     ]
+    assert report["status"] == "source_quality_blocked"
+    assert report["sample_floor_assessment"]["state"] == "source_contract_blocked"
+
+
+def test_report_classifies_blocked_actual_anchors_as_join_gap(
+    tmp_path: Path,
+) -> None:
+    target_date = date(2026, 8, 27)
+    source_dir = tmp_path / "source"
+    blocked = _entry_row(target_date, 1)
+    blocked["anchor_role"] = "episode_signal_bar"
+    blocked["classification"] = "source_quality_blocked"
+    blocked["source_gap_reasons"] = [
+        "actual_signal_decision_timestamp_missing",
+        "canonical_0b_market_anchor_within_1s_missing",
+    ]
+    payload = {
+        "schema": "machine_microstructure_attribution_v1",
+        "target_date": target_date.isoformat(),
+        "clean_tuning_baseline_date": "2026-06-05",
+        "clean_baseline_allowed": True,
+        "authority": {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+        "micro_entry_confirmation": {"entry_anchors": [blocked]},
+    }
+    source_dir.mkdir()
+    (source_dir / f"machine_microstructure_attribution_{target_date}.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+    report = build_report(
+        target_date=target_date,
+        source_dir=source_dir,
+        low_price_candidate_dir=tmp_path / "low-price-candidates",
+        samsung_candidate_dir=tmp_path / "samsung-candidates",
+        widget_policy_dir=tmp_path / "widget-policies",
+    )
+
+    assert report["winner"] is None
+    assert report["status"] == "source_quality_blocked"
+    assessment = report["sample_floor_assessment"]
+    assert assessment["state"] == "instrumentation_or_join_gap"
+    assert assessment["shortage_classification_status"] == "classified"
+    assert assessment["shortage_class"] == "structural_population_exhaustion"
+    assert assessment["target_actual_entry_anchor_count"] == 1
+    assert assessment["target_source_quality_blocked_anchor_count"] == 1
+    assert assessment["target_source_gap_reasons"] == [
+        "actual_signal_decision_timestamp_missing",
+        "canonical_0b_market_anchor_within_1s_missing",
+    ]
+    assert assessment["next_action"] == (
+        "repair_exact_entry_anchor_market_join_and_rerun"
+    )
+    assert assessment["runtime_effect"] is False
+    assert assessment["allowed_runtime_apply"] is False
+
+
+def test_cohort_sample_projection_uses_all_source_days_since_first_seen(
+    tmp_path: Path,
+) -> None:
+    target_date = date(2026, 8, 27)
+    source_dir = tmp_path / "source"
+    source_dates = _trading_dates(target_date, 5)
+    for index, source_date in enumerate(source_dates, start=1):
+        rows = [_entry_row(source_date, index)] if index in {1, 5} else []
+        payload = {
+            "schema": "machine_microstructure_attribution_v1",
+            "target_date": source_date.isoformat(),
+            "clean_tuning_baseline_date": "2026-06-05",
+            "clean_baseline_allowed": True,
+            "authority": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            "micro_entry_confirmation": {"entry_anchors": rows},
+        }
+        path = source_dir / f"machine_microstructure_attribution_{source_date}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = build_report(
+        target_date=target_date,
+        source_dir=source_dir,
+        low_price_candidate_dir=tmp_path / "low-price-candidates",
+        samsung_candidate_dir=tmp_path / "samsung-candidates",
+        widget_policy_dir=tmp_path / "widget-policies",
+    )
+
+    assessment = report["cohorts"][0]["sample_floor_assessment"]
+    assert assessment["state"] == "natural_sample_wait"
+    assert assessment["shortage_class"] == "time_resolvable_shortage"
+    assert assessment["source_report_day_count_since_scope_first_seen"] == 5
+    assert assessment["completed_outcomes_per_source_day"] == 0.4
+    assert assessment["remaining_completed_outcome_count"] == 18
+    assert assessment["projected_additional_trading_days_at_observed_yield"] == 45
 
 
 def test_worse_delayed_ask_is_included_as_negative_paired_uplift() -> None:

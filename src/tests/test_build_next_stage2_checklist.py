@@ -350,9 +350,11 @@ def test_build_next_stage2_checklist_preserves_manual_content_and_replaces_auto_
     )
 
     mod.build_next_stage2_checklist("2026-05-11")
+    first_render = target.read_text(encoding="utf-8")
     mod.build_next_stage2_checklist("2026-05-11")
 
     text = target.read_text(encoding="utf-8")
+    assert text == first_render
     assert "manual-only-line" in text
     assert "manual-sync-line" in text
     assert text.count("ThresholdEnvAutoApplyPreopen0512") == 1

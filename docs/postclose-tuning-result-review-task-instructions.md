@@ -20,6 +20,7 @@
 8. AI 판단품질, micro-reversion 등 다단계 계산은 원천 row부터 최종 집계까지 독립 재현되며 leakage·중복·단위·시간·비용 오류가 없는가?
 9. 당일 적용된 입력은 메인·위젯·에피소드 process에 실제 소비됐으며, 당일 장후 생성된 다음-session 산출물은 그 authority에 맞는 마지막 consumer와 handoff까지만 정확히 전달됐는가?
 10. 실행 예정 process가 살아 있고 의미 있는 output과 consumer를 가지며 dead·hung·duplicate·no-op·orphan 경로가 남지 않았는가?
+11. 보고서의 각 표본·모집단 부족은 `시간이 해결하는 부족`과 `구조적으로 모집단이 고갈되는 부족` 중 무엇이며, 최초 고갈 단계·예상 해소 시점 또는 구조 보완·재판정 조건이 근거와 함께 닫혔는가?
 
 장후 완료는 다음 두 층을 분리한다.
 
@@ -68,7 +69,7 @@
 
 high/xhigh의 추가 추론은 조사 깊이를 높이는 데 사용하고 scope나 실행 권한을 넓히지 않는다. `high`는 위 6개 gate, 독립 producer/consumer review와 finding-0 재검증을 모두 수행한다. `xhigh`는 여기에 반대 가설·오탐/누락·경계 표본·authority leak를 겨냥한 adversarial second pass와 수정 후 전체 영향면 재리뷰를 추가한다. 현재 target date와 직접 연결된 producer/consumer부터 닫고, 무관한 repository 전역 개선은 별도 backlog로 분리한다.
 
-긴 실행에서는 최소 `target date / commit·dirty / artifact path·hash·time / process PID·start·status / finding severity / 수정 파일 / validation / regeneration step`을 evidence ledger로 유지한다. context가 축약되거나 작업이 다음 turn으로 이어져도 이 ledger와 마지막 완료 gate에서 재개하고 이미 닫힌 단계를 무근거로 반복하지 않는다.
+긴 실행에서는 최소 `target date / commit·dirty / artifact path·hash·time / process PID·start·status / finding severity / shortage_id·shortage_class·evidence window·ETA 또는 구조 보완 / 수정 파일 / validation / regeneration step`을 evidence ledger로 유지한다. context가 축약되거나 작업이 다음 turn으로 이어져도 이 ledger와 마지막 완료 gate에서 재개하고 이미 닫힌 단계를 무근거로 반복하지 않는다.
 
 서로 독립된 read-only 계산, process inventory와 producer/consumer review는 병렬 검토할 수 있다. 최종 판정은 단일 owner가 source hash와 finding을 합쳐 내며, sub-review의 추정만으로 결함을 확정하거나 runtime을 변경하지 않는다.
 
@@ -312,6 +313,8 @@ deterministic producer는 같은 immutable input과 policy version의 재실행�
 
 계산이 맞더라도 primary decision field가 metric contract의 `metric_role`, `decision_authority`, `window_policy`, `sample_floor`, `primary_decision_metric`, `source_quality_gate`, `forbidden_uses`를 갖지 않으면 `instrumentation_gap` 또는 `source_quality_blocker`로 분류한다.
 
+계산 감사 중 `sample_floor` 미달, underproduction, natural match 0, submit/terminal/mature outcome 부족을 발견하면 최종 count만 읽지 않고 §8.4의 reachability 계산과 `shortage_ledger`를 함께 작성한다. `hold_sample|EVIDENCE_ACCUMULATING|defer_until_more_sample` 상태나 그 반복 횟수 자체는 구조적 고갈 증거가 아니며, declared window 안의 유입·maturity·expiry와 최초 funnel 고갈 stage로 판정한다.
+
 ### 7.2 AI 판단품질 계산 감사
 
 AI endpoint별로 자연 호출, offline replay와 결과 평가를 같은 trace lineage로 연결한다.
@@ -512,7 +515,42 @@ Swing dry-run, sim/probe/counterfactual은 source와 후보 생성에는 사용�
 
 blocked 상태는 `source_quality`, `sample_floor`, `submit_drought`, `env_mapping`, `runtime_hook`, `process_reflection`, `post_apply_attribution`, `AI_review`, `safety_or_broker_guard`, `user_authority`로 분리한다. `contract not closed`, `표본 부족`처럼 뭉뚱그리지 말고 owner artifact, 관측 근거, next repair action과 acceptance test를 각각 기록한다.
 
+`sample_floor`는 다시 `natural_sample_wait`, `no_natural_sample`, `instrumentation_or_join_gap`, `terminal_or_right_censored_gap`, `fragmented_child_bucket`, `window_floor_unattainable`로 세분한다. 각 owner/scope/window마다 eligible opportunity, captured source-qualified row, mature terminal row, 최근 창의 일별 yield, floor까지 남은 수와 observed-yield 기준 예상 추가 거래일을 기록한다. yield가 0이면 도달일을 계산하지 않고 최초 0 stage와 upstream/downstream census를 기록한다. handoff·guard가 정상이고 opportunity 자체가 없으면 `natural_absence`로 두며 결손 owner를 만들지 않는다. required input이나 consumer가 있어야 하는데 contract breach로 0이 된 증거가 있을 때만 producer/join/terminal owner를 지정한다. exact owner의 선언된 일일 최대 lifecycle 수와 window 길이의 곱보다 floor가 크거나, rolling child를 계속 분할해 최대 관측 가능 수가 floor 아래이면 단순 이월하지 않고 `window_floor_unattainable` 또는 `fragmented_child_bucket`으로 fail-closed한다. 이때 floor를 자동 완화하거나 owner·venue·session을 합치지 않는다. 기존 metric contract가 이미 소유한 canonical rolling/cumulative parent의 원래 authority와 child-dimension 진단을 사용하는 것은 신규 authority 이전이 아니다. 새 parent·denominator·window를 만들거나 child authority를 parent로 이전할 때만 별도 metric-contract 변경과 review gate를 요구한다.
+
+이 세부 원인 코드는 §8.4의 최종 `shortage_class`를 대체하지 않는다. 예를 들어 `natural_sample_wait`도 reachability 증거에 따라 시간 해결형 또는 `pending_declared_window`가 될 수 있고, 반복 `no_natural_sample`도 handoff 정상·finite reach가 입증되면 즉시 구조형으로 승격하지 않는다. 반대로 `fragmented_child_bucket|window_floor_unattainable`은 계약상 최대 도달치가 floor 아래임이 계산으로 확인될 때 구조형으로 연결한다.
+
 은퇴한 opening rotation·upper-limit rotation·panic-buying과 WAIT6579 독립 bridge의 historical artifact는 archive/audit evidence일 뿐 재기동·재활성화 경로가 아니다.
+
+### 8.4 부족의 시간성·구조적 모집단 고갈 판정
+
+보고서에서 `부족`, `미달`, `자연 표본 없음`, `sample_floor`, `submit_drought`, `terminal outcome 부족`으로 해석하거나 required population의 `0건`을 문제로 제시하는 모든 항목은 stable한 `shortage_id`를 부여해 `shortage_ledger`에서 전수 관리한다. 오류·충돌·authority leak 0건처럼 0이 정상 목표인 metric은 부족으로 세지 않는다. 실질적인 표본·모집단 부족의 최종 `shortage_class`는 다음 둘 중 정확히 하나여야 한다.
+
+- `time_resolvable_shortage` (`시간이 해결하는 부족`): producer부터 artifact authority가 선언한 intended last consumer 또는 sample-floor-owning stage까지의 경로가 정상이고 source quality도 유효하며, 같은 floor denominator 아래 새 qualifying unique 표본이 계속 유입될 수 있고 rolling-window expiry까지 차감한 보수적 도달 가능 표본이 선언된 관찰 horizon 안에 sample floor를 채운다는 유한한 근거가 있는 상태다. 계약상 유한한 maturity/terminal deadline과 별도 주문·청산 권한 변경 없이 자연 전환될 근거가 있는 right-censor 대기, 정상 handoff 뒤의 일시적 `natural_match_0`가 여기에 포함될 수 있다. 무기한 HELD 또는 deadline·자연 전환 근거가 없는 active-unrealized row를 시간 해결분으로 더하지 않는다.
+- `structural_population_exhaustion` (`구조적으로 모집단이 고갈되는 부족`): 단순 대기로는 현재 계약의 eligible·matched·mature 모집단이 늘지 않거나, 예상 유입량으로는 sample floor·결정 horizon에 도달할 수 없는 상태다. 과도하게 잘게 나눈 child bucket, 불가능한 predicate나 posterior-only runtime match, source/policy key 불일치, systematic join/exclusion, eligible upstream은 있는데 특정 funnel 단계가 계속 0이 되는 hook·consumer 결손, 구조적 submit drought가 여기에 해당한다.
+
+source-quality 결손 때문에 실제 모집단을 셀 수 없거나 owner의 `window_policy`, sample floor, maturity cutoff, effective/expiry horizon이 없어 둘 중 하나를 입증할 수 없으면 임의로 `time_resolvable_shortage`로 두지 않는다. `shortage_classification_status=blocked_missing_evidence`와 실제 blocker를 기록해 먼저 계약을 보완한다. 신규 경로의 declared minimum classification window가 아직 닫히지 않아 유입률을 계산할 수 없는 경우는 `shortage_classification_status=pending_declared_window`, 필요한 completed trading day 수와 earliest review date를 기록한다. 두 상태는 세 번째 최종 부족 유형이 아니며, 증거가 복구되거나 창이 닫히기 전에는 live-auto나 runtime approval의 정상 대기 근거로 사용할 수 없다. `pending_declared_window`는 명시한 earliest review date까지 제한적으로 `defer_evidence`에 둘 수 있지만 시간 해결형으로 포장하지 않는다. `not_yet_due|bounded_wait`, reviewed OFF/disabled, 완전 은퇴 family, artifact authority상 해당 consumer 표본을 요구하지 않는 경로, `user_authority` 대기, AI/source/env 계약 결손 자체는 표본 부족으로 위장하지 않고 `N/A_by_contract` 또는 각각의 원래 상태로 보고한다. 계약 결손이 stage count를 0으로 만든 사실이 유효 upstream/downstream census로 입증된 경우에만 그 결손을 구조적 고갈의 root cause로 함께 기록한다.
+
+`shortage_class`는 기존 producer/verifier의 canonical 상태를 대체하거나 runtime schema를 새로 만드는 값이 아니라 장후 감사·결과보고 metadata다. 각 row에 `canonical_source_state`를 함께 보존하고 `hold_sample`, `no_natural_sample`, `source_outcome_underproduction`, `lifecycle_stage_underproduction`, `not_applicable`, `keep_visible_by_design`의 원래 의미와 status를 덮어쓰지 않는다.
+
+각 `shortage_id`는 다음 funnel을 owner·family·stage·venue/session별 unique key로 재구성해 최초 고갈 단계를 고정한다. 모든 항목에 terminal까지 강제하지 않고 artifact의 `decision_authority`, intended last consumer와 floor denominator가 요구하는 단계에서 자른다.
+
+`raw source population → source-quality-valid → contract eligible [→ catalog/policy selected → PREOPEN loaded → runtime natural matched when authority requires] → authority-declared last consumer/floor-owning stage [→ decision/submit/terminal mature/completed when the floor contract requires]`
+
+최소 증거는 `metric_contract_version`, `shortage_metric`, `floor_denominator_key/unit`, denominator dedup key, `required_sample_floor`, `current_floor_qualified_unique`, `remaining_deficit`, 적용 `window_policy`, clean-baseline 시작, observed trading dates, completed due trading-day 수, source-available due-day 비율, 일별 `new_floor_qualified_unique`, 0건인 due day 수, `expiring_floor_qualified_unique`, 계약상 필요한 경우의 maturity backlog와 예정시각, first depleted stage, stage별 upstream count·conversion, policy effective/expiry 또는 다음 decision horizon, source/artifact hash다. `floor_qualifying_arrival_rate`는 exact floor denominator를 새로 충족한 unique row만 분자에 넣고, source-quality-valid census가 가능한 정상 due day의 0건도 분모에 포함해 `new_floor_qualified_unique / completed due trading days`로 계산한다. eligible/opportunity/matched/mature 등 다른 stage의 rate는 bottleneck 진단값일 뿐 floor ETA에 대입하지 않는다. source-quality 차단으로 census 자체가 불가능한 날은 자연 0일로 세지 않고 별도 excluded day로 보존한다. 같은 floor denominator의 `net_floor_accumulation_rate = floor_qualifying_arrival_rate - floor_expiry_rate`와 함께 사용한 lookback·분모를 명시한다. forecast는 metric contract가 선언한 minimum completed due days, source-available day floor, fixed lower-bound estimator를 충족해야 하며 양(+) 유입일만 골라 계산하지 않는다. 이 계약이 없거나 최소 창이 덜 찼으면 deterministic maturity deadline 근거가 있는 경우를 제외하고 `pending_declared_window|blocked_missing_evidence`로 둔다. cumulative 창은 expiry를 0으로 두며, rolling 창은 날짜별 신규 floor-qualifying 유입·maturity·expiry를 함께 투영한다. `conservative_reachable_n = current_floor_qualified_unique - expiring_floor_qualified_unique_before_horizon + conservative_expected_new_floor_qualified_unique`가 sample floor 이상이어야 시간 해결형이다. 비만료 창에서 `net_floor_accumulation_rate > 0`일 때만 `estimated_trading_days_to_floor=ceil(remaining_deficit / net_floor_accumulation_rate)`를 보조값으로 사용할 수 있고, rolling 창은 일별 expiry schedule을 반영한 earliest reach date를 사용한다. rate가 0, net accumulation이 0 이하, `conservative_reachable_n < required_sample_floor`, 또는 earliest reach date가 effective/decision horizon 밖이면 시간 해결을 주장하지 않는다. 단일 거래일 `natural_match_0`는 catalog/PREOPEN/key lineage가 정상이고 해당 natural-match floor denominator의 clean-baseline 또는 계약 window 비영(非零) base rate로 유한 reach date를 보일 때만 시간 해결형 warning이다.
+
+판정과 보완은 다음 규칙을 따른다.
+
+1. `time_resolvable_shortage`는 현재 수집 경로를 임의로 바꾸지 않고 `as_of`, conservative reachable N, ETA 범위, 다음 maturity/recheck 시각, 예상 신규·expiry 표본 수, 재분류 trigger를 남긴다. 시간 지정 후속은 당일 checklist에 `Due`, `Slot`, `TimeWindow`, `Track`을 가진 OPEN 항목으로 기록하되 같은 stable `shortage_id`의 기존 OPEN 항목을 갱신하고 중복 생성하지 않는다. ETA가 지났거나 최근 10개 completed trading day 안에서 동일 due check가 3회 이상 기록된 예상 유입 하한을 충족하지 못하거나, policy/key가 만료·미반영되면 즉시 다시 계산해 구조적 고갈 또는 실제 contract blocker로 재분류한다.
+2. `structural_population_exhaustion`는 기다림이나 반복 `defer_evidence`로 닫지 않는다. 최초 고갈 stage의 단일 owner를 지정하고, 허용 범위에서 parent bucket widening과 child dimension/provenance 보존, safe sim/source-only 수집 확대, parser/schema/key-lineage/runtime-hook/instrumentation 보완, maturity scheduler 또는 consumer 연결 보완 중 최소 조치를 workorder로 넘긴다. 단, 정당한 safety guard가 계약대로 제외한 모집단은 `structural_by_design_safety_exclusion`, `action=reject_nonpromotion`으로 두고 safety 완화나 구현 workorder 대상으로 만들지 않는다. live threshold·실주문 authority·provider·bot·cap·broker/hard-safety 변경이 필요하면 구현하지 않고 `user_authority`로 분리한다.
+3. 구조 보완 acceptance는 report row 생성이 아니라 같은 corrected path에서 신규 source-quality-valid이면서 exact floor denominator를 충족한 unique 표본이 first depleted stage를 통과하고, owner/venue/session 분리·전수 보존식·downstream hash가 닫히며, 재계산된 finite ETA 또는 sample floor 충족이 확인되는 것이다. 영향 artifact를 재생성할 때는 §7.6 순서와 review gate를 따른다.
+4. 표본 수를 맞추기 위해 row 복제·가중치로 unique 수 부풀리기, pre-baseline 자료 재사용, right-censored/HELD를 completed로 전환, main/widget/episode 또는 KRX/NXT 모집단 병합, child provenance 삭제, sample floor 임의 하향, hard-safety·broker guard·threshold 완화, OFF/은퇴 family 재활성화를 하지 않는다.
+5. submit drought는 upstream 후보 수가 많다는 이유만으로 시간 해결형이 아니다. `budget/latency/price/broker receipt` 등 최초 0-conversion 축을 확인하고, 정상적인 희소 도착인지 동일 guard·hook에서 반복 소멸하는 구조적 funnel 고갈인지 분리한다. 유효 floor와 source quality로 `SUBMIT_DROUGHT_CRITICAL|SWING_ENTRY_DROUGHT_CRITICAL`이 발행됐으면 단순 wait로 닫지 않고 구조적 병목 조사를 강제한다. BUY Funnel Sentinel 또는 Swing improvement source에서 LDM submit attribution·lifecycle bucket discovery, source-only code-improvement workorder와 postclose verifier까지의 필수 handoff를 확인하며 `runtime_effect=false`, `allowed_runtime_apply=false`, broker/order/provider/bot/threshold 권한 없음 상태를 유지한다. 정당한 hard-safety 차단이 원인이면 safety를 완화하지 않고 `structural_by_design_safety_exclusion`, 비승격·재설계·reject로 닫는다.
+
+오탐 방지를 위해 반복된 `implemented_but_hold_sample`, quiet-gap rollup, `no_current_signal`, negative-EV `hold_no_edge`, 단 한 번의 정상 safety-guard 차단을 그 자체로 구조적 고갈로 승격하지 않는다. child combo 하나의 모집단만 고갈되고 canonical parent가 floor·EV를 충족하면 child scope의 진단·exclusion 후보로만 남기고 전체 parent/family 고갈로 확대하지 않는다. 새 postclose 후보의 next PREOPEN이 아직 오지 않았거나 fixed maturity deadline 전인 row도 구조적 고갈이 아니다.
+
+상태 전이는 `blocked_missing_evidence → pending_declared_window|time_resolvable_shortage|structural_population_exhaustion|N/A_by_contract`, `pending_declared_window → time_resolvable_shortage|structural_population_exhaustion|blocked_missing_evidence|N/A_by_contract`, `time_resolvable_shortage → resolved|structural_population_exhaustion`, `structural_population_exhaustion → collecting_after_structural_repair → time_resolvable_shortage|resolved`로 추적한다. `pending_declared_window`는 earliest review date에 반드시 재판정하며 근거 없이 다음 창으로 미루지 않는다. 구조 보완 코드·report 생성·PREOPEN handoff만으로 `resolved`라고 하지 않는다. `collecting_after_structural_repair`는 review finding 0과 targeted validation, exact producer/consumer receipt가 닫힌 뒤에만 열고, 수정 generation에서 신규 floor-qualified unique 표본이 first depleted stage를 실제 통과해야 다음 상태로 이동한다. `resolved`는 source quality·authority handoff와 exact floor denominator의 sample floor가 함께 충족될 때만 허용한다.
+
+`shortage_id`는 `owner|family/arm/bucket|stage|venue/session|metric_contract_version|window_policy|floor_denominator_key`의 canonical key로 결정하고 target date, generation, source hash가 바뀌어도 같은 부족이면 유지한다. 최종 `shortage_ledger`의 각 row에는 최소 `shortage_id`, `canonical_source_state`, owner/family/stage/venue/session, decision authority와 intended last consumer, metric contract/version, shortage metric/floor denominator·unit·dedup key, required/current/deficit, observed dates와 source-available day ratio, first depleted stage와 funnel counts, window·floor-qualified arrival/expiry rate·maturity backlog·conservative reachable N, `shortage_class`와 classification status/reason code, 판정 근거, ETA 또는 `why_waiting_cannot_resolve`, 보완 owner/artifact/workorder, 다음 due/recheck, reclassification trigger, acceptance test, `runtime_effect`, `allowed_runtime_apply`, `forbidden_uses`를 기록한다. 같은 shortage의 날짜별 row는 stable ID와 source hash로 이어서 분류 변화와 보완 효과를 추적한다.
 
 ## 9. Code-improvement workorder 2-pass 처리
 
@@ -565,10 +603,11 @@ review finding 0과 targeted validation 후 필요한 producer부터 consumer �
 
 - `attach_existing_family`: 기존 family report/calibration에 실제 source metric이 나타났는지 확인한다.
 - `design_family_candidate`: sample floor, source-quality gate, env mapping, runtime hook, rollback, post-apply attribution이 모두 설계됐는지 확인한다.
-- `defer_evidence`: 새 표본으로 승격됐는지, 계속 부족한지, stale로 폐기할지 판정한다.
+- `defer_evidence`: `time_resolvable_shortage`로 입증됐거나 신규 경로의 `pending_declared_window`가 명시한 earliest review date까지인 항목만 사용한다. 새 표본으로 승격됐는지, ETA·예상 유입량을 지켰는지, 구조적 고갈로 재분류할지, stale로 폐기할지 판정하며 단순한 반복 `hold_sample`만으로 구조적 승격하지 않는다.
+- `structural_population_exhaustion`: 최초 고갈 stage와 최소 source/instrumentation/sim 보완이 명확하면 `implement_now|attach_existing_family|design_family_candidate`로 보내고, 안전 우회나 폐기축 부활만 가능한 경우 `reject`, 권한 변경이 필요하면 `user_authority`로 보류한다.
 - `reject`: safety 우회, 폐기축 부활, fallback/shadow 재개 요구는 사유와 함께 유지한다.
 
-최근 10일 창에서 3회 이상 반복되고 downstream closure가 계속 필요한 구조적 항목은 `repeat_unresolved_structural_blocker`로 재분류해 root cause, 장기 미해결 이유, 최소 안전 보완, 새 evidence requirement와 acceptance test를 다시 확인한다. 설계상 visibility만 유지하는 rollup은 `keep_visible_by_design`으로 분리한다.
+최근 10일 창에서 3회 이상 반복되고 downstream closure가 계속 필요한 구조적 항목은 `repeat_unresolved_structural_blocker`로 재분류해 root cause, 장기 미해결 이유, 최소 안전 보완, 새 evidence requirement와 acceptance test를 다시 확인한다. 명백한 impossible predicate, key/hook 단절 또는 ETA 초과는 3회 반복을 기다리지 않고 즉시 구조적 고갈로 판정한다. 설계상 visibility만 유지하는 rollup은 `keep_visible_by_design`으로 분리한다.
 
 ## 10. 코드·문서 보완 검증
 
@@ -607,6 +646,7 @@ wrapper·cron·threshold/postclose 체인을 변경했다면 관련 shell syntax
 16. 무단 runtime·주문·provider·bot·cap·safety 변경이나 불필요한 재기동이 없었다.
 17. “오류 없음”은 위 sample manifest·전수 보존식·targeted test가 검증한 coverage 안에서만 선언했고, 미표본 strata·결손 source·외부 broker/provider 불확실성과 다음 거래일 acceptance를 잔여 위험으로 명시했다.
 18. multi-artifact를 재생성했다면 pre/post snapshot, transaction manifest/pointer의 atomic publish 또는 동등한 consumer quiescence/lock, consumer pinned-generation receipt와 mixed-generation census 0이 확인됐다. 실패 시 결함 영향 밖의 이전 generation만 유지됐고, known-bad generation은 consumer reference 0건 또는 명시적 blocked receipt와 함께 audit-only로 격리됐다.
+19. 모든 표본·모집단 부족 후보가 deterministic stable `shortage_id`로 전수 집계됐고 `classified_shortage_total = time_resolvable_shortage_count + structural_population_exhaustion_count`, `shortage_candidate_total = classified_shortage_total + blocked_missing_evidence_count + pending_declared_window_count` 두 보존식이 실제 ledger row와 일치한다. `N/A_by_contract` census는 부족 후보 합계 밖에 별도로 보존됐다. 시간 해결형은 exact floor denominator와 rolling expiry를 반영한 conservative reachable N·finite ETA·다음 due·재분류 trigger, 구조적 고갈형은 first depleted stage·보완 owner·acceptance test를 가지며 blind wait 상태가 없다.
 
 ## 12. 최종 보고 형식
 
@@ -618,11 +658,14 @@ Tuning Chain Control State는 다음처럼 사용한다.
 - `YELLOW`: controller wrapper는 완료됐지만 표본·source readiness·handoff·post-apply attribution 또는 비권한 process warning과 후속 관찰이 남아 있다.
 - `RED`: 필수 artifact/lineage/provider receipt가 없거나 계산 오류, consumer 오입력, expected process death/hang, verifier/controller fail·blocked가 안전하게 닫히지 않았다.
 
+shortage class 하나만으로 색을 자동 결정하지 않는다. 수집 경로와 finite ETA가 검증된 `time_resolvable_shortage`는 후속 관찰이 남은 `YELLOW` 근거가 될 수 있다. source-only 범위에서 fail-closed되고 구조 보완 owner가 지정된 `structural_population_exhaustion`도 영향에 따라 `YELLOW`일 수 있지만, 필수 입력·consumer를 고갈시켰거나 잘못된 정상 판정을 만들었거나 보완·차단이 없는 경우는 `RED`다. 필수 scope에 unresolved structural shortage 또는 `blocked_missing_evidence|pending_declared_window`가 남으면 `GREEN`으로 판정하지 않는다.
+
 마지막에는 반드시 다음을 분리한다.
 
 - Tuning Chain Control State: `GREEN|YELLOW|RED`, 막힌 단계, 영향, 조치
 - 자동화체인: EOD, postclose wrapper, verifier, controller JSON/wrapper, 후행 작업 terminal 상태
 - source quality: pass/block/warning, clean-baseline·venue·owner·lineage 결손
+- 부족 분류 ledger: `시간이 해결하는 부족` 표와 `구조적으로 모집단이 고갈되는 부족` 표를 분리하고, stable `shortage_id`별 shortage metric/floor denominator·required/current/deficit·intended last consumer·first depleted stage·funnel count, floor-qualified arrival·expiry rate·conservative reachable N·ETA 또는 대기로 해소 불가능한 이유, 보완 owner·due·재분류 trigger·acceptance test를 기록한다. `blocked_missing_evidence|pending_declared_window|N/A_by_contract`는 두 표의 합계에 섞지 않고 별도 예외 표로 제시한다.
 - 계산 정확성: raw→parser→join→label→cost→aggregation→candidate 재계산, deterministic strata sample manifest, 전수 보존식, rounding/tolerance, golden/metamorphic test와 count/hash/JSON·Markdown parity
 - process 감사: authoritative expected-set source와 systemd MainPID/cgroup/lock/heartbeat 근거, dead/hung/duplicate/no-op/orphan/unconsumed 판정과 오탐 제외
 - 메인 봇: lifecycle별 기회·차단·제출·체결·보유·청산과 비용 차감 EV
@@ -634,6 +677,6 @@ Tuning Chain Control State는 다음처럼 사용한다.
 - runtime/handoff: 대상일 applied input 실제 소비와 장후 생성 next-session artifact의 authority별 intended last consumer를 분리하고, R0→R6 sim 경로와 main/widget/episode 독립 handoff, 다음 거래일 OPEN acceptance, real runtime remaining blocker와 post-apply attribution
 - workorder: 최종 generation ID/source hash, 기존 구현, 신규 구현, 보류, non-implement 재판정
 - 재생성: 수정 전/후 result·generation·source fingerprint diff, 해결된 오류와 남은 blocker
-- 장기 미해결: 반복 횟수, root cause, 기존 시도 실패 이유, 새 처리방안과 acceptance test
+- 장기 미해결: shortage class의 날짜별 변화, 반복 횟수, root cause, 기존 wait/보완 시도 실패 이유, 새 처리방안과 acceptance test
 
 report 이름이나 `DONE` marker의 존재만으로 효과를 주장하지 않는다. 최종 정상 효과는 `source quality → owner/stage 식별 → policy/runtime 소비 → executable order/terminal outcome → 비용 차감 rolling/cumulative EV → post-apply attribution`이 연결됐을 때만 인정한다. 장후 생성된 다음-session artifact에는 아직 이 효과를 주장하지 않고, handoff 완료와 다음 거래일 acceptance OPEN을 분리 보고한다.

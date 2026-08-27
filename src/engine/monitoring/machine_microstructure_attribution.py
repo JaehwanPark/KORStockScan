@@ -6008,6 +6008,8 @@ def _fast_lifecycle_objective_followup(
     paired_producer_present = (
         boundary.get("rolling_paired_policy_candidate_producer_present") is True
     )
+    sample_floor_assessment = objective_alignment.get("sample_floor_assessment") or {}
+    sample_floor_state = str(sample_floor_assessment.get("state") or "")
     required_gap_codes = list(
         dict.fromkeys(objective_alignment.get("remaining_gaps") or [])
     )
@@ -6069,6 +6071,24 @@ def _fast_lifecycle_objective_followup(
             and recovery.get("rerun_same_source_date_allowed") is False
             else "repair_current_attribution_source_contract_and_rerun"
         )
+    elif sample_floor_state == "source_quality_or_eligibility_gap":
+        state = "EVIDENCE_ACCUMULATING"
+        followup_required = True
+        attention_class = "source_quality"
+        current_capability = "rolling_paired_research_scope_source_blocked"
+        next_action = "repair_exact_scope_source_or_eligibility_contract_and_rerun"
+    elif sample_floor_state == "terminal_or_right_censored_gap":
+        state = "EVIDENCE_ACCUMULATING"
+        followup_required = True
+        attention_class = "terminal_reconciliation"
+        current_capability = "rolling_paired_research_terminal_outcome_blocked"
+        next_action = "reconcile_exact_owner_terminal_outcomes_before_waiting"
+    elif sample_floor_state == "window_floor_unattainable_at_observed_yield":
+        state = "IMPLEMENTATION_REQUIRED"
+        followup_required = True
+        attention_class = "sample_floor_contract"
+        current_capability = "rolling_paired_research_window_floor_unattainable"
+        next_action = "repair_exact_scope_collection_yield_or_review_window_contract"
     else:
         state = "EVIDENCE_ACCUMULATING"
         followup_required = True
@@ -6482,6 +6502,9 @@ def build_report(
             "recovery"
         )
         or rolling_policy_source_contract["recovery"]
+    )
+    objective_alignment["sample_floor_assessment"] = dict(
+        rolling_paired_policy_research.get("sample_floor_assessment") or {}
     )
     research_status = str(rolling_paired_policy_research.get("status") or "")
     objective_alignment["decision"] = (

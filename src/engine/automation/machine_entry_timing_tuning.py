@@ -63,6 +63,7 @@ SAMSUNG_CANDIDATE_DIR = (
 )
 WIDGET_POLICY_DIR = DATA_DIR / "runtime" / "widget_auto_trade_policy"
 ENTRY_ROLES = frozenset({"actual_widget_entry_signal", "episode_signal_decision_leg"})
+ACTUAL_ENTRY_SOURCE_ROLES = frozenset({*ENTRY_ROLES, "episode_signal_bar"})
 DELAYS_SEC = tuple(sorted(ALLOWED_DELAYS_SEC - {0}))
 ROLLING_WINDOWS_DAYS = REQUIRED_ROLLING_WINDOWS_DAYS
 
@@ -651,6 +652,219 @@ def _evaluate_cohort(
     }
 
 
+def _cohort_sample_floor_assessment(
+    *,
+    cohort_key: tuple[str, str, str, str, str],
+    cohort_rows: list[tuple[date, dict[str, Any]]],
+    alternatives: list[dict[str, Any]],
+    source_report_dates: set[date],
+) -> dict[str, Any]:
+    """Separate source/terminal defects from normal exact-scope accumulation."""
+
+    first_seen_date = min(source_date for source_date, _ in cohort_rows)
+    eligible_source_dates = {
+        source_date
+        for source_date in source_report_dates
+        if source_date >= first_seen_date
+    }
+    blocked_count = sum(
+        row.get("classification") == "source_quality_blocked" for _, row in cohort_rows
+    )
+    policy_eligible_count = sum(
+        (
+            row.get("owner_policy_tuning_eligible") is True
+            or row.get("owner_timing_custody_observation_eligible") is True
+        )
+        and row.get("classification") != "source_quality_blocked"
+        and row.get("actual_order_submitted") is True
+        for _, row in cohort_rows
+    )
+    completed_count = max(
+        (int(row.get("completed_outcome_count") or 0) for row in alternatives),
+        default=0,
+    )
+    observed_days = max(
+        (int(row.get("observed_trading_days") or 0) for row in alternatives),
+        default=0,
+    )
+    remaining = max(MIN_COMPLETED_OUTCOMES - completed_count, 0)
+    completed_per_source_day = (
+        completed_count / len(eligible_source_dates) if eligible_source_dates else 0.0
+    )
+    if completed_count >= MIN_COMPLETED_OUTCOMES:
+        state = "sample_floor_met"
+        projected_days = 0
+    elif policy_eligible_count == 0 and blocked_count > 0:
+        state = "source_quality_blocked"
+        projected_days = None
+    elif policy_eligible_count == 0:
+        state = "eligibility_contract_gap"
+        projected_days = None
+    elif completed_count == 0:
+        state = "outcome_or_executable_gap"
+        projected_days = None
+    else:
+        state = "natural_sample_wait"
+        projected_days = math.ceil(remaining / completed_per_source_day)
+    if state == "sample_floor_met":
+        shortage_classification_status = "not_applicable_floor_met"
+        shortage_class = None
+        why_waiting_cannot_resolve = None
+    elif state == "natural_sample_wait":
+        shortage_classification_status = "classified"
+        shortage_class = "time_resolvable_shortage"
+        why_waiting_cannot_resolve = None
+    elif state in {"source_quality_blocked", "eligibility_contract_gap"}:
+        shortage_classification_status = "classified"
+        shortage_class = "structural_population_exhaustion"
+        why_waiting_cannot_resolve = (
+            "source_or_eligibility_defect_prevents_new_valid_unique_rows"
+        )
+    else:
+        shortage_classification_status = "blocked_missing_evidence"
+        shortage_class = None
+        why_waiting_cannot_resolve = (
+            "terminal_maturity_or_executable_pair_arrival_rate_not_proven"
+        )
+    return {
+        "shortage_id": "machine_entry_timing:" + ":".join(cohort_key),
+        "state": state,
+        "shortage_classification_status": shortage_classification_status,
+        "shortage_class": shortage_class,
+        "why_waiting_cannot_resolve": why_waiting_cannot_resolve,
+        "candidate_input_anchor_count": len(cohort_rows),
+        "source_report_day_count_since_scope_first_seen": len(eligible_source_dates),
+        "source_quality_blocked_anchor_count": blocked_count,
+        "source_quality_eligible_anchor_count": policy_eligible_count,
+        "completed_outcome_count": completed_count,
+        "observed_trading_days": observed_days,
+        "completed_outcome_floor": MIN_COMPLETED_OUTCOMES,
+        "remaining_completed_outcome_count": remaining,
+        "completed_outcomes_per_source_day": round(completed_per_source_day, 8),
+        "projected_additional_trading_days_at_observed_yield": projected_days,
+        "projection_authority": "diagnostic_only_no_runtime_or_floor_change",
+    }
+
+
+def _report_sample_floor_assessment(
+    *,
+    target_date: date,
+    reports: list[tuple[date, Path, dict[str, Any]]],
+    target_source_ready: bool,
+    cohorts: list[dict[str, Any]],
+    winner: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Classify why a missing winner cannot be resolved by blind waiting."""
+
+    target_actual_rows: list[dict[str, Any]] = []
+    for source_date, _, payload in reports:
+        if source_date != target_date:
+            continue
+        confirmation = payload.get("micro_entry_confirmation") or {}
+        for row in confirmation.get("entry_anchors") or []:
+            if (
+                isinstance(row, dict)
+                and row.get("owner") in {"widget", "episode"}
+                and row.get("anchor_role") in ACTUAL_ENTRY_SOURCE_ROLES
+            ):
+                target_actual_rows.append(row)
+    target_blocked_rows = [
+        row
+        for row in target_actual_rows
+        if row.get("classification") == "source_quality_blocked"
+    ]
+    gap_reasons: set[str] = set()
+    for row in target_blocked_rows:
+        raw_reasons = row.get("source_gap_reasons")
+        reasons = raw_reasons if isinstance(raw_reasons, list) else [raw_reasons]
+        gap_reasons.update(
+            str(reason)
+            for reason in reasons
+            if reason is not None and str(reason).strip()
+        )
+    cohort_states = [
+        str((cohort.get("sample_floor_assessment") or {}).get("state") or "")
+        for cohort in cohorts
+    ]
+    if winner is not None:
+        state = "candidate_ready"
+        blocker_class = None
+        next_action = "preserve_exact_scope_review_and_apply_contract"
+    elif not target_source_ready:
+        state = "source_contract_blocked"
+        blocker_class = "source_quality"
+        next_action = "repair_or_generate_exact_target_source_artifact"
+    elif target_actual_rows and len(target_blocked_rows) == len(target_actual_rows):
+        state = (
+            "instrumentation_or_join_gap"
+            if "actual_signal_decision_timestamp_missing" in gap_reasons
+            else "source_quality_blocked"
+        )
+        blocker_class = "source_quality"
+        next_action = "repair_exact_entry_anchor_market_join_and_rerun"
+    elif "source_quality_blocked" in cohort_states:
+        state = "source_quality_blocked"
+        blocker_class = "source_quality"
+        next_action = "repair_blocked_exact_scope_source_and_rerun"
+    elif "eligibility_contract_gap" in cohort_states:
+        state = "eligibility_contract_gap"
+        blocker_class = "source_quality"
+        next_action = "repair_exact_scope_eligibility_lineage_before_waiting"
+    elif "outcome_or_executable_gap" in cohort_states:
+        state = "terminal_or_right_censored_gap"
+        blocker_class = "terminal_outcome"
+        next_action = "reconcile_terminal_or_executable_pair_before_waiting"
+    elif not target_actual_rows:
+        state = "no_natural_sample"
+        blocker_class = "sample_floor"
+        next_action = "continue_exact_date_collection_without_imputation"
+    else:
+        state = "natural_sample_wait"
+        blocker_class = "sample_floor"
+        next_action = "continue_exact_scope_collection_and_recheck_projection"
+    if state == "candidate_ready":
+        shortage_classification_status = "not_applicable_candidate_ready"
+        shortage_class = None
+        why_waiting_cannot_resolve = None
+    elif state == "natural_sample_wait":
+        shortage_classification_status = "classified"
+        shortage_class = "time_resolvable_shortage"
+        why_waiting_cannot_resolve = None
+    elif state in {
+        "instrumentation_or_join_gap",
+        "source_quality_blocked",
+        "eligibility_contract_gap",
+    }:
+        shortage_classification_status = "classified"
+        shortage_class = "structural_population_exhaustion"
+        why_waiting_cannot_resolve = (
+            "waiting_does_not_repair_the_first_depleted_source_or_join_stage"
+        )
+    else:
+        shortage_classification_status = "blocked_missing_evidence"
+        shortage_class = None
+        why_waiting_cannot_resolve = (
+            "positive_arrival_rate_and_finite_resolution_horizon_not_proven"
+        )
+    return {
+        "shortage_id": "machine_entry_timing:all_exact_scopes:entry_confirmation_delay",
+        "state": state,
+        "shortage_classification_status": shortage_classification_status,
+        "shortage_class": shortage_class,
+        "why_waiting_cannot_resolve": why_waiting_cannot_resolve,
+        "blocker_class": blocker_class,
+        "target_actual_entry_anchor_count": len(target_actual_rows),
+        "target_source_quality_blocked_anchor_count": len(target_blocked_rows),
+        "target_source_gap_reasons": sorted(gap_reasons),
+        "cohort_state_counts": {
+            value: cohort_states.count(value) for value in sorted(set(cohort_states))
+        },
+        "next_action": next_action,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def build_report(
     *,
     target_date: date,
@@ -660,6 +874,7 @@ def build_report(
     widget_policy_dir: Path = WIDGET_POLICY_DIR,
 ) -> dict[str, Any]:
     reports, rejected = _source_reports(target_date=target_date, source_dir=source_dir)
+    source_report_dates = {source_date for source_date, _, _ in reports}
     target_source_ready = any(
         source_date == target_date for source_date, _, _ in reports
     )
@@ -722,6 +937,12 @@ def build_report(
             "entry_state": entry_state,
             "alternatives": alternatives,
             "selected": selected,
+            "sample_floor_assessment": _cohort_sample_floor_assessment(
+                cohort_key=key,
+                cohort_rows=rows,
+                alternatives=alternatives,
+                source_report_dates=source_report_dates,
+            ),
         }
         cohorts.append(cohort)
         if selected is not None:
@@ -745,9 +966,25 @@ def build_report(
             default=None,
         )
     )
+    sample_floor_assessment = _report_sample_floor_assessment(
+        target_date=target_date,
+        reports=reports,
+        target_source_ready=target_source_ready,
+        cohorts=cohorts,
+        winner=winner,
+    )
+    status = (
+        "candidate_ready"
+        if winner
+        else (
+            "source_quality_blocked"
+            if sample_floor_assessment["blocker_class"] == "source_quality"
+            else "evidence_accumulating"
+        )
+    )
     return {
         "schema": REPORT_SCHEMA,
-        "status": "candidate_ready" if winner else "evidence_accumulating",
+        "status": status,
         "decision": (
             "select_one_next_session_entry_confirmation_delay"
             if winner
@@ -763,6 +1000,7 @@ def build_report(
         "cohorts": cohorts,
         "winner": winner,
         "same_stage_owner_guard": same_stage_owner_guard,
+        "sample_floor_assessment": sample_floor_assessment,
         "metric_contract": METRIC_CONTRACT,
         "runtime_effect": False,
         "actual_order_submitted": False,
@@ -853,6 +1091,12 @@ def render_markdown(report: dict[str, Any], applied: dict[str, Any]) -> str:
         lines.append(
             "- No scope passed all cumulative and 5/10/20-day floors; delay remains `0s`."
         )
+    sample_assessment = report.get("sample_floor_assessment") or {}
+    lines.append(
+        "- Sample-floor state: "
+        f"`{sample_assessment.get('state')}`; next action "
+        f"`{sample_assessment.get('next_action')}`."
+    )
     lines.extend(
         [
             f"- Applied scope count: `{len(applied['scopes'])}`.",

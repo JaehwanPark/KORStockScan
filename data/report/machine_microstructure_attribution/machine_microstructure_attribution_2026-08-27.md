@@ -18,7 +18,7 @@
 - Matched unique decision lifecycles: `5`; entry-submit anchors: `0`; entry-fill anchors: `2`; exit-submit anchors: `0`; exit anchors: `3`.
 - Timed outcomes: `4`; completed within 180s: `None`.
 - Gross/no-slippage average (diagnostic only): `None`; cost-aware owner average (daily diagnostic only): `None`.
-- Completion follow-up: `EVIDENCE_ACCUMULATING`; next=`continue_exact_date_collection_and_rolling_readiness_review`; tracked by the 21:15 approval/reminder ledger.
+- Completion follow-up: `EVIDENCE_ACCUMULATING`; next=`reconcile_exact_owner_terminal_outcomes_before_waiting`; tracked by the 21:15 approval/reminder ledger.
 - Speed, target, cooldown, cap, quantity, re-entry, and forced-exit policy remain unchanged.
 
 ## Rolling Paired Turnover Policy Research
@@ -26,7 +26,7 @@
 - Status: `evidence_accumulating`; decision: `continue_source_only_rolling_paired_evidence`.
 - Cohorts: `10`; ready candidates: `0`.
 - Axis: source-only target timeout `60/120/180s`; ranking requires positive cost-aware rolling EV/net profit, p10 and HELD guards, then capital-efficiency improvement.
-- Remaining evidence gaps: `10d_candidate_ev_not_positive,10d_paired_ev_uplift_not_positive,10d_paired_lifecycle_count_below_20,20d_candidate_ev_not_positive,20d_paired_ev_uplift_not_positive,20d_paired_lifecycle_count_below_20,5d_candidate_ev_not_positive,5d_paired_ev_uplift_not_positive,5d_paired_lifecycle_count_below_20,bbo_complete_rate_below_95pct,depth_window_coverage_below_90pct,observed_trading_days_below_5,paired_p10_worse_or_missing,policy_eligible_unique_lifecycles_below_20,primary_20d_net_profit_not_positive,relative_primary_ev_uplift_below_1pct`.
+- Remaining evidence gaps: `10d_candidate_ev_not_positive,10d_paired_ev_uplift_not_positive,10d_paired_lifecycle_count_below_10,20d_candidate_ev_not_positive,20d_paired_ev_uplift_not_positive,20d_paired_lifecycle_count_below_20,5d_candidate_ev_not_positive,5d_paired_ev_uplift_not_positive,5d_paired_lifecycle_count_below_5,bbo_complete_rate_below_95pct,depth_window_coverage_below_90pct,observed_trading_days_below_5,paired_p10_worse_or_missing,policy_eligible_unique_lifecycles_below_20,primary_20d_net_profit_not_positive,relative_primary_ev_uplift_below_1pct`.
 - Runtime family registration, PREOPEN apply, orders, and current owner policy remain unchanged.
 
 ## Micro Entry Confirmation
@@ -71,10 +71,10 @@
 | episode | cj_cgv_midday | 079160 | micro_anchor_window_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | tym_midday | 002900 | micro_symbol_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | tym_afternoon | 002900 | micro_symbol_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |
-| episode | youngone_morning | 111770 | micro_symbol_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |
-| episode | kepco_late_morning | 015760 | micro_anchor_window_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | nhn_afternoon | 181710 | micro_expected_venue_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | youngone_afternoon | 111770 | micro_symbol_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |
+| episode | youngone_morning | 111770 | micro_symbol_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |
+| episode | kepco_late_morning | 015760 | micro_anchor_window_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | sk_eternix_late_morning | 475150 | micro_symbol_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | mirae_asset_late_morning | 006800 | micro_symbol_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | kepco_morning | 015760 | micro_anchor_window_not_observed | micro_context_unavailable_base_owner_tuning_unchanged |

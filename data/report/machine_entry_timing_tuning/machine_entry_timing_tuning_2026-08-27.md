@@ -7,4 +7,5 @@
 - Quantity, order price, target, stop, holding, and exit are unchanged.
 
 - No scope passed all cumulative and 5/10/20-day floors; delay remains `0s`.
+- Sample-floor state: `instrumentation_or_join_gap`; next action `repair_exact_entry_anchor_market_join_and_rerun`.
 - Applied scope count: `0`.

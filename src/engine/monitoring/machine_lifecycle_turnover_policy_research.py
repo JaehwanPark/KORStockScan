@@ -26,6 +26,7 @@ OBJECTIVE_FOLLOWUP_ID = "machine_lifecycle_turnover_policy_research_v1"
 OBJECTIVE_BINDING_SCHEMA = "machine_fast_lifecycle_objective_candidate_binding_v1"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 TIMEOUT_AXIS_VALUES_SEC = (60, 120, 180)
+ROLLING_PAIRED_LIFECYCLE_FLOORS = {"5d": 5, "10d": 10, "20d": 20}
 DECISION_ROLES = {
     "counterfactual_calibration_entry",
     "actual_widget_entry_signal",
@@ -47,6 +48,7 @@ METRIC_CONTRACT = {
     "sample_floor": {
         "observed_trading_days_per_owner_scope": 5,
         "policy_eligible_unique_lifecycles_per_owner_scope": 20,
+        "rolling_paired_complete_lifecycles": dict(ROLLING_PAIRED_LIFECYCLE_FLOORS),
         "bbo_complete_rate_pct": 95.0,
         "depth_window_coverage_pct": 90.0,
         "invalid_contract_row_count": 0,
@@ -1040,6 +1042,13 @@ def _candidate_from_research(
                 key: windows[key]["candidate_source_quality_adjusted_ev_pct"]
                 for key in ("5d", "10d", "20d")
             },
+            "rolling_paired_complete_lifecycle_count": {
+                key: windows[key]["paired_complete_lifecycle_count"]
+                for key in ("5d", "10d", "20d")
+            },
+            "rolling_paired_complete_lifecycle_floor": dict(
+                ROLLING_PAIRED_LIFECYCLE_FLOORS
+            ),
             "paired_ev_uplift_pct_points": {
                 key: windows[key]["paired_ev_uplift_pct_points"]
                 for key in ("5d", "10d", "20d")
@@ -1073,6 +1082,7 @@ def _research_row(
     cohort: tuple[str, str, str, str],
     units: list[dict[str, Any]],
     invalid_contract_counts: Sequence[tuple[date, int]],
+    source_report_dates: set[date],
 ) -> dict[str, Any]:
     primary_window_start = _krx_window_start(target_day, 20)
     diagnostic_units = [
@@ -1123,17 +1133,126 @@ def _research_row(
             gaps.append("depth_window_coverage_below_90pct")
         if invalid_contract_row_count != 0:
             gaps.append("invalid_contract_rows_present")
+        window_sample_readiness: dict[str, Any] = {}
         for window_name, window in windows.items():
             candidate_ev = _finite(
                 window.get("candidate_source_quality_adjusted_ev_pct")
             )
             uplift = _finite(window.get("paired_ev_uplift_pct_points"))
+            required_paired_lifecycles = ROLLING_PAIRED_LIFECYCLE_FLOORS[window_name]
+            paired_lifecycles = int(window.get("paired_complete_lifecycle_count") or 0)
             if candidate_ev is None or candidate_ev <= 0:
                 gaps.append(f"{window_name}_candidate_ev_not_positive")
             if uplift is None or uplift <= 0:
                 gaps.append(f"{window_name}_paired_ev_uplift_not_positive")
-            if int(window.get("paired_complete_lifecycle_count") or 0) < 20:
-                gaps.append(f"{window_name}_paired_lifecycle_count_below_20")
+            if paired_lifecycles < required_paired_lifecycles:
+                gaps.append(
+                    f"{window_name}_paired_lifecycle_count_below_"
+                    f"{required_paired_lifecycles}"
+                )
+            diagnostic_lifecycles = int(window.get("diagnostic_lifecycle_count") or 0)
+            eligible_lifecycles = int(window.get("lifecycle_count") or 0)
+            held_diagnostic_lifecycles = int(
+                window.get("held_diagnostic_only_lifecycle_count") or 0
+            )
+            terminal_or_unresolved = int(
+                window.get("current_held_or_unresolved_count") or 0
+            ) + int(window.get("candidate_held_or_unresolved_count") or 0)
+            if paired_lifecycles >= required_paired_lifecycles:
+                sample_state = "floor_met"
+            elif held_diagnostic_lifecycles > 0 and terminal_or_unresolved > 0:
+                sample_state = "terminal_or_right_censored_gap"
+            elif diagnostic_lifecycles > 0 and eligible_lifecycles == 0:
+                sample_state = "source_quality_or_eligibility_gap"
+            elif paired_lifecycles == 0 and terminal_or_unresolved > 0:
+                sample_state = "terminal_or_right_censored_gap"
+            else:
+                sample_state = "natural_sample_wait"
+            window_start = date.fromisoformat(str(window["window_start"]))
+            source_report_day_count = sum(
+                window_start <= source_day <= target_day
+                for source_day in source_report_dates
+            )
+            observed_daily_yield = (
+                paired_lifecycles / source_report_day_count
+                if source_report_day_count
+                else 0.0
+            )
+            window_days = int(window_name.removesuffix("d"))
+            projected_full_window_lifecycles = observed_daily_yield * window_days
+            remaining_paired_lifecycles = max(
+                required_paired_lifecycles - paired_lifecycles, 0
+            )
+            if (
+                sample_state == "natural_sample_wait"
+                and source_report_day_count >= window_days
+                and projected_full_window_lifecycles + 1e-12
+                < required_paired_lifecycles
+            ):
+                sample_state = "window_floor_unattainable_at_observed_yield"
+                gaps.append(
+                    f"{window_name}_window_floor_unattainable_at_observed_yield"
+                )
+            if sample_state == "floor_met":
+                shortage_classification_status = "not_applicable_floor_met"
+                shortage_class = None
+                projected_days = 0
+                why_waiting_cannot_resolve = None
+            elif sample_state == "source_quality_or_eligibility_gap":
+                shortage_classification_status = "classified"
+                shortage_class = "structural_population_exhaustion"
+                projected_days = None
+                why_waiting_cannot_resolve = (
+                    "diagnostic_lifecycle_exists_but_policy_eligible_pair_is_absent"
+                )
+            elif sample_state == "window_floor_unattainable_at_observed_yield":
+                shortage_classification_status = "classified"
+                shortage_class = "structural_population_exhaustion"
+                projected_days = None
+                why_waiting_cannot_resolve = (
+                    "observed_yield_cannot_reach_floor_before_rolling_window_expires"
+                )
+            elif sample_state == "natural_sample_wait" and observed_daily_yield > 0:
+                shortage_classification_status = "classified"
+                shortage_class = "time_resolvable_shortage"
+                projected_days = math.ceil(
+                    remaining_paired_lifecycles / observed_daily_yield
+                )
+                why_waiting_cannot_resolve = None
+            else:
+                shortage_classification_status = "blocked_missing_evidence"
+                shortage_class = None
+                projected_days = None
+                why_waiting_cannot_resolve = (
+                    "terminal_maturity_or_positive_arrival_rate_not_proven"
+                )
+            window_sample_readiness[window_name] = {
+                "shortage_id": (
+                    f"machine_turnover:{cohort[0]}:{cohort[1]}:{cohort[2]}:"
+                    f"{cohort[3]}:target_timeout_{timeout_sec}s:{window_name}"
+                ),
+                "required_paired_complete_lifecycle_count": (
+                    required_paired_lifecycles
+                ),
+                "observed_paired_complete_lifecycle_count": paired_lifecycles,
+                "remaining_paired_complete_lifecycle_count": (
+                    remaining_paired_lifecycles
+                ),
+                "source_report_day_count": source_report_day_count,
+                "observed_paired_lifecycles_per_source_day": round(
+                    observed_daily_yield, 8
+                ),
+                "projected_paired_lifecycles_in_full_window": round(
+                    projected_full_window_lifecycles, 8
+                ),
+                "projected_additional_trading_days_at_observed_yield": (projected_days),
+                "state": sample_state,
+                "shortage_classification_status": shortage_classification_status,
+                "shortage_class": shortage_class,
+                "why_waiting_cannot_resolve": why_waiting_cannot_resolve,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            }
         current_20d = _finite(
             windows["20d"].get("paired_current_source_quality_adjusted_ev_pct")
         )
@@ -1171,6 +1290,7 @@ def _research_row(
                 "axis": "target_timeout_sec",
                 "recommended_value": timeout_sec,
                 "windows": windows,
+                "window_sample_readiness": window_sample_readiness,
                 "relative_primary_ev_uplift_pct": (
                     round(relative_uplift, 6) if relative_uplift is not None else None
                 ),
@@ -1238,6 +1358,107 @@ def _research_row(
     }
 
 
+def _sample_floor_assessment(
+    *, rows: Sequence[Mapping[str, Any]], source_contract_ready: bool
+) -> dict[str, Any]:
+    state_counts: dict[str, int] = defaultdict(int)
+    classification_status_counts: dict[str, int] = defaultdict(int)
+    shortage_class_counts: dict[str, int] = defaultdict(int)
+    for row in rows:
+        alternatives = row.get("alternatives")
+        if not isinstance(alternatives, list) or not alternatives:
+            continue
+        # Sample counts are timeout-arm specific. Count each distinct
+        # cohort/arm/window assessment once without pooling owner scopes.
+        for alternative in alternatives:
+            readiness = (
+                alternative.get("window_sample_readiness")
+                if isinstance(alternative, Mapping)
+                else None
+            )
+            if not isinstance(readiness, Mapping):
+                continue
+            for window in readiness.values():
+                if isinstance(window, Mapping):
+                    state = str(window.get("state") or "unknown")
+                    state_counts[state] += 1
+                    classification_status = str(
+                        window.get("shortage_classification_status") or "unknown"
+                    )
+                    classification_status_counts[classification_status] += 1
+                    shortage_class = window.get("shortage_class")
+                    if isinstance(shortage_class, str) and shortage_class:
+                        shortage_class_counts[shortage_class] += 1
+    if not source_contract_ready:
+        state = "source_contract_blocked"
+        blocker_class = "source_quality"
+        next_action = "repair_current_attribution_source_contract_and_rerun"
+    elif not rows:
+        state = "no_natural_sample"
+        blocker_class = "sample_floor"
+        next_action = "continue_exact_date_collection_without_imputation"
+    elif state_counts.get("source_quality_or_eligibility_gap", 0) > 0:
+        state = "source_quality_or_eligibility_gap"
+        blocker_class = "source_quality"
+        next_action = "repair_exact_scope_source_or_eligibility_contract_and_rerun"
+    elif state_counts.get("window_floor_unattainable_at_observed_yield", 0) > 0:
+        state = "window_floor_unattainable_at_observed_yield"
+        blocker_class = "sample_floor_contract"
+        next_action = "repair_exact_scope_collection_yield_or_review_window_contract"
+    elif state_counts.get("terminal_or_right_censored_gap", 0) > 0:
+        state = "terminal_or_right_censored_gap"
+        blocker_class = "terminal_outcome"
+        next_action = "reconcile_exact_owner_terminal_outcomes_before_waiting"
+    elif state_counts.get("natural_sample_wait", 0) > 0:
+        state = "natural_sample_wait"
+        blocker_class = "sample_floor"
+        next_action = "continue_exact_scope_collection_and_recheck_window_floors"
+    else:
+        state = "sample_floor_met_or_non_sample_gate_pending"
+        blocker_class = None
+        next_action = "review_non_sample_ev_tail_and_runtime_design_gates"
+    if state in {
+        "source_quality_or_eligibility_gap",
+        "window_floor_unattainable_at_observed_yield",
+    }:
+        shortage_classification_status = "classified"
+        shortage_class = "structural_population_exhaustion"
+        why_waiting_cannot_resolve = (
+            "source_or_window_capacity_defect_prevents_floor_closure"
+        )
+    elif state == "natural_sample_wait" and not classification_status_counts.get(
+        "blocked_missing_evidence", 0
+    ):
+        shortage_classification_status = "classified"
+        shortage_class = "time_resolvable_shortage"
+        why_waiting_cannot_resolve = None
+    elif state == "sample_floor_met_or_non_sample_gate_pending":
+        shortage_classification_status = "not_applicable_sample_floor_met"
+        shortage_class = None
+        why_waiting_cannot_resolve = None
+    else:
+        shortage_classification_status = "blocked_missing_evidence"
+        shortage_class = None
+        why_waiting_cannot_resolve = (
+            "positive_arrival_rate_or_terminal_maturity_horizon_not_proven"
+        )
+    return {
+        "shortage_id": "machine_turnover:all_exact_scopes:target_timeout",
+        "state": state,
+        "shortage_classification_status": shortage_classification_status,
+        "shortage_class": shortage_class,
+        "why_waiting_cannot_resolve": why_waiting_cannot_resolve,
+        "blocker_class": blocker_class,
+        "window_state_counts": dict(sorted(state_counts.items())),
+        "window_classification_status_counts": dict(
+            sorted(classification_status_counts.items())
+        ),
+        "window_shortage_class_counts": dict(sorted(shortage_class_counts.items())),
+        "next_action": next_action,
+        **AUTHORITY,
+    }
+
+
 def build_rolling_paired_policy_research(
     *,
     target_date: str,
@@ -1260,6 +1481,9 @@ def build_rolling_paired_policy_research(
         report_dir=report_dir,
         target_day=target_day,
     )
+    source_report_dates = {
+        date.fromisoformat(str(report["target_date"])) for report in reports
+    }
     cohort_units: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(
         list
     )
@@ -1298,6 +1522,7 @@ def build_rolling_paired_policy_research(
             cohort=cohort,
             units=units,
             invalid_contract_counts=cohort_invalid_contract_counts.get(cohort, []),
+            source_report_dates=source_report_dates,
         )
         for cohort, units in sorted(cohort_units.items())
     ]
@@ -1358,18 +1583,23 @@ def build_rolling_paired_policy_research(
                 for gap in alternative["readiness_gaps"]
             }
             unresolved_gap_codes.extend(sorted(all_gaps))
+    sample_floor_assessment = _sample_floor_assessment(
+        rows=rows,
+        source_contract_ready=current_source_contract_ready,
+    )
+    report_status = (
+        "candidate_ready"
+        if candidates
+        else (
+            "source_quality_blocked"
+            if sample_floor_assessment["blocker_class"] == "source_quality"
+            else "evidence_accumulating"
+        )
+    )
     return {
         "schema": REPORT_SCHEMA,
         "target_date": target_date,
-        "status": (
-            "candidate_ready"
-            if candidates
-            else (
-                "source_quality_blocked"
-                if not current_source_contract_ready
-                else "evidence_accumulating"
-            )
-        ),
+        "status": report_status,
         "decision": (
             "source_only_candidate_ready_design_required"
             if candidates
@@ -1386,6 +1616,7 @@ def build_rolling_paired_policy_research(
             "errors": current_source_contract_errors,
             "recovery": source_contract_recovery,
         },
+        "sample_floor_assessment": sample_floor_assessment,
         "candidate_axes": {
             "single_axis": "target_timeout_sec",
             "values_sec": list(TIMEOUT_AXIS_VALUES_SEC),

@@ -14,8 +14,19 @@ from src.engine.monitoring.machine_microstructure_attribution import (
     _anchor_result,
     _fast_lifecycle_objective_followup,
 )
+from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+def _trading_dates(through: date, count: int) -> list[date]:
+    result: list[date] = []
+    candidate = through
+    while len(result) < count:
+        if is_krx_trading_day(candidate):
+            result.append(candidate)
+        candidate -= timedelta(days=1)
+    return sorted(result)
 
 
 def _anchor(
@@ -226,6 +237,139 @@ def test_rolling_research_emits_one_source_only_design_required_candidate(
     )
     assert followup_rejections == []
     assert queue["objective_followups"][0]["state"] == "CANDIDATE_QUEUE_HANDOFF"
+
+
+def test_rolling_research_uses_window_length_paired_sample_floors(
+    tmp_path: Path,
+) -> None:
+    target_day = date(2026, 8, 27)
+    source_dates = _trading_dates(target_day, 20)
+    for lifecycle_number, source_day in enumerate(source_dates[:-1], start=1):
+        payload = _report(
+            source_day.isoformat(),
+            [
+                _anchor(
+                    source_date=source_day.isoformat(),
+                    lifecycle_number=lifecycle_number,
+                )
+            ],
+        )
+        (
+            tmp_path
+            / f"machine_microstructure_attribution_{source_day.isoformat()}.json"
+        ).write_text(__import__("json").dumps(payload), encoding="utf-8")
+    current = _report(
+        target_day.isoformat(),
+        [
+            _anchor(
+                source_date=target_day.isoformat(),
+                lifecycle_number=20,
+            )
+        ],
+    )
+
+    research = build_rolling_paired_policy_research(
+        target_date=target_day.isoformat(),
+        current_report=current,
+        report_dir=tmp_path,
+    )
+
+    assert research["status"] == "candidate_ready"
+    alternative = research["cohorts"][0]["alternatives"][0]
+    readiness = alternative["window_sample_readiness"]
+    for window_name, floor in (("5d", 5), ("10d", 10), ("20d", 20)):
+        window = readiness[window_name]
+        assert window["required_paired_complete_lifecycle_count"] == floor
+        assert window["observed_paired_complete_lifecycle_count"] == floor
+        assert window["remaining_paired_complete_lifecycle_count"] == 0
+        assert window["state"] == "floor_met"
+        assert window["shortage_classification_status"] == ("not_applicable_floor_met")
+        assert window["shortage_class"] is None
+    assert not any(
+        "5d_paired_lifecycle_count_below_20" in gap
+        for gap in research["remaining_gap_codes"]
+    )
+
+
+def test_rolling_research_classifies_unresolved_window_before_waiting(
+    tmp_path: Path,
+) -> None:
+    current = _report(
+        "2026-08-27",
+        [
+            _anchor(
+                source_date="2026-08-27",
+                lifecycle_number=1,
+                current_realized=False,
+            )
+        ],
+    )
+
+    research = build_rolling_paired_policy_research(
+        target_date="2026-08-27",
+        current_report=current,
+        report_dir=tmp_path,
+    )
+
+    readiness = research["cohorts"][0]["alternatives"][0]["window_sample_readiness"]
+    assert readiness["5d"]["state"] == "terminal_or_right_censored_gap"
+    assert readiness["5d"]["shortage_classification_status"] == (
+        "blocked_missing_evidence"
+    )
+    assert readiness["20d"]["remaining_paired_complete_lifecycle_count"] == 20
+    assert research["sample_floor_assessment"]["state"] == (
+        "terminal_or_right_censored_gap"
+    )
+    assert research["sample_floor_assessment"]["shortage_classification_status"] == (
+        "blocked_missing_evidence"
+    )
+    assert research["sample_floor_assessment"]["next_action"] == (
+        "reconcile_exact_owner_terminal_outcomes_before_waiting"
+    )
+
+
+def test_rolling_research_detects_window_floor_unattainable_at_observed_yield(
+    tmp_path: Path,
+) -> None:
+    target_day = date(2026, 8, 27)
+    source_dates = _trading_dates(target_day, 5)
+    for source_day in source_dates[:-1]:
+        payload = _report(source_day.isoformat(), [])
+        (
+            tmp_path
+            / f"machine_microstructure_attribution_{source_day.isoformat()}.json"
+        ).write_text(__import__("json").dumps(payload), encoding="utf-8")
+    current = _report(
+        target_day.isoformat(),
+        [
+            _anchor(
+                source_date=target_day.isoformat(),
+                lifecycle_number=1,
+            )
+        ],
+    )
+
+    research = build_rolling_paired_policy_research(
+        target_date=target_day.isoformat(),
+        current_report=current,
+        report_dir=tmp_path,
+    )
+
+    window = research["cohorts"][0]["alternatives"][0]["window_sample_readiness"]["5d"]
+    assert window["state"] == "window_floor_unattainable_at_observed_yield"
+    assert window["source_report_day_count"] == 5
+    assert window["projected_paired_lifecycles_in_full_window"] == 1.0
+    assert window["shortage_class"] == "structural_population_exhaustion"
+    assert research["sample_floor_assessment"]["state"] == (
+        "window_floor_unattainable_at_observed_yield"
+    )
+    assert research["sample_floor_assessment"]["shortage_class"] == (
+        "structural_population_exhaustion"
+    )
+    assert (
+        "5d_window_floor_unattainable_at_observed_yield"
+        in research["remaining_gap_codes"]
+    )
 
 
 def test_rolling_research_keeps_insufficient_and_unresolved_samples_open(

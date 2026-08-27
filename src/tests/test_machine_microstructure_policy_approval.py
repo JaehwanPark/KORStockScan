@@ -66,6 +66,16 @@ def _candidate(
                 "10d": 0.09,
                 "20d": 0.08,
             },
+            "rolling_paired_complete_lifecycle_count": {
+                "5d": 5,
+                "10d": 10,
+                "20d": 20,
+            },
+            "rolling_paired_complete_lifecycle_floor": {
+                "5d": 5,
+                "10d": 10,
+                "20d": 20,
+            },
             "relative_primary_ev_uplift_pct": 1.2,
             "primary_20d_net_profit": 12_000,
             "costs_included": True,
@@ -3302,3 +3312,19 @@ def test_readiness_rejects_prebaseline_and_boolean_numeric_evidence() -> None:
 
     assert "source_date_before_clean_baseline" in errors
     assert "observed_trading_days_below_5" in errors
+
+
+def test_readiness_rejects_thin_or_drifted_rolling_paired_counts() -> None:
+    thin = _candidate()
+    thin["evidence"]["rolling_paired_complete_lifecycle_count"]["5d"] = 4
+
+    thin_errors = mod.evidence_readiness_errors(thin)
+
+    assert "rolling_5d_paired_lifecycle_count_below_5" in thin_errors
+
+    drifted = _candidate()
+    drifted["evidence"]["rolling_paired_complete_lifecycle_floor"]["5d"] = 20
+
+    drifted_errors = mod.evidence_readiness_errors(drifted)
+
+    assert "rolling_paired_lifecycle_floor_contract_invalid" in drifted_errors

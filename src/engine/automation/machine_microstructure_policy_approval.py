@@ -32,6 +32,9 @@ from src.engine.monitoring.machine_microstructure_attribution import (
     OBJECTIVE_HANDOFF_RESOLVABLE_GAP_CODES,
     resolve_completed_machine_target_date,
 )
+from src.engine.monitoring.machine_lifecycle_turnover_policy_research import (
+    ROLLING_PAIRED_LIFECYCLE_FLOORS,
+)
 from src.engine.scalping.micro_reversion.contracts import CLEAN_BASELINE_DATE
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
 from src.utils.jsonl_io import (
@@ -614,6 +617,8 @@ def evidence_readiness_errors(candidate: Mapping[str, Any]) -> list[str]:
     relative_uplift = _finite_float(evidence.get("relative_primary_ev_uplift_pct"))
     net_profit = _finite_float(evidence.get("primary_20d_net_profit"))
     rolling = evidence.get("rolling_source_quality_adjusted_ev_pct")
+    rolling_paired_counts = evidence.get("rolling_paired_complete_lifecycle_count")
+    rolling_paired_floors = evidence.get("rolling_paired_complete_lifecycle_floor")
     if observed_days is None or observed_days < 5:
         errors.append("observed_trading_days_below_5")
     if matched_anchors is None or matched_anchors < 20:
@@ -629,6 +634,15 @@ def evidence_readiness_errors(candidate: Mapping[str, Any]) -> list[str]:
         for window in ("5d", "10d", "20d")
     ):
         errors.append("rolling_5d_10d_20d_ev_not_all_positive")
+    if rolling_paired_floors != ROLLING_PAIRED_LIFECYCLE_FLOORS:
+        errors.append("rolling_paired_lifecycle_floor_contract_invalid")
+    if not isinstance(rolling_paired_counts, Mapping):
+        errors.append("rolling_paired_lifecycle_counts_missing")
+    else:
+        for window, floor in ROLLING_PAIRED_LIFECYCLE_FLOORS.items():
+            count = _nonnegative_int(rolling_paired_counts.get(window))
+            if count is None or count < floor:
+                errors.append(f"rolling_{window}_paired_lifecycle_count_below_{floor}")
     if relative_uplift is None or relative_uplift < 1.0:
         errors.append("relative_primary_ev_uplift_below_1pct")
     if net_profit is None or net_profit <= 0.0:

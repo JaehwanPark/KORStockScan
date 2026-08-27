@@ -1690,7 +1690,13 @@ def _upsert_auto_block(existing: str, auto_block: str) -> str:
     if AUTO_START in existing and AUTO_END in existing:
         prefix, rest = existing.split(AUTO_START, 1)
         _, suffix = rest.split(AUTO_END, 1)
-        return prefix.rstrip() + "\n\n" + auto_block.rstrip() + "\n" + suffix
+        return (
+            prefix.rstrip()
+            + "\n\n"
+            + auto_block.rstrip()
+            + "\n\n"
+            + suffix.lstrip("\r\n")
+        )
 
     sync_heading = "\n## Project/Calendar 동기화"
     if sync_heading in existing:

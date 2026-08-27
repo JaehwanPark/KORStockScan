@@ -1197,13 +1197,13 @@ def test_held_episode_keeps_diagnostic_anchors_but_never_tuning_authority(tmp_pa
     followup = report["objective_followups"][0]
     assert followup["state"] == "EVIDENCE_ACCUMULATING"
     assert followup["followup_required"] is True
-    assert followup["attention_class"] == "evidence_collection"
+    assert followup["attention_class"] == "terminal_reconciliation"
     assert followup["operator_decision_required"] is False
     assert followup["remaining_gap_codes"] == [
         "no_policy_eligible_paired_lifecycle_observed"
     ]
     assert followup["next_action"] == (
-        "continue_exact_date_collection_and_rolling_readiness_review"
+        "reconcile_exact_owner_terminal_outcomes_before_waiting"
     )
     assert followup["metric_contract"] == OBJECTIVE_FOLLOWUP_METRIC_CONTRACT
     assert report["rolling_paired_policy_research"]["implementation_boundary"] == {
