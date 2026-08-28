@@ -13,6 +13,15 @@ STARTUP_RETIRED_RUNTIME_ENV_KEYS = frozenset(
         # value across child-only graceful restarts, so the child entrypoint
         # must remove it before importing any trading module.
         "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED",
+        # The latency TP1 direct recheck was removed in favor of feeding
+        # refreshed inputs through the normal market-data envelope and next
+        # scanner loop.  Clear the entire namespace so a long-lived supervisor
+        # cannot restore the retired real-submit exception on a child restart.
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS",
     }
 )
 

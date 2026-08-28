@@ -34795,7 +34795,7 @@ def test_publish_buy_signal_submission_notice_shows_requested_and_submitted_qty(
     assert fields["submitted_leg_count"] == 2
 
 
-def test_publish_buy_signal_submission_notice_exposes_direct_canary_recheck(
+def test_publish_buy_signal_submission_notice_omits_retired_direct_recheck(
     monkeypatch,
 ):
     published = []
@@ -34833,114 +34833,37 @@ def test_publish_buy_signal_submission_notice_exposes_direct_canary_recheck(
     message = published[0][1]["message"]
     assert "DANGER 예외: `direct canary`" in message
     assert "OFI: `+0.0410`" in message
-    assert "TP1 재확인: `recovered`" in message
+    assert "TP1 재확인" not in message
+    assert "top depth" not in message
 
 
-def test_latency_direct_recheck_arms_then_blocks_early_normal_reentry():
+def test_retired_latency_direct_recheck_state_is_cleared_without_requeue():
     now_ts = time.time()
-    stock = {}
-    arm_gate = {
-        "latency_true_ofi_direct_canary_recheck_required": True,
-        "latency_true_ofi_direct_canary_recheck_active": True,
-        "latency_true_ofi_direct_canary_reason": "tp1_recheck_arm_required",
-        "latency_true_ofi_direct_canary_recheck_min_wait_sec": 2.0,
-        "latency_true_ofi_direct_canary_recheck_ttl_sec": 5.0,
+    stock = {
+        "latency_true_ofi_direct_canary_recheck_armed": True,
+        "latency_true_ofi_direct_canary_recheck_started_at": now_ts - 1.0,
+        "latency_true_ofi_direct_canary_recheck_until_epoch": now_ts + 4.0,
+        "latency_true_ofi_direct_canary_recheck_source_reason": "legacy",
+        "latency_true_ofi_direct_canary_recheck_last_finished_at": now_ts - 2.0,
+        "latency_true_ofi_direct_canary_recheck_last_outcome": "armed",
+        "_scanner_rising_latency_direct_recheck_after_epoch": now_ts + 1.0,
+        "_scanner_rising_entry_relief_reason": "latency_direct_recheck_pending",
+        "_scanner_rising_recheck_reason": "latency_direct_recheck_pending",
+        "_scanner_full_eval_budget_source": "latency_direct_recheck",
     }
 
-    armed = state_handlers._apply_latency_true_ofi_direct_recheck(
-        stock,
-        "000001",
-        arm_gate,
-        now_ts=now_ts,
-    )
+    state_handlers._clear_retired_latency_true_ofi_direct_recheck_state(stock)
 
-    assert armed["latency_true_ofi_direct_canary_recheck_enqueued"] is True
+    assert not any(
+        key in stock
+        for key in state_handlers._LATENCY_TRUE_OFI_DIRECT_RECHECK_STATE_FIELDS
+    )
     assert state_handlers._scanner_active_rising_recheck_reason(
         stock, now_ts=now_ts
-    ) == ("latency_direct_recheck_pending")
-
-    early_gate = {
-        "allowed": True,
-        "decision": "ALLOW_NORMAL",
-        "mode": "normal",
-        "latency_true_ofi_direct_canary_recheck_required": True,
-        "latency_true_ofi_direct_canary_recheck_active": True,
-        "latency_true_ofi_direct_canary_recheck_elapsed_sec": 0.5,
-        "latency_true_ofi_direct_canary_recheck_min_wait_sec": 2.0,
-        "latency_true_ofi_direct_canary_recheck_ttl_sec": 5.0,
-        "latency_true_ofi_direct_canary_recheck_positive_micro_recovered": True,
-    }
-    early = state_handlers._apply_latency_true_ofi_direct_recheck(
-        stock,
-        "000001",
-        early_gate,
-        now_ts=now_ts + 0.5,
-    )
-
-    assert early_gate["allowed"] is False
-    assert early_gate["reason"] == "tp1_direct_recheck_min_wait_pending"
-    assert early["latency_true_ofi_direct_canary_recheck_enforcement"] == (
-        "tp1_direct_recheck_min_wait_pending"
-    )
-
-    recovered_gate = {
-        "allowed": True,
-        "decision": "ALLOW_NORMAL",
-        "mode": "normal",
-        "latency_true_ofi_direct_canary_recheck_required": True,
-        "latency_true_ofi_direct_canary_recheck_active": True,
-        "latency_true_ofi_direct_canary_recheck_elapsed_sec": 2.5,
-        "latency_true_ofi_direct_canary_recheck_min_wait_sec": 2.0,
-        "latency_true_ofi_direct_canary_recheck_ttl_sec": 5.0,
-        "latency_true_ofi_direct_canary_recheck_positive_micro_recovered": True,
-    }
-    recovered = state_handlers._apply_latency_true_ofi_direct_recheck(
-        stock,
-        "000001",
-        recovered_gate,
-        now_ts=now_ts + 2.5,
-    )
-
-    assert recovered_gate["allowed"] is True
-    assert recovered["latency_true_ofi_direct_canary_recheck_recovered"] is True
-    assert "latency_true_ofi_direct_canary_recheck_armed" not in stock
-
-    expired_stock = {
-        "latency_true_ofi_direct_canary_recheck_armed": True,
-        "latency_true_ofi_direct_canary_recheck_started_at": now_ts,
-        "_scanner_rising_latency_direct_recheck_after_epoch": now_ts + 2.0,
-    }
-    expired_gate = {
-        "allowed": True,
-        "decision": "ALLOW_NORMAL",
-        "mode": "normal",
-        "latency_true_ofi_direct_canary_recheck_required": True,
-        "latency_true_ofi_direct_canary_recheck_active": True,
-        "latency_true_ofi_direct_canary_recheck_elapsed_sec": 5.1,
-        "latency_true_ofi_direct_canary_recheck_min_wait_sec": 2.0,
-        "latency_true_ofi_direct_canary_recheck_ttl_sec": 5.0,
-        "latency_true_ofi_direct_canary_recheck_positive_micro_recovered": True,
-    }
-    expired = state_handlers._apply_latency_true_ofi_direct_recheck(
-        expired_stock,
-        "000001",
-        expired_gate,
-        now_ts=now_ts + 5.1,
-    )
-
-    assert expired_gate["allowed"] is False
-    assert expired_gate["reason"] == "tp1_direct_recheck_expired"
-    assert expired["latency_true_ofi_direct_canary_recheck_enforcement"] == "expired"
-    assert (
-        expired["latency_true_ofi_direct_canary_recheck_scheduler_window_missed"]
-        is True
-    )
-    assert expired["latency_true_ofi_direct_canary_recheck_scheduler_lag_sec"] == 0.1
-    assert (
-        expired["latency_true_ofi_direct_canary_recheck_scheduler_outcome"]
-        == "expired_before_runtime_dispatch"
-    )
-    assert "_scanner_rising_latency_direct_recheck_after_epoch" not in expired_stock
+    ) is None
+    assert state_handlers._scanner_active_full_eval_budget_source(
+        stock, now_ts=now_ts
+    ) is None
 
 
 def test_real_entry_panic_gap_weight_keeps_normal_market_price(monkeypatch):

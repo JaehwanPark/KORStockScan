@@ -8797,6 +8797,11 @@ def test_verify_runtime_env_handoff_rejects_retired_operator_overrides(
                 "export KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED=true",
                 "export KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED=true",
                 "export KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED=true",
+                "export KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED=true",
+                "export KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE=2026-07-20",
+                "export KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC=2",
+                "export KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC=5",
+                "export KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS=10",
             ]
         ),
         encoding="utf-8",
@@ -8808,6 +8813,11 @@ def test_verify_runtime_env_handoff_rejects_retired_operator_overrides(
     assert result["fail_reason"] == "retired_runtime_selection_or_override_present"
     assert result["operator_runtime_override_keys"] == []
     assert result["retired_operator_override_keys_blocked"] == [
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC",
         "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED",
         "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED",
         "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED",
@@ -8829,7 +8839,12 @@ def test_verify_runtime_env_handoff_rejects_retired_manifest_overrides(
                 "target_date": "2026-07-20",
                 "selected_families": [],
                 "env_overrides": {
-                    "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED": "true"
+                    "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED": "true",
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED": "true",
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE": "2026-07-20",
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC": "2",
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC": "5",
+                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS": "10",
                 },
             }
         ),
@@ -8840,7 +8855,12 @@ def test_verify_runtime_env_handoff_rejects_retired_manifest_overrides(
 
     assert result["status"] == "fail"
     assert result["retired_manifest_override_keys_blocked"] == [
-        "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED"
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC",
+        "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED",
     ]
     assert result["findings"][0]["source"] == "threshold_runtime_env_manifest"
 
@@ -9675,8 +9695,6 @@ def test_dated_runtime_override_audits_accept_current_runtime_bundle():
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED": "true",
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE": target_date,
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED": "true",
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ENABLED": "true",
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED": "true",
@@ -9721,6 +9739,9 @@ def test_dated_runtime_override_audits_accept_current_runtime_bundle():
 
     assert all(audit["status"] == "pass" for audit in audits)
     assert all(audit["reason"] == "active_date_matches_target" for audit in audits)
+    assert not any(
+        audit["family"] == "latency_true_ofi_direct_canary_recheck" for audit in audits
+    )
 
 
 def test_verify_runtime_env_handoff_requires_scalp_sim_policy_source_date(

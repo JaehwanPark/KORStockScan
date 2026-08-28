@@ -25,12 +25,53 @@ def test_bot_main_import_does_not_install_runtime_side_effects():
 
 def test_bot_main_import_clears_retired_inherited_runtime_authority(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE",
+        "2026-08-28",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC", "2"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC", "5"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS",
+        "10",
+    )
     sys.modules.pop("src.bot_main", None)
 
     module = importlib.import_module("src.bot_main")
 
     assert "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED" not in os.environ
+    assert (
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED" not in os.environ
+    )
+    assert (
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE"
+        not in os.environ
+    )
+    assert (
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC"
+        not in os.environ
+    )
+    assert (
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC"
+        not in os.environ
+    )
+    assert (
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS"
+        not in os.environ
+    )
     assert module._RETIRED_RUNTIME_ENV_CLEARED_AT_STARTUP == (
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS",
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC",
         "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED",
     )
     source = inspect.getsource(module)

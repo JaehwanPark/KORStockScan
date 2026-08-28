@@ -2500,6 +2500,30 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
         in script
     )
     assert (
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED:"
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE" not in script
+    )
+    assert "unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED" in script
+    assert (
+        "unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE"
+        in script
+    )
+    assert (
+        "unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC"
+        in script
+    )
+    assert "unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC" in script
+    assert (
+        "unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS"
+        in script
+    )
+    assert (
+        script.count(
+            "unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED"
+        )
+        == 2
+    )
+    assert (
         "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED:KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE:"
         in script
     )
@@ -2600,7 +2624,7 @@ def test_run_bot_dated_auto_renew_registry_matches_handoff_verifier_registry():
         if spec.get("auto_renew") is not False
     }
 
-    assert len(shell_specs) == 23
+    assert len(shell_specs) == 22
     assert shell_specs == verifier_specs
 
 

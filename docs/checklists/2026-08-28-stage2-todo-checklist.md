@@ -58,6 +58,13 @@
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
 
+- [ ] `[LatencyDirectRecheckRetirementAcceptance0828] 은퇴한 latency direct-canary 재검사 키의 다음 PREOPEN 제거·PID 반영 확인` (`Due: 2026-08-31`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:00`, `Track: RuntimeStability`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [threshold_runtime_env_2026-08-28.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-08-28.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [runtime_flags.py](/home/ubuntu/KORStockScan/src/utils/runtime_flags.py)
+  - 판정 기준: Plan Rebase의 post-block submit retry 제거 계약에 따라 `KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_{ENABLED,ACTIVE_DATE,MIN_WAIT_SEC,TTL_SEC,SPREAD_WORSEN_BPS}`가 operator/runtime env와 새 PID env에 없고 PREOPEN handoff verify가 pass인지 확인한다. 2026-08-28 PID `13273`은 기동 커밋 `7b8e59fcd8236bf8ff4270247f70dd4b2a419d9d`에서 authority key 두 개를 보유했고 `tp1_direct_recheck_expired`가 실제 관측되어 현재 PID 미반영 상태로 분리한다.
+  - 금지: 현재 PID env 수동 변경, broker/order/quantity/threshold/provider 변경, 미체결·독립 owner custody를 대사하지 않은 재기동, 은퇴 키를 PREOPEN/operator override에 재등록하지 않는다.
+  - 완료 조건: review finding 0과 targeted validation 통과, operator/runtime env recheck namespace key 0건, PREOPEN verify pass, 새 PID env 동일 key 0건, 새 PID 이후 `tp1_direct_recheck_*` enforcement event 0건을 같은 source/provenance 창에서 확인한다.
+  - 다음 액션: operator override 정리는 PREOPEN 권한 owner가 수행하고, 새 PID가 없으면 `implemented_but_current_pid_not_reflected`, verify가 차단되면 `retired_override_fail_closed`, 새 PID 수용까지 닫히면 `retirement_reflected`로 기록한다.
+
 ## 장후 체크리스트 (20:05~21:55)
 
 - [ ] `[PostcloseSourceQualityGateReview0828] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-08-28`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)

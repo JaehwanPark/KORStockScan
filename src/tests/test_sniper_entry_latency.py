@@ -6738,7 +6738,7 @@ def test_latency_true_ofi_direct_canary_is_off_without_dated_runtime(monkeypatch
     assert entry_latency_module._latency_true_ofi_direct_canary_enabled() is False
 
 
-def test_latency_true_ofi_direct_canary_requires_tp1_micro_recheck_before_allow(
+def test_latency_true_ofi_direct_canary_rejects_retired_tp1_micro_recheck(
     monkeypatch,
 ):
     _enable_latency_true_ofi_direct_canary(monkeypatch)
@@ -6749,7 +6749,6 @@ def test_latency_true_ofi_direct_canary_requires_tp1_micro_recheck_before_allow(
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE",
         datetime.now(entry_latency_module._KST).strftime("%Y-%m-%d"),
     )
-    now_ts = time.time()
     base_stock = {
         "rising_missed_entry_lineage": True,
         "price_delta_since_first_seen_pct": "4.20",
@@ -6797,26 +6796,32 @@ def test_latency_true_ofi_direct_canary_requires_tp1_micro_recheck_before_allow(
     )
 
     assert first["latency_true_ofi_direct_canary_applied"] is False
-    assert first["latency_true_ofi_direct_canary_recheck_state"] == "arm_required"
-    assert first["latency_true_ofi_direct_canary_reason"] == "tp1_recheck_arm_required"
+    assert first["latency_true_ofi_direct_canary_recheck_configured"] is False
+    assert first["latency_true_ofi_direct_canary_recheck_active"] is False
+    assert first["latency_true_ofi_direct_canary_recheck_state"] == "retired_removed"
+    assert first["latency_true_ofi_direct_canary_reason"] == (
+        "tp1_recheck_removed_use_market_data_envelope_next_scanner_loop"
+    )
 
     recovered_stock = {
         **base_stock,
         "latency_true_ofi_direct_canary_recheck_armed": True,
-        "latency_true_ofi_direct_canary_recheck_started_at": now_ts - 2.5,
+        "latency_true_ofi_direct_canary_recheck_started_at": time.time() - 2.5,
     }
     recovered = entry_latency_module._latency_true_ofi_direct_canary_fields(
         stock=recovered_stock,
         **kwargs,
     )
 
-    assert recovered["latency_true_ofi_direct_canary_applied"] is True
-    assert recovered["latency_true_ofi_direct_canary_recheck_state"] == "recovered"
+    assert recovered["latency_true_ofi_direct_canary_applied"] is False
+    assert recovered["latency_true_ofi_direct_canary_recheck_state"] == (
+        "retired_removed"
+    )
     assert recovered[
         "latency_true_ofi_direct_canary_recheck_top_depth_ratio_source"
     ] == ("ws.orderbook.top_bid_over_ask")
     assert recovered["latency_true_ofi_direct_canary_reason"] == (
-        "direct_canary_tp1_recheck_recovered_allow"
+        "tp1_recheck_removed_use_market_data_envelope_next_scanner_loop"
     )
 
     rest_replaced = entry_latency_module._latency_true_ofi_direct_canary_fields(
@@ -6836,7 +6841,7 @@ def test_latency_true_ofi_direct_canary_requires_tp1_micro_recheck_before_allow(
         "latency_true_ofi_direct_canary_recheck_top_depth_ratio_source"
     ] == ("rest.orderbook.top_bid_over_ask")
     assert rest_replaced["latency_true_ofi_direct_canary_reason"] == (
-        "tp1_recheck_positive_micro_not_recovered"
+        "tp1_recheck_removed_use_market_data_envelope_next_scanner_loop"
     )
 
 
@@ -6895,8 +6900,10 @@ def test_latency_true_ofi_direct_canary_rechecks_submit_time_deterioration(
 
     assert fields["latency_true_ofi_direct_canary_applied"] is False
     assert fields["latency_true_ofi_direct_canary_recheck_required"] is True
-    assert fields["latency_true_ofi_direct_canary_recheck_state"] == "arm_required"
-    assert fields["latency_true_ofi_direct_canary_reason"] == "tp1_recheck_arm_required"
+    assert fields["latency_true_ofi_direct_canary_recheck_state"] == "retired_removed"
+    assert fields["latency_true_ofi_direct_canary_reason"] == (
+        "tp1_recheck_removed_use_market_data_envelope_next_scanner_loop"
+    )
     assert fields["latency_true_ofi_direct_canary_submit_deterioration_reasons"] == (
         "true_ofi_turned_negative,spread_worsened"
     )

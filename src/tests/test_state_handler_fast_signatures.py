@@ -637,15 +637,16 @@ def test_fresh_spread_ai_recheck_never_rechecks_fresh_drop(monkeypatch):
     assert fields["fresh_spread_ai_recheck_latency_recovered"] is False
 
 
-def test_submit_runs_fresh_spread_ai_recheck_before_post_latency_guards():
+def test_submit_clears_retired_direct_recheck_after_fresh_spread_refresh():
     source = inspect.getsource(handlers._submit_watching_triggered_entry)
     initial_latency_idx = source.index("latency_gate = evaluate_live_buy_entry(")
     recheck_idx = source.index("_maybe_recheck_fresh_spread_latency_with_ai(")
-    direct_recheck_idx = source.index(
-        "latency_direct_recheck_fields = _apply_latency_true_ofi_direct_recheck("
+    retired_cleanup_idx = source.index(
+        "_clear_retired_latency_true_ofi_direct_recheck_state(stock)"
     )
 
-    assert initial_latency_idx < recheck_idx < direct_recheck_idx
+    assert initial_latency_idx < recheck_idx < retired_cleanup_idx
+    assert "_apply_latency_true_ofi_direct_recheck(" not in source
 
 
 def test_update_ai_quote_freshness_fields_overwrites_stale_provenance(monkeypatch):

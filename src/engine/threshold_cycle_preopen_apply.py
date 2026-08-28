@@ -4424,12 +4424,6 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, Any], ...] = (
         "dependency_enabled_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED",
     },
     {
-        "family": "latency_true_ofi_direct_canary_recheck",
-        "enabled_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED",
-        "active_date_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE",
-        "dependency_enabled_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED",
-    },
-    {
         "family": "latency_true_ofi_nxt_probability_band",
         "enabled_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ENABLED",
         "active_date_key": (

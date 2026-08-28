@@ -11858,20 +11858,8 @@ def _publish_buy_signal_submission_notice(
             (latency_gate or {}).get("latency_true_ofi_direct_canary_true_ofi_ewma"),
             0.0,
         )
-        top_depth_ratio = _safe_float(
-            (latency_gate or {}).get(
-                "latency_true_ofi_direct_canary_recheck_top_depth_ratio"
-            ),
-            0.0,
-        )
-        recheck_state = str(
-            (latency_gate or {}).get("latency_true_ofi_direct_canary_recheck_state")
-            or "not_required"
-        )
         direct_canary_line = (
-            "\nDANGER 예외: `direct canary` | "
-            f"OFI: `{true_ofi:+.4f}` | top depth: `{top_depth_ratio:.2f}` | "
-            f"TP1 재확인: `{recheck_state}`"
+            "\nDANGER 예외: `direct canary` | " f"OFI: `{true_ofi:+.4f}`"
         )
     msg = (
         f"🛒 **[BUY 주문 제출] {stock.get('name')} ({code})**\n"
@@ -13313,172 +13301,18 @@ _LATENCY_TRUE_OFI_DIRECT_RECHECK_STATE_FIELDS = (
     "_scanner_rising_entry_relief_reason",
     "_scanner_rising_recheck_reason",
     "_scanner_full_eval_budget_source",
+    "latency_true_ofi_direct_canary_recheck_last_finished_at",
+    "latency_true_ofi_direct_canary_recheck_last_outcome",
 )
 
 
-def _clear_latency_true_ofi_direct_recheck(
-    stock: dict, *, now_ts: float, outcome: str
-) -> None:
-    _mutate_stock_state(
-        stock,
-        set_fields={
-            "latency_true_ofi_direct_canary_recheck_last_finished_at": now_ts,
-            "latency_true_ofi_direct_canary_recheck_last_outcome": outcome,
-        },
-        pop_fields=_LATENCY_TRUE_OFI_DIRECT_RECHECK_STATE_FIELDS,
-    )
-
-
-def _apply_latency_true_ofi_direct_recheck(
-    stock: dict,
-    code: str,
-    latency_gate: dict,
-    *,
-    now_ts: float,
-) -> dict[str, Any]:
-    """Arm and enforce the TP1-driven, bounded DANGER exception recheck."""
-    gate = latency_gate if isinstance(latency_gate, dict) else {}
-    required = bool(gate.get("latency_true_ofi_direct_canary_recheck_required"))
-    active = bool(gate.get("latency_true_ofi_direct_canary_recheck_active"))
-    reason = str(gate.get("latency_true_ofi_direct_canary_reason") or "")
-    armed = _boolish_true(stock.get("latency_true_ofi_direct_canary_recheck_armed"))
-    min_wait_sec = max(
-        2.0,
-        min(
-            5.0,
-            _safe_float(
-                gate.get("latency_true_ofi_direct_canary_recheck_min_wait_sec"), 2.0
-            ),
-        ),
-    )
-    ttl_sec = max(
-        min_wait_sec,
-        min(
-            5.0,
-            _safe_float(
-                gate.get("latency_true_ofi_direct_canary_recheck_ttl_sec"), 5.0
-            ),
-        ),
-    )
-    result = {
-        "latency_true_ofi_direct_canary_recheck_enqueued": False,
-        "latency_true_ofi_direct_canary_recheck_recovered": False,
-        "latency_true_ofi_direct_canary_recheck_enforcement": "not_applicable",
-    }
-    if not required:
-        return result
-    if not active:
-        result["latency_true_ofi_direct_canary_recheck_enforcement"] = (
-            "runtime_inactive"
-        )
-        return result
-
-    if not armed and reason == "tp1_recheck_arm_required":
-        until_epoch = now_ts + ttl_sec
-        after_epoch = now_ts + min_wait_sec
+def _clear_retired_latency_true_ofi_direct_recheck_state(stock: dict) -> None:
+    """Drop stale scheduler state for the removed direct-recheck path."""
+    if any(key in stock for key in _LATENCY_TRUE_OFI_DIRECT_RECHECK_STATE_FIELDS):
         _mutate_stock_state(
             stock,
-            set_fields={
-                "latency_true_ofi_direct_canary_recheck_armed": True,
-                "latency_true_ofi_direct_canary_recheck_started_at": now_ts,
-                "latency_true_ofi_direct_canary_recheck_until_epoch": until_epoch,
-                "latency_true_ofi_direct_canary_recheck_source_reason": (
-                    gate.get("latency_true_ofi_direct_canary_tp1_submit_safety_action")
-                    or "tp1_recheck_required"
-                ),
-                "_scanner_rising_latency_direct_recheck_after_epoch": after_epoch,
-                "_scanner_rising_entry_relief_reason": "latency_direct_recheck_pending",
-                "_scanner_rising_recheck_reason": "latency_direct_recheck_pending",
-                "_scanner_full_eval_budget_source": "latency_direct_recheck",
-            },
+            pop_fields=_LATENCY_TRUE_OFI_DIRECT_RECHECK_STATE_FIELDS,
         )
-        result.update(
-            {
-                "latency_true_ofi_direct_canary_recheck_enqueued": True,
-                "latency_true_ofi_direct_canary_recheck_enforcement": "armed",
-                "latency_true_ofi_direct_canary_recheck_after_epoch": round(
-                    after_epoch, 3
-                ),
-                "latency_true_ofi_direct_canary_recheck_until_epoch": round(
-                    until_epoch, 3
-                ),
-            }
-        )
-        return result
-
-    if not armed:
-        return result
-
-    elapsed_sec = _safe_float(
-        gate.get("latency_true_ofi_direct_canary_recheck_elapsed_sec"), 0.0
-    )
-    recovered = bool(
-        gate.get("latency_true_ofi_direct_canary_recheck_positive_micro_recovered")
-    )
-    if elapsed_sec > ttl_sec or reason == "tp1_recheck_expired":
-        scheduler_lag_sec = max(0.0, elapsed_sec - ttl_sec)
-        result.update(
-            {
-                "latency_true_ofi_direct_canary_recheck_scheduler_window_missed": (
-                    scheduler_lag_sec > 0.0
-                ),
-                "latency_true_ofi_direct_canary_recheck_scheduler_lag_sec": round(
-                    scheduler_lag_sec, 3
-                ),
-                "latency_true_ofi_direct_canary_recheck_scheduler_outcome": (
-                    "expired_before_runtime_dispatch"
-                    if scheduler_lag_sec > 0.0
-                    else "expired_within_runtime_dispatch"
-                ),
-            }
-        )
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "latency_true_ofi_direct_canary_recheck_last_outcome": "expired",
-            },
-            pop_fields=("_scanner_rising_latency_direct_recheck_after_epoch",),
-        )
-        gate.update(
-            {
-                "allowed": False,
-                "decision": "REJECT_DANGER",
-                "effective_decision": "REJECT_DANGER",
-                "reason": "tp1_direct_recheck_expired",
-                "effective_reason": "tp1_direct_recheck_expired",
-                "mode": "reject",
-            }
-        )
-        result["latency_true_ofi_direct_canary_recheck_enforcement"] = "expired"
-        return result
-    if elapsed_sec < min_wait_sec or not recovered:
-        block_reason = (
-            "tp1_direct_recheck_min_wait_pending"
-            if elapsed_sec < min_wait_sec
-            else "tp1_direct_recheck_positive_micro_not_recovered"
-        )
-        gate.update(
-            {
-                "allowed": False,
-                "decision": "REJECT_DANGER",
-                "effective_decision": "REJECT_DANGER",
-                "reason": block_reason,
-                "effective_reason": block_reason,
-                "mode": "reject",
-            }
-        )
-        result["latency_true_ofi_direct_canary_recheck_enforcement"] = block_reason
-        return result
-
-    _clear_latency_true_ofi_direct_recheck(stock, now_ts=now_ts, outcome="recovered")
-    gate["latency_true_ofi_direct_canary_recheck_state"] = "recovered"
-    result.update(
-        {
-            "latency_true_ofi_direct_canary_recheck_recovered": True,
-            "latency_true_ofi_direct_canary_recheck_enforcement": "recovered",
-        }
-    )
-    return result
 
 
 def _scanner_active_rising_recheck_reason(
@@ -13499,10 +13333,6 @@ def _scanner_active_rising_recheck_reason(
         (
             "_scanner_async_expired_response_recheck_until_epoch",
             "expired_ai_fresh_snapshot_recheck_pending",
-        ),
-        (
-            "_scanner_rising_latency_direct_recheck_after_epoch",
-            "latency_direct_recheck_pending",
         ),
         (
             "_scanner_rising_reversal_up_volatile_recheck_until_epoch",
@@ -13542,8 +13372,6 @@ def _scanner_active_full_eval_budget_source(
         return "freshness_envelope_recheck"
     if reason == "expired_ai_fresh_snapshot_recheck_pending":
         return "expired_ai_fresh_snapshot_recheck"
-    if reason == "latency_direct_recheck_pending":
-        return "latency_direct_recheck"
     if reason == "reversal_up_volatile_recheck_pending":
         return "reversal_up_volatile_recheck"
     if reason == "reversal_up_watch_recheck_pending":
@@ -65538,43 +65366,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         latency_gate.update(pre_submit_ws_snapshot_refresh)
     latency_gate.update(pre_submit_rest_orderbook_refresh)
     latency_gate.update(nxt_tp1_context_refresh_fields)
-    latency_direct_recheck_fields = _apply_latency_true_ofi_direct_recheck(
-        stock,
-        code,
-        latency_gate,
-        now_ts=(
-            time.time()
-            if fresh_spread_ai_recheck_fields.get("fresh_spread_ai_recheck_attempted")
-            else _runtime_action_now_ts(runtime)
-        ),
-    )
-    latency_gate.update(latency_direct_recheck_fields)
-    if latency_direct_recheck_fields.get(
-        "latency_true_ofi_direct_canary_recheck_enforcement"
-    ) not in {"not_applicable", "runtime_inactive"}:
-        _log_entry_pipeline(
-            stock,
-            code,
-            "latency_true_ofi_direct_canary_recheck",
-            threshold_family="latency_true_ofi_direct_canary_recheck",
-            metric_role="bounded_tunable",
-            decision_authority="operator_runtime_override_latency_true_ofi_direct_recheck",
-            window_policy="same_candidate_2_to_5_second_recheck",
-            sample_floor="fresh_trusted_ws_micro_recovery",
-            primary_decision_metric="positive_true_ofi_and_top_depth_recovery",
-            source_quality_gate="fresh_ws_micro_and_signed_tape_required",
-            runtime_effect=bool(
-                latency_direct_recheck_fields.get(
-                    "latency_true_ofi_direct_canary_recheck_recovered"
-                )
-            ),
-            allowed_runtime_apply=bool(
-                latency_gate.get("latency_true_ofi_direct_canary_recheck_active")
-            ),
-            actual_order_submitted=False,
-            broker_order_forbidden=not bool(latency_gate.get("allowed")),
-            **latency_direct_recheck_fields,
-        )
+    _clear_retired_latency_true_ofi_direct_recheck_state(stock)
     secondary_recheck_enabled = _pre_submit_secondary_recheck_enabled()
     latency_gate.update(
         {
@@ -65682,16 +65474,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ai_quote_stale=ai_source_quality_fields.get("quote_stale"),
             ai_quote_age_ms=ai_source_quality_fields.get("quote_age_ms"),
         )
-        latency_direct_recheck_pending = str(
-            latency_direct_recheck_fields.get(
-                "latency_true_ofi_direct_canary_recheck_enforcement"
-            )
-            or ""
-        ) in {
-            "armed",
-            "tp1_direct_recheck_min_wait_pending",
-            "tp1_direct_recheck_positive_micro_not_recovered",
-        }
         latency_submit_backoff_fields = (
             _record_rising_missed_submit_safety_backoff(
                 stock,
@@ -65703,7 +65485,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             if (
                 str(latency_gate.get("latency_state") or "").strip().upper() == "DANGER"
-                and not latency_direct_recheck_pending
             )
             else {}
         )

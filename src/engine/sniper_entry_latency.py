@@ -2733,15 +2733,10 @@ def _latency_true_ofi_direct_canary_fields(
         )
         * 10_000.0,
     )
-    spread_worsen_bps = max(
-        1.0,
-        _to_float(
-            os.getenv(
-                "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS"
-            ),
-            10.0,
-        ),
-    )
+    # The former submit-time direct recheck is retired.  Keep the fixed
+    # deterioration comparison as source-only provenance, but do not read any
+    # retired runtime configuration or candidate-local scheduler state.
+    spread_worsen_bps = 10.0
     submit_true_ofi_deteriorated = bool(
         tp1_context_fresh
         and source_state.startswith("fresh_ws")
@@ -2763,52 +2758,14 @@ def _latency_true_ofi_direct_canary_fields(
     ]
     if submit_deterioration_reasons:
         tp1_recheck_required = True
-    recheck_configured = _truthy(
-        os.getenv(
-            "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED", "false"
-        )
-    )
-    recheck_active_date = str(
-        os.getenv("KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE")
-        or runtime_state["active_date"]
-        or ""
-    ).strip()
-    recheck_active = bool(
-        enabled and recheck_configured and recheck_active_date == current_date
-    )
-    recheck_min_wait_sec = min(
-        5.0,
-        max(
-            2.0,
-            _to_float(
-                os.getenv(
-                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC"
-                ),
-                2.0,
-            ),
-        ),
-    )
-    recheck_ttl_sec = min(
-        5.0,
-        max(
-            recheck_min_wait_sec,
-            _to_float(
-                os.getenv(
-                    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC"
-                ),
-                5.0,
-            ),
-        ),
-    )
-    recheck_armed = _truthy(
-        (stock or {}).get("latency_true_ofi_direct_canary_recheck_armed", False)
-    )
-    recheck_started_at = _to_float(
-        (stock or {}).get("latency_true_ofi_direct_canary_recheck_started_at"), 0.0
-    )
-    recheck_elapsed_sec = (
-        max(0.0, time.time() - recheck_started_at) if recheck_started_at > 0 else 0.0
-    )
+    recheck_configured = False
+    recheck_active_date = ""
+    recheck_active = False
+    recheck_min_wait_sec = 0.0
+    recheck_ttl_sec = 0.0
+    recheck_armed = False
+    recheck_started_at = 0.0
+    recheck_elapsed_sec = 0.0
     top_depth_ratio, top_depth_ratio_source = _latency_direct_canary_top_depth_ratio(
         stock, ws_data
     )
@@ -3662,54 +3619,18 @@ def _latency_true_ofi_direct_canary_fields(
         )
         return fields
     if fields["latency_true_ofi_direct_canary_recheck_required"]:
-        if not fields["latency_true_ofi_direct_canary_recheck_active"]:
-            fields["latency_true_ofi_direct_canary_recheck_state"] = "runtime_inactive"
-            fields["latency_true_ofi_direct_canary_reason"] = (
-                "tp1_recheck_runtime_inactive"
-            )
-            return fields
-        if not fields["latency_true_ofi_direct_canary_recheck_armed"]:
-            fields["latency_true_ofi_direct_canary_recheck_state"] = "arm_required"
-            fields["latency_true_ofi_direct_canary_reason"] = "tp1_recheck_arm_required"
-            return fields
-        if (
-            fields["latency_true_ofi_direct_canary_recheck_elapsed_sec"]
-            < fields["latency_true_ofi_direct_canary_recheck_min_wait_sec"]
-        ):
-            fields["latency_true_ofi_direct_canary_recheck_state"] = "min_wait_pending"
-            fields["latency_true_ofi_direct_canary_reason"] = (
-                "tp1_recheck_min_wait_pending"
-            )
-            return fields
-        if (
-            fields["latency_true_ofi_direct_canary_recheck_elapsed_sec"]
-            > fields["latency_true_ofi_direct_canary_recheck_ttl_sec"]
-        ):
-            fields["latency_true_ofi_direct_canary_recheck_state"] = "expired"
-            fields["latency_true_ofi_direct_canary_reason"] = "tp1_recheck_expired"
-            return fields
-        if not fields[
-            "latency_true_ofi_direct_canary_recheck_positive_micro_recovered"
-        ]:
-            fields["latency_true_ofi_direct_canary_recheck_state"] = (
-                "positive_micro_not_recovered"
-            )
-            fields["latency_true_ofi_direct_canary_reason"] = (
-                "tp1_recheck_positive_micro_not_recovered"
-            )
-            return fields
-        fields["latency_true_ofi_direct_canary_recheck_state"] = "recovered"
+        fields["latency_true_ofi_direct_canary_recheck_state"] = "retired_removed"
+        fields["latency_true_ofi_direct_canary_reason"] = (
+            "tp1_recheck_removed_use_market_data_envelope_next_scanner_loop"
+        )
+        return fields
     fields.update(
         {
             "latency_true_ofi_direct_canary_applied": True,
             "latency_true_ofi_direct_canary_reason": (
-                "direct_canary_tp1_recheck_recovered_allow"
-                if fields["latency_true_ofi_direct_canary_recheck_required"]
-                else (
-                    "direct_canary_extended_spread_true_ofi_allow"
-                    if fields["latency_true_ofi_direct_canary_extended_tier_applied"]
-                    else "direct_canary_true_ofi_false_negative_allow"
-                )
+                "direct_canary_extended_spread_true_ofi_allow"
+                if fields["latency_true_ofi_direct_canary_extended_tier_applied"]
+                else "direct_canary_true_ofi_false_negative_allow"
             ),
             "latency_true_ofi_direct_canary_runtime_effect": True,
             "latency_true_ofi_direct_canary_allowed_runtime_apply": True,
