@@ -8,6 +8,7 @@ from src.engine.monitoring.machine_microstructure_attribution import (
     FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID,
     OBJECTIVE_CANDIDATE_BINDING_SCHEMA,
     OBJECTIVE_FOLLOWUP_METRIC_CONTRACT,
+    _episode_exit_outcome_provenance,
     _fast_lifecycle_objective_followup,
     _episode_inventory,
     _lifecycle_objective_summary,
@@ -15,6 +16,7 @@ from src.engine.monitoring.machine_microstructure_attribution import (
     _rolling_source_contract_recovery,
     _validate_stream_row,
     _widget_advisory_event_index,
+    _widget_actual_execution_inventory,
     _widget_inventory,
     archive_exact_date_canary_snapshot,
     build_report as build_attribution_report,
@@ -28,6 +30,18 @@ from src.engine.scalping.micro_reversion.collection_targets import (
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+def test_realized_episode_exit_with_unknown_source_is_not_target_fill():
+    provenance = _episode_exit_outcome_provenance(
+        {"net_profit_pct": -1.0},
+        realized=True,
+    )
+
+    assert provenance["exit_execution_class"] == "realized_exit_source_unknown"
+    assert provenance["manual_exit_realized"] is False
+    assert provenance["autonomous_target_filled"] is False
+    assert provenance["realized_loss"] is True
 
 
 def test_widget_advisory_index_accepts_both_producer_timestamp_suffixes(tmp_path):
@@ -1015,6 +1029,85 @@ def test_active_episode_signal_bar_gets_micro_path_metrics(tmp_path):
     assert lifecycle["matched_entry_fill_anchor_count"] == 1
     assert lifecycle["matched_exit_anchor_count"] == 1
     assert lifecycle["timed_owner_outcome_count"] == 1
+
+
+def test_episode_manual_stop_loss_keeps_negative_outcome_and_distinct_exit_role(
+    tmp_path,
+):
+    target_date = "2026-08-28"
+    report_root = tmp_path / "report"
+    _write_json(
+        report_root
+        / "low_price_two_leg_tuning"
+        / f"low_price_two_leg_tuning_{target_date}.json",
+        {
+            "schema": "low_price_two_leg_tuning_report_v6",
+            "target_date": target_date,
+            "cost_pct": 0.23,
+            "daily": {
+                "profiles": {
+                    "nhn_afternoon": {
+                        "profile_id": "nhn_afternoon",
+                        "target_date": target_date,
+                        "symbol": "181710",
+                        "session": "afternoon",
+                        "source_quality": "pass",
+                        "attempted": True,
+                        "eligible_for_tuning": True,
+                        "signal_features": {
+                            "signal_bar": "2026-08-28T14:00:00+09:00",
+                            "signal_decision_at": "2026-08-28T14:00:01+09:00",
+                            "signal_close": 71_500,
+                        },
+                        "legs": [
+                            {
+                                "leg_id": "signal_close",
+                                "entry_price": 71_500,
+                                "buy_filled_qty": 8,
+                                "buy_filled_at": "2026-08-28T14:00:10+09:00",
+                                "fill_price": 71_500,
+                                "target_filled_qty": 8,
+                                "target_filled_at": "2026-08-28T15:00:00+09:00",
+                                "target_fill_price": 69_900,
+                                "target_price": 71_900,
+                                "exit_fill_source": (
+                                    "broker_verified_manual_sell_receipt"
+                                ),
+                                "profit_price_source": "broker_manual_sell_receipt",
+                                "exit_execution_class": "manual_operator_exit",
+                                "gross_no_slippage_return_pct": -2.237762,
+                                "net_profit_pct": -2.467762,
+                                "completed": True,
+                            }
+                        ],
+                    }
+                }
+            },
+        },
+    )
+
+    profiles, anchors, sources = _episode_inventory(target_date, report_root)
+
+    assert sources["tuning"]["status"] == "loaded"
+    assert profiles["nhn_afternoon"]["owner_policy_tuning_eligible"] is True
+    decision_anchor = next(
+        anchor
+        for anchor in anchors
+        if anchor["anchor_role"] == "episode_signal_decision_leg"
+    )
+    exit_anchor = next(
+        anchor
+        for anchor in anchors
+        if anchor["anchor_role"] == "episode_manual_exit_confirmed"
+    )
+    for anchor in (decision_anchor, exit_anchor):
+        outcome = anchor["owner_outcome"]
+        assert outcome["realized"] is True
+        assert outcome["exit_execution_class"] == "manual_operator_exit"
+        assert outcome["manual_exit_realized"] is True
+        assert outcome["autonomous_target_filled"] is False
+        assert outcome["realized_loss"] is True
+        assert outcome["cost_aware_net_return_pct"] < 0
 
 
 def test_samsung_episode_decision_timestamp_enters_entry_timing_inventory(tmp_path):
@@ -3385,6 +3478,241 @@ def test_actual_widget_execution_journal_is_attributed_as_real_lifecycle(tmp_pat
         if row["scope_id"] == "actual:005930:KRX_REGULAR"
     )
     assert actual_research["policy_eligible_unique_lifecycle_count"] == 1
+
+
+def test_actual_widget_manual_partial_exit_is_realized_loss_with_residual_custody(
+    tmp_path,
+):
+    target_date = "2026-08-28"
+    report_root = tmp_path / "report"
+    state_path = tmp_path / "widget_state.json"
+    signal_id = "005930:2026-08-28:ENTRY:KRX_REGULAR:2026-08-28T09:45:00+09:00"
+    buy_orders = [
+        (
+            "B1",
+            "ENTRY_BUY",
+            264_500,
+            "2026-08-28T09:45:01+09:00",
+            "2026-08-28T09:45:02+09:00",
+        ),
+        (
+            "B2",
+            "SCALE_IN_BUY",
+            262_000,
+            "2026-08-28T10:03:19+09:00",
+            "2026-08-28T10:03:20+09:00",
+        ),
+        (
+            "B3",
+            "SCALE_IN_BUY",
+            260_500,
+            "2026-08-28T10:40:01+09:00",
+            "2026-08-28T10:40:02+09:00",
+        ),
+    ]
+    state_orders = []
+    for order_no, role, price, _submitted_at, filled_at in buy_orders:
+        state_orders.append(
+            {
+                "broker_accepted": True,
+                "order_no": order_no,
+                "order_date": target_date,
+                "side": "BUY",
+                "order_role": role,
+                "signal_id": signal_id if role == "ENTRY_BUY" else f"{signal_id}:{role}",
+                "parent_entry_signal_id": None if role == "ENTRY_BUY" else signal_id,
+                "market_venue": "KRX",
+                "broker_execution_venue": "KRX",
+                "requested_qty": 10,
+                "filled_qty": 10,
+                "fill_price": price,
+                "status": "FILLED",
+                "last_reconciled_at": filled_at,
+            }
+        )
+    state_orders.append(
+        {
+            "broker_accepted": True,
+            "order_no": "S1",
+            "order_date": target_date,
+            "side": "SELL",
+            "order_role": "MANUAL_OPERATOR_PARTIAL_EXIT",
+            "signal_id": f"{signal_id}:MANUAL_PARTIAL_EXIT:10",
+            "parent_entry_signal_id": signal_id,
+            "market_venue": "NXT",
+            "broker_execution_venue": "NXT",
+            "requested_qty": 10,
+            "filled_qty": 10,
+            "fill_price": 256_500,
+            "status": "FILLED",
+            "last_reconciled_at": "2026-08-28T18:36:25+09:00",
+            "operator_authority": "explicit_user_manual_partial_exit",
+            "exit_execution_class": "manual_operator_exit",
+            "manual_exit_realized": True,
+            "manual_partial_exit_requested_qty": 10,
+            "manual_exit_receipt": {
+                "order_no": "S1",
+                "order_date": target_date,
+                "symbol": "005930",
+                "filled_qty": 10,
+                "fill_price": 256_500,
+                "owner_id": "widget_auto_trade",
+                "source_api": "kt00007",
+                "allocation_authority": "explicit_user_manual_partial_exit",
+            },
+        }
+    )
+    _write_json(
+        state_path,
+        {
+            "schema_version": 1,
+            "execution_authority": "operator_directed_widget_auto_trade_v1",
+            "active_date": target_date,
+            "symbols": {
+                "005930": {"entry_signal_id": signal_id, "orders": state_orders}
+            },
+            "history": [],
+        },
+    )
+
+    def event(event_type: str, observed_at: str, **fields):
+        return {
+            "schema": "widget_signal_auto_trade_event_v1",
+            "event_type": event_type,
+            "observed_at": observed_at,
+            "trade_date": target_date,
+            "symbol": "005930",
+            "name": "Samsung",
+            "execution_authority": "operator_directed_widget_auto_trade_v1",
+            "decision_authority": "operator_directed_widget_auto_trade_v1",
+            "runtime_effect": True,
+            "actual_order_submitted": True,
+            "broker_order_forbidden": False,
+            **fields,
+        }
+
+    events = []
+    for order_no, role, price, submitted_at, filled_at in buy_orders:
+        order_signal = signal_id if role == "ENTRY_BUY" else f"{signal_id}:{role}"
+        parent = None if role == "ENTRY_BUY" else signal_id
+        events.extend(
+            [
+                event(
+                    "order_submitted",
+                    submitted_at,
+                    order_no=order_no,
+                    order_role=role,
+                    side="BUY",
+                    requested_qty=10,
+                    signal_id=order_signal,
+                    parent_entry_signal_id=parent,
+                    market_venue="KRX",
+                ),
+                event(
+                    "order_execution_reconciled",
+                    filled_at,
+                    order_no=order_no,
+                    order_role=role,
+                    side="BUY",
+                    requested_qty=10,
+                    filled_qty=10,
+                    remaining_qty=0,
+                    fill_price=price,
+                    broker_execution_venue="KRX",
+                ),
+            ]
+        )
+    events.extend(
+        [
+            event(
+                "order_submitted",
+                "2026-08-28T18:36:24+09:00",
+                order_no="S1",
+                order_role="MANUAL_OPERATOR_PARTIAL_EXIT",
+                side="SELL",
+                requested_qty=10,
+                signal_id=f"{signal_id}:MANUAL_PARTIAL_EXIT:10",
+                parent_entry_signal_id=signal_id,
+                market_venue="NXT",
+            ),
+            event(
+                "order_execution_reconciled",
+                "2026-08-28T18:36:25+09:00",
+                order_no="S1",
+                order_role="MANUAL_OPERATOR_PARTIAL_EXIT",
+                side="SELL",
+                requested_qty=10,
+                filled_qty=10,
+                remaining_qty=0,
+                fill_price=256_500,
+                broker_execution_venue="NXT",
+            ),
+        ]
+    )
+    _write_jsonl(
+        report_root
+        / "widget_signal_auto_trade_events"
+        / "widget_signal_auto_trade_events_20260828.jsonl",
+        events,
+    )
+
+    symbols = {}
+    anchors, source = _widget_actual_execution_inventory(
+        target_date=target_date,
+        report_root=report_root,
+        state_path=state_path,
+        symbols=symbols,
+    )
+
+    assert source["status"] == "loaded"
+    assert source["contract_errors"] == []
+    entry = next(
+        row for row in anchors if row["anchor_role"] == "actual_widget_entry_signal"
+    )
+    outcome = entry["owner_outcome"]
+    assert outcome["realized"] is True
+    assert outcome["realization_scope"] == "partial_manual_exit_cashflow"
+    assert outcome["quantity"] == 10
+    assert outcome["purchased_quantity"] == 30
+    assert outcome["right_censored_residual_quantity"] == 20
+    assert outcome["exit_execution_class"] == "manual_operator_exit"
+    assert outcome["manual_exit_realized"] is True
+    assert outcome["autonomous_target_filled"] is False
+    assert outcome["realized_loss"] is True
+    assert outcome["cost_aware_net_return_pct"] < 0
+    assert outcome["execution_venue_alignment_state"] == "cross_venue"
+    exit_anchor = next(
+        row
+        for row in anchors
+        if row["anchor_role"] == "actual_widget_manual_partial_exit_reconciled"
+    )
+    assert exit_anchor["owner_outcome"]["leg_id"] == (
+        "widget_partial_manual_exit_cashflow"
+    )
+    objective = _lifecycle_objective_summary(
+        [{**entry, "micro_context_status": "matched"}]
+    )
+    coverage = objective["lifecycle_coverage"]
+    assert coverage["widget_manual_operator_exit_owner_outcome_count"] == 1
+    assert coverage["widget_manual_operator_exit_loss_owner_outcome_count"] == 1
+    assert coverage["episode_manual_operator_exit_owner_outcome_count"] == 0
+
+    malformed_state = json.loads(state_path.read_text(encoding="utf-8"))
+    malformed_state["symbols"]["005930"]["orders"][-1]["manual_exit_receipt"][
+        "source_api"
+    ] = "unknown"
+    _write_json(state_path, malformed_state)
+    malformed_anchors, malformed_source = _widget_actual_execution_inventory(
+        target_date=target_date,
+        report_root=report_root,
+        state_path=state_path,
+        symbols={},
+    )
+    assert malformed_anchors == []
+    assert malformed_source["status"] == "contract_invalid"
+    assert malformed_source["contract_errors"] == [
+        "manual_partial_exit_state_contract_invalid:005930:S1"
+    ]
 
 
 def test_actual_widget_unfilled_entry_keeps_signal_and_submit_diagnostic(tmp_path):

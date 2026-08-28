@@ -166,7 +166,7 @@ main controller와 병렬 또는 후행으로 실행되는 owner를 각각 분�
 - `run_machine_microstructure_final_refresh.sh` 21:15 owner: 현재 reviewed wrapper 계약의 한 번 결정한 completed target date, expansion → attribution → entry-timing → approval/notification → checklist builder 단계별 return code와 `builder > policy > entry-timing > attribution > expansion` 실패 우선순위. entry-timing은 `attribution_rc==0`일 때만 실행되며, attribution 실패 때의 `entry_timing_rc=0`은 성공이 아니라 `skipped_due_to_attribution_failure`로 판정한다. 시작 시점 wrapper snapshot·설치 unit·runbook·traceability 중 entry-timing 단계 또는 실패 우선순위가 어긋나면 이 고정 예시로 정상화하지 않고 `contract_drift`로 차단한다.
 - AI paired replay: 대상 stage/venue/session별 terminal batch, exact source/batch hash, checkpoint, provider receipt, `completed_offline_only`
 - 20:50 dashboard DB archive: wrapper `[DONE]/[FAIL]`, `DASHBOARD_ARCHIVE_*`, verified/backfilled source와 `skipped_unverified`
-- 21:00 log rotation/cleanup: wrapper terminal marker, archive generation/hash·gzip roundtrip, writer-active defer, escalation/state failure와 원본 보존
+- 21:00 log rotation/cleanup: wrapper terminal marker, declared writer별 pre-open rollover receipt, archive generation/source hash·gzip roundtrip, open-inode 0·owner lock, writer-active defer, escalation/state failure와 원본 보존
 - 21:55 error detector final window: 대상일 canonical report, 고유 `run_id`, 7개 detector accounting, `summary_severity`, wrapper `[DONE]/[FAIL]`
 
 후행 source-only replay의 성공을 live 적용으로 해석하지 않는다. `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, `broker_order_forbidden=true` 계약을 확인한다.

@@ -327,6 +327,70 @@ def test_exact_date_applied_policy_provenance_and_broker_sell_price(tmp_path: Pa
     )
 
 
+def test_samsung_manual_stop_loss_is_retained_as_negative_realized_ev():
+    from src.engine.monitoring.samsung_machine_entry_tuning import (
+        _sanitize_leg,
+        _summarize_legs,
+    )
+
+    manual_leg = _sanitize_leg(
+        {
+            "leg_id": "signal_close",
+            "quantity": 10,
+            "status": "COMPLETE",
+            "entry_price": 100_000,
+            "fill_price": 100_000,
+            "target_price": 100_500,
+            "position_qty": 0,
+            "buy_filled_qty": 10,
+            "target_filled_qty": 10,
+            "target_fill_price": 98_000,
+            "exit_fill_source": "broker_verified_manual_sell_receipt",
+        },
+        0.23,
+    )
+    no_fill_leg = _sanitize_leg(
+        {
+            "leg_id": "signal_close_minus_1tick",
+            "quantity": 10,
+            "status": "NO_FILL",
+            "entry_price": 99_900,
+            "fill_price": 0,
+            "target_price": 0,
+            "position_qty": 0,
+            "buy_filled_qty": 0,
+            "target_filled_qty": 0,
+            "target_fill_price": 0,
+        },
+        0.23,
+    )
+    legs = [manual_leg, no_fill_leg]
+    row = {
+        "eligible_for_cumulative_tuning": True,
+        "attempted": True,
+        "cohort": "two_leg_runtime",
+        "source_quality": "pass",
+        "legs": legs,
+        "summary": _summarize_legs(True, legs),
+    }
+
+    summary = _aggregate_rows([row])
+
+    assert manual_leg["exit_execution_class"] == "manual_operator_exit"
+    assert manual_leg["manual_exit_realized"] is True
+    assert manual_leg["autonomous_target_filled"] is False
+    assert manual_leg["realized_loss"] is True
+    assert manual_leg["equal_weight_profit_pct"] < 0
+    assert row["summary"]["manual_exit_completed_legs"] == 1
+    assert row["summary"]["manual_exit_loss_legs"] == 1
+    assert row["summary"]["machine_target_completed_legs"] == 0
+    assert summary["manual_exit_completed_legs"] == 1
+    assert summary["manual_exit_loss_legs"] == 1
+    assert summary["machine_target_completed_legs"] == 0
+    assert summary["manual_exit_fixed_cost_estimate_net_profit_krw"] < 0
+    assert summary["notional_weighted_ev_pct"] < 0
+
+
 def test_pre_override_morning_signal_keeps_exact_date_base_policy(tmp_path: Path):
     applied_dir = tmp_path / "applied"
     applied = baseline_applied_payload(

@@ -21,7 +21,7 @@ from src.engine.panic_sell_state_detector import (
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import iter_jsonl
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 REPORT_DIRNAME = "panic_sell_defense"
 PANIC_WINDOW_MIN = 30
 PANIC_STOP_LOSS_RATIO_FLOOR_PCT = 70.0
@@ -297,17 +297,98 @@ def _non_real_attempt_keys(events: list[dict[str, Any]]) -> set[str]:
     }
 
 
-def _broker_confirmed_exit_attempt_keys(events: list[dict[str, Any]]) -> set[str]:
-    """Link a decision-time exit signal to its later broker fill receipt."""
+def _broker_order_identity(row: dict[str, Any]) -> str:
+    fields = _event_fields(row)
+    for key in (
+        "order_no",
+        "sell_order_no",
+        "kiwoom_order_no",
+        "broker_order_no",
+        "broker_order_id",
+        "actual_order_id",
+    ):
+        value = _safe_str(fields.get(key))
+        if value and value not in {"-", "unknown", "not_available"}:
+            return f"order:{value}"
+    return ""
 
-    return {
-        _attempt_key(row)
-        for row in events
+
+def _deduplicate_real_exit_signals(
+    exit_events: list[dict[str, Any]],
+    holding_events: list[dict[str, Any]],
+    *,
+    non_real_keys: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return one decision signal per broker-confirmed exit identity.
+
+    The holding loop can emit the same exit decision repeatedly while one sell
+    order is pending. Panic intensity is an exit-lifecycle count, not a polling
+    iteration count. Distinct broker order numbers remain distinct, including
+    partial-exit orders owned by the same lifecycle attempt.
+    """
+
+    broker_receipts = [
+        row
+        for row in holding_events
         if _safe_str(row.get("stage")) == "sell_completed"
-        and _attempt_key(row)
         and _has_real_exit_provenance(row)
         and not _is_non_real_observation(row)
-    }
+        and _attempt_key(row) not in non_real_keys
+    ]
+    receipt_capacity_by_attempt: Counter[str] = Counter()
+    receipt_identities_by_attempt: dict[str, set[str]] = {}
+    for row in broker_receipts:
+        attempt = _attempt_key(row)
+        identity = _broker_order_identity(row)
+        if not identity:
+            identity = f"receipt:{attempt}"
+        identities = receipt_identities_by_attempt.setdefault(attempt, set())
+        if identity not in identities:
+            identities.add(identity)
+            receipt_capacity_by_attempt[attempt] += 1
+
+    candidates = [
+        row
+        for row in exit_events
+        if _attempt_key(row) not in non_real_keys
+        and not _is_non_real_observation(row)
+        and (
+            _has_real_exit_provenance(row)
+            or receipt_capacity_by_attempt.get(_attempt_key(row), 0) > 0
+        )
+    ]
+    candidates_by_attempt: dict[str, list[dict[str, Any]]] = {}
+    for row in candidates:
+        candidates_by_attempt.setdefault(_attempt_key(row), []).append(row)
+
+    canonical: list[dict[str, Any]] = []
+    duplicates: list[dict[str, Any]] = []
+    for attempt, rows in candidates_by_attempt.items():
+        ordered = sorted(
+            rows,
+            key=lambda item: (
+                _safe_str(item.get("emitted_at")),
+                _safe_str(item.get("record_id")),
+            ),
+        )
+        direct_identities = {
+            identity
+            for row in ordered
+            for identity in [_broker_order_identity(row)]
+            if identity
+        }
+        direct_submitted_without_order = any(
+            _has_real_exit_provenance(row) and not _broker_order_identity(row)
+            for row in ordered
+        )
+        canonical_count = max(
+            receipt_capacity_by_attempt.get(attempt, 0),
+            len(direct_identities),
+            1 if direct_submitted_without_order else 0,
+        )
+        canonical.extend(ordered[:canonical_count])
+        duplicates.extend(ordered[canonical_count:])
+    return canonical, duplicates
 
 
 def _exit_rule_text(row: dict[str, Any]) -> str:
@@ -390,23 +471,22 @@ def _summarize_exit_metrics(
         row for row in events if _safe_str(row.get("pipeline")) == "HOLDING_PIPELINE"
     ]
     non_real_keys = _non_real_attempt_keys(holding_events)
-    broker_confirmed_exit_keys = _broker_confirmed_exit_attempt_keys(holding_events)
-    real_exits = [
+    real_exits, duplicate_real_exits = _deduplicate_real_exit_signals(
+        exit_events,
+        holding_events,
+        non_real_keys=non_real_keys,
+    )
+    duplicate_ids = {id(row) for row in duplicate_real_exits}
+    real_ids = {id(row) for row in real_exits}
+    non_real_exits = [
         row
         for row in exit_events
-        if (
-            _has_real_exit_provenance(row)
-            or _attempt_key(row) in broker_confirmed_exit_keys
-        )
-        and _attempt_key(row) not in non_real_keys
-        and not _is_non_real_observation(row)
+        if id(row) not in real_ids and id(row) not in duplicate_ids
     ]
-    non_real_exits = [row for row in exit_events if row not in real_exits]
     unproven_exits = [
         row
-        for row in exit_events
-        if row not in real_exits
-        and not _has_real_exit_provenance(row)
+        for row in non_real_exits
+        if not _has_real_exit_provenance(row)
         and not _is_non_real_observation(row)
     ]
     stop_loss_real = [row for row in real_exits if _is_stop_loss_exit(row)]
@@ -508,11 +588,18 @@ def _summarize_exit_metrics(
         )
     )
     return {
-        "panic_decision_basis": "real_exit_with_broker_provenance_only",
+        "panic_decision_basis": "broker_confirmed_exit_identity_deduplicated",
         "real_exit_provenance_required": True,
+        "raw_exit_signal_count": len(exit_events),
         "real_exit_count": len(real_exits),
+        "duplicate_real_exit_signal_count": len(duplicate_real_exits),
+        "duplicate_real_exit_signals_excluded_from_panic": True,
         "non_real_exit_count": len(non_real_exits),
         "unproven_exit_count": len(unproven_exits),
+        "exit_signal_partition_reconciled": (
+            len(exit_events)
+            == len(real_exits) + len(duplicate_real_exits) + len(non_real_exits)
+        ),
         "sim_probe_exit_excluded_from_panic": True,
         "stop_loss_exit_count": len(stop_loss_real),
         "current_30m_stop_loss_exit_count": len(current_window_stop_loss),
@@ -1001,6 +1088,14 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
             "reasons": (
                 panic_breadth.get("reasons") if isinstance(panic_breadth, dict) else []
             ),
+            "market_weakness_observation": (
+                market_breadth.get("market_weakness_observation")
+                if isinstance(market_breadth, dict)
+                and isinstance(
+                    market_breadth.get("market_weakness_observation"), dict
+                )
+                else {}
+            ),
         },
     }
 
@@ -1106,6 +1201,10 @@ def _microstructure_market_context(
         "market_panic_breadth_industry_breadth": market_breadth.get("industry_breadth")
         or {},
         "market_panic_breadth_indices": market_breadth.get("market_indices") or {},
+        "market_weakness_observation": market_breadth.get(
+            "market_weakness_observation"
+        )
+        or {},
         "evaluated_symbol_count": evaluated_count,
         "risk_off_advisory_count": risk_off_count,
         "risk_off_advisory_ratio_pct": risk_off_ratio,
@@ -1552,6 +1651,10 @@ def build_panic_sell_defense_report(
         },
         "microstructure_detector": microstructure_detector,
         "microstructure_market_context": microstructure_market_context,
+        "market_weakness_observation": microstructure_market_context.get(
+            "market_weakness_observation"
+        )
+        or {},
         "defense_actions": _defense_actions(panic_state, panic_metrics),
         "canary_candidates": _canary_candidates(
             panic_state, panic_metrics, active_recovery
@@ -1562,6 +1665,9 @@ def build_panic_sell_defense_report(
             "panic_detection_threshold": "portfolio stop-loss cluster uses rolling intraday quantile evidence only; PANIC_DETECTED requires market or confirmed microstructure risk-off context",
             "should_delay_stop_loss": "no for hard/protect/emergency; future candidate only for soft/trailing/flow",
             "new_buy_during_panic": "no threshold relaxation; route recovery evidence to separate probe/counterfactual",
+            "new_buy_during_market_weakness": "observation only; compare current behavior with delay, skip, and relative-strength-plus-liquidity exception arms before any owner-specific approval",
+            "market_weakness_release": "requires three consecutive unique source-qualified snapshots beyond explicit recovery margins; NORMAL alone is not release evidence",
+            "existing_positions_during_market_weakness": "keep each owner target/holding contract unchanged; no forced exit, stop change, or cross-owner custody action",
             "swing_behavior": "dry-run/probe only unless separate approval artifact exists",
             "performance_read": "closed PnL, forward return, and active sim/probe recovery must be read separately",
         },
@@ -1588,6 +1694,11 @@ def build_markdown(report: dict[str, Any]) -> str:
     micro_market = (
         report.get("microstructure_market_context")
         if isinstance(report.get("microstructure_market_context"), dict)
+        else {}
+    )
+    weakness = (
+        report.get("market_weakness_observation")
+        if isinstance(report.get("market_weakness_observation"), dict)
         else {}
     )
     input_streaming = (
@@ -1630,9 +1741,13 @@ def build_markdown(report: dict[str, Any]) -> str:
         "",
         f"- panic_decision_basis: `{panic.get('panic_decision_basis', '-')}`",
         f"- real_exit_provenance_required: `{str(panic.get('real_exit_provenance_required', False)).lower()}`",
+        f"- raw_exit_signal_count: `{panic.get('raw_exit_signal_count', 0)}`",
         f"- real_exit_count: `{panic['real_exit_count']}`",
+        f"- duplicate_real_exit_signal_count: `{panic.get('duplicate_real_exit_signal_count', 0)}`",
+        f"- duplicate_real_exit_signals_excluded_from_panic: `{str(panic.get('duplicate_real_exit_signals_excluded_from_panic', False)).lower()}`",
         f"- non_real_exit_count: `{panic['non_real_exit_count']}`",
         f"- unproven_exit_count: `{panic.get('unproven_exit_count', 0)}`",
+        f"- exit_signal_partition_reconciled: `{str(panic.get('exit_signal_partition_reconciled', False)).lower()}`",
         f"- sim_probe_exit_excluded_from_panic: `{str(panic.get('sim_probe_exit_excluded_from_panic', False)).lower()}`",
         f"- stop_loss_exit_count: `{panic['stop_loss_exit_count']}`",
         f"- current_30m_stop_loss_exit_count: `{panic['current_30m_stop_loss_exit_count']}`",
@@ -1694,6 +1809,15 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- portfolio_local_risk_off_only: `{str(micro_market.get('portfolio_local_risk_off_only', False)).lower()}`",
         f"- source_quality_gate: `{micro_market.get('source_quality_gate', '-')}`",
         f"- reasons: `{'; '.join(micro_market.get('reasons') or [])}`",
+        "",
+        "## Market Weakness Observation",
+        "",
+        f"- raw_state: `{weakness.get('raw_state', 'UNKNOWN')}`",
+        f"- observation_id: `{weakness.get('observation_id', '-')}`",
+        f"- source_quality_ready: `{str(weakness.get('source_quality_ready', False)).lower()}`",
+        f"- release_margin_passed: `{str(((weakness.get('release_margin') or {}).get('passed', False))).lower()}`",
+        f"- runtime_effect: `{str(weakness.get('runtime_effect', False)).lower()}`",
+        f"- allowed_runtime_apply: `{str(weakness.get('allowed_runtime_apply', False)).lower()}`",
         "",
         "## 방어 액션",
         "",

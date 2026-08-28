@@ -3957,6 +3957,30 @@ def test_entry_ai_submit_authority_blocks_not_evaluated_zero_score():
     assert decision["entry_ai_submit_authority_result_source"] == "not_available"
 
 
+def test_entry_ai_submit_authority_normalizes_placeholder_result_source():
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "name": "레몬헬스케어",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+        },
+        latency_gate={
+            "decision": "ALLOW_NORMAL",
+            "ai_score": 0.0,
+            "ai_action": "not_evaluated",
+            "ai_result_source": "-",
+        },
+        latency_signal_score=0.0,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "entry_ai_score_unavailable"
+    assert decision["entry_ai_submit_authority_result_source"] == "not_available"
+    assert decision["actual_order_submitted"] is False
+    assert decision["broker_order_forbidden"] is True
+
+
 def test_krx_direct_canary_live_ai_wait_blocks_exact_negative_ev_cohort():
     now_ts = 1_784_684_276.0
     stock = {

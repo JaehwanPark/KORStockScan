@@ -60,6 +60,7 @@ from src.trading.low_price_two_leg.preflight import (
     RECOMMENDATION_20260824_PROFILE_MAP,
     RECOMMENDATION_20260826_PROFILE_MAP,
     RECOMMENDATION_20260827_PROFILE_MAP,
+    RECOMMENDATION_20260828_PROFILE_MAP,
     build_authority_artifact,
     evaluate_preflight,
     validate_research_evidence,
@@ -69,9 +70,12 @@ from src.trading.low_price_two_leg.profiles import (
     CJ_CGV_AFTERNOON_WINDOW,
     CJ_CGV_LATE_MORNING_WINDOW,
     CJ_CGV_MIDDAY_WINDOW,
+    CJ_CGV_MIDDAY_20260831_WINDOW,
     DOOSAN_ENERBILITY_AFTERNOON_WINDOW,
     DOOSAN_ENERBILITY_MORNING_WINDOW,
     DOOSAN_ENERBILITY_LATE_MORNING_REVISED_WINDOW,
+    FAN_OCEAN_LATE_MORNING_WINDOW,
+    FAN_OCEAN_MORNING_WINDOW,
     HANSE_AFTERNOON_WINDOW,
     HANSE_LATE_MORNING_REVISED_WINDOW,
     HANSE_MIDDAY_WINDOW,
@@ -102,6 +106,7 @@ from src.trading.low_price_two_leg.profiles import (
     PROFILES_20260825_PRIOR,
     PROFILES_20260827_PRIOR,
     PROFILES_20260828_PRIOR,
+    PROFILES_20260831_PRIOR,
     PRE_RECOMMENDATION_PROFILES,
     SAMSUNG_HEAVY_MIDDAY_WINDOW,
     SK_ETERNIX_MIDDAY_WINDOW,
@@ -116,6 +121,7 @@ from src.trading.low_price_two_leg.profiles import (
     SD_BIOSENSOR_MORNING_20260828_WINDOW,
     TYM_AFTERNOON_WINDOW,
     TYM_MIDDAY_WINDOW,
+    TYM_MIDDAY_20260831_WINDOW,
     NHN_AFTERNOON_WINDOW,
     YOUNGONE_AFTERNOON_REVISED_WINDOW,
     YOUNGONE_MORNING_WINDOW,
@@ -267,7 +273,7 @@ class FakeSession:
         return self.responses.pop(0)
 
 
-def test_profiles_are_exact_sixteen_symbols_and_forty_six_independent_sessions():
+def test_profiles_are_exact_seventeen_symbols_and_forty_eight_independent_sessions():
     assert {key: (item.symbol, item.session) for key, item in PROFILES.items()} == {
         "samsung_heavy_midday": ("010140", "midday"),
         "samsung_heavy_afternoon": ("010140", "afternoon"),
@@ -315,6 +321,8 @@ def test_profiles_are_exact_sixteen_symbols_and_forty_six_independent_sessions()
         "sd_biosensor_midday": ("137310", "midday"),
         "doosan_enerbility_afternoon": ("034020", "afternoon"),
         "samsung_ea_midday": ("028050", "midday"),
+        "fan_ocean_morning": ("028670", "morning"),
+        "fan_ocean_late_morning": ("028670", "late_morning"),
     }
     assert {
         (item.policy.scan_start, item.policy.scan_last_bar)
@@ -345,9 +353,9 @@ def test_profiles_are_exact_sixteen_symbols_and_forty_six_independent_sessions()
         SAMSUNG_EA_MIDDAY_WINDOW,
         SAMSUNG_EA_LATE_MORNING_WINDOW,
         SAMSUNG_EA_AFTERNOON_20260828_WINDOW,
-        CJ_CGV_MIDDAY_WINDOW,
+        CJ_CGV_MIDDAY_20260831_WINDOW,
         CJ_CGV_AFTERNOON_WINDOW,
-        TYM_MIDDAY_WINDOW,
+        TYM_MIDDAY_20260831_WINDOW,
         TYM_AFTERNOON_WINDOW,
         CJ_CGV_LATE_MORNING_WINDOW,
         KEPCO_LATE_MORNING_WINDOW,
@@ -367,6 +375,8 @@ def test_profiles_are_exact_sixteen_symbols_and_forty_six_independent_sessions()
         SD_BIOSENSOR_MIDDAY_WINDOW,
         DOOSAN_ENERBILITY_AFTERNOON_WINDOW,
         SAMSUNG_EA_MIDDAY_WINDOW,
+        FAN_OCEAN_MORNING_WINDOW,
+        FAN_OCEAN_LATE_MORNING_WINDOW,
     }
     assert PROFILES["samsung_heavy_midday"].policy.lookback_bars == 30
     assert PROFILES["samsung_heavy_midday"].policy.rolling_high_drawdown_pct == 0.75
@@ -542,6 +552,8 @@ def test_live_systemd_unit_requires_fresh_preflight_and_does_not_restart_on_guar
         ("sd_biosensor_midday", "13:20:00", "13:24:00"),
         ("doosan_enerbility_afternoon", "14:05:00", "14:09:00"),
         ("samsung_ea_midday", "13:15:00", "13:19:00"),
+        ("fan_ocean_morning", "09:30:00", "09:34:00"),
+        ("fan_ocean_late_morning", "10:00:00", "10:04:00"),
     ],
 )
 def test_expanded_profile_timers_bind_exact_instance_and_start_time(
@@ -576,6 +588,7 @@ def test_current_and_install_time_profile_symbols_have_explicit_manual_ownership
         "015760",
         "017670",
         "028050",
+        "028670",
         "035720",
         "079160",
         "105630",
@@ -824,7 +837,7 @@ def test_all_nine_20260827_recommendations_bind_exact_next_profiles():
         live_profile_id,
         report_profile_id,
     ) in RECOMMENDATION_20260827_PROFILE_MAP.items():
-        profile = PROFILES[live_profile_id]
+        profile = PROFILES_20260831_PRIOR[live_profile_id]
         policy = profile.policy
         assert policy.quantity == 20
         assert recommendations[report_profile_id]["recommended_spot"] == {
@@ -1012,7 +1025,7 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
         True,
         "valid",
     )
-    assert set(friday_generation["profiles"]) == set(PROFILES)
+    assert set(friday_generation["profiles"]) == set(PROFILES_20260831_PRIOR)
     assert friday_generation["profile_revision_transition"] == {
         "effective_target_date": "2026-08-28",
         "source_date": "2026-08-27",
@@ -1035,6 +1048,60 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
         True,
         "valid",
     )
+    monday_0831_generation, _ = build_applied_policy(
+        target_date=date(2026, 8, 31), candidate_dir=tmp_path / "none"
+    )
+    assert set(monday_0831_generation["profiles"]) == set(PROFILES)
+    assert monday_0831_generation["profile_revision_transition"] == {
+        "effective_target_date": "2026-08-31",
+        "source_date": "2026-08-28",
+        "before_profile_count": 46,
+        "after_profile_count": 48,
+        "recommendation_count": 7,
+        "new_profile_count": 2,
+        "logic_revision_count": 5,
+        "approved_profile_ids": sorted(RECOMMENDATION_20260828_PROFILE_MAP),
+        "evidence_path": (
+            "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-28.json"
+        ),
+        "evidence_canonical_sha256": (
+            "d5f6e6cb6f80e2fa70c1807f39dc18955060f74d14cdf2111821f1a6b9d1e944"
+        ),
+        "decision_authority": "explicit_user_directed_profile_revision_2026_08_28",
+        "existing_order_effect": "none_preserve_prior_policy_custody",
+    }
+    assert validate_applied(
+        monday_0831_generation, target_date=date(2026, 8, 31)
+    ) == (True, "valid")
+
+
+def test_all_seven_20260828_recommendations_bind_exact_next_profiles():
+    evidence_path = (
+        Path(__file__).resolve().parents[2]
+        / "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-28.json"
+    )
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+
+    assert len(RECOMMENDATION_20260828_PROFILE_MAP) == 7
+    assert set(RECOMMENDATION_20260828_PROFILE_MAP.values()) == set(recommendations)
+    for live_profile_id, report_profile_id in RECOMMENDATION_20260828_PROFILE_MAP.items():
+        profile = PROFILES[live_profile_id]
+        policy = profile.policy
+        assert policy.quantity == 20
+        assert recommendations[report_profile_id]["recommended_spot"] == {
+            "scan_start": policy.scan_start.strftime("%H:%M"),
+            "scan_end": policy.scan_last_bar.strftime("%H:%M"),
+            "lookback_bars": policy.lookback_bars,
+            "rolling_high_drawdown_pct": policy.rolling_high_drawdown_pct,
+            "rolling_low_proximity_pct": policy.rolling_low_proximity_pct,
+            "entry_offsets_ticks": list(policy.entry_offsets_ticks),
+            "entry_valid_completed_bars": policy.entry_valid_completed_bars,
+            "target_ticks": policy.target_ticks,
+        }
+        assert validate_research_evidence(
+            profile, target_date=date(2026, 8, 31)
+        ) == (True, "ready")
 
 
 def test_20260820_postclose_tuning_keeps_twenty_profile_generation(tmp_path):
@@ -3174,6 +3241,70 @@ def test_actual_leg_lifecycle_timing_and_gross_diagnostics_are_preserved(tmp_pat
     assert summary["target_reconciliation_completion_within_180s_ratio"] == 0.5
     assert summary["broker_completed_capital_occupied_krw_seconds"] > 0
     assert summary["broker_completed_net_return_per_capital_hour"] > 0
+
+
+def test_verified_manual_stop_loss_is_negative_ev_not_target_speed_success():
+    from src.engine.monitoring.low_price_two_leg_tuning import (
+        _aggregate,
+        _sanitize_leg,
+    )
+
+    manual_leg = _sanitize_leg(
+        {
+            "leg_id": "signal_close",
+            "quantity": 10,
+            "status": "COMPLETE",
+            "entry_price": 71_500,
+            "fill_price": 71_500,
+            "target_price": 71_900,
+            "position_qty": 0,
+            "buy_filled_qty": 10,
+            "target_filled_qty": 10,
+            "target_fill_price": 69_900,
+            "buy_filled_at": "2026-08-28T14:00:00+09:00",
+            "target_filled_at": "2026-08-28T14:00:30+09:00",
+            "exit_fill_source": "broker_verified_manual_sell_receipt",
+            "manual_exit_receipt": {"order_date": "2026-08-28"},
+        },
+        DEFAULT_ROUND_TRIP_COST_PCT,
+    )
+    target_leg = _sanitize_leg(
+        {
+            "leg_id": "signal_close_minus_1tick",
+            "quantity": 10,
+            "status": "COMPLETE",
+            "entry_price": 71_400,
+            "fill_price": 71_400,
+            "target_price": 71_800,
+            "position_qty": 0,
+            "buy_filled_qty": 10,
+            "target_filled_qty": 10,
+            "target_fill_price": 71_800,
+            "buy_filled_at": "2026-08-28T14:00:00+09:00",
+            "target_filled_at": "2026-08-28T14:05:00+09:00",
+        },
+        DEFAULT_ROUND_TRIP_COST_PCT,
+    )
+    row = {
+        "eligible_for_tuning": True,
+        "attempted": True,
+        "legs": [manual_leg, target_leg],
+    }
+
+    summary = _aggregate([row])
+
+    assert manual_leg["exit_execution_class"] == "manual_operator_exit"
+    assert manual_leg["manual_exit_realized"] is True
+    assert manual_leg["autonomous_target_filled"] is False
+    assert manual_leg["realized_loss"] is True
+    assert manual_leg["net_profit_pct"] < 0
+    assert summary["manual_exit_completed_legs"] == 1
+    assert summary["manual_exit_loss_legs"] == 1
+    assert summary["machine_target_completed_legs"] == 1
+    assert summary["manual_exit_fixed_cost_estimate_net_profit_krw"] < 0
+    assert summary["broker_realized_net_profit_krw"] < 0
+    assert summary["target_reconciliation_completion_within_180s_count"] == 0
+    assert summary["target_reconciliation_completion_within_180s_ratio"] == 0.0
 
 
 def test_clean_window_loads_legacy_report_and_does_not_impute_missing_dates(tmp_path):

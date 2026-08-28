@@ -37932,6 +37932,20 @@ def _entry_ai_submit_authority_fields(
         .strip()
         .lower()
     )
+    if result_source in {
+        "",
+        "-",
+        "none",
+        "null",
+        "nan",
+        "nat",
+        "not_evaluated",
+    }:
+        # Keep the guard fail-closed, but emit the canonical explicit absence
+        # token consumed by the source-quality audit.  A raw placeholder such
+        # as "-" previously survived into pipeline_events and was repeatedly
+        # quarantined as a missing provenance field.
+        result_source = "not_available"
     confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
     max_prior_age_sec = max(
         1.0,
@@ -38120,7 +38134,7 @@ def _entry_ai_submit_authority_fields(
         "entry_ai_submit_authority_reason": reason,
         "entry_ai_submit_authority_score": f"{score:.1f}",
         "entry_ai_submit_authority_action": action or "not_evaluated",
-        "entry_ai_submit_authority_result_source": result_source or "not_available",
+        "entry_ai_submit_authority_result_source": result_source,
         "entry_ai_submit_authority_fresh_prior": bool(fresh_prior),
         "entry_ai_submit_authority_action_guard_active": bool(action_guard_active),
         "entry_ai_submit_authority_action_contract_enforced": bool(

@@ -15,3 +15,4 @@
 111770 # manual_operator youngone_low_price_two_leg_owner
 181710 # manual_operator nhn_low_price_two_leg_owner
 137310 # manual_operator sd_biosensor_low_price_two_leg_owner
+028670 # manual_operator fan_ocean_low_price_two_leg_owner

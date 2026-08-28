@@ -7,6 +7,7 @@ reports. It does not mutate runtime thresholds, order routing, or broker state.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from datetime import datetime
@@ -14,9 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import write_json_object_generation_safe
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 REPORT_DIRNAME = "market_panic_breadth"
+OBSERVATION_DIRNAME = "market_weakness_observations"
 REPORT_ONLY_FORBIDDEN_USES = [
     "runtime_threshold_apply",
     "order_submit",
@@ -40,6 +43,14 @@ DEFAULT_MARKET_WEIGHTS = {
     "KOSPI": 0.65,
     "KOSDAQ": 0.35,
 }
+MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS = 2
+MARKET_WEAKNESS_RELEASE_OBSERVATIONS = 3
+MARKET_WEAKNESS_RELEASE_INDEX_MARGIN_PCT = 0.3
+MARKET_WEAKNESS_RELEASE_INDUSTRY_MARGIN_PCT = 7.0
+MARKET_WEAKNESS_RELEASE_SEVERE_MARGIN_PCT = 5.0
+MARKET_WEAKNESS_RELEASE_STOCK_MARGIN_PCT = 10.0
+MARKET_WEAKNESS_MIN_MARKET_INDEX_COUNT = 2
+MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT = 3
 
 
 def _report_dir() -> Path:
@@ -48,6 +59,18 @@ def _report_dir() -> Path:
 
 def _report_path(target_date: str) -> Path:
     return _report_dir() / f"{REPORT_DIRNAME}_{target_date}.json"
+
+
+def _observation_path(target_date: str, as_of: str, observation_id: str) -> Path:
+    timestamp = "".join(character for character in as_of if character.isdigit())[:14]
+    timestamp = timestamp or "unknown_time"
+    return (
+        DATA_DIR
+        / "report"
+        / OBSERVATION_DIRNAME
+        / target_date
+        / f"market_weakness_observation_{timestamp}_{observation_id[-12:]}.json"
+    )
 
 
 def _safe_str(value: Any) -> str:
@@ -437,6 +460,255 @@ def summarize_breadth(
     }
 
 
+def build_market_weakness_observation(
+    summary: dict[str, Any],
+    *,
+    target_date: str,
+    as_of: str,
+    source_quality_status: str,
+) -> dict[str, Any]:
+    """Build a stateless, source-only weakness/recovery observation.
+
+    Alert activation/release streaks are intentionally owned by the notifier.
+    This producer only labels one immutable market snapshot and exposes the
+    margins needed to audit why a release was or was not eligible.
+    """
+
+    market_indices = (
+        summary.get("market_indices")
+        if isinstance(summary.get("market_indices"), dict)
+        else {}
+    )
+    index_changes = {
+        str(market): change
+        for market, row in market_indices.items()
+        if isinstance(row, dict)
+        for change in [_safe_float(row.get("change_pct"), None)]
+        if change is not None
+    }
+    weighted = (
+        summary.get("weighted_market_breadth")
+        if isinstance(summary.get("weighted_market_breadth"), dict)
+        else {}
+    )
+    industry = (
+        summary.get("industry_breadth")
+        if isinstance(summary.get("industry_breadth"), dict)
+        else {}
+    )
+    stock = (
+        summary.get("stock_breadth")
+        if isinstance(summary.get("stock_breadth"), dict)
+        else {}
+    )
+    thresholds = (
+        summary.get("thresholds")
+        if isinstance(summary.get("thresholds"), dict)
+        else {}
+    )
+    weighted_index_change = _safe_float(weighted.get("index_change_pct"), None)
+    industry_sample_count = _safe_int(industry.get("sample_count"), 0)
+    industry_down_ratio = _safe_float(industry.get("down_ratio_pct"), None)
+    severe_down_ratio = _safe_float(industry.get("severe_down_ratio_pct"), None)
+    max_stock_fall_ratio = _safe_float(stock.get("max_fall_ratio_pct"), None)
+    index_drop_floor = _safe_float(
+        thresholds.get("index_drop_floor_pct"), DEFAULT_INDEX_DROP_FLOOR_PCT
+    )
+    industry_down_floor = _safe_float(
+        thresholds.get("industry_down_ratio_floor_pct"),
+        DEFAULT_INDUSTRY_DOWN_RATIO_FLOOR_PCT,
+    )
+    severe_down_floor = _safe_float(
+        thresholds.get("severe_down_ratio_floor_pct"),
+        DEFAULT_SEVERE_DOWN_RATIO_FLOOR_PCT,
+    )
+    stock_fall_floor = _safe_float(
+        thresholds.get("stock_fall_ratio_floor_pct"),
+        DEFAULT_STOCK_FALL_RATIO_FLOOR_PCT,
+    )
+    source_quality_ready = bool(
+        source_quality_status == "ok"
+        and as_of[:10] == target_date
+        and {"KOSPI", "KOSDAQ"}.issubset(index_changes)
+        and industry_sample_count >= MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT
+        and weighted_index_change is not None
+        and industry_down_ratio is not None
+        and severe_down_ratio is not None
+        and max_stock_fall_ratio is not None
+        and index_drop_floor is not None
+        and industry_down_floor is not None
+        and severe_down_floor is not None
+        and stock_fall_floor is not None
+    )
+    release_thresholds = {
+        "each_market_index_above_pct": (
+            round(index_drop_floor + MARKET_WEAKNESS_RELEASE_INDEX_MARGIN_PCT, 3)
+            if index_drop_floor is not None
+            else None
+        ),
+        "weighted_market_index_above_pct": (
+            round(index_drop_floor + MARKET_WEAKNESS_RELEASE_INDEX_MARGIN_PCT, 3)
+            if index_drop_floor is not None
+            else None
+        ),
+        "industry_down_ratio_below_pct": (
+            round(
+                industry_down_floor
+                - MARKET_WEAKNESS_RELEASE_INDUSTRY_MARGIN_PCT,
+                3,
+            )
+            if industry_down_floor is not None
+            else None
+        ),
+        "industry_severe_down_ratio_below_pct": (
+            round(
+                severe_down_floor - MARKET_WEAKNESS_RELEASE_SEVERE_MARGIN_PCT,
+                3,
+            )
+            if severe_down_floor is not None
+            else None
+        ),
+        "max_stock_fall_ratio_below_pct": (
+            round(stock_fall_floor - MARKET_WEAKNESS_RELEASE_STOCK_MARGIN_PCT, 3)
+            if stock_fall_floor is not None
+            else None
+        ),
+    }
+    release_checks = {
+        "each_market_index_recovered": bool(
+            source_quality_ready
+            and all(
+                value > release_thresholds["each_market_index_above_pct"]
+                for value in index_changes.values()
+            )
+        ),
+        "weighted_market_index_recovered": bool(
+            source_quality_ready
+            and weighted_index_change
+            > release_thresholds["weighted_market_index_above_pct"]
+        ),
+        "industry_down_ratio_recovered": bool(
+            source_quality_ready
+            and industry_down_ratio
+            < release_thresholds["industry_down_ratio_below_pct"]
+        ),
+        "industry_severe_down_ratio_recovered": bool(
+            source_quality_ready
+            and severe_down_ratio
+            < release_thresholds["industry_severe_down_ratio_below_pct"]
+        ),
+        "stock_fall_ratio_recovered": bool(
+            source_quality_ready
+            and max_stock_fall_ratio
+            < release_thresholds["max_stock_fall_ratio_below_pct"]
+        ),
+    }
+    release_margin_pass = bool(
+        source_quality_ready and all(release_checks.values())
+    )
+    if not source_quality_ready:
+        raw_state = "UNKNOWN"
+    elif bool(summary.get("risk_off_advisory")):
+        raw_state = "BROAD_WEAKNESS"
+    elif bool(summary.get("single_market_risk_off_advisory")):
+        raw_state = "SINGLE_MARKET_WEAKNESS"
+    elif release_margin_pass:
+        raw_state = "RECOVERY_EVIDENCE"
+    else:
+        raw_state = "NEAR_WEAKNESS_BOUNDARY"
+
+    evidence = {
+        "market_index_change_pct": index_changes,
+        "weighted_market_index_change_pct": weighted_index_change,
+        "industry_sample_count": industry_sample_count,
+        "industry_down_ratio_pct": industry_down_ratio,
+        "industry_severe_down_ratio_pct": severe_down_ratio,
+        "max_stock_fall_ratio_pct": max_stock_fall_ratio,
+        "broad_risk_off_advisory": bool(summary.get("risk_off_advisory")),
+        "single_market_risk_off_advisory": bool(
+            summary.get("single_market_risk_off_advisory")
+        ),
+        "risk_on_advisory": bool(summary.get("risk_on_advisory")),
+    }
+    identity_payload = {
+        "target_date": target_date,
+        "as_of": as_of,
+        "source_quality_status": source_quality_status,
+        "raw_state": raw_state,
+        "evidence": evidence,
+    }
+    observation_id = "market-weakness-" + hashlib.sha256(
+        json.dumps(
+            identity_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:20]
+    history_path = _observation_path(target_date, as_of, observation_id)
+    return {
+        "schema_version": 1,
+        "observation_id": observation_id,
+        "target_date": target_date,
+        "as_of": as_of,
+        "raw_state": raw_state,
+        "source_quality_ready": source_quality_ready,
+        "source_quality_status": source_quality_status,
+        "metric_role": "market_weakness_observation",
+        "decision_authority": "source_quality_observation_only",
+        "window_policy": "intraday_consecutive_unique_snapshot_hysteresis",
+        "sample_floor": {
+            "market_index_count": MARKET_WEAKNESS_MIN_MARKET_INDEX_COUNT,
+            "industry_row_count": MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT,
+            "activation_unique_observations": MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS,
+            "release_unique_observations": MARKET_WEAKNESS_RELEASE_OBSERVATIONS,
+        },
+        "primary_decision_metric": "raw_state_with_release_margin",
+        "source_quality_gate": "same-session fresh KOSPI/KOSDAQ and industry breadth snapshot",
+        "forbidden_uses": REPORT_ONLY_FORBIDDEN_USES
+        + [
+            "widget_entry_block",
+            "episode_entry_block",
+            "open_buy_cancel",
+            "position_exit",
+        ],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "evidence": evidence,
+        "release_margin": {
+            "passed": release_margin_pass,
+            "thresholds": release_thresholds,
+            "checks": release_checks,
+        },
+        "history_path": str(history_path),
+        "response_research_contract": {
+            "status": "source_only_counterfactual_collection",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "owner_isolation_required": ["main", "widget", "episode"],
+            "control": "current_owner_behavior_unchanged",
+            "candidate_arms": [
+                "delay_new_entry_until_recovery_confirmed",
+                "skip_new_entry_during_confirmed_weakness",
+                "relative_strength_and_liquidity_exception",
+            ],
+            "required_outcomes": [
+                "cost_adjusted_ev_pct",
+                "adverse_first_rate_pct",
+                "missed_upside_pct",
+                "fill_feasibility_pct",
+                "capital_occupation_minutes",
+            ],
+            "guards": [
+                "no_change_to_existing_target_orders",
+                "no_forced_exit_or_stop_change",
+                "no_quantity_or_price_mutation",
+                "owner_specific_evaluation_only",
+            ],
+        },
+    }
+
+
 def fetch_kiwoom_market_breadth(
     token: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -504,12 +776,19 @@ def build_market_panic_breadth_report(
     source_quality_status = "ok" if parsed_rows else "missing_live_breadth_rows"
     if errors:
         source_quality_status = "fetch_error"
+    as_of_text = as_of.isoformat(timespec="seconds")
+    weakness_observation = build_market_weakness_observation(
+        summary,
+        target_date=target_date,
+        as_of=as_of_text,
+        source_quality_status=source_quality_status,
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_DIRNAME,
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "as_of": as_of.isoformat(timespec="seconds"),
+        "as_of": as_of_text,
         "dry_run": bool(dry_run),
         "policy": {
             "report_only": True,
@@ -526,6 +805,7 @@ def build_market_panic_breadth_report(
         },
         "rows": parsed_rows[:300],
         "panic_breadth": summary,
+        "market_weakness_observation": weakness_observation,
     }
 
 
@@ -534,8 +814,18 @@ def write_report(report: dict[str, Any]) -> Path:
         "%Y-%m-%d"
     )
     path = _report_path(target_date)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    observation = report.get("market_weakness_observation")
+    if isinstance(observation, dict):
+        history_path = _observation_path(
+            target_date,
+            _safe_str(observation.get("as_of")),
+            _safe_str(observation.get("observation_id")),
+        )
+        declared_history_path = Path(_safe_str(observation.get("history_path")))
+        if declared_history_path != history_path:
+            raise ValueError("market_weakness_history_path_contract_mismatch")
+        write_json_object_generation_safe(history_path, observation)
+    write_json_object_generation_safe(path, report)
     return path
 
 

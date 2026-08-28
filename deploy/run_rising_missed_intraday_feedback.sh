@@ -24,6 +24,8 @@ NICE_COMMAND="${RISING_MISSED_INTRADAY_FEEDBACK_NICE_COMMAND:-nice}"
 CPU_AFFINITY="${RISING_MISSED_INTRADAY_FEEDBACK_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity monitor)}"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
+bash "$SCRIPT_DIR/run_owned_log_rotation.sh" "rising_missed_intraday_feedback_internal" "$LOG_FILE" || \
+  echo "[WARN] owned log rotation failed owner=rising_missed_intraday_feedback_internal log=${LOG_FILE}; writer will continue fail-closed"
 cd "$PROJECT_DIR"
 
 validate_int() {

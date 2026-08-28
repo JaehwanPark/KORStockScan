@@ -99,6 +99,10 @@ TIMERS=(
   korstockscan-low-price-two-leg-doosan-enerbility-afternoon.timer
   korstockscan-low-price-two-leg-samsung-ea-midday-preflight.timer
   korstockscan-low-price-two-leg-samsung-ea-midday.timer
+  korstockscan-low-price-two-leg-fan-ocean-morning-preflight.timer
+  korstockscan-low-price-two-leg-fan-ocean-morning.timer
+  korstockscan-low-price-two-leg-fan-ocean-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-fan-ocean-late-morning.timer
 )
 SERVICES=(
   korstockscan-low-price-two-leg@samsung_heavy_midday.service
@@ -197,6 +201,10 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@doosan_enerbility_afternoon.service
   korstockscan-low-price-two-leg@samsung_ea_midday.service
   korstockscan-low-price-two-leg-preflight@samsung_ea_midday.service
+  korstockscan-low-price-two-leg@fan_ocean_morning.service
+  korstockscan-low-price-two-leg-preflight@fan_ocean_morning.service
+  korstockscan-low-price-two-leg@fan_ocean_late_morning.service
+  korstockscan-low-price-two-leg-preflight@fan_ocean_late_morning.service
 )
 FILES=(
   korstockscan-low-price-two-leg@.service

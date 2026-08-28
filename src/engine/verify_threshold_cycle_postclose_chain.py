@@ -131,9 +131,25 @@ def _threshold_ev_reconciliation_issues(ev_report: dict[str, Any]) -> list[str]:
         if isinstance(daily.get("trade_review_snapshot_reconciliation"), dict)
         else {}
     )
+    source_split = (
+        daily.get("source_split") if isinstance(daily.get("source_split"), dict) else {}
+    )
+    real_split = (
+        source_split.get("real")
+        if isinstance(source_split.get("real"), dict)
+        else {}
+    )
+    authoritative_source_split = bool(
+        daily.get("headline_authority") == "completed_by_source_same_day_real"
+        and reconciliation.get("decision_authority")
+        == "diagnostic_only_when_same_day_source_split_present"
+        and _safe_int(real_split.get("sample"), -1)
+        == _safe_int(daily.get("completed_trades"), -2)
+    )
     return (
         ["threshold_cycle_ev_trade_review_calibration_count_mismatch"]
         if reconciliation.get("count_match") is False
+        and not authoritative_source_split
         else []
     )
 
@@ -689,9 +705,15 @@ def _raw_row_exclusion_handoff_status(
         else {}
     )
     excluded_row_count = int(raw_exclusion.get("excluded_row_count") or 0)
+    revalidation_count_fields = {
+        "hard_blocking_contract_gap_count",
+        "current_scan_hard_blocking_excluded_row_count",
+        "post_exclusion_hard_blocking_excluded_row_count",
+    }
     revalidation_closed = (
-        preflight.get("status") == "pass"
+        preflight.get("status") in {"pass", "warning"}
         and preflight_summary.get("tuning_input_allowed") is True
+        and revalidation_count_fields.issubset(preflight_summary)
         and int(preflight_summary.get("hard_blocking_contract_gap_count") or 0) == 0
         and int(
             preflight_summary.get("current_scan_hard_blocking_excluded_row_count") or 0

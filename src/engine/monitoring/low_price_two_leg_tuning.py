@@ -52,17 +52,20 @@ from src.utils import kiwoom_utils
 from src.utils.market_day import is_krx_trading_day
 
 REPORT_TYPE = "low_price_two_leg_tuning"
-REPORT_SCHEMA = "low_price_two_leg_tuning_report_v5"
+REPORT_SCHEMA = "low_price_two_leg_tuning_report_v6"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
     {
         "low_price_two_leg_tuning_report_v1",
         "low_price_two_leg_tuning_report_v2",
         "low_price_two_leg_tuning_report_v3",
         "low_price_two_leg_tuning_report_v4",
+        "low_price_two_leg_tuning_report_v5",
         REPORT_SCHEMA,
     }
 )
 DEFAULT_ROUND_TRIP_COST_PCT = 0.23
+MANUAL_EXIT_FILL_SOURCE = "broker_verified_manual_sell_receipt"
+MANUAL_EXIT_PRICE_SOURCE = "broker_manual_sell_receipt"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
 SAMPLE_FLOOR_COMPLETED_LEGS = 20
@@ -116,6 +119,8 @@ PROFILE_FIRST_OPERATIONAL_DATES = {
     "doosan_enerbility_afternoon": date(2026, 8, 27),
     "samsung_ea_midday": date(2026, 8, 27),
     "sk_telecom_morning": date(2026, 8, 28),
+    "fan_ocean_morning": date(2026, 8, 31),
+    "fan_ocean_late_morning": date(2026, 8, 31),
 }
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {
@@ -143,12 +148,16 @@ METRIC_CONTRACT = {
     "primary_decision_metric": "notional_weighted_ev_pct",
     "profit_cost_model": (
         "ka10073_exact_cost_when_uniquely_attributable_else_"
-        "broker_target_fill_price_minus_fixed_round_trip_cost_pct"
+        "broker_exit_fill_price_minus_fixed_round_trip_cost_pct_including_"
+        "verified_manual_operator_losses"
     ),
     "lifecycle_speed_diagnostics": {
         "metric_role": "diagnostic_execution_velocity_and_capital_occupancy",
         "decision_authority": "postclose_diagnostic_only",
-        "window_policy": "per_completed_broker_leg_buy_fill_to_target_fill",
+        "window_policy": (
+            "per_completed_broker_leg_buy_fill_to_exit_with_machine_target_speed_"
+            "reported_separately_from_manual_operator_exit"
+        ),
         "sample_floor": "one_completed_leg_with_ordered_aware_fill_timestamps",
         "primary_decision_metric": "broker_completed_net_return_per_capital_hour",
         "primary_decision_metric_unit": (
@@ -170,6 +179,9 @@ METRIC_CONTRACT = {
             "gross_no_slippage_return_pct",
             "median_reconciliation_confirmed_holding_duration_sec",
             "target_reconciliation_completion_within_180s_ratio",
+            "manual_exit_completed_legs",
+            "manual_exit_loss_legs",
+            "manual_exit_fixed_cost_estimate_net_profit_krw",
             "broker_completed_capital_occupied_krw_seconds",
             "broker_completed_net_return_per_capital_hour",
         ],
@@ -190,6 +202,7 @@ METRIC_CONTRACT = {
         "prebaseline_and_nontrading_reports_excluded",
         "historical_replay_not_mixed_with_actual_outcomes",
         "ka10073_symbol_day_quantity_and_average_price_unique_match",
+        "verified_manual_operator_exit_is_realized_pnl_not_machine_target_success",
     ],
     "forbidden_uses": [
         "historical_market_data_requery",
@@ -200,6 +213,7 @@ METRIC_CONTRACT = {
         "threshold_relaxation",
         "quantity_target_entry_validity_stop_or_forced_exit_change",
         "gross_no_slippage_or_speed_diagnostic_as_standalone_policy_authority",
+        "manual_operator_exit_as_machine_target_fill_or_target_speed_success",
         "provider_bot_cap_or_broker_guard_change",
     ],
 }
@@ -240,6 +254,23 @@ def _as_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _exit_execution_class(
+    *, completed: bool, exit_fill_source: str, profit_price_source: str
+) -> str:
+    if not completed:
+        return "not_realized"
+    if (
+        exit_fill_source == MANUAL_EXIT_FILL_SOURCE
+        or profit_price_source == MANUAL_EXIT_PRICE_SOURCE
+    ):
+        return "manual_operator_exit"
+    if profit_price_source == "broker_target_fill_price":
+        return "machine_target_fill"
+    if profit_price_source == "configured_target_price_proxy":
+        return "configured_target_price_proxy"
+    return "realized_exit_source_unknown"
 
 
 def _aware_timestamp(value: Any) -> datetime | None:
@@ -627,6 +658,24 @@ def _historical_profile_row(
                     normalized["net_profit_pct"] = round(
                         (exit_price / fill_price - 1.0) * 100.0 - cost_pct, 6
                     )
+            exit_execution_class = _exit_execution_class(
+                completed=bool(normalized.get("completed")),
+                exit_fill_source=str(normalized.get("exit_fill_source") or ""),
+                profit_price_source=str(normalized.get("profit_price_source") or ""),
+            )
+            normalized["exit_execution_class"] = exit_execution_class
+            normalized["manual_exit_realized"] = (
+                exit_execution_class == "manual_operator_exit"
+            )
+            normalized["autonomous_target_filled"] = (
+                exit_execution_class == "machine_target_fill"
+            )
+            net_profit = _as_float(normalized.get("net_profit_pct"))
+            normalized["realized_loss"] = bool(
+                normalized.get("completed")
+                and net_profit is not None
+                and net_profit < 0.0
+            )
             normalized_legs.append(normalized)
         row["legs"] = normalized_legs
         reasons = list(row.get("source_quality_reasons") or [])
@@ -684,7 +733,7 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     buy_filled_at = _aware_timestamp(raw.get("buy_filled_at"))
     target_filled_at = _aware_timestamp(raw.get("target_filled_at"))
     exit_fill_source = str(raw.get("exit_fill_source") or "")
-    manual_exit_verified = exit_fill_source == "broker_verified_manual_sell_receipt"
+    manual_exit_verified = exit_fill_source == MANUAL_EXIT_FILL_SOURCE
     manual_receipt = (
         raw.get("manual_exit_receipt")
         if isinstance(raw.get("manual_exit_receipt"), dict)
@@ -750,6 +799,11 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     gross_no_slippage_return_pct = (
         (profit_exit_price / fill_price - 1.0) * 100.0 if completed else None
     )
+    exit_execution_class = _exit_execution_class(
+        completed=completed,
+        exit_fill_source=exit_fill_source,
+        profit_price_source=profit_price_source,
+    )
     holding_duration_sec = (
         (target_filled_at - buy_filled_at).total_seconds()
         if completed
@@ -783,6 +837,10 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         ),
         "profit_exit_price": profit_exit_price if completed else 0,
         "profit_price_source": profit_price_source,
+        "exit_execution_class": exit_execution_class,
+        "manual_exit_realized": exit_execution_class == "manual_operator_exit",
+        "autonomous_target_filled": exit_execution_class == "machine_target_fill",
+        "realized_loss": bool(net_profit_pct is not None and net_profit_pct < 0.0),
         "completed": completed,
         "held": held,
         "terminal": status in TERMINAL_LEG_STATUSES,
@@ -954,6 +1012,19 @@ def _aggregate(rows: list[dict]) -> dict:
         if leg.get("profit_price_source")
         in {"broker_target_fill_price", "broker_manual_sell_receipt"}
     ]
+    manual_exit_completed = [
+        leg
+        for leg in broker_priced_completed
+        if leg.get("exit_execution_class") == "manual_operator_exit"
+    ]
+    manual_exit_losses = [
+        leg for leg in manual_exit_completed if leg.get("realized_loss") is True
+    ]
+    machine_target_completed = [
+        leg
+        for leg in broker_priced_completed
+        if leg.get("exit_execution_class") == "machine_target_fill"
+    ]
     target_proxy_completed = [
         leg
         for leg in completed
@@ -965,7 +1036,16 @@ def _aggregate(rows: list[dict]) -> dict:
         if _as_float(leg.get("holding_duration_sec")) is not None
         and float(leg["holding_duration_sec"]) >= 0.0
     ]
+    timed_machine_target_completed = [
+        leg
+        for leg in machine_target_completed
+        if _as_float(leg.get("holding_duration_sec")) is not None
+        and float(leg["holding_duration_sec"]) >= 0.0
+    ]
     holding_durations = [float(leg["holding_duration_sec"]) for leg in timed_completed]
+    machine_target_holding_durations = [
+        float(leg["holding_duration_sec"]) for leg in timed_machine_target_completed
+    ]
     sorted_holding_durations = sorted(holding_durations)
     p90_holding_duration = (
         sorted_holding_durations[
@@ -1047,6 +1127,13 @@ def _aggregate(rows: list[dict]) -> dict:
         / 100.0
         for leg in target_proxy_completed
     )
+    manual_exit_fixed_cost_estimate_profit = sum(
+        _as_int(leg.get("fill_price"))
+        * _as_int(leg.get("buy_filled_qty"))
+        * float(leg["net_profit_pct"])
+        / 100.0
+        for leg in manual_exit_completed
+    )
     ev = (
         broker_realized_profit / attempted_notional * 100.0
         if attempted_notional
@@ -1063,6 +1150,9 @@ def _aggregate(rows: list[dict]) -> dict:
         "attempted_episodes": len(attempted_rows),
         "completed_legs": len(completed),
         "broker_priced_completed_legs": len(broker_priced_completed),
+        "machine_target_completed_legs": len(machine_target_completed),
+        "manual_exit_completed_legs": len(manual_exit_completed),
+        "manual_exit_loss_legs": len(manual_exit_losses),
         "target_price_proxy_completed_legs": len(target_proxy_completed),
         "broker_sell_fill_price_coverage": (
             round(len(broker_priced_completed) / len(completed), 6)
@@ -1086,6 +1176,13 @@ def _aggregate(rows: list[dict]) -> dict:
             else None
         ),
         "completed_legs_with_lifecycle_timing": len(timed_completed),
+        "machine_target_completed_legs_with_lifecycle_timing": len(
+            timed_machine_target_completed
+        ),
+        "manual_exit_completed_legs_with_lifecycle_timing": sum(
+            leg.get("exit_execution_class") == "manual_operator_exit"
+            for leg in timed_completed
+        ),
         "lifecycle_timing_missing_completed_legs": len(completed)
         - len(timed_completed),
         "median_reconciliation_confirmed_holding_duration_sec": (
@@ -1097,15 +1194,18 @@ def _aggregate(rows: list[dict]) -> dict:
             round(p90_holding_duration, 3) if p90_holding_duration is not None else None
         ),
         "target_reconciliation_completion_within_180s_count": sum(
-            duration <= 180.0 for duration in holding_durations
+            duration <= 180.0 for duration in machine_target_holding_durations
         ),
         "target_reconciliation_completion_within_180s_ratio": (
             round(
-                sum(duration <= 180.0 for duration in holding_durations)
-                / len(holding_durations),
+                sum(
+                    duration <= 180.0
+                    for duration in machine_target_holding_durations
+                )
+                / len(machine_target_holding_durations),
                 6,
             )
-            if holding_durations
+            if machine_target_holding_durations
             else None
         ),
         "completed_holding_seconds_sum": (
@@ -1115,6 +1215,9 @@ def _aggregate(rows: list[dict]) -> dict:
         "cost_adjusted_net_profit_krw": round(broker_realized_profit, 3),
         "exact_broker_realized_net_profit_krw": round(exact_broker_profit, 3),
         "fixed_cost_estimate_net_profit_krw": round(fixed_cost_broker_profit, 3),
+        "manual_exit_fixed_cost_estimate_net_profit_krw": round(
+            manual_exit_fixed_cost_estimate_profit, 3
+        ),
         "broker_completed_capital_occupied_krw_seconds": (
             round(broker_completed_capital_occupied_krw_seconds, 3)
             if timed_broker_completed
@@ -1673,15 +1776,18 @@ def render_markdown(report: dict, candidate: dict) -> str:
         ),
         f"- Clean-baseline actual observations: {report['clean_baseline_window']['available_actual_observation_date_count']}/{report['clean_baseline_window']['expected_trading_date_count']} trading dates; missing dates are coverage only and are not imputed.",
         "",
-        "| Profile | Symbol | Session | Daily status | Clean cumulative attempts | Complete legs | Held/unresolved | EV |",
-        "|---|---|---|---|---:|---:|---:|---:|",
+        "| Profile | Symbol | Session | Daily status | Clean cumulative attempts | Complete legs | Manual exits/losses | Held/unresolved | EV |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|",
     ]
     for profile_id, row in report["daily"]["profiles"].items():
         summary = report["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
         lines.append(
             f"| {profile_id} | {row['symbol']} | {row['session']} | "
             f"{row['source_quality']} | {summary['attempted_episodes']} | "
-            f"{summary['completed_legs']} | {summary['held_or_unresolved_legs']} | "
+            f"{summary['completed_legs']} | "
+            f"{summary['manual_exit_completed_legs']}/"
+            f"{summary['manual_exit_loss_legs']} | "
+            f"{summary['held_or_unresolved_legs']} | "
             f"{summary['notional_weighted_ev_pct']} |"
         )
     lines.extend(["", "## Next PREOPEN candidate", ""])

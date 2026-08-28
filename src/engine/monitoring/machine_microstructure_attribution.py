@@ -83,6 +83,8 @@ DEFAULT_WIDGET_AUTO_TRADE_STATE_PATH = (
 WIDGET_AUTO_TRADE_EVENT_SCHEMA = "widget_signal_auto_trade_event_v1"
 WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY = "operator_directed_widget_auto_trade_v1"
 WIDGET_BROKER_EXECUTION_VENUES = {"KRX", "NXT", "SOR"}
+WIDGET_MANUAL_PARTIAL_EXIT_ROLE = "MANUAL_OPERATOR_PARTIAL_EXIT"
+WIDGET_MANUAL_PARTIAL_EXIT_AUTHORITY = "explicit_user_manual_partial_exit"
 WIDGET_SESSION_VENUES = {
     "NXT_PREMARKET": "NXT",
     "KRX_REGULAR": "KRX",
@@ -102,6 +104,8 @@ CLEAN_BASELINE_DATE = date(2026, 6, 5)
 POSTCLOSE_COMPLETE_TIME = time(20, 0)
 ENTRY_CONFIRMATION_HORIZONS_SEC = (1, 3, 5)
 ENTRY_CONFIRMATION_MAX_QUOTE_AGE_SEC = 1
+MANUAL_EXIT_FILL_SOURCE = "broker_verified_manual_sell_receipt"
+MANUAL_EXIT_PRICE_SOURCE = "broker_manual_sell_receipt"
 
 METRIC_CONTRACT = {
     "metric_role": "machine_lifecycle_microstructure_diagnostic_context",
@@ -151,7 +155,8 @@ MICRO_ENTRY_CONFIRMATION_CONTRACT = {
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
         "canonical_contiguous_0b_0d_exact_scope_latest_nonfuture_depth_and_"
-        "executable_bbo_without_missing_value_imputation"
+        "executable_bbo_without_missing_value_imputation_with_manual_exit_"
+        "provenance_preserved"
     ),
     "forbidden_uses": [
         "standalone_buy_wait_drop_or_exit_decision",
@@ -163,6 +168,7 @@ MICRO_ENTRY_CONFIRMATION_CONTRACT = {
         "provider_bot_broker_guard_or_hard_safety_change",
         "missing_micro_data_as_zero_or_neutral_confirmation",
         "source_only_opportunity_as_realized_broker_profit",
+        "manual_operator_exit_as_machine_target_fill_success",
     ],
 }
 FAST_LIFECYCLE_OBJECTIVE_CONTRACT = {
@@ -193,11 +199,13 @@ FAST_LIFECYCLE_OBJECTIVE_CONTRACT = {
         "timestamp_order_nonnegative",
         "micro_anchor_source_contract_valid",
         "missing_latency_is_unknown_not_zero",
+        "manual_operator_exit_loss_kept_in_cost_aware_realized_outcome",
     ],
     "forbidden_uses": [
         "target_cooldown_cap_entry_validity_quantity_or_force_exit_mutation",
         "held_or_right_censored_as_realized_profit",
         "gross_no_slippage_result_as_live_promotion_evidence",
+        "manual_operator_exit_as_autonomous_target_completion",
         "same_day_or_intraday_runtime_mutation",
         "broker_provider_bot_or_hard_safety_change",
     ],
@@ -529,6 +537,70 @@ def _finite_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _episode_exit_outcome_provenance(
+    leg: Mapping[str, Any], *, realized: bool
+) -> dict[str, Any]:
+    exit_fill_source = str(leg.get("exit_fill_source") or "")
+    profit_price_source = str(leg.get("profit_price_source") or "")
+    explicit_class = str(leg.get("exit_execution_class") or "")
+    if not realized:
+        exit_execution_class = "not_realized"
+    elif (
+        explicit_class == "manual_operator_exit"
+        or exit_fill_source == MANUAL_EXIT_FILL_SOURCE
+        or profit_price_source == MANUAL_EXIT_PRICE_SOURCE
+    ):
+        exit_execution_class = "manual_operator_exit"
+    elif explicit_class in {"machine_target_fill", "configured_target_price_proxy"}:
+        exit_execution_class = explicit_class
+    elif profit_price_source == "broker_target_fill_price":
+        exit_execution_class = "machine_target_fill"
+    elif profit_price_source == "configured_target_price_proxy":
+        exit_execution_class = "configured_target_price_proxy"
+    else:
+        exit_execution_class = "realized_exit_source_unknown"
+    net_return = _finite_float(leg.get("net_profit_pct"))
+    if net_return is None:
+        net_return = _finite_float(leg.get("equal_weight_profit_pct"))
+    return {
+        "exit_execution_class": exit_execution_class,
+        "exit_fill_source": exit_fill_source or None,
+        "profit_price_source": profit_price_source or None,
+        "manual_exit_realized": bool(
+            realized and exit_execution_class == "manual_operator_exit"
+        ),
+        "autonomous_target_filled": bool(
+            realized and exit_execution_class == "machine_target_fill"
+        ),
+        "realized_loss": bool(realized and net_return is not None and net_return < 0.0),
+        "holding_duration_provenance": (
+            str(leg.get("lifecycle_timestamp_provenance") or "") or None
+        ),
+    }
+
+
+def _episode_exit_anchor_role(
+    *, realized: bool, exit_execution_class: str, reconciled: bool = False
+) -> str:
+    if exit_execution_class == "manual_operator_exit":
+        return (
+            "episode_manual_exit_reconciled"
+            if reconciled
+            else "episode_manual_exit_confirmed"
+        )
+    if realized:
+        return (
+            "episode_target_fill_reconciled"
+            if reconciled
+            else "episode_target_fill_confirmed"
+        )
+    return (
+        "episode_target_partial_fill_reconciled"
+        if reconciled
+        else "episode_target_partial_fill_confirmed"
+    )
 
 
 def _source(
@@ -1168,6 +1240,7 @@ def _widget_actual_execution_inventory(
                 "SCALE_IN_BUY",
                 "TAKE_PROFIT_SELL",
                 "FINAL_EXIT_SELL",
+                WIDGET_MANUAL_PARTIAL_EXIT_ROLE,
             }
             or side != ("BUY" if role in {"ENTRY_BUY", "SCALE_IN_BUY"} else "SELL")
         ):
@@ -1278,6 +1351,37 @@ def _widget_actual_execution_inventory(
         ):
             contract_errors.append(f"state_event_order_mismatch:{key[0]}:{key[1]}")
             continue
+        if submit.get("order_role") == WIDGET_MANUAL_PARTIAL_EXIT_ROLE:
+            receipt = state_order.get("manual_exit_receipt")
+            if (
+                state_order.get("operator_authority")
+                != WIDGET_MANUAL_PARTIAL_EXIT_AUTHORITY
+                or state_order.get("exit_execution_class") != "manual_operator_exit"
+                or state_order.get("manual_exit_realized") is not True
+                or not isinstance(receipt, dict)
+                or str(receipt.get("order_no") or "").strip() != key[1]
+                or str(receipt.get("symbol") or "").strip() != key[0]
+                or str(receipt.get("owner_id") or "").strip() != "widget_auto_trade"
+                or str(receipt.get("order_date") or "").strip() != target_date
+                or str(receipt.get("source_api") or "").strip() != "kt00007"
+                or receipt.get("allocation_authority")
+                != WIDGET_MANUAL_PARTIAL_EXIT_AUTHORITY
+                or int(_widget_numeric(receipt.get("filled_qty")) or 0)
+                != int(_widget_numeric(state_order.get("filled_qty")) or 0)
+                or _widget_numeric(receipt.get("fill_price"))
+                != _widget_numeric(state_order.get("fill_price"))
+                or int(
+                    _widget_numeric(
+                        state_order.get("manual_partial_exit_requested_qty")
+                    )
+                    or 0
+                )
+                != int(_widget_numeric(state_order.get("requested_qty")) or 0)
+            ):
+                contract_errors.append(
+                    f"manual_partial_exit_state_contract_invalid:{key[0]}:{key[1]}"
+                )
+                continue
         state_execution_venue = (
             str(state_order.get("broker_execution_venue") or "").strip().upper()
         )
@@ -1427,6 +1531,7 @@ def _widget_actual_execution_inventory(
             instrumentation_gaps.append(f"order_lifecycle_incomplete:{key[0]}:{key[1]}")
             continue
         fact = {
+            **state_order,
             **submit,
             "filled_qty": filled_qty,
             "fill_price": fill_price,
@@ -1478,13 +1583,28 @@ def _widget_actual_execution_inventory(
         sell_orders = [
             order
             for order in orders
-            if order.get("order_role") in {"TAKE_PROFIT_SELL", "FINAL_EXIT_SELL"}
+            if order.get("order_role")
+            in {
+                "TAKE_PROFIT_SELL",
+                "FINAL_EXIT_SELL",
+                WIDGET_MANUAL_PARTIAL_EXIT_ROLE,
+            }
             and int(order.get("filled_qty") or 0) > 0
         ]
         sell_submit_orders = [
             order
             for order in orders
-            if order.get("order_role") in {"TAKE_PROFIT_SELL", "FINAL_EXIT_SELL"}
+            if order.get("order_role")
+            in {
+                "TAKE_PROFIT_SELL",
+                "FINAL_EXIT_SELL",
+                WIDGET_MANUAL_PARTIAL_EXIT_ROLE,
+            }
+        ]
+        manual_sell_orders = [
+            order
+            for order in sell_orders
+            if order.get("order_role") == WIDGET_MANUAL_PARTIAL_EXIT_ROLE
         ]
         venue = str(initial_orders[0].get("market_venue") or "")
         scope_id = f"actual:{symbol}:{session}"
@@ -1590,10 +1710,14 @@ def _widget_actual_execution_inventory(
                 or (first_fill_at is not None and exit_at >= first_fill_at)
             )
         )
+        buy_market_venues = {
+            str(order.get("market_venue") or "") for order in buy_submit_orders
+        }
         if (
             sell_qty > buy_qty
             or not timestamp_order_valid
-            or order_venues != {venue}
+            or buy_market_venues != {venue}
+            or not order_venues.issubset({"KRX", "NXT"})
             or WIDGET_SESSION_VENUES.get(session) != venue
             or anchor_entry_price is None
             or anchor_entry_price <= 0
@@ -1604,15 +1728,31 @@ def _widget_actual_execution_inventory(
                 {"scope_id": scope_id, "reason": "actual_widget_fill_order_invalid"}
             )
             continue
-        realized = bool(sell_qty == buy_qty and buy_qty > 0 and exit_at is not None)
+        manual_sell_qty = sum(
+            int(order["filled_qty"]) for order in manual_sell_orders
+        )
+        partial_manual_realization = bool(
+            0 < manual_sell_qty <= sell_qty < buy_qty and exit_at is not None
+        )
+        realized = bool(
+            (sell_qty == buy_qty and buy_qty > 0 and exit_at is not None)
+            or partial_manual_realization
+        )
+        realized_qty = sell_qty if partial_manual_realization else buy_qty
+        average_entry_price = buy_notional / buy_qty if buy_qty > 0 else None
+        realized_entry_notional = (
+            average_entry_price * realized_qty
+            if realized and average_entry_price is not None
+            else buy_notional
+        )
         gross_return_pct = (
-            (sell_notional / buy_notional - 1.0) * 100.0
-            if realized and buy_notional > 0
+            (sell_notional / realized_entry_notional - 1.0) * 100.0
+            if realized and realized_entry_notional > 0
             else None
         )
         execution_economics = (
             modeled_execution_economics(
-                buy_notional_krw=buy_notional,
+                buy_notional_krw=realized_entry_notional,
                 sell_notional_krw=sell_notional,
                 trade_date=target_date,
             )
@@ -1644,20 +1784,36 @@ def _widget_actual_execution_inventory(
             if len(resolved_final_exit_reasons) == 1
             else None
         )
+        if not realized:
+            exit_execution_class = "not_realized"
+        elif manual_sell_qty == sell_qty:
+            exit_execution_class = "manual_operator_exit"
+        elif manual_sell_qty > 0:
+            exit_execution_class = "mixed_manual_and_machine_exit"
+        elif all(
+            order.get("order_role") == "TAKE_PROFIT_SELL" for order in sell_orders
+        ):
+            exit_execution_class = "machine_target_fill"
+        elif all(
+            order.get("order_role") == "FINAL_EXIT_SELL" for order in sell_orders
+        ):
+            exit_execution_class = "machine_final_exit"
+        else:
+            exit_execution_class = "realized_exit_source_unknown"
         owner_outcome = {
             "exit_at": exit_at.isoformat() if exit_at else None,
             "exit_price": sell_notional / sell_qty if sell_qty else None,
             "exit_reason": (
-                "take_profit_fill"
-                if realized
-                and all(
-                    order.get("order_role") == "TAKE_PROFIT_SELL"
-                    for order in sell_orders
-                )
+                "manual_operator_partial_exit"
+                if partial_manual_realization
                 else (
-                    source_final_exit_reason
-                    if realized and source_final_exit_reason
-                    else "final_exit_fill" if realized else "right_censored"
+                    "take_profit_fill"
+                    if realized and exit_execution_class == "machine_target_fill"
+                    else (
+                        source_final_exit_reason
+                        if realized and source_final_exit_reason
+                        else "final_exit_fill" if realized else "right_censored"
+                    )
                 )
             ),
             "source_final_exit_event_ids": [
@@ -1712,8 +1868,16 @@ def _widget_actual_execution_inventory(
                 if comparison_cost is not None
                 else None
             ),
-            "entry_notional_krw": round(buy_notional, 3),
-            "quantity": buy_qty,
+            "entry_notional_krw": round(realized_entry_notional, 3),
+            "quantity": realized_qty,
+            "purchased_quantity": buy_qty,
+            "manual_exit_filled_quantity": manual_sell_qty,
+            "right_censored_residual_quantity": max(0, buy_qty - sell_qty),
+            "realization_scope": (
+                "partial_manual_exit_cashflow"
+                if partial_manual_realization
+                else "full_widget_episode" if realized else "right_censored"
+            ),
             "buy_leg_count": len(buy_submit_orders),
             "scale_in_buy_leg_count": sum(
                 order.get("order_role") == "SCALE_IN_BUY" for order in buy_submit_orders
@@ -1724,7 +1888,21 @@ def _widget_actual_execution_inventory(
             "exit_execution_venues": exit_execution_venues,
             "execution_venue_alignment_state": execution_venue_alignment_state,
             "realized": realized,
-            "leg_id": "widget_episode",
+            "leg_id": (
+                "widget_partial_manual_exit_cashflow"
+                if partial_manual_realization
+                else "widget_episode"
+            ),
+            "exit_execution_class": exit_execution_class,
+            "manual_exit_realized": bool(realized and manual_sell_qty > 0),
+            "autonomous_target_filled": bool(
+                realized and exit_execution_class == "machine_target_fill"
+            ),
+            "realized_loss": bool(
+                realized
+                and execution_economics is not None
+                and execution_economics["modeled_net_profit_krw"] < 0
+            ),
             "timestamp_provenance": (
                 "execution_loop_submit_record_and_broker_reconciliation_confirmation_time"
             ),
@@ -1970,6 +2148,9 @@ def _widget_actual_execution_inventory(
                     }
                 )
         if sell_qty > 0 and exit_at is not None:
+            manual_exit_only = bool(
+                manual_sell_qty == sell_qty and manual_sell_qty > 0
+            )
             anchors.append(
                 {
                     "anchor_id": f"{lifecycle_id}:exit",
@@ -1987,7 +2168,11 @@ def _widget_actual_execution_inventory(
                     "owner_target_price": None,
                     "lifecycle_stage": "exit" if realized else "exit_partial_fill",
                     "anchor_role": (
-                        "actual_widget_exit_fill_reconciled"
+                        "actual_widget_manual_partial_exit_reconciled"
+                        if manual_exit_only and buy_qty > sell_qty
+                        else "actual_widget_manual_exit_reconciled"
+                        if manual_exit_only
+                        else "actual_widget_exit_fill_reconciled"
                         if realized
                         else "actual_widget_exit_partial_fill_reconciled"
                     ),
@@ -2779,10 +2964,11 @@ def _episode_inventory(
         "low_price_two_leg_tuning_report_v3",
         "low_price_two_leg_tuning_report_v4",
         "low_price_two_leg_tuning_report_v5",
+        "low_price_two_leg_tuning_report_v6",
     )
     expansion_schemas = ("low_price_two_leg_expanded_candidate_research_v5",)
     samsung_schemas = tuple(
-        f"samsung_machine_entry_tuning_report_v{version}" for version in range(2, 7)
+        f"samsung_machine_entry_tuning_report_v{version}" for version in range(2, 8)
     )
     tuning = _read_target_json(
         tuning_path, target_date, expected_schemas=tuning_schemas
@@ -3035,6 +3221,9 @@ def _episode_inventory(
                         and leg.get("completed") is True
                         and target_filled_qty == buy_filled_qty
                     )
+                    exit_provenance = _episode_exit_outcome_provenance(
+                        leg, realized=realized
+                    )
                     if valid_buy_fill:
                         leg_gross_return_pct = _finite_float(
                             leg.get("gross_no_slippage_return_pct")
@@ -3062,6 +3251,7 @@ def _episode_inventory(
                                 else None
                             ),
                             "realized": realized,
+                            **exit_provenance,
                         }
                         if decision_at is not None:
                             anchors.append(
@@ -3133,10 +3323,11 @@ def _episode_inventory(
                             }
                         )
                     if valid_target_fill:
-                        target_anchor_role = (
-                            "episode_target_fill_confirmed"
-                            if realized
-                            else "episode_target_partial_fill_confirmed"
+                        target_anchor_role = _episode_exit_anchor_role(
+                            realized=realized,
+                            exit_execution_class=str(
+                                exit_provenance["exit_execution_class"]
+                            ),
                         )
                         anchors.append(
                             {
@@ -3179,6 +3370,7 @@ def _episode_inventory(
                                     "quantity": buy_filled_qty,
                                     "quantity_basis": "broker_confirmed_fill",
                                     "realized": realized,
+                                    **exit_provenance,
                                 },
                                 "owner_lifecycle_contract_valid": True,
                                 "owner_policy_tuning_eligible": owner_row_eligible,
@@ -3366,6 +3558,9 @@ def _episode_inventory(
                     and target_fill_price is not None
                     and target_fill_price > 0
                 )
+                exit_provenance = _episode_exit_outcome_provenance(
+                    leg, realized=realized
+                )
                 if leg.get("completed") is True and not realized:
                     lifecycle_invalid = True
                     row["lifecycle_instrumentation_gaps"].append(
@@ -3392,6 +3587,7 @@ def _episode_inventory(
                     "exit_price": target_fill_price if realized else None,
                     "exit_at": target_filled_at.isoformat() if realized else None,
                     "realized": realized,
+                    **exit_provenance,
                 }
                 anchors.append(
                     {
@@ -3578,10 +3774,15 @@ def _episode_inventory(
                     leg.get("completed") is True
                     and target_filled_qty_value == buy_filled_qty_value
                 )
-                target_anchor_role = (
-                    "episode_target_fill_reconciled"
-                    if realized
-                    else "episode_target_partial_fill_reconciled"
+                exit_provenance = _episode_exit_outcome_provenance(
+                    leg, realized=realized
+                )
+                target_anchor_role = _episode_exit_anchor_role(
+                    realized=realized,
+                    exit_execution_class=str(
+                        exit_provenance["exit_execution_class"]
+                    ),
+                    reconciled=True,
                 )
                 anchors.append(
                     {
@@ -3625,6 +3826,7 @@ def _episode_inventory(
                             "quantity": int(buy_filled_qty_value),
                             "quantity_basis": "broker_confirmed_fill",
                             "realized": realized,
+                            **exit_provenance,
                         },
                         "owner_lifecycle_contract_valid": True,
                         "owner_policy_tuning_eligible": row[
@@ -5721,6 +5923,16 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
     matched_exit_count = sum(
         row.get("lifecycle_stage") == "exit" for row in context_matched_results
     )
+    matched_manual_exit_count = sum(
+        row.get("anchor_role")
+        in {
+            "episode_manual_exit_confirmed",
+            "episode_manual_exit_reconciled",
+            "actual_widget_manual_partial_exit_reconciled",
+            "actual_widget_manual_exit_reconciled",
+        }
+        for row in context_matched_results
+    )
     matched_partial_exit_fill_count = sum(
         row.get("lifecycle_stage") == "exit_partial_fill"
         for row in context_matched_results
@@ -5763,6 +5975,46 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
         for unit in outcome_units.values()
         if unit["outcome"].get("realized") is True
     ]
+    manual_exit_units = [
+        unit
+        for unit in realized_units
+        if unit["outcome"].get("exit_execution_class") == "manual_operator_exit"
+    ]
+    manual_exit_loss_units = [
+        unit
+        for unit in manual_exit_units
+        if unit["outcome"].get("realized_loss") is True
+    ]
+    machine_target_units = [
+        unit
+        for unit in realized_units
+        if unit["outcome"].get("exit_execution_class") == "machine_target_fill"
+    ]
+    episode_machine_target_units = [
+        unit
+        for unit in machine_target_units
+        if unit["cohort"] == "actual_episode_execution"
+    ]
+    episode_manual_exit_units = [
+        unit
+        for unit in manual_exit_units
+        if unit["cohort"] == "actual_episode_execution"
+    ]
+    episode_manual_exit_loss_units = [
+        unit
+        for unit in manual_exit_loss_units
+        if unit["cohort"] == "actual_episode_execution"
+    ]
+    widget_manual_exit_units = [
+        unit
+        for unit in manual_exit_units
+        if unit["cohort"] == "actual_widget_execution"
+    ]
+    widget_manual_exit_loss_units = [
+        unit
+        for unit in manual_exit_loss_units
+        if unit["cohort"] == "actual_widget_execution"
+    ]
     realized_holding_durations_ms = [
         value
         for unit in realized_units
@@ -5793,6 +6045,12 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
         "source_only_counterfactual",
     ):
         cohort_units = [unit for unit in realized_units if unit["cohort"] == cohort]
+        cohort_manual_units = [
+            unit
+            for unit in cohort_units
+            if unit["outcome"].get("exit_execution_class")
+            == "manual_operator_exit"
+        ]
         cohort_gross = [
             value
             for unit in cohort_units
@@ -5821,6 +6079,16 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
         ]
         cohort_diagnostics[cohort] = {
             "realized_sample_count": len(cohort_units),
+            "machine_target_fill_sample_count": sum(
+                unit["outcome"].get("exit_execution_class")
+                == "machine_target_fill"
+                for unit in cohort_units
+            ),
+            "manual_operator_exit_sample_count": len(cohort_manual_units),
+            "manual_operator_exit_loss_sample_count": sum(
+                unit["outcome"].get("realized_loss") is True
+                for unit in cohort_manual_units
+            ),
             "gross_no_slippage_avg_return_pct": (
                 round(statistics.fmean(cohort_gross), 6) if cohort_gross else None
             ),
@@ -5882,11 +6150,32 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
             "matched_entry_submit_anchor_count": matched_entry_submit_count,
             "matched_exit_submit_anchor_count": matched_exit_submit_count,
             "matched_exit_anchor_count": matched_exit_count,
+            "matched_manual_exit_anchor_count": matched_manual_exit_count,
             "matched_partial_exit_fill_anchor_count": (matched_partial_exit_fill_count),
             "owner_outcome_unit_count": len(outcome_units),
             "owner_outcome_not_micro_attributed_count": len(owner_outcome_keys)
             - len(outcome_units),
             "realized_owner_outcome_count": len(realized_units),
+            "episode_machine_target_fill_owner_outcome_count": len(
+                episode_machine_target_units
+            ),
+            "episode_manual_operator_exit_owner_outcome_count": len(
+                episode_manual_exit_units
+            ),
+            "episode_manual_operator_exit_loss_owner_outcome_count": len(
+                episode_manual_exit_loss_units
+            ),
+            "widget_manual_operator_exit_owner_outcome_count": len(
+                widget_manual_exit_units
+            ),
+            "widget_manual_operator_exit_loss_owner_outcome_count": len(
+                widget_manual_exit_loss_units
+            ),
+            "all_owner_machine_target_fill_outcome_count": len(machine_target_units),
+            "all_owner_manual_operator_exit_outcome_count": len(manual_exit_units),
+            "all_owner_manual_operator_exit_loss_outcome_count": len(
+                manual_exit_loss_units
+            ),
             "unrealized_owner_outcome_count": len(outcome_units) - len(realized_units),
             "timed_owner_outcome_count": len(realized_holding_durations_ms),
             "timing_missing_owner_outcome_count": len(realized_units)
@@ -6077,6 +6366,12 @@ def _fast_lifecycle_objective_followup(
         attention_class = "source_quality"
         current_capability = "rolling_paired_research_scope_source_blocked"
         next_action = "repair_exact_scope_source_or_eligibility_contract_and_rerun"
+    elif sample_floor_state == "source_report_contract_gap":
+        state = "EVIDENCE_ACCUMULATING"
+        followup_required = True
+        attention_class = "source_quality"
+        current_capability = "rolling_paired_research_report_contract_blocked"
+        next_action = "repair_excluded_source_report_contracts_and_rerun"
     elif sample_floor_state == "terminal_or_right_censored_gap":
         state = "EVIDENCE_ACCUMULATING"
         followup_required = True

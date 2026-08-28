@@ -20,6 +20,9 @@ DRY_RUN="${PANIC_SELL_DEFENSE_DRY_RUN:-0}"
 NOTIFY_ENABLED="${PANIC_SELL_DEFENSE_NOTIFY_TELEGRAM_ENABLED:-true}"
 NOTIFY_AUDIENCE="${PANIC_SELL_DEFENSE_NOTIFY_AUDIENCE:-all}"
 NOTIFY_STATE_FILE="${PANIC_SELL_DEFENSE_NOTIFY_STATE_FILE:-$PROJECT_DIR/tmp/panic_state_telegram_notify_state.json}"
+MARKET_WEAKNESS_NOTIFY_ENABLED="${PANIC_MARKET_WEAKNESS_NOTIFY_ENABLED:-true}"
+MARKET_WEAKNESS_NOTIFY_AUDIENCE="${PANIC_MARKET_WEAKNESS_NOTIFY_AUDIENCE:-admin}"
+MARKET_WEAKNESS_STATE_FILE="${PANIC_MARKET_WEAKNESS_STATE_FILE:-$PROJECT_DIR/tmp/market_weakness_observer_state.json}"
 MARKET_BREADTH_COLLECT_ENABLED="${PANIC_MARKET_BREADTH_COLLECT_ENABLED:-true}"
 MARKET_BREADTH_MAX_AGE_SEC="${PANIC_MARKET_BREADTH_MAX_AGE_SEC:-75}"
 MARKET_BREADTH_LOCK_FILE="${PANIC_MARKET_BREADTH_LOCK_FILE:-$PROJECT_DIR/tmp/run_market_panic_breadth.lock}"
@@ -30,6 +33,8 @@ NICE_COMMAND="${PANIC_SELL_DEFENSE_NICE_COMMAND:-nice}"
 CPU_AFFINITY="${PANIC_SELL_DEFENSE_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity panic)}"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
+bash "$SCRIPT_DIR/run_owned_log_rotation.sh" "panic_sell_defense_internal" "$LOG_FILE" || \
+  echo "[WARN] owned log rotation failed owner=panic_sell_defense_internal log=${LOG_FILE}; writer will continue fail-closed"
 cd "$PROJECT_DIR"
 
 validate_int() {
@@ -150,16 +155,33 @@ fi
 
 if "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
   REPORT_FILE="$PROJECT_DIR/data/report/panic_sell_defense/panic_sell_defense_${TARGET_DATE}.json"
-  if [[ "$NOTIFY_ENABLED" != "0" && "$NOTIFY_ENABLED" != "false" && "$NOTIFY_ENABLED" != "no" && "$NOTIFY_ENABLED" != "off" && -f "$REPORT_FILE" ]]; then
+  if [[ -f "$REPORT_FILE" ]]; then
     notify_audience="$NOTIFY_AUDIENCE"
     if [[ "$DRY_RUN" == "1" ]]; then
       notify_audience="admin"
     fi
-    env PYTHONPATH=. "$VENV_PY" -m src.engine.notify_panic_state_transition \
-      --report-file "$REPORT_FILE" \
-      --kind panic_sell \
-      --audience "$notify_audience" \
-      --state-file "$NOTIFY_STATE_FILE" 2>&1 | tee -a "$LOG_FILE" || true
+    if [[ "$NOTIFY_ENABLED" != "0" && "$NOTIFY_ENABLED" != "false" && "$NOTIFY_ENABLED" != "no" && "$NOTIFY_ENABLED" != "off" ]]; then
+      env PYTHONPATH=. "$VENV_PY" -m src.engine.notify_panic_state_transition \
+        --report-file "$REPORT_FILE" \
+        --kind panic_sell \
+        --audience "$notify_audience" \
+        --state-file "$NOTIFY_STATE_FILE" 2>&1 | tee -a "$LOG_FILE" || true
+    fi
+    weakness_notify_audience="$MARKET_WEAKNESS_NOTIFY_AUDIENCE"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      weakness_notify_audience="admin"
+    fi
+    weakness_notify_cmd=(
+      env PYTHONPATH=. "$VENV_PY" -m src.engine.notify_panic_state_transition
+      --report-file "$REPORT_FILE"
+      --kind market_weakness
+      --audience "$weakness_notify_audience"
+      --state-file "$MARKET_WEAKNESS_STATE_FILE"
+    )
+    if [[ "$NOTIFY_ENABLED" == "0" || "$NOTIFY_ENABLED" == "false" || "$NOTIFY_ENABLED" == "no" || "$NOTIFY_ENABLED" == "off" || "$MARKET_WEAKNESS_NOTIFY_ENABLED" == "0" || "$MARKET_WEAKNESS_NOTIFY_ENABLED" == "false" || "$MARKET_WEAKNESS_NOTIFY_ENABLED" == "no" || "$MARKET_WEAKNESS_NOTIFY_ENABLED" == "off" ]]; then
+      weakness_notify_cmd+=(--observe-only)
+    fi
+    "${weakness_notify_cmd[@]}" 2>&1 | tee -a "$LOG_FILE" || true
   fi
   touch "$COOLDOWN_STATE_FILE"
   finished_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"

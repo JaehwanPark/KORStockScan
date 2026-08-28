@@ -29,6 +29,25 @@ def test_threshold_ev_reconciliation_mismatch_is_a_verifier_issue():
     )
 
 
+def test_threshold_ev_reconciliation_accepts_declared_diagnostic_source_split():
+    assert mod._threshold_ev_reconciliation_issues(
+        {
+            "daily_ev_summary": {
+                "completed_trades": 5,
+                "headline_authority": "completed_by_source_same_day_real",
+                "source_split": {"real": {"sample": 5}},
+                "trade_review_snapshot_reconciliation": {
+                    "completed_trades": 3,
+                    "count_match": False,
+                    "decision_authority": (
+                        "diagnostic_only_when_same_day_source_split_present"
+                    ),
+                },
+            }
+        }
+    ) == []
+
+
 def test_workorder_source_fingerprint_detects_changed_bytes(tmp_path):
     source = tmp_path / "source.json"
     source.write_text('{"value":1}', encoding="utf-8")
@@ -1187,6 +1206,73 @@ def test_raw_row_exclusion_handoff_passes_after_final_revalidation_closed():
     assert status["status"] == "pass"
     assert status["workorder_handoff_present"] is True
     assert status["revalidation_closed_count"] == 1
+
+
+def test_raw_row_exclusion_handoff_ignores_unrelated_preflight_warning():
+    status = mod._raw_row_exclusion_handoff_status(
+        {
+            "status": "warning",
+            "summary": {
+                "tuning_input_allowed": True,
+                "hard_blocking_contract_gap_count": 0,
+                "current_scan_hard_blocking_excluded_row_count": 0,
+                "post_exclusion_hard_blocking_excluded_row_count": 0,
+                "raw_row_exclusion_revalidation_required": False,
+            },
+            "raw_row_exclusion": {"excluded_row_count": 2},
+        },
+        workorder={
+            "orders": [
+                {
+                    "order_id": (
+                        "order_observation_source_quality_raw_row_exclusion_producer_gap"
+                    ),
+                    "improvement_type": (
+                        "source_quality_raw_row_exclusion_revalidated_closed"
+                    ),
+                    "route": "source_quality_raw_row_exclusion_revalidated_closed",
+                    "decision": "attach_existing_family",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            ]
+        },
+    )
+
+    assert status["status"] == "pass"
+    assert status["workorder_handoff_present"] is True
+
+
+def test_raw_row_exclusion_handoff_warning_missing_counts_stays_open():
+    status = mod._raw_row_exclusion_handoff_status(
+        {
+            "status": "warning",
+            "summary": {
+                "tuning_input_allowed": True,
+                "raw_row_exclusion_revalidation_required": False,
+            },
+            "raw_row_exclusion": {"excluded_row_count": 2},
+        },
+        workorder={
+            "orders": [
+                {
+                    "order_id": (
+                        "order_observation_source_quality_raw_row_exclusion_producer_gap"
+                    ),
+                    "route": "source_quality_raw_row_exclusion_revalidated_closed",
+                    "decision": "attach_existing_family",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            ]
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert (
+        "raw_row_exclusion_revalidation_not_closed"
+        in status["invalid_contract_reasons"]
+    )
 
 
 def test_raw_row_exclusion_handoff_rejects_stale_revalidation_closed_order():

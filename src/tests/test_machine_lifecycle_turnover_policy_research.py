@@ -372,6 +372,122 @@ def test_rolling_research_detects_window_floor_unattainable_at_observed_yield(
     )
 
 
+def test_rolling_research_defers_shortage_class_until_declared_window_closes(
+    tmp_path: Path,
+) -> None:
+    target_day = date(2026, 8, 28)
+    source_dates = _trading_dates(target_day, 4)
+    for source_day in source_dates[:-1]:
+        payload = _report(source_day.isoformat(), [])
+        (
+            tmp_path
+            / f"machine_microstructure_attribution_{source_day.isoformat()}.json"
+        ).write_text(__import__("json").dumps(payload), encoding="utf-8")
+    current = _report(
+        target_day.isoformat(),
+        [
+            _anchor(
+                source_date=target_day.isoformat(),
+                lifecycle_number=1,
+            )
+        ],
+    )
+
+    research = build_rolling_paired_policy_research(
+        target_date=target_day.isoformat(),
+        current_report=current,
+        report_dir=tmp_path,
+    )
+
+    readiness = research["cohorts"][0]["alternatives"][0][
+        "window_sample_readiness"
+    ]
+    window = readiness["5d"]
+    assert window["state"] == "pending_declared_window"
+    assert window["shortage_classification_status"] == "pending_declared_window"
+    assert window["shortage_class"] is None
+    assert window["classification_window_complete"] is False
+    assert window["minimum_completed_due_trading_days"] == 5
+    assert window["remaining_completed_due_trading_days_to_classification"] == 1
+    assert window["earliest_review_date"] == "2026-08-31"
+    assert window["projected_additional_trading_days_at_observed_yield"] is None
+    assert research["sample_floor_assessment"]["state"] == (
+        "pending_declared_window"
+    )
+    assert research["sample_floor_assessment"]["shortage_classification_status"] == (
+        "pending_declared_window"
+    )
+    assert research["sample_floor_assessment"]["shortage_class"] is None
+    assert research["sample_floor_assessment"]["next_action"] == (
+        "recheck_at_earliest_declared_window"
+    )
+    assert "5d_classification_window_pending" in research["remaining_gap_codes"]
+
+
+def test_rolling_research_blocks_when_source_report_contract_is_excluded(
+    tmp_path: Path,
+) -> None:
+    excluded_day = date(2026, 8, 27)
+    excluded = _report(excluded_day.isoformat(), [])
+    excluded["rolling_policy_source_contract"] = {
+        "ready": False,
+        "gap": "producer_contract_missing",
+    }
+    (
+        tmp_path
+        / f"machine_microstructure_attribution_{excluded_day.isoformat()}.json"
+    ).write_text(__import__("json").dumps(excluded), encoding="utf-8")
+    current = _report(
+        "2026-08-28",
+        [_anchor(source_date="2026-08-28", lifecycle_number=1)],
+    )
+
+    research = build_rolling_paired_policy_research(
+        target_date="2026-08-28",
+        current_report=current,
+        report_dir=tmp_path,
+    )
+
+    window = research["cohorts"][0]["alternatives"][0][
+        "window_sample_readiness"
+    ]["5d"]
+    assert window["state"] == "source_report_contract_gap"
+    assert window["source_report_contract_gap_day_count"] == 1
+    assert window["shortage_classification_status"] == "blocked_missing_evidence"
+    assert window["shortage_class"] is None
+    assert window["earliest_review_date"] is None
+    assert window["projected_paired_lifecycles_in_full_window"] is None
+    assert window["projected_additional_trading_days_at_observed_yield"] is None
+    assessment = research["sample_floor_assessment"]
+    assert assessment["state"] == "source_report_contract_gap"
+    assert assessment["shortage_classification_status"] == (
+        "blocked_missing_evidence"
+    )
+    assert assessment["shortage_class"] is None
+    assert assessment["next_action"] == (
+        "repair_excluded_source_report_contracts_and_rerun"
+    )
+    assert "5d_source_report_contract_gap" in research["remaining_gap_codes"]
+
+    followup = _fast_lifecycle_objective_followup(
+        target_date="2026-08-28",
+        objective_alignment={
+            "implementation_boundary": research["implementation_boundary"],
+            "reflected_in_real_runtime_policy": False,
+            "sample_floor_assessment": assessment,
+            "remaining_gaps": research["remaining_gap_codes"],
+        },
+        promotion_candidates=[],
+    )
+    assert followup["attention_class"] == "source_quality"
+    assert followup["current_capability"] == (
+        "rolling_paired_research_report_contract_blocked"
+    )
+    assert followup["next_action"] == (
+        "repair_excluded_source_report_contracts_and_rerun"
+    )
+
+
 def test_rolling_research_keeps_insufficient_and_unresolved_samples_open(
     tmp_path: Path,
 ):

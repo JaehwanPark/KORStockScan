@@ -23,7 +23,7 @@ cat >> "$TMP_CRON" <<EOF
 # 20:05 is after the NXT close and keeps the data refresh parallel with postclose reporting.
 5 20 * * 1-5 cd $PROJECT_DIR && $PROJECT_DIR/.venv/bin/python src/utils/update_kospi.py >> $PROJECT_DIR/logs/update_kospi.log 2>&1 # UPDATE_KOSPI_EOD_2005
 50 20 * * 1-5 $PROJECT_DIR/deploy/run_dashboard_db_archive_cron.sh 0 >> $PROJECT_DIR/logs/dashboard_db_archive_cron.log 2>&1 # DASHBOARD_DB_ARCHIVE_2050
-0 21 * * * $PROJECT_DIR/deploy/run_logs_rotation_cleanup_cron.sh 30 >> $PROJECT_DIR/logs/log_rotation_cleanup_cron.log 2>&1 # LOG_ROTATION_CLEANUP_2100
+0 21 * * * bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner log_rotation_cleanup_cron --log $PROJECT_DIR/logs/log_rotation_cleanup_cron.log $PROJECT_DIR/deploy/run_logs_rotation_cleanup_cron.sh 30 # LOG_ROTATION_CLEANUP_2100
 EOF
 
 crontab "$TMP_CRON"

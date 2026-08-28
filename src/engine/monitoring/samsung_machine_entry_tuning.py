@@ -36,13 +36,14 @@ from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 REPORT_TYPE = "samsung_machine_entry_tuning"
-REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v6"
+REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v7"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
     {
         "samsung_machine_entry_tuning_report_v2",
         "samsung_machine_entry_tuning_report_v3",
         "samsung_machine_entry_tuning_report_v4",
         "samsung_machine_entry_tuning_report_v5",
+        "samsung_machine_entry_tuning_report_v6",
         REPORT_SCHEMA,
     }
 )
@@ -51,6 +52,8 @@ CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
 ROLLING_WINDOWS = {"rolling_10d": 10, "rolling_20d": 20}
 SAMPLE_FLOOR = 20
 AUTO_MIN_COMPLETED_LEGS = 20
+MANUAL_EXIT_FILL_SOURCE = "broker_verified_manual_sell_receipt"
+MANUAL_EXIT_PRICE_SOURCE = "broker_manual_sell_receipt"
 APPLIED_POLICY_PROVENANCE_REQUIRED_DATE = date(2026, 8, 14)
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 MACHINE_FILES = {
@@ -104,7 +107,10 @@ METRIC_CONTRACT = {
         "completed_legs_per_attempted_leg",
         "equal_weight_avg_profit_pct",
     ],
-    "profit_cost_model": "broker_target_fill_price_minus_fixed_round_trip_cost_pct",
+    "profit_cost_model": (
+        "broker_exit_fill_price_minus_fixed_round_trip_cost_pct_including_"
+        "verified_manual_operator_losses"
+    ),
     "source_quality_gate": [
         "target_date_matches_state",
         "two_leg_v2_schema",
@@ -117,6 +123,7 @@ METRIC_CONTRACT = {
         "historical_replay_not_mixed_with_actual_outcomes",
         "positive_rolling_10d_20d_and_cumulative_notional_ev",
         "exact_date_applied_policy_hash_and_fields",
+        "verified_manual_operator_exit_is_realized_pnl_not_machine_target_success",
     ],
     "forbidden_uses": [
         "direct_or_same_day_runtime_or_threshold_mutation",
@@ -125,6 +132,7 @@ METRIC_CONTRACT = {
         "price_touch_as_fill",
         "legacy_one_leg_and_two_leg_sample_mixing",
         "forced_exit_or_stop_loss_creation",
+        "manual_operator_exit_as_machine_target_fill_success",
         "provider_route_cap_bot_or_broker_guard_change",
         "real_runtime_approval",
     ],
@@ -156,6 +164,23 @@ def _as_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return result if math.isfinite(result) else None
+
+
+def _exit_execution_class(
+    *, completed: bool, exit_fill_source: str, profit_price_source: str
+) -> str:
+    if not completed:
+        return "not_realized"
+    if (
+        exit_fill_source == MANUAL_EXIT_FILL_SOURCE
+        or profit_price_source == MANUAL_EXIT_PRICE_SOURCE
+    ):
+        return "manual_operator_exit"
+    if profit_price_source == "broker_target_fill_price":
+        return "machine_target_fill"
+    if profit_price_source == "configured_target_price_proxy":
+        return "configured_target_price_proxy"
+    return "realized_exit_source_unknown"
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -248,7 +273,7 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     target_filled_qty = _as_int(leg.get("target_filled_qty"))
     target_fill_price = _as_int(leg.get("target_fill_price"))
     exit_fill_source = str(leg.get("exit_fill_source") or "")
-    manual_exit_verified = exit_fill_source == "broker_verified_manual_sell_receipt"
+    manual_exit_verified = exit_fill_source == MANUAL_EXIT_FILL_SOURCE
     buy_filled_qty = _as_int(
         leg.get("buy_filled_qty", position_qty + target_filled_qty)
     )
@@ -273,6 +298,11 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     )
     if completed and fill_price > 0 and profit_exit_price > 0:
         profit_pct = round((profit_exit_price / fill_price - 1.0) * 100.0 - cost_pct, 6)
+    exit_execution_class = _exit_execution_class(
+        completed=completed,
+        exit_fill_source=exit_fill_source,
+        profit_price_source=profit_price_source,
+    )
     return {
         "leg_id": str(leg.get("leg_id") or ""),
         "price_role": str(leg.get("price_role") or ""),
@@ -294,6 +324,10 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "exit_fill_source": exit_fill_source or None,
         "profit_exit_price": profit_exit_price if completed else 0,
         "profit_price_source": profit_price_source,
+        "exit_execution_class": exit_execution_class,
+        "manual_exit_realized": exit_execution_class == "manual_operator_exit",
+        "autonomous_target_filled": exit_execution_class == "machine_target_fill",
+        "realized_loss": bool(profit_pct is not None and profit_pct < 0.0),
         "completed": completed,
         "held": held,
         "unresolved": not terminal,
@@ -318,6 +352,17 @@ def _summarize_legs(attempted: bool, legs: list[dict[str, Any]]) -> dict[str, An
         "submitted_legs": sum(bool(leg.get("submitted")) for leg in legs),
         "filled_legs": sum(bool(leg.get("filled")) for leg in legs),
         "completed_legs": sum(bool(leg.get("completed")) for leg in legs),
+        "machine_target_completed_legs": sum(
+            leg.get("exit_execution_class") == "machine_target_fill" for leg in legs
+        ),
+        "manual_exit_completed_legs": sum(
+            leg.get("exit_execution_class") == "manual_operator_exit" for leg in legs
+        ),
+        "manual_exit_loss_legs": sum(
+            leg.get("exit_execution_class") == "manual_operator_exit"
+            and leg.get("realized_loss") is True
+            for leg in legs
+        ),
         "held_legs": sum(bool(leg.get("held")) for leg in legs),
         "unresolved_legs": sum(bool(leg.get("unresolved")) for leg in legs),
         "completed_signal_episode": complete_episode,
@@ -350,7 +395,7 @@ def _leg_outcome_contract_valid(leg: dict[str, Any]) -> bool:
         or (
             target_fill_price > 0
             and target_fill_price < _as_int(leg.get("target_price"))
-            and leg.get("exit_fill_source") != "broker_verified_manual_sell_receipt"
+            and leg.get("exit_fill_source") != MANUAL_EXIT_FILL_SOURCE
         )
     ):
         return False
@@ -370,27 +415,49 @@ def _leg_outcome_contract_valid(leg: dict[str, Any]) -> bool:
 
 def _normalize_historical_machine_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
-    normalized["legs"] = [
-        {
-            **leg,
-            "profit_price_source": (
-                str(leg.get("profit_price_source"))
-                if leg.get("profit_price_source")
+    normalized_legs = []
+    for leg in row.get("legs", []):
+        if not isinstance(leg, dict):
+            continue
+        profit_price_source = (
+            str(leg.get("profit_price_source"))
+            if leg.get("profit_price_source")
+            else (
+                "broker_target_fill_price"
+                if leg.get("completed") and _as_int(leg.get("target_fill_price"))
                 else (
-                    "broker_target_fill_price"
-                    if leg.get("completed") and _as_int(leg.get("target_fill_price"))
-                    else (
-                        "configured_target_price_proxy"
-                        if leg.get("completed")
-                        and leg.get("equal_weight_profit_pct") is not None
-                        else "not_completed"
-                    )
+                    "configured_target_price_proxy"
+                    if leg.get("completed")
+                    and leg.get("equal_weight_profit_pct") is not None
+                    else "not_completed"
                 )
-            ),
-        }
-        for leg in row.get("legs", [])
-        if isinstance(leg, dict)
-    ]
+            )
+        )
+        exit_execution_class = _exit_execution_class(
+            completed=bool(leg.get("completed")),
+            exit_fill_source=str(leg.get("exit_fill_source") or ""),
+            profit_price_source=profit_price_source,
+        )
+        net_profit = _as_float(leg.get("equal_weight_profit_pct"))
+        normalized_legs.append(
+            {
+                **leg,
+                "profit_price_source": profit_price_source,
+                "exit_execution_class": exit_execution_class,
+                "manual_exit_realized": (
+                    exit_execution_class == "manual_operator_exit"
+                ),
+                "autonomous_target_filled": (
+                    exit_execution_class == "machine_target_fill"
+                ),
+                "realized_loss": bool(
+                    leg.get("completed")
+                    and net_profit is not None
+                    and net_profit < 0.0
+                ),
+            }
+        )
+    normalized["legs"] = normalized_legs
     attempted = bool(normalized.get("attempted"))
     outcome_complete_for_ev = bool(
         not attempted
@@ -880,6 +947,19 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         and leg.get("profit_price_source")
         in {"broker_target_fill_price", "broker_manual_sell_receipt"}
     ]
+    manual_exit_completed = [
+        leg
+        for leg in broker_priced_completed
+        if leg.get("exit_execution_class") == "manual_operator_exit"
+    ]
+    manual_exit_losses = [
+        leg for leg in manual_exit_completed if leg.get("realized_loss") is True
+    ]
+    machine_target_completed = [
+        leg
+        for leg in broker_priced_completed
+        if leg.get("exit_execution_class") == "machine_target_fill"
+    ]
     target_proxy_completed = [
         leg
         for row in attempted
@@ -905,6 +985,13 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         * float(leg["equal_weight_profit_pct"])
         / 100.0
         for leg in target_proxy_completed
+    )
+    manual_exit_fixed_cost_estimate_profit = sum(
+        _as_int(leg.get("fill_price"))
+        * _as_int(leg.get("buy_filled_qty"))
+        * float(leg["equal_weight_profit_pct"])
+        / 100.0
+        for leg in manual_exit_completed
     )
     attempted_legs = sum(_as_int(item.get("attempted_legs")) for item in summaries)
     submitted_legs = sum(_as_int(item.get("submitted_legs")) for item in summaries)
@@ -953,6 +1040,9 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "filled_legs": sum(_as_int(item.get("filled_legs")) for item in summaries),
         "completed_legs": completed_legs,
         "broker_priced_completed_legs": len(broker_priced_completed),
+        "machine_target_completed_legs": len(machine_target_completed),
+        "manual_exit_completed_legs": len(manual_exit_completed),
+        "manual_exit_loss_legs": len(manual_exit_losses),
         "target_price_proxy_completed_legs": len(target_proxy_completed),
         "broker_sell_fill_price_coverage": (
             round(len(broker_priced_completed) / completed_legs, 6)
@@ -978,6 +1068,9 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             round(broker_completed_net_profit / attempted_notional * 100.0, 6)
             if attempted_notional > 0
             else None
+        ),
+        "manual_exit_fixed_cost_estimate_net_profit_krw": round(
+            manual_exit_fixed_cost_estimate_profit, 3
         ),
         "target_price_proxy_notional_weighted_ev_pct": (
             round(target_proxy_net_profit / attempted_notional * 100.0, 6)
@@ -1595,15 +1688,17 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Daily",
         "",
-        "| Machine | Cohort | Source | Attempt | Status | Completed legs | Held | Unresolved |",
-        "|---|---|---|---:|---|---:|---:|---:|",
+        "| Machine | Cohort | Source | Attempt | Status | Completed legs | Manual exits/losses | Held | Unresolved |",
+        "|---|---|---|---:|---|---:|---:|---:|---:|",
     ]
     for machine, row in report["daily"]["machines"].items():
         summary = row["summary"]
         lines.append(
             f"| {machine} | {row['cohort']} | {row['source_quality']} | "
             f"{int(bool(row['attempted']))} | {row['state_status']} | "
-            f"{summary['completed_legs']} | {summary['held_legs']} | "
+            f"{summary['completed_legs']} | "
+            f"{summary['manual_exit_completed_legs']}/"
+            f"{summary['manual_exit_loss_legs']} | {summary['held_legs']} | "
             f"{summary['unresolved_legs']} |"
         )
     lines.extend(["", "## Cumulative decision", ""])

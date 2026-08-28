@@ -3257,6 +3257,88 @@ def test_observation_source_quality_closed_revalidation_attaches_existing_family
     assert not codex_workorder_runner.is_safe_implement_now(classified)
 
 
+def test_observation_source_quality_closed_revalidation_ignores_unrelated_warning():
+    report = {
+        "status": "warning",
+        "summary": {
+            "event_count": 20,
+            "review_warning_count": 1,
+            "review_warning_stages": ["order_bundle_failed"],
+            "tuning_input_allowed": True,
+            "hard_blocking_contract_gap_count": 0,
+            "current_scan_hard_blocking_excluded_row_count": 0,
+            "post_exclusion_hard_blocking_excluded_row_count": 0,
+            "raw_row_exclusion_revalidation_required": False,
+        },
+        "raw_row_exclusion": {
+            "excluded_row_count": 1,
+            "stage_counts": {"pre_submit_entry_ai_authority_guard_block": 1},
+            "exclusion_reasons": {"required_field_missing": 1},
+        },
+    }
+
+    order = next(
+        item
+        for item in mod._observation_source_quality_followup_orders(report)
+        if item["order_id"]
+        == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+    )
+    classified = mod._serialize_classified_order(
+        mod._classify_order(
+            order,
+            finding_by_order_id={},
+            finding_by_title_slug={},
+            auto_family_order_ids=set(),
+            closed_instrumentation_order_families={},
+        )
+    )
+
+    assert classified["decision"] == "attach_existing_family"
+    assert classified["route"] == (
+        "source_quality_raw_row_exclusion_revalidated_closed"
+    )
+    assert classified["implementation_status"] == "terminal_existing_family_evidence"
+    assert classified["raw_row_exclusion_context_classification"] == (
+        "post_exclusion_revalidation_closed"
+    )
+    assert not codex_workorder_runner.is_safe_implement_now(classified)
+
+
+def test_observation_source_quality_warning_missing_revalidation_counts_stays_open():
+    report = {
+        "status": "warning",
+        "summary": {
+            "tuning_input_allowed": True,
+            "raw_row_exclusion_revalidation_required": False,
+        },
+        "raw_row_exclusion": {
+            "excluded_row_count": 1,
+            "stage_counts": {"custom_stage": 1},
+            "exclusion_reasons": {"required_field_missing": 1},
+        },
+    }
+
+    order = next(
+        item
+        for item in mod._observation_source_quality_followup_orders(report)
+        if item["order_id"]
+        == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+    )
+    classified = mod._serialize_classified_order(
+        mod._classify_order(
+            order,
+            finding_by_order_id={},
+            finding_by_title_slug={},
+            auto_family_order_ids=set(),
+            closed_instrumentation_order_families={},
+        )
+    )
+
+    assert classified["decision"] == "implement_now"
+    assert classified["route"] == "source_quality_raw_row_exclusion_producer_fix"
+    assert classified["implementation_status"] is None
+
+
 def test_observation_source_quality_known_fixed_unknown_tokens_attach_existing_family():
     report = {
         "status": "warning",

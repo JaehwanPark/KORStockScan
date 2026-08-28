@@ -588,6 +588,54 @@ def test_episode_better_delayed_fill_preserves_target_tick_count() -> None:
     assert observation["candidate_net_pct"] == expected_gross_pct - 0.23
 
 
+def test_manual_stop_loss_uses_same_exit_price_and_remains_negative_tuning_input():
+    source_date = date(2026, 8, 27)
+    row = _entry_row(source_date, 1)
+    row["owner_outcome"].update(
+        {
+            "exit_price": 90.0,
+            "gross_no_slippage_return_pct": -10.0,
+            "cost_aware_net_return_pct": -10.23,
+            "exit_execution_class": "manual_operator_exit",
+            "exit_fill_source": "broker_verified_manual_sell_receipt",
+            "manual_exit_realized": True,
+            "autonomous_target_filled": False,
+            "realized_loss": True,
+        }
+    )
+    row["entry_confirmation_bbo_horizons"]["1"]["best_ask"] = 99.0
+
+    observation = _candidate_observation(
+        source_date=source_date,
+        row=row,
+        delay_sec=1,
+    )
+
+    assert observation is not None
+    assert observation["exit_execution_class"] == "manual_operator_exit"
+    assert observation["outcome_basis"] == (
+        "manual_operator_exit_same_realized_exit_price"
+    )
+    assert observation["baseline_realized_loss"] is True
+    assert observation["baseline_net_pct"] == -10.23
+    assert observation["candidate_net_pct"] == (90.0 / 99.0 - 1.0) * 100.0 - 0.23
+    assert observation["candidate_net_pct"] < 0
+    assert observation["candidate_net_pct"] > observation["baseline_net_pct"]
+
+    cohort = _evaluate_cohort(
+        cohort_rows=[(source_date, row)],
+        delay_sec=1,
+        target_date=source_date,
+    )
+    assert cohort["completed_outcome_count"] == 1
+    assert cohort["machine_target_fill_outcome_count"] == 0
+    assert cohort["manual_operator_exit_outcome_count"] == 1
+    assert cohort["manual_operator_exit_loss_outcome_count"] == 1
+    assert cohort["baseline_source_quality_adjusted_ev_pct"] == -10.23
+    assert cohort["source_quality_adjusted_ev_pct"] < 0
+    assert cohort["ready"] is False
+
+
 def test_widget_take_profit_ratio_is_rounded_up_to_executable_krx_tick() -> None:
     source_date = date(2026, 8, 27)
     row = _entry_row(source_date, 1)

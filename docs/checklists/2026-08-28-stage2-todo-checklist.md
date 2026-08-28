@@ -117,6 +117,25 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+- [x] `[LogWriterOwnedRollover0828] 반복 writer-defer 구조 결함의 owner-controlled rollover 구현` (`Due: 2026-08-28`, `Slot: POSTCLOSE`, `TimeWindow: 22:00~23:30`, `Track: RuntimeStability`)
+  - Source: [run_owned_log_rotation.sh](/home/ubuntu/KORStockScan/deploy/run_owned_log_rotation.sh), [run_with_owned_log.sh](/home/ubuntu/KORStockScan/deploy/run_with_owned_log.sh), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정: cleanup이 unknown writer active pathname을 임의 rename/truncate하지 않는 기존 fail-closed 경계는 유지하고, error detector·panic-sell defense·rising-missed feedback·threshold preopen/postclose·cleanup cron의 실제 writer가 파일을 열기 전에 자기 log만 rollover하는 owner 경로를 구현했다. owner/path lock, open inode 0건, pre/post metadata·원문 SHA-256, no-clobber gzip generation, decoded SHA-256 roundtrip과 append-only receipt를 강제한다.
+  - 권한 경계: filesystem instrumentation/provenance 전용이며 runtime env, 실주문·취소, threshold, provider/bot, quantity/cap, hard safety 또는 broker guard 변경 권한이 없다.
+  - 검증: shell syntax, quiescent/open-inode/동일-generation test, cron installer 문자열 검사, review finding 0과 targeted validation으로 닫는다.
+
+- [x] `[MarketWeaknessObservationHysteresis0828] 시장 약세·패닉 관찰 분리와 해제 정확성 보완` (`Due: 2026-08-28`, `Slot: POSTCLOSE`, `TimeWindow: 22:00~23:30`, `Track: RuntimeStability`)
+  - Source: [market_panic_breadth_collector.py](/home/ubuntu/KORStockScan/src/engine/market_panic_breadth_collector.py), [panic_sell_defense_report.py](/home/ubuntu/KORStockScan/src/engine/panic_sell_defense_report.py), [notify_panic_state_transition.py](/home/ubuntu/KORStockScan/src/engine/notify_panic_state_transition.py), [run_panic_sell_defense_intraday.sh](/home/ubuntu/KORStockScan/deploy/run_panic_sell_defense_intraday.sh)
+  - 판정: `PANIC_SELL`과 broad/single-market weakness 알림 owner를 분리했다. 약세 시작은 같은 날짜의 KOSPI·KOSDAQ+최소 3개 업종 fresh 고유 snapshot 2회, 해제는 명시적 recovery margin을 통과한 고유 snapshot 3회로 고정했으며 duplicate/60초 미만/stale/source-quality·identity·authority-blocked/`NEAR_WEAKNESS_BOUNDARY`는 streak를 전진시키지 않는다. 동일 broker sell order에 연결된 반복 exit signal은 1회만 panic count에 포함한다.
+  - 권한 경계: source-only 관찰·알림·반사실 수집이며 위젯/에피소드 신규매수 차단, 미체결 취소, 기존 target/holding/exit 변경, 수량·가격·threshold/provider/bot 변경 권한이 없다.
+  - 검증: collector/report/notifier targeted test, wrapper syntax, parser validation, compile 및 review finding 0으로 닫는다.
+
+- [ ] `[WeakDayOwnerResponseCounterfactual0904] 약세일 owner별 신규진입 대응 반사실 평가` (`Due: 2026-09-04`, `Slot: POSTCLOSE`, `TimeWindow: 21:15~21:30`, `Track: ScalpingLogic`)
+  - Source: [market_weakness_observations](/home/ubuntu/KORStockScan/data/report/market_weakness_observations), [machine_microstructure_attribution.py](/home/ubuntu/KORStockScan/src/engine/monitoring/machine_microstructure_attribution.py), [widget_auto_trade](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade), [regular_two_leg_machine.py](/home/ubuntu/KORStockScan/src/trading/order/regular_two_leg_machine.py)
+  - 판정 기준: main/widget/episode owner를 분리하고 `current control`, `delay until recovery confirmed`, `skip during confirmed weakness`, `relative-strength+liquidity exception`을 executable entry/exit와 고정 비용으로 비교한다. 비용차감 EV, adverse-first, missed upside, fill feasibility, 자본점유시간을 broad/single-market 및 KOSPI/KOSDAQ constituent별로 산출한다.
+  - 표본 조건: clean baseline 이후의 immutable observation과 exact owner terminal outcome만 사용하고, weak window 안의 completed와 HELD/right-censored를 분리한다. 거래일·owner·시장별 표본 floor가 닫히기 전에는 `EVIDENCE_ACCUMULATING`으로 유지한다.
+  - 금지: 일중 final snapshot만으로 event-time 약세를 소급 추정하거나, source-only 결과로 신규매수 차단·미체결 취소·forced exit·수량/가격/target/holding 계약을 자동 변경하지 않는다.
+  - 다음 액션: owner별 비용차감 EV와 missed-upside 비훼손을 통과한 단일 신규진입 축만 별도 사용자 승인 후보로 만들고, 기존 보유·target 주문은 모든 arm에서 그대로 유지한다.
+
 - [ ] `[WidgetEpisodeLiquidityGuardPreopenAcceptance0831] 위젯·에피소드 신규매수 양방향 잔량·체결속도 가드 설치·기동 반영 확인` (`Due: 2026-08-31`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:00`, `Track: ScalpingLogic`)
   - Source: [entry_liquidity_guard.py](/home/ubuntu/KORStockScan/src/trading/order/entry_liquidity_guard.py), [regular_two_leg_machine.py](/home/ubuntu/KORStockScan/src/trading/order/regular_two_leg_machine.py), [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [test_entry_liquidity_guard.py](/home/ubuntu/KORStockScan/src/tests/test_entry_liquidity_guard.py)
   - 판정 기준: 신규 위젯 초기·추가매수와 독립 에피소드 첫 매수 전에 fresh `ka10004` venue-qualified 호가를 한 번만 읽고, 최우선 매수·매도 잔량이 각각 `max(100주, 해당 신규 주문 총수량×5)` 이상일 때만 다음 가드로 진행하는지 확인한다. 이어서 route-qualified `ka10003` 최근 10체결이 최신 5초 이내, 10체결 span 20초 이내, 합산 체결량 `max(20주, 신규 주문 총수량×2)` 이상일 때만 주문 owner가 진행해야 한다. `181710` NHN의 97주/93주 경계와 CJ CGV·영원무역·NHN의 10체결 span 45초/35초/29초 fixture는 모두 주문 0건으로 재현되어야 한다.

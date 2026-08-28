@@ -234,6 +234,16 @@ case "$PROFILE" in
     CONFIRM="028050_MIDDAY_TWO_LEG_LIVE"
     INTERVAL_SEC="6"
     ;;
+  fan_ocean_morning)
+    export KORSTOCKSCAN_LOW_PRICE_TWO_LEG_FAN_OCEAN_MORNING_ENABLED=true
+    CONFIRM="028670_MORNING_TWO_LEG_LIVE"
+    INTERVAL_SEC="6"
+    ;;
+  fan_ocean_late_morning)
+    export KORSTOCKSCAN_LOW_PRICE_TWO_LEG_FAN_OCEAN_LATE_MORNING_ENABLED=true
+    CONFIRM="028670_LATE_MORNING_TWO_LEG_LIVE"
+    INTERVAL_SEC="6"
+    ;;
   *)
     echo "unsupported low-price two-leg profile: $PROFILE" >&2
     exit 2

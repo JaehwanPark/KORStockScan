@@ -5409,8 +5409,11 @@ def _observation_source_quality_followup_orders(
     excluded_row_count = int(raw_row_exclusion.get("excluded_row_count") or 0)
     if excluded_row_count > 0:
         revalidation_closed = (
-            report.get("status") == "pass"
+            report.get("status") in {"pass", "warning"}
             and summary.get("tuning_input_allowed") is True
+            and "hard_blocking_contract_gap_count" in summary
+            and "current_scan_hard_blocking_excluded_row_count" in summary
+            and "post_exclusion_hard_blocking_excluded_row_count" in summary
             and int(summary.get("hard_blocking_contract_gap_count") or 0) == 0
             and int(summary.get("current_scan_hard_blocking_excluded_row_count") or 0)
             == 0

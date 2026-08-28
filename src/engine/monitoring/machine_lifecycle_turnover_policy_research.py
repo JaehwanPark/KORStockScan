@@ -121,6 +121,16 @@ def _krx_window_start(target_day: date, trading_day_count: int) -> date:
     return current
 
 
+def _advance_krx_trading_days(start_day: date, trading_day_count: int) -> date:
+    current = start_day
+    remaining = trading_day_count
+    while remaining > 0:
+        current += timedelta(days=1)
+        if is_krx_trading_day(current):
+            remaining -= 1
+    return current
+
+
 def _direct_anchor_results(report: Mapping[str, Any]) -> list[dict[str, Any]]:
     consumers = report.get("consumers")
     if not isinstance(consumers, Mapping):
@@ -1083,6 +1093,7 @@ def _research_row(
     units: list[dict[str, Any]],
     invalid_contract_counts: Sequence[tuple[date, int]],
     source_report_dates: set[date],
+    source_report_exclusion_dates: set[date],
 ) -> dict[str, Any]:
     primary_window_start = _krx_window_start(target_day, 20)
     diagnostic_units = [
@@ -1173,6 +1184,10 @@ def _research_row(
                 window_start <= source_day <= target_day
                 for source_day in source_report_dates
             )
+            source_report_contract_gap_day_count = sum(
+                window_start <= source_day <= target_day
+                for source_day in source_report_exclusion_dates
+            )
             observed_daily_yield = (
                 paired_lifecycles / source_report_day_count
                 if source_report_day_count
@@ -1183,9 +1198,32 @@ def _research_row(
             remaining_paired_lifecycles = max(
                 required_paired_lifecycles - paired_lifecycles, 0
             )
+            remaining_source_report_days = max(
+                window_days - source_report_day_count, 0
+            )
+            classification_window_complete = remaining_source_report_days == 0
+            earliest_review_date = (
+                target_day
+                if classification_window_complete
+                else _advance_krx_trading_days(
+                    target_day, remaining_source_report_days
+                )
+            )
             if (
                 sample_state == "natural_sample_wait"
-                and source_report_day_count >= window_days
+                and source_report_contract_gap_day_count > 0
+            ):
+                sample_state = "source_report_contract_gap"
+                gaps.append(f"{window_name}_source_report_contract_gap")
+            elif (
+                sample_state == "natural_sample_wait"
+                and not classification_window_complete
+            ):
+                sample_state = "pending_declared_window"
+                gaps.append(f"{window_name}_classification_window_pending")
+            if (
+                sample_state == "natural_sample_wait"
+                and classification_window_complete
                 and projected_full_window_lifecycles + 1e-12
                 < required_paired_lifecycles
             ):
@@ -1205,6 +1243,13 @@ def _research_row(
                 why_waiting_cannot_resolve = (
                     "diagnostic_lifecycle_exists_but_policy_eligible_pair_is_absent"
                 )
+            elif sample_state == "source_report_contract_gap":
+                shortage_classification_status = "blocked_missing_evidence"
+                shortage_class = None
+                projected_days = None
+                why_waiting_cannot_resolve = (
+                    "rolling_source_report_contract_gap_prevents_population_census"
+                )
             elif sample_state == "window_floor_unattainable_at_observed_yield":
                 shortage_classification_status = "classified"
                 shortage_class = "structural_population_exhaustion"
@@ -1212,6 +1257,11 @@ def _research_row(
                 why_waiting_cannot_resolve = (
                     "observed_yield_cannot_reach_floor_before_rolling_window_expires"
                 )
+            elif sample_state == "pending_declared_window":
+                shortage_classification_status = "pending_declared_window"
+                shortage_class = None
+                projected_days = None
+                why_waiting_cannot_resolve = None
             elif sample_state == "natural_sample_wait" and observed_daily_yield > 0:
                 shortage_classification_status = "classified"
                 shortage_class = "time_resolvable_shortage"
@@ -1239,11 +1289,26 @@ def _research_row(
                     remaining_paired_lifecycles
                 ),
                 "source_report_day_count": source_report_day_count,
+                "source_report_contract_gap_day_count": (
+                    source_report_contract_gap_day_count
+                ),
+                "minimum_completed_due_trading_days": window_days,
+                "remaining_completed_due_trading_days_to_classification": (
+                    remaining_source_report_days
+                ),
+                "classification_window_complete": classification_window_complete,
+                "earliest_review_date": (
+                    earliest_review_date.isoformat()
+                    if sample_state == "pending_declared_window"
+                    else None
+                ),
                 "observed_paired_lifecycles_per_source_day": round(
                     observed_daily_yield, 8
                 ),
-                "projected_paired_lifecycles_in_full_window": round(
-                    projected_full_window_lifecycles, 8
+                "projected_paired_lifecycles_in_full_window": (
+                    None
+                    if sample_state == "source_report_contract_gap"
+                    else round(projected_full_window_lifecycles, 8)
                 ),
                 "projected_additional_trading_days_at_observed_yield": (projected_days),
                 "state": sample_state,
@@ -1401,6 +1466,10 @@ def _sample_floor_assessment(
         state = "source_quality_or_eligibility_gap"
         blocker_class = "source_quality"
         next_action = "repair_exact_scope_source_or_eligibility_contract_and_rerun"
+    elif state_counts.get("source_report_contract_gap", 0) > 0:
+        state = "source_report_contract_gap"
+        blocker_class = "source_quality"
+        next_action = "repair_excluded_source_report_contracts_and_rerun"
     elif state_counts.get("window_floor_unattainable_at_observed_yield", 0) > 0:
         state = "window_floor_unattainable_at_observed_yield"
         blocker_class = "sample_floor_contract"
@@ -1409,6 +1478,10 @@ def _sample_floor_assessment(
         state = "terminal_or_right_censored_gap"
         blocker_class = "terminal_outcome"
         next_action = "reconcile_exact_owner_terminal_outcomes_before_waiting"
+    elif state_counts.get("pending_declared_window", 0) > 0:
+        state = "pending_declared_window"
+        blocker_class = "sample_floor"
+        next_action = "recheck_at_earliest_declared_window"
     elif state_counts.get("natural_sample_wait", 0) > 0:
         state = "natural_sample_wait"
         blocker_class = "sample_floor"
@@ -1426,11 +1499,21 @@ def _sample_floor_assessment(
         why_waiting_cannot_resolve = (
             "source_or_window_capacity_defect_prevents_floor_closure"
         )
+    elif state == "source_report_contract_gap":
+        shortage_classification_status = "blocked_missing_evidence"
+        shortage_class = None
+        why_waiting_cannot_resolve = (
+            "rolling_source_report_contract_gap_prevents_population_census"
+        )
     elif state == "natural_sample_wait" and not classification_status_counts.get(
         "blocked_missing_evidence", 0
     ):
         shortage_classification_status = "classified"
         shortage_class = "time_resolvable_shortage"
+        why_waiting_cannot_resolve = None
+    elif state == "pending_declared_window":
+        shortage_classification_status = "pending_declared_window"
+        shortage_class = None
         why_waiting_cannot_resolve = None
     elif state == "sample_floor_met_or_non_sample_gate_pending":
         shortage_classification_status = "not_applicable_sample_floor_met"
@@ -1484,6 +1567,12 @@ def build_rolling_paired_policy_research(
     source_report_dates = {
         date.fromisoformat(str(report["target_date"])) for report in reports
     }
+    source_report_exclusion_dates = {
+        date.fromisoformat(str(exclusion["source_date"]))
+        for exclusion in exclusions
+        if exclusion.get("source_date")
+        and str(exclusion.get("reason") or "") != "duplicate_source_date"
+    }
     cohort_units: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(
         list
     )
@@ -1523,6 +1612,7 @@ def build_rolling_paired_policy_research(
             units=units,
             invalid_contract_counts=cohort_invalid_contract_counts.get(cohort, []),
             source_report_dates=source_report_dates,
+            source_report_exclusion_dates=source_report_exclusion_dates,
         )
         for cohort, units in sorted(cohort_units.items())
     ]

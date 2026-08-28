@@ -24,6 +24,7 @@ SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
         "samsung_machine_entry_tuning_report_v4",
         "samsung_machine_entry_tuning_report_v5",
         "samsung_machine_entry_tuning_report_v6",
+        "samsung_machine_entry_tuning_report_v7",
     }
 )
 APPLIED_SCHEMA = "samsung_machine_entry_policy_applied_v1"

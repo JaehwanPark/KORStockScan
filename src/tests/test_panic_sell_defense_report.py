@@ -62,8 +62,19 @@ def _write_market_panic_breadth(tmp_path, *, risk_off: bool = True) -> None:
         / "market_panic_breadth"
         / f"market_panic_breadth_{TARGET_DATE}.json",
         {
+            "target_date": TARGET_DATE,
             "as_of": f"{TARGET_DATE}T10:29:00",
             "source_quality": {"status": "ok"},
+            "market_weakness_observation": {
+                "observation_id": "weakness-test-1",
+                "target_date": TARGET_DATE,
+                "as_of": f"{TARGET_DATE}T10:29:00",
+                "raw_state": "BROAD_WEAKNESS" if risk_off else "RECOVERY_EVIDENCE",
+                "source_quality_ready": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "release_margin": {"passed": not risk_off},
+            },
             "panic_breadth": {
                 "risk_off_advisory": risk_off,
                 "industry_breadth": {
@@ -256,6 +267,8 @@ def test_live_market_panic_breadth_only_marks_watch_not_panic(monkeypatch, tmp_p
         is True
     )
     assert report["microstructure_detector"]["panic_signal_count"] == 0
+    assert report["market_weakness_observation"]["raw_state"] == "BROAD_WEAKNESS"
+    assert report["market_weakness_observation"]["runtime_effect"] is False
     assert (
         "live market panic breadth risk_off advisory" in report["panic_state_reasons"]
     )
@@ -427,7 +440,7 @@ def test_unproven_exit_signal_is_not_real_panic_basis(monkeypatch, tmp_path):
     assert report["panic_state"] == "NORMAL"
     assert (
         report["panic_metrics"]["panic_decision_basis"]
-        == "real_exit_with_broker_provenance_only"
+        == "broker_confirmed_exit_identity_deduplicated"
     )
     assert report["panic_metrics"]["real_exit_provenance_required"] is True
     assert report["panic_metrics"]["real_exit_count"] == 0
@@ -479,6 +492,51 @@ def test_exit_signal_inherits_real_provenance_from_broker_sell_receipt(
     assert report["panic_metrics"]["non_real_exit_count"] == 0
     assert report["panic_metrics"]["stop_loss_exit_count"] == 3
     assert report["panic_metrics"]["unproven_exit_count"] == 0
+
+
+def test_repeated_exit_signal_is_counted_once_per_broker_order(monkeypatch, tmp_path):
+    attempt_id = "SCANPROM-repeated-real-exit"
+    events = [
+        _event(
+            f"10:00:{index:02d}",
+            record_id=100 + index,
+            fields={
+                "main_lifecycle_attempt_id": attempt_id,
+                "exit_rule": "scalp_soft_stop_pct",
+                "reason": "soft stop loss",
+                "profit_rate": -0.8,
+            },
+        )
+        for index in range(10)
+    ]
+    events.append(
+        _event(
+            "10:01:00",
+            record_id=999,
+            stage="sell_completed",
+            fields={
+                "main_lifecycle_attempt_id": attempt_id,
+                "order_no": "SELL-ONE",
+                "profit_rate": -0.8,
+            },
+        )
+    )
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(tmp_path, events)
+
+    report = report_mod.build_panic_sell_defense_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:29:00"),
+    )
+
+    panic = report["panic_metrics"]
+    assert panic["raw_exit_signal_count"] == 10
+    assert panic["real_exit_count"] == 1
+    assert panic["stop_loss_exit_count"] == 1
+    assert panic["duplicate_real_exit_signal_count"] == 9
+    assert panic["duplicate_real_exit_signals_excluded_from_panic"] is True
+    assert panic["exit_signal_partition_reconciled"] is True
+    assert panic["panic_detected"] is False
 
 
 def test_non_real_assumed_fill_marks_sparse_exit_signal_as_non_real(

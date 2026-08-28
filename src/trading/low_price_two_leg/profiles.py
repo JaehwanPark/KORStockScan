@@ -37,8 +37,10 @@ SK_ETERNIX_AFTERNOON_REVISED_WINDOW = (time(14, 15), time(14, 40))
 HANSE_MORNING_WINDOW = (time(9, 15), time(9, 44))
 HANSE_AFTERNOON_WINDOW = (time(14, 20), time(14, 29))
 CJ_CGV_MIDDAY_WINDOW = (time(13, 20), time(13, 49))
+CJ_CGV_MIDDAY_20260831_WINDOW = (time(13, 20), time(13, 29))
 CJ_CGV_AFTERNOON_WINDOW = (time(14, 15), time(14, 24))
 TYM_MIDDAY_WINDOW = (time(13, 15), time(13, 44))
+TYM_MIDDAY_20260831_WINDOW = (time(13, 15), time(13, 34))
 TYM_AFTERNOON_WINDOW = (time(14, 30), time(14, 39))
 CJ_CGV_LATE_MORNING_WINDOW = (time(10, 0), time(10, 9))
 KEPCO_LATE_MORNING_WINDOW = (time(10, 0), time(10, 59))
@@ -64,12 +66,15 @@ SD_BIOSENSOR_MIDDAY_WINDOW = (time(13, 25), time(13, 54))
 DOOSAN_ENERBILITY_AFTERNOON_WINDOW = (time(14, 10), time(14, 29))
 SAMSUNG_EA_MIDDAY_WINDOW = (time(13, 20), time(13, 49))
 SAMSUNG_EA_AFTERNOON_20260828_WINDOW = (time(14, 15), time(14, 34))
+FAN_OCEAN_MORNING_WINDOW = (time(9, 35), time(9, 59))
+FAN_OCEAN_LATE_MORNING_WINDOW = (time(10, 5), time(10, 14))
 PROFILE_REVISION_20260819_EFFECTIVE_DATE = date(2026, 8, 19)
 PROFILE_REVISION_20260821_EFFECTIVE_DATE = date(2026, 8, 21)
 PROFILE_REVISION_20260824_EFFECTIVE_DATE = date(2026, 8, 24)
 PROFILE_REVISION_20260825_EFFECTIVE_DATE = date(2026, 8, 25)
 PROFILE_REVISION_20260827_EFFECTIVE_DATE = date(2026, 8, 27)
 PROFILE_REVISION_20260828_EFFECTIVE_DATE = date(2026, 8, 28)
+PROFILE_REVISION_20260831_EFFECTIVE_DATE = date(2026, 8, 31)
 # Compatibility alias for consumers that own the first recommendation transition.
 PROFILE_REVISION_EFFECTIVE_DATE = PROFILE_REVISION_20260819_EFFECTIVE_DATE
 ALLOWED_SYMBOLS = frozenset(
@@ -80,6 +85,7 @@ ALLOWED_SYMBOLS = frozenset(
         "015760",
         "017670",
         "028050",
+        "028670",
         "034020",
         "035720",
         "042660",
@@ -123,8 +129,10 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         HANSE_MORNING_WINDOW,
         HANSE_AFTERNOON_WINDOW,
         CJ_CGV_MIDDAY_WINDOW,
+        CJ_CGV_MIDDAY_20260831_WINDOW,
         CJ_CGV_AFTERNOON_WINDOW,
         TYM_MIDDAY_WINDOW,
+        TYM_MIDDAY_20260831_WINDOW,
         TYM_AFTERNOON_WINDOW,
         CJ_CGV_LATE_MORNING_WINDOW,
         KEPCO_LATE_MORNING_WINDOW,
@@ -150,6 +158,8 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         DOOSAN_ENERBILITY_AFTERNOON_WINDOW,
         SAMSUNG_EA_MIDDAY_WINDOW,
         SAMSUNG_EA_AFTERNOON_20260828_WINDOW,
+        FAN_OCEAN_MORNING_WINDOW,
+        FAN_OCEAN_LATE_MORNING_WINDOW,
     }
 )
 
@@ -1665,6 +1675,123 @@ PROFILES["sk_telecom_morning"] = _profile(
 )
 
 
+# The 2026-08-28 postclose recommendations become a separate exact-date
+# generation on 2026-08-31. The 2026-08-28 inventory remains immutable so
+# existing orders and held custody retain the contract active when submitted.
+PROFILES_20260831_PRIOR = dict(PROFILES)
+_REVISION_20260831_SOURCE = (
+    "clean_baseline_43d_calibration_16d_holdout_user_approved_v8"
+)
+
+
+def _revise_20260831(
+    profile_id: str,
+    *,
+    window: tuple[time, time] | None = None,
+    lookback_bars: int,
+    drawdown_pct: float,
+    near_low_pct: float,
+    entry_offsets_ticks: tuple[int, int] = (0, -1),
+    entry_valid_completed_bars: int = 5,
+    target_ticks: int,
+) -> MachineProfile:
+    prior = PROFILES_20260831_PRIOR[profile_id]
+    selected_window = window or (prior.policy.scan_start, prior.policy.scan_last_bar)
+    return replace(
+        prior,
+        policy=replace(
+            prior.policy,
+            scan_start=selected_window[0],
+            scan_last_bar=selected_window[1],
+            lookback_bars=lookback_bars,
+            rolling_high_drawdown_pct=drawdown_pct,
+            rolling_low_proximity_pct=near_low_pct,
+            entry_offsets_ticks=entry_offsets_ticks,
+            entry_valid_completed_bars=entry_valid_completed_bars,
+            target_ticks=target_ticks,
+            runtime_policy_source=_REVISION_20260831_SOURCE,
+            runtime_policy_hash="",
+        ),
+    )
+
+
+PROFILES = dict(PROFILES_20260831_PRIOR)
+PROFILES.update(
+    {
+        "cj_cgv_midday": _revise_20260831(
+            "cj_cgv_midday",
+            window=CJ_CGV_MIDDAY_20260831_WINDOW,
+            lookback_bars=20,
+            drawdown_pct=0.75,
+            near_low_pct=0.35,
+            target_ticks=4,
+        ),
+        "mirae_asset_late_morning": _revise_20260831(
+            "mirae_asset_late_morning",
+            window=MIRAE_ASSET_LATE_MORNING_20260828_WINDOW,
+            lookback_bars=45,
+            drawdown_pct=1.00,
+            near_low_pct=0.50,
+            entry_offsets_ticks=(-1, -2),
+            target_ticks=4,
+        ),
+        "nhn_morning": _revise_20260831(
+            "nhn_morning",
+            lookback_bars=20,
+            drawdown_pct=0.50,
+            near_low_pct=0.50,
+            target_ticks=4,
+        ),
+        "tym_midday": _revise_20260831(
+            "tym_midday",
+            window=TYM_MIDDAY_20260831_WINDOW,
+            lookback_bars=15,
+            drawdown_pct=0.50,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+        "sk_telecom_morning": _revise_20260831(
+            "sk_telecom_morning",
+            lookback_bars=30,
+            drawdown_pct=0.50,
+            near_low_pct=0.75,
+            target_ticks=4,
+        ),
+    }
+)
+PROFILES.update(
+    {
+        profile.profile_id: profile
+        for profile in (
+            _profile(
+                "fan_ocean_morning",
+                "028670",
+                "팬오션",
+                "morning",
+                window=FAN_OCEAN_MORNING_WINDOW,
+                lookback_bars=30,
+                drawdown_pct=2.00,
+                near_low_pct=0.20,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260831_SOURCE,
+            ),
+            _profile(
+                "fan_ocean_late_morning",
+                "028670",
+                "팬오션",
+                "late_morning",
+                window=FAN_OCEAN_LATE_MORNING_WINDOW,
+                lookback_bars=45,
+                drawdown_pct=1.75,
+                near_low_pct=0.50,
+                target_ticks=2,
+                runtime_policy_source=_REVISION_20260831_SOURCE,
+            ),
+        )
+    }
+)
+
+
 def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
     if target_date < PROFILE_REVISION_20260819_EFFECTIVE_DATE:
         return PRE_RECOMMENDATION_PROFILES
@@ -1678,6 +1805,8 @@ def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
         return PROFILES_20260827_PRIOR
     if target_date < PROFILE_REVISION_20260828_EFFECTIVE_DATE:
         return PROFILES_20260828_PRIOR
+    if target_date < PROFILE_REVISION_20260831_EFFECTIVE_DATE:
+        return PROFILES_20260831_PRIOR
     return PROFILES
 
 

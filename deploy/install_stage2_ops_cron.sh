@@ -13,7 +13,7 @@ mv "$TMP_CRON.filtered" "$TMP_CRON"
 cat >> "$TMP_CRON" <<EOF
 # stage2 ops cron
 * * * * 1-5 $PROJECT_DIR/deploy/run_system_metric_sampler_cron.sh >> $PROJECT_DIR/logs/system_metric_sampler_cron.log 2>&1 # SYSTEM_METRIC_SAMPLER_1MIN
-*/5 8-19 * * 1-5 $PROJECT_DIR/deploy/run_rising_missed_intraday_feedback.sh >> $PROJECT_DIR/logs/run_rising_missed_intraday_feedback_cron.log 2>&1 # RISING_MISSED_INTRADAY_FEEDBACK_5MIN
+*/5 8-19 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner rising_missed_intraday_feedback_cron --log $PROJECT_DIR/logs/run_rising_missed_intraday_feedback_cron.log $PROJECT_DIR/deploy/run_rising_missed_intraday_feedback.sh # RISING_MISSED_INTRADAY_FEEDBACK_5MIN
 */5 8-19 * * 1-5 $PROJECT_DIR/deploy/run_scalping_pyramid_intraday_feedback.sh >> $PROJECT_DIR/logs/run_scalping_pyramid_intraday_feedback_cron.log 2>&1 # SCALPING_PYRAMID_INTRADAY_FEEDBACK_5MIN
 5-55/5 9-14 * * 1-5 $PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh >> $PROJECT_DIR/logs/run_intraday_ws_freshness_monitor_cron.log 2>&1 # INTRADAY_WS_FRESHNESS_MONITOR_5MIN
 0,5,10,15,20 15 * * 1-5 $PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh >> $PROJECT_DIR/logs/run_intraday_ws_freshness_monitor_cron.log 2>&1 # INTRADAY_WS_FRESHNESS_MONITOR_5MIN

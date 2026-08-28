@@ -27,6 +27,9 @@ if ! flock -n 9; then
     exit 0
 fi
 
+bash "$SCRIPT_DIR/run_owned_log_rotation.sh" "error_detection_internal" "$LOG_FILE" || \
+    echo "[WARN] owned log rotation failed owner=error_detection_internal log=${LOG_FILE}; writer will continue fail-closed"
+
 started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
 echo "[START] error detection mode=${MODE} started_at=${started_at}" | tee -a "$LOG_FILE"
 

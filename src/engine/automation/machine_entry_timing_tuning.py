@@ -96,6 +96,7 @@ METRIC_CONTRACT = {
         "missing_micro_data_as_zero_or_neutral",
         "cross_owner_scope_session_or_entry_state_pooling",
         "broker_guard_hard_safety_provider_bot_or_cap_change",
+        "manual_operator_exit_as_machine_target_fill_success",
     ],
 }
 
@@ -404,6 +405,12 @@ def _candidate_observation(
     owner_entry_limit_price = _finite(row.get("owner_entry_limit_price"))
     owner_target_price = _finite(row.get("owner_target_price"))
     baseline_gross = _finite(outcome.get("gross_no_slippage_return_pct"))
+    reported_net = _finite(outcome.get("cost_aware_net_return_pct"))
+    exit_execution_class = str(outcome.get("exit_execution_class") or "")
+    manual_operator_exit = bool(
+        row.get("owner") == "episode"
+        and exit_execution_class == "manual_operator_exit"
+    )
     try:
         cost_contract = comparison_cost_contract(source_date)
     except ValueError:
@@ -463,6 +470,11 @@ def _candidate_observation(
         or cost_pct is None
         or baseline_gross is None
         or (
+            row.get("owner") == "episode"
+            and exit_execution_class
+            not in {"", "machine_target_fill", "manual_operator_exit"}
+        )
+        or (
             row.get("owner") == "widget"
             and int(outcome.get("scale_in_buy_leg_count") or 0) > 0
         )
@@ -475,6 +487,8 @@ def _candidate_observation(
         candidate_exit_price = _ceil_krx_price(
             delayed_ask * (owner_target_price / baseline_fill_price)
         )
+    elif manual_operator_exit:
+        candidate_exit_price = exit_price
     elif row.get("owner") == "episode":
         candidate_exit_price = float(
             move_price_by_ticks(int(delayed_ask), episode_target_ticks)
@@ -490,6 +504,21 @@ def _candidate_observation(
         "lifecycle_id": str(row.get("lifecycle_id") or ""),
         "baseline_net_pct": baseline_net,
         "candidate_net_pct": candidate_net,
+        "reported_cost_aware_net_pct": reported_net,
+        "baseline_realized_loss": bool(
+            (reported_net if reported_net is not None else baseline_net) < 0.0
+        ),
+        "exit_execution_class": (
+            exit_execution_class
+            or ("machine_target_fill" if row.get("owner") == "episode" else "")
+        ),
+        "outcome_basis": (
+            "manual_operator_exit_same_realized_exit_price"
+            if manual_operator_exit
+            else "machine_target_tick_preserving_exit"
+            if row.get("owner") == "episode"
+            else "widget_realized_exit_contract"
+        ),
         "comparison_cost_contract_sha256": cost_contract.get("contract_sha256"),
     }
 
@@ -562,6 +591,11 @@ def _evaluate_cohort(
     )
     baseline_values = [item["baseline_net_pct"] for item in observations]
     candidate_values = [item["candidate_net_pct"] for item in observations]
+    manual_exit_observations = [
+        item
+        for item in observations
+        if item.get("exit_execution_class") == "manual_operator_exit"
+    ]
     baseline_ev = statistics.fmean(baseline_values) if baseline_values else None
     candidate_ev = statistics.fmean(candidate_values) if candidate_values else None
     rolling: dict[str, Any] = {}
@@ -629,6 +663,15 @@ def _evaluate_cohort(
         ),
         "unique_decision_lifecycles": len(lifecycles),
         "completed_outcome_count": len(observations),
+        "machine_target_fill_outcome_count": sum(
+            item.get("exit_execution_class") == "machine_target_fill"
+            for item in observations
+        ),
+        "manual_operator_exit_outcome_count": len(manual_exit_observations),
+        "manual_operator_exit_loss_outcome_count": sum(
+            item.get("baseline_realized_loss") is True
+            for item in manual_exit_observations
+        ),
         "source_quality_eligible_anchor_count": denominator,
         "right_censored_or_unresolved_count": right_censored_count,
         "right_censored_rate_pct": round(right_censored_rate, 8),

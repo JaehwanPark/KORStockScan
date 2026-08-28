@@ -1781,6 +1781,32 @@ def test_postclose_wrapper_refreshes_market_breadth_before_panic_sell_report():
     assert "market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT" in script
 
 
+def test_panic_intraday_wrapper_separates_panic_and_market_weakness_alerts():
+    script = Path("deploy/run_panic_sell_defense_intraday.sh").read_text(
+        encoding="utf-8"
+    )
+
+    panic_idx = script.index("--kind panic_sell")
+    weakness_idx = script.index("--kind market_weakness")
+
+    assert panic_idx < weakness_idx
+    assert (
+        'MARKET_WEAKNESS_NOTIFY_AUDIENCE="${PANIC_MARKET_WEAKNESS_NOTIFY_AUDIENCE:-admin}"'
+        in script
+    )
+    assert (
+        'MARKET_WEAKNESS_NOTIFY_ENABLED="${PANIC_MARKET_WEAKNESS_NOTIFY_ENABLED:-true}"'
+        in script
+    )
+    assert (
+        'MARKET_WEAKNESS_STATE_FILE="${PANIC_MARKET_WEAKNESS_STATE_FILE:-$PROJECT_DIR/tmp/market_weakness_observer_state.json}"'
+        in script
+    )
+    assert "weakness_notify_cmd+=(--observe-only)" in script
+    assert script.count('--state-file "$NOTIFY_STATE_FILE"') == 1
+    assert script.count('--state-file "$MARKET_WEAKNESS_STATE_FILE"') == 1
+
+
 def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_steps():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
