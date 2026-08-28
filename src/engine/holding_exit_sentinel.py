@@ -416,44 +416,22 @@ def _max_field(events: list[PipelineEvent], stage: str, field: str) -> float:
 
 
 TERMINAL_HOLDING_STAGES = {"sell_completed"}
-ACTIVE_HOLDING_STAGES = {
-    "holding_started",
-    "position_rebased_after_fill",
-    "ai_holding_fast_reuse_band",
-    "ai_holding_reuse_bypass",
-    "ai_holding_review",
-    "ai_holding_skip_unchanged",
-    "bad_entry_refined_candidate",
-    "exit_signal",
-    "holding_flow_override_candidate_cleared",
-    "holding_flow_override_defer_exit",
-    "holding_flow_override_exit_confirmed",
-    "holding_flow_override_force_exit",
-    "holding_flow_override_review",
-    "reversal_add_blocked_reason",
-    "reversal_add_gate_blocked",
-    "scale_in_price_guard_block",
-    "scale_in_qty_block",
-    "sell_order_sent",
-    "soft_stop_expert_shadow",
-    "soft_stop_micro_grace",
-    "stat_action_decision_snapshot",
-}
+OPEN_HOLDING_STAGES = {"holding_started", "position_rebased_after_fill"}
 
 
 def _active_holding_keys(events: list[PipelineEvent]) -> set[str]:
-    last_by_key: dict[str, PipelineEvent] = {}
+    active_by_key: dict[str, bool] = {}
     for event in events:
         key = _attempt_key(event)
         if not key:
             continue
-        last_by_key[key] = event
-    return {
-        key
-        for key, event in last_by_key.items()
-        if event.stage in ACTIVE_HOLDING_STAGES
-        and event.stage not in TERMINAL_HOLDING_STAGES
-    }
+        if _is_non_real_observation(event):
+            continue
+        if event.stage in OPEN_HOLDING_STAGES:
+            active_by_key[key] = True
+        elif event.stage in TERMINAL_HOLDING_STAGES:
+            active_by_key[key] = False
+    return {key for key, active in active_by_key.items() if active}
 
 
 def _stage_reason_top(events: list[PipelineEvent]) -> list[dict[str, Any]]:

@@ -191,6 +191,77 @@ def test_stale_after_all_positions_completed_is_not_runtime_ops(monkeypatch, tmp
     assert "RUNTIME_OPS" not in report["classification"]["matches"]
 
 
+def test_diagnostic_events_without_real_holding_do_not_create_active_holding(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:00:00",
+                "bad_entry_refined_candidate",
+                record_id=1,
+            ),
+            _event(
+                "2026-05-06",
+                "10:01:00",
+                "ai_holding_review",
+                record_id=1,
+                fields={"ai_cache": "miss"},
+            ),
+            _event(
+                "2026-05-06",
+                "10:02:00",
+                "holding_started",
+                record_id=2,
+                fields={
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "True",
+                },
+            ),
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:30:00"),
+    )
+
+    assert report["current"]["session"]["unique_symbols"]["active_holding"] == 0
+    assert "RUNTIME_OPS" not in report["classification"]["matches"]
+
+
+def test_diagnostic_event_after_sell_completed_does_not_reopen_holding(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event("2026-05-06", "10:00:00", "holding_started", record_id=1),
+            _event("2026-05-06", "10:01:00", "sell_completed", record_id=1),
+            _event(
+                "2026-05-06",
+                "10:02:00",
+                "stat_action_decision_snapshot",
+                record_id=1,
+            ),
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:30:00"),
+    )
+
+    assert report["current"]["session"]["unique_symbols"]["active_holding"] == 0
+    assert "RUNTIME_OPS" not in report["classification"]["matches"]
+
+
 def test_stale_with_active_holding_is_runtime_ops(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     _write_events(

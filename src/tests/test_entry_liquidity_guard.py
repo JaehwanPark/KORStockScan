@@ -279,6 +279,32 @@ def test_execution_velocity_rejects_stale_low_volume_and_route_conflict():
     )
 
 
+def test_execution_velocity_freshness_preserves_observation_milliseconds():
+    payload = _velocity_ticks(["151227"] * 10)
+
+    exact_boundary = parse_ka10003_entry_execution_velocity_snapshot(
+        payload,
+        symbol="111770",
+        route="SOR",
+        observed_at=datetime(2026, 8, 28, 15, 12, 32, tzinfo=KST),
+    )
+    just_stale = parse_ka10003_entry_execution_velocity_snapshot(
+        payload,
+        symbol="111770",
+        route="SOR",
+        observed_at=datetime(2026, 8, 28, 15, 12, 32, 1_000, tzinfo=KST),
+    )
+
+    assert exact_boundary.latest_print_age_ms == 5_000
+    assert evaluate_entry_execution_velocity(
+        exact_boundary, requested_quantity=20
+    ).allowed
+    assert just_stale.latest_print_age_ms == 5_001
+    assert evaluate_entry_execution_velocity(
+        just_stale, requested_quantity=20
+    ).reason == "entry_execution_velocity_latest_print_stale"
+
+
 def test_execution_velocity_rejects_duplicate_accumulated_volume_rows():
     payload = _velocity_ticks(["151232"] * 10)
     payload[1]["raw"]["acc_trde_qty"] = payload[0]["raw"]["acc_trde_qty"]

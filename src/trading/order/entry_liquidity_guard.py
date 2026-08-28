@@ -361,7 +361,10 @@ def parse_ka10003_entry_execution_velocity_snapshot(
         ):
             raise ValueError("ka10003_accumulated_volume_not_latest_first")
         observed_seconds = observed.hour * 3600 + observed.minute * 60 + observed.second
-        latest_age_ms = (observed_seconds - seconds[0]) * 1_000
+        latest_age_ms = (
+            (observed_seconds - seconds[0]) * 1_000
+            + observed.microsecond // 1_000
+        )
         if latest_age_ms < -MAX_EVENT_CLOCK_SKEW_MS:
             raise ValueError("ka10003_latest_trade_time_in_future")
         latest_age_ms = max(0, latest_age_ms)
