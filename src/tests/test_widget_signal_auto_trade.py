@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.trading.order.entry_liquidity_guard import EntryLiquiditySnapshot
+
 from src.engine.monitoring.samsung_widget_contract import KST
 from src.trading.widget_auto_trade import engine
 from src.trading.widget_auto_trade.engine import WidgetSignalAutoTrader, WidgetSpec
@@ -83,10 +85,29 @@ class FakeGateway:
         self.cancel_calls = []
         self.snapshots = {}
         self.sequence = 0
+        self.best_bid_qty = 1_000
+        self.best_ask_qty = 1_000
+        self.liquidity_calls = []
 
     def _accepted(self, prefix):
         self.sequence += 1
         return SubmitResult(True, f"{prefix}{self.sequence}", "0", "OK")
+
+    def entry_liquidity_snapshot(self, *, code, route):
+        self.liquidity_calls.append((code, route))
+        suffix = "NX" if route == "NXT" else "AL"
+        return EntryLiquiditySnapshot(
+            True,
+            code,
+            route,
+            f"{code}_{suffix}",
+            best_bid=100_000,
+            best_ask=100_100,
+            best_bid_qty=self.best_bid_qty,
+            best_ask_qty=self.best_ask_qty,
+            age_ms=0,
+            received_ts_ms=1,
+        )
 
     def submit_buy(self, *, code, qty, route):
         self.buy_calls.append((code, qty, route))
@@ -736,6 +757,27 @@ def test_one_order_per_entry_episode_and_rearms_only_after_final_exit(
     assert len(gateway.buy_calls) == 2
 
 
+def test_thin_touch_depth_blocks_widget_entry_without_order_and_is_not_requeried(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="THIN-ENTRY")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box, qty=10)
+    gateway.best_bid_qty = 97
+    gateway.best_ask_qty = 93
+
+    first = trader.run_once(now)
+    second = trader.run_once(now.replace(second=1))
+
+    assert gateway.buy_calls == []
+    assert gateway.liquidity_calls == [("999999", "KRX")]
+    assert first["symbols"]["999999"]["entry_episode_open"] is False
+    assert second["symbols"]["999999"]["orders"] == []
+    assert recorder.events[-1]["event_type"] == "entry_blocked_liquidity_guard"
+    assert recorder.events[-1]["entry_liquidity_required_each_side_quantity"] == 100
+    assert recorder.events[-1]["actual_order_submitted"] is False
+
+
 def test_daily_reset_archives_but_never_sells_prior_day_quantity(tmp_path, monkeypatch):
     day_one = _at(10)
     box = {"payload": _payload(day_one, entry_id="DAY1-ENTRY")}
@@ -910,6 +952,30 @@ def test_samsung_equal_share_policy_rechecks_global_buy_pause_before_add(
     assert len(gateway.buy_calls) == 1
     assert gateway.cancel_calls == []
     assert recorder.events[-1]["event_type"] == "scale_in_blocked_global_buy_pause"
+
+
+def test_samsung_scale_in_liquidity_block_keeps_existing_target_open(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _samsung_policy_payload(now)}
+    trader, gateway, recorder = _samsung_policy_trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    _fill(gateway, "B1", qty=10, price=100_000)
+    trader.run_once(now)
+    assert gateway.limit_sell_calls == [("005930", 10, "SOR", 100_500)]
+
+    gateway.best_bid_qty = 99
+    gateway.best_ask_qty = 1_000
+    box["payload"] = _samsung_policy_payload(now.replace(second=1), price=99_500)
+    trader.run_once(now.replace(second=1))
+    trader.run_once(now.replace(second=2))
+
+    assert len(gateway.buy_calls) == 1
+    assert gateway.cancel_calls == []
+    assert gateway.liquidity_calls == [("005930", "KRX"), ("005930", "KRX")]
+    assert recorder.events[-1]["event_type"] == "scale_in_blocked_liquidity_guard"
+    assert recorder.events[-1]["actual_order_submitted"] is False
 
 
 def test_samsung_equal_share_policy_requires_existing_target_coverage_before_add(
@@ -2027,6 +2093,46 @@ def test_gateway_uses_documented_order_contract_without_cash_or_token_issue(
     }
     assert all("oauth2" not in call[0] for call in session.calls)
     assert all(call[1]["headers"]["api-id"] != "kt00001" for call in session.calls)
+
+
+def test_gateway_liquidity_read_uses_explicit_integrated_or_nxt_book(monkeypatch):
+    calls = []
+
+    def fake_orderbook(token, code):
+        calls.append((token, code))
+        return {
+            "source": "ka10004_rest_orderbook",
+            "stock_code": "181710",
+            "request_code": code,
+            "rest_freshness_basis": "response_received_epoch_ms",
+            "best_bid": 71_300,
+            "best_ask": 71_500,
+            "best_bid_qty": 101,
+            "best_ask_qty": 102,
+            "bid_tot": 1_255,
+            "ask_tot": 880,
+            "rest_age_ms": 0,
+            "rest_received_ts_ms": 1,
+        }
+
+    monkeypatch.setattr(
+        gateway_module.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        fake_orderbook,
+    )
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        token_loader=lambda: "cached-token"
+    )
+
+    regular = gateway.entry_liquidity_snapshot(code="181710", route="KRX")
+    nxt = gateway.entry_liquidity_snapshot(code="181710", route="NXT")
+
+    assert calls == [
+        ("cached-token", "181710_AL"),
+        ("cached-token", "181710_NX"),
+    ]
+    assert regular.source_ok and regular.route == "KRX"
+    assert nxt.source_ok and nxt.route == "NXT"
 
 
 def test_gateway_routes_krx_buy_and_final_sell_through_sor(monkeypatch):

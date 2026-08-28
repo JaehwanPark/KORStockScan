@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from src.trading.order.entry_liquidity_guard import EntryLiquiditySnapshot
+
 from src.trading.samsung_midday_one_share import gateway as gateway_module
 from src.trading.samsung_midday_one_share.gateway import (
     ExecutionSnapshot,
@@ -68,6 +70,20 @@ class FakeGateway:
 
     def completed_sor_minute_bars(self, *, trade_date, now):
         return MinuteBarsSnapshot(True, self.bars)
+
+    def entry_liquidity_snapshot(self, *, route="SOR"):
+        return EntryLiquiditySnapshot(
+            True,
+            "005930",
+            route,
+            "005930_AL",
+            best_bid=100_000,
+            best_ask=100_100,
+            best_bid_qty=1_000,
+            best_ask_qty=1_000,
+            age_ms=0,
+            received_ts_ms=1,
+        )
 
     def _accepted(self, prefix: str) -> SubmitResult:
         self.sequence += 1

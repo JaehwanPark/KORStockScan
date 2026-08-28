@@ -95,6 +95,43 @@ def _target_receipts() -> list[dict]:
     return rows
 
 
+def _split_held_state() -> dict:
+    payload = _held_state()
+    payload["position_qty"] = 18
+    payload["legs"][0].update(
+        {
+            "buy_filled_qty": 8,
+            "position_qty": 8,
+            "target_quantity": 8,
+        }
+    )
+    return payload
+
+
+def _split_receipts() -> list[dict]:
+    rows = []
+    for order_no, quantity, fill_price in (
+        ("0048247", 8, 49_800),
+        ("0048289", 10, 49_750),
+    ):
+        rows.append(
+            {
+                "source_api": "kt00007",
+                "trade_date": "20260814",
+                "code": "475150",
+                "side": "매도",
+                "ord_no": order_no,
+                "raw": {
+                    "ord_qty": str(quantity),
+                    "cntr_qty": str(quantity),
+                    "ord_remnq": "0",
+                    "cntr_uv": str(fill_price),
+                },
+            }
+        )
+    return rows
+
+
 def test_manual_exit_dry_run_preserves_state_and_reports_confirmation(tmp_path: Path):
     state_path = tmp_path / "state.json"
     payload = _held_state()
@@ -166,6 +203,77 @@ def test_manual_exit_applies_only_exact_whole_owner_receipt(tmp_path: Path):
     )
     assert aggregate["broker_priced_completed_legs"] == 2
     assert aggregate["target_price_proxy_completed_legs"] == 0
+
+
+def test_manual_exit_applies_two_exact_per_leg_receipts_atomically(tmp_path: Path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(_split_held_state()), encoding="utf-8")
+    registry_path = tmp_path / "receipts.json"
+
+    dry_run = reconcile_manual_exit(
+        owner_id="sk_eternix_midday",
+        order_no="0048247,0048289",
+        order_date="2026-08-14",
+        receipt_rows=_split_receipts(),
+        observed_at=datetime(2026, 8, 14, 9, 5, tzinfo=KST),
+        apply=False,
+        state_path=state_path,
+        receipt_registry_path=registry_path,
+    )
+
+    assert dry_run["held_qty"] == 18
+    assert dry_run["expected_confirmation"] == (
+        "RECONCILE_sk_eternix_midday_2026-08-13_18_0048247+0048289"
+    )
+    assert [row["filled_qty"] for row in dry_run["receipts"]] == [8, 10]
+
+    reconcile_manual_exit(
+        owner_id="sk_eternix_midday",
+        order_no="0048247,0048289",
+        order_date="2026-08-14",
+        receipt_rows=_split_receipts(),
+        observed_at=datetime(2026, 8, 14, 9, 5, tzinfo=KST),
+        apply=True,
+        confirmation=("RECONCILE_sk_eternix_midday_2026-08-13_18_0048247+0048289"),
+        state_path=state_path,
+        receipt_registry_path=registry_path,
+    )
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["status"] == "COMPLETE"
+    assert state["position_qty"] == 0
+    assert [leg["target_filled_qty"] for leg in state["legs"]] == [8, 10]
+    assert [leg["target_fill_price"] for leg in state["legs"]] == [49_800, 49_750]
+    assert [leg["manual_exit_receipt"]["order_no"] for leg in state["legs"]] == [
+        "0048247",
+        "0048289",
+    ]
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert [row["status"] for row in registry["receipts"]] == ["applied", "applied"]
+
+
+def test_manual_exit_rejects_split_receipts_without_exact_leg_allocation(
+    tmp_path: Path,
+):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(_split_held_state()), encoding="utf-8")
+    rows = _split_receipts()
+    rows[0]["raw"]["ord_qty"] = "10"
+    rows[0]["raw"]["cntr_qty"] = "10"
+    rows[1]["raw"]["ord_qty"] = "8"
+    rows[1]["raw"]["cntr_qty"] = "8"
+
+    with pytest.raises(ValueError, match="exact_leg_allocation"):
+        reconcile_manual_exit(
+            owner_id="sk_eternix_midday",
+            order_no="0048247,0048289",
+            order_date="2026-08-14",
+            receipt_rows=rows,
+            observed_at=datetime(2026, 8, 14, 9, 5, tzinfo=KST),
+            apply=False,
+            state_path=state_path,
+            receipt_registry_path=tmp_path / "receipts.json",
+        )
 
 
 @pytest.mark.parametrize(

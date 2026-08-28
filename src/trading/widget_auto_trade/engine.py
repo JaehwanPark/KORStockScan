@@ -26,6 +26,11 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 from src.engine.trade_pause_control import is_buy_side_paused
+from src.trading.order.entry_liquidity_guard import (
+    EntryLiquidityDecision,
+    evaluate_entry_liquidity,
+    unavailable_entry_liquidity_snapshot,
+)
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_up_by_bps
 from src.trading.config.machine_entry_timing_policy import (
     ENTRY_CONFIRMATION_MAX_LATE_SEC,
@@ -115,6 +120,7 @@ EXECUTION_CONTRACT = {
     "primary_decision_metric": "broker_filled_widget_owned_quantity",
     "source_quality_gate": (
         "fresh_contract_valid_widget_snapshot_and_unique_signal;"
+        "fresh_ka10004_integrated_or_nxt_touch_depth;"
         "shared_cached_token_only;exact_order_number_fill_reconciliation"
     ),
     "forbidden_uses": [
@@ -124,12 +130,15 @@ EXECUTION_CONTRACT = {
         "orderable_cash_precheck",
         "non_take_profit_non_final_exit_submission",
         "source_signal_threshold_mutation",
+        "entry_liquidity_guard_as_cancel_or_exit_authority",
         "main_bot_process_control",
     ],
 }
 
 
 class OrderGateway(Protocol):
+    def entry_liquidity_snapshot(self, *, code: str, route: str): ...
+
     def submit_buy(self, *, code: str, qty: int, route: str) -> SubmitResult: ...
 
     def submit_sell(self, *, code: str, qty: int, route: str) -> SubmitResult: ...
@@ -1762,6 +1771,21 @@ class WidgetSignalAutoTrader:
         )
         return True
 
+    def _entry_liquidity_decision(
+        self, *, spec: WidgetSpec, route: str, requested_quantity: int
+    ) -> EntryLiquidityDecision:
+        try:
+            snapshot = self.gateway.entry_liquidity_snapshot(
+                code=spec.code, route=route
+            )
+        except Exception as exc:
+            snapshot = unavailable_entry_liquidity_snapshot(
+                symbol=spec.code,
+                route=route,
+                error=type(exc).__name__,
+            )
+        return evaluate_entry_liquidity(snapshot, requested_quantity=requested_quantity)
+
     def _maybe_submit_scale_in(
         self,
         spec: WidgetSpec,
@@ -1902,6 +1926,54 @@ class WidgetSignalAutoTrader:
                 pending_take_profit_qty=pending_take_profit_qty,
             )
             return
+        route = str(symbol_state.get("entry_route") or "").upper()
+        if route not in {"KRX", "NXT"}:
+            return
+        scale_in_liquidity_identity = (
+            f"{entry_signal_id}:ADD{next_leg_index}:{trigger_price}"
+        )
+        if (
+            symbol_state.get("last_scale_in_liquidity_block_identity")
+            == scale_in_liquidity_identity
+        ):
+            return
+        liquidity_decision = self._entry_liquidity_decision(
+            spec=spec,
+            route=route,
+            requested_quantity=int(policy["leg_quantity_each"]),
+        )
+        symbol_state["last_scale_in_liquidity_check"] = (
+            liquidity_decision.event_fields()
+        )
+        if not liquidity_decision.allowed:
+            symbol_state["last_scale_in_liquidity_block_identity"] = (
+                scale_in_liquidity_identity
+            )
+            self._save()
+            self._record_entry_block_once(
+                spec=spec,
+                symbol_state=symbol_state,
+                signal_id=scale_in_liquidity_identity,
+                reason="scale_in_blocked_liquidity_guard",
+                now=now,
+                trigger_price=trigger_price,
+                current_price=current_price,
+                actual_order_submitted=False,
+                **liquidity_decision.event_fields(),
+            )
+            return
+        symbol_state.pop("last_scale_in_liquidity_block_identity", None)
+        self._save()
+        self._event(
+            "scale_in_liquidity_guard_passed",
+            spec,
+            now,
+            signal_id=scale_in_liquidity_identity,
+            trigger_price=trigger_price,
+            current_price=current_price,
+            actual_order_submitted=False,
+            **liquidity_decision.event_fields(),
+        )
         if not leg_trigger_already_requested:
             symbol_state["scale_in_requested"] = True
             symbol_state["scale_in_trigger_price"] = trigger_price
@@ -1921,9 +1993,6 @@ class WidgetSignalAutoTrader:
         if self._has_pending(symbol_state, "SELL") or self._has_pending(
             symbol_state, "BUY"
         ):
-            return
-        route = str(symbol_state.get("entry_route") or "").upper()
-        if route not in {"KRX", "NXT"}:
             return
         self._submit(
             spec=spec,
@@ -2735,6 +2804,49 @@ class WidgetSignalAutoTrader:
                     timing_policy_hash=timing_policy_provenance.get("policy_hash"),
                 )
                 return
+        entry_quantity = (
+            int(entry_policy["leg_quantity_each"])
+            if entry_policy is not None
+            else self.entry_qty
+        )
+        if (
+            symbol_state.get("last_entry_liquidity_block_identity")
+            == confirmation_identity
+        ):
+            return
+        liquidity_decision = self._entry_liquidity_decision(
+            spec=spec,
+            route=route,
+            requested_quantity=entry_quantity,
+        )
+        symbol_state["last_entry_liquidity_check"] = liquidity_decision.event_fields()
+        if not liquidity_decision.allowed:
+            symbol_state["last_entry_liquidity_block_identity"] = confirmation_identity
+            self._save()
+            self._record_entry_block_once(
+                spec=spec,
+                symbol_state=symbol_state,
+                signal_id=signal_id,
+                reason="entry_blocked_liquidity_guard",
+                now=now,
+                confirmation_identity=confirmation_identity,
+                source_state=source_state,
+                actual_order_submitted=False,
+                **liquidity_decision.event_fields(),
+            )
+            return
+        symbol_state.pop("last_entry_liquidity_block_identity", None)
+        self._save()
+        self._event(
+            "entry_liquidity_guard_passed",
+            spec,
+            now,
+            signal_id=signal_id,
+            confirmation_identity=confirmation_identity,
+            source_state=source_state,
+            actual_order_submitted=False,
+            **liquidity_decision.event_fields(),
+        )
         for key in (
             "entry_submit_rejected_at",
             "entry_submit_rejected_signal_id",
@@ -2780,11 +2892,7 @@ class WidgetSignalAutoTrader:
             spec=spec,
             symbol_state=symbol_state,
             side="BUY",
-            qty=(
-                int(entry_policy["leg_quantity_each"])
-                if entry_policy is not None
-                else self.entry_qty
-            ),
+            qty=entry_quantity,
             route=route,
             signal_id=signal_id,
             now=now,

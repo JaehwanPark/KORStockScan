@@ -33,6 +33,7 @@ from src.trading.low_price_two_leg.gateway import (
     SubmitResult,
 )
 from src.trading.low_price_two_leg.machine import LowPriceTwoLegMachine
+from src.trading.order.entry_liquidity_guard import EntryLiquiditySnapshot
 from src.trading.low_price_two_leg.policy_runtime import (
     BASELINE_POLICIES,
     CANDIDATE_SCHEMA,
@@ -158,15 +159,34 @@ def _profile_run_at(profile_id: str) -> datetime:
 
 class FakeGateway:
     def __init__(self, profile_id: str) -> None:
+        self.profile_id = profile_id
         self.bars = _signal_bars(profile_id)
         self.buy_calls: list[int] = []
         self.sell_calls: list[int] = []
         self.cancel_calls: list[str] = []
         self.snapshots: dict[str, ExecutionSnapshot] = {}
         self.sequence = 0
+        self.best_bid_qty = 1_000
+        self.best_ask_qty = 1_000
+        self.liquidity_calls: list[str] = []
 
     def completed_sor_minute_bars(self, *, trade_date, now):
         return MinuteBarsSnapshot(True, self.bars)
+
+    def entry_liquidity_snapshot(self, *, route="SOR"):
+        self.liquidity_calls.append(route)
+        return EntryLiquiditySnapshot(
+            True,
+            PROFILES[self.profile_id].symbol,
+            route,
+            f"{PROFILES[self.profile_id].symbol}_AL",
+            best_bid=100_000,
+            best_ask=100_100,
+            best_bid_qty=self.best_bid_qty,
+            best_ask_qty=self.best_ask_qty,
+            age_ms=0,
+            received_ts_ms=1,
+        )
 
     def _accepted(self, prefix: str) -> SubmitResult:
         self.sequence += 1
@@ -1317,6 +1337,78 @@ def test_machine_state_and_order_ledger_are_bound_to_one_profile(tmp_path):
     assert state["signal_features"]["strategy"] == profile.profile_id
     assert state["signal_features"]["source"] == (
         "kiwoom_ka10080_010140_AL_completed_1m"
+    )
+
+
+def test_machine_blocks_entire_episode_when_either_touch_has_under_100_shares(
+    tmp_path,
+):
+    profile = PROFILES["nhn_afternoon"]
+    gateway = FakeGateway(profile.profile_id)
+    gateway.best_bid_qty = 97
+    gateway.best_ask_qty = 93
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "nhn-state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+
+    state = machine.run_once(_profile_run_at(profile.profile_id))
+
+    assert state["status"] == "NO_TRADE"
+    assert state["attempt_consumed"] is True
+    assert state["position_qty"] == 0
+    assert {leg["status"] for leg in state["legs"]} == {"NO_FILL"}
+    assert state["blocked_reason"] == "entry_liquidity_touch_depth_insufficient"
+    assert state["last_action"] == "entry_liquidity_blocked_before_buy"
+    assert gateway.buy_calls == []
+    guard = state["signal_features"]["entry_liquidity"]
+    assert guard["entry_liquidity_required_each_side_quantity"] == 100
+    assert guard["entry_liquidity_snapshot"]["best_bid_qty"] == 97
+    assert guard["entry_liquidity_snapshot"]["best_ask_qty"] == 93
+
+
+def test_machine_rechecks_liquidity_after_restart_with_a_planned_leg(tmp_path):
+    profile = PROFILES["nhn_afternoon"]
+    gateway = FakeGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "nhn-restart-state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    machine._state.update(
+        {
+            "trade_date": _profile_run_at(profile.profile_id).date().isoformat(),
+            "status": "READY",
+            "signal_features": {
+                "entry_liquidity": {
+                    "entry_liquidity_allowed": True,
+                    "entry_liquidity_snapshot": {"route": "SOR"},
+                }
+            },
+            "legs": [
+                {
+                    "leg_id": "L1",
+                    "status": "PLANNED",
+                    "entry_price": 75_000,
+                    "quantity": 10,
+                }
+            ],
+        }
+    )
+    gateway.best_bid_qty = 99
+
+    machine._submit_planned_buys(_profile_run_at(profile.profile_id))
+
+    assert gateway.liquidity_calls == ["SOR"]
+    assert gateway.buy_calls == []
+    assert machine._state["legs"][0]["status"] == "NO_FILL"
+    assert machine._state["blocked_reason"] == (
+        "entry_liquidity_touch_depth_insufficient"
     )
 
 

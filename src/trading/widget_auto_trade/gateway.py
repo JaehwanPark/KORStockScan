@@ -15,6 +15,12 @@ import requests
 
 from src.engine.sniper_config import CONF
 from src.engine.trade_pause_control import is_buy_side_paused
+from src.trading.order.entry_liquidity_guard import (
+    EntryLiquiditySnapshot,
+    entry_liquidity_request_code,
+    parse_ka10004_entry_liquidity_snapshot,
+    unavailable_entry_liquidity_snapshot,
+)
 from src.trading.order.tick_utils import get_tick_size
 from src.utils import kiwoom_utils
 
@@ -28,6 +34,9 @@ KIWOOM_OFFICIAL_REFERENCE = {
         "postman/kiwoom-openapi.postman_collection.json",
     ],
     "request_scope": ["kt10000", "kt10001", "kt10003", "kt00007"],
+    "delegated_request_scope": {
+        "ka10004": "src.trading.order.entry_liquidity_guard.KIWOOM_OFFICIAL_REFERENCE"
+    },
 }
 
 TokenLoader = Callable[[], str | None]
@@ -241,6 +250,20 @@ class KiwoomSharedTokenOrderGateway:
         except Exception:
             body = {}
         return response, body if isinstance(body, dict) else {}
+
+    def entry_liquidity_snapshot(
+        self, *, code: str, route: str
+    ) -> EntryLiquiditySnapshot:
+        try:
+            request_code = entry_liquidity_request_code(code, route)
+            payload = kiwoom_utils.get_stock_orderbook_ka10004(
+                self._token(), request_code
+            )
+        except Exception as exc:
+            return unavailable_entry_liquidity_snapshot(
+                symbol=code, route=route, error=type(exc).__name__
+            )
+        return parse_ka10004_entry_liquidity_snapshot(payload, symbol=code, route=route)
 
     @staticmethod
     def _submit_result(

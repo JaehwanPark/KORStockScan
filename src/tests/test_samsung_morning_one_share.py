@@ -4,6 +4,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 import pytest
 
+from src.trading.order.entry_liquidity_guard import EntryLiquiditySnapshot
+
 from src.trading.samsung_morning_one_share import gateway as gateway_module
 from src.trading.samsung_morning_one_share.gateway import (
     ExecutionSnapshot,
@@ -28,6 +30,9 @@ class FakeGateway:
         self.cancel_calls: list[tuple[str, str]] = []
         self.snapshots: dict[str, ExecutionSnapshot] = {}
         self.sequence = 0
+        self.best_bid_qty = 1_000
+        self.best_ask_qty = 1_000
+        self.liquidity_calls: list[str] = []
 
     def _accepted(self, prefix: str) -> SubmitResult:
         self.sequence += 1
@@ -36,6 +41,22 @@ class FakeGateway:
     def opening_price(self, *, route, trade_date):
         price = self.opens.get(route)
         return OpenPriceSnapshot(bool(price), price, f"{trade_date:%Y%m%d}080000")
+
+    def entry_liquidity_snapshot(self, *, route="SOR"):
+        self.liquidity_calls.append(route)
+        suffix = "NX" if route == "NXT" else "AL"
+        return EntryLiquiditySnapshot(
+            True,
+            "005930",
+            route,
+            f"005930_{suffix}",
+            best_bid=300_000,
+            best_ask=300_500,
+            best_bid_qty=self.best_bid_qty,
+            best_ask_qty=self.best_ask_qty,
+            age_ms=0,
+            received_ts_ms=1,
+        )
 
     def submit_limit_buy(self, *, price, quantity, route="SOR"):
         assert quantity in {1, 10}
@@ -183,6 +204,7 @@ def test_nxt_cancel_must_reconcile_before_sor_regular_fallback(tmp_path):
     assert sor["signal_features"]["entry_windows"] == {
         "SOR": {"start": "09:00:00", "deadline": "09:30:00"}
     }
+    assert gateway.liquidity_calls == ["NXT", "SOR"]
 
 
 def test_late_start_arms_sor_fallback_without_attempting_nxt(tmp_path):
@@ -193,10 +215,12 @@ def test_late_start_arms_sor_fallback_without_attempting_nxt(tmp_path):
     assert {leg["route"] for leg in waiting["legs"]} == {"SOR"}
     assert {leg["status"] for leg in waiting["legs"]} == {"PLANNED"}
     assert gateway.buy_calls == []
+    assert gateway.liquidity_calls == []
 
     submitted = machine.run_once(_at(11, 9, 0))
     assert submitted["status"] == "BUY_OPEN"
     assert gateway.buy_calls == [("SOR", 298_000), ("SOR", 297_500)]
+    assert gateway.liquidity_calls == ["SOR"]
     assert submitted["signal_features"]["opening_price"] == 300_000
     assert [
         leg["entry_price"] for leg in submitted["signal_features"]["entry_legs"]
@@ -208,6 +232,21 @@ def test_start_during_sor_window_uses_sor_open_directly(tmp_path):
     state = _machine(tmp_path, gateway).run_once(_at(11, 9, 1))
     assert state["status"] == "BUY_OPEN"
     assert gateway.buy_calls == [("SOR", 298_000), ("SOR", 297_500)]
+
+
+def test_thin_nxt_book_blocks_both_morning_legs_without_any_buy(tmp_path):
+    gateway = FakeGateway()
+    gateway.best_bid_qty = 97
+    gateway.best_ask_qty = 93
+
+    state = _machine(tmp_path, gateway).run_once(_at(11, 8, 1))
+
+    assert state["status"] == "NO_TRADE"
+    assert state["position_qty"] == 0
+    assert {leg["status"] for leg in state["legs"]} == {"NO_FILL"}
+    assert state["last_action"] == "entry_liquidity_blocked_before_buy"
+    assert gateway.liquidity_calls == ["NXT"]
+    assert gateway.buy_calls == []
 
 
 def test_filled_nxt_leg_keeps_target_while_only_unfilled_leg_falls_back(tmp_path):

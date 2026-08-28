@@ -24,6 +24,11 @@ from src.trading.order.episode_quantity import (
     EPISODE_TOTAL_QUANTITY,
     SUPPORTED_OWNED_LEG_QUANTITIES,
 )
+from src.trading.order.entry_liquidity_guard import (
+    EntryLiquidityDecision,
+    evaluate_entry_liquidity,
+    unavailable_entry_liquidity_snapshot,
+)
 from src.trading.config.machine_entry_timing_policy import (
     ENTRY_CONFIRMATION_MAX_LATE_SEC,
     resolve_entry_confirmation_delay,
@@ -34,6 +39,7 @@ KST = ZoneInfo("Asia/Seoul")
 
 class RegularGateway(Protocol):
     def completed_sor_minute_bars(self, *, trade_date, now: datetime): ...
+    def entry_liquidity_snapshot(self, *, route: str = "SOR"): ...
     def submit_limit_buy(self, *, price: int, quantity: int): ...
     def submit_limit_sell(self, *, price: int, quantity: int): ...
     def cancel_buy(self, *, order_no: str): ...
@@ -292,6 +298,52 @@ class SamsungRegularTwoLegMachine:
         self._state.update({"status": "BLOCKED", "blocked_reason": reason})
         self._record(now, "blocked", reason=reason)
         return self.snapshot()
+
+    def _entry_liquidity_decision(
+        self, *, route: str, requested_quantity: int
+    ) -> EntryLiquidityDecision:
+        try:
+            snapshot = self.gateway.entry_liquidity_snapshot(route=route)
+        except Exception as exc:
+            snapshot = unavailable_entry_liquidity_snapshot(
+                symbol=str(self.policy.symbol),
+                route=route,
+                error=type(exc).__name__,
+            )
+        return evaluate_entry_liquidity(snapshot, requested_quantity=requested_quantity)
+
+    def _entry_liquidity_allows_planned_buys(
+        self, *, now: datetime, route: str, requested_quantity: int
+    ) -> bool:
+        features = dict(self._state.get("signal_features") or {})
+        normalized_route = str(route or "").strip().upper()
+        decision = self._entry_liquidity_decision(
+            route=normalized_route,
+            requested_quantity=requested_quantity,
+        )
+        features["entry_liquidity"] = decision.event_fields()
+        self._state["signal_features"] = features
+        if not decision.allowed:
+            for leg in self._state.get("legs", []):
+                leg_route = str(leg.get("route") or normalized_route).upper()
+                if leg.get("status") == "PLANNED" and leg_route == normalized_route:
+                    leg["status"] = "NO_FILL"
+            self._state["blocked_reason"] = decision.reason
+            self._record(
+                now,
+                "entry_liquidity_blocked_before_buy",
+                route=normalized_route,
+                **decision.event_fields(),
+            )
+            return False
+        self._state["blocked_reason"] = ""
+        self._record(
+            now,
+            "entry_liquidity_guard_passed",
+            route=normalized_route,
+            **decision.event_fields(),
+        )
+        return True
 
     def _position_qty(self) -> int:
         return sum(
@@ -792,6 +844,19 @@ class SamsungRegularTwoLegMachine:
         self._cancel_buy(now, leg, elapsed)
 
     def _submit_planned_buys(self, now: datetime) -> None:
+        planned_quantity = sum(
+            int(leg.get("quantity", 0) or 0)
+            for leg in self._state.get("legs", [])
+            if leg.get("status") == "PLANNED"
+        )
+        if planned_quantity > 0:
+            route = str(getattr(self.policy, "route", "SOR") or "SOR").upper()
+            if not self._entry_liquidity_allows_planned_buys(
+                now=now,
+                route=route,
+                requested_quantity=planned_quantity,
+            ):
+                return
         for leg in self._state.get("legs", []):
             if leg.get("status") != "PLANNED" or self._state.get("status") == "BLOCKED":
                 continue

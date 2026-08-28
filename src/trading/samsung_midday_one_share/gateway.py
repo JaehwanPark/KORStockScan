@@ -16,6 +16,12 @@ from src.trading.order.episode_quantity import (
     validate_owned_leg_quantity,
     validate_position_quantity,
 )
+from src.trading.order.entry_liquidity_guard import (
+    EntryLiquiditySnapshot,
+    entry_liquidity_request_code,
+    parse_ka10004_entry_liquidity_snapshot,
+    unavailable_entry_liquidity_snapshot,
+)
 from src.trading.order.kiwoom_episode_read_control import (
     EPISODE_READ_API_IDS,
     KT00007_API_ID,
@@ -43,6 +49,9 @@ OFFICIAL_REFERENCE = {
         "postman/kiwoom-openapi.postman_collection.json",
     ],
     "request_scope": ["ka10080", "kt10000", "kt10001", "kt10003", "kt00007"],
+    "delegated_request_scope": {
+        "ka10004": "src.trading.order.entry_liquidity_guard.KIWOOM_OFFICIAL_REFERENCE"
+    },
 }
 
 TokenLoader = Callable[[], str | None]
@@ -309,6 +318,20 @@ class KiwoomMiddayOneShareGateway:
         ):
             self._minute_bars_cache.put(cache_key, snapshot)
         return snapshot
+
+    def entry_liquidity_snapshot(self, *, route: str = "SOR") -> EntryLiquiditySnapshot:
+        try:
+            request_code = entry_liquidity_request_code("005930", route)
+            payload = kiwoom_utils.get_stock_orderbook_ka10004(
+                self._token(), request_code
+            )
+        except Exception as exc:
+            return unavailable_entry_liquidity_snapshot(
+                symbol="005930", route=route, error=type(exc).__name__
+            )
+        return parse_ka10004_entry_liquidity_snapshot(
+            payload, symbol="005930", route=route
+        )
 
     def submit_limit_buy(self, *, price: int, quantity: int) -> SubmitResult:
         self._require_write_authority()

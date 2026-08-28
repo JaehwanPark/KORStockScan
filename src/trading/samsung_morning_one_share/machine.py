@@ -387,6 +387,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
         return True
 
     def _submit_planned_buys(self, now: datetime) -> None:
+        approved_routes: set[str] = set()
         for leg in self._state.get("legs", []):
             if leg.get("status") != "PLANNED" or self._state.get("status") == "BLOCKED":
                 continue
@@ -409,6 +410,20 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 and not self._price_sor_leg(now, leg)
             ):
                 continue
+            if route not in approved_routes:
+                planned_quantity = sum(
+                    int(planned_leg.get("quantity", 0) or 0)
+                    for planned_leg in self._state.get("legs", [])
+                    if planned_leg.get("status") == "PLANNED"
+                    and str(planned_leg.get("route") or "").upper() == route
+                )
+                if not self._entry_liquidity_allows_planned_buys(
+                    now=now,
+                    route=route,
+                    requested_quantity=planned_quantity,
+                ):
+                    return
+                approved_routes.add(route)
             leg["status"] = "BUY_SUBMITTING"
             self._record(
                 now,
