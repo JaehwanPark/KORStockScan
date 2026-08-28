@@ -532,6 +532,13 @@ def _attempt_key(event: PipelineEvent) -> str:
     return f"name:{event.stock_name}"
 
 
+def _exact_attempt_key(event: PipelineEvent) -> str | None:
+    record_id = _safe_str(event.record_id).strip()
+    if not record_id or record_id.lower() in {"0", "none", "null", "-"}:
+        return None
+    return f"id:{record_id}"
+
+
 def _stage_unique_key(event: PipelineEvent) -> str:
     """Use producer-owned promotion identity for source-handoff funnel rows."""
 
@@ -1385,6 +1392,28 @@ def _summarize_events(
             or _contains_text_token(event.fields, "latency_state_danger")
         )
     ]
+    budget_pass_first_at: dict[str, datetime] = {}
+    for event in lossless_scoped:
+        if event.stage != "budget_pass":
+            continue
+        key = _exact_attempt_key(event)
+        if key is None:
+            continue
+        previous = budget_pass_first_at.get(key)
+        if previous is None or event.emitted_at < previous:
+            budget_pass_first_at[key] = event.emitted_at
+    latency_danger_attempt_keys = {_attempt_key(event) for event in latency_blocks}
+    latency_blocked_budget_events = [
+        event
+        for event in latency_blocks
+        if (key := _exact_attempt_key(event)) in budget_pass_first_at
+        and event.emitted_at >= budget_pass_first_at[key]
+    ]
+    latency_blocked_budget_attempt_keys = {
+        key
+        for event in latency_blocked_budget_events
+        if (key := _exact_attempt_key(event)) is not None
+    }
     upstream_counter = Counter(_blocker_label(event) for event in upstream_events)
     latency_counter = Counter(_blocker_label(event) for event in latency_blocks)
     price_guard_counter = Counter(_blocker_label(event) for event in price_guard_events)
@@ -1416,10 +1445,17 @@ def _summarize_events(
         for event in latency_blocks
         for label in _latency_danger_reason_labels(event)
     )
+    latency_blocked_budget_danger_reason_counts = Counter(
+        label
+        for event in latency_blocked_budget_events
+        for label in _latency_danger_reason_labels(event)
+    )
     refresh_scope_events = [
         event
         for event in lossless_scoped
         if event.stage in {"latency_block", "latency_pass", "order_bundle_submitted"}
+        and (key := _exact_attempt_key(event)) in budget_pass_first_at
+        and event.emitted_at >= budget_pass_first_at[key]
     ]
     refresh_attempt_keys = {
         _attempt_key(event)
@@ -1535,6 +1571,9 @@ def _summarize_events(
         "latency_danger_reason_counts": dict(
             sorted(latency_danger_reason_counts.items())
         ),
+        "latency_blocked_budget_danger_reason_counts": dict(
+            sorted(latency_blocked_budget_danger_reason_counts.items())
+        ),
         "price_guard_top": [
             {"label": label, "count": count}
             for label, count in price_guard_counter.most_common(10)
@@ -1557,6 +1596,17 @@ def _summarize_events(
             {_ai_trace_key(event) for event in upstream_events}
         ),
         "latency_state_danger_events": len(latency_blocks),
+        "latency_state_danger_unique": len(latency_danger_attempt_keys),
+        "budget_pass_missing_exact_attempt_key_events": sum(
+            1
+            for event in lossless_scoped
+            if event.stage == "budget_pass" and _exact_attempt_key(event) is None
+        ),
+        "latency_danger_missing_exact_attempt_key_events": sum(
+            1 for event in latency_blocks if _exact_attempt_key(event) is None
+        ),
+        "latency_blocked_budget_events": len(latency_blocked_budget_events),
+        "latency_blocked_budget_unique": len(latency_blocked_budget_attempt_keys),
         "price_guard_events": len(price_guard_events),
         "price_guard_unique": len(
             {_attempt_key(event) for event in price_guard_events}
@@ -1757,8 +1807,13 @@ def _latency_root_cause_bucket(label: str) -> str:
 def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, Any]:
     buckets = Counter()
     refresh_buckets = Counter()
-    reason_counts = current.get("latency_danger_reason_counts")
-    if isinstance(reason_counts, dict) and reason_counts:
+    causal_reason_counts = current.get("latency_blocked_budget_danger_reason_counts")
+    reason_counts = (
+        causal_reason_counts
+        if isinstance(causal_reason_counts, dict)
+        else current.get("latency_danger_reason_counts")
+    )
+    if isinstance(reason_counts, dict):
         label_count_items = reason_counts.items()
     else:
         labels = (
@@ -1819,6 +1874,15 @@ def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, An
     return {
         "latency_danger_event_count": int(
             current.get("latency_state_danger_events", 0) or 0
+        ),
+        "latency_danger_unique_count": int(
+            current.get("latency_state_danger_unique", 0) or 0
+        ),
+        "latency_blocked_budget_event_count": int(
+            current.get("latency_blocked_budget_events", 0) or 0
+        ),
+        "latency_blocked_budget_unique_count": int(
+            current.get("latency_blocked_budget_unique", 0) or 0
         ),
         "latency_root_cause_counts": dict(buckets),
         "quote_freshness_attribution": {
@@ -1902,11 +1966,20 @@ def _classify(
             "entry AI authority revalidation blocks dominate the downstream submit path"
         )
 
-    latency_drought = budget_unique >= 3 and (
-        submitted_unique == 0
-        or ratios["latency_to_budget_unique_pct"] < 25.0
-        or current["latency_state_danger_events"]
-        >= max(3, submitted_unique + latency_unique)
+    latency_danger_events = int(current.get("latency_state_danger_events", 0) or 0)
+    latency_blocked_budget_unique = int(
+        current.get("latency_blocked_budget_unique", 0) or 0
+    )
+    latency_drought = (
+        budget_unique >= 3
+        and latency_danger_events > 0
+        and latency_blocked_budget_unique > 0
+        and (
+            submitted_unique == 0
+            or ratios["latency_to_budget_unique_pct"] < 25.0
+            or latency_blocked_budget_unique
+            >= max(3, submitted_unique + latency_unique)
+        )
     )
     if latency_drought:
         matches.append("LATENCY_DROUGHT")
@@ -2249,6 +2322,9 @@ def _entry_submit_drought_observation_breakdown(
     broker_submit_failure_unique = int(
         session_summary.get("broker_submit_failure_unique", 0) or 0
     )
+    latency_blocked_budget_unique = int(
+        session_summary.get("latency_blocked_budget_unique", 0) or 0
+    )
     latency_root_cause_counts = (
         root_cause.get("latency_root_cause_counts")
         if isinstance(root_cause.get("latency_root_cause_counts"), dict)
@@ -2335,10 +2411,30 @@ def _entry_submit_drought_observation_breakdown(
                 if "LATENCY_PRE_SUBMIT" in weak_contract_matches
                 else "no_current_signal"
             ),
-            "observed_count": int(
-                session_summary.get("latency_state_danger_events", 0) or 0
-            ),
+            "observed_count": latency_blocked_budget_unique,
             "evidence": {
+                "latency_state_danger_events": int(
+                    session_summary.get("latency_state_danger_events", 0) or 0
+                ),
+                "latency_state_danger_unique": int(
+                    session_summary.get("latency_state_danger_unique", 0) or 0
+                ),
+                "latency_blocked_budget_events": int(
+                    session_summary.get("latency_blocked_budget_events", 0) or 0
+                ),
+                "latency_blocked_budget_unique": latency_blocked_budget_unique,
+                "budget_pass_missing_exact_attempt_key_events": int(
+                    session_summary.get(
+                        "budget_pass_missing_exact_attempt_key_events", 0
+                    )
+                    or 0
+                ),
+                "latency_danger_missing_exact_attempt_key_events": int(
+                    session_summary.get(
+                        "latency_danger_missing_exact_attempt_key_events", 0
+                    )
+                    or 0
+                ),
                 "latency_blocker_top": (
                     latency_blockers if isinstance(latency_blockers, list) else []
                 ),
@@ -2717,6 +2813,12 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"unique={session.get('ai_action_unique_counts') or {}}`",
         f"- budget/AI lineage: `{session.get('budget_ai_lineage') or {}}`",
         f"- latency blockers: `{_format_top_blockers(session['latency_blocker_top'])}`",
+        f"- latency causal join: `raw_danger_events={session.get('latency_state_danger_events', 0)}, "
+        f"raw_unique={session.get('latency_state_danger_unique', 0)}, "
+        f"joined_budget_events={session.get('latency_blocked_budget_events', 0)}, "
+        f"joined_budget_unique={session.get('latency_blocked_budget_unique', 0)}, "
+        f"budget_missing_key={session.get('budget_pass_missing_exact_attempt_key_events', 0)}, "
+        f"latency_missing_key={session.get('latency_danger_missing_exact_attempt_key_events', 0)}`",
         f"- price guards: `{_format_top_blockers(session['price_guard_top'])}`",
         f"- quote refresh: `attempted={quote_freshness.get('refresh_attempted_count', 0)}, "
         f"applied={quote_freshness.get('refresh_applied_count', 0)}, "

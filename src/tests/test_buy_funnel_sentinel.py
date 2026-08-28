@@ -11,7 +11,7 @@ def _event(
     *,
     name: str = "테스트종목",
     code: str = "000001",
-    record_id: int = 1,
+    record_id: int | str = 1,
     pipeline: str = "ENTRY_PIPELINE",
     fields: dict | None = None,
 ) -> dict:
@@ -263,15 +263,17 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
     rows = []
     for idx in range(5):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
         rows.append(
             _event(
                 "2026-05-06",
                 f"10:0{idx}:20",
                 "latency_block",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={"reason": "latency_state_danger"},
             )
         )
@@ -341,6 +343,196 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
     assert root_cause["unknown_latency_workorder_required"] is True
     assert report["current"]["session"]["stage_unique"]["budget_pass"] == 5
     assert report["current"]["session"]["stage_unique"]["order_bundle_submitted"] == 0
+    assert report["current"]["session"]["latency_state_danger_unique"] == 5
+    assert report["current"]["session"]["latency_blocked_budget_unique"] == 5
+    markdown = sentinel.build_markdown(report)
+    assert (
+        "- latency causal join: `raw_danger_events=5, raw_unique=5, "
+        "joined_budget_events=5, joined_budget_unique=5, budget_missing_key=0, "
+        "latency_missing_key=0`" in markdown
+    )
+
+
+def test_submit_drought_without_latency_block_does_not_claim_latency_drought(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(3):
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+        )
+        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+    _write_events(tmp_path, "2026-05-06", rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+    )
+
+    assert report["classification"]["primary"] == "SUBMIT_DROUGHT_CRITICAL"
+    assert "LATENCY_DROUGHT" not in report["classification"]["matches"]
+    assert report["current"]["session"]["latency_state_danger_events"] == 0
+    contract = report["entry_submit_drought_contract"]
+    assert "LATENCY_PRE_SUBMIT" not in contract["weak_contract_matches"]
+    latency_axis = contract["observation_breakdown"]["axes"]["LATENCY_PRE_SUBMIT"]
+    assert latency_axis["status"] == "no_current_signal"
+    assert latency_axis["observed_count"] == 0
+
+
+def test_unrelated_latency_block_does_not_claim_budget_pass_latency_drought(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(3):
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+        )
+        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+    rows.append(
+        _event(
+            "2026-05-06",
+            "10:04:00",
+            "latency_block",
+            record_id=99,
+            fields={"reason": "latency_state_danger"},
+        )
+    )
+    _write_events(tmp_path, "2026-05-06", rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+    )
+
+    assert report["classification"]["primary"] == "SUBMIT_DROUGHT_CRITICAL"
+    assert "LATENCY_DROUGHT" not in report["classification"]["matches"]
+    session = report["current"]["session"]
+    assert session["latency_state_danger_events"] == 1
+    assert session["latency_state_danger_unique"] == 1
+    assert session["latency_blocked_budget_events"] == 0
+    assert session["latency_blocked_budget_unique"] == 0
+    root_cause = report["classification"]["submit_drought_root_cause"]
+    assert root_cause["latency_root_cause_counts"] == {}
+    assert root_cause["unknown_latency_workorder_required"] is False
+    contract = report["entry_submit_drought_contract"]
+    assert "LATENCY_PRE_SUBMIT" not in contract["weak_contract_matches"]
+    latency_axis = contract["observation_breakdown"]["axes"]["LATENCY_PRE_SUBMIT"]
+    assert latency_axis["status"] == "no_current_signal"
+    assert latency_axis["observed_count"] == 0
+    assert latency_axis["evidence"]["latency_state_danger_events"] == 1
+    assert latency_axis["evidence"]["latency_state_danger_unique"] == 1
+    assert latency_axis["evidence"]["latency_blocked_budget_unique"] == 0
+
+
+def test_repeated_latency_events_do_not_inflate_unique_drought_condition(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(5):
+        rows.extend(
+            [
+                _event(
+                    "2026-05-06",
+                    f"10:0{idx}:00",
+                    "ai_confirmed",
+                    record_id=idx + 1,
+                ),
+                _event(
+                    "2026-05-06",
+                    f"10:0{idx}:10",
+                    "budget_pass",
+                    record_id=idx + 1,
+                ),
+                _event(
+                    "2026-05-06",
+                    f"10:0{idx}:20",
+                    "latency_pass",
+                    record_id=idx + 1,
+                ),
+            ]
+        )
+    for second in range(10):
+        rows.append(
+            _event(
+                "2026-05-06",
+                f"10:05:{second:02d}",
+                "latency_block",
+                record_id=1,
+                fields={"reason": "latency_state_danger"},
+            )
+        )
+    for idx in (1, 2):
+        rows.append(
+            _event(
+                "2026-05-06",
+                f"10:06:0{idx}",
+                "order_bundle_submitted",
+                record_id=idx,
+            )
+        )
+    _write_events(tmp_path, "2026-05-06", rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+    )
+
+    assert "LATENCY_DROUGHT" not in report["classification"]["matches"]
+    session = report["current"]["session"]
+    assert session["latency_state_danger_events"] == 10
+    assert session["latency_state_danger_unique"] == 1
+    assert session["latency_blocked_budget_events"] == 10
+    assert session["latency_blocked_budget_unique"] == 1
+
+
+def test_missing_record_id_cannot_create_latency_causal_join(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(3):
+        code = f"00000{idx + 1}"
+        missing_record_id = "0" if idx == 0 else 0
+        rows.extend(
+            [
+                _event(
+                    "2026-05-06",
+                    f"10:0{idx}:00",
+                    "ai_confirmed",
+                    code=code,
+                    record_id=missing_record_id,
+                ),
+                _event(
+                    "2026-05-06",
+                    f"10:0{idx}:10",
+                    "budget_pass",
+                    code=code,
+                    record_id=missing_record_id,
+                ),
+                _event(
+                    "2026-05-06",
+                    f"10:0{idx}:20",
+                    "latency_block",
+                    code=code,
+                    record_id=missing_record_id,
+                    fields={"reason": "latency_state_danger"},
+                ),
+            ]
+        )
+    _write_events(tmp_path, "2026-05-06", rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+    )
+
+    assert "LATENCY_DROUGHT" not in report["classification"]["matches"]
+    session = report["current"]["session"]
+    assert session["budget_pass_missing_exact_attempt_key_events"] == 3
+    assert session["latency_danger_missing_exact_attempt_key_events"] == 3
+    assert session["latency_blocked_budget_events"] == 0
+    assert session["latency_blocked_budget_unique"] == 0
 
 
 def test_budget_census_gap_is_observation_only_without_explicit_ai_lineage(
@@ -1269,15 +1461,17 @@ def test_latency_drought_uses_latency_danger_reason_breakdown(monkeypatch, tmp_p
     rows = []
     for idx in range(5):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
         rows.append(
             _event(
                 "2026-05-06",
                 f"10:0{idx}:20",
                 "latency_block",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={
                     "reason": "latency_state_danger",
                     "latency_danger_reasons": "quote_stale,ws_age_too_high",
@@ -1302,15 +1496,17 @@ def test_latency_drought_classifies_ws_jitter_as_quote_stale(monkeypatch, tmp_pa
     rows = []
     for idx in range(5):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
         rows.append(
             _event(
                 "2026-05-06",
                 f"10:0{idx}:20",
                 "latency_block",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={
                     "reason": "latency_state_danger",
                     "latency_danger_reasons": "ws_jitter_too_high",
@@ -1334,15 +1530,17 @@ def test_latency_drought_splits_orderbook_microstructure_spread(monkeypatch, tmp
     rows = []
     for idx in range(5):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
         rows.append(
             _event(
                 "2026-05-06",
                 f"10:0{idx}:20",
                 "latency_block",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={
                     "reason": "latency_state_danger",
                     "latency_danger_reasons": "ws_age_too_high",
@@ -1371,15 +1569,17 @@ def test_latency_drought_classifies_other_danger_as_order_rtt_guard(
     rows = []
     for idx in range(5):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
         rows.append(
             _event(
                 "2026-05-06",
                 f"10:0{idx}:20",
                 "latency_block",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={
                     "reason": "latency_state_danger",
                     "latency_danger_reasons": "other_danger",
@@ -1407,15 +1607,17 @@ def test_latency_drought_splits_pre_submit_quote_refresh_observer_failure(
     rows = []
     for idx in range(5):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
         rows.append(
             _event(
                 "2026-05-06",
                 f"10:0{idx}:20",
                 "latency_block",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={
                     "reason": "latency_state_danger",
                     "pre_submit_quote_refresh_enabled": True,
@@ -1450,15 +1652,17 @@ def test_latency_drought_splits_pre_submit_ws_snapshot_stale(monkeypatch, tmp_pa
     rows = []
     for idx in range(5):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
         rows.append(
             _event(
                 "2026-05-06",
                 f"10:0{idx}:20",
                 "latency_block",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={
                     "reason": "latency_state_danger",
                     "pre_submit_ws_snapshot_refresh_enabled": True,
@@ -1493,15 +1697,17 @@ def test_latency_drought_splits_pre_submit_ws_snapshot_none_as_missing(
     rows = []
     for idx in range(5):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
         rows.append(
             _event(
                 "2026-05-06",
                 f"10:0{idx}:20",
                 "latency_block",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={
                     "reason": "latency_state_danger",
                     "pre_submit_ws_snapshot_refresh_enabled": True,
@@ -1539,6 +1745,14 @@ def test_latency_drought_quote_freshness_attribution_counts_recovered_pass_and_s
             _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
         )
         rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+    rows.extend(
+        [
+            _event("2026-05-06", "10:05:40", "ai_confirmed", record_id=100),
+            _event("2026-05-06", "10:05:50", "budget_pass", record_id=100),
+            _event("2026-05-06", "10:06:40", "ai_confirmed", record_id=101),
+            _event("2026-05-06", "10:06:50", "budget_pass", record_id=101),
+        ]
+    )
     rows.append(
         _event(
             "2026-05-06",
@@ -1611,6 +1825,12 @@ def test_refresh_still_blocked_count_uses_latency_block_events_not_attempt_minus
             _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
         )
         rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+    rows.extend(
+        [
+            _event("2026-05-06", "10:05:40", "ai_confirmed", record_id=100),
+            _event("2026-05-06", "10:05:50", "budget_pass", record_id=100),
+        ]
+    )
     rows.append(
         _event(
             "2026-05-06",
@@ -1661,6 +1881,16 @@ def test_refresh_recovered_latency_pass_downstream_breakdown(monkeypatch, tmp_pa
             _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
         )
         rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+    rows.extend(
+        [
+            _event("2026-05-06", "10:05:40", "ai_confirmed", record_id=100),
+            _event("2026-05-06", "10:05:50", "budget_pass", record_id=100),
+            _event("2026-05-06", "10:06:40", "ai_confirmed", record_id=101),
+            _event("2026-05-06", "10:06:50", "budget_pass", record_id=101),
+            _event("2026-05-06", "10:07:40", "ai_confirmed", record_id=102),
+            _event("2026-05-06", "10:07:50", "budget_pass", record_id=102),
+        ]
+    )
     rows.extend(
         [
             _event(
@@ -1803,15 +2033,17 @@ def test_fresh_ws_snapshot_reason_does_not_pollute_latency_danger_breakdown(
     rows = []
     for idx in range(5):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
         rows.append(
             _event(
                 "2026-05-06",
                 f"10:0{idx}:20",
                 "latency_block",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={
                     "reason": "latency_state_danger",
                     "latency_danger_reasons": "quote_stale",
@@ -1841,15 +2073,17 @@ def test_input_snapshot_fresh_reason_is_report_provenance_not_unknown_workorder(
     rows = []
     for idx in range(5):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
         rows.append(
             _event(
                 "2026-05-06",
                 f"10:0{idx}:20",
                 "latency_block",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={
                     "reason": "latency_state_danger",
                     "pre_submit_ws_snapshot_refresh_enabled": True,
