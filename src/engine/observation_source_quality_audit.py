@@ -2791,6 +2791,7 @@ def _reviewed_unknown_reason_for_stage_field(
             "entry_ai_price_canary_applied",
             "entry_ai_price_canary_fallback",
             "entry_ai_price_feature_packet_source_block",
+            "order_bundle_failed",
             "order_bundle_submitted",
             "pre_submit_micro_unavailable_block",
             "pre_submit_entry_ai_authority_guard_block",
@@ -2811,6 +2812,7 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         if stage in {
             "entry_ai_price_feature_packet_source_block",
+            "order_bundle_failed",
             "pre_submit_micro_unavailable_block",
         } and not (
             _is_falseish("actual_order_submitted")

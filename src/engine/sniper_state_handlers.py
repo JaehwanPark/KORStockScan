@@ -48896,6 +48896,49 @@ def _merge_entry_pipeline_field_groups(*field_groups) -> dict:
     return fields
 
 
+def _order_bundle_failure_provenance(
+    broker_submit_attempt_count: int,
+    broker_submit_success_response_count: int,
+) -> dict:
+    attempt_count = max(0, _safe_int(broker_submit_attempt_count, 0))
+    success_response_count = min(
+        attempt_count,
+        max(0, _safe_int(broker_submit_success_response_count, 0)),
+    )
+    pre_broker_blocked = attempt_count == 0
+    broker_acknowledged_order_identity_missing = success_response_count > 0
+    return {
+        "metric_role": "execution_quality_real_only",
+        "decision_authority": "source_quality_only_order_failure_attribution",
+        "window_policy": "same_entry_order_bundle",
+        "sample_floor": "one_terminal_failed_order_bundle",
+        "primary_decision_metric": "order_bundle_failure_mode",
+        "source_quality_gate": "exact_broker_submit_attempt_and_response_census",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": pre_broker_blocked,
+        "broker_submit_attempt_count": attempt_count,
+        "broker_submit_success_response_count": success_response_count,
+        "broker_submission_reconciliation_required": (
+            broker_acknowledged_order_identity_missing
+        ),
+        "order_bundle_failure_mode": (
+            "pre_broker_blocked"
+            if pre_broker_blocked
+            else (
+                "broker_acknowledged_order_identity_missing"
+                if broker_acknowledged_order_identity_missing
+                else "broker_submit_failed_or_unacknowledged"
+            )
+        ),
+        "forbidden_uses": (
+            "standalone_buy|threshold_mutation|provider_route_change|"
+            "order_price_or_quantity_change|broker_guard_bypass"
+        ),
+    }
+
+
 def _without_entry_pipeline_fields(fields: dict | None, *keys: str) -> dict:
     out = dict(fields or {})
     for key in keys:
@@ -64387,6 +64430,43 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     cooldowns = runtime["cooldowns"]
     alerted_stocks = runtime["alerted_stocks"]
     ai_engine = runtime.get("ai_engine")
+    if _truthy_field(stock.get("entry_submit_identity_reconciliation_required")):
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_submit_identity_reconciliation_blocked",
+            block_reason=(
+                stock.get("entry_submit_identity_reconciliation_reason")
+                or "broker_order_identity_missing_after_success_response"
+            ),
+            unresolved_broker_route=(
+                stock.get("entry_submit_identity_reconciliation_broker_route") or "-"
+            ),
+            unresolved_requested_qty=_safe_int(
+                stock.get("entry_submit_identity_reconciliation_requested_qty"), 0
+            ),
+            unresolved_order_price=_safe_int(
+                stock.get("entry_submit_identity_reconciliation_order_price"), 0
+            ),
+            unresolved_recorded_at=_safe_float(
+                stock.get("entry_submit_identity_reconciliation_recorded_at"), 0.0
+            ),
+            metric_role="safety_veto",
+            decision_authority="exact_broker_order_identity_reconciliation_guard",
+            window_policy="same_symbol_until_broker_inventory_reconciled",
+            sample_floor="not_applicable_order_identity_safety_veto",
+            primary_decision_metric="entry_submit_identity_reconciliation_required",
+            source_quality_gate="exact_broker_order_identity_required",
+            runtime_effect=True,
+            allowed_runtime_apply=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            forbidden_uses=(
+                "automatic_reconciliation_clear|duplicate_buy_retry|residual_leg_submit|"
+                "broker_guard_bypass|order_identity_inference|owner_or_custody_transfer"
+            ),
+        )
+        return False
     ws_data, entry_opportunity_recheck_ws_handoff_fields = (
         _consume_entry_opportunity_recheck_ws_handoff(stock, ws_data, runtime)
     )
@@ -68837,6 +68917,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     )
 
     successful_orders = []
+    broker_submit_attempt_count = 0
+    broker_submit_success_response_count = 0
     entry_split_order_submit_fields = {
         "entry_split_order_policy_applied": bool(
             submit_revalidation_fields.get("entry_split_order_policy_applied")
@@ -69451,6 +69533,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 runtime_effect=True,
             )
             break
+        broker_submit_attempt_count += 1
         res = kiwoom_orders.send_buy_order(
             code,
             qty,
@@ -69487,6 +69570,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **real_pre_submit_guard_fields,
             )
             continue
+        broker_submit_success_response_count += 1
         scanner_generation_submit_committed = True
         response_broker_route = (
             str(
@@ -69503,18 +69587,83 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             or "caller_fallback"
         ).strip()
         ord_no = _extract_broker_order_no(res)
-        if (
-            bool(planned_order.get("entry_split_order_probe_first_applied"))
-            and not ord_no
-        ):
-            trip_probe_runtime_circuit("probe_broker_order_number_missing")
-            _abort_entry_split_probe_residual(
+        if not ord_no:
+            probe_first_order = bool(
+                planned_order.get("entry_split_order_probe_first_applied")
+            )
+            identity_failure_reason = (
+                "probe_broker_order_number_missing"
+                if probe_first_order
+                else "broker_order_number_missing_after_success_response"
+            )
+            if probe_first_order:
+                trip_probe_runtime_circuit(identity_failure_reason)
+                _abort_entry_split_probe_residual(
+                    stock,
+                    code,
+                    identity_failure_reason,
+                    preserve_position=_safe_int(stock.get("buy_qty"), 0) > 0,
+                )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "entry_submit_identity_reconciliation_required": True,
+                    "entry_submit_identity_reconciliation_reason": (
+                        identity_failure_reason
+                    ),
+                    "entry_submit_identity_reconciliation_return_code": rt_cd,
+                    "entry_submit_identity_reconciliation_requested_qty": qty,
+                    "entry_submit_identity_reconciliation_order_price": broker_price,
+                    "entry_submit_identity_reconciliation_broker_route": (
+                        response_broker_route
+                    ),
+                    "entry_submit_identity_reconciliation_route_resolution": (
+                        response_route_resolution
+                    ),
+                    "entry_submit_identity_reconciliation_recorded_at": time.time(),
+                },
+            )
+            _log_entry_pipeline(
                 stock,
                 code,
-                "probe_broker_order_number_missing",
-                preserve_position=_safe_int(stock.get("buy_qty"), 0) > 0,
+                "order_leg_fail",
+                tag=request["tag"],
+                return_code=rt_cd,
+                failure_reason=identity_failure_reason,
+                broker_response_success=True,
+                broker_order_identity_present=False,
+                broker_submission_reconciliation_required=True,
+                metric_role="source_quality_blocker",
+                decision_authority="exact_broker_order_identity_reconciliation_guard",
+                window_policy="same_symbol_until_broker_inventory_reconciled",
+                sample_floor="not_applicable_order_identity_safety_veto",
+                primary_decision_metric="broker_order_identity_present",
+                source_quality_gate="exact_broker_order_identity_required",
+                runtime_effect=False,
+                allowed_runtime_apply=False,
+                actual_order_submitted=False,
+                broker_order_forbidden=False,
+                forbidden_uses=(
+                    "successful_submit_count|order_identity_inference|duplicate_buy_retry|"
+                    "residual_leg_submit|owner_or_custody_transfer|runtime_promotion"
+                ),
+                **order_resolution_fields,
+                **_without_entry_pipeline_fields(
+                    real_pre_submit_guard_fields,
+                    "metric_role",
+                    "decision_authority",
+                    "window_policy",
+                    "sample_floor",
+                    "primary_decision_metric",
+                    "source_quality_gate",
+                    "runtime_effect",
+                    "allowed_runtime_apply",
+                    "actual_order_submitted",
+                    "broker_order_forbidden",
+                    "forbidden_uses",
+                ),
             )
-            continue
+            break
         route_recorded_at = time.time()
         entry_execution_cohort = _scalping_execution_cohort(
             route_recorded_at, response_broker_route
@@ -69815,6 +69964,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **_merge_entry_pipeline_field_groups(
                 real_pre_submit_guard_fields,
                 microstructure_submit_log_fields,
+            ),
+            **_order_bundle_failure_provenance(
+                broker_submit_attempt_count,
+                broker_submit_success_response_count,
             ),
         )
         if _is_swing_strategy(strategy):

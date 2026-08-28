@@ -28919,6 +28919,53 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     )
     assert by_stage["order_bundle_failed"]["liquidity_guard_action"] == "WOULD_PASS"
     assert by_stage["order_bundle_failed"]["overbought_guard_action"] == "WOULD_PASS"
+    assert by_stage["order_bundle_failed"]["actual_order_submitted"] is False
+    assert by_stage["order_bundle_failed"]["broker_order_forbidden"] is True
+    assert by_stage["order_bundle_failed"]["broker_submit_attempt_count"] == 0
+    assert (
+        by_stage["order_bundle_failed"]["broker_submit_success_response_count"] == 0
+    )
+    assert (
+        by_stage["order_bundle_failed"]["broker_submission_reconciliation_required"]
+        is False
+    )
+    assert (
+        by_stage["order_bundle_failed"]["order_bundle_failure_mode"]
+        == "pre_broker_blocked"
+    )
+
+
+def test_order_bundle_failure_provenance_distinguishes_broker_attempt():
+    fields = state_handlers._order_bundle_failure_provenance(1, 0)
+
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is False
+    assert fields["broker_submit_attempt_count"] == 1
+    assert fields["broker_submit_success_response_count"] == 0
+    assert fields["broker_submission_reconciliation_required"] is False
+    assert fields["order_bundle_failure_mode"] == (
+        "broker_submit_failed_or_unacknowledged"
+    )
+    assert fields["runtime_effect"] is False
+    assert fields["allowed_runtime_apply"] is False
+
+
+def test_order_bundle_failure_provenance_fails_closed_when_order_identity_missing():
+    fields = state_handlers._order_bundle_failure_provenance(1, 1)
+
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is False
+    assert fields["broker_submit_attempt_count"] == 1
+    assert fields["broker_submit_success_response_count"] == 1
+    assert fields["order_bundle_failure_mode"] == (
+        "broker_acknowledged_order_identity_missing"
+    )
+    assert fields["broker_submission_reconciliation_required"] is True
+
+    inconsistent_fields = state_handlers._order_bundle_failure_provenance(0, 1)
+    assert inconsistent_fields["broker_submit_success_response_count"] == 0
+    assert inconsistent_fields["actual_order_submitted"] is False
+    assert inconsistent_fields["broker_order_forbidden"] is True
 
 
 def test_counterfactual_executable_bbo_requires_explicit_fresh_submit_context():
@@ -30054,7 +30101,10 @@ def test_rising_missed_scout_quality_guard_keeps_independent_ofi_veto(
     assert decision["block_reason"] == "fresh_adverse_micro_submit_safety"
 
 
-def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
+@pytest.mark.parametrize("broker_order_identity_present", [True, False])
+def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
+    monkeypatch, broker_order_identity_present
+):
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -30176,7 +30226,7 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
             sent_orders.append(args)
             or {
                 "return_code": "0",
-                "ord_no": "O1",
+                **({"ord_no": "O1"} if broker_order_identity_present else {}),
                 "broker_route": "SOR",
                 "broker_route_resolution": "test_explicit_krx_session_route",
             }
@@ -30210,6 +30260,19 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
             "order_price": kwargs.get("signal_price"),
         },
     )
+    if not broker_order_identity_present:
+        monkeypatch.setattr(
+            state_handlers,
+            "apply_entry_split_order_policy",
+            lambda orders, **kwargs: (
+                [dict(orders[0]), {**orders[0], "tag": "residual"}],
+                {
+                    "entry_split_order_policy_applied": True,
+                    "entry_split_order_policy_mode": "test_two_leg_bundle",
+                    "entry_split_order_leg_count": 2,
+                },
+            ),
+        )
 
     stock = {
         "id": 11,
@@ -30253,16 +30316,103 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
     assert "pre_submit_liquidity_relief_evaluated" in by_stage
     assert "pre_submit_liquidity_relief_allowed" in by_stage
     assert "pre_submit_liquidity_guard_block" not in by_stage
-    assert "order_bundle_submitted" in by_stage
-    assert by_stage["order_bundle_submitted"]["requested_qty"] == 1
-    assert by_stage["order_bundle_submitted"]["submitted_qty"] == 1
-    assert by_stage["order_bundle_submitted"]["submitted_leg_count"] == 1
-    assert stock["entry_execution_broker_route"] == "SOR"
-    assert stock["entry_execution_broker_route_resolution"] == (
-        "consistent_submitted_legs"
+    # A broker success response without an order identity must stop the bundle;
+    # the residual leg is never sent while the first leg is unreconciled.
+    assert len(sent_orders) == 1
+    if broker_order_identity_present:
+        assert "order_bundle_submitted" in by_stage
+        assert by_stage["order_bundle_submitted"]["requested_qty"] == 1
+        assert by_stage["order_bundle_submitted"]["submitted_qty"] == 1
+        assert by_stage["order_bundle_submitted"]["submitted_leg_count"] == 1
+        assert stock["entry_execution_broker_route"] == "SOR"
+        assert stock["entry_execution_broker_route_resolution"] == (
+            "consistent_submitted_legs"
+        )
+        assert stock["entry_execution_route_recorded_at"] > 0
+        assert not stock.get("entry_submit_identity_reconciliation_required")
+    else:
+        assert "order_bundle_submitted" not in by_stage
+        assert "pending_entry_orders" not in stock
+        assert stock["entry_submit_identity_reconciliation_required"] is True
+        assert stock["entry_submit_identity_reconciliation_reason"] == (
+            "broker_order_number_missing_after_success_response"
+        )
+        assert by_stage["order_leg_fail"]["broker_response_success"] is True
+        assert by_stage["order_leg_fail"]["broker_order_identity_present"] is False
+        assert (
+            by_stage["order_leg_fail"][
+                "broker_submission_reconciliation_required"
+            ]
+            is True
+        )
+        assert by_stage["order_bundle_failed"]["order_bundle_failure_mode"] == (
+            "broker_acknowledged_order_identity_missing"
+        )
+        assert (
+            by_stage["order_bundle_failed"][
+                "broker_submission_reconciliation_required"
+            ]
+            is True
+        )
+
+
+def test_entry_submit_identity_reconciliation_guard_blocks_repeat_broker_attempt(
+    monkeypatch,
+):
+    logs = []
+    broker_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
     )
-    assert stock["entry_execution_route_recorded_at"] > 0
-    assert sent_orders
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: broker_calls.append((args, kwargs)),
+    )
+    stock = {
+        "name": "RECONCILE",
+        "entry_submit_identity_reconciliation_required": True,
+        "entry_submit_identity_reconciliation_reason": (
+            "broker_order_number_missing_after_success_response"
+        ),
+        "entry_submit_identity_reconciliation_requested_qty": 1,
+        "entry_submit_identity_reconciliation_order_price": 10_000,
+        "entry_submit_identity_reconciliation_broker_route": "SOR",
+        "entry_submit_identity_reconciliation_recorded_at": 1_000.0,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "ratio": 0.1,
+        "curr_price": 10_000,
+        "liquidity_value": 1_000_000_000,
+        "msg": "",
+        "now_ts": 1_001.0,
+        "cooldowns": {},
+        "alerted_stocks": set(),
+    }
+
+    submitted = state_handlers._submit_watching_triggered_entry(
+        stock,
+        "555555",
+        {"curr": 10_000},
+        1,
+        runtime,
+    )
+
+    assert submitted is False
+    assert broker_calls == []
+    assert len(logs) == 1
+    stage, fields = logs[0]
+    assert stage == "entry_submit_identity_reconciliation_blocked"
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+    assert fields["runtime_effect"] is True
+    assert fields["allowed_runtime_apply"] is False
+    assert fields["unresolved_broker_route"] == "SOR"
+    assert fields["unresolved_requested_qty"] == 1
+    assert fields["unresolved_order_price"] == 10_000
 
 
 def test_pre_submit_liquidity_relief_requires_strong_bundle_path(monkeypatch):

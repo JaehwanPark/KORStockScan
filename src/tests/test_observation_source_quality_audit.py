@@ -2181,6 +2181,16 @@ def test_observation_source_quality_audit_reviews_20260713_unknown_provenance_ga
                 record_id=5,
             ),
             _event(
+                "order_bundle_failed",
+                {
+                    **common_entry_context,
+                    "decision_authority": "real_scalping_submit_fail_closed",
+                    "runtime_effect": False,
+                    "source_quality_gate": "entry_context_source_quality",
+                },
+                record_id=6,
+            ),
+            _event(
                 "scalp_entry_action_decision_snapshot",
                 {
                     "actual_order_submitted": False,
@@ -2233,6 +2243,12 @@ def test_observation_source_quality_audit_reviews_20260713_unknown_provenance_ga
         reviewed["rising_missed_tick_absolute_throughput_relief_applied"][
             "entry_order_flow_status"
         ]["reviewed_reason"]
+        == "reviewed_entry_order_flow_not_available"
+    )
+    assert (
+        reviewed["order_bundle_failed"]["entry_order_flow_status"][
+            "reviewed_reason"
+        ]
         == "reviewed_entry_order_flow_not_available"
     )
     assert (
@@ -2545,6 +2561,35 @@ def test_observation_source_quality_audit_reviews_20260722_explicit_unknown_prov
                 "entry_context_missing_features": "order_flow_pressure",
                 "actual_order_submitted": True,
                 "broker_order_forbidden": False,
+            },
+        )
+        is None
+    )
+    assert (
+        audit._reviewed_unknown_reason_for_stage_field(
+            "order_bundle_failed",
+            "entry_order_flow_status",
+            "unknown",
+            {
+                "entry_context_quality": "stale",
+                "entry_context_missing_features": "order_flow_pressure",
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+            },
+        )
+        is None
+    )
+    assert (
+        audit._reviewed_unknown_reason_for_stage_field(
+            "order_bundle_failed",
+            "entry_order_flow_status",
+            "unknown",
+            {
+                "entry_context_quality": "stale",
+                "entry_context_missing_features": "order_flow_pressure",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": False,
+                "broker_submission_reconciliation_required": True,
             },
         )
         is None
