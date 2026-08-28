@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from src.trading.order.entry_liquidity_guard import EntryLiquiditySnapshot
+from src.trading.order.entry_liquidity_guard import (
+    EntryExecutionVelocitySnapshot,
+    EntryLiquiditySnapshot,
+)
 
 from src.trading.samsung_midday_one_share import gateway as gateway_module
 from src.trading.samsung_midday_one_share.gateway import (
@@ -83,6 +86,21 @@ class FakeGateway:
             best_ask_qty=1_000,
             age_ms=0,
             received_ts_ms=1,
+        )
+
+    def entry_execution_velocity_snapshot(self, *, route="SOR"):
+        return EntryExecutionVelocitySnapshot(
+            True,
+            "005930",
+            route,
+            "005930_AL",
+            print_count=10,
+            recent_print_span_ms=1_000,
+            latest_print_age_ms=0,
+            recent_volume=1_000,
+            observed_at_kst="2026-08-12T13:15:10+09:00",
+            print_times=("131510",) * 10,
+            venues=("KRX",) * 10,
         )
 
     def _accepted(self, prefix: str) -> SubmitResult:

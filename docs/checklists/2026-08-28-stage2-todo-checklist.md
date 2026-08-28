@@ -117,11 +117,12 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
-- [ ] `[WidgetEpisodeLiquidityGuardPreopenAcceptance0831] 위젯·에피소드 신규매수 최우선 양방향 잔량 가드 설치·기동 반영 확인` (`Due: 2026-08-31`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:00`, `Track: ScalpingLogic`)
+- [ ] `[WidgetEpisodeLiquidityGuardPreopenAcceptance0831] 위젯·에피소드 신규매수 양방향 잔량·체결속도 가드 설치·기동 반영 확인` (`Due: 2026-08-31`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:00`, `Track: ScalpingLogic`)
   - Source: [entry_liquidity_guard.py](/home/ubuntu/KORStockScan/src/trading/order/entry_liquidity_guard.py), [regular_two_leg_machine.py](/home/ubuntu/KORStockScan/src/trading/order/regular_two_leg_machine.py), [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [test_entry_liquidity_guard.py](/home/ubuntu/KORStockScan/src/tests/test_entry_liquidity_guard.py)
-  - 판정 기준: 신규 위젯 초기·추가매수와 독립 에피소드 첫 매수 전에 fresh `ka10004` venue-qualified 호가를 한 번만 읽고, 최우선 매수·매도 잔량이 각각 `max(100주, 해당 신규 주문 총수량×5)` 이상일 때만 주문 owner가 진행하는지 확인한다. `181710` NHN의 97주/93주 경계 fixture는 주문 0건으로 재현되어야 한다.
-  - 금지: 기존 보유, TARGET_OPEN, 매도·취소·reprice·청산 owner에 유동성 가드를 소급 적용하거나 main/widget/episode custody를 합치지 않는다. 현재 장중 process를 이 항목만으로 임의 재기동하지 않는다.
-  - 완료 조건: review finding 0, targeted validation 통과, 설치 revision과 다음 기동 process revision 일치, 첫 eligible 자연표본의 `entry_liquidity_guard_passed|entry_blocked_liquidity_guard|entry_liquidity_blocked_before_buy` provenance 확인, 기존 owner 미체결·보유·target 비변경, 중복 신규주문 0건.
+  - 판정 기준: 신규 위젯 초기·추가매수와 독립 에피소드 첫 매수 전에 fresh `ka10004` venue-qualified 호가를 한 번만 읽고, 최우선 매수·매도 잔량이 각각 `max(100주, 해당 신규 주문 총수량×5)` 이상일 때만 다음 가드로 진행하는지 확인한다. 이어서 route-qualified `ka10003` 최근 10체결이 최신 5초 이내, 10체결 span 20초 이내, 합산 체결량 `max(20주, 신규 주문 총수량×2)` 이상일 때만 주문 owner가 진행해야 한다. `181710` NHN의 97주/93주 경계와 CJ CGV·영원무역·NHN의 10체결 span 45초/35초/29초 fixture는 모두 주문 0건으로 재현되어야 한다.
+  - 금지: 체결방향이나 체결강도를 체결속도로 대체하지 않는다. 기존 보유, TARGET_OPEN, 매도·취소·reprice·청산 owner에 잔량·체결속도 가드를 소급 적용하거나 main/widget/episode custody를 합치지 않는다. 현재 장중 process를 이 항목만으로 임의 재기동하지 않는다.
+  - 현재 반영 상태 (`2026-08-28 15:32 KST`): production source는 위젯 초기·추가매수, 삼성 morning/reentry/midday/afternoon 및 `LowPriceTwoLegMachine` 전체 profile에 연결됐고 review fixture가 이를 전수 경로 기준으로 검증한다. 당일 07:58 기동 widget PID `13858`과 custody-only 한국전력 morning/afternoon PID `52387`/`198660`은 변경 전 process이므로 `implemented_not_runtime_reflected`다. 한국전력 두 process는 `attempt_consumed=true`와 `TARGET_OPEN`만 관리하므로 신규매수 경로가 없으며, owner별 broker 대사 없이 재기동하지 않는다.
+  - 완료 조건: review finding 0, targeted validation 통과, 설치 revision과 다음 기동 process revision 일치, 첫 eligible 자연표본의 `entry_liquidity_guard_passed|entry_execution_velocity_guard_passed|entry_blocked_liquidity_guard|entry_blocked_execution_velocity_guard|entry_liquidity_blocked_before_buy|entry_execution_velocity_blocked_before_buy` provenance 확인, 기존 owner 미체결·보유·target 비변경, 중복 신규주문 0건.
   - 다음 액션: 설치 또는 새 process 반영 전에는 `implemented_not_runtime_reflected`, 반영 후 자연표본이 없으면 `runtime_reflected_no_natural_sample`, pass/block provenance와 주문 0/정상 제출이 일치하면 `runtime_reflected_and_verified`로 닫는다.
 
 ## Project/Calendar 동기화

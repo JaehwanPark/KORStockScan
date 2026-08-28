@@ -27,8 +27,11 @@ from src.engine.risk.manual_control_exclusion import (
 )
 from src.engine.trade_pause_control import is_buy_side_paused
 from src.trading.order.entry_liquidity_guard import (
+    EntryExecutionVelocityDecision,
     EntryLiquidityDecision,
+    evaluate_entry_execution_velocity,
     evaluate_entry_liquidity,
+    unavailable_entry_execution_velocity_snapshot,
     unavailable_entry_liquidity_snapshot,
 )
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_up_by_bps
@@ -121,6 +124,7 @@ EXECUTION_CONTRACT = {
     "source_quality_gate": (
         "fresh_contract_valid_widget_snapshot_and_unique_signal;"
         "fresh_ka10004_integrated_or_nxt_touch_depth;"
+        "fresh_route_qualified_ka10003_latest_10_print_velocity;"
         "shared_cached_token_only;exact_order_number_fill_reconciliation"
     ),
     "forbidden_uses": [
@@ -131,6 +135,7 @@ EXECUTION_CONTRACT = {
         "non_take_profit_non_final_exit_submission",
         "source_signal_threshold_mutation",
         "entry_liquidity_guard_as_cancel_or_exit_authority",
+        "entry_execution_velocity_guard_as_cancel_or_exit_authority",
         "main_bot_process_control",
     ],
 }
@@ -138,6 +143,7 @@ EXECUTION_CONTRACT = {
 
 class OrderGateway(Protocol):
     def entry_liquidity_snapshot(self, *, code: str, route: str): ...
+    def entry_execution_velocity_snapshot(self, *, code: str, route: str): ...
 
     def submit_buy(self, *, code: str, qty: int, route: str) -> SubmitResult: ...
 
@@ -1786,6 +1792,23 @@ class WidgetSignalAutoTrader:
             )
         return evaluate_entry_liquidity(snapshot, requested_quantity=requested_quantity)
 
+    def _entry_execution_velocity_decision(
+        self, *, spec: WidgetSpec, route: str, requested_quantity: int
+    ) -> EntryExecutionVelocityDecision:
+        try:
+            snapshot = self.gateway.entry_execution_velocity_snapshot(
+                code=spec.code, route=route
+            )
+        except Exception as exc:
+            snapshot = unavailable_entry_execution_velocity_snapshot(
+                symbol=spec.code,
+                route=route,
+                error=type(exc).__name__,
+            )
+        return evaluate_entry_execution_velocity(
+            snapshot, requested_quantity=requested_quantity
+        )
+
     def _maybe_submit_scale_in(
         self,
         spec: WidgetSpec,
@@ -1935,6 +1958,8 @@ class WidgetSignalAutoTrader:
         if (
             symbol_state.get("last_scale_in_liquidity_block_identity")
             == scale_in_liquidity_identity
+            or symbol_state.get("last_scale_in_execution_velocity_block_identity")
+            == scale_in_liquidity_identity
         ):
             return
         liquidity_decision = self._entry_liquidity_decision(
@@ -1973,6 +1998,43 @@ class WidgetSignalAutoTrader:
             current_price=current_price,
             actual_order_submitted=False,
             **liquidity_decision.event_fields(),
+        )
+        velocity_decision = self._entry_execution_velocity_decision(
+            spec=spec,
+            route=route,
+            requested_quantity=int(policy["leg_quantity_each"]),
+        )
+        symbol_state["last_scale_in_execution_velocity_check"] = (
+            velocity_decision.event_fields()
+        )
+        if not velocity_decision.allowed:
+            symbol_state["last_scale_in_execution_velocity_block_identity"] = (
+                scale_in_liquidity_identity
+            )
+            self._save()
+            self._record_entry_block_once(
+                spec=spec,
+                symbol_state=symbol_state,
+                signal_id=scale_in_liquidity_identity,
+                reason="scale_in_blocked_execution_velocity_guard",
+                now=now,
+                trigger_price=trigger_price,
+                current_price=current_price,
+                actual_order_submitted=False,
+                **velocity_decision.event_fields(),
+            )
+            return
+        symbol_state.pop("last_scale_in_execution_velocity_block_identity", None)
+        self._save()
+        self._event(
+            "scale_in_execution_velocity_guard_passed",
+            spec,
+            now,
+            signal_id=scale_in_liquidity_identity,
+            trigger_price=trigger_price,
+            current_price=current_price,
+            actual_order_submitted=False,
+            **velocity_decision.event_fields(),
         )
         if not leg_trigger_already_requested:
             symbol_state["scale_in_requested"] = True
@@ -2812,6 +2874,8 @@ class WidgetSignalAutoTrader:
         if (
             symbol_state.get("last_entry_liquidity_block_identity")
             == confirmation_identity
+            or symbol_state.get("last_entry_execution_velocity_block_identity")
+            == confirmation_identity
         ):
             return
         liquidity_decision = self._entry_liquidity_decision(
@@ -2846,6 +2910,43 @@ class WidgetSignalAutoTrader:
             source_state=source_state,
             actual_order_submitted=False,
             **liquidity_decision.event_fields(),
+        )
+        velocity_decision = self._entry_execution_velocity_decision(
+            spec=spec,
+            route=route,
+            requested_quantity=entry_quantity,
+        )
+        symbol_state["last_entry_execution_velocity_check"] = (
+            velocity_decision.event_fields()
+        )
+        if not velocity_decision.allowed:
+            symbol_state["last_entry_execution_velocity_block_identity"] = (
+                confirmation_identity
+            )
+            self._save()
+            self._record_entry_block_once(
+                spec=spec,
+                symbol_state=symbol_state,
+                signal_id=signal_id,
+                reason="entry_blocked_execution_velocity_guard",
+                now=now,
+                confirmation_identity=confirmation_identity,
+                source_state=source_state,
+                actual_order_submitted=False,
+                **velocity_decision.event_fields(),
+            )
+            return
+        symbol_state.pop("last_entry_execution_velocity_block_identity", None)
+        self._save()
+        self._event(
+            "entry_execution_velocity_guard_passed",
+            spec,
+            now,
+            signal_id=signal_id,
+            confirmation_identity=confirmation_identity,
+            source_state=source_state,
+            actual_order_submitted=False,
+            **velocity_decision.event_fields(),
         )
         for key in (
             "entry_submit_rejected_at",

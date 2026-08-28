@@ -4,7 +4,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 import pytest
 
-from src.trading.order.entry_liquidity_guard import EntryLiquiditySnapshot
+from src.trading.order.entry_liquidity_guard import (
+    EntryExecutionVelocitySnapshot,
+    EntryLiquiditySnapshot,
+)
 
 from src.trading.samsung_morning_one_share import gateway as gateway_module
 from src.trading.samsung_morning_one_share.gateway import (
@@ -33,6 +36,8 @@ class FakeGateway:
         self.best_bid_qty = 1_000
         self.best_ask_qty = 1_000
         self.liquidity_calls: list[str] = []
+        self.execution_velocity_span_ms = 1_000
+        self.execution_velocity_calls: list[str] = []
 
     def _accepted(self, prefix: str) -> SubmitResult:
         self.sequence += 1
@@ -56,6 +61,23 @@ class FakeGateway:
             best_ask_qty=self.best_ask_qty,
             age_ms=0,
             received_ts_ms=1,
+        )
+
+    def entry_execution_velocity_snapshot(self, *, route="SOR"):
+        self.execution_velocity_calls.append(route)
+        suffix = "NX" if route == "NXT" else "AL"
+        return EntryExecutionVelocitySnapshot(
+            True,
+            "005930",
+            route,
+            f"005930_{suffix}",
+            print_count=10,
+            recent_print_span_ms=self.execution_velocity_span_ms,
+            latest_print_age_ms=0,
+            recent_volume=1_000,
+            observed_at_kst="2026-08-12T09:00:00+09:00",
+            print_times=("090000",) * 10,
+            venues=(("NXT",) * 10 if route == "NXT" else ("KRX",) * 10),
         )
 
     def submit_limit_buy(self, *, price, quantity, route="SOR"):
@@ -246,6 +268,22 @@ def test_thin_nxt_book_blocks_both_morning_legs_without_any_buy(tmp_path):
     assert {leg["status"] for leg in state["legs"]} == {"NO_FILL"}
     assert state["last_action"] == "entry_liquidity_blocked_before_buy"
     assert gateway.liquidity_calls == ["NXT"]
+    assert gateway.buy_calls == []
+
+
+def test_slow_nxt_prints_block_both_morning_legs_without_any_buy(tmp_path):
+    gateway = FakeGateway()
+    gateway.execution_velocity_span_ms = 29_000
+
+    state = _machine(tmp_path, gateway).run_once(_at(11, 8, 1))
+
+    assert state["status"] == "NO_TRADE"
+    assert state["position_qty"] == 0
+    assert {leg["status"] for leg in state["legs"]} == {"NO_FILL"}
+    assert state["last_action"] == "entry_execution_velocity_blocked_before_buy"
+    assert state["blocked_reason"] == "entry_execution_velocity_too_slow"
+    assert gateway.liquidity_calls == ["NXT"]
+    assert gateway.execution_velocity_calls == ["NXT"]
     assert gateway.buy_calls == []
 
 

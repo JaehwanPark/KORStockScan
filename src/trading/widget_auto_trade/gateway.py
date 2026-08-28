@@ -16,9 +16,13 @@ import requests
 from src.engine.sniper_config import CONF
 from src.engine.trade_pause_control import is_buy_side_paused
 from src.trading.order.entry_liquidity_guard import (
+    REQUIRED_RECENT_PRINT_COUNT,
+    EntryExecutionVelocitySnapshot,
     EntryLiquiditySnapshot,
     entry_liquidity_request_code,
+    parse_ka10003_entry_execution_velocity_snapshot,
     parse_ka10004_entry_liquidity_snapshot,
+    unavailable_entry_execution_velocity_snapshot,
     unavailable_entry_liquidity_snapshot,
 )
 from src.trading.order.tick_utils import get_tick_size
@@ -35,7 +39,11 @@ KIWOOM_OFFICIAL_REFERENCE = {
     ],
     "request_scope": ["kt10000", "kt10001", "kt10003", "kt00007"],
     "delegated_request_scope": {
-        "ka10004": "src.trading.order.entry_liquidity_guard.KIWOOM_OFFICIAL_REFERENCE"
+        "ka10003": (
+            "src.trading.order.entry_liquidity_guard."
+            "KIWOOM_EXECUTION_VELOCITY_OFFICIAL_REFERENCE"
+        ),
+        "ka10004": "src.trading.order.entry_liquidity_guard.KIWOOM_OFFICIAL_REFERENCE",
     },
 }
 
@@ -264,6 +272,22 @@ class KiwoomSharedTokenOrderGateway:
                 symbol=code, route=route, error=type(exc).__name__
             )
         return parse_ka10004_entry_liquidity_snapshot(payload, symbol=code, route=route)
+
+    def entry_execution_velocity_snapshot(
+        self, *, code: str, route: str
+    ) -> EntryExecutionVelocitySnapshot:
+        try:
+            request_code = entry_liquidity_request_code(code, route)
+            payload = kiwoom_utils.get_tick_history_ka10003(
+                self._token(), request_code, limit=REQUIRED_RECENT_PRINT_COUNT
+            )
+        except Exception as exc:
+            return unavailable_entry_execution_velocity_snapshot(
+                symbol=code, route=route, error=type(exc).__name__
+            )
+        return parse_ka10003_entry_execution_velocity_snapshot(
+            payload, symbol=code, route=route
+        )
 
     @staticmethod
     def _submit_result(

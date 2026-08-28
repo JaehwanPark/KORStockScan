@@ -25,8 +25,11 @@ from src.trading.order.episode_quantity import (
     SUPPORTED_OWNED_LEG_QUANTITIES,
 )
 from src.trading.order.entry_liquidity_guard import (
+    EntryExecutionVelocityDecision,
     EntryLiquidityDecision,
+    evaluate_entry_execution_velocity,
     evaluate_entry_liquidity,
+    unavailable_entry_execution_velocity_snapshot,
     unavailable_entry_liquidity_snapshot,
 )
 from src.trading.config.machine_entry_timing_policy import (
@@ -40,6 +43,7 @@ KST = ZoneInfo("Asia/Seoul")
 class RegularGateway(Protocol):
     def completed_sor_minute_bars(self, *, trade_date, now: datetime): ...
     def entry_liquidity_snapshot(self, *, route: str = "SOR"): ...
+    def entry_execution_velocity_snapshot(self, *, route: str = "SOR"): ...
     def submit_limit_buy(self, *, price: int, quantity: int): ...
     def submit_limit_sell(self, *, price: int, quantity: int): ...
     def cancel_buy(self, *, order_no: str): ...
@@ -312,6 +316,21 @@ class SamsungRegularTwoLegMachine:
             )
         return evaluate_entry_liquidity(snapshot, requested_quantity=requested_quantity)
 
+    def _entry_execution_velocity_decision(
+        self, *, route: str, requested_quantity: int
+    ) -> EntryExecutionVelocityDecision:
+        try:
+            snapshot = self.gateway.entry_execution_velocity_snapshot(route=route)
+        except Exception as exc:
+            snapshot = unavailable_entry_execution_velocity_snapshot(
+                symbol=str(self.policy.symbol),
+                route=route,
+                error=type(exc).__name__,
+            )
+        return evaluate_entry_execution_velocity(
+            snapshot, requested_quantity=requested_quantity
+        )
+
     def _entry_liquidity_allows_planned_buys(
         self, *, now: datetime, route: str, requested_quantity: int
     ) -> bool:
@@ -342,6 +361,32 @@ class SamsungRegularTwoLegMachine:
             "entry_liquidity_guard_passed",
             route=normalized_route,
             **decision.event_fields(),
+        )
+        velocity_decision = self._entry_execution_velocity_decision(
+            route=normalized_route,
+            requested_quantity=requested_quantity,
+        )
+        features = dict(self._state.get("signal_features") or {})
+        features["entry_execution_velocity"] = velocity_decision.event_fields()
+        self._state["signal_features"] = features
+        if not velocity_decision.allowed:
+            for leg in self._state.get("legs", []):
+                leg_route = str(leg.get("route") or normalized_route).upper()
+                if leg.get("status") == "PLANNED" and leg_route == normalized_route:
+                    leg["status"] = "NO_FILL"
+            self._state["blocked_reason"] = velocity_decision.reason
+            self._record(
+                now,
+                "entry_execution_velocity_blocked_before_buy",
+                route=normalized_route,
+                **velocity_decision.event_fields(),
+            )
+            return False
+        self._record(
+            now,
+            "entry_execution_velocity_guard_passed",
+            route=normalized_route,
+            **velocity_decision.event_fields(),
         )
         return True
 

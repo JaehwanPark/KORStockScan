@@ -18,9 +18,13 @@ from src.trading.order.episode_quantity import (
     validate_position_quantity,
 )
 from src.trading.order.entry_liquidity_guard import (
+    REQUIRED_RECENT_PRINT_COUNT,
+    EntryExecutionVelocitySnapshot,
     EntryLiquiditySnapshot,
     entry_liquidity_request_code,
+    parse_ka10003_entry_execution_velocity_snapshot,
     parse_ka10004_entry_liquidity_snapshot,
+    unavailable_entry_execution_velocity_snapshot,
     unavailable_entry_liquidity_snapshot,
 )
 from src.trading.order.kiwoom_episode_read_control import (
@@ -51,7 +55,11 @@ OFFICIAL_REFERENCE = {
     ],
     "request_scope": ["ka10080", "kt10000", "kt10001", "kt10003", "kt00007"],
     "delegated_request_scope": {
-        "ka10004": "src.trading.order.entry_liquidity_guard.KIWOOM_OFFICIAL_REFERENCE"
+        "ka10003": (
+            "src.trading.order.entry_liquidity_guard."
+            "KIWOOM_EXECUTION_VELOCITY_OFFICIAL_REFERENCE"
+        ),
+        "ka10004": "src.trading.order.entry_liquidity_guard.KIWOOM_OFFICIAL_REFERENCE",
     },
 }
 
@@ -338,6 +346,22 @@ class KiwoomLowPriceTwoLegGateway:
                 symbol=self.symbol, route=route, error=type(exc).__name__
             )
         return parse_ka10004_entry_liquidity_snapshot(
+            payload, symbol=self.symbol, route=route
+        )
+
+    def entry_execution_velocity_snapshot(
+        self, *, route: str = "SOR"
+    ) -> EntryExecutionVelocitySnapshot:
+        try:
+            request_code = entry_liquidity_request_code(self.symbol, route)
+            payload = kiwoom_utils.get_tick_history_ka10003(
+                self._token(), request_code, limit=REQUIRED_RECENT_PRINT_COUNT
+            )
+        except Exception as exc:
+            return unavailable_entry_execution_velocity_snapshot(
+                symbol=self.symbol, route=route, error=type(exc).__name__
+            )
+        return parse_ka10003_entry_execution_velocity_snapshot(
             payload, symbol=self.symbol, route=route
         )
 

@@ -33,7 +33,10 @@ from src.trading.low_price_two_leg.gateway import (
     SubmitResult,
 )
 from src.trading.low_price_two_leg.machine import LowPriceTwoLegMachine
-from src.trading.order.entry_liquidity_guard import EntryLiquiditySnapshot
+from src.trading.order.entry_liquidity_guard import (
+    EntryExecutionVelocitySnapshot,
+    EntryLiquiditySnapshot,
+)
 from src.trading.low_price_two_leg.policy_runtime import (
     BASELINE_POLICIES,
     CANDIDATE_SCHEMA,
@@ -169,6 +172,10 @@ class FakeGateway:
         self.best_bid_qty = 1_000
         self.best_ask_qty = 1_000
         self.liquidity_calls: list[str] = []
+        self.execution_velocity_span_ms = 1_000
+        self.execution_velocity_latest_age_ms = 0
+        self.execution_velocity_recent_volume = 1_000
+        self.execution_velocity_calls: list[str] = []
 
     def completed_sor_minute_bars(self, *, trade_date, now):
         return MinuteBarsSnapshot(True, self.bars)
@@ -186,6 +193,22 @@ class FakeGateway:
             best_ask_qty=self.best_ask_qty,
             age_ms=0,
             received_ts_ms=1,
+        )
+
+    def entry_execution_velocity_snapshot(self, *, route="SOR"):
+        self.execution_velocity_calls.append(route)
+        return EntryExecutionVelocitySnapshot(
+            True,
+            PROFILES[self.profile_id].symbol,
+            route,
+            f"{PROFILES[self.profile_id].symbol}_AL",
+            print_count=10,
+            recent_print_span_ms=self.execution_velocity_span_ms,
+            latest_print_age_ms=self.execution_velocity_latest_age_ms,
+            recent_volume=self.execution_velocity_recent_volume,
+            observed_at_kst="2026-08-12T14:00:10+09:00",
+            print_times=("140010",) * 10,
+            venues=("KRX",) * 10,
         )
 
     def _accepted(self, prefix: str) -> SubmitResult:
@@ -1368,6 +1391,38 @@ def test_machine_blocks_entire_episode_when_either_touch_has_under_100_shares(
     assert guard["entry_liquidity_required_each_side_quantity"] == 100
     assert guard["entry_liquidity_snapshot"]["best_bid_qty"] == 97
     assert guard["entry_liquidity_snapshot"]["best_ask_qty"] == 93
+
+
+def test_machine_blocks_entire_episode_when_latest_ten_prints_are_too_slow(
+    tmp_path,
+):
+    profile = PROFILES["youngone_afternoon"]
+    gateway = FakeGateway(profile.profile_id)
+    gateway.execution_velocity_span_ms = 35_000
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "youngone-slow-state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+
+    state = machine.run_once(_profile_run_at(profile.profile_id))
+
+    assert state["status"] == "NO_TRADE"
+    assert state["attempt_consumed"] is True
+    assert state["position_qty"] == 0
+    assert {leg["status"] for leg in state["legs"]} == {"NO_FILL"}
+    assert state["blocked_reason"] == "entry_execution_velocity_too_slow"
+    assert state["last_action"] == "entry_execution_velocity_blocked_before_buy"
+    assert gateway.buy_calls == []
+    assert gateway.liquidity_calls == ["SOR"]
+    assert gateway.execution_velocity_calls == ["SOR"]
+    guard = state["signal_features"]["entry_execution_velocity"]
+    assert guard["entry_execution_velocity_snapshot"]["recent_print_span_ms"] == (
+        35_000
+    )
+    assert guard["entry_execution_velocity_allowed"] is False
 
 
 def test_machine_rechecks_liquidity_after_restart_with_a_planned_leg(tmp_path):
