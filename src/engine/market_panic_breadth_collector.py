@@ -13,6 +13,7 @@ import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import write_json_object_generation_safe
@@ -45,12 +46,285 @@ DEFAULT_MARKET_WEIGHTS = {
 }
 MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS = 2
 MARKET_WEAKNESS_RELEASE_OBSERVATIONS = 3
+MARKET_WEAKNESS_MIN_OBSERVATION_SPACING_SEC = 60
 MARKET_WEAKNESS_RELEASE_INDEX_MARGIN_PCT = 0.3
 MARKET_WEAKNESS_RELEASE_INDUSTRY_MARGIN_PCT = 7.0
 MARKET_WEAKNESS_RELEASE_SEVERE_MARGIN_PCT = 5.0
 MARKET_WEAKNESS_RELEASE_STOCK_MARGIN_PCT = 10.0
 MARKET_WEAKNESS_MIN_MARKET_INDEX_COUNT = 2
 MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT = 3
+KST = ZoneInfo("Asia/Seoul")
+
+
+def market_weakness_observation_id(observation: dict[str, Any]) -> str:
+    """Return the immutable schema-v2 identity for one weakness snapshot."""
+
+    identity_payload = {
+        "schema_version": 2,
+        "target_date": observation.get("target_date"),
+        "as_of": observation.get("as_of"),
+        "source_quality_status": observation.get("source_quality_status"),
+        "source_quality_ready": observation.get("source_quality_ready"),
+        "raw_state": observation.get("raw_state"),
+        "affected_markets": observation.get("affected_markets"),
+        "recovery_evidence_markets": observation.get("recovery_evidence_markets"),
+        "evidence": observation.get("evidence"),
+        "release_margin": observation.get("release_margin"),
+    }
+    return (
+        "market-weakness-"
+        + hashlib.sha256(
+            json.dumps(
+                identity_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+    )
+
+
+def market_weakness_observation_contract_errors(
+    observation: dict[str, Any],
+) -> list[str]:
+    """Validate the immutable, market-scoped source-only observation contract."""
+
+    errors: list[str] = []
+    supported_markets = {"KOSPI", "KOSDAQ"}
+    raw_state = _safe_str(observation.get("raw_state"))
+    affected_raw = observation.get("affected_markets")
+    recovered_raw = observation.get("recovery_evidence_markets")
+    affected = (
+        sorted({_safe_str(value).upper() for value in affected_raw})
+        if isinstance(affected_raw, list)
+        else []
+    )
+    recovered = (
+        sorted({_safe_str(value).upper() for value in recovered_raw})
+        if isinstance(recovered_raw, list)
+        else []
+    )
+    if observation.get("schema_version") != 2:
+        errors.append("market_scope_schema_v2_required")
+    try:
+        observed_at = datetime.fromisoformat(_safe_str(observation.get("as_of")))
+    except ValueError:
+        observed_at = None
+    if (
+        observed_at is None
+        or observed_at.tzinfo is None
+        or observed_at.astimezone(KST).date().isoformat()
+        != _safe_str(observation.get("target_date"))
+    ):
+        errors.append("exact_date_aware_observation_time_invalid")
+    if observation.get("source_quality_status") != "ok":
+        errors.append("source_quality_status_not_ok")
+    if observation.get("source_quality_ready") is not True:
+        errors.append("source_quality_not_ready")
+    sample_floor = observation.get("sample_floor")
+    if not (
+        observation.get("metric_role") == "market_weakness_observation"
+        and observation.get("window_policy")
+        == "intraday_consecutive_unique_snapshot_hysteresis"
+        and isinstance(sample_floor, dict)
+        and sample_floor.get("market_index_count")
+        == MARKET_WEAKNESS_MIN_MARKET_INDEX_COUNT
+        and sample_floor.get("industry_row_count")
+        == MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT
+        and sample_floor.get("activation_unique_observations")
+        == MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS
+        and sample_floor.get("release_unique_observations")
+        == MARKET_WEAKNESS_RELEASE_OBSERVATIONS
+        and observation.get("primary_decision_metric")
+        == "raw_state_with_release_margin"
+    ):
+        errors.append("metric_contract_invalid")
+    required_forbidden_uses = set(
+        REPORT_ONLY_FORBIDDEN_USES
+        + [
+            "widget_entry_block",
+            "episode_entry_block",
+            "open_buy_cancel",
+            "target_order_cancel",
+            "holding_policy_change",
+            "price_or_quantity_change",
+            "position_exit",
+        ]
+    )
+    forbidden_uses = observation.get("forbidden_uses")
+    if not isinstance(forbidden_uses, list) or not required_forbidden_uses.issubset(
+        {_safe_str(value) for value in forbidden_uses}
+    ):
+        errors.append("forbidden_use_contract_invalid")
+    response_contract = observation.get("response_research_contract")
+    if not (
+        isinstance(response_contract, dict)
+        and response_contract.get("runtime_effect") is False
+        and response_contract.get("allowed_runtime_apply") is False
+        and response_contract.get("control") == "current_owner_behavior_unchanged"
+    ):
+        errors.append("response_research_contract_invalid")
+    if not (
+        observation.get("decision_authority") == "source_quality_observation_only"
+        and observation.get("runtime_effect") is False
+        and observation.get("allowed_runtime_apply") is False
+    ):
+        errors.append("authority_contract_invalid")
+    if raw_state not in {
+        "BROAD_WEAKNESS",
+        "SINGLE_MARKET_WEAKNESS",
+        "RECOVERY_EVIDENCE",
+        "NEAR_WEAKNESS_BOUNDARY",
+        "UNKNOWN",
+    }:
+        errors.append("raw_state_invalid")
+    elif raw_state == "UNKNOWN" and observation.get("source_quality_ready") is True:
+        errors.append("unknown_state_with_ready_source_invalid")
+    if not isinstance(affected_raw, list) or any(
+        market not in supported_markets for market in affected
+    ):
+        errors.append("affected_market_scope_invalid")
+    if not isinstance(recovered_raw, list) or any(
+        market not in supported_markets for market in recovered
+    ):
+        errors.append("recovery_market_scope_invalid")
+    if affected_raw != affected:
+        errors.append("affected_market_scope_not_canonical")
+    if recovered_raw != recovered:
+        errors.append("recovery_market_scope_not_canonical")
+    if raw_state == "BROAD_WEAKNESS" and affected != ["KOSDAQ", "KOSPI"]:
+        errors.append("broad_market_scope_invalid")
+    elif raw_state == "SINGLE_MARKET_WEAKNESS" and len(affected) != 1:
+        errors.append("single_market_scope_invalid")
+    elif raw_state not in {"BROAD_WEAKNESS", "SINGLE_MARKET_WEAKNESS"} and affected:
+        errors.append("non_weak_state_affected_scope_invalid")
+    if set(affected) & set(recovered):
+        errors.append("weak_and_recovery_scope_conflict")
+
+    evidence = observation.get("evidence")
+    evidence_market_states = (
+        evidence.get("market_states")
+        if isinstance(evidence, dict)
+        and isinstance(evidence.get("market_states"), dict)
+        else None
+    )
+    if not (
+        isinstance(evidence, dict)
+        and evidence.get("affected_markets") == affected
+        and evidence.get("recovery_evidence_markets") == recovered
+        and isinstance(evidence_market_states, dict)
+        and all(
+            isinstance(evidence_market_states.get(market), dict)
+            and evidence_market_states[market].get("source_quality_ready") is True
+            for market in supported_markets
+        )
+    ):
+        errors.append("market_scope_evidence_contract_invalid")
+
+    release_margin = observation.get("release_margin")
+    release_thresholds = (
+        release_margin.get("thresholds")
+        if isinstance(release_margin, dict)
+        and isinstance(release_margin.get("thresholds"), dict)
+        else None
+    )
+    required_release_threshold_names = {
+        "each_market_index_above_pct",
+        "weighted_market_index_above_pct",
+        "industry_down_ratio_below_pct",
+        "industry_severe_down_ratio_below_pct",
+        "max_stock_fall_ratio_below_pct",
+    }
+    if not (
+        isinstance(release_thresholds, dict)
+        and set(release_thresholds) == required_release_threshold_names
+        and all(
+            (value := _safe_float(release_thresholds.get(name), None)) is not None
+            and math.isfinite(value)
+            for name in required_release_threshold_names
+        )
+    ):
+        errors.append("release_threshold_contract_invalid")
+    market_checks = (
+        release_margin.get("markets")
+        if isinstance(release_margin, dict)
+        and isinstance(release_margin.get("markets"), dict)
+        else None
+    )
+    passed_markets: list[str] = []
+    if not isinstance(release_margin, dict) or not isinstance(
+        release_margin.get("passed"), bool
+    ):
+        errors.append("release_margin_contract_invalid")
+    if market_checks is None:
+        errors.append("market_release_contract_missing")
+    else:
+        for market in sorted(supported_markets):
+            market_check = market_checks.get(market)
+            checks = (
+                market_check.get("checks")
+                if isinstance(market_check, dict)
+                and isinstance(market_check.get("checks"), dict)
+                else None
+            )
+            required_check_names = {
+                "market_index_recovered",
+                "industry_down_ratio_recovered",
+                "industry_severe_down_ratio_recovered",
+                "stock_fall_ratio_recovered",
+            }
+            market_contract_valid = bool(
+                isinstance(market_check, dict)
+                and isinstance(market_check.get("passed"), bool)
+                and isinstance(market_check.get("source_quality_ready"), bool)
+                and isinstance(checks, dict)
+                and set(checks) == required_check_names
+                and all(isinstance(value, bool) for value in checks.values())
+                and market_check["passed"]
+                is bool(market_check["source_quality_ready"] and all(checks.values()))
+            )
+            if not market_contract_valid:
+                errors.append(f"market_release_contract_invalid:{market}")
+            elif market_check["passed"]:
+                passed_markets.append(market)
+    global_checks = (
+        release_margin.get("checks")
+        if isinstance(release_margin, dict)
+        and isinstance(release_margin.get("checks"), dict)
+        else None
+    )
+    required_global_check_names = {
+        "each_market_index_recovered",
+        "weighted_market_index_recovered",
+        "industry_down_ratio_recovered",
+        "industry_severe_down_ratio_recovered",
+        "stock_fall_ratio_recovered",
+    }
+    if not (
+        isinstance(release_margin, dict)
+        and isinstance(global_checks, dict)
+        and set(global_checks) == required_global_check_names
+        and all(isinstance(value, bool) for value in global_checks.values())
+        and release_margin.get("passed")
+        is bool(observation.get("source_quality_ready") and all(global_checks.values()))
+    ):
+        errors.append("global_release_check_contract_invalid")
+    if recovered != passed_markets:
+        errors.append("recovery_market_release_mismatch")
+    if raw_state == "RECOVERY_EVIDENCE" and (
+        not isinstance(release_margin, dict) or release_margin.get("passed") is not True
+    ):
+        errors.append("global_recovery_margin_not_passed")
+
+    observation_id = _safe_str(observation.get("observation_id"))
+    try:
+        expected_id = market_weakness_observation_id(observation)
+    except (TypeError, ValueError):
+        expected_id = ""
+    if not observation_id or observation_id != expected_id:
+        errors.append("observation_identity_invalid")
+    return list(dict.fromkeys(errors))
 
 
 def _report_dir() -> Path:
@@ -150,7 +424,12 @@ def _find_rows(payload: Any) -> list[dict[str, Any]]:
 
 def parse_kiwoom_industry_rows(
     payloads: list[dict[str, Any]] | dict[str, Any] | list[Any],
+    *,
+    source_market: str | None = None,
 ) -> list[dict[str, Any]]:
+    normalized_source_market = _safe_str(source_market).upper() or None
+    if normalized_source_market not in {None, "KOSPI", "KOSDAQ"}:
+        raise ValueError(f"unsupported source_market: {source_market}")
     payload_list = payloads if isinstance(payloads, list) else [payloads]
     parsed: list[dict[str, Any]] = []
     for row in _find_rows(payload_list):
@@ -198,6 +477,10 @@ def parse_kiwoom_industry_rows(
                 "flat_count": flat_count,
                 "fall_count": fall_count,
                 "listed_count": listed_count,
+                # ka20003 returns a market-specific industry universe selected by
+                # request inds_cd.  The response rows do not repeat that parent
+                # market, so preserve the request provenance explicitly.
+                "source_market": normalized_source_market,
                 "raw_keys": sorted(str(key) for key in row.keys()),
             }
         )
@@ -222,6 +505,45 @@ def _weighted_average(values: list[tuple[float, float]]) -> float | None:
     return round(
         sum(value * weight for value, weight in values if weight > 0) / total_weight, 3
     )
+
+
+def _industry_breadth_metrics(
+    rows: list[dict[str, Any]],
+    *,
+    severe_down_floor_pct: float,
+    severe_up_floor_pct: float,
+) -> dict[str, Any]:
+    pct_rows = [row for row in rows if row.get("change_pct") is not None]
+    down_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) < 0.0]
+    severe_down_rows = [
+        row
+        for row in pct_rows
+        if float(row.get("change_pct") or 0.0) <= severe_down_floor_pct
+    ]
+    up_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) > 0.0]
+    severe_up_rows = [
+        row
+        for row in pct_rows
+        if float(row.get("change_pct") or 0.0) >= severe_up_floor_pct
+    ]
+    sample_count = len(pct_rows)
+
+    def ratio(count: int) -> float:
+        return round((count / sample_count) * 100.0, 1) if sample_count else 0.0
+
+    return {
+        "sample_count": sample_count,
+        "up_count": len(up_rows),
+        "up_ratio_pct": ratio(len(up_rows)),
+        "down_count": len(down_rows),
+        "down_ratio_pct": ratio(len(down_rows)),
+        "severe_down_count": len(severe_down_rows),
+        "severe_down_floor_pct": severe_down_floor_pct,
+        "severe_down_ratio_pct": ratio(len(severe_down_rows)),
+        "severe_up_count": len(severe_up_rows),
+        "severe_up_floor_pct": severe_up_floor_pct,
+        "severe_up_ratio_pct": ratio(len(severe_up_rows)),
+    }
 
 
 def summarize_breadth(
@@ -249,32 +571,24 @@ def summarize_breadth(
         else:
             industry_rows.append(row)
 
-    pct_rows = [row for row in industry_rows if row.get("change_pct") is not None]
-    down_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) < 0.0]
-    severe_down_rows = [
-        row
-        for row in pct_rows
-        if float(row.get("change_pct") or 0.0) <= severe_down_floor_pct
-    ]
-    up_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) > 0.0]
-    severe_up_rows = [
-        row
-        for row in pct_rows
-        if float(row.get("change_pct") or 0.0) >= severe_up_floor_pct
-    ]
-    sample_count = len(pct_rows)
-    down_ratio = (
-        round((len(down_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
+    industry_breadth = _industry_breadth_metrics(
+        industry_rows,
+        severe_down_floor_pct=severe_down_floor_pct,
+        severe_up_floor_pct=severe_up_floor_pct,
     )
-    severe_ratio = (
-        round((len(severe_down_rows) / sample_count) * 100.0, 1)
-        if sample_count
-        else 0.0
-    )
-    up_ratio = round((len(up_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
-    severe_up_ratio = (
-        round((len(severe_up_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
-    )
+    sample_count = int(industry_breadth["sample_count"])
+    down_ratio = float(industry_breadth["down_ratio_pct"])
+    severe_ratio = float(industry_breadth["severe_down_ratio_pct"])
+    up_ratio = float(industry_breadth["up_ratio_pct"])
+    severe_up_ratio = float(industry_breadth["severe_up_ratio_pct"])
+    scoped_industry_rows: dict[str, list[dict[str, Any]]] = {
+        "KOSPI": [],
+        "KOSDAQ": [],
+    }
+    for row in industry_rows:
+        source_market = _safe_str(row.get("source_market")).upper()
+        if source_market in scoped_industry_rows:
+            scoped_industry_rows[source_market].append(row)
     index_changes = {
         market: float(row.get("change_pct"))
         for market, row in market_indices.items()
@@ -288,6 +602,7 @@ def summarize_breadth(
     )
     stock_fall_rows = []
     stock_rise_rows = []
+    stock_breadth_by_market: dict[str, dict[str, Any]] = {}
     stock_fall_weight_values: list[tuple[float, float]] = []
     stock_rise_weight_values: list[tuple[float, float]] = []
     for market, row in market_indices.items():
@@ -325,6 +640,11 @@ def summarize_breadth(
                 "rise_ratio_pct": rise_ratio,
             }
         )
+        stock_breadth_by_market[market] = {
+            "listed_count": denominator,
+            "fall_ratio_pct": fall_ratio,
+            "rise_ratio_pct": rise_ratio,
+        }
     max_stock_fall_ratio = max(
         [row["fall_ratio_pct"] for row in stock_fall_rows], default=0.0
     )
@@ -348,11 +668,6 @@ def summarize_breadth(
         index_risk_off
         and (industry_risk_off or severe_risk_off or stock_breadth_risk_off)
     )
-    single_market_risk_off = bool(
-        not risk_off
-        and (single_market_index_risk_off or single_market_stock_risk_off)
-        and (industry_risk_off or severe_risk_off or single_market_stock_risk_off)
-    )
     index_risk_on = (
         weighted_index_change is not None
         and weighted_index_change >= index_rise_floor_pct
@@ -367,11 +682,99 @@ def summarize_breadth(
     risk_on = bool(
         index_risk_on and (industry_risk_on or severe_risk_on or stock_breadth_risk_on)
     )
-    single_market_risk_on = bool(
-        not risk_on
-        and (single_market_index_risk_on or single_market_stock_risk_on)
-        and (industry_risk_on or severe_risk_on or single_market_stock_risk_on)
-    )
+    market_states: dict[str, dict[str, Any]] = {}
+    affected_markets: list[str] = []
+    risk_on_markets: list[str] = []
+    for market in ("KOSPI", "KOSDAQ"):
+        market_industry = _industry_breadth_metrics(
+            scoped_industry_rows[market],
+            severe_down_floor_pct=severe_down_floor_pct,
+            severe_up_floor_pct=severe_up_floor_pct,
+        )
+        stock_row = stock_breadth_by_market.get(market) or {}
+        index_change = index_changes.get(market)
+        index_weak = bool(
+            index_change is not None and index_change <= index_drop_floor_pct
+        )
+        stock_weak = bool(
+            stock_row.get("listed_count", 0) > 0
+            and stock_row.get("fall_ratio_pct", 0.0) >= stock_fall_ratio_floor_pct
+        )
+        industry_weak = bool(
+            market_industry["sample_count"] >= MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT
+            and market_industry["down_ratio_pct"] >= industry_down_ratio_floor_pct
+        )
+        severe_weak = bool(
+            market_industry["sample_count"] >= MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT
+            and market_industry["severe_down_ratio_pct"] >= severe_down_ratio_floor_pct
+        )
+        index_strong = bool(
+            index_change is not None and index_change >= index_rise_floor_pct
+        )
+        stock_strong = bool(
+            stock_row.get("listed_count", 0) > 0
+            and stock_row.get("rise_ratio_pct", 0.0) >= stock_rise_ratio_floor_pct
+        )
+        industry_strong = bool(
+            market_industry["sample_count"] >= MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT
+            and market_industry["up_ratio_pct"] >= industry_up_ratio_floor_pct
+        )
+        severe_strong = bool(
+            market_industry["sample_count"] >= MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT
+            and market_industry["severe_up_ratio_pct"] >= severe_up_ratio_floor_pct
+        )
+        scope_ready = bool(
+            index_change is not None
+            and (
+                market_industry["sample_count"]
+                >= MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT
+                or stock_row.get("listed_count", 0) > 0
+            )
+        )
+        weak = bool(
+            scope_ready
+            and (index_weak or stock_weak)
+            and (industry_weak or severe_weak or stock_weak)
+        )
+        strong = bool(
+            scope_ready
+            and (index_strong or stock_strong)
+            and (industry_strong or severe_strong or stock_strong)
+        )
+        if weak:
+            affected_markets.append(market)
+        if strong:
+            risk_on_markets.append(market)
+        market_states[market] = {
+            "source_quality_ready": scope_ready,
+            "industry_scope_status": (
+                "request_market_bound"
+                if market_industry["sample_count"]
+                >= MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT
+                else (
+                    "market_stock_breadth_bound"
+                    if stock_row.get("listed_count", 0) > 0
+                    else "market_scope_provenance_missing"
+                )
+            ),
+            "index_change_pct": index_change,
+            "industry_breadth": market_industry,
+            "stock_breadth": stock_row,
+            "risk_off_advisory": weak,
+            "risk_on_advisory": strong,
+            "checks": {
+                "index_weak": index_weak,
+                "industry_weak": industry_weak,
+                "industry_severe_weak": severe_weak,
+                "stock_weak": stock_weak,
+                "index_strong": index_strong,
+                "industry_strong": industry_strong,
+                "industry_severe_strong": severe_strong,
+                "stock_strong": stock_strong,
+            },
+        }
+    single_market_risk_off = bool(not risk_off and affected_markets)
+    single_market_risk_on = bool(not risk_on and risk_on_markets)
     reasons: list[str] = []
     if index_risk_off:
         reasons.append("weighted_market_index_intraday_drop")
@@ -420,19 +823,14 @@ def summarize_breadth(
             "single_market_risk_off_advisory": single_market_risk_off,
             "single_market_risk_on_advisory": single_market_risk_on,
         },
-        "industry_breadth": {
-            "sample_count": sample_count,
-            "up_count": len(up_rows),
-            "up_ratio_pct": up_ratio,
-            "down_count": len(down_rows),
-            "down_ratio_pct": down_ratio,
-            "severe_down_count": len(severe_down_rows),
-            "severe_down_floor_pct": severe_down_floor_pct,
-            "severe_down_ratio_pct": severe_ratio,
-            "severe_up_count": len(severe_up_rows),
-            "severe_up_floor_pct": severe_up_floor_pct,
-            "severe_up_ratio_pct": severe_up_ratio,
-        },
+        "industry_breadth": industry_breadth,
+        "market_states": market_states,
+        "affected_markets": (
+            ["KOSPI", "KOSDAQ"] if risk_off else sorted(affected_markets)
+        ),
+        "risk_on_markets": (
+            ["KOSPI", "KOSDAQ"] if risk_on else sorted(risk_on_markets)
+        ),
         "stock_breadth": {
             "markets": stock_fall_rows,
             "rise_markets": stock_rise_rows,
@@ -502,9 +900,19 @@ def build_market_weakness_observation(
         else {}
     )
     thresholds = (
-        summary.get("thresholds")
-        if isinstance(summary.get("thresholds"), dict)
+        summary.get("thresholds") if isinstance(summary.get("thresholds"), dict) else {}
+    )
+    market_states = (
+        summary.get("market_states")
+        if isinstance(summary.get("market_states"), dict)
         else {}
+    )
+    affected_markets = sorted(
+        {
+            str(market)
+            for market in summary.get("affected_markets") or []
+            if str(market) in {"KOSPI", "KOSDAQ"}
+        }
     )
     weighted_index_change = _safe_float(weighted.get("index_change_pct"), None)
     industry_sample_count = _safe_int(industry.get("sample_count"), 0)
@@ -530,6 +938,11 @@ def build_market_weakness_observation(
         source_quality_status == "ok"
         and as_of[:10] == target_date
         and {"KOSPI", "KOSDAQ"}.issubset(index_changes)
+        and all(
+            isinstance(market_states.get(market), dict)
+            and market_states[market].get("source_quality_ready") is True
+            for market in ("KOSPI", "KOSDAQ")
+        )
         and industry_sample_count >= MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT
         and weighted_index_change is not None
         and industry_down_ratio is not None
@@ -553,8 +966,7 @@ def build_market_weakness_observation(
         ),
         "industry_down_ratio_below_pct": (
             round(
-                industry_down_floor
-                - MARKET_WEAKNESS_RELEASE_INDUSTRY_MARGIN_PCT,
+                industry_down_floor - MARKET_WEAKNESS_RELEASE_INDUSTRY_MARGIN_PCT,
                 3,
             )
             if industry_down_floor is not None
@@ -603,19 +1015,89 @@ def build_market_weakness_observation(
             < release_thresholds["max_stock_fall_ratio_below_pct"]
         ),
     }
-    release_margin_pass = bool(
-        source_quality_ready and all(release_checks.values())
-    )
+    release_margin_pass = bool(source_quality_ready and all(release_checks.values()))
+    market_release_checks: dict[str, dict[str, Any]] = {}
+    recovery_evidence_markets: list[str] = []
+    for market in ("KOSPI", "KOSDAQ"):
+        market_state = (
+            market_states.get(market)
+            if isinstance(market_states.get(market), dict)
+            else {}
+        )
+        market_industry = (
+            market_state.get("industry_breadth")
+            if isinstance(market_state.get("industry_breadth"), dict)
+            else {}
+        )
+        market_stock = (
+            market_state.get("stock_breadth")
+            if isinstance(market_state.get("stock_breadth"), dict)
+            else {}
+        )
+        market_index_change = _safe_float(market_state.get("index_change_pct"), None)
+        market_down_ratio = _safe_float(market_industry.get("down_ratio_pct"), None)
+        market_severe_ratio = _safe_float(
+            market_industry.get("severe_down_ratio_pct"), None
+        )
+        market_fall_ratio = _safe_float(market_stock.get("fall_ratio_pct"), None)
+        listed_count = _safe_int(market_stock.get("listed_count"), 0)
+        scoped_industry_ready = (
+            _safe_int(market_industry.get("sample_count"), 0)
+            >= MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT
+        )
+        checks = {
+            "market_index_recovered": bool(
+                market_index_change is not None
+                and market_index_change
+                > release_thresholds["each_market_index_above_pct"]
+            ),
+            "industry_down_ratio_recovered": bool(
+                scoped_industry_ready
+                and market_down_ratio is not None
+                and market_down_ratio
+                < release_thresholds["industry_down_ratio_below_pct"]
+            ),
+            "industry_severe_down_ratio_recovered": bool(
+                scoped_industry_ready
+                and market_severe_ratio is not None
+                and market_severe_ratio
+                < release_thresholds["industry_severe_down_ratio_below_pct"]
+            ),
+            "stock_fall_ratio_recovered": bool(
+                listed_count <= 0
+                or (
+                    market_fall_ratio is not None
+                    and market_fall_ratio
+                    < release_thresholds["max_stock_fall_ratio_below_pct"]
+                )
+            ),
+        }
+        market_passed = bool(
+            source_quality_ready
+            and market_state.get("source_quality_ready") is True
+            and all(checks.values())
+        )
+        if market_passed:
+            recovery_evidence_markets.append(market)
+        market_release_checks[market] = {
+            "passed": market_passed,
+            "source_quality_ready": market_state.get("source_quality_ready") is True,
+            "checks": checks,
+        }
+    recovery_evidence_markets.sort()
     if not source_quality_ready:
         raw_state = "UNKNOWN"
     elif bool(summary.get("risk_off_advisory")):
         raw_state = "BROAD_WEAKNESS"
-    elif bool(summary.get("single_market_risk_off_advisory")):
+    elif bool(summary.get("single_market_risk_off_advisory")) and affected_markets:
         raw_state = "SINGLE_MARKET_WEAKNESS"
     elif release_margin_pass:
         raw_state = "RECOVERY_EVIDENCE"
     else:
         raw_state = "NEAR_WEAKNESS_BOUNDARY"
+    source_candidate_affected_markets = list(affected_markets)
+    if raw_state not in {"BROAD_WEAKNESS", "SINGLE_MARKET_WEAKNESS"}:
+        affected_markets = []
 
     evidence = {
         "market_index_change_pct": index_changes,
@@ -628,30 +1110,39 @@ def build_market_weakness_observation(
         "single_market_risk_off_advisory": bool(
             summary.get("single_market_risk_off_advisory")
         ),
+        "affected_markets": affected_markets,
+        "source_candidate_affected_markets": source_candidate_affected_markets,
+        "market_states": market_states,
+        "recovery_evidence_markets": recovery_evidence_markets,
         "risk_on_advisory": bool(summary.get("risk_on_advisory")),
     }
-    identity_payload = {
+    release_margin = {
+        "passed": release_margin_pass,
+        "thresholds": release_thresholds,
+        "checks": release_checks,
+        "markets": market_release_checks,
+    }
+    identity_source = {
         "target_date": target_date,
         "as_of": as_of,
-        "source_quality_status": source_quality_status,
         "raw_state": raw_state,
+        "affected_markets": affected_markets,
+        "recovery_evidence_markets": recovery_evidence_markets,
+        "source_quality_ready": source_quality_ready,
+        "source_quality_status": source_quality_status,
         "evidence": evidence,
+        "release_margin": release_margin,
     }
-    observation_id = "market-weakness-" + hashlib.sha256(
-        json.dumps(
-            identity_payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()[:20]
+    observation_id = market_weakness_observation_id(identity_source)
     history_path = _observation_path(target_date, as_of, observation_id)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "observation_id": observation_id,
         "target_date": target_date,
         "as_of": as_of,
         "raw_state": raw_state,
+        "affected_markets": affected_markets,
+        "recovery_evidence_markets": recovery_evidence_markets,
         "source_quality_ready": source_quality_ready,
         "source_quality_status": source_quality_status,
         "metric_role": "market_weakness_observation",
@@ -670,16 +1161,15 @@ def build_market_weakness_observation(
             "widget_entry_block",
             "episode_entry_block",
             "open_buy_cancel",
+            "target_order_cancel",
+            "holding_policy_change",
+            "price_or_quantity_change",
             "position_exit",
         ],
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "evidence": evidence,
-        "release_margin": {
-            "passed": release_margin_pass,
-            "thresholds": release_thresholds,
-            "checks": release_checks,
-        },
+        "release_margin": release_margin,
         "history_path": str(history_path),
         "response_research_contract": {
             "status": "source_only_counterfactual_collection",
@@ -715,24 +1205,31 @@ def fetch_kiwoom_market_breadth(
     from src.utils import kiwoom_utils
 
     url = kiwoom_utils.get_api_url("/api/dostk/sect")
-    results: list[dict[str, Any]] = []
-    for inds_cd in ("001", "101"):
-        results.extend(
-            kiwoom_utils.fetch_kiwoom_api_continuous(
-                url=url,
-                token=token,
-                api_id="ka20003",
-                payload={"inds_cd": inds_cd},
-                use_continuous=False,
-            )
+    parsed_rows: list[dict[str, Any]] = []
+    for inds_cd, source_market in (("001", "KOSPI"), ("101", "KOSDAQ")):
+        payloads = kiwoom_utils.fetch_kiwoom_api_continuous(
+            url=url,
+            token=token,
+            api_id="ka20003",
+            payload={"inds_cd": inds_cd},
+            use_continuous=False,
         )
-    return parse_kiwoom_industry_rows(results), {
+        parsed_rows.extend(
+            parse_kiwoom_industry_rows(payloads, source_market=source_market)
+        )
+    return parsed_rows, {
         "transport": "kiwoom_rest",
         "endpoint": "/api/dostk/sect",
         "api_ids": ["ka20003"],
         "request_payloads": [{"inds_cd": "001"}, {"inds_cd": "101"}],
         "doc_basis": {
             "rest_api": "https://openapi.kiwoom.com/m/guide/apiguide",
+            "official_repository_commit": ("9180debf7aea0074715dd8f7a15af432afbfc403"),
+            "official_repository_retrieved_at": "2026-08-31T07:50:26+09:00",
+            "official_repository_paths": [
+                "kiwoom/_data/kiwoom_api_spec.json#ka20003",
+                "examples/국내주식/업종/get_domestic_all_sector_indices.py",
+            ],
             "ws_types": ["0J 업종지수", "0U 업종등락"],
         },
     }
@@ -746,7 +1243,8 @@ def build_market_panic_breadth_report(
     token: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    as_of = as_of or datetime.now()
+    as_of = as_of or datetime.now(KST)
+    as_of = as_of.replace(tzinfo=KST) if as_of.tzinfo is None else as_of.astimezone(KST)
     errors: list[str] = []
     source = {
         "transport": "injected_rows" if rows is not None else "kiwoom_rest",
@@ -787,7 +1285,7 @@ def build_market_panic_breadth_report(
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_DIRNAME,
         "target_date": target_date,
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(KST).isoformat(timespec="seconds"),
         "as_of": as_of_text,
         "dry_run": bool(dry_run),
         "policy": {
@@ -810,7 +1308,7 @@ def build_market_panic_breadth_report(
 
 
 def write_report(report: dict[str, Any]) -> Path:
-    target_date = _safe_str(report.get("target_date")) or datetime.now().strftime(
+    target_date = _safe_str(report.get("target_date")) or datetime.now(KST).strftime(
         "%Y-%m-%d"
     )
     path = _report_path(target_date)
@@ -834,7 +1332,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Collect report-only intraday market panic breadth."
     )
     parser.add_argument(
-        "--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d")
+        "--date", dest="target_date", default=datetime.now(KST).strftime("%Y-%m-%d")
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--print-json", action="store_true")

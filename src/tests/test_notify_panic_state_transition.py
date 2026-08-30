@@ -1,33 +1,127 @@
 import json
 
 from src.engine import notify_panic_state_transition as mod
+from src.engine.market_panic_breadth_collector import (
+    market_weakness_observation_id,
+)
+
+
+def _refresh_weakness_identity(report: dict) -> dict:
+    observation = report["market_weakness_observation"]
+    affected = sorted(observation.get("affected_markets") or [])
+    recovered = sorted(observation.get("recovery_evidence_markets") or [])
+    observation["affected_markets"] = affected
+    observation["recovery_evidence_markets"] = recovered
+    observation.setdefault("evidence", {})["affected_markets"] = affected
+    observation["evidence"]["recovery_evidence_markets"] = recovered
+    release_margin = observation.setdefault("release_margin", {})
+    release_margin["markets"] = {
+        market: {
+            "passed": market in recovered,
+            "source_quality_ready": True,
+            "checks": {
+                "market_index_recovered": market in recovered,
+                "industry_down_ratio_recovered": market in recovered,
+                "industry_severe_down_ratio_recovered": market in recovered,
+                "stock_fall_ratio_recovered": market in recovered,
+            },
+        }
+        for market in ("KOSPI", "KOSDAQ")
+    }
+    observation["observation_id"] = market_weakness_observation_id(observation)
+    return report
 
 
 def _weakness_report(raw_state: str, sequence: int) -> dict:
-    as_of = f"2026-08-28T10:{sequence:02d}:00"
-    return {
+    as_of = f"2026-08-28T10:{sequence:02d}:00+09:00"
+    report = {
         "target_date": "2026-08-28",
         "as_of": as_of,
         "panic_state": "RECOVERY_WATCH",
         "market_weakness_observation": {
-            "observation_id": f"weakness-{sequence}",
+            "schema_version": 2,
             "target_date": "2026-08-28",
             "as_of": as_of,
             "raw_state": raw_state,
+            "affected_markets": (
+                ["KOSDAQ", "KOSPI"]
+                if raw_state == "BROAD_WEAKNESS"
+                else (["KOSPI"] if raw_state == "SINGLE_MARKET_WEAKNESS" else [])
+            ),
+            "recovery_evidence_markets": (
+                ["KOSDAQ", "KOSPI"] if raw_state == "RECOVERY_EVIDENCE" else []
+            ),
             "source_quality_ready": True,
+            "source_quality_status": "ok",
+            "metric_role": "market_weakness_observation",
             "decision_authority": "source_quality_observation_only",
+            "window_policy": "intraday_consecutive_unique_snapshot_hysteresis",
+            "sample_floor": {
+                "market_index_count": 2,
+                "industry_row_count": 3,
+                "activation_unique_observations": 2,
+                "release_unique_observations": 3,
+            },
+            "primary_decision_metric": "raw_state_with_release_margin",
+            "forbidden_uses": [
+                "runtime_threshold_apply",
+                "order_submit",
+                "auto_sell",
+                "bot_restart",
+                "provider_route_change",
+                "widget_entry_block",
+                "episode_entry_block",
+                "open_buy_cancel",
+                "target_order_cancel",
+                "holding_policy_change",
+                "price_or_quantity_change",
+                "position_exit",
+            ],
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "evidence": {
                 "market_index_change_pct": {"KOSPI": -1.4, "KOSDAQ": -0.2},
                 "industry_down_ratio_pct": 68.0,
                 "max_stock_fall_ratio_pct": 74.0,
+                "affected_markets": (
+                    ["KOSDAQ", "KOSPI"]
+                    if raw_state == "BROAD_WEAKNESS"
+                    else (["KOSPI"] if raw_state == "SINGLE_MARKET_WEAKNESS" else [])
+                ),
+                "recovery_evidence_markets": (
+                    ["KOSDAQ", "KOSPI"] if raw_state == "RECOVERY_EVIDENCE" else []
+                ),
+                "market_states": {
+                    market: {"source_quality_ready": True}
+                    for market in ("KOSPI", "KOSDAQ")
+                },
             },
             "release_margin": {
-                "passed": raw_state == "RECOVERY_EVIDENCE"
+                "passed": raw_state == "RECOVERY_EVIDENCE",
+                "thresholds": {
+                    "each_market_index_above_pct": -0.9,
+                    "weighted_market_index_above_pct": -0.9,
+                    "industry_down_ratio_below_pct": 55.0,
+                    "industry_severe_down_ratio_below_pct": 10.0,
+                    "max_stock_fall_ratio_below_pct": 60.0,
+                },
+                "checks": {
+                    "each_market_index_recovered": raw_state == "RECOVERY_EVIDENCE",
+                    "weighted_market_index_recovered": raw_state == "RECOVERY_EVIDENCE",
+                    "industry_down_ratio_recovered": raw_state == "RECOVERY_EVIDENCE",
+                    "industry_severe_down_ratio_recovered": raw_state
+                    == "RECOVERY_EVIDENCE",
+                    "stock_fall_ratio_recovered": raw_state == "RECOVERY_EVIDENCE",
+                },
+            },
+            "response_research_contract": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "control": "current_owner_behavior_unchanged",
             },
         },
     }
+    return _refresh_weakness_identity(report)
 
 
 def test_panic_sell_start_and_release_notifications(tmp_path, monkeypatch):
@@ -704,6 +798,163 @@ def test_market_weakness_requires_two_unique_observations(tmp_path, monkeypatch)
     assert saved["market_weakness"]["weak_streak"] == 2
 
 
+def test_single_market_weakness_streak_does_not_cross_listing_markets(
+    tmp_path, monkeypatch
+):
+    report = tmp_path / "panic_sell.json"
+    state = tmp_path / "state.json"
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda *args: None)
+
+    first = _weakness_report("SINGLE_MARKET_WEAKNESS", 1)
+    first["market_weakness_observation"]["affected_markets"] = ["KOSPI"]
+    _refresh_weakness_identity(first)
+    report.write_text(json.dumps(first), encoding="utf-8")
+    assert (
+        mod.notify_from_report(
+            report, kind="market_weakness", state_file=state, now_ts=1000.0
+        )
+        == "activation_pending"
+    )
+
+    second = _weakness_report("SINGLE_MARKET_WEAKNESS", 2)
+    second["market_weakness_observation"]["affected_markets"] = ["KOSDAQ"]
+    _refresh_weakness_identity(second)
+    report.write_text(json.dumps(second), encoding="utf-8")
+    assert (
+        mod.notify_from_report(
+            report, kind="market_weakness", state_file=state, now_ts=1010.0
+        )
+        == "activation_pending"
+    )
+
+    saved = json.loads(state.read_text(encoding="utf-8"))["market_weakness"]
+    assert saved["phase"] == "activation_pending"
+    assert saved["weak_streak"] == 1
+    assert saved["weak_streak_markets"] == ["KOSDAQ"]
+
+
+def test_broad_raw_observation_does_not_overstate_partially_confirmed_scope(
+    tmp_path, monkeypatch
+):
+    report = tmp_path / "panic_sell.json"
+    state = tmp_path / "state.json"
+    sent = []
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(
+        mod,
+        "_send_telegram",
+        lambda token, chat_id, message: sent.append(message),
+    )
+
+    report.write_text(
+        json.dumps(_weakness_report("SINGLE_MARKET_WEAKNESS", 1)),
+        encoding="utf-8",
+    )
+    assert (
+        mod.notify_from_report(
+            report, kind="market_weakness", state_file=state, now_ts=1000.0
+        )
+        == "activation_pending"
+    )
+    report.write_text(
+        json.dumps(_weakness_report("BROAD_WEAKNESS", 2)), encoding="utf-8"
+    )
+    assert (
+        mod.notify_from_report(
+            report, kind="market_weakness", state_file=state, now_ts=1010.0
+        )
+        == "sent"
+    )
+
+    saved = json.loads(state.read_text(encoding="utf-8"))["market_weakness"]
+    assert saved["active_markets"] == ["KOSPI"]
+    assert "한쪽 시장 약세 지속 관찰" in sent[0]
+    assert "시장 전반 약세 지속" not in sent[0]
+
+
+def test_single_market_latch_releases_on_same_market_recovery(tmp_path, monkeypatch):
+    report = tmp_path / "panic_sell.json"
+    state = tmp_path / "state.json"
+    sent = []
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda *args: sent.append(args))
+
+    for sequence in (1, 2):
+        value = _weakness_report("SINGLE_MARKET_WEAKNESS", sequence)
+        value["market_weakness_observation"]["affected_markets"] = ["KOSPI"]
+        _refresh_weakness_identity(value)
+        report.write_text(json.dumps(value), encoding="utf-8")
+        mod.notify_from_report(
+            report,
+            kind="market_weakness",
+            state_file=state,
+            now_ts=1000.0 + sequence,
+        )
+
+    for sequence in (3, 4, 5):
+        value = _weakness_report("NEAR_WEAKNESS_BOUNDARY", sequence)
+        value["market_weakness_observation"]["recovery_evidence_markets"] = ["KOSPI"]
+        _refresh_weakness_identity(value)
+        report.write_text(json.dumps(value), encoding="utf-8")
+        status = mod.notify_from_report(
+            report,
+            kind="market_weakness",
+            state_file=state,
+            now_ts=1010.0 + sequence,
+        )
+
+    assert status == "sent"
+    saved = json.loads(state.read_text(encoding="utf-8"))["market_weakness"]
+    assert saved["phase"] == "released"
+    assert saved["active_markets"] == []
+    assert len(sent) == 2
+
+
+def test_broad_latch_narrows_instead_of_releasing_when_one_market_recovers(
+    tmp_path, monkeypatch
+):
+    report = tmp_path / "panic_sell.json"
+    state = tmp_path / "state.json"
+    sent = []
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda *args: sent.append(args))
+
+    for sequence in (1, 2):
+        report.write_text(
+            json.dumps(_weakness_report("BROAD_WEAKNESS", sequence)),
+            encoding="utf-8",
+        )
+        mod.notify_from_report(
+            report,
+            kind="market_weakness",
+            state_file=state,
+            now_ts=1000.0 + sequence,
+        )
+    for sequence in (3, 4, 5):
+        value = _weakness_report("NEAR_WEAKNESS_BOUNDARY", sequence)
+        value["market_weakness_observation"]["recovery_evidence_markets"] = ["KOSPI"]
+        _refresh_weakness_identity(value)
+        report.write_text(json.dumps(value), encoding="utf-8")
+        status = mod.notify_from_report(
+            report,
+            kind="market_weakness",
+            state_file=state,
+            now_ts=1010.0 + sequence,
+        )
+
+    assert status == "sent"
+    saved = json.loads(state.read_text(encoding="utf-8"))["market_weakness"]
+    assert saved["phase"] == "active"
+    assert saved["active_scope"] == "SINGLE_MARKET_WEAKNESS"
+    assert saved["active_markets"] == ["KOSDAQ"]
+    assert len(sent) == 2
+
+
 def test_market_weakness_distinct_observation_too_close_does_not_advance(
     tmp_path, monkeypatch
 ):
@@ -719,6 +970,7 @@ def test_market_weakness_distinct_observation_too_close_does_not_advance(
     )
 
     first = _weakness_report("BROAD_WEAKNESS", 1)
+    first_observation_id = first["market_weakness_observation"]["observation_id"]
     report.write_text(json.dumps(first), encoding="utf-8")
     assert (
         mod.notify_from_report(
@@ -727,8 +979,9 @@ def test_market_weakness_distinct_observation_too_close_does_not_advance(
         == "activation_pending"
     )
     too_close = _weakness_report("BROAD_WEAKNESS", 2)
-    too_close["as_of"] = "2026-08-28T10:01:20"
-    too_close["market_weakness_observation"]["as_of"] = "2026-08-28T10:01:20"
+    too_close["as_of"] = "2026-08-28T10:01:20+09:00"
+    too_close["market_weakness_observation"]["as_of"] = "2026-08-28T10:01:20+09:00"
+    _refresh_weakness_identity(too_close)
     report.write_text(json.dumps(too_close), encoding="utf-8")
 
     assert (
@@ -739,7 +992,7 @@ def test_market_weakness_distinct_observation_too_close_does_not_advance(
     )
     saved = json.loads(state.read_text(encoding="utf-8"))
     assert saved["market_weakness"]["weak_streak"] == 1
-    assert saved["market_weakness"]["last_observation_id"] == "weakness-1"
+    assert saved["market_weakness"]["last_observation_id"] == first_observation_id
     assert sent == []
 
 
@@ -769,9 +1022,8 @@ def test_market_weakness_recovery_requires_declared_release_margin(
         )
 
     invalid_release = _weakness_report("RECOVERY_EVIDENCE", 3)
-    invalid_release["market_weakness_observation"]["release_margin"][
-        "passed"
-    ] = False
+    invalid_release["market_weakness_observation"]["release_margin"]["passed"] = False
+    _refresh_weakness_identity(invalid_release)
     report.write_text(json.dumps(invalid_release), encoding="utf-8")
 
     assert (
@@ -918,9 +1170,7 @@ def test_market_weakness_release_needs_three_margin_passes(tmp_path, monkeypatch
     assert saved["market_weakness"]["recovery_streak"] == 3
 
 
-def test_market_weakness_source_gap_never_releases_active_latch(
-    tmp_path, monkeypatch
-):
+def test_market_weakness_source_gap_never_releases_active_latch(tmp_path, monkeypatch):
     report = tmp_path / "panic_sell.json"
     state = tmp_path / "state.json"
     sent = []
@@ -944,6 +1194,7 @@ def test_market_weakness_source_gap_never_releases_active_latch(
         )
     blocked = _weakness_report("RECOVERY_EVIDENCE", 3)
     blocked["market_weakness_observation"]["source_quality_ready"] = False
+    _refresh_weakness_identity(blocked)
     report.write_text(json.dumps(blocked), encoding="utf-8")
 
     assert (
@@ -988,6 +1239,15 @@ def test_market_weakness_single_market_escalates_to_broad(tmp_path, monkeypatch)
     assert (
         mod.notify_from_report(
             report, kind="market_weakness", state_file=state, now_ts=1010.0
+        )
+        == "no_transition"
+    )
+    report.write_text(
+        json.dumps(_weakness_report("BROAD_WEAKNESS", 4)), encoding="utf-8"
+    )
+    assert (
+        mod.notify_from_report(
+            report, kind="market_weakness", state_file=state, now_ts=1020.0
         )
         == "sent"
     )

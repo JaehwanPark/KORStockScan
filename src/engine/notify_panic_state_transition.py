@@ -10,6 +10,12 @@ from pathlib import Path
 from urllib import parse, request
 
 from src.database.db_manager import DBManager
+from src.engine.market_panic_breadth_collector import (
+    MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS,
+    MARKET_WEAKNESS_MIN_OBSERVATION_SPACING_SEC,
+    MARKET_WEAKNESS_RELEASE_OBSERVATIONS,
+    market_weakness_observation_contract_errors,
+)
 from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "tmp" / "panic_state_telegram_notify_state.json"
@@ -23,14 +29,8 @@ SELL_RESTART_SUPPRESS_AFTER_RELEASE_SEC = 10 * 60
 MARKET_WEAKNESS_ACTIVE_STATES = {"BROAD_WEAKNESS", "SINGLE_MARKET_WEAKNESS"}
 MARKET_WEAKNESS_RELEASE_STATE = "RECOVERY_EVIDENCE"
 MARKET_WEAKNESS_BOUNDARY_STATE = "NEAR_WEAKNESS_BOUNDARY"
-MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS = 2
-MARKET_WEAKNESS_RELEASE_OBSERVATIONS = 3
 MARKET_WEAKNESS_MAX_REPORT_LAG_SEC = 180
-MARKET_WEAKNESS_MIN_OBSERVATION_SPACING_SEC = 60
-MARKET_WEAKNESS_SEVERITY = {
-    "SINGLE_MARKET_WEAKNESS": 1,
-    "BROAD_WEAKNESS": 2,
-}
+SUPPORTED_LISTING_MARKETS = {"KOSPI", "KOSDAQ"}
 
 
 def _report_session_key(report_file: Path, report: dict) -> str:
@@ -211,9 +211,7 @@ def _market_weakness_observation(report: dict) -> dict:
     return {}
 
 
-def _effective_market_weakness_observation(
-    report_file: Path, report: dict
-) -> dict:
+def _effective_market_weakness_observation(report_file: Path, report: dict) -> dict:
     observation = _market_weakness_observation(report)
     if not observation:
         return {}
@@ -227,34 +225,19 @@ def _effective_market_weakness_observation(
         else None
     )
     source_ready = bool(observation.get("source_quality_ready"))
-    identity_valid = bool(str(observation.get("observation_id") or "").strip())
-    raw_state = str(observation.get("raw_state") or "UNKNOWN")
-    release_margin = (
-        observation.get("release_margin")
-        if isinstance(observation.get("release_margin"), dict)
-        else {}
-    )
+    contract_errors = market_weakness_observation_contract_errors(observation)
+    identity_valid = "observation_identity_invalid" not in contract_errors
     authority_valid = bool(
-        observation.get("decision_authority")
-        == "source_quality_observation_only"
+        observation.get("decision_authority") == "source_quality_observation_only"
         and observation.get("runtime_effect") is False
         and observation.get("allowed_runtime_apply") is False
     )
-    state_contract_valid = bool(
-        raw_state
-        in MARKET_WEAKNESS_ACTIVE_STATES
-        | {MARKET_WEAKNESS_RELEASE_STATE, MARKET_WEAKNESS_BOUNDARY_STATE, "UNKNOWN"}
-        and (
-            raw_state != MARKET_WEAKNESS_RELEASE_STATE
-            or release_margin.get("passed") is True
-        )
-    )
+    state_contract_valid = not contract_errors
     same_session = bool(
         session_key and observation_session and session_key == observation_session
     )
     fresh = bool(
-        lag_sec is not None
-        and 0.0 <= lag_sec <= MARKET_WEAKNESS_MAX_REPORT_LAG_SEC
+        lag_sec is not None and 0.0 <= lag_sec <= MARKET_WEAKNESS_MAX_REPORT_LAG_SEC
     )
     observation["notifier_source_gate"] = {
         "same_session": same_session,
@@ -265,6 +248,7 @@ def _effective_market_weakness_observation(
         "identity_valid": identity_valid,
         "authority_valid": authority_valid,
         "state_contract_valid": state_contract_valid,
+        "contract_errors": contract_errors,
         "passed": bool(
             source_ready
             and identity_valid
@@ -278,7 +262,82 @@ def _effective_market_weakness_observation(
         original_id = str(observation.get("observation_id") or "missing")
         observation["observation_id"] = f"{original_id}:source_blocked"
         observation["raw_state"] = "UNKNOWN"
+        observation["affected_markets"] = []
+        observation["recovery_evidence_markets"] = []
     return observation
+
+
+def _normalized_markets(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return sorted(
+        {
+            str(market).strip().upper()
+            for market in value
+            if str(market).strip().upper() in SUPPORTED_LISTING_MARKETS
+        }
+    )
+
+
+def _observation_affected_markets(observation: dict) -> list[str]:
+    explicit = _normalized_markets(observation.get("affected_markets"))
+    if _safe_int(observation.get("schema_version"), 0) >= 2:
+        return explicit
+    if explicit:
+        return explicit
+    raw_state = str(observation.get("raw_state") or "")
+    if raw_state == "BROAD_WEAKNESS":
+        return ["KOSDAQ", "KOSPI"]
+    evidence = (
+        observation.get("evidence")
+        if isinstance(observation.get("evidence"), dict)
+        else {}
+    )
+    explicit = _normalized_markets(evidence.get("affected_markets"))
+    if explicit:
+        return explicit
+    if raw_state != "SINGLE_MARKET_WEAKNESS":
+        return []
+    indices = (
+        evidence.get("market_index_change_pct")
+        if isinstance(evidence.get("market_index_change_pct"), dict)
+        else {}
+    )
+    weak = [
+        market
+        for market in SUPPORTED_LISTING_MARKETS
+        if (change := _safe_float(indices.get(market))) is not None and change <= -1.2
+    ]
+    return sorted(weak)
+
+
+def _observation_recovery_markets(observation: dict) -> list[str]:
+    explicit = _normalized_markets(observation.get("recovery_evidence_markets"))
+    if _safe_int(observation.get("schema_version"), 0) >= 2:
+        return explicit
+    if explicit:
+        return explicit
+    release_margin = (
+        observation.get("release_margin")
+        if isinstance(observation.get("release_margin"), dict)
+        else {}
+    )
+    markets = release_margin.get("markets")
+    if isinstance(markets, dict):
+        explicit = sorted(
+            market
+            for market in SUPPORTED_LISTING_MARKETS
+            if isinstance(markets.get(market), dict)
+            and markets[market].get("passed") is True
+        )
+        if explicit:
+            return explicit
+    if (
+        str(observation.get("raw_state") or "") == MARKET_WEAKNESS_RELEASE_STATE
+        and release_margin.get("passed") is True
+    ):
+        return ["KOSDAQ", "KOSPI"]
+    return []
 
 
 def _fmt_pct(value: object) -> str:
@@ -286,10 +345,7 @@ def _fmt_pct(value: object) -> str:
     return f"{numeric:+.2f}%" if numeric is not None else "확인중"
 
 
-def _market_weakness_message(
-    observation: dict, transition: str, state: dict
-) -> str:
-    raw_state = str(observation.get("raw_state") or "UNKNOWN")
+def _market_weakness_message(observation: dict, transition: str, state: dict) -> str:
     evidence = (
         observation.get("evidence")
         if isinstance(observation.get("evidence"), dict)
@@ -304,21 +360,31 @@ def _market_weakness_message(
         title = "✅ 시장 약세 관찰 해제"
         body = "약세 임계치에서 충분히 벗어난 회복 근거가 3회 연속 확인되었습니다."
     elif transition == "update":
-        title = "🔄 시장 전반 약세로 확산"
-        body = "한쪽 시장 약세가 지수·업종 전반의 약세로 확산되었습니다."
+        if len(state.get("active_markets") or []) == 2:
+            title = "🔄 시장 전반 약세로 확산"
+            body = "두 시장의 약세가 각각 확인되어 적용 범위가 확대되었습니다."
+        else:
+            title = "🔄 시장 약세 적용 범위 변경"
+            body = "시장별 약세·회복 확인 결과에 따라 적용 범위가 변경되었습니다."
     elif transition == "status":
         title = "ℹ️ 시장 약세 관찰 상태"
         body = "현재 source-only 시장 약세 관찰 상태입니다."
-    elif raw_state == "BROAD_WEAKNESS":
+    elif len(state.get("active_markets") or []) == 2:
         title = "🟠 시장 전반 약세 지속"
         body = "지수와 시장 breadth의 약세가 2회 연속 확인되었습니다."
     else:
         title = "⚠️ 한쪽 시장 약세 지속 관찰"
-        body = "한쪽 시장 약세와 이를 뒷받침하는 하락 breadth가 2회 연속 확인되었습니다."
+        body = (
+            "한쪽 시장 약세와 이를 뒷받침하는 하락 breadth가 2회 연속 확인되었습니다."
+        )
     return "\n".join(
         [
             title,
             body,
+            (
+                "- 적용 시장: "
+                + (", ".join(state.get("active_markets") or []) or "해제/확인중")
+            ),
             f"- 지수: KOSPI {_fmt_pct(indices.get('KOSPI'))} / KOSDAQ {_fmt_pct(indices.get('KOSDAQ'))}",
             (
                 "- breadth: 업종 하락 "
@@ -448,63 +514,143 @@ def _notify_market_weakness_from_report(
 
     previous_phase = str(previous.get("phase") or "released")
     was_active = previous_phase in {"active", "release_pending"}
-    previous_raw_state = str(previous.get("raw_state") or "")
-    weak_streak = _safe_int(previous.get("weak_streak"), 0)
-    recovery_streak = _safe_int(previous.get("recovery_streak"), 0)
-    active_scope = str(previous.get("active_scope") or "")
-    transition = "none"
-
-    if raw_state in MARKET_WEAKNESS_ACTIVE_STATES:
-        weak_streak = (
-            weak_streak + 1
-            if previous_raw_state in MARKET_WEAKNESS_ACTIVE_STATES
-            else 1
+    legacy_active_markets = _normalized_markets(previous.get("active_markets"))
+    if was_active and not legacy_active_markets:
+        # Legacy state files predate market-scoped custody.  Treat the latch as
+        # broad until source-qualified per-market recovery closes it.
+        legacy_active_markets = ["KOSDAQ", "KOSPI"]
+    legacy_weak_markets = _normalized_markets(previous.get("weak_streak_markets"))
+    previous_market_states = (
+        previous.get("market_states")
+        if isinstance(previous.get("market_states"), dict)
+        else {}
+    )
+    market_states: dict[str, dict[str, object]] = {}
+    for market in sorted(SUPPORTED_LISTING_MARKETS):
+        prior = (
+            previous_market_states.get(market)
+            if isinstance(previous_market_states.get(market), dict)
+            else {}
         )
-        recovery_streak = 0
-        if was_active:
-            phase = "active"
-            if MARKET_WEAKNESS_SEVERITY.get(raw_state, 0) > MARKET_WEAKNESS_SEVERITY.get(
-                active_scope, 0
+        market_states[market] = {
+            "active": bool(prior.get("active", market in legacy_active_markets)),
+            "weak_streak": _safe_int(
+                prior.get("weak_streak"),
+                _safe_int(previous.get("weak_streak"), 0)
+                if market in legacy_weak_markets
+                else 0,
+            ),
+            "recovery_streak": _safe_int(
+                prior.get("recovery_streak"),
+                _safe_int(previous.get("recovery_streak"), 0)
+                if market in legacy_active_markets
+                else 0,
+            ),
+            "last_class": str(
+                prior.get("last_class")
+                or ("weak" if market in legacy_weak_markets else "neutral")
+            ),
+        }
+    previous_active_markets = sorted(
+        market for market, value in market_states.items() if value["active"] is True
+    )
+    current_affected_markets = _observation_affected_markets(observation)
+    current_recovery_markets = _observation_recovery_markets(observation)
+    for market, market_state in market_states.items():
+        classification = (
+            "weak"
+            if market in current_affected_markets
+            else "recovery"
+            if market in current_recovery_markets
+            else "neutral"
+        )
+        if classification == "weak":
+            market_state["weak_streak"] = (
+                _safe_int(market_state.get("weak_streak"), 0) + 1
+                if market_state.get("last_class") == "weak"
+                else 1
+            )
+            market_state["recovery_streak"] = 0
+            if (
+                _safe_int(market_state["weak_streak"], 0)
+                >= MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS
             ):
-                transition = "update"
-                active_scope = raw_state
-        elif weak_streak >= MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS:
-            phase = "active"
-            transition = "start"
-            active_scope = raw_state
+                market_state["active"] = True
+        elif classification == "recovery":
+            market_state["weak_streak"] = 0
+            market_state["recovery_streak"] = (
+                _safe_int(market_state.get("recovery_streak"), 0) + 1
+                if market_state.get("active") is True
+                and market_state.get("last_class") == "recovery"
+                else (1 if market_state.get("active") is True else 0)
+            )
+            if (
+                _safe_int(market_state["recovery_streak"], 0)
+                >= MARKET_WEAKNESS_RELEASE_OBSERVATIONS
+            ):
+                market_state["active"] = False
         else:
+            market_state["weak_streak"] = 0
+            market_state["recovery_streak"] = 0
+        market_state["last_class"] = classification
+
+    active_markets = sorted(
+        market for market, value in market_states.items() if value["active"] is True
+    )
+    transition = "none"
+    if not previous_active_markets and active_markets:
+        transition = "start"
+    elif previous_active_markets and not active_markets:
+        transition = "release"
+    elif previous_active_markets != active_markets:
+        transition = "update"
+    weak_streak = max(
+        (_safe_int(value.get("weak_streak"), 0) for value in market_states.values()),
+        default=0,
+    )
+    weak_streak_markets = current_affected_markets
+    if active_markets:
+        active_recovery_streaks = [
+            _safe_int(market_states[market].get("recovery_streak"), 0)
+            for market in active_markets
+        ]
+        recovery_streak = min(active_recovery_streaks)
+        phase = (
+            "release_pending"
+            if recovery_streak > 0 and not current_affected_markets
+            else "active"
+        )
+        active_scope = (
+            "BROAD_WEAKNESS"
+            if set(active_markets) == SUPPORTED_LISTING_MARKETS
+            else "SINGLE_MARKET_WEAKNESS"
+        )
+    else:
+        recovery_streak = max(
+            (
+                _safe_int(value.get("recovery_streak"), 0)
+                for value in market_states.values()
+            ),
+            default=0,
+        )
+        active_scope = ""
+        if weak_streak > 0:
             phase = "activation_pending"
-            active_scope = ""
-    elif raw_state == MARKET_WEAKNESS_RELEASE_STATE:
-        weak_streak = 0
-        if was_active:
-            recovery_streak += 1
-            if recovery_streak >= MARKET_WEAKNESS_RELEASE_OBSERVATIONS:
-                phase = "released"
-                transition = "release"
-                active_scope = ""
-            else:
-                phase = "release_pending"
+        elif raw_state == "UNKNOWN":
+            phase = "unknown"
         else:
             phase = "released"
-            recovery_streak = 0
-            active_scope = ""
-    elif raw_state == MARKET_WEAKNESS_BOUNDARY_STATE:
-        weak_streak = 0
-        recovery_streak = 0
-        phase = "active" if was_active else "released"
-    else:
-        weak_streak = weak_streak if was_active else 0
-        recovery_streak = 0
-        phase = "active" if was_active else "unknown"
 
     next_state = {
         "phase": phase,
         "raw_state": raw_state,
         "state": active_scope or raw_state,
         "active_scope": active_scope,
+        "active_markets": active_markets,
         "weak_streak": weak_streak,
+        "weak_streak_markets": weak_streak_markets,
         "recovery_streak": recovery_streak,
+        "market_states": market_states,
         "last_observation_id": observation_id,
         "last_observation_as_of": observation.get("as_of"),
         "last_source_gate": observation.get("notifier_source_gate") or {},

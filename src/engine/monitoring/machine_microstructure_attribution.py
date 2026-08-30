@@ -49,6 +49,9 @@ from src.engine.scalping.micro_reversion.collection_targets import (
 from src.engine.monitoring.machine_lifecycle_turnover_policy_research import (
     build_rolling_paired_policy_research,
 )
+from src.engine.monitoring.machine_market_weakness_response import (
+    build_machine_market_weakness_response,
+)
 from src.engine.monitoring.widget_comparison_cost import (
     comparison_cost_contract,
     modeled_execution_economics,
@@ -770,7 +773,9 @@ def _widget_state_order_index(
     return index, source
 
 
-def _widget_advisory_event_index(*, target_date: str, report_root: Path) -> tuple[
+def _widget_advisory_event_index(
+    *, target_date: str, report_root: Path
+) -> tuple[
     dict[str, dict[str, Any]],
     dict[str, dict[str, Any]],
     dict[tuple[str, str, int], dict[str, Any]],
@@ -1691,7 +1696,9 @@ def _widget_actual_execution_inventory(
         execution_venue_alignment_state = (
             "unknown"
             if not all_execution_venues
-            else "aligned" if all_execution_venues == {venue} else "cross_venue"
+            else "aligned"
+            if all_execution_venues == {venue}
+            else "cross_venue"
         )
         timestamp_order_valid = bool(
             signal_at <= first_entry_submit_at
@@ -1728,9 +1735,7 @@ def _widget_actual_execution_inventory(
                 {"scope_id": scope_id, "reason": "actual_widget_fill_order_invalid"}
             )
             continue
-        manual_sell_qty = sum(
-            int(order["filled_qty"]) for order in manual_sell_orders
-        )
+        manual_sell_qty = sum(int(order["filled_qty"]) for order in manual_sell_orders)
         partial_manual_realization = bool(
             0 < manual_sell_qty <= sell_qty < buy_qty and exit_at is not None
         )
@@ -1794,9 +1799,7 @@ def _widget_actual_execution_inventory(
             order.get("order_role") == "TAKE_PROFIT_SELL" for order in sell_orders
         ):
             exit_execution_class = "machine_target_fill"
-        elif all(
-            order.get("order_role") == "FINAL_EXIT_SELL" for order in sell_orders
-        ):
+        elif all(order.get("order_role") == "FINAL_EXIT_SELL" for order in sell_orders):
             exit_execution_class = "machine_final_exit"
         else:
             exit_execution_class = "realized_exit_source_unknown"
@@ -1812,7 +1815,9 @@ def _widget_actual_execution_inventory(
                     else (
                         source_final_exit_reason
                         if realized and source_final_exit_reason
-                        else "final_exit_fill" if realized else "right_censored"
+                        else "final_exit_fill"
+                        if realized
+                        else "right_censored"
                     )
                 )
             ),
@@ -1876,7 +1881,9 @@ def _widget_actual_execution_inventory(
             "realization_scope": (
                 "partial_manual_exit_cashflow"
                 if partial_manual_realization
-                else "full_widget_episode" if realized else "right_censored"
+                else "full_widget_episode"
+                if realized
+                else "right_censored"
             ),
             "buy_leg_count": len(buy_submit_orders),
             "scale_in_buy_leg_count": sum(
@@ -2148,9 +2155,7 @@ def _widget_actual_execution_inventory(
                     }
                 )
         if sell_qty > 0 and exit_at is not None:
-            manual_exit_only = bool(
-                manual_sell_qty == sell_qty and manual_sell_qty > 0
-            )
+            manual_exit_only = bool(manual_sell_qty == sell_qty and manual_sell_qty > 0)
             anchors.append(
                 {
                     "anchor_id": f"{lifecycle_id}:exit",
@@ -2817,9 +2822,9 @@ def _widget_inventory(
             scope_id = f"expansion:{symbol}:SOR_REGULAR"
             if scope_id not in row["owner_scope_ids"]:
                 row["owner_scope_ids"].append(scope_id)
-            row["owner_scope_kinds"][
-                scope_id
-            ] = "prospective_widget_collector_expansion"
+            row["owner_scope_kinds"][scope_id] = (
+                "prospective_widget_collector_expansion"
+            )
             row["owner_scope_expected_venues"][scope_id] = ["SOR"]
 
     actual_anchors, actual_source = _widget_actual_execution_inventory(
@@ -3779,9 +3784,7 @@ def _episode_inventory(
                 )
                 target_anchor_role = _episode_exit_anchor_role(
                     realized=realized,
-                    exit_execution_class=str(
-                        exit_provenance["exit_execution_class"]
-                    ),
+                    exit_execution_class=str(exit_provenance["exit_execution_class"]),
                     reconciled=True,
                 )
                 anchors.append(
@@ -4203,7 +4206,9 @@ def _depth_item_matches_scope(payload: dict[str, Any]) -> bool:
         else (
             f"{symbol}_NX"
             if venue == "NXT"
-            else f"{symbol}_AL" if venue == "SOR" else ""
+            else f"{symbol}_AL"
+            if venue == "SOR"
+            else ""
         )
     )
     return bool(symbol and expected_item and payload.get("item") == expected_item)
@@ -6048,8 +6053,7 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
         cohort_manual_units = [
             unit
             for unit in cohort_units
-            if unit["outcome"].get("exit_execution_class")
-            == "manual_operator_exit"
+            if unit["outcome"].get("exit_execution_class") == "manual_operator_exit"
         ]
         cohort_gross = [
             value
@@ -6080,8 +6084,7 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
         cohort_diagnostics[cohort] = {
             "realized_sample_count": len(cohort_units),
             "machine_target_fill_sample_count": sum(
-                unit["outcome"].get("exit_execution_class")
-                == "machine_target_fill"
+                unit["outcome"].get("exit_execution_class") == "machine_target_fill"
                 for unit in cohort_units
             ),
             "manual_operator_exit_sample_count": len(cohort_manual_units),
@@ -6540,6 +6543,13 @@ def build_report(
         widget_sources=widget_sources,
         target_date=target_date,
     )
+    market_weakness_response = build_machine_market_weakness_response(
+        micro_entry_confirmation,
+        target_date=target_date,
+        observation_root=report_root / "market_weakness_observations",
+        symbol_master_dir=report_root / "micro_reversion_economic_reference",
+        history_report_dir=report_root / REPORT_TYPE,
+    )
     results_by_scope: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for result in results:
         results_by_scope[(result["owner"], result["scope_id"])].append(result)
@@ -6866,6 +6876,7 @@ def build_report(
         "fast_lifecycle_objective_alignment": objective_alignment,
         "rolling_paired_policy_research": rolling_paired_policy_research,
         "micro_entry_confirmation": micro_entry_confirmation,
+        "market_weakness_entry_response": market_weakness_response,
         "objective_followups": objective_followups,
         "policy_change_readiness": POLICY_CHANGE_READINESS_CONTRACT,
         "promotion_candidate_intake_contract": PROMOTION_CANDIDATE_INTAKE_CONTRACT,
@@ -6882,6 +6893,7 @@ def build_report(
             "widget": widget_sources,
             "episode": episode_sources,
             "micro_reversion": micro_source,
+            "market_weakness_response": market_weakness_response["sources"],
         },
         "summary": {
             "dynamic_symbol_count": len(symbols),
@@ -6913,6 +6925,12 @@ def build_report(
                 micro_entry_confirmation["summary"][
                     "daily_cap_reallocation_observation_count"
                 ]
+            ),
+            "confirmed_market_weakness_entry_count": (
+                market_weakness_response["summary"]["confirmed_weakness_entry_count"]
+            ),
+            "market_weakness_actual_realized_comparison_count": (
+                market_weakness_response["summary"]["actual_realized_comparison_count"]
             ),
         },
         "consumers": {
@@ -7123,6 +7141,46 @@ def render_markdown(report: dict[str, Any]) -> str:
                     "and widget/episode owners and entry states are not pooled."
                 ),
                 "- No BUY, exit, quantity, target, cooldown, or daily-cap mutation is authorized.",
+                "",
+            ]
+        )
+    weakness_response = report.get("market_weakness_entry_response")
+    if isinstance(weakness_response, dict):
+        weakness_summary = weakness_response.get("summary") or {}
+        weakness_cumulative = weakness_response.get("clean_baseline_cumulative") or {}
+        lines.extend(
+            [
+                "## Market-Scoped Weakness Entry Response",
+                "",
+                (
+                    "- Confirmed-weakness entry anchors: "
+                    f"`{weakness_summary.get('confirmed_weakness_entry_count', 0)}`; "
+                    "actual realized comparisons: "
+                    f"`{weakness_summary.get('actual_realized_comparison_count', 0)}`; "
+                    "source blocked: "
+                    f"`{weakness_summary.get('source_quality_blocked_count', 0)}`."
+                ),
+                (
+                    "- Actual realized skip-vs-control incremental average: "
+                    f"`{weakness_summary.get('actual_realized_source_quality_adjusted_incremental_vs_control_pct')}`."
+                ),
+                (
+                    "- Clean-baseline cumulative: dates "
+                    f"`{weakness_cumulative.get('affected_actual_realized_trading_date_count', 0)}`; "
+                    "comparisons "
+                    f"`{weakness_cumulative.get('affected_actual_realized_comparison_count', 0)}`; "
+                    "average/p10 "
+                    f"`{weakness_cumulative.get('incremental_vs_control_avg_pct')}` / "
+                    f"`{weakness_cumulative.get('incremental_vs_control_p10_pct')}`; "
+                    "source-only review ready "
+                    f"`{weakness_cumulative.get('source_only_review_ready', False)}`."
+                ),
+                (
+                    "- KOSPI/KOSDAQ listing market and two-observation activation / "
+                    "three-observation release are reconstructed from past-only "
+                    "schema-v2 observations."
+                ),
+                "- Response arms are source-only; no entry block, cancel, target, holding, exit, price, or quantity authority exists.",
                 "",
             ]
         )

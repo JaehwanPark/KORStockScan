@@ -311,7 +311,9 @@ def _depth_row(
         "item": (
             f"{symbol}_AL"
             if venue == "SOR"
-            else f"{symbol}_NX" if venue == "NXT" else symbol
+            else f"{symbol}_NX"
+            if venue == "NXT"
+            else symbol
         ),
         "orderbook_time_raw": "100000",
         "bid_depth": 1000,
@@ -662,6 +664,19 @@ def test_dynamic_widget_symbol_is_matched_without_changing_owner_policy(tmp_path
     assert (
         report["micro_entry_confirmation"]["summary"]["source_quality_blocked_count"]
         == 1
+    )
+    assert report["market_weakness_entry_response"]["authority"] == {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "policy_candidate_ready": False,
+    }
+    assert (
+        report["sources"]["market_weakness_response"]["market_weakness_observations"][
+            "status"
+        ]
+        == "no_schema_v2_observation"
     )
 
 
@@ -3519,7 +3534,9 @@ def test_actual_widget_manual_partial_exit_is_realized_loss_with_residual_custod
                 "order_date": target_date,
                 "side": "BUY",
                 "order_role": role,
-                "signal_id": signal_id if role == "ENTRY_BUY" else f"{signal_id}:{role}",
+                "signal_id": signal_id
+                if role == "ENTRY_BUY"
+                else f"{signal_id}:{role}",
                 "parent_entry_signal_id": None if role == "ENTRY_BUY" else signal_id,
                 "market_venue": "KRX",
                 "broker_execution_venue": "KRX",

@@ -68,6 +68,31 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-08-31 ka20003 Request-Market Provenance Gate
+
+- Re-verified at `2026-08-31T07:50:26+09:00` against current upstream commit
+  `9180debf7aea0074715dd8f7a15af432afbfc403`; inspected
+  `kiwoom/_data/kiwoom_api_spec.json` section `ka20003` and
+  `examples/국내주식/업종/get_domestic_all_sector_indices.py`.
+- Official `ka20003` uses `POST /api/dostk/sect`, requires header `api-id:
+  ka20003`, and requires body `inds_cd`, where `001` selects KOSPI and `101`
+  selects KOSDAQ. The response list `all_inds_idex` contains industry/index
+  rows but does not repeat the request's parent market on every row.
+- `market_panic_breadth_collector` therefore parses the two responses
+  separately and persists `source_market=KOSPI|KOSDAQ` from the exact request
+  envelope. It must not concatenate both payloads and later infer an industry
+  row's parent market from its row code or name.
+- Market-specific weakness/recovery requires the index and corroborating
+  industry/stock breadth from the same `source_market`. Unscoped legacy rows
+  remain audit evidence but cannot support a new single-market scoped alert or
+  widget/episode response counterfactual. This remains source-only and grants
+  no order, cancellation, exit, threshold, provider, or bot authority.
+- Schema-v2 observation identity binds the exact KST timestamp, source-quality
+  state, affected/recovery market lists, evidence, and global/per-market release
+  margin. Consumers reject identity drift, non-canonical market lists,
+  contradictory release checks, and competing observations at the same event
+  timestamp instead of selecting one by filename order.
+
 ### 2026-08-24 Integrated-SOR Execution Identity Gate
 
 - Re-verified at `2026-08-24T23:42:45+09:00` against current upstream commit
