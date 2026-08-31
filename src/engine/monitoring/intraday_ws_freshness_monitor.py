@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import time
 from collections import Counter, defaultdict
@@ -27,7 +28,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v2"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v3"
 
 FORBIDDEN_USES = [
     "EV",
@@ -67,6 +68,21 @@ DECISION_STAGE_STALE_BACKOFF_METRIC_CONTRACT = {
     "sample_floor": "at_least_one_explicit_stale_backoff_event",
     "primary_decision_metric": "decision_stage_stale_backoff_count",
     "source_quality_gate": "explicit_scanner_stale_or_backoff_reason",
+    "forbidden_uses": FORBIDDEN_USES,
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "broker_order_forbidden": True,
+}
+
+SCANNER_UNIQUE_FUNNEL_METRIC_CONTRACT = {
+    "metric_role": "funnel_count",
+    "decision_authority": "scanner_unique_lineage_source_only_no_runtime_mutation",
+    "window_policy": "daily_unique_scanner_promotion_generation",
+    "sample_floor": "one_valid_scanner_promotion_or_prune_lineage",
+    "primary_decision_metric": "eligible_without_heavy_evaluation_count",
+    "source_quality_gate": (
+        "promotion_id_or_scan_generation_code_required_and_pipeline_threshold_mirrors_deduplicated"
+    ),
     "forbidden_uses": FORBIDDEN_USES,
     "runtime_effect": False,
     "allowed_runtime_apply": False,
@@ -316,6 +332,500 @@ def _event_time(row: dict[str, Any]) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=KST)
     return parsed.astimezone(KST)
+
+
+def _valid_lineage_token(value: Any) -> str:
+    token = str(value or "").strip()
+    if not token or token.lower() in {"-", "none", "null", "unknown"}:
+        return ""
+    if token.startswith("not_applicable") or token.startswith("not_available"):
+        return ""
+    return token
+
+
+def _scanner_funnel_state_from_mapping(value: Any) -> dict[str, Any]:
+    value = value if isinstance(value, dict) else {}
+    lineages = value.get("lineages") if isinstance(value.get("lineages"), dict) else {}
+    prunes = value.get("prunes") if isinstance(value.get("prunes"), dict) else {}
+    fingerprints = value.get("event_fingerprints")
+    return {
+        "lineages": {
+            str(key): dict(item)
+            for key, item in lineages.items()
+            if isinstance(item, dict)
+        },
+        "prunes": {
+            str(key): dict(item)
+            for key, item in prunes.items()
+            if isinstance(item, dict)
+        },
+        "event_fingerprints": (
+            list(fingerprints) if isinstance(fingerprints, list) else []
+        ),
+        "relevant_raw_event_count": int(value.get("relevant_raw_event_count") or 0),
+        "duplicate_mirror_event_count": int(
+            value.get("duplicate_mirror_event_count") or 0
+        ),
+        "missing_lineage_event_count": int(
+            value.get("missing_lineage_event_count") or 0
+        ),
+    }
+
+
+def _append_unique(values: Any, value: Any) -> list[str]:
+    items = [str(item) for item in values] if isinstance(values, list) else []
+    token = _valid_lineage_token(value)
+    if token and token not in items:
+        items.append(token)
+    return items
+
+
+def _scanner_funnel_event_relevant(row: dict[str, Any]) -> bool:
+    stage = str(row.get("stage") or row.get("event_type") or "")
+    if stage in {
+        "scalping_scanner_candidate_pruned",
+        "scalping_scanner_candidate_promoted",
+        "scalping_scanner_runtime_target_attach",
+        "scalping_scanner_fast_precheck",
+        "scalping_scanner_heavy_eval_completion",
+        "scalping_scanner_runtime_queue_lag",
+        "scalping_scanner_watch_eviction",
+        "scalping_scanner_ws_backoff_watch_retained",
+    }:
+        return True
+    if stage in {
+        "ai_confirmed",
+        "ai_confirmed_terminal_no_budget",
+        "budget_pass",
+        "latency_pass",
+        "latency_block",
+        "order_bundle_submitted",
+        "order_bundle_failed",
+    }:
+        return bool(_valid_lineage_token(row.get("scanner_promotion_id")))
+    return False
+
+
+def _scanner_funnel_event_fingerprint(row: dict[str, Any]) -> str:
+    payload = {
+        "stage": str(row.get("stage") or row.get("event_type") or ""),
+        "code": str(row.get("stock_code") or row.get("code") or "").strip()[:6],
+        "promotion_id": _valid_lineage_token(row.get("scanner_promotion_id")),
+        "record_id": _valid_lineage_token(
+            row.get("runtime_record_id") or row.get("record_id")
+        ),
+        "scan_generation_id": _valid_lineage_token(
+            row.get("scanner_scan_generation_id")
+        ),
+        "emitted_at": str(
+            row.get("emitted_at")
+            or row.get("generated_at")
+            or row.get("timestamp")
+            or ""
+        ),
+        "attach_outcome": str(row.get("runtime_target_attach_outcome") or ""),
+        "prune_reason": str(row.get("scanner_prune_reason") or ""),
+        "eviction_reason": str(row.get("eviction_reason") or ""),
+        "fast_precheck_result": str(row.get("fast_precheck_result") or ""),
+    }
+    canonical = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _update_scanner_funnel_state(
+    state: dict[str, Any],
+    row: dict[str, Any],
+    event_class: dict[str, Any],
+) -> None:
+    if not _scanner_funnel_event_relevant(row):
+        return
+    state["relevant_raw_event_count"] += 1
+    fingerprint = _scanner_funnel_event_fingerprint(row)
+    fingerprint_set = state.setdefault("_fingerprint_set", set())
+    if fingerprint in fingerprint_set:
+        state["duplicate_mirror_event_count"] += 1
+        return
+    fingerprint_set.add(fingerprint)
+
+    stage = str(row.get("stage") or row.get("event_type") or "unknown")
+    code = str(row.get("stock_code") or row.get("code") or "").strip()[:6]
+    promotion_id = _valid_lineage_token(row.get("scanner_promotion_id"))
+    generation_id = _valid_lineage_token(row.get("scanner_scan_generation_id"))
+    if stage == "scalping_scanner_candidate_pruned":
+        if not generation_id or not code:
+            state["missing_lineage_event_count"] += 1
+            return
+        prune_key = f"{generation_id}:{code}"
+        reason = str(row.get("scanner_prune_reason") or "unknown")
+        prune = state["prunes"].setdefault(
+            prune_key,
+            {
+                "scan_generation_id": generation_id,
+                "code": code,
+                "scan_rank": row.get("scanner_scan_rank"),
+                "ranked_candidate_count": row.get("scanner_ranked_candidate_count"),
+                "reason": reason,
+                "reasons": [reason],
+                "source_signature": str(row.get("source_signature") or ""),
+                "venue": str(
+                    row.get("effective_venue") or row.get("venue") or "UNKNOWN"
+                ),
+                "market_session_bucket": str(
+                    row.get("market_session_bucket") or "UNKNOWN"
+                ),
+            },
+        )
+        prune["reasons"] = _append_unique(prune.get("reasons"), reason)
+        return
+    if not promotion_id:
+        state["missing_lineage_event_count"] += 1
+        return
+
+    lineage = state["lineages"].setdefault(
+        promotion_id,
+        {
+            "promotion_id": promotion_id,
+            "code": code,
+            "scan_generation_id": generation_id,
+            "scan_rank": row.get("scanner_scan_rank"),
+            "ranked_candidate_count": row.get("scanner_ranked_candidate_count"),
+            "record_ids": [],
+            "stages": {},
+            "attach_outcomes": [],
+            "attach_reasons": [],
+            "eviction_reasons": [],
+            "venue": "UNKNOWN",
+            "market_session_bucket": "UNKNOWN",
+            "decision_stage_stale_backoff": False,
+            "runtime_queue_lag": False,
+            "eligible_for_heavy_entry_eval": False,
+            "manual_control_exclusion_attach_skip": False,
+            "manual_control_exclusion_terminalized": False,
+            "handoff_provenance_complete": False,
+        },
+    )
+    if code:
+        lineage["code"] = code
+    if generation_id:
+        lineage["scan_generation_id"] = generation_id
+    if row.get("scanner_scan_rank") not in (None, ""):
+        lineage["scan_rank"] = row.get("scanner_scan_rank")
+    if row.get("scanner_ranked_candidate_count") not in (None, ""):
+        lineage["ranked_candidate_count"] = row.get("scanner_ranked_candidate_count")
+    lineage["record_ids"] = _append_unique(
+        lineage.get("record_ids"), row.get("runtime_record_id") or row.get("record_id")
+    )
+    stage_counts = (
+        lineage.get("stages") if isinstance(lineage.get("stages"), dict) else {}
+    )
+    stage_counts[stage] = int(stage_counts.get(stage) or 0) + 1
+    lineage["stages"] = stage_counts
+    venue = str(row.get("effective_venue") or row.get("venue") or "").strip().upper()
+    if venue in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
+        lineage["venue"] = venue
+    session_bucket = str(row.get("market_session_bucket") or "").strip()
+    if session_bucket:
+        lineage["market_session_bucket"] = session_bucket
+    lineage["decision_stage_stale_backoff"] = bool(
+        lineage.get("decision_stage_stale_backoff")
+        or event_class.get("decision_stage_stale_backoff")
+    )
+    lineage["runtime_queue_lag"] = bool(
+        lineage.get("runtime_queue_lag")
+        or stage == "scalping_scanner_runtime_queue_lag"
+    )
+    lineage["eligible_for_heavy_entry_eval"] = bool(
+        lineage.get("eligible_for_heavy_entry_eval")
+        or str(row.get("fast_precheck_result") or "") == "eligible_for_heavy_entry_eval"
+    )
+    if stage == "scalping_scanner_runtime_target_attach":
+        outcome = str(row.get("runtime_target_attach_outcome") or "unknown")
+        reason = str(row.get("runtime_target_attach_reason") or "unknown")
+        lineage["attach_outcomes"] = _append_unique(
+            lineage.get("attach_outcomes"), outcome
+        )
+        lineage["attach_reasons"] = _append_unique(
+            lineage.get("attach_reasons"), reason
+        )
+        lineage["manual_control_exclusion_attach_skip"] = bool(
+            lineage.get("manual_control_exclusion_attach_skip")
+            or (
+                outcome == "skipped"
+                and reason == "operator_manual_control_excluded_symbol"
+            )
+        )
+        lineage["manual_control_exclusion_terminalized"] = bool(
+            lineage.get("manual_control_exclusion_terminalized")
+            or _boolish(row.get("manual_control_exclusion_terminalized"))
+        )
+        handoff_promotion_id = _valid_lineage_token(
+            row.get("scanner_runtime_handoff_promotion_id")
+        )
+        lineage["handoff_provenance_complete"] = bool(
+            lineage.get("handoff_provenance_complete")
+            or (
+                outcome in {"attached", "refreshed", "db_poll_attached"}
+                and handoff_promotion_id == promotion_id
+                and _to_float(row.get("scanner_runtime_handoff_epoch")) is not None
+                and _valid_lineage_token(row.get("scanner_runtime_instance_id"))
+                and row.get("scanner_attach_provenance_version")
+                == "scanner_runtime_handoff_v1"
+            )
+        )
+    if stage == "scalping_scanner_watch_eviction":
+        lineage["eviction_reasons"] = _append_unique(
+            lineage.get("eviction_reasons"), row.get("eviction_reason")
+        )
+
+
+def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
+    lineages = list((state.get("lineages") or {}).values())
+    prunes = list((state.get("prunes") or {}).values())
+    final_outcomes: Counter = Counter()
+    prune_reasons: Counter = Counter()
+    venues: Counter = Counter()
+    attach_success_count = 0
+    handoff_complete_count = 0
+    eligible_count = 0
+    eligible_without_heavy_count = 0
+    manual_attach_skip_count = 0
+    manual_terminalized_count = 0
+    unique_records: set[str] = set()
+    unique_symbols: set[str] = set()
+    generation_terminal_keys: dict[str, set[tuple[str, str]]] = defaultdict(set)
+    generation_ranked_counts: dict[str, int] = {}
+    generation_ranked_count_values: dict[str, set[int]] = defaultdict(set)
+    generation_rank_codes: dict[str, dict[int, set[str]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+    for lineage in lineages:
+        stages = (
+            lineage.get("stages") if isinstance(lineage.get("stages"), dict) else {}
+        )
+        stage_names = set(stages)
+        unique_records.update(str(item) for item in lineage.get("record_ids") or [])
+        if lineage.get("code"):
+            unique_symbols.add(str(lineage["code"]))
+        generation_id = _valid_lineage_token(lineage.get("scan_generation_id"))
+        if generation_id:
+            generation_terminal_keys[generation_id].add(
+                (str(lineage.get("code") or ""), "promoted")
+            )
+            ranked_count = int(_to_float(lineage.get("ranked_candidate_count"), 0) or 0)
+            if ranked_count:
+                generation_ranked_count_values[generation_id].add(ranked_count)
+                generation_ranked_counts[generation_id] = max(
+                    generation_ranked_counts.get(generation_id, 0), ranked_count
+                )
+            scan_rank = int(_to_float(lineage.get("scan_rank"), 0) or 0)
+            if scan_rank:
+                generation_rank_codes[generation_id][scan_rank].add(
+                    str(lineage.get("code") or "")
+                )
+        venues[str(lineage.get("venue") or "UNKNOWN")] += 1
+        attach_success = bool(
+            set(lineage.get("attach_outcomes") or [])
+            & {"attached", "refreshed", "db_poll_attached"}
+        )
+        attach_success_count += int(attach_success)
+        handoff_complete_count += int(
+            attach_success and bool(lineage.get("handoff_provenance_complete"))
+        )
+        eligible = bool(lineage.get("eligible_for_heavy_entry_eval"))
+        heavy = "scalping_scanner_heavy_eval_completion" in stage_names
+        eligible_count += int(eligible)
+        eligible_without_heavy_count += int(eligible and not heavy)
+        manual_attach_skip_count += int(
+            bool(lineage.get("manual_control_exclusion_attach_skip"))
+        )
+        manual_terminalized_count += int(
+            bool(lineage.get("manual_control_exclusion_terminalized"))
+        )
+        attach_outcomes = set(lineage.get("attach_outcomes") or [])
+        eviction_reasons = set(lineage.get("eviction_reasons") or [])
+        if "order_bundle_submitted" in stage_names:
+            outcome = "submitted"
+        elif "order_bundle_failed" in stage_names:
+            outcome = "order_bundle_failed"
+        elif lineage.get("manual_control_exclusion_attach_skip"):
+            outcome = "manual_control_exclusion_attach_skipped"
+        elif "skipped" in attach_outcomes:
+            outcome = "runtime_attach_skipped"
+        elif any("recovery_exhausted" in reason for reason in eviction_reasons):
+            outcome = "direct_ws_recovery_exhausted"
+        elif eviction_reasons:
+            outcome = (
+                "queue_lag_with_stale_context"
+                if lineage.get("runtime_queue_lag")
+                and lineage.get("decision_stage_stale_backoff")
+                else "other_evicted"
+            )
+        elif "latency_block" in stage_names:
+            outcome = "latency_blocked"
+        elif stage_names & {"latency_pass", "budget_pass"}:
+            outcome = "downstream_guard_passed_right_censored"
+        elif "ai_confirmed" in stage_names:
+            outcome = "recovered_ai"
+        elif "ai_confirmed_terminal_no_budget" in stage_names:
+            outcome = "ai_budget_terminal_no_call"
+        elif heavy:
+            outcome = "recovered_heavy_no_ai"
+        elif "scalping_scanner_fast_precheck" in stage_names:
+            outcome = (
+                "active_queue_lag_right_censored"
+                if lineage.get("runtime_queue_lag")
+                and lineage.get("decision_stage_stale_backoff")
+                else "fast_precheck_only_right_censored"
+            )
+        else:
+            outcome = "active_right_censored"
+        final_outcomes[outcome] += 1
+    for prune in prunes:
+        reasons = prune.get("reasons") or [prune.get("reason") or "unknown"]
+        for reason in reasons:
+            prune_reasons[str(reason)] += 1
+        generation_id = _valid_lineage_token(prune.get("scan_generation_id"))
+        if generation_id:
+            for reason in reasons:
+                generation_terminal_keys[generation_id].add(
+                    (str(prune.get("code") or ""), f"pruned:{reason}")
+                )
+            ranked_count = int(_to_float(prune.get("ranked_candidate_count"), 0) or 0)
+            if ranked_count:
+                generation_ranked_count_values[generation_id].add(ranked_count)
+                generation_ranked_counts[generation_id] = max(
+                    generation_ranked_counts.get(generation_id, 0), ranked_count
+                )
+            scan_rank = int(_to_float(prune.get("scan_rank"), 0) or 0)
+            if scan_rank:
+                generation_rank_codes[generation_id][scan_rank].add(
+                    str(prune.get("code") or "")
+                )
+    conservation_rows = []
+    for generation_id in sorted(generation_terminal_keys):
+        ranked_count = generation_ranked_counts.get(generation_id, 0)
+        terminal_keys = generation_terminal_keys[generation_id]
+        terminal_codes = {code for code, _outcome in terminal_keys}
+        row = {
+            "scan_generation_id": generation_id,
+            "ranked_candidate_count": ranked_count,
+            "terminal_candidate_count": len(terminal_codes),
+            "conservation_delta": ranked_count - len(terminal_codes),
+            "outcome_conflict_count": sum(
+                len(
+                    {
+                        outcome
+                        for item_code, outcome in terminal_keys
+                        if item_code == code
+                    }
+                )
+                > 1
+                for code in terminal_codes
+            ),
+            "missing_ranked_candidate_count": int(ranked_count <= 0),
+            "ranked_count_conflict_count": max(
+                0, len(generation_ranked_count_values[generation_id]) - 1
+            ),
+            "duplicate_rank_count": sum(
+                len(codes) > 1
+                for rank, codes in generation_rank_codes[generation_id].items()
+                if 1 <= rank <= ranked_count
+            ),
+            "missing_rank_count": sum(
+                rank not in generation_rank_codes[generation_id]
+                for rank in range(1, ranked_count + 1)
+            ),
+            "out_of_range_rank_count": sum(
+                not 1 <= rank <= ranked_count
+                for rank in generation_rank_codes[generation_id]
+            ),
+        }
+        row["metadata_conflict_count"] = sum(
+            int(row[key])
+            for key in (
+                "missing_ranked_candidate_count",
+                "ranked_count_conflict_count",
+                "duplicate_rank_count",
+                "missing_rank_count",
+                "out_of_range_rank_count",
+            )
+        )
+        conservation_rows.append(row)
+    return {
+        "metric_contract": SCANNER_UNIQUE_FUNNEL_METRIC_CONTRACT,
+        "relevant_raw_event_count": int(state.get("relevant_raw_event_count") or 0),
+        "duplicate_mirror_event_count": int(
+            state.get("duplicate_mirror_event_count") or 0
+        ),
+        "missing_lineage_event_count": int(
+            state.get("missing_lineage_event_count") or 0
+        ),
+        "unique_promotion_count": len(lineages),
+        "unique_runtime_record_count": len(unique_records),
+        "unique_symbol_count": len(unique_symbols),
+        "attach_success_count": attach_success_count,
+        "handoff_provenance_complete_count": handoff_complete_count,
+        "handoff_provenance_coverage_pct": _rate_pct(
+            handoff_complete_count, attach_success_count
+        ),
+        "eligible_for_heavy_entry_eval_count": eligible_count,
+        "eligible_without_heavy_evaluation_count": eligible_without_heavy_count,
+        "eligible_without_heavy_evaluation_rate_pct": _rate_pct(
+            eligible_without_heavy_count, eligible_count
+        ),
+        "manual_control_exclusion_attach_skip_count": manual_attach_skip_count,
+        "manual_control_exclusion_terminalized_count": manual_terminalized_count,
+        "unique_pruned_candidate_count": len(prunes),
+        "prune_reason_counts": dict(sorted(prune_reasons.items())),
+        "scan_generation_conservation": {
+            "generation_count": len(conservation_rows),
+            "complete_generation_count": sum(
+                row["conservation_delta"] == 0
+                and row["outcome_conflict_count"] == 0
+                and row["metadata_conflict_count"] == 0
+                for row in conservation_rows
+            ),
+            "incomplete_generation_count": sum(
+                row["conservation_delta"] != 0
+                or row["outcome_conflict_count"] != 0
+                or row["metadata_conflict_count"] != 0
+                for row in conservation_rows
+            ),
+            "incomplete_rows_sample": [
+                row
+                for row in conservation_rows
+                if row["conservation_delta"] != 0
+                or row["outcome_conflict_count"] != 0
+                or row["metadata_conflict_count"] != 0
+            ][:50],
+            "rows": conservation_rows[:50],
+        },
+        "final_outcome_counts": dict(sorted(final_outcomes.items())),
+        "venue_counts": dict(sorted(venues.items())),
+        "economic_cohorts": {
+            "eligible_no_heavy": eligible_without_heavy_count,
+            "heavy_then_stale_queue_evict": sum(
+                1
+                for lineage in lineages
+                if "scalping_scanner_heavy_eval_completion"
+                in (lineage.get("stages") or {})
+                and lineage.get("runtime_queue_lag")
+                and lineage.get("decision_stage_stale_backoff")
+                and lineage.get("eviction_reasons")
+            ),
+            "non_gainer_not_rising_repeat": sum(
+                1
+                for prune in prunes
+                if prune.get("reason") == "reentry_cooldown_no_material_upgrade"
+                and "MARKET_GAINER" not in str(prune.get("source_signature") or "")
+            ),
+            "executable_bbo_ev_status": "source_quality_blocked_until_exact_bbo_join",
+        },
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
 
 
 def _time_bucket(row: dict[str, Any]) -> str:
@@ -796,6 +1306,7 @@ def _build_workorders(
 ) -> list[dict[str, Any]]:
     counts = summary["pipeline_counts"]
     snapshot = summary["snapshot_summary"]
+    scanner_funnel = summary.get("scanner_unique_funnel") or {}
     causal = summary.get("causal_attribution") or {}
     quiet_volume_counts = (causal.get("trade_tick_quiet") or {}).get(
         "cumulative_volume_provenance_counts", {}
@@ -824,6 +1335,192 @@ def _build_workorders(
         "decision_authority": METRIC_CONTRACT["decision_authority"],
         "forbidden_uses": FORBIDDEN_USES,
     }
+    attach_success_count = int(scanner_funnel.get("attach_success_count") or 0)
+    handoff_complete_count = int(
+        scanner_funnel.get("handoff_provenance_complete_count") or 0
+    )
+    if attach_success_count > handoff_complete_count:
+        orders.append(
+            {
+                **base,
+                "decision": "defer_evidence",
+                "next_action": "verify_after_current_runtime_reflection",
+                "implementation_state": "handoff_provenance_implemented_not_runtime_reflected",
+                "order_id": "order_scanner_runtime_handoff_provenance_gap",
+                "title": "Scanner runtime handoff provenance closure",
+                "priority": 1,
+                "intent": (
+                    "Require an exact promotion id, local runtime handoff epoch, runtime instance id, "
+                    "and provenance version on every successful scanner WATCHING attach."
+                ),
+                "evidence": [
+                    f"attach_success_count={attach_success_count}",
+                    f"handoff_provenance_complete_count={handoff_complete_count}",
+                    "handoff_provenance_coverage_pct="
+                    f"{scanner_funnel.get('handoff_provenance_coverage_pct', 0.0)}",
+                ],
+                "files_likely_touched": [
+                    "src/engine/kiwoom_sniper_v2.py",
+                    "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+                    "src/tests/test_kiwoom_sniper_market_regime_runtime.py",
+                    "src/tests/test_intraday_ws_freshness_monitor.py",
+                ],
+                "acceptance_tests": [
+                    "successful_attach_handoff_provenance_coverage_pct=100",
+                    "same_promotion_refresh_preserves_handoff_epoch",
+                    "new_promotion_rotates_handoff_epoch",
+                ],
+            }
+        )
+    eligible_no_heavy = int(
+        scanner_funnel.get("eligible_without_heavy_evaluation_count") or 0
+    )
+    if eligible_no_heavy:
+        orders.append(
+            {
+                **base,
+                "decision": "defer_evidence",
+                "next_action": "recheck_after_next_natural_session",
+                "implementation_state": "closed_loop_instrumentation_active",
+                "order_id": "order_scanner_eligible_no_heavy_closed_loop",
+                "title": "Scanner eligible-to-heavy evaluation loss closure",
+                "priority": 1,
+                "intent": (
+                    "Attribute unique promotions that passed fast precheck but never reached heavy "
+                    "evaluation, preserving WS stale, queue-lag, eviction, venue, and terminal outcome."
+                ),
+                "evidence": [
+                    f"eligible_without_heavy_evaluation_count={eligible_no_heavy}",
+                    "eligible_without_heavy_evaluation_rate_pct="
+                    f"{scanner_funnel.get('eligible_without_heavy_evaluation_rate_pct', 0.0)}",
+                    f"final_outcome_counts={scanner_funnel.get('final_outcome_counts', {})}",
+                    f"economic_cohorts={scanner_funnel.get('economic_cohorts', {})}",
+                ],
+                "files_likely_touched": [
+                    "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+                    "src/engine/scalping/scanner_scheduler_replay.py",
+                    "src/tests/test_intraday_ws_freshness_monitor.py",
+                ],
+                "acceptance_tests": [
+                    "pipeline_threshold_mirror_events_are_deduplicated",
+                    "every_unique_promotion_has_one_final_outcome_or_active_right_censored",
+                    "missing_executable_bbo_remains_source_quality_blocked_not_zero_ev",
+                ],
+            }
+        )
+    manual_attach_skips = int(
+        scanner_funnel.get("manual_control_exclusion_attach_skip_count") or 0
+    )
+    if manual_attach_skips:
+        orders.append(
+            {
+                **base,
+                "decision": "defer_evidence",
+                "next_action": "verify_zero_after_current_runtime_reflection",
+                "implementation_state": "scanner_prefilter_and_exact_terminalization_implemented",
+                "order_id": "order_scanner_manual_exclusion_slot_leak",
+                "title": "Scanner manual-exclusion WATCHING slot leak verification",
+                "priority": 1,
+                "intent": (
+                    "Verify manually controlled symbols are pruned before WATCHING persistence and "
+                    "that legacy exact zero-fill generations are terminalized without touching holdings."
+                ),
+                "evidence": [
+                    f"manual_control_exclusion_attach_skip_count={manual_attach_skips}",
+                    "manual_control_exclusion_terminalized_count="
+                    f"{scanner_funnel.get('manual_control_exclusion_terminalized_count', 0)}",
+                ],
+                "files_likely_touched": [
+                    "src/scanners/scalping_scanner.py",
+                    "src/engine/kiwoom_sniper_v2.py",
+                    "src/tests/test_scalping_scanner_candidate_pool.py",
+                    "src/tests/test_kiwoom_sniper_market_regime_runtime.py",
+                ],
+                "acceptance_tests": [
+                    "manual_excluded_scanner_promotion_count=0",
+                    "manual_excluded_scanner_ws_reg_count=0",
+                    "manual_excluded_zero_fill_watching_count=0",
+                    "other_owner_and_filled_position_mutation_count=0",
+                ],
+            }
+        )
+    conservation = scanner_funnel.get("scan_generation_conservation") or {}
+    incomplete_generations = int(conservation.get("incomplete_generation_count") or 0)
+    if incomplete_generations:
+        orders.append(
+            {
+                **base,
+                "decision": "defer_evidence",
+                "next_action": "verify_after_next_natural_scan_generation",
+                "implementation_state": "candidate_prune_receipts_implemented",
+                "order_id": "order_scanner_scan_generation_conservation_gap",
+                "title": "Scanner ranked-to-promotion funnel conservation gap",
+                "priority": 1,
+                "intent": (
+                    "Require each ranked candidate in a scan generation to terminate as exactly one "
+                    "promotion, explicit guard block, or first-blocker prune receipt."
+                ),
+                "evidence": [
+                    f"incomplete_generation_count={incomplete_generations}",
+                    "incomplete_conservation_rows_sample="
+                    f"{conservation.get('incomplete_rows_sample', [])}",
+                ],
+                "files_likely_touched": [
+                    "src/scanners/scalping_scanner.py",
+                    "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+                    "src/tests/test_scalping_scanner_candidate_pool.py",
+                    "src/tests/test_intraday_ws_freshness_monitor.py",
+                ],
+                "acceptance_tests": [
+                    "ranked_candidate_count=unique_promoted_plus_unique_pruned_per_generation",
+                    "incomplete_generation_count=0",
+                ],
+            }
+        )
+    economic_cohorts = scanner_funnel.get("economic_cohorts") or {}
+    economic_candidate_count = sum(
+        int(economic_cohorts.get(key) or 0)
+        for key in (
+            "eligible_no_heavy",
+            "heavy_then_stale_queue_evict",
+            "non_gainer_not_rising_repeat",
+        )
+    )
+    if (
+        economic_candidate_count
+        and economic_cohorts.get("executable_bbo_ev_status")
+        == "source_quality_blocked_until_exact_bbo_join"
+    ):
+        orders.append(
+            {
+                **base,
+                "decision": "defer_evidence",
+                "next_action": "join_exact_executable_bbo_and_first_hit_labels_postclose",
+                "implementation_state": "cohorts_identified_bbo_join_pending",
+                "order_id": "order_scanner_funnel_executable_bbo_join",
+                "title": "Scanner funnel executable-BBO economic attribution",
+                "priority": 2,
+                "intent": (
+                    "Join each unique lost scanner generation to fresh executable bid/ask, quote age, "
+                    "venue/session, fixed effective-dated costs, target/adverse first-hit, and timeout exit."
+                ),
+                "evidence": [
+                    f"economic_candidate_count={economic_candidate_count}",
+                    f"economic_cohorts={economic_cohorts}",
+                ],
+                "files_likely_touched": [
+                    "src/engine/scalping/rising_missed_intraday_feedback.py",
+                    "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+                    "src/tests/test_rising_missed_intraday_feedback.py",
+                ],
+                "acceptance_tests": [
+                    "exact_promotion_venue_session_bbo_join_coverage_pct>=95",
+                    "missing_bbo_is_source_quality_blocked_not_zero_profit",
+                    "KRX_PREMARKET_KRX_LIKE_NXT_results_are_separate",
+                    "fixed_cost_contract_effective_date_and_source_hash_match",
+                ],
+            }
+        )
     if counts.get("subscription_stale", 0) or snapshot.get(
         "repair_recommended_count", 0
     ):
@@ -1027,6 +1724,9 @@ def build_report(
         provenance_counts = _nested_counters_from_mapping(
             (cached_state or {}).get("provenance_counts")
         )
+        scanner_funnel_state = _scanner_funnel_state_from_mapping(
+            (cached_state or {}).get("scanner_funnel_state")
+        )
         total_events = int((cached_state or {}).get("total_events") or 0)
     except (TypeError, ValueError):
         cached_state = None
@@ -1037,7 +1737,11 @@ def build_report(
         time_bucket_counts = defaultdict(Counter)
         symbol_counts = defaultdict(Counter)
         provenance_counts = defaultdict(Counter)
+        scanner_funnel_state = _scanner_funnel_state_from_mapping(None)
         total_events = 0
+    scanner_funnel_state["_fingerprint_set"] = set(
+        scanner_funnel_state.get("event_fingerprints") or []
+    )
     appended_event_count = 0
     invalid_json_line_count = 0
     source_offsets: dict[str, dict[str, Any]] = {}
@@ -1064,7 +1768,13 @@ def build_report(
             total_events += 1
             appended_event_count += 1
             source_appended_count += 1
-            item = _pipeline_event_class(_flatten_event(raw), stale_ms=stale_ms)
+            flattened = _flatten_event(raw)
+            item = _pipeline_event_class(flattened, stale_ms=stale_ms)
+            _update_scanner_funnel_state(
+                scanner_funnel_state,
+                flattened,
+                item,
+            )
             for key in (
                 "trade_tick_quiet",
                 "subscription_stale",
@@ -1164,6 +1874,16 @@ def build_report(
                 "provenance_counts": {
                     key: dict(counter) for key, counter in provenance_counts.items()
                 },
+                "scanner_funnel_state": {
+                    key: value
+                    for key, value in {
+                        **scanner_funnel_state,
+                        "event_fingerprints": sorted(
+                            scanner_funnel_state.get("_fingerprint_set") or set()
+                        ),
+                    }.items()
+                    if key != "_fingerprint_set"
+                },
                 "total_events": total_events,
             },
         )
@@ -1175,6 +1895,7 @@ def build_report(
     ) = _resolve_snapshot(subscription_snapshot_path, target_date=target_date)
     snapshot_rows = _snapshot_rows(snapshot_payload, stale_ms=stale_ms)
     snapshot = _snapshot_summary(snapshot_rows)
+    scanner_unique_funnel = _scanner_unique_funnel_summary(scanner_funnel_state)
 
     summary = {
         "target_date": target_date,
@@ -1193,6 +1914,11 @@ def build_report(
                 else "full_streaming_rebuild"
             ),
             "memory_bounded_streaming": True,
+            "retained_state_scope": "daily_unique_scanner_lineages_and_relevant_event_hashes",
+            "memory_growth_bound": (
+                "O(daily_unique_scanner_promotions+daily_unique_prunes+"
+                "daily_relevant_event_fingerprints)"
+            ),
             "full_event_list_materialized": False,
             "aggregated_event_count": total_events,
             "appended_event_count": appended_event_count,
@@ -1229,6 +1955,7 @@ def build_report(
             ),
         },
         "snapshot_summary": snapshot,
+        "scanner_unique_funnel": scanner_unique_funnel,
         "by_stage": {
             key: _counter_rows(counter, key_name="stage")
             for key, counter in sorted(stage_counts.items())
@@ -1324,6 +2051,7 @@ def _render_monitor_markdown(report: dict[str, Any]) -> str:
             f"- pipeline_counts: `{report.get('pipeline_counts')}`",
             f"- pipeline_rates: `{report.get('pipeline_rates')}`",
             f"- causal_attribution: `{report.get('causal_attribution')}`",
+            f"- scanner_unique_funnel: `{report.get('scanner_unique_funnel')}`",
             "- subscription_snapshot_path: "
             f"`{report.get('subscription_snapshot_path')}`",
             "- subscription_snapshot_provenance: "

@@ -92,6 +92,37 @@ def test_replay_accepts_canonical_db_poll_recovery_attach():
     assert "attach_not_applied" not in replay["exclusions"]
 
 
+def test_replay_prefers_exact_runtime_handoff_over_event_sink_timestamp():
+    promotion_epoch = datetime(2026, 7, 24, 9, 0, 0, tzinfo=KST).timestamp()
+    events = [
+        _event(
+            "scalping_scanner_runtime_target_attach",
+            "2026-07-24T09:00:09",
+            runtime_target_attach_outcome="attached",
+            scanner_promotion_id="PROMO-HANDOFF",
+            scanner_promotion_emitted_epoch=promotion_epoch,
+            scanner_runtime_handoff_epoch=promotion_epoch + 1.0,
+            scanner_runtime_handoff_promotion_id="PROMO-HANDOFF",
+            scanner_runtime_instance_id="scanner-runtime-test",
+            scanner_attach_provenance_version="scanner_runtime_handoff_v1",
+            effective_venue="KRX",
+            venue_resolution="consistent_explicit:payload.effective_venue",
+        ),
+        _event(
+            "scalping_scanner_fast_precheck",
+            "2026-07-24T09:00:03",
+            scanner_promotion_id="PROMO-HANDOFF",
+        ),
+    ]
+
+    replay = replay_scanner_events(events)
+
+    assert replay["valid_generation_count"] == 1
+    assert replay["venues"]["KRX"]["promotion_to_attach_p95_sec"] == 1.0
+    assert replay["venues"]["KRX"]["attach_to_first_precheck_p95_sec"] == 2.0
+    assert replay["attach_epoch_source_counts"] == {"exact_runtime_handoff": 1}
+
+
 def test_replay_prefers_scheduler_action_timestamps_over_async_sink_time():
     promotion_epoch = datetime(2026, 7, 24, 9, 0, 0, tzinfo=KST).timestamp()
     attach_epoch = promotion_epoch + 1.1

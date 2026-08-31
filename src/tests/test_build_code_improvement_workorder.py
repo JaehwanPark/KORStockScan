@@ -327,6 +327,65 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
     )
 
 
+def test_build_code_improvement_workorder_consumes_intraday_ws_directives(
+    tmp_path, monkeypatch
+):
+    source_dir = tmp_path / "intraday_ws_freshness_monitor"
+    source_dir.mkdir()
+    source_path = source_dir / "intraday_ws_freshness_monitor_2026-07-02.json"
+    source_path.write_text(
+        json.dumps(
+            {
+                "report_type": "intraday_ws_freshness_monitor",
+                "source_paths": {"pipeline_events": "pipeline.jsonl"},
+                "workorder_directives": [
+                    {
+                        "order_id": "order_scanner_eligible_no_heavy_closed_loop",
+                        "title": "Scanner eligible-to-heavy evaluation loss closure",
+                        "decision": "defer_evidence",
+                        "priority": 1,
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "evidence": ["eligible_without_heavy_evaluation_count=3"],
+                        "files_likely_touched": [
+                            "src/engine/monitoring/intraday_ws_freshness_monitor.py"
+                        ],
+                        "acceptance_tests": ["unique_lineage_closed"],
+                        "forbidden_uses": ["stale_submit_bypass"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
+    )
+    monkeypatch.setattr(
+        mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
+    )
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "INTRADAY_WS_FRESHNESS_MONITOR_DIR", source_dir)
+    monkeypatch.setattr(
+        mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", tmp_path / "report"
+    )
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", tmp_path / "docs")
+
+    report = mod.build_code_improvement_workorder("2026-07-02", max_orders=10)
+
+    orders = [
+        item
+        for item in report["orders"]
+        if item["source_report_type"] == "intraday_ws_freshness_monitor"
+    ]
+    assert len(orders) == 1
+    assert orders[0]["order_id"] == ("order_scanner_eligible_no_heavy_closed_loop")
+    assert orders[0]["runtime_effect"] is False
+    assert orders[0]["allowed_runtime_apply"] is False
+    assert report["summary"]["intraday_ws_freshness_source_order_count"] == 1
+    assert report["source"]["intraday_ws_freshness_monitor"] == str(source_path)
+
+
 def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(
     tmp_path, monkeypatch
 ):

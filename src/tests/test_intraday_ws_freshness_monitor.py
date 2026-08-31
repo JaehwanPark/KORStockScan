@@ -170,6 +170,354 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
     )
 
 
+def test_scanner_unique_funnel_deduplicates_mirrors_and_closes_final_outcome(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    promotion_id = "SCANPROM-000101-1000000"
+    common = {
+        "scanner_promotion_id": promotion_id,
+        "scanner_scan_generation_id": "SCANGEN-1000",
+        "scanner_scan_rank": 1,
+        "scanner_ranked_candidate_count": 2,
+        "runtime_record_id": 77,
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+    }
+    rows = [
+        _event("scalping_scanner_candidate_promoted", common, code="000101"),
+        _event(
+            "scalping_scanner_runtime_target_attach",
+            {
+                **common,
+                "runtime_target_attach_outcome": "attached",
+                "runtime_target_attach_reason": "new_watching_target_attached",
+                "scanner_runtime_handoff_epoch": 1000.1,
+                "scanner_runtime_handoff_promotion_id": promotion_id,
+                "scanner_runtime_instance_id": "scanner-runtime-test",
+                "scanner_attach_provenance_version": "scanner_runtime_handoff_v1",
+            },
+            code="000101",
+        ),
+        _event(
+            "scalping_scanner_fast_precheck",
+            {**common, "fast_precheck_result": "eligible_for_heavy_entry_eval"},
+            code="000101",
+        ),
+        _event(
+            "scalping_scanner_runtime_queue_lag",
+            {**common, "fast_precheck_reason": "scanner_ws_stale_backoff_active"},
+            code="000101",
+        ),
+        _event(
+            "scalping_scanner_candidate_pruned",
+            {
+                "scanner_scan_generation_id": "SCANGEN-1000",
+                "scanner_scan_rank": 2,
+                "scanner_ranked_candidate_count": 2,
+                "scanner_prune_reason": "reentry_cooldown_no_material_upgrade",
+                "source_signature": "PRICE_JUMP_START",
+                "effective_venue": "KRX",
+            },
+            code="000202",
+        ),
+    ]
+    _write_jsonl(pipeline_path, rows)
+    _write_jsonl(threshold_path, rows)
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    funnel = report["scanner_unique_funnel"]
+    assert funnel["metric_contract"]["primary_decision_metric"] == (
+        "eligible_without_heavy_evaluation_count"
+    )
+    assert funnel["metric_contract"]["primary_decision_metric"] in funnel
+    assert funnel["relevant_raw_event_count"] == 10
+    assert funnel["duplicate_mirror_event_count"] == 5
+    assert funnel["unique_promotion_count"] == 1
+    assert funnel["unique_runtime_record_count"] == 1
+    assert funnel["unique_symbol_count"] == 1
+    assert funnel["unique_pruned_candidate_count"] == 1
+    assert funnel["attach_success_count"] == 1
+    assert funnel["handoff_provenance_coverage_pct"] == 100.0
+    assert funnel["eligible_without_heavy_evaluation_count"] == 1
+    assert funnel["final_outcome_counts"] == {"active_queue_lag_right_censored": 1}
+    assert funnel["economic_cohorts"]["non_gainer_not_rising_repeat"] == 1
+    assert funnel["economic_cohorts"]["executable_bbo_ev_status"] == (
+        "source_quality_blocked_until_exact_bbo_join"
+    )
+    conservation = funnel["scan_generation_conservation"]
+    assert conservation["complete_generation_count"] == 1
+    assert conservation["incomplete_generation_count"] == 0
+    assert conservation["rows"] == [
+        {
+            "scan_generation_id": "SCANGEN-1000",
+            "ranked_candidate_count": 2,
+            "terminal_candidate_count": 2,
+            "conservation_delta": 0,
+            "outcome_conflict_count": 0,
+            "missing_ranked_candidate_count": 0,
+            "ranked_count_conflict_count": 0,
+            "duplicate_rank_count": 0,
+            "missing_rank_count": 0,
+            "out_of_range_rank_count": 0,
+            "metadata_conflict_count": 0,
+        }
+    ]
+    order_ids = {item["order_id"] for item in report["workorder_directives"]}
+    assert "order_scanner_eligible_no_heavy_closed_loop" in order_ids
+    assert "order_scanner_runtime_handoff_provenance_gap" not in order_ids
+    assert "order_scanner_scan_generation_conservation_gap" not in order_ids
+
+
+def test_scanner_generation_flags_multiple_first_blockers_for_same_candidate(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    common = {
+        "scanner_scan_generation_id": "SCANGEN-CONFLICT",
+        "scanner_scan_rank": 1,
+        "scanner_ranked_candidate_count": 1,
+        "effective_venue": "KRX",
+    }
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_pruned",
+                {**common, "scanner_prune_reason": "general_slot_limit"},
+                code="000303",
+            ),
+            _event(
+                "scalping_scanner_candidate_pruned",
+                {**common, "scanner_prune_reason": "owner_quota"},
+                code="000303",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    conservation = report["scanner_unique_funnel"]["scan_generation_conservation"]
+    assert conservation["complete_generation_count"] == 0
+    assert conservation["incomplete_generation_count"] == 1
+    assert conservation["rows"][0]["conservation_delta"] == 0
+    assert conservation["rows"][0]["outcome_conflict_count"] == 1
+    order_ids = {item["order_id"] for item in report["workorder_directives"]}
+    assert "order_scanner_scan_generation_conservation_gap" in order_ids
+
+
+def test_scanner_manual_exclusion_attach_skip_is_terminal_not_right_censored(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    promotion_id = "SCANPROM-MANUAL-SKIP"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_runtime_target_attach",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "runtime_target_attach_outcome": "skipped",
+                    "runtime_target_attach_reason": (
+                        "operator_manual_control_excluded_symbol"
+                    ),
+                    "manual_control_exclusion_terminalized": True,
+                    "effective_venue": "KRX",
+                },
+                code="000404",
+            )
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    funnel = report["scanner_unique_funnel"]
+    assert funnel["final_outcome_counts"] == {
+        "manual_control_exclusion_attach_skipped": 1
+    }
+    assert funnel["manual_control_exclusion_attach_skip_count"] == 1
+    assert funnel["manual_control_exclusion_terminalized_count"] == 1
+
+
+def test_scanner_queue_lag_is_not_terminal_when_heavy_ai_later_recovers(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    common = {
+        "scanner_promotion_id": "SCANPROM-RECOVERED",
+        "runtime_record_id": 88,
+        "effective_venue": "KRX",
+    }
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_fast_precheck",
+                {**common, "fast_precheck_result": "eligible_for_heavy_entry_eval"},
+                code="000505",
+            ),
+            _event(
+                "scalping_scanner_runtime_queue_lag",
+                {**common, "fast_precheck_reason": "scanner_ws_stale_backoff_active"},
+                code="000505",
+            ),
+            _event(
+                "scalping_scanner_heavy_eval_completion",
+                common,
+                code="000505",
+            ),
+            _event("ai_confirmed", common, code="000505"),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    funnel = report["scanner_unique_funnel"]
+    assert funnel["final_outcome_counts"] == {"recovered_ai": 1}
+    assert funnel["eligible_without_heavy_evaluation_count"] == 0
+
+
+def test_scanner_submit_remains_terminal_after_watch_eviction(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    common = {
+        "scanner_promotion_id": "SCANPROM-SUBMITTED",
+        "runtime_record_id": 89,
+        "effective_venue": "KRX",
+    }
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event("scalping_scanner_candidate_promoted", common, code="000506"),
+            _event("order_bundle_submitted", common, code="000506"),
+            _event(
+                "scalping_scanner_runtime_target_attach",
+                {
+                    **common,
+                    "runtime_target_attach_outcome": "skipped",
+                    "runtime_target_attach_reason": (
+                        "operator_manual_control_excluded_symbol"
+                    ),
+                },
+                code="000506",
+            ),
+            _event(
+                "scalping_scanner_watch_eviction",
+                {**common, "eviction_reason": "normal_watch_cleanup"},
+                code="000506",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    assert report["scanner_unique_funnel"]["final_outcome_counts"] == {"submitted": 1}
+
+
+def test_scanner_order_bundle_failure_is_not_labeled_broker_submit_failure(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    common = {
+        "scanner_promotion_id": "SCANPROM-PRE-BROKER-BLOCK",
+        "runtime_record_id": 90,
+        "effective_venue": "KRX",
+        "order_bundle_failure_mode": "pre_broker_blocked",
+        "broker_submit_attempt_count": 0,
+    }
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event("scalping_scanner_candidate_promoted", common, code="000507"),
+            _event("order_bundle_failed", common, code="000507"),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    assert report["scanner_unique_funnel"]["final_outcome_counts"] == {
+        "order_bundle_failed": 1
+    }
+
+
+def test_scanner_handoff_gap_defers_for_runtime_reflection_without_auto_apply(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_runtime_target_attach",
+                {
+                    "scanner_promotion_id": "SCANPROM-LEGACY-PID",
+                    "runtime_target_attach_outcome": "attached",
+                    "runtime_target_attach_reason": "new_watching_target_attached",
+                    "effective_venue": "KRX",
+                },
+                code="000606",
+            )
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    order = next(
+        item
+        for item in report["workorder_directives"]
+        if item["order_id"] == "order_scanner_runtime_handoff_provenance_gap"
+    )
+    assert order["decision"] == "defer_evidence"
+    assert order["next_action"] == "verify_after_current_runtime_reflection"
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
+
+
 def test_build_report_incrementally_aggregates_only_appended_rows(tmp_path):
     pipeline_path = tmp_path / "pipeline.jsonl"
     threshold_path = tmp_path / "threshold.jsonl"

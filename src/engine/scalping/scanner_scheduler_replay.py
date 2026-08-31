@@ -34,6 +34,7 @@ class ScannerReplaySample:
     promotion_epoch: float
     attach_epoch: float
     first_precheck_epoch: float
+    attach_epoch_source: str = "diagnostic_event_proxy"
 
     @property
     def promotion_to_attach_sec(self) -> float:
@@ -84,6 +85,20 @@ def _float_or_none(value: Any) -> float | None:
     return parsed if parsed > 0 else None
 
 
+def _event_order_epoch(event: dict[str, Any], emitted_epoch: float) -> float:
+    fields = event.get("fields")
+    if (
+        str(event.get("stage") or "") == ATTACH_STAGE
+        and isinstance(fields, dict)
+        and fields.get("scanner_attach_provenance_version")
+        == "scanner_runtime_handoff_v1"
+    ):
+        return _float_or_none(fields.get("scanner_runtime_handoff_epoch")) or float(
+            emitted_epoch
+        )
+    return float(emitted_epoch)
+
+
 def _canonical_attach(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
     fields = event.get("fields")
     if not isinstance(fields, dict):
@@ -98,8 +113,36 @@ def _canonical_attach(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str
         return None, "attach_venue_resolution_invalid"
     promotion_id = str(fields.get("scanner_promotion_id") or "").strip()
     promotion_epoch = _float_or_none(fields.get("scanner_promotion_emitted_epoch"))
-    attach_epoch = _event_epoch(event)
+    event_proxy_epoch = _event_epoch(event)
     code = str(event.get("stock_code") or "").strip()[:6]
+    handoff_epoch = _float_or_none(fields.get("scanner_runtime_handoff_epoch"))
+    handoff_promotion_id = str(
+        fields.get("scanner_runtime_handoff_promotion_id") or ""
+    ).strip()
+    handoff_instance_id = str(fields.get("scanner_runtime_instance_id") or "").strip()
+    handoff_version = str(fields.get("scanner_attach_provenance_version") or "").strip()
+    explicit_handoff_observed = bool(
+        handoff_epoch
+        or handoff_promotion_id
+        or handoff_version
+        or (
+            handoff_instance_id and not handoff_instance_id.startswith("not_applicable")
+        )
+    )
+    if explicit_handoff_observed:
+        if (
+            handoff_epoch is None
+            or handoff_promotion_id != promotion_id
+            or not handoff_instance_id
+            or handoff_instance_id.startswith("not_applicable")
+            or handoff_version != "scanner_runtime_handoff_v1"
+        ):
+            return None, "attach_handoff_provenance_invalid"
+        attach_epoch = handoff_epoch
+        attach_epoch_source = "exact_runtime_handoff"
+    else:
+        attach_epoch = event_proxy_epoch
+        attach_epoch_source = "diagnostic_event_proxy"
     if (
         not code
         or not promotion_id
@@ -115,6 +158,7 @@ def _canonical_attach(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str
         "venue": venue,
         "promotion_epoch": promotion_epoch,
         "attach_epoch": attach_epoch,
+        "attach_epoch_source": attach_epoch_source,
     }, "valid_attach"
 
 
@@ -173,16 +217,16 @@ def replay_scanner_events(
     samples: list[ScannerReplaySample] = []
     exclusions: dict[str, int] = {}
 
-    ordered = sorted(
-        (
-            (epoch, event)
-            for event in events
-            if isinstance(event, dict)
-            for epoch in [_event_epoch(event)]
-            if epoch is not None and epoch >= float(baseline_epoch)
-        ),
-        key=lambda item: item[0],
-    )
+    ordered = [
+        (epoch, event, _event_order_epoch(event, epoch))
+        for event in events
+        if isinstance(event, dict)
+        for epoch in [_event_epoch(event)]
+        if epoch is not None
+        and _event_order_epoch(event, epoch) >= float(baseline_epoch)
+    ]
+    ordered.sort(key=lambda item: item[2])
+    ordered = [(epoch, event) for epoch, event, _order_epoch in ordered]
     for event_epoch, event in ordered:
         stage = str(event.get("stage") or "")
         if stage == ATTACH_STAGE:
@@ -241,6 +285,7 @@ def replay_scanner_events(
                     promotion_epoch=attach["promotion_epoch"],
                     attach_epoch=dispatch["attach_epoch"],
                     first_precheck_epoch=dispatch["dispatch_epoch"],
+                    attach_epoch_source=attach["attach_epoch_source"],
                 )
             )
             sampled_keys.add(key)
@@ -516,11 +561,21 @@ def _summarize(
             ),
         }
     return {
-        "schema_version": 1,
-        "replay_contract": "scanner_deadline_scheduler_historical_baseline_v1",
+        "schema_version": 2,
+        "replay_contract": "scanner_deadline_scheduler_historical_baseline_v2",
         "decision_authority": "diagnostic_replay_only_no_runtime_activation",
         "clean_baseline_ts_kst": DEFAULT_BASELINE.isoformat(),
         "valid_generation_count": len(sample_list),
+        "attach_epoch_source_counts": dict(
+            sorted(
+                {
+                    source: sum(
+                        sample.attach_epoch_source == source for sample in sample_list
+                    )
+                    for source in {sample.attach_epoch_source for sample in sample_list}
+                }.items()
+            )
+        ),
         "excluded_count": sum(exclusions.values()),
         "exclusions": dict(sorted(exclusions.items())),
         "venues": by_venue,

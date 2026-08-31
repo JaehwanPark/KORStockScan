@@ -46,6 +46,7 @@ CONVERSION_LANE_DIR = REPORT_DIR / "conversion_lane"
 INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR = (
     REPORT_DIR / "intraday_entry_blocker_diagnostics"
 )
+INTRADAY_WS_FRESHNESS_MONITOR_DIR = REPORT_DIR / "intraday_ws_freshness_monitor"
 RISING_MISSED_SCOUT_WORKORDER_DIR = REPORT_DIR / "rising_missed_scout_workorder"
 RISING_MISSED_CLASSIFIER_PRIOR_DIR = REPORT_DIR / "rising_missed_classifier_prior"
 ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR = REPORT_DIR / "one_share_threshold_opportunity"
@@ -218,6 +219,13 @@ def intraday_entry_blocker_diagnostics_report_path(target_date: str) -> Path:
     return (
         INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR
         / f"intraday_entry_blocker_diagnostics_{target_date}.json"
+    )
+
+
+def intraday_ws_freshness_monitor_report_path(target_date: str) -> Path:
+    return (
+        INTRADAY_WS_FRESHNESS_MONITOR_DIR
+        / f"intraday_ws_freshness_monitor_{target_date}.json"
     )
 
 
@@ -625,6 +633,49 @@ def _intraday_entry_blocker_followup_orders(
                     "source_workorder": item,
                 }
             )
+    return orders
+
+
+def _intraday_ws_freshness_followup_orders(
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    directives = report.get("workorder_directives")
+    if not isinstance(directives, list):
+        return []
+    source_paths = [
+        str(path) for path in (report.get("source_paths") or {}).values() if path
+    ]
+    orders: list[dict[str, Any]] = []
+    for raw in directives:
+        if not isinstance(raw, dict) or not raw.get("order_id"):
+            continue
+        order = {
+            **raw,
+            "source_report_type": "intraday_ws_freshness_monitor",
+            "lifecycle_stage": "entry",
+            "target_subsystem": "scanner_runtime_freshness_funnel",
+            "route": "instrumentation_order",
+            "mapped_family": "scanner_runtime_freshness_funnel",
+            "threshold_family": "scanner_runtime_freshness_funnel",
+            "improvement_type": "scanner_funnel_source_quality_followup",
+            "confidence": "intraday_unique_lineage_diagnostic",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "source_paths": source_paths,
+            "next_postclose_metric": (
+                "The next natural session must regenerate unique promotion/prune lineages, "
+                "handoff coverage, terminal outcomes, and executable-BBO source-quality status."
+            ),
+        }
+        forbidden = raw.get("forbidden_uses")
+        order["forbidden_uses"] = (
+            list(forbidden)
+            if isinstance(forbidden, list)
+            else [str(forbidden)] if forbidden else []
+        )
+        orders.append(order)
     return orders
 
 
@@ -7556,6 +7607,11 @@ def build_code_improvement_workorder(
         intraday_entry_blocker_path,
         isolated_source_mode=isolated_source_mode,
     )
+    intraday_ws_freshness_path = intraday_ws_freshness_monitor_report_path(target_date)
+    intraday_ws_freshness = _load_source_json(
+        intraday_ws_freshness_path,
+        isolated_source_mode=isolated_source_mode,
+    )
     entry_hurdle_backtest_path = entry_hurdle_backtest_report_path(target_date)
     entry_hurdle_backtest = _load_source_json(
         entry_hurdle_backtest_path,
@@ -7616,6 +7672,7 @@ def build_code_improvement_workorder(
         "buy_funnel_sentinel": buy_funnel_sentinel_path,
         "conversion_lane": conversion_lane_path,
         "intraday_entry_blocker_diagnostics": intraday_entry_blocker_path,
+        "intraday_ws_freshness_monitor": intraday_ws_freshness_path,
         "entry_hurdle_backtest": entry_hurdle_backtest_path,
         "rising_missed_scout_workorder": rising_missed_scout_workorder_path,
         "rising_missed_classifier_prior": rising_missed_classifier_prior_path,
@@ -7808,6 +7865,9 @@ def build_code_improvement_workorder(
     intraday_entry_blocker_orders = _intraday_entry_blocker_followup_orders(
         intraday_entry_blocker
     )
+    intraday_ws_freshness_orders = _intraday_ws_freshness_followup_orders(
+        intraday_ws_freshness
+    )
     entry_hurdle_backtest_orders = _entry_hurdle_backtest_followup_orders(
         entry_hurdle_backtest
     )
@@ -7918,6 +7978,7 @@ def build_code_improvement_workorder(
         *stage_hook_workorder_discovery_orders,
         *conversion_lane_orders,
         *intraday_entry_blocker_orders,
+        *intraday_ws_freshness_orders,
         *entry_hurdle_backtest_orders,
         *rising_missed_scout_orders,
         *rising_missed_classifier_prior_orders,
@@ -8428,6 +8489,9 @@ def build_code_improvement_workorder(
             "intraday_entry_blocker_diagnostics": source_ref(
                 "intraday_entry_blocker_diagnostics"
             ),
+            "intraday_ws_freshness_monitor": source_ref(
+                "intraday_ws_freshness_monitor"
+            ),
             "entry_hurdle_backtest": source_ref("entry_hurdle_backtest"),
             "rising_missed_scout_workorder": source_ref(
                 "rising_missed_scout_workorder"
@@ -8499,6 +8563,9 @@ def build_code_improvement_workorder(
             "conversion_lane_source_order_count": len(conversion_lane_orders),
             "intraday_entry_blocker_source_order_count": len(
                 intraday_entry_blocker_orders
+            ),
+            "intraday_ws_freshness_source_order_count": len(
+                intraday_ws_freshness_orders
             ),
             "entry_hurdle_backtest_source_order_count": len(
                 entry_hurdle_backtest_orders

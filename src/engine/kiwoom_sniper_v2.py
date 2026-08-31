@@ -300,6 +300,10 @@ ACCOUNT_RECONCILIATION_INTERVAL_SEC = 90.0
 _SCANNER_OBSERVATION_EXECUTOR = ThreadPoolExecutor(
     max_workers=1, thread_name_prefix="scanner_observation"
 )
+_SCANNER_RUNTIME_INSTANCE_ID = (
+    f"scanner-runtime-{os.getpid()}-{int(time.time() * 1000)}"
+)
+_SCANNER_ATTACH_PROVENANCE_VERSION = "scanner_runtime_handoff_v1"
 _LOOP_METRICS_LAST_LOG_TS: float = 0.0
 _GATEKEEPER_REPORT_NOTIFY_TTL_SEC = 600.0
 _GATEKEEPER_REPORT_NOTIFY_RECENT: dict[str, float] = {}
@@ -741,6 +745,45 @@ def _expire_scanner_identity_mismatch_record(payload, code: str, reason: str) ->
         log_error(
             f"[SCANNER_IDENTITY_GUARD] failed to expire mismatched scanner WATCHING "
             f"record id={record_id} code={norm_code} reason={reason}: {exc}"
+        )
+        return False
+
+
+def _expire_manual_control_excluded_scanner_record(payload, code: str) -> bool:
+    """Terminalize only the exact zero-fill scanner generation being rejected."""
+
+    payload = dict(payload or {})
+    record_id = payload.get("record_id") or payload.get("id")
+    promotion_id = str(payload.get("scanner_promotion_id") or "").strip()
+    norm_code = str(code or payload.get("code") or "").strip()[:6]
+    if not record_id or not promotion_id or not norm_code:
+        return False
+    try:
+        with DB.get_session() as session:
+            updated = (
+                session.query(RecommendationHistory)
+                .filter(
+                    RecommendationHistory.id == record_id,
+                    RecommendationHistory.stock_code == norm_code,
+                    RecommendationHistory.status == "WATCHING",
+                    RecommendationHistory.strategy == "SCALPING",
+                    RecommendationHistory.position_tag == "SCANNER",
+                    RecommendationHistory.scanner_promotion_id == promotion_id,
+                    RecommendationHistory.buy_time.is_(None),
+                    RecommendationHistory.buy_qty == 0,
+                )
+                .update({"status": "EXPIRED"}, synchronize_session=False)
+            )
+        if updated:
+            log_info(
+                "[MANUAL_CONTROL_EXCLUSION] exact scanner WATCHING terminalized "
+                f"record id={record_id} code={norm_code} promotion_id={promotion_id}"
+            )
+        return bool(updated)
+    except Exception as exc:
+        log_error(
+            "[MANUAL_CONTROL_EXCLUSION] exact scanner WATCHING terminalization failed "
+            f"record id={record_id} code={norm_code} promotion_id={promotion_id}: {exc}"
         )
         return False
 
@@ -2320,6 +2363,41 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
             "scanner_promotion_emitted_epoch"
         )
         or "not_applicable_scanner_promotion_emitted_epoch",
+        "scanner_scan_generation_id": payload.get("scanner_scan_generation_id")
+        or target.get("scanner_scan_generation_id")
+        or "not_applicable_scanner_scan_generation_id",
+        "scanner_scan_rank": payload.get("scanner_scan_rank")
+        or target.get("scanner_scan_rank")
+        or "not_applicable_scanner_scan_rank",
+        "scanner_ranked_candidate_count": payload.get("scanner_ranked_candidate_count")
+        or target.get("scanner_ranked_candidate_count")
+        or "not_applicable_scanner_ranked_candidate_count",
+        "scanner_runtime_handoff_epoch": target.get("scanner_runtime_handoff_epoch")
+        or payload.get("scanner_runtime_handoff_epoch")
+        or "not_applicable_scanner_runtime_handoff_epoch",
+        "scanner_runtime_handoff_source": target.get("scanner_runtime_handoff_source")
+        or payload.get("scanner_runtime_handoff_source")
+        or "not_applicable_scanner_runtime_handoff_source",
+        "scanner_runtime_handoff_promotion_id": target.get(
+            "scanner_runtime_handoff_promotion_id"
+        )
+        or payload.get("scanner_runtime_handoff_promotion_id")
+        or "not_applicable_scanner_runtime_handoff_promotion_id",
+        "scanner_runtime_instance_id": target.get("scanner_runtime_instance_id")
+        or payload.get("scanner_runtime_instance_id")
+        or _SCANNER_RUNTIME_INSTANCE_ID,
+        "scanner_attach_provenance_version": target.get(
+            "scanner_attach_provenance_version"
+        )
+        or payload.get("scanner_attach_provenance_version")
+        or "not_applicable_scanner_attach_provenance_version",
+        "manual_control_exclusion_terminalized": bool(
+            payload.get("manual_control_exclusion_terminalized", False)
+        ),
+        "manual_control_exclusion_terminalization_scope": payload.get(
+            "manual_control_exclusion_terminalization_scope"
+        )
+        or "not_applicable_manual_control_exclusion_terminalization_scope",
         "source_signature": payload.get("source_signature")
         or "not_applicable_source_signature",
         "scanner_required_realtime_types": payload.get(
@@ -2448,6 +2526,34 @@ def _log_scanner_runtime_target_attach(payload, *, outcome, reason, target=None)
         )
     finally:
         _clear_scanner_promotion_pending_attach(code)
+
+
+def _scanner_runtime_handoff_updates(payload, *, source, existing=None):
+    """Return observation-only handoff provenance without changing watch age."""
+
+    payload = dict(payload or {})
+    existing = dict(existing or {})
+    promotion_id = str(payload.get("scanner_promotion_id") or "").strip()
+    existing_promotion_id = str(
+        existing.get("scanner_runtime_handoff_promotion_id") or ""
+    ).strip()
+    preserve_epoch = bool(
+        promotion_id
+        and promotion_id == existing_promotion_id
+        and _safe_float(existing.get("scanner_runtime_handoff_epoch"), 0.0) > 0
+    )
+    handoff_epoch = (
+        _safe_float(existing.get("scanner_runtime_handoff_epoch"), time.time())
+        if preserve_epoch
+        else time.time()
+    )
+    return {
+        "scanner_runtime_handoff_epoch": round(float(handoff_epoch), 6),
+        "scanner_runtime_handoff_source": str(source),
+        "scanner_runtime_handoff_promotion_id": promotion_id,
+        "scanner_runtime_instance_id": _SCANNER_RUNTIME_INSTANCE_ID,
+        "scanner_attach_provenance_version": _SCANNER_ATTACH_PROVENANCE_VERSION,
+    }
 
 
 def _emit_scanner_scheduler_event(
@@ -7835,6 +7941,9 @@ def _scanner_runtime_context_updates(payload):
         "negative_display_rebound",
         "scanner_watch_budget_owner",
         "scanner_watch_budget_owner_source",
+        "scanner_scan_generation_id",
+        "scanner_scan_rank",
+        "scanner_ranked_candidate_count",
         "late_confirmation_recheck_once",
         "late_confirmation_recheck_requires_fresh_bbo_tape",
         "late_confirmation_recheck_max_age_sec",
@@ -7931,6 +8040,14 @@ def _scanner_pipeline_stock_snapshot(stock_value):
             "scanner_promotion_id",
             "scanner_promotion_reason",
             "scanner_promotion_emitted_epoch",
+            "scanner_scan_generation_id",
+            "scanner_scan_rank",
+            "scanner_ranked_candidate_count",
+            "scanner_runtime_handoff_epoch",
+            "scanner_runtime_handoff_source",
+            "scanner_runtime_handoff_promotion_id",
+            "scanner_runtime_instance_id",
+            "scanner_attach_provenance_version",
             "source_signature",
             # Deferred observation events are emitted from this compact copy.
             # Preserve the attach-time venue contract so queue/heavy-eval
@@ -8082,8 +8199,16 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
 
     control_exclusion = evaluate_manual_control_exclusion(code)
     if control_exclusion.excluded:
+        terminalized = _expire_manual_control_excluded_scanner_record(payload, code)
         _log_scanner_runtime_target_attach(
-            {**payload, **control_exclusion.as_log_fields()},
+            {
+                **payload,
+                **control_exclusion.as_log_fields(),
+                "manual_control_exclusion_terminalized": terminalized,
+                "manual_control_exclusion_terminalization_scope": (
+                    "exact_record_promotion_zero_fill"
+                ),
+            },
             outcome="skipped",
             reason=control_exclusion.reason,
         )
@@ -8153,6 +8278,11 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                 )
                 refresh_source_signature = payload.get("source_signature") or ""
                 refresh_venue_fields = _scanner_runtime_target_venue_fields(payload)
+                refresh_handoff_fields = _scanner_runtime_handoff_updates(
+                    payload,
+                    source="promotion_event_refresh",
+                    existing=existing,
+                )
                 existing.update(
                     {
                         "id": record_id or existing.get("id"),
@@ -8167,6 +8297,7 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                         "source_signature": refresh_source_signature,
                         "scanner_required_realtime_types": "0B",
                         **refresh_venue_fields,
+                        **refresh_handoff_fields,
                         **refresh_context_updates,
                     }
                 )
@@ -8241,6 +8372,10 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
             or "",
             "source_signature": payload.get("source_signature") or "",
             "scanner_required_realtime_types": "0B",
+            **_scanner_runtime_handoff_updates(
+                payload,
+                source="promotion_event_attach",
+            ),
             **_scanner_runtime_target_venue_fields(payload),
             **scanner_context_updates,
         }
@@ -10388,8 +10523,16 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
     control_exclusion = evaluate_manual_control_exclusion(code)
     if control_exclusion.excluded:
         if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
+            terminalized = _expire_manual_control_excluded_scanner_record(dt, code)
             _log_scanner_runtime_target_attach(
-                {**dt, **control_exclusion.as_log_fields()},
+                {
+                    **dt,
+                    **control_exclusion.as_log_fields(),
+                    "manual_control_exclusion_terminalized": terminalized,
+                    "manual_control_exclusion_terminalization_scope": (
+                        "exact_record_promotion_zero_fill"
+                    ),
+                },
                 outcome="skipped",
                 reason=control_exclusion.reason,
                 target=dt,
@@ -10459,6 +10602,12 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
                 if owner_was_explicit
                 else "legacy_db_restore_default_rising"
             )
+        dt.update(
+            _scanner_runtime_handoff_updates(
+                dt,
+                source="database_poll_recovery_attach",
+            )
+        )
         identity_payload = {
             "record_id": dt.get("id"),
             "code": code,
@@ -11073,8 +11222,10 @@ def _start_post_sell_bbo_observer_worker() -> threading.Thread:
     def _worker() -> None:
         while not stop_event.wait(1.0):
             try:
-                result = sniper_state_handlers.observe_post_sell_executable_bbo_horizons(
-                    now_ts=time.time()
+                result = (
+                    sniper_state_handlers.observe_post_sell_executable_bbo_horizons(
+                        now_ts=time.time()
+                    )
                 )
                 run_sniper.post_sell_bbo_observer_last_success_epoch = time.time()
                 run_sniper.post_sell_bbo_observer_last_result = dict(result or {})
@@ -14883,10 +15034,7 @@ def run_sniper(is_test_mode=False):
 
             _sniper_final_heartbeat("sniper_engine", alive=False)
         except Exception as heartbeat_error:
-            log_error(
-                "[SNIPER_HEARTBEAT_FINALIZE_FAILED] "
-                f"error={heartbeat_error}"
-            )
+            log_error("[SNIPER_HEARTBEAT_FINALIZE_FAILED] " f"error={heartbeat_error}")
         smoothing_source_only_observer.stop()
         fast_exit_monitor.stop()
         async_coordinator = getattr(

@@ -25,7 +25,7 @@ forced scout 수익이 반복되는데 normal BUY/submit이 0이거나 극히 �
 - rising missed 1주 결과는 기회비용/후보 증거로 사용하되 real-order enablement, cap release, provider 변경, bot restart, hard safety 완화의 직접 근거로 쓰지 않는다.
 - normal submit drought가 관측되면 forced scout lineage, AI score near-buy, pre-submit pass, fill 직전 실패, source-quality exclusion, cooldown/hard-safety를 분리해 "왜 일반 submit으로 못 넘어갔는지"를 우선 판정한다.
 - source-quality unrecoverable row는 빠르게 제외하고 예산을 actionable major blocker에 재배치한다.
-- clean tuning baseline은 `2026-06-04T14:29:09+09:00 KST` 이후 데이터만 사용한다. 이전 raw/report/analytics는 archive/audit evidence 전용이다.
+- clean tuning baseline은 `2026-06-05T00:00:00+09:00 KST` 이후 데이터만 사용한다. 이전 raw/report/analytics는 archive/audit evidence 전용이다.
 - hot runtime pressure relief는 수동 조정에만 의존하지 않도록 자동 관측/자동 조절 가능한 구조를 우선 고려한다. 빈번히 바뀌는 값은 봇 재기동 없이 동적 반영되도록 설계한다.
 - 실매매 한정 운영 압력 완화나 관측 보강이 기존 승인된 runtime family/override 범위 안에서 필요한 경우에만 provenance와 rollback 값을 남긴다. 실주문 권한, hard guard 완화, threshold 변경, provider 변경, bot restart가 필요하면 먼저 사용자에게 보고한다.
 - graceful restart는 `restart.flag` 방식을 우선 사용한다. runtime 반영 실패가 확인될 때에만 프로세스 kill을 검토한다.

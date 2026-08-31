@@ -1,6 +1,6 @@
 # 장중 수익극대화 모니터링 작업지시문
 
-작성 기준: `2026-08-26 KST`
+작성 기준: `2026-08-31 KST`
 
 현재 가동 중인 키움증권 연동 SCALPING 런타임을 대상으로 EV와 누적 순이익 극대화를 위한 장중 모니터링·보완 작업을 수행한다. 메인 봇, 위젯 매매기계, 에피소드 매매기계는 서로 독립된 주문 owner로 평가하며 주문번호·보유수량·청산 귀속을 혼합하지 않는다.
 
@@ -15,13 +15,14 @@
 모든 주요 기회는 다음 질문으로 반복 점검한다.
 
 1. 유효한 상승 또는 짧은 회귀 기회가 있었는데 어느 단계에서 왜 진입하지 못했는가?
-2. 제출·체결 가격과 수량, residual multi-leg, 추가매수는 당시 executable 시장과 owner 계약에 적정했는가?
-3. 비용 차감 후 수익을 확대할 수 있었는데 과차단·미체결·조기청산으로 훼손하지 않았는가?
-4. 손실 가능성이 커졌을 때 owner별 보호·청산 계약이 적시에 작동했는가?
-5. 당일 ON runtime과 policy는 실제 eligible 표본에서 호출되고 의도한 효과를 냈는가?
-6. AI가 호출되는 경로에서는 호출·입력·판단 품질이 모두 정상이고 손익에 유리했는가?
-7. smoothing이 순간 노이즈를 줄였는가, 아니면 유효한 변화까지 늦추거나 stale 상태를 숨겼는가?
-8. 메인 봇·위젯·에피소드 중 어느 owner의 기회인지 명확했고 중복 진입·오청산·수량 혼합이 없었는가?
+2. 후단 submit 차단이 적정하더라도 시장의 실제 상승 모집단이 scanner source·universe·watch budget·평가·promotion 중 더 상위 단계에서 미관측되거나 고갈되지 않았는가?
+3. 제출·체결 가격과 수량, residual multi-leg, 추가매수는 당시 executable 시장과 owner 계약에 적정했는가?
+4. 비용 차감 후 수익을 확대할 수 있었는데 과차단·미체결·조기청산으로 훼손하지 않았는가?
+5. 손실 가능성이 커졌을 때 owner별 보호·청산 계약이 적시에 작동했는가?
+6. 당일 ON runtime과 policy는 실제 eligible 표본에서 호출되고 의도한 효과를 냈는가?
+7. AI가 호출되는 경로에서는 호출·입력·판단 품질이 모두 정상이고 손익에 유리했는가?
+8. smoothing이 순간 노이즈를 줄였는가, 아니면 유효한 변화까지 늦추거나 stale 상태를 숨겼는가?
+9. 메인 봇·위젯·에피소드 중 어느 owner의 기회인지 명확했고 중복 진입·오청산·수량 혼합이 없었는가?
 
 단순 가동, 후보 수, 승률 또는 gross MFE가 아니라 실제 체결 가능성, 수수료·세금·spread·slippage를 반영한 EV와 순이익을 최종 기준으로 삼는다. `2026-08-18` 이후 R0→R3 비교 경제성은 매수 수수료 1.5bps, 매도 수수료 1.5bps, 매도 세금 20bps, Provider 비용 0원인 effective-dated 정책 계약을 사용하고, 공식 KOSPI/KOSDAQ master에서 보통주로 확인된 종목만 포함한다. exact broker receipt 손익·비용은 실거래 reconciliation 근거로 별도 보존하되 R0→R3 고정 비교비용을 암묵적으로 대체하지 않는다. 비용모델·master의 effective date 또는 source hash가 맞지 않으면 EV 입력을 차단한다.
 
@@ -33,7 +34,7 @@
 
 다음 흐름을 후보·주문·체결·보유변화·매도마다 재구성한다.
 
-`scanner/WATCHING → candidate → entry AI → entry-price AI → submit guard → 선택된 bounded mode의 probe 또는 normal sizing → residual multi-leg → holding/scale-in → partial TP/trailing/exit → broker reconciliation`
+`시장·universe source → scanner source fetch/normalize → candidate pool/rank/limit → eligibility/source guard → watch budget/slot reservation → scanner promotion/WATCHING → runtime attach → fast precheck → heavy evaluation → entry AI trace/provider/trusted decision → authority gate → entry-price AI → submit guard → 선택된 bounded mode의 probe 또는 normal sizing → residual multi-leg → holding/scale-in → partial TP/trailing/exit → broker reconciliation`
 
 확인 항목:
 
@@ -47,6 +48,33 @@
 - 매도 후 1·3·5·10·20·30·60분 반사실을 실현손익과 분리했는지
 
 `position_sizing_dynamic_formula`가 메인 봇 신규·추가매수 수량의 단일 owner다. micro-reversion 또는 AI 판단이 수량·broker guard·hard safety를 직접 바꾸지 않는다.
+
+#### 메인 봇 상승종목 탐색 포착률과 submit drought 상위원인 감사
+
+submit drought의 AI·latency·spread·stale·broker 차단 근거가 적정하다는 판정은 그 차단에 도달한 종목에 한한다. 이 판정만으로 scanner가 시장의 상승종목을 충분히 찾았다고 결론내리지 않는다. scanner/pipeline event를 기점으로 만든 funnel·rising-missed report는 scanner 밖 미관측 종목을 분모에 넣을 수 없으므로, 독립된 시장 전체 기준 모집단이 없으면 판정은 `insufficient_evidence_scanner_recall`, blocker는 `external_opportunity_denominator_missing`으로 남긴다.
+
+다음 두 기준 모집단을 분리해 고정한다.
+
+1. `as_of rising benchmark`: 당시까지 이용 가능했던 독립 전종목 시장 source로 구성한 포착률 분모다. 공식 KOSPI/KOSDAQ 보통주 master의 effective date·hash, symbol, venue/session, source timestamp·hash, panel/top-N, 상승률·체결대금·거래량 등 선정 정의, lookback·capture cadence를 먼저 고정한다. panel이 `common` 또는 `liquid`라는 이름만으로 보통주·유동성 계약을 충족했다고 간주하지 않는다. 이 모집단은 후행 고가를 사용하지 않는다.
+2. `ex_post executable opportunity`: 실제 놓친 수익기회인지 판정하는 action-neutral mature label이다. benchmark 최초 충족 시점 후 fresh executable BBO의 1·3·5·10·20·30·60분 target/adverse first-hit, fill feasibility와 총비용 차감 EV를 계산하되, 이 후행 label을 당시 scanner 선정이나 AI 입력으로 역류시키지 않는다.
+
+독립 benchmark의 `symbol × venue × session × opportunity_episode_id`를 stable key로 삼는다. `opportunity_episode_id`는 최초 benchmark crossing, 선언된 validity/TTL과 reset 규칙으로 만들고 as-of capture bucket은 provenance로 남긴다. 종목·거래소별 하루 한 행으로 재진입 wave를 합치거나 반복 snapshot마다 분모를 부풀리지 않는다. 다음 funnel을 전수 대조한다.
+
+`external market opportunity denominator → scanner source fetch/normalized → candidate pool/rank/limit → universe/source eligible and guarded → watch budget/slot reservation → scanner promotion/WATCHING → runtime attach → fast precheck → heavy evaluation → entry AI trace → provider called → trusted evaluated result → candidate/authority gate → submit safety → submit`
+
+- 종목별 최초 benchmark 충족 시각, scanner 최초 fetch·promotion·fast/heavy evaluation·AI·candidate 시각과 각 지연의 p50·p95를 남긴다. benchmark capture 후 동일 code·venue·session·episode의 `forward_exact`만 인과 coverage로 인정한다.
+- 포착 성공은 선언된 `scanner_detection_sla`와 opportunity validity 안에 있는 다음 scanner loop에서 판정한다. 이전 promotion, same-day retrospective·symbol-only 근접 join, cross-venue/session, 다른 promotion wave를 성공으로 세지 않고, SLA 밖 늦은 발견은 `late_discovery_after_opportunity_window`로 분리한다.
+- 사건 반복 count가 아닌 unique opportunity-episode 기준의 `source_seen_recall_pct`, `watch_admission_recall_pct`, `promotion_recall_pct`, `fast_precheck_recall_pct`, `heavy_eval_recall_pct`, `candidate_recall_pct`와 분모·분자를 보고한다. primary decision metric이라고 선언한 비율은 실제 named output field, formula·window·sample floor와 일치해야 한다.
+- `benchmark top-N → scanner promotion`의 discovery recall, `promotion → runtime attach/fast precheck/heavy evaluation/provider`의 post-promotion consumption, `trusted AI result → budget/latency/submit`의 downstream conversion은 서로 다른 분모로 보존한다. promotion ID, unique symbol, opportunity episode count를 함께 보고하고 반복 promotion ID를 discovery recall 성공으로 중복 집계하지 않는다.
+- 각 benchmark row는 단 하나의 최초 미도달 원인으로 `scanner_source_unseen|scanner_fetch_or_normalization_gap|source_or_candidate_pool_rank_limit_pruned|intended_source_or_universe_exclusion|unexplained_or_wrong_scope_filter_exclusion|watch_budget_not_admitted|slot_starvation|promotion_rule_rejected|runtime_attach_gap|fast_precheck_gap|heavy_eval_deferred_never_evaluated|entry_ai_trace_gap|entry_ai_preflight_or_transport_block|entry_ai_untrusted_or_rejected|candidate_or_authority_gate_blocked|intended_submit_safety_block|late_discovery_after_opportunity_window|submitted|unresolved_source_quality`를 갖는다. 겹치는 사유는 secondary reason으로만 집계한다.
+- 광의의 `broad_rising_population = 각 최초 미도달 상태와 submitted 상태의 배타적 합`과 단계별 input·output·dedup·unmatched 보존식을 닫고, KRX·`PREMARKET_KRX_LIKE`·NXT와 시간대별로 분리한다. 비보통주·master 불일치, 매수 시간창 밖, 명시적 upper-limit/chase protection 등 `intended_source_or_universe_exclusion`은 근거와 함께 남기되 `actionable_rising_population` 분모에서 제외한다. 근거가 없거나 잘못된 venue·session 적용은 제외하지 않는다.
+- 가격 상승만 있고 executable BBO·거래대금·spread·fill feasibility·비용 계약을 충족하지 못한 종목은 탐색 recall 진단에는 남기되 실행 가능한 놓친 수익기회로 세지 않는다.
+- `scanner_full_eval_loop_budget_deferred`가 validity/SLA 안에 평가됐다면 일시 backpressure로, opportunity validity가 닫힐 때까지 `deferred_never_evaluated`로 남거나 장기 slot 점유로 반복 탈락했다면 구조적 탐색 결함으로 분리한다.
+- promotion 후 maturity window가 지났는데 AI handoff가 없는 종목은 scanner 미발견으로 합치지 않고 `post_promotion_handoff_gap_candidate`로 분리한다. exact promotion lineage의 runtime target attach, WATCHING skip reason, fast-precheck result·lag·queue rank, heavy-evaluation queue wait·outcome, Entry-AI trace·provider receipt까지 연결한 후 첫 결손 소유자를 판정한다.
+
+기존 `market_opportunity_census`를 발견하면 source-only partial observer로만 사용한다. 대상일 snapshot/report, installed trigger·traceability owner, official master binding, exact-capture·lineage·detection SLA, 실제 primary metric field가 모두 닫히지 않으면 이를 현재 recall 정상 근거로 쓰지 않고 `scanner_recall_instrumentation`을 연다. 단일·얇은 top-N capture는 `early_evidence|hold_sample`로 남기고 source-quality-valid target-date·선언 sample floor·bounded detection SLA가 모두 닫힐 때만 coverage 정상을 판정한다.
+
+최종 판정은 `insufficient_evidence_scanner_recall`, `natural_actionable_riser_absent`, `scanner_coverage_valid_submit_drought_downstream`, `post_promotion_handoff_gap_candidate`, `scanner_under_discovery_confirmed`, `compound_scanner_and_submit_drought` 중 해당 상태와 직접 근거를 남긴다. 탐색 결함이면 source ingestion, universe filter, candidate pool, watch-budget/slot, scheduler, promotion 계측·report·source-only replay를 먼저 보완한다. 이 감사는 market source enable/disable, fetch depth, candidate limit, reserved slot/WATCHING cap, scheduler/full-eval budget, promotion rule, score·entry·submit threshold, hard safety, 수량·provider·bot·broker를 장중 hot mutation하거나 재기동할 권한을 만들지 않는다. 선택 surface 변경은 source-quality-valid rolling executable outcome, same-stage single owner, rollback과 다음 PREOPEN bounded artifact 또는 명시적 사용자 권한을 따로 요구한다.
 
 #### 메인 봇 risky micro-reversion 관측
 
@@ -177,6 +205,8 @@ Smoothing은 순간 tick·호가·OFI/QI 흔들림으로 action이 왕복하는 
 - 당일 PREOPEN apply plan/runtime env, active date, policy version, dependency와 operator override
 - 실제 AI provider/failback/timeout/parse 상태와 `provider=none` 발생 여부
 - Kiwoom REST/WS 연결, 가격·호가·체결·분봉 freshness와 venue provenance
+- 공식 보통주 master에 결속된 독립 시장 전체 `as_of rising benchmark`의 source path·hash·수집 시각·선정 정의·전체 census와 scanner 외부 미관측 종목 재현 가능성
+- scanner source fetch/normalize → candidate pool/rank/limit → universe/source guard → watch budget/slot → promotion/WATCHING → runtime attach → fast/heavy evaluation → AI/authority gate의 unique-key count·dedup·unmatched·지연과 최초 미도달 원인 보존식
 - 현재 계좌 보유, owner별 ledger/custody, 미체결 주문, 주문가능금액과 broker reconciliation
 - 메인 봇 재기동 전후 broker 미체결·전시장 잔고가 동일한지, `manual_operator` 및 독립 machine 주문을 취소·중복제출·흡수하지 않았는지
 - KRX, `PREMARKET_KRX_LIKE`, NXT의 source·route·session 분리
@@ -199,7 +229,7 @@ Smoothing은 순간 tick·호가·OFI/QI 흔들림으로 action이 왕복하는 
 - source-only 정상 관측이며 실주문 효과 없음
 - OFF·은퇴 상태로 현재 검증 모집단 아님
 
-blocked 상태는 `source_quality`, `sample_floor`, `submit_drought`, `env_mapping`, `runtime_hook`, `post_apply_attribution`, `AI_review`, `safety_or_broker_guard`, `user_authority`로 분류하고, owner artifact·관측 근거·다음 보완·acceptance test를 각각 기록한다. 단순히 “계약 미완료” 또는 “데이터 부족”으로 종결하지 않는다.
+blocked 상태는 `source_quality`, `sample_floor`, `external_opportunity_denominator`, `scanner_recall_instrumentation`, `scanner_discovery`, `watch_budget_or_slot`, `post_promotion_handoff`, `submit_drought`, `env_mapping`, `runtime_hook`, `post_apply_attribution`, `AI_review`, `safety_or_broker_guard`, `user_authority`로 분류하고, owner artifact·관측 근거·다음 보완·acceptance test를 각각 기록한다. 단순히 “계약 미완료” 또는 “데이터 부족”으로 종결하지 않는다.
 
 자동연장 runtime은 active key, `enabled=true`, 당일 active date, dependency, policy file/version, launcher/PID 반영과 실제 pass/block/recheck/submit/exit 수를 확인한다. 자동연장은 효용성 승인이나 live 승격 근거가 아니다.
 
@@ -218,6 +248,7 @@ Swing과 은퇴한 opening-rotation·upper-limit rotation·panic-buying 경로�
 - main/widget/episode의 주문·수량·보유·청산 owner를 공유하거나 파편화하지 않는다.
 - full fill과 partial fill, completed와 active/HELD, real과 sim/source-only, 실현손익과 counterfactual을 합산하지 않는다.
 - 정상 진입 미달을 곧바로 기회 없음으로 해석하지 않되 hard-negative를 작은 목표라는 이유로 완화하지 않는다.
+- 후단 submit 차단이 적정해도 상위 scanner 포착률 감사를 닫지 않는다. 독립 market-wide 분모가 없으면 정상으로 간주하지 말고 instrumentation gap을 먼저 닫는다.
 - threshold/runtime 변경은 동일 stage의 기존 bounded owner 한 축, before/after, 근거, active date와 rollback을 기록한다.
 - 일별 mature 표본은 cumulative ledger에 누적하되 1건으로 실주문 권한·hard safety·수량을 자동 변경하지 않는다.
 - source-quality 결손은 계측·report·provenance 보완으로 먼저 닫고 결손값을 0 또는 정상으로 보간하지 않는다.
@@ -231,7 +262,8 @@ Swing과 은퇴한 opening-rotation·upper-limit rotation·panic-buying 경로�
 
 마지막에는 반드시 다음을 분리한다.
 
-- 메인 봇: 놓친 수익기회, 적정 차단, probe/residual/scale-in, 매도와 post-sell
+- 종목탐색: 독립 `as_of rising benchmark`의 정의·source/hash·분모, discovery·post-promotion consumption·downstream conversion의 독립 분모, scanner source/watch/promotion/fast·heavy evaluation/AI/candidate 단계별 recall·지연·최초 미도달 원인, scanner 밖 미관측 종목의 executable outcome과 최종 판정 상태
+- 메인 봇: 상위 탐색 결과와 후단 submit drought를 분리한 놓친 수익기회, 적정 차단, probe/residual/scale-in, 매도와 post-sell
 - 위젯: signal·episode·fill·target·terminal, 비용 차감 EV, owner/custody 정합성
 - 에피소드: profile/leg별 제출·체결·target·COMPLETE/HELD/BLOCKED와 실현비용
 - micro-reversion: 상태별 후보, ask depletion/refill/체결 귀속, recheck, passive fill feasibility, target/adverse first-hit, tail loss, canary·disk 상태와 현재 runtime authority
