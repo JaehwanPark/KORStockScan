@@ -12,6 +12,9 @@ from src.engine.automation.low_price_two_leg_policy_apply import build_applied_p
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
+from src.engine.risk.market_weakness_entry_guard import (
+    MarketWeaknessEntryDecision,
+)
 from src.engine.monitoring.low_price_two_leg_tuning import (
     CLEAN_WINDOW_NAME,
     DEFAULT_ROUND_TRIP_COST_PCT,
@@ -128,8 +131,22 @@ from src.trading.low_price_two_leg.profiles import (
     MinuteBar,
 )
 from src.trading.low_price_two_leg.service import _profile_with_applied_policy
+from src.trading.order import regular_two_leg_machine as regular_machine_module
 from src.trading.order.regular_two_leg_machine import KST
 from src.trading.order.tick_utils import move_price_by_ticks
+
+
+@pytest.fixture(autouse=True)
+def _isolate_market_weakness_counterfactual_writer(monkeypatch):
+    monkeypatch.setattr(
+        regular_machine_module,
+        "record_market_weakness_blocked_entry",
+        lambda *_args, **_kwargs: {
+            "status": "test_isolated",
+            "observation_id": "test-market-weakness-block",
+            "path": "test-only",
+        },
+    )
 
 
 def _at(day: int, hour: int, minute: int = 0, second: int = 10) -> datetime:
@@ -164,6 +181,36 @@ def _profile_run_at(profile_id: str) -> datetime:
         date(2026, 8, 12), PROFILES[profile_id].policy.scan_start, tzinfo=KST
     )
     return started + timedelta(minutes=1, seconds=10)
+
+
+def _episode_market_weakness_decision(now: datetime, *, mode: str):
+    if mode == "active":
+        reason = "entry_blocked_market_weakness_active"
+        blocked = True
+        active_markets = ("KOSPI",)
+    elif mode == "invalid_scope":
+        reason = "entry_blocked_market_weakness_state_invalid"
+        blocked = True
+        active_markets = ()
+    else:
+        reason = "market_weakness_latch_not_active"
+        blocked = False
+        active_markets = ()
+    return MarketWeaknessEntryDecision(
+        blocked=blocked,
+        reason=reason,
+        symbol="010140",
+        owner="episode",
+        listing_market="KOSPI",
+        phase="active" if blocked else "released",
+        active_markets=active_markets,
+        session_key=now.date().isoformat(),
+        observation_id="weakness-episode-cancel-1",
+        observation_as_of=now.isoformat(),
+        source_status="test",
+        state_path="test-state.json",
+        symbol_master_path="test-master.json",
+    )
 
 
 class FakeGateway:
@@ -1070,9 +1117,10 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
         "decision_authority": "explicit_user_directed_profile_revision_2026_08_28",
         "existing_order_effect": "none_preserve_prior_policy_custody",
     }
-    assert validate_applied(
-        monday_0831_generation, target_date=date(2026, 8, 31)
-    ) == (True, "valid")
+    assert validate_applied(monday_0831_generation, target_date=date(2026, 8, 31)) == (
+        True,
+        "valid",
+    )
 
 
 def test_all_seven_20260828_recommendations_bind_exact_next_profiles():
@@ -1085,7 +1133,10 @@ def test_all_seven_20260828_recommendations_bind_exact_next_profiles():
 
     assert len(RECOMMENDATION_20260828_PROFILE_MAP) == 7
     assert set(RECOMMENDATION_20260828_PROFILE_MAP.values()) == set(recommendations)
-    for live_profile_id, report_profile_id in RECOMMENDATION_20260828_PROFILE_MAP.items():
+    for (
+        live_profile_id,
+        report_profile_id,
+    ) in RECOMMENDATION_20260828_PROFILE_MAP.items():
         profile = PROFILES[live_profile_id]
         policy = profile.policy
         assert policy.quantity == 20
@@ -1099,9 +1150,10 @@ def test_all_seven_20260828_recommendations_bind_exact_next_profiles():
             "entry_valid_completed_bars": policy.entry_valid_completed_bars,
             "target_ticks": policy.target_ticks,
         }
-        assert validate_research_evidence(
-            profile, target_date=date(2026, 8, 31)
-        ) == (True, "ready")
+        assert validate_research_evidence(profile, target_date=date(2026, 8, 31)) == (
+            True,
+            "ready",
+        )
 
 
 def test_20260820_postclose_tuning_keeps_twenty_profile_generation(tmp_path):
@@ -1428,6 +1480,123 @@ def test_machine_state_and_order_ledger_are_bound_to_one_profile(tmp_path):
     assert state["signal_features"]["source"] == (
         "kiwoom_ka10080_010140_AL_completed_1m"
     )
+
+
+def test_market_weakness_cancels_exact_reconciled_episode_buy_orders(
+    tmp_path, monkeypatch
+):
+    profile = PROFILES["samsung_heavy_midday"]
+    gateway = FakeGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "weakness-cancel-state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    started_at = _profile_run_at(profile.profile_id)
+    mode = {"value": "released"}
+    monkeypatch.setattr(
+        regular_machine_module,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: _episode_market_weakness_decision(
+            started_at, mode=mode["value"]
+        ),
+    )
+    submitted = machine.run_once(started_at)
+    order_nos = [leg["buy_order_no"] for leg in submitted["legs"]]
+    mode["value"] = "active"
+
+    canceled = machine.run_once(started_at + timedelta(seconds=1))
+
+    assert gateway.cancel_calls == order_nos
+    assert {leg["status"] for leg in canceled["legs"]} == {"BUY_CANCEL_PENDING"}
+    assert all(
+        leg["buy_cancel_reason"] == "market_weakness_active_exact_market"
+        for leg in canceled["legs"]
+    )
+    assert all(leg["buy_cancel_attempt_count"] == 1 for leg in canceled["legs"])
+    assert (
+        canceled["signal_features"]["market_weakness_entry_guard"][
+            "market_weakness_open_buy_cancel_allowed"
+        ]
+        is True
+    )
+
+
+def test_invalid_market_scope_never_authorizes_episode_buy_cancel(
+    tmp_path, monkeypatch
+):
+    profile = PROFILES["samsung_heavy_midday"]
+    gateway = FakeGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "weakness-invalid-state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    started_at = _profile_run_at(profile.profile_id)
+    mode = {"value": "released"}
+    monkeypatch.setattr(
+        regular_machine_module,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: _episode_market_weakness_decision(
+            started_at, mode=mode["value"]
+        ),
+    )
+    machine.run_once(started_at)
+    mode["value"] = "invalid_scope"
+
+    state = machine.run_once(started_at + timedelta(seconds=1))
+
+    assert gateway.cancel_calls == []
+    assert {leg["status"] for leg in state["legs"]} == {"BUY_OPEN"}
+
+
+def test_episode_cancel_ambiguity_reconciles_before_bounded_retry(
+    tmp_path, monkeypatch
+):
+    profile = PROFILES["samsung_heavy_midday"]
+    gateway = FakeGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "weakness-ambiguous-state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    started_at = _profile_run_at(profile.profile_id)
+    mode = {"value": "released"}
+    monkeypatch.setattr(
+        regular_machine_module,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: _episode_market_weakness_decision(
+            started_at, mode=mode["value"]
+        ),
+    )
+    machine.run_once(started_at)
+    mode["value"] = "active"
+    first_b1 = {"pending": True}
+
+    def flaky_cancel(*, order_no):
+        gateway.cancel_calls.append(order_no)
+        if order_no == "B1" and first_b1["pending"]:
+            first_b1["pending"] = False
+            return SubmitResult(False, "", "1700", "timeout", ambiguous=True)
+        return gateway._accepted("C")
+
+    monkeypatch.setattr(gateway, "cancel_buy", flaky_cancel)
+
+    ambiguous = machine.run_once(started_at + timedelta(seconds=1))
+    throttled = machine.run_once(started_at + timedelta(seconds=2))
+    retried = machine.run_once(started_at + timedelta(seconds=6))
+
+    assert ambiguous["legs"][0]["buy_cancel_ambiguous"] is True
+    assert throttled["legs"][0]["buy_cancel_attempt_count"] == 1
+    assert retried["legs"][0]["buy_cancel_ambiguous"] is False
+    assert retried["legs"][0]["buy_cancel_attempt_count"] == 2
+    assert gateway.cancel_calls == ["B1", "B2", "B1"]
 
 
 def test_machine_blocks_entire_episode_when_either_touch_has_under_100_shares(

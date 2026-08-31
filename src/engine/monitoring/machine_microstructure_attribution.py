@@ -56,8 +56,12 @@ from src.engine.monitoring.widget_comparison_cost import (
     comparison_cost_contract,
     modeled_execution_economics,
 )
+from src.engine.risk.market_weakness_entry_guard import (
+    market_weakness_blocked_entry_contract_errors,
+)
 from src.trading.low_price_two_leg.profiles import PROFILES
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import read_json_object_strict
 from src.utils.market_day import is_krx_trading_day
 
 KST_SUFFIX = "+09:00"
@@ -98,6 +102,7 @@ CANARY_DAILY_SNAPSHOT_DIR = (
 )
 PRE_WINDOW_SEC = 30
 POST_WINDOW_SEC = 180
+MARKET_WEAKNESS_COUNTERFACTUAL_POST_WINDOW_SEC = 30 * 60
 DEPTH_CONTEXT_MAX_AGE_SEC = 5
 TIMEOUT_RESEARCH_HORIZONS_SEC = (60, 120, 180)
 TIMEOUT_RESEARCH_MAX_QUOTE_AGE_SEC = 5
@@ -107,6 +112,8 @@ CLEAN_BASELINE_DATE = date(2026, 6, 5)
 POSTCLOSE_COMPLETE_TIME = time(20, 0)
 ENTRY_CONFIRMATION_HORIZONS_SEC = (1, 3, 5)
 ENTRY_CONFIRMATION_MAX_QUOTE_AGE_SEC = 1
+MARKET_WEAKNESS_COUNTERFACTUAL_HORIZONS_SEC = (60, 180, 300, 600, 1200, 1800)
+MARKET_WEAKNESS_COUNTERFACTUAL_MAX_QUOTE_AGE_SEC = 5
 MANUAL_EXIT_FILL_SOURCE = "broker_verified_manual_sell_receipt"
 MANUAL_EXIT_PRICE_SOURCE = "broker_manual_sell_receipt"
 
@@ -115,7 +122,8 @@ METRIC_CONTRACT = {
     "decision_authority": "postclose_diagnostic_only",
     "window_policy": (
         "target_date_signal_entry_submit_fill_target_submit_and_reconciled_exit_anchor_"
-        "minus_30s_through_plus_180s"
+        "minus_30s_through_plus_180s_except_market_weakness_entry_counterfactual_"
+        "through_plus_1800s"
     ),
     "sample_floor": {
         "per_anchor_eligible_0b_rows": 1,
@@ -322,6 +330,117 @@ def _read_target_json(
     if expected_schemas and payload.get("schema") not in expected_schemas:
         return None
     return payload
+
+
+def _market_weakness_blocked_entry_inventory(
+    target_date: str, report_root: Path
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    source_dir = report_root / "machine_market_weakness_blocked_entries" / target_date
+    anchors: list[dict[str, Any]] = []
+    errors: list[str] = []
+    invalid_artifact_count = 0
+    seen_ids: set[str] = set()
+    paths = sorted(
+        {
+            (
+                path.with_name(path.name[: -len(".gz")])
+                if path.name.endswith(".json.gz")
+                else path
+            )
+            for pattern in (
+                "machine-weakness-block-*.json",
+                "machine-weakness-block-*.json.gz",
+            )
+            for path in source_dir.glob(pattern)
+        }
+    )
+    comparison_cost = (
+        comparison_cost_contract(target_date)
+        if date.fromisoformat(target_date) >= CLEAN_BASELINE_DATE
+        else None
+    )
+    for path in paths:
+        try:
+            payload = read_json_object_strict(path)
+        except (FileNotFoundError, OSError, TypeError, ValueError):
+            payload = None
+        observation_id = str((payload or {}).get("observation_id") or "").strip()
+        observed_at = _owner_ts_on_target_date(
+            (payload or {}).get("observed_at"), target_date
+        )
+        owner = str((payload or {}).get("owner") or "").strip()
+        symbol = str((payload or {}).get("symbol") or "").strip()
+        scope_id = str((payload or {}).get("scope_id") or "").strip()
+        session = str((payload or {}).get("session") or "").strip().upper()
+        venues = (payload or {}).get("expected_venues")
+        quantity = (payload or {}).get("required_quantity")
+        contract_errors = market_weakness_blocked_entry_contract_errors(
+            payload,
+            target_date=target_date,
+        )
+        if observation_id in seen_ids:
+            contract_errors.append("blocked_entry_observation_id_duplicate")
+        if contract_errors:
+            invalid_artifact_count += 1
+            errors.extend(f"{reason}:{path.name}" for reason in contract_errors)
+            continue
+        seen_ids.add(observation_id)
+        anchors.append(
+            {
+                "anchor_id": f"market_weakness_blocked:{observation_id}",
+                "lifecycle_id": f"market_weakness_blocked:{observation_id}",
+                "owner": owner,
+                "scope_id": scope_id,
+                "symbol": symbol,
+                "session": session,
+                "expected_venues": sorted(
+                    {str(value).strip().upper() for value in venues}
+                ),
+                "expected_session_buckets": [session],
+                "anchor_at": observed_at.isoformat(),
+                "anchor_price": _finite_float(payload.get("reference_price")),
+                "owner_target_price": _finite_float(payload.get("target_price")),
+                "owner_requested_quantity": int(quantity),
+                "owner_round_trip_cost_pct": (
+                    comparison_cost.get("round_trip_cost_pct")
+                    if comparison_cost is not None
+                    else None
+                ),
+                "owner_round_trip_cost_provenance": (
+                    "effective_dated_widget_episode_comparison_cost_contract"
+                ),
+                "lifecycle_stage": "entry",
+                "anchor_role": "actual_market_weakness_blocked_entry_signal",
+                "entry_state": "MARKET_WEAKNESS_BLOCKED",
+                "entry_timing_decision_anchor_valid": True,
+                "source_entry_event_id": observation_id,
+                "source_signal_id": payload.get("source_signal_id"),
+                "guard_observation_id": payload.get("guard_observation_id"),
+                "owner_outcome": {
+                    "realized": False,
+                    "actual_order_submitted": False,
+                    "counterfactual_only": True,
+                    "quantity": int(quantity),
+                },
+                "owner_lifecycle_contract_valid": True,
+                "owner_policy_tuning_eligible": True,
+                "owner_timing_custody_observation_eligible": True,
+                "actual_order_submitted": False,
+            }
+        )
+    return anchors, {
+        "path": str(source_dir),
+        "status": (
+            "loaded" if anchors else ("contract_invalid" if errors else "not_observed")
+        ),
+        "artifact_count": len(paths),
+        "eligible_count": len(anchors),
+        "excluded_count": invalid_artifact_count,
+        "contract_error_count": len(errors),
+        "partition_reconciled": (len(paths) == len(anchors) + invalid_artifact_count),
+        "contract_errors": errors,
+        "optional_when_absent": True,
+    }
 
 
 def _previous_krx_trading_date(value: date) -> date:
@@ -773,9 +892,7 @@ def _widget_state_order_index(
     return index, source
 
 
-def _widget_advisory_event_index(
-    *, target_date: str, report_root: Path
-) -> tuple[
+def _widget_advisory_event_index(*, target_date: str, report_root: Path) -> tuple[
     dict[str, dict[str, Any]],
     dict[str, dict[str, Any]],
     dict[tuple[str, str, int], dict[str, Any]],
@@ -1696,9 +1813,7 @@ def _widget_actual_execution_inventory(
         execution_venue_alignment_state = (
             "unknown"
             if not all_execution_venues
-            else "aligned"
-            if all_execution_venues == {venue}
-            else "cross_venue"
+            else "aligned" if all_execution_venues == {venue} else "cross_venue"
         )
         timestamp_order_valid = bool(
             signal_at <= first_entry_submit_at
@@ -1815,9 +1930,7 @@ def _widget_actual_execution_inventory(
                     else (
                         source_final_exit_reason
                         if realized and source_final_exit_reason
-                        else "final_exit_fill"
-                        if realized
-                        else "right_censored"
+                        else "final_exit_fill" if realized else "right_censored"
                     )
                 )
             ),
@@ -1881,9 +1994,7 @@ def _widget_actual_execution_inventory(
             "realization_scope": (
                 "partial_manual_exit_cashflow"
                 if partial_manual_realization
-                else "full_widget_episode"
-                if realized
-                else "right_censored"
+                else "full_widget_episode" if realized else "right_censored"
             ),
             "buy_leg_count": len(buy_submit_orders),
             "scale_in_buy_leg_count": sum(
@@ -1953,6 +2064,9 @@ def _widget_actual_execution_inventory(
                     if initial_fill_price is not None
                     else "accepted_entry_limit_price_unfilled"
                 ),
+                "owner_requested_quantity": int(
+                    _widget_numeric(initial_orders[0].get("requested_qty")) or 0
+                ),
                 "owner_target_price": target_prices[-1] if target_prices else None,
                 "lifecycle_stage": "entry",
                 "anchor_role": "actual_widget_entry_signal",
@@ -1994,10 +2108,20 @@ def _widget_actual_execution_inventory(
                         if order.get("fill_price") is not None
                         else "accepted_entry_limit_price_unfilled"
                     ),
+                    "owner_requested_quantity": int(
+                        _widget_numeric(order.get("requested_qty")) or 0
+                    ),
                     "owner_target_price": target_prices[-1] if target_prices else None,
                     "lifecycle_stage": "entry_submit",
-                    "anchor_role": "actual_widget_entry_submit_accept_recorded",
+                    "anchor_role": (
+                        "actual_widget_scale_in_signal"
+                        if order.get("order_role") == "SCALE_IN_BUY"
+                        else "actual_widget_entry_submit_accept_recorded"
+                    ),
                     "execution_order_role": order.get("order_role"),
+                    "actual_realized_response_eligible": (
+                        order.get("order_role") != "SCALE_IN_BUY"
+                    ),
                     "execution_order_no": order.get("order_no"),
                     "eventual_broker_execution_venue": order.get(
                         "broker_execution_venue"
@@ -2175,11 +2299,15 @@ def _widget_actual_execution_inventory(
                     "anchor_role": (
                         "actual_widget_manual_partial_exit_reconciled"
                         if manual_exit_only and buy_qty > sell_qty
-                        else "actual_widget_manual_exit_reconciled"
-                        if manual_exit_only
-                        else "actual_widget_exit_fill_reconciled"
-                        if realized
-                        else "actual_widget_exit_partial_fill_reconciled"
+                        else (
+                            "actual_widget_manual_exit_reconciled"
+                            if manual_exit_only
+                            else (
+                                "actual_widget_exit_fill_reconciled"
+                                if realized
+                                else "actual_widget_exit_partial_fill_reconciled"
+                            )
+                        )
                     ),
                     "broker_execution_venues": exit_execution_venues,
                     **owner_cost_contract,
@@ -2822,9 +2950,9 @@ def _widget_inventory(
             scope_id = f"expansion:{symbol}:SOR_REGULAR"
             if scope_id not in row["owner_scope_ids"]:
                 row["owner_scope_ids"].append(scope_id)
-            row["owner_scope_kinds"][scope_id] = (
-                "prospective_widget_collector_expansion"
-            )
+            row["owner_scope_kinds"][
+                scope_id
+            ] = "prospective_widget_collector_expansion"
             row["owner_scope_expected_venues"][scope_id] = ["SOR"]
 
     actual_anchors, actual_source = _widget_actual_execution_inventory(
@@ -4206,9 +4334,7 @@ def _depth_item_matches_scope(payload: dict[str, Any]) -> bool:
         else (
             f"{symbol}_NX"
             if venue == "NXT"
-            else f"{symbol}_AL"
-            if venue == "SOR"
-            else ""
+            else f"{symbol}_AL" if venue == "SOR" else ""
         )
     )
     return bool(symbol and expected_item and payload.get("item") == expected_item)
@@ -4615,6 +4741,13 @@ def _micro_context(
         if anchor_at is not None:
             anchors_by_symbol[anchor["symbol"]].append((anchor, anchor_at))
 
+    def post_window_sec(anchor: Mapping[str, Any]) -> int:
+        return (
+            MARKET_WEAKNESS_COUNTERFACTUAL_POST_WINDOW_SEC
+            if anchor.get("anchor_role") in _ENTRY_CONFIRMATION_ANCHOR_ROLES
+            else POST_WINDOW_SEC
+        )
+
     for payload in _iter_relevant_rows(
         stream_paths, symbols, diagnostics=read_diagnostics
     ):
@@ -4671,7 +4804,7 @@ def _micro_context(
             if (
                 anchor_at - timedelta(seconds=PRE_WINDOW_SEC)
                 <= timestamp
-                <= anchor_at + timedelta(seconds=POST_WINDOW_SEC)
+                <= anchor_at + timedelta(seconds=post_window_sec(anchor))
             ):
                 windows[anchor["anchor_id"]]["rows"].append(
                     {
@@ -4731,7 +4864,7 @@ def _micro_context(
             if (
                 anchor_at - timedelta(seconds=PRE_WINDOW_SEC)
                 <= timestamp
-                <= anchor_at + timedelta(seconds=POST_WINDOW_SEC)
+                <= anchor_at + timedelta(seconds=post_window_sec(anchor))
             ):
                 windows[anchor["anchor_id"]]["depth_rows"] += 1
                 windows[anchor["anchor_id"]]["depth_points"].append(
@@ -4779,7 +4912,7 @@ def _micro_context(
             if (
                 anchor_at - timedelta(seconds=PRE_WINDOW_SEC)
                 <= timestamp
-                <= anchor_at + timedelta(seconds=POST_WINDOW_SEC)
+                <= anchor_at + timedelta(seconds=post_window_sec(anchor))
             ):
                 windows[anchor["anchor_id"]]["shock_reference_count"] += 1
 
@@ -4847,7 +4980,9 @@ def _invalid_contract_count_for_scope(
 _ENTRY_CONFIRMATION_ANCHOR_ROLES = frozenset(
     {
         "actual_widget_entry_signal",
+        "actual_widget_scale_in_signal",
         "actual_widget_daily_cap_blocked_entry_signal",
+        "actual_market_weakness_blocked_entry_signal",
         "counterfactual_calibration_entry",
         "prospective_widget_research_entry",
         "episode_signal_decision_leg",
@@ -5082,6 +5217,8 @@ def _anchor_result(
     required_exit_quantity = (
         _finite_float(outcome.get("quantity")) if isinstance(outcome, dict) else None
     )
+    if required_exit_quantity is None:
+        required_exit_quantity = _finite_float(anchor.get("owner_requested_quantity"))
     if (
         required_exit_quantity is None
         and isinstance(outcome, dict)
@@ -5147,6 +5284,7 @@ def _anchor_result(
             }
             for horizon in ENTRY_CONFIRMATION_HORIZONS_SEC
         },
+        "market_weakness_counterfactual": None,
         "gross_no_slippage_profit_touch": {
             str(threshold): {"touched": None, "time_ms": None}
             for threshold in GROSS_PROFIT_TOUCH_BPS
@@ -5448,6 +5586,242 @@ def _anchor_result(
                 "gross_no_slippage_profit_touch": profit_touches,
             }
         )
+    if anchor.get("anchor_role") in _ENTRY_CONFIRMATION_ANCHOR_ROLES:
+        counterfactual_gaps: list[str] = []
+        counterfactual_quantity = _finite_float(anchor.get("owner_requested_quantity"))
+        if counterfactual_quantity is None and isinstance(outcome, dict):
+            counterfactual_quantity = _finite_float(outcome.get("purchased_quantity"))
+        if counterfactual_quantity is None:
+            counterfactual_quantity = required_exit_quantity
+        quantity = (
+            int(counterfactual_quantity)
+            if counterfactual_quantity is not None
+            and counterfactual_quantity > 0
+            and float(counterfactual_quantity).is_integer()
+            else 0
+        )
+        cost_pct = _finite_float(anchor.get("owner_round_trip_cost_pct"))
+        if status != "matched":
+            counterfactual_gaps.append(status)
+        if quantity <= 0:
+            counterfactual_gaps.append("required_quantity_missing_or_invalid")
+        if cost_pct is None or cost_pct < 0:
+            counterfactual_gaps.append("round_trip_cost_contract_missing_or_invalid")
+        entry_deadline = (
+            anchor_at
+            + timedelta(seconds=MARKET_WEAKNESS_COUNTERFACTUAL_MAX_QUOTE_AGE_SEC)
+            if anchor_at is not None
+            else None
+        )
+        executable_entry_row = None
+        executable_entry_depth = None
+        if not counterfactual_gaps and entry_deadline is not None:
+            for candidate in post:
+                if candidate["timestamp"] > entry_deadline:
+                    break
+                if candidate.get("best_ask") is None:
+                    continue
+                depth = fillable_depth_context(candidate)
+                if (
+                    depth is not None
+                    and depth.get("best_ask") == candidate.get("best_ask")
+                    and int(depth.get("best_ask_qty") or 0) >= quantity
+                ):
+                    executable_entry_row = candidate
+                    executable_entry_depth = depth
+                    break
+        if executable_entry_row is None:
+            counterfactual_gaps.append("executable_depth_backed_entry_ask_missing")
+        entry_price = (
+            float(executable_entry_row["best_ask"])
+            if executable_entry_row is not None
+            else None
+        )
+        executable_bid_path: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        if executable_entry_row is not None and entry_price is not None:
+            maximum_at = anchor_at + timedelta(
+                seconds=MARKET_WEAKNESS_COUNTERFACTUAL_POST_WINDOW_SEC
+            )
+            for candidate in post:
+                if candidate["timestamp"] < executable_entry_row["timestamp"]:
+                    continue
+                if candidate["timestamp"] > maximum_at:
+                    break
+                if candidate.get("best_bid") is None:
+                    continue
+                depth = fillable_depth_context(candidate)
+                if (
+                    depth is not None
+                    and depth.get("best_bid") == candidate.get("best_bid")
+                    and int(depth.get("best_bid_qty") or 0) >= quantity
+                ):
+                    executable_bid_path.append((candidate, depth))
+        if not executable_bid_path:
+            counterfactual_gaps.append("executable_depth_backed_exit_bid_path_missing")
+
+        horizons: dict[str, dict[str, Any]] = {}
+        for horizon_sec in MARKET_WEAKNESS_COUNTERFACTUAL_HORIZONS_SEC:
+            deadline = (
+                anchor_at + timedelta(seconds=horizon_sec)
+                if anchor_at is not None
+                else None
+            )
+            candidates = [
+                item
+                for item in executable_bid_path
+                if deadline is not None and item[0]["timestamp"] <= deadline
+            ]
+            selected = candidates[-1] if candidates else None
+            quote_age_ms = (
+                round((deadline - selected[0]["timestamp"]).total_seconds() * 1000.0)
+                if deadline is not None and selected is not None
+                else None
+            )
+            observed = bool(
+                selected is not None
+                and quote_age_ms is not None
+                and 0
+                <= quote_age_ms
+                <= MARKET_WEAKNESS_COUNTERFACTUAL_MAX_QUOTE_AGE_SEC * 1000
+                and entry_price is not None
+                and cost_pct is not None
+            )
+            bid_price = float(selected[0]["best_bid"]) if observed else None
+            gross_return_pct = (
+                (bid_price / entry_price - 1.0) * 100.0
+                if bid_price is not None and entry_price is not None
+                else None
+            )
+            horizons[str(horizon_sec // 60)] = {
+                "horizon_sec": horizon_sec,
+                "observed": observed,
+                "bid_price": round(bid_price, 6) if bid_price is not None else None,
+                "gross_return_pct": (
+                    round(gross_return_pct, 8) if gross_return_pct is not None else None
+                ),
+                "cost_aware_net_return_pct": (
+                    round(gross_return_pct - cost_pct, 8)
+                    if gross_return_pct is not None and cost_pct is not None
+                    else None
+                ),
+                "quote_age_from_horizon_ms": quote_age_ms,
+                "available_best_bid_quantity": (
+                    int(selected[1]["best_bid_qty"]) if observed else None
+                ),
+                "required_quantity": quantity or None,
+                "depth_backed": observed,
+            }
+        counterfactual_gaps.extend(
+            f"executable_bbo_horizon_{minute}m_missing"
+            for minute, row in horizons.items()
+            if row.get("observed") is not True
+        )
+
+        target_price = _finite_float(anchor.get("owner_target_price"))
+        adverse_price = None
+        if (
+            entry_price is not None
+            and target_price is not None
+            and target_price > entry_price
+        ):
+            adverse_price = entry_price - (target_price - entry_price)
+        else:
+            counterfactual_gaps.append("owner_target_not_above_executable_entry")
+        target_hit = next(
+            (
+                item
+                for item in executable_bid_path
+                if target_price is not None
+                and target_price > 0
+                and float(item[0]["best_bid"]) >= target_price
+            ),
+            None,
+        )
+        adverse_hit = next(
+            (
+                item
+                for item in executable_bid_path
+                if adverse_price is not None
+                and float(item[0]["best_bid"]) <= adverse_price
+            ),
+            None,
+        )
+        if target_hit is not None and adverse_hit is not None:
+            if target_hit[0]["timestamp"] < adverse_hit[0]["timestamp"]:
+                first_hit = "target_first"
+            elif adverse_hit[0]["timestamp"] < target_hit[0]["timestamp"]:
+                first_hit = "adverse_first"
+            else:
+                first_hit = "same_timestamp_ambiguous"
+        elif target_hit is not None:
+            first_hit = "target_first"
+        elif adverse_hit is not None:
+            first_hit = "adverse_first"
+        else:
+            first_hit = "unresolved"
+        bid_returns_pct = (
+            [
+                (float(item[0]["best_bid"]) / entry_price - 1.0) * 100.0
+                for item in executable_bid_path
+            ]
+            if entry_price is not None
+            else []
+        )
+        metrics["market_weakness_counterfactual"] = {
+            "schema": "machine_market_weakness_executable_bbo_counterfactual_v1",
+            "source_quality_status": (
+                "eligible" if not counterfactual_gaps else "blocked"
+            ),
+            "source_gap_reasons": sorted(set(counterfactual_gaps)),
+            "entry": {
+                "observed": executable_entry_row is not None,
+                "ask_price": round(entry_price, 6) if entry_price is not None else None,
+                "entry_at": (
+                    executable_entry_row["timestamp"].isoformat()
+                    if executable_entry_row is not None
+                    else None
+                ),
+                "available_best_ask_quantity": (
+                    int(executable_entry_depth["best_ask_qty"])
+                    if executable_entry_depth is not None
+                    else None
+                ),
+                "required_quantity": quantity or None,
+                "depth_backed": executable_entry_row is not None,
+            },
+            "horizons_minutes": horizons,
+            "mfe_executable_bid_pct": (
+                round(max(bid_returns_pct), 8) if bid_returns_pct else None
+            ),
+            "mae_executable_bid_pct": (
+                round(min(bid_returns_pct), 8) if bid_returns_pct else None
+            ),
+            "target_adverse_first_hit": {
+                "state": first_hit,
+                "target_price": target_price,
+                "adverse_price": (
+                    round(adverse_price, 6) if adverse_price is not None else None
+                ),
+                "target_at": (
+                    target_hit[0]["timestamp"].isoformat()
+                    if target_hit is not None
+                    else None
+                ),
+                "adverse_at": (
+                    adverse_hit[0]["timestamp"].isoformat()
+                    if adverse_hit is not None
+                    else None
+                ),
+                "adverse_threshold_role": (
+                    "diagnostic_symmetric_distance_to_owner_target_not_stop"
+                ),
+            },
+            "round_trip_cost_pct": cost_pct,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "broker_order_forbidden": True,
+        }
+
     metrics["entry_ask_depletion"] = _entry_ask_depletion_feature(
         anchor,
         window,
@@ -5565,6 +5939,9 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "classification": label,
         "source_gap_reasons": sorted(set(source_gaps)),
         "actual_order_submitted": result.get("actual_order_submitted") is True,
+        "actual_realized_response_eligible": (
+            result.get("actual_realized_response_eligible") is not False
+        ),
         "owner_outcome": result.get("owner_outcome"),
         "owner_entry_limit_price": result.get("owner_entry_limit_price"),
         "owner_target_price": result.get("owner_target_price"),
@@ -5578,6 +5955,7 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "anchor_price": (result.get("metrics") or {}).get("reference_price"),
         "entry_confirmation_bbo_horizons": bbo_horizons,
         "entry_ask_depletion": ask_report,
+        "market_weakness_counterfactual": metrics.get("market_weakness_counterfactual"),
         "runtime_effect": False,
         "broker_order_forbidden": True,
     }
@@ -6482,11 +6860,15 @@ def build_report(
     episode_profiles, episode_anchors, episode_sources = _episode_inventory(
         target_date, report_root
     )
-    anchors = widget_anchors + episode_anchors
+    weakness_blocked_anchors, weakness_blocked_source = (
+        _market_weakness_blocked_entry_inventory(target_date, report_root)
+    )
+    anchors = widget_anchors + episode_anchors + weakness_blocked_anchors
     symbols = set(widget_symbols)
     symbols.update(
         str(row.get("symbol")) for row in episode_profiles.values() if row.get("symbol")
     )
+    symbols.update(str(row["symbol"]) for row in weakness_blocked_anchors)
     micro_source, micro_inventory, windows = _micro_context(
         target_date,
         observation_root,
@@ -6894,6 +7276,7 @@ def build_report(
             "episode": episode_sources,
             "micro_reversion": micro_source,
             "market_weakness_response": market_weakness_response["sources"],
+            "market_weakness_blocked_entries": weakness_blocked_source,
         },
         "summary": {
             "dynamic_symbol_count": len(symbols),

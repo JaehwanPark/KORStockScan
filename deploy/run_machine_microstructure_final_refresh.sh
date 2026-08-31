@@ -33,6 +33,14 @@ attribution_rc=0
   --write \
   --print-summary || attribution_rc=$?
 
+weakness_hysteresis_rc=0
+if ((attribution_rc == 0)); then
+  "$PYTHON_BIN" -m src.engine.automation.market_weakness_hysteresis_tuning \
+    --target-date "$completed_target_date" \
+    --write \
+    --print-summary || weakness_hysteresis_rc=$?
+fi
+
 entry_timing_rc=0
 if ((attribution_rc == 0)); then
   "$PYTHON_BIN" -m src.engine.automation.machine_entry_timing_tuning \
@@ -58,17 +66,20 @@ builder_rc=0
   --completed-machine-source-date "$completed_target_date" || builder_rc=$?
 
 # The builder is the durable fallback and therefore has highest failure
-# priority. Policy/notification failure is next, followed by entry timing,
-# attribution, and expansion. All codes remain visible in the journal even when an
-# earlier producer failed and the later fallback steps still ran.
-printf '[MACHINE_MICRO_FINAL_REFRESH] target_date=%s expansion_rc=%s attribution_rc=%s entry_timing_rc=%s policy_rc=%s builder_rc=%s\n' \
-  "$completed_target_date" "$expansion_rc" "$attribution_rc" "$entry_timing_rc" "$policy_rc" "$builder_rc" >&2
+# priority. Policy/notification failure is next, followed by weakness
+# hysteresis tuning, entry timing, attribution, and expansion. All codes remain
+# visible even when an earlier producer failed and fallback steps still ran.
+printf '[MACHINE_MICRO_FINAL_REFRESH] target_date=%s expansion_rc=%s attribution_rc=%s weakness_hysteresis_rc=%s entry_timing_rc=%s policy_rc=%s builder_rc=%s\n' \
+  "$completed_target_date" "$expansion_rc" "$attribution_rc" "$weakness_hysteresis_rc" "$entry_timing_rc" "$policy_rc" "$builder_rc" >&2
 
 if ((builder_rc != 0)); then
   exit "$builder_rc"
 fi
 if ((policy_rc != 0)); then
   exit "$policy_rc"
+fi
+if ((weakness_hysteresis_rc != 0)); then
+  exit "$weakness_hysteresis_rc"
 fi
 if ((entry_timing_rc != 0)); then
   exit "$entry_timing_rc"

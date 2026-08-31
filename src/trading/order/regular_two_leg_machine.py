@@ -19,6 +19,11 @@ from zoneinfo import ZoneInfo
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
+from src.engine.risk.market_weakness_entry_guard import (
+    MarketWeaknessEntryDecision,
+    evaluate_market_weakness_entry_guard,
+    record_market_weakness_blocked_entry,
+)
 from src.trading.order.episode_quantity import (
     EPISODE_LEG_QUANTITY,
     EPISODE_TOTAL_QUANTITY,
@@ -32,6 +37,7 @@ from src.trading.order.entry_liquidity_guard import (
     unavailable_entry_execution_velocity_snapshot,
     unavailable_entry_liquidity_snapshot,
 )
+from src.trading.order.tick_utils import move_price_by_ticks
 from src.trading.config.machine_entry_timing_policy import (
     ENTRY_CONFIRMATION_MAX_LATE_SEC,
     resolve_entry_confirmation_delay,
@@ -66,6 +72,15 @@ def _new_leg(leg_id: str, price_role: str, entry_price: int) -> dict:
         "buy_order_no": "",
         "buy_order_date": "",
         "buy_cancel_requested": False,
+        "buy_cancel_ambiguous": False,
+        "buy_cancel_attempt_count": 0,
+        "buy_cancel_attempted_at": "",
+        "buy_cancel_terminal_failure": False,
+        "buy_cancel_reason": "",
+        "buy_cancel_provenance": {},
+        "last_buy_reconciled_at": "",
+        "last_buy_remaining_qty": 0,
+        "last_buy_reconcile_source_ok": False,
         "fill_price": 0,
         "buy_filled_at": "",
         "buy_filled_qty": 0,
@@ -108,6 +123,8 @@ class SamsungRegularTwoLegMachine:
     """
 
     LEG_IDS = ("signal_close", "signal_close_minus_1tick")
+    BUY_CANCEL_MAX_ATTEMPTS = 3
+    BUY_CANCEL_RETRY_SEC = 5
 
     def __init__(
         self,
@@ -233,6 +250,15 @@ class SamsungRegularTwoLegMachine:
             leg.setdefault("target_quantity", inferred_filled_qty)
             leg.setdefault("target_fill_price", 0)
             leg.setdefault("target_filled_at", "")
+            leg.setdefault("buy_cancel_ambiguous", False)
+            leg.setdefault("buy_cancel_attempt_count", 0)
+            leg.setdefault("buy_cancel_attempted_at", "")
+            leg.setdefault("buy_cancel_terminal_failure", False)
+            leg.setdefault("buy_cancel_reason", "")
+            leg.setdefault("buy_cancel_provenance", {})
+            leg.setdefault("last_buy_reconciled_at", "")
+            leg.setdefault("last_buy_remaining_qty", 0)
+            leg.setdefault("last_buy_reconcile_source_ok", False)
         return payload
 
     def _invalid_loaded_state(self, reason: str) -> dict:
@@ -330,6 +356,89 @@ class SamsungRegularTwoLegMachine:
         return evaluate_entry_execution_velocity(
             snapshot, requested_quantity=requested_quantity
         )
+
+    def _market_weakness_entry_decision(
+        self, now: datetime
+    ) -> MarketWeaknessEntryDecision:
+        return evaluate_market_weakness_entry_guard(
+            symbol=self.policy.symbol,
+            owner="episode",
+            now=now,
+        )
+
+    def _market_weakness_allows_new_buys(
+        self,
+        *,
+        now: datetime,
+        signal_bar: str = "",
+        preserve_signal_for_recheck: bool = False,
+        reference_price: int | None = None,
+        target_price: int | None = None,
+        required_quantity: int | None = None,
+        expected_venues: tuple[str, ...] | list[str] | None = None,
+        counterfactual_session: str | None = None,
+    ) -> bool:
+        decision = self._market_weakness_entry_decision(now)
+        if not decision.blocked:
+            return True
+        fingerprint = ":".join(
+            [
+                decision.reason,
+                decision.listing_market or "UNKNOWN",
+                decision.observation_id or decision.phase,
+                signal_bar,
+            ]
+        )
+        self._state["pending_entry_confirmation"] = None
+        if preserve_signal_for_recheck:
+            self._state["last_evaluated_bar"] = ""
+        self._state["blocked_reason"] = decision.reason
+        features = dict(self._state.get("signal_features") or {})
+        features["market_weakness_entry_guard"] = decision.event_fields()
+        resolved_reference = int(
+            reference_price or self._state.get("signal_close") or 0
+        )
+        resolved_quantity = int(required_quantity or EPISODE_TOTAL_QUANTITY)
+        resolved_target = int(target_price or 0)
+        if resolved_target <= 0 and resolved_reference > 0:
+            resolved_target = move_price_by_ticks(
+                resolved_reference, int(self.policy.target_ticks)
+            )
+        resolved_venues = list(
+            expected_venues
+            or [str(getattr(self.policy, "route", "SOR") or "SOR").upper()]
+        )
+        counterfactual_receipt = record_market_weakness_blocked_entry(
+            decision,
+            now=now,
+            scope_id=self.entry_timing_scope_id,
+            session=str(counterfactual_session or self.entry_timing_session),
+            source_signal_id=(
+                f"{self.policy.symbol}:{signal_bar}"
+                if signal_bar
+                else f"{self.policy.symbol}:{now.date().isoformat()}:planned_entry"
+            ),
+            signal_bar=signal_bar,
+            reference_price=resolved_reference or None,
+            target_price=resolved_target or None,
+            required_quantity=resolved_quantity,
+            expected_venues=resolved_venues,
+        )
+        features["market_weakness_counterfactual_observation"] = counterfactual_receipt
+        self._state["signal_features"] = features
+        if self._state.get("last_market_weakness_block_fingerprint") != fingerprint:
+            self._state["last_market_weakness_block_fingerprint"] = fingerprint
+            self._record(
+                now,
+                decision.reason,
+                signal_bar=signal_bar,
+                actual_order_submitted=False,
+                market_weakness_counterfactual_observation=(counterfactual_receipt),
+                **decision.event_fields(),
+            )
+        else:
+            self._save()
+        return False
 
     def _entry_liquidity_allows_planned_buys(
         self, *, now: datetime, route: str, requested_quantity: int
@@ -781,30 +890,186 @@ class SamsungRegularTwoLegMachine:
             return None
         return sum(bar.timestamp > signal_bar for bar in source.bars)
 
-    def _cancel_buy(self, now: datetime, leg: dict, elapsed: int) -> None:
+    def _submit_buy_cancel(self, leg: dict):
+        return self.gateway.cancel_buy(order_no=str(leg["buy_order_no"]))
+
+    def _buy_cancel_route_fields(self, leg: dict) -> dict[str, object]:
+        return {}
+
+    def _cancel_buy(
+        self,
+        now: datetime,
+        leg: dict,
+        elapsed: int,
+        *,
+        cancel_reason: str = "entry_validity_expired",
+        provenance: dict[str, object] | None = None,
+    ) -> None:
+        provenance = dict(
+            provenance
+            or (
+                leg.get("buy_cancel_provenance")
+                if isinstance(leg.get("buy_cancel_provenance"), dict)
+                else {}
+            )
+        )
+        cancel_reason = str(
+            cancel_reason or leg.get("buy_cancel_reason") or "entry_validity_expired"
+        )
+        order_no = str(leg.get("buy_order_no") or "").strip()
+        if (
+            not order_no
+            or not self._owns_order(order_no)
+            or str(leg.get("buy_order_date") or "") != now.date().isoformat()
+        ):
+            fingerprint = f"{leg.get('leg_id')}:{order_no}:{cancel_reason}"
+            if (
+                self._state.get("last_buy_cancel_owner_block_fingerprint")
+                != fingerprint
+            ):
+                self._state["last_buy_cancel_owner_block_fingerprint"] = fingerprint
+                self._record(
+                    now,
+                    "buy_cancel_blocked_owner_or_date_mismatch",
+                    leg_id=leg.get("leg_id"),
+                    buy_order_no=order_no,
+                    buy_order_date=leg.get("buy_order_date"),
+                    cancel_reason=cancel_reason,
+                    **self._buy_cancel_route_fields(leg),
+                    **provenance,
+                )
+            return
+        if leg.get("buy_cancel_terminal_failure"):
+            return
+        attempts = int(leg.get("buy_cancel_attempt_count", 0) or 0)
+        if attempts >= self.BUY_CANCEL_MAX_ATTEMPTS:
+            leg.update(
+                {
+                    "status": "BUY_OPEN",
+                    "buy_cancel_requested": False,
+                    "buy_cancel_ambiguous": False,
+                    "buy_cancel_terminal_failure": True,
+                }
+            )
+            self._record(
+                now,
+                "buy_cancel_terminal_failure",
+                leg_id=leg["leg_id"],
+                buy_order_no=order_no,
+                cancel_attempt_count=attempts,
+                cancel_reason=cancel_reason,
+                **self._buy_cancel_route_fields(leg),
+                **provenance,
+            )
+            return
+        last_attempt_text = str(leg.get("buy_cancel_attempted_at") or "")
+        if last_attempt_text:
+            try:
+                last_attempt = datetime.fromisoformat(last_attempt_text).astimezone(KST)
+            except ValueError:
+                last_attempt = None
+            if (
+                last_attempt is not None
+                and (now - last_attempt).total_seconds() < self.BUY_CANCEL_RETRY_SEC
+            ):
+                return
         leg["status"] = "BUY_CANCEL_SUBMITTING"
+        leg["buy_cancel_attempt_count"] = attempts + 1
+        leg["buy_cancel_attempted_at"] = _iso(now)
+        leg["buy_cancel_reason"] = cancel_reason
+        leg["buy_cancel_provenance"] = provenance
         self._record(
             now,
             "buy_cancel_intent",
             leg_id=leg["leg_id"],
             completed_bars_after_signal=elapsed,
+            buy_order_no=order_no,
+            cancel_attempt_count=attempts + 1,
+            cancel_reason=cancel_reason,
+            **self._buy_cancel_route_fields(leg),
+            **provenance,
         )
-        result = self.gateway.cancel_buy(order_no=str(leg["buy_order_no"]))
+        try:
+            result = self._submit_buy_cancel(leg)
+        except Exception as exc:
+            leg.update(
+                {
+                    "status": "BUY_CANCEL_PENDING",
+                    "buy_cancel_requested": True,
+                    "buy_cancel_ambiguous": True,
+                }
+            )
+            self._record(
+                now,
+                "buy_cancel_ambiguous",
+                leg_id=leg["leg_id"],
+                buy_order_no=order_no,
+                error=type(exc).__name__,
+                cancel_attempt_count=attempts + 1,
+                cancel_reason=cancel_reason,
+                **self._buy_cancel_route_fields(leg),
+                **provenance,
+            )
+            return
         if result.ambiguous:
-            self._block(now, f"buy_cancel_ambiguous:{leg['leg_id']}")
+            leg.update(
+                {
+                    "status": "BUY_CANCEL_PENDING",
+                    "buy_cancel_requested": True,
+                    "buy_cancel_ambiguous": True,
+                }
+            )
+            self._record(
+                now,
+                "buy_cancel_ambiguous",
+                leg_id=leg["leg_id"],
+                buy_order_no=order_no,
+                return_code=result.return_code,
+                cancel_attempt_count=attempts + 1,
+                cancel_reason=cancel_reason,
+                **self._buy_cancel_route_fields(leg),
+                **provenance,
+            )
             return
         if not result.accepted:
-            leg["status"] = "BUY_OPEN"
+            leg.update(
+                {
+                    "status": "BUY_OPEN",
+                    "buy_cancel_requested": False,
+                    "buy_cancel_ambiguous": False,
+                }
+            )
             self._record(
                 now,
                 "buy_cancel_rejected_retryable",
                 leg_id=leg["leg_id"],
+                buy_order_no=order_no,
                 return_code=result.return_code,
+                cancel_attempt_count=attempts + 1,
+                cancel_reason=cancel_reason,
+                **self._buy_cancel_route_fields(leg),
+                **provenance,
             )
             return
-        leg.update({"status": "BUY_CANCEL_PENDING", "buy_cancel_requested": True})
+        leg.update(
+            {
+                "status": "BUY_CANCEL_PENDING",
+                "buy_cancel_requested": True,
+                "buy_cancel_ambiguous": False,
+            }
+        )
         self._own_order(result.order_no)
-        self._record(now, "buy_cancel_submitted", leg_id=leg["leg_id"])
+        self._record(
+            now,
+            "buy_cancel_submitted",
+            leg_id=leg["leg_id"],
+            buy_order_no=order_no,
+            cancel_order_no=result.order_no,
+            cancel_attempt_count=attempts + 1,
+            cancel_reason=cancel_reason,
+            **self._buy_cancel_route_fields(leg),
+            **provenance,
+        )
 
     def _reconcile_buy(self, now: datetime, leg: dict, elapsed: int | None) -> None:
         try:
@@ -820,6 +1085,10 @@ class SamsungRegularTwoLegMachine:
                 error=snapshot.error,
             )
             return
+        if snapshot.found:
+            leg["last_buy_reconciled_at"] = _iso(now)
+            leg["last_buy_remaining_qty"] = int(snapshot.remaining_qty)
+            leg["last_buy_reconcile_source_ok"] = True
         if snapshot.found and snapshot.filled_qty > 0:
             if not snapshot.fill_price:
                 self._block(now, f"buy_fill_price_missing:{leg['leg_id']}")
@@ -850,12 +1119,33 @@ class SamsungRegularTwoLegMachine:
                 remaining_qty=snapshot.remaining_qty,
             )
             if snapshot.remaining_qty == 0:
+                leg["buy_cancel_ambiguous"] = False
                 self._submit_target(now, leg)
             elif not leg.get("buy_cancel_requested"):
-                self._cancel_buy(now, leg, elapsed or 0)
+                self._cancel_buy(
+                    now,
+                    leg,
+                    elapsed or 0,
+                    cancel_reason="partial_fill_remainder",
+                )
+            elif leg.get("buy_cancel_ambiguous"):
+                self._cancel_buy(
+                    now,
+                    leg,
+                    elapsed or 0,
+                    cancel_reason=str(
+                        leg.get("buy_cancel_reason") or "entry_validity_expired"
+                    ),
+                )
             return
         if snapshot.found and snapshot.filled_qty == 0 and snapshot.remaining_qty == 0:
-            leg.update({"status": "NO_FILL", "buy_cancel_requested": False})
+            leg.update(
+                {
+                    "status": "NO_FILL",
+                    "buy_cancel_requested": False,
+                    "buy_cancel_ambiguous": False,
+                }
+            )
             completed_sibling_leg_ids = [
                 str(item.get("leg_id") or "")
                 for item in self._state.get("legs", [])
@@ -876,6 +1166,16 @@ class SamsungRegularTwoLegMachine:
             )
             return
         if leg.get("buy_cancel_requested"):
+            if leg.get("buy_cancel_ambiguous"):
+                self._cancel_buy(
+                    now,
+                    leg,
+                    elapsed or 0,
+                    cancel_reason=str(
+                        leg.get("buy_cancel_reason") or "entry_validity_expired"
+                    ),
+                )
+                return
             self._record(now, "buy_cancel_reconciliation_wait", leg_id=leg["leg_id"])
             return
         if elapsed is None or elapsed < self.policy.entry_valid_completed_bars:
@@ -888,7 +1188,82 @@ class SamsungRegularTwoLegMachine:
             return
         self._cancel_buy(now, leg, elapsed)
 
+    def _cancel_market_weakness_open_buys(
+        self,
+        *,
+        now: datetime,
+        elapsed: int | None,
+    ) -> None:
+        open_legs = [
+            leg
+            for leg in self._state.get("legs", [])
+            if leg.get("status") == "BUY_OPEN"
+            and not leg.get("buy_cancel_terminal_failure")
+        ]
+        if not open_legs:
+            return
+        decision = self._market_weakness_entry_decision(now)
+        if not decision.exact_market_open_buy_cancel_allowed:
+            return
+        features = dict(self._state.get("signal_features") or {})
+        features["market_weakness_entry_guard"] = decision.event_fields()
+        self._state["signal_features"] = features
+        for leg in open_legs:
+            order_no = str(leg.get("buy_order_no") or "").strip()
+            exact_owner = bool(
+                order_no
+                and self._owns_order(order_no)
+                and str(leg.get("buy_order_date") or "") == now.date().isoformat()
+            )
+            fresh_reconciliation = bool(
+                leg.get("last_buy_reconciled_at") == _iso(now)
+                and leg.get("last_buy_reconcile_source_ok") is True
+                and int(leg.get("last_buy_remaining_qty", 0) or 0) > 0
+            )
+            if not exact_owner or not fresh_reconciliation:
+                fingerprint = ":".join(
+                    [
+                        str(leg.get("leg_id") or ""),
+                        order_no,
+                        decision.observation_id or decision.phase,
+                        "owner" if not exact_owner else "reconciliation",
+                    ]
+                )
+                if (
+                    self._state.get("last_market_weakness_cancel_block_fingerprint")
+                    != fingerprint
+                ):
+                    self._state["last_market_weakness_cancel_block_fingerprint"] = (
+                        fingerprint
+                    )
+                    self._record(
+                        now,
+                        "market_weakness_buy_cancel_blocked_exact_order_check",
+                        leg_id=leg.get("leg_id"),
+                        buy_order_no=order_no,
+                        exact_owner=exact_owner,
+                        fresh_reconciliation=fresh_reconciliation,
+                        last_buy_reconciled_at=leg.get("last_buy_reconciled_at"),
+                        **self._buy_cancel_route_fields(leg),
+                        **decision.event_fields(),
+                    )
+                continue
+            self._cancel_buy(
+                now,
+                leg,
+                elapsed or 0,
+                cancel_reason="market_weakness_active_exact_market",
+                provenance=decision.event_fields(),
+            )
+
     def _submit_planned_buys(self, now: datetime) -> None:
+        if any(
+            leg.get("status") == "PLANNED" for leg in self._state.get("legs", [])
+        ) and not self._market_weakness_allows_new_buys(
+            now=now,
+            signal_bar=str(self._state.get("signal_bar") or ""),
+        ):
+            return
         planned_quantity = sum(
             int(leg.get("quantity", 0) or 0)
             for leg in self._state.get("legs", [])
@@ -1098,6 +1473,20 @@ class SamsungRegularTwoLegMachine:
             )
             self._save()
             return self.snapshot()
+        if not self._market_weakness_allows_new_buys(
+            now=now,
+            signal_bar=latest_iso,
+            preserve_signal_for_recheck=True,
+            reference_price=int(signal.signal_bar.close_price),
+            target_price=move_price_by_ticks(
+                int(signal.signal_bar.close_price), int(self.policy.target_ticks)
+            ),
+            required_quantity=EPISODE_TOTAL_QUANTITY,
+            expected_venues=[
+                str(getattr(self.policy, "route", "SOR") or "SOR").upper()
+            ],
+        ):
+            return self.snapshot()
         if confirmed_pending:
             delay_sec = int(pending_confirmation["delay_sec"])
             signal_decision_at = str(pending_confirmation["armed_at"])
@@ -1241,6 +1630,7 @@ class SamsungRegularTwoLegMachine:
                 self._reconcile_target(now, leg)
             if self._state.get("status") == "BLOCKED":
                 return self.snapshot()
+        self._cancel_market_weakness_open_buys(now=now, elapsed=elapsed)
         self._submit_planned_buys(now)
         self._sync_aggregate()
         if self._state["status"] == "BLOCKED":

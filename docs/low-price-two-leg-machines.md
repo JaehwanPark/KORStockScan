@@ -68,6 +68,18 @@ same-quantity limit target at that profile generation's frozen tick distance. Th
 stop loss, target timeout, forced sale, or target cancellation; an unclosed
 position remains held.
 
+The operator-approved
+`WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_FREEZE_OPEN_BUY_CANCEL_V2` applies to all
+profiles without changing their signal, quantity, target, or no-stop holding
+contracts. A current-session `active|release_pending` latch blocks PLANNED BUY
+submission only for the profile's verified listing market. For an already open
+BUY leg, the machine cancels only after the current-day original order number is
+present in that profile's owned-order ledger and the broker snapshot confirms a
+positive remaining quantity in the same cycle. Partial fills remain owned and
+receive their normal target after cancellation reconciliation. Missing market
+scope, stale/unavailable reconciliation, another profile/widget/main/manual
+order, SELL/target orders, and existing holdings are outside this authority.
+
 The four 2026-08-12 additions use the full clean-baseline 47-date window with
 31 calibration dates and the latest 16 dates as holdout. Their conservative
 execution proxy requires one-tick penetration beyond both entry and target:

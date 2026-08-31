@@ -4,6 +4,7 @@ from src.engine import notify_panic_state_transition as mod
 from src.engine.market_panic_breadth_collector import (
     market_weakness_observation_id,
 )
+from src.engine.risk.market_weakness_threshold_policy import SCHEMA, threshold_hash
 
 
 def _refresh_weakness_identity(report: dict) -> dict:
@@ -792,10 +793,121 @@ def test_market_weakness_requires_two_unique_observations(tmp_path, monkeypatch)
     )
     assert len(sent) == 1
     assert "한쪽 시장 약세 지속 관찰" in sent[0][1]
-    assert "자동매매 변경: 없음" in sent[0][1]
+    assert "관찰 owner: source-only 상태·반사실 수집" in sent[0][1]
+    assert "실행 bridge: 해당 시장 위젯·에피소드 신규·추가 매수 차단" in sent[0][1]
+    assert "비영향: 메인봇·보유·매도·목표 주문 변경 없음" in sent[0][1]
     saved = json.loads(state.read_text(encoding="utf-8"))
     assert saved["market_weakness"]["phase"] == "active"
     assert saved["market_weakness"]["weak_streak"] == 2
+
+
+def test_market_weakness_notifier_consumes_observation_bound_reviewed_thresholds(
+    tmp_path,
+    monkeypatch,
+):
+    report_path = tmp_path / "panic_sell.json"
+    state = tmp_path / "state.json"
+    sent = []
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(
+        mod,
+        "_send_telegram",
+        lambda token, chat_id, message: sent.append((chat_id, message)),
+    )
+
+    for sequence in (1, 2, 3):
+        report = _weakness_report("SINGLE_MARKET_WEAKNESS", sequence)
+        observation = report["market_weakness_observation"]
+        observation["sample_floor"]["activation_unique_observations"] = 3
+        observation["sample_floor"]["release_unique_observations"] = 4
+        observation["hysteresis_policy"] = {
+            "schema": SCHEMA,
+            "target_date": "2026-08-28",
+            "source_date": "2026-08-27",
+            "source": "exact_date_applied_policy",
+            "status": "applied",
+            "policy_path": "/tmp/reviewed-policy.json",
+            "policy_hash": threshold_hash(activation=3, release=4),
+            "review_status": "passed_out_of_sample_review",
+            "activation_unique_observations": 3,
+            "release_unique_observations": 4,
+            "minimum_observation_spacing_sec": 60,
+            "runtime_effect": True,
+            "axis": "market_weakness_hysteresis_consecutive_observation_counts",
+        }
+        _refresh_weakness_identity(report)
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        result = mod.notify_from_report(
+            report_path,
+            kind="market_weakness",
+            state_file=state,
+            now_ts=1000.0 + sequence,
+        )
+        assert result == ("sent" if sequence == 3 else "activation_pending")
+
+    saved = json.loads(state.read_text(encoding="utf-8"))["market_weakness"]
+    assert saved["phase"] == "active"
+    assert saved["weak_streak"] == 3
+    assert saved["activation_unique_observations"] == 3
+    assert saved["release_unique_observations"] == 4
+    assert len(sent) == 1
+
+
+def test_market_weakness_notifier_rejects_intraday_hysteresis_policy_change(
+    tmp_path,
+    monkeypatch,
+):
+    report_path = tmp_path / "panic_sell.json"
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda *_args, **_kwargs: None)
+
+    first = _weakness_report("SINGLE_MARKET_WEAKNESS", 1)
+    report_path.write_text(json.dumps(first), encoding="utf-8")
+    assert (
+        mod.notify_from_report(
+            report_path,
+            kind="market_weakness",
+            state_file=state_path,
+            now_ts=1001.0,
+        )
+        == "activation_pending"
+    )
+    before = json.loads(state_path.read_text(encoding="utf-8"))
+
+    changed = _weakness_report("SINGLE_MARKET_WEAKNESS", 2)
+    observation = changed["market_weakness_observation"]
+    observation["sample_floor"]["activation_unique_observations"] = 3
+    observation["sample_floor"]["release_unique_observations"] = 4
+    observation["hysteresis_policy"] = {
+        "schema": SCHEMA,
+        "target_date": "2026-08-28",
+        "source_date": "2026-08-27",
+        "source": "exact_date_applied_policy",
+        "status": "applied",
+        "policy_path": "/tmp/reviewed-policy.json",
+        "policy_hash": threshold_hash(activation=3, release=4),
+        "review_status": "passed_out_of_sample_review",
+        "activation_unique_observations": 3,
+        "release_unique_observations": 4,
+        "minimum_observation_spacing_sec": 60,
+        "runtime_effect": True,
+        "axis": "market_weakness_hysteresis_consecutive_observation_counts",
+    }
+    _refresh_weakness_identity(changed)
+    report_path.write_text(json.dumps(changed), encoding="utf-8")
+
+    result = mod.notify_from_report(
+        report_path,
+        kind="market_weakness",
+        state_file=state_path,
+        now_ts=1002.0,
+    )
+
+    assert result == "intraday_hysteresis_policy_mismatch"
+    assert json.loads(state_path.read_text(encoding="utf-8")) == before
 
 
 def test_single_market_weakness_streak_does_not_cross_listing_markets(

@@ -15,6 +15,13 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.engine.risk.market_weakness_threshold_policy import (
+    BASELINE_ACTIVATION_OBSERVATIONS,
+    BASELINE_RELEASE_OBSERVATIONS,
+    MIN_OBSERVATION_SPACING_SEC,
+    observation_thresholds,
+    resolve_effective_thresholds,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import write_json_object_generation_safe
 
@@ -44,9 +51,9 @@ DEFAULT_MARKET_WEIGHTS = {
     "KOSPI": 0.65,
     "KOSDAQ": 0.35,
 }
-MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS = 2
-MARKET_WEAKNESS_RELEASE_OBSERVATIONS = 3
-MARKET_WEAKNESS_MIN_OBSERVATION_SPACING_SEC = 60
+MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS = BASELINE_ACTIVATION_OBSERVATIONS
+MARKET_WEAKNESS_RELEASE_OBSERVATIONS = BASELINE_RELEASE_OBSERVATIONS
+MARKET_WEAKNESS_MIN_OBSERVATION_SPACING_SEC = MIN_OBSERVATION_SPACING_SEC
 MARKET_WEAKNESS_RELEASE_INDEX_MARGIN_PCT = 0.3
 MARKET_WEAKNESS_RELEASE_INDUSTRY_MARGIN_PCT = 7.0
 MARKET_WEAKNESS_RELEASE_SEVERE_MARGIN_PCT = 5.0
@@ -70,6 +77,7 @@ def market_weakness_observation_id(observation: dict[str, Any]) -> str:
         "recovery_evidence_markets": observation.get("recovery_evidence_markets"),
         "evidence": observation.get("evidence"),
         "release_margin": observation.get("release_margin"),
+        "hysteresis_policy": observation.get("hysteresis_policy"),
     }
     return (
         "market-weakness-"
@@ -123,6 +131,14 @@ def market_weakness_observation_contract_errors(
     if observation.get("source_quality_ready") is not True:
         errors.append("source_quality_not_ready")
     sample_floor = observation.get("sample_floor")
+    try:
+        activation_observations, release_observations, spacing_sec = (
+            observation_thresholds(observation)
+        )
+    except ValueError:
+        activation_observations = None
+        release_observations = None
+        spacing_sec = None
     if not (
         observation.get("metric_role") == "market_weakness_observation"
         and observation.get("window_policy")
@@ -133,9 +149,9 @@ def market_weakness_observation_contract_errors(
         and sample_floor.get("industry_row_count")
         == MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT
         and sample_floor.get("activation_unique_observations")
-        == MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS
-        and sample_floor.get("release_unique_observations")
-        == MARKET_WEAKNESS_RELEASE_OBSERVATIONS
+        == activation_observations
+        and sample_floor.get("release_unique_observations") == release_observations
+        and spacing_sec == MARKET_WEAKNESS_MIN_OBSERVATION_SPACING_SEC
         and observation.get("primary_decision_metric")
         == "raw_state_with_release_margin"
     ):
@@ -872,6 +888,9 @@ def build_market_weakness_observation(
     margins needed to audit why a release was or was not eligible.
     """
 
+    hysteresis = resolve_effective_thresholds(
+        target_date=datetime.fromisoformat(target_date).date()
+    )
     market_indices = (
         summary.get("market_indices")
         if isinstance(summary.get("market_indices"), dict)
@@ -1132,6 +1151,7 @@ def build_market_weakness_observation(
         "source_quality_status": source_quality_status,
         "evidence": evidence,
         "release_margin": release_margin,
+        "hysteresis_policy": hysteresis.observation_contract(),
     }
     observation_id = market_weakness_observation_id(identity_source)
     history_path = _observation_path(target_date, as_of, observation_id)
@@ -1151,8 +1171,10 @@ def build_market_weakness_observation(
         "sample_floor": {
             "market_index_count": MARKET_WEAKNESS_MIN_MARKET_INDEX_COUNT,
             "industry_row_count": MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT,
-            "activation_unique_observations": MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS,
-            "release_unique_observations": MARKET_WEAKNESS_RELEASE_OBSERVATIONS,
+            "activation_unique_observations": (
+                hysteresis.activation_unique_observations
+            ),
+            "release_unique_observations": hysteresis.release_unique_observations,
         },
         "primary_decision_metric": "raw_state_with_release_margin",
         "source_quality_gate": "same-session fresh KOSPI/KOSDAQ and industry breadth snapshot",
@@ -1170,6 +1192,7 @@ def build_market_weakness_observation(
         "allowed_runtime_apply": False,
         "evidence": evidence,
         "release_margin": release_margin,
+        "hysteresis_policy": hysteresis.observation_contract(),
         "history_path": str(history_path),
         "response_research_contract": {
             "status": "source_only_counterfactual_collection",

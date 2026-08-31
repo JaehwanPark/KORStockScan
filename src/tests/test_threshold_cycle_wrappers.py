@@ -569,10 +569,19 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     attribution_idx = script.index(
         "-m src.engine.monitoring.machine_microstructure_attribution"
     )
+    weakness_hysteresis_idx = script.index(
+        "-m src.engine.automation.market_weakness_hysteresis_tuning"
+    )
     entry_timing_idx = script.index(
         "-m src.engine.automation.machine_entry_timing_tuning"
     )
-    assert tuning_idx < expansion_idx < attribution_idx < entry_timing_idx
+    assert (
+        tuning_idx
+        < expansion_idx
+        < attribution_idx
+        < weakness_hysteresis_idx
+        < entry_timing_idx
+    )
     assert 'wait_for_postclose_resources "machine_microstructure_attribution"' in script
     assert "machine_microstructure_attribution_${TARGET_DATE}.json" in script
     assert (
@@ -618,6 +627,9 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     attribution_refresh_idx = final_refresh.index(
         '"$PYTHON_BIN" -m src.engine.monitoring.machine_microstructure_attribution'
     )
+    weakness_hysteresis_refresh_idx = final_refresh.index(
+        '"$PYTHON_BIN" -m src.engine.automation.market_weakness_hysteresis_tuning'
+    )
     entry_timing_refresh_idx = final_refresh.index(
         '"$PYTHON_BIN" -m src.engine.automation.machine_entry_timing_tuning'
     )
@@ -630,6 +642,7 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     assert (
         expansion_refresh_idx
         < attribution_refresh_idx
+        < weakness_hysteresis_refresh_idx
         < entry_timing_refresh_idx
         < approval_refresh_idx
         < checklist_refresh_idx
@@ -645,6 +658,7 @@ def _run_machine_microstructure_final_refresh(
     *,
     expansion_rc=0,
     attribution_rc=0,
+    weakness_hysteresis_rc=0,
     entry_timing_rc=0,
     policy_rc=0,
     builder_rc=0,
@@ -668,6 +682,8 @@ def _run_machine_microstructure_final_refresh(
                 '    exit "${FAKE_EXPANSION_RC:-0}" ;;',
                 '  *"machine_microstructure_attribution"*)',
                 '    exit "${FAKE_ATTRIBUTION_RC:-0}" ;;',
+                '  *"market_weakness_hysteresis_tuning"*)',
+                '    exit "${FAKE_WEAKNESS_HYSTERESIS_RC:-0}" ;;',
                 '  *"machine_entry_timing_tuning"*)',
                 '    exit "${FAKE_ENTRY_TIMING_RC:-0}" ;;',
                 '  *"machine_microstructure_policy_approval"*)',
@@ -689,6 +705,7 @@ def _run_machine_microstructure_final_refresh(
         "FINAL_REFRESH_CALL_LOG": str(call_log),
         "FAKE_EXPANSION_RC": str(expansion_rc),
         "FAKE_ATTRIBUTION_RC": str(attribution_rc),
+        "FAKE_WEAKNESS_HYSTERESIS_RC": str(weakness_hysteresis_rc),
         "FAKE_ENTRY_TIMING_RC": str(entry_timing_rc),
         "FAKE_POLICY_RC": str(policy_rc),
         "FAKE_BUILDER_RC": str(builder_rc),
@@ -713,24 +730,27 @@ def test_machine_microstructure_final_refresh_success_order_and_flags(tmp_path):
     result, calls = _run_machine_microstructure_final_refresh(tmp_path)
 
     assert result.returncode == 0
-    assert len(calls) == 5
+    assert len(calls) == 6
     assert "widget_collector_expansion_recommendation" in calls[0]
     assert "--target-date 2026-08-14" in calls[0]
     assert "--write --notify --source-wait-sec 900 --source-poll-sec 30" in calls[0]
     assert "machine_microstructure_attribution" in calls[1]
     assert "--target-date 2026-08-14" in calls[1]
     assert "--write --print-summary" in calls[1]
-    assert "machine_entry_timing_tuning" in calls[2]
+    assert "market_weakness_hysteresis_tuning" in calls[2]
     assert "--target-date 2026-08-14" in calls[2]
     assert "--write --print-summary" in calls[2]
-    assert "machine_microstructure_policy_approval" in calls[3]
+    assert "machine_entry_timing_tuning" in calls[3]
     assert "--target-date 2026-08-14" in calls[3]
-    assert "--notify-objective-followups" in calls[3]
-    assert "build_next_stage2_checklist" in calls[4]
-    assert "--completed-machine-source-date 2026-08-14" in calls[4]
+    assert "--write --print-summary" in calls[3]
+    assert "machine_microstructure_policy_approval" in calls[4]
+    assert "--target-date 2026-08-14" in calls[4]
+    assert "--notify-objective-followups" in calls[4]
+    assert "build_next_stage2_checklist" in calls[5]
+    assert "--completed-machine-source-date 2026-08-14" in calls[5]
     assert (
-        "expansion_rc=0 attribution_rc=0 entry_timing_rc=0 policy_rc=0 builder_rc=0"
-        in (result.stderr)
+        "expansion_rc=0 attribution_rc=0 weakness_hysteresis_rc=0 "
+        "entry_timing_rc=0 policy_rc=0 builder_rc=0" in (result.stderr)
     )
 
 
@@ -771,16 +791,17 @@ def test_machine_microstructure_final_refresh_continues_after_upstream_failure(
     )
 
     assert result.returncode == expected_rc
-    assert len(calls) == (4 if attribution_rc else 5)
+    assert len(calls) == (4 if attribution_rc else 6)
     assert "widget_collector_expansion_recommendation" in calls[0]
     assert "machine_microstructure_attribution" in calls[1]
     if attribution_rc:
         assert "machine_microstructure_policy_approval" in calls[2]
         assert "build_next_stage2_checklist" in calls[3]
     else:
-        assert "machine_entry_timing_tuning" in calls[2]
-        assert "machine_microstructure_policy_approval" in calls[3]
-        assert "build_next_stage2_checklist" in calls[4]
+        assert "market_weakness_hysteresis_tuning" in calls[2]
+        assert "machine_entry_timing_tuning" in calls[3]
+        assert "machine_microstructure_policy_approval" in calls[4]
+        assert "build_next_stage2_checklist" in calls[5]
 
 
 def test_machine_microstructure_final_refresh_prioritizes_builder_failure(tmp_path):
@@ -795,8 +816,8 @@ def test_machine_microstructure_final_refresh_prioritizes_builder_failure(tmp_pa
     assert result.returncode == 7
     assert len(calls) == 4
     assert (
-        "expansion_rc=5 attribution_rc=4 entry_timing_rc=0 policy_rc=3 builder_rc=7"
-        in (result.stderr)
+        "expansion_rc=5 attribution_rc=4 weakness_hysteresis_rc=0 "
+        "entry_timing_rc=0 policy_rc=3 builder_rc=7" in (result.stderr)
     )
 
 
@@ -807,9 +828,25 @@ def test_machine_microstructure_final_refresh_surfaces_entry_timing_failure(tmp_
     )
 
     assert result.returncode == 8
-    assert len(calls) == 5
-    assert "machine_entry_timing_tuning" in calls[2]
+    assert len(calls) == 6
+    assert "machine_entry_timing_tuning" in calls[3]
     assert "entry_timing_rc=8" in result.stderr
+
+
+def test_machine_microstructure_final_refresh_surfaces_weakness_hysteresis_failure(
+    tmp_path,
+):
+    result, calls = _run_machine_microstructure_final_refresh(
+        tmp_path,
+        weakness_hysteresis_rc=9,
+        entry_timing_rc=8,
+    )
+
+    assert result.returncode == 9
+    assert len(calls) == 6
+    assert "market_weakness_hysteresis_tuning" in calls[2]
+    assert "machine_entry_timing_tuning" in calls[3]
+    assert "weakness_hysteresis_rc=9" in result.stderr
 
 
 def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_without_bedrock_lite_shadow():

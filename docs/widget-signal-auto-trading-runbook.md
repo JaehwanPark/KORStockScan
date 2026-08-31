@@ -124,6 +124,16 @@
   다시 통과해야 재시도한다.
 - 전역 BUY 일시정지, 신호 freshness/venue 계약, 단일 실행기 lock, 수량 상한,
   미체결 중복 방지는 우회하지 않는다.
+- `WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_FREEZE_OPEN_BUY_CANCEL_V2`의 당일
+  `active|release_pending` market latch와 verified listing market이 일치하면 위젯
+  신규진입과 추가매수를 모두 차단한다. 이미 접수된 `ENTRY_BUY` 또는
+  `SCALE_IN_BUY`는 위젯 원장에 저장된 당일 원주문번호를 broker execution
+  snapshot으로 다시 확인한 뒤 현재 미체결 잔량만 `kt10003` 취소한다. 부분체결
+  수량은 보유·목표 주문 대상으로 유지한다. snapshot 부재·불명확, market scope
+  결손, 수동·main bot·episode owner 주문과 SELL/target 주문에는 취소 권한이 없다.
+  취소 응답이 불명확하면 5초 간격 최대 3회 안에서 원주문 잔량을 매번 재대사한
+  뒤에만 재시도한다. rollback은
+  `KORSTOCKSCAN_WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED=0`이다.
 
 ## 회전 수익 목적과 현재 구현 경계
 

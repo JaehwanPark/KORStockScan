@@ -25,6 +25,11 @@ from src.engine.risk.manual_control_exclusion import (
     evaluate_manual_control_exclusion,
     manual_control_operator_exclusion_source,
 )
+from src.engine.risk.market_weakness_entry_guard import (
+    MarketWeaknessEntryDecision,
+    evaluate_market_weakness_entry_guard,
+    record_market_weakness_blocked_entry,
+)
 from src.engine.trade_pause_control import is_buy_side_paused
 from src.trading.order.entry_liquidity_guard import (
     EntryExecutionVelocityDecision,
@@ -883,6 +888,64 @@ class WidgetSignalAutoTrader:
         self._save()
         self._event(reason, spec, now, signal_id=signal_id, **fields)
 
+    def _market_weakness_blocks_entry(
+        self,
+        *,
+        spec: WidgetSpec,
+        symbol_state: dict[str, Any],
+        signal_id: str,
+        now: datetime,
+        counterfactual_anchor: dict[str, Any] | None = None,
+    ) -> bool:
+        decision = self._market_weakness_decision(spec=spec, now=now)
+        if not decision.blocked:
+            return False
+        counterfactual_receipt: dict[str, Any] | None = None
+        if isinstance(counterfactual_anchor, dict):
+            counterfactual_receipt = record_market_weakness_blocked_entry(
+                decision,
+                now=now,
+                scope_id=str(counterfactual_anchor.get("scope_id") or ""),
+                session=str(counterfactual_anchor.get("session") or ""),
+                source_signal_id=str(
+                    counterfactual_anchor.get("source_signal_id") or signal_id
+                ),
+                signal_bar=str(counterfactual_anchor.get("signal_bar") or ""),
+                reference_price=counterfactual_anchor.get("reference_price"),
+                target_price=counterfactual_anchor.get("target_price"),
+                required_quantity=_positive_int(
+                    counterfactual_anchor.get("required_quantity")
+                ),
+                expected_venues=list(
+                    counterfactual_anchor.get("expected_venues") or []
+                ),
+            )
+        self._record_entry_block_once(
+            spec=spec,
+            symbol_state=symbol_state,
+            signal_id=(
+                f"{signal_id}:market_weakness:"
+                f"{decision.observation_id or decision.phase}"
+            ),
+            reason=decision.reason,
+            now=now,
+            source_signal_id=signal_id,
+            actual_order_submitted=False,
+            market_weakness_counterfactual_observation=counterfactual_receipt,
+            **decision.event_fields(),
+        )
+        return True
+
+    @staticmethod
+    def _market_weakness_decision(
+        *, spec: WidgetSpec, now: datetime
+    ) -> MarketWeaknessEntryDecision:
+        return evaluate_market_weakness_entry_guard(
+            symbol=spec.code,
+            owner="widget",
+            now=now,
+        )
+
     @staticmethod
     def _snapshot_time(payload: dict[str, Any]) -> datetime | None:
         return samsung_contract.snapshot_observed_at(payload)
@@ -1478,10 +1541,70 @@ class WidgetSignalAutoTrader:
             self._save()
 
     def _cancel_pending_buys(
-        self, spec: WidgetSpec, symbol_state: dict[str, Any], now: datetime
+        self,
+        spec: WidgetSpec,
+        symbol_state: dict[str, Any],
+        now: datetime,
+        *,
+        cancel_reason: str = "final_exit_requested",
+        allowed_order_roles: frozenset[str] | None = None,
+        require_current_day: bool = False,
+        require_fresh_reconciliation: bool = False,
+        provenance: dict[str, Any] | None = None,
     ) -> None:
+        provenance = dict(provenance or {})
         for order in symbol_state.get("orders") or []:
-            if order.get("side") != "BUY" or order.get("status") != "SUBMITTED":
+            if order.get("side") != "BUY" or order.get("status") not in {
+                "SUBMITTED",
+                "CANCEL_AMBIGUOUS",
+            }:
+                continue
+            if (
+                allowed_order_roles is not None
+                and order.get("order_role") not in allowed_order_roles
+            ):
+                continue
+            if order.get("broker_accepted") is not True:
+                continue
+            order_no = str(order.get("order_no") or "").strip()
+            if not order_no:
+                continue
+            if require_current_day and str(order.get("order_date") or "") != (
+                now.date().isoformat()
+            ):
+                continue
+            if (
+                require_fresh_reconciliation
+                and order.get("last_reconciled_at") != now.isoformat()
+            ):
+                fingerprint = ":".join(
+                    [
+                        order_no,
+                        cancel_reason,
+                        str(
+                            provenance.get("market_weakness_entry_guard_observation_id")
+                            or ""
+                        ),
+                        str(order.get("last_reconcile_error") or "not_fresh"),
+                    ]
+                )
+                if order.get("last_cancel_reconciliation_block_fingerprint") != (
+                    fingerprint
+                ):
+                    order["last_cancel_reconciliation_block_fingerprint"] = fingerprint
+                    self._save()
+                    self._event(
+                        "buy_cancel_blocked_reconciliation_not_fresh",
+                        spec,
+                        now,
+                        order_no=order_no,
+                        order_role=order.get("order_role"),
+                        cancel_reason=cancel_reason,
+                        last_reconcile_error=order.get("last_reconcile_error"),
+                        last_reconciled_at=order.get("last_reconciled_at"),
+                        actual_order_submitted=False,
+                        **provenance,
+                    )
                 continue
             remaining = _positive_int(order.get("remaining_qty"))
             if remaining <= 0:
@@ -1497,8 +1620,11 @@ class WidgetSignalAutoTrader:
                         spec,
                         now,
                         order_no=order.get("order_no"),
+                        order_role=order.get("order_role"),
                         remaining_qty=remaining,
                         cancel_attempt_count=attempts,
+                        cancel_reason=cancel_reason,
+                        **provenance,
                     )
                 continue
             last_attempt = _timestamp(order.get("cancel_attempted_at"))
@@ -1524,14 +1650,22 @@ class WidgetSignalAutoTrader:
                     "buy_cancel_ambiguous",
                     spec,
                     now,
-                    order_no=order.get("order_no"),
+                    order_no=order_no,
+                    order_role=order.get("order_role"),
+                    filled_qty=_positive_int(order.get("filled_qty")),
                     remaining_qty=remaining,
                     error=type(exc).__name__,
+                    cancel_reason=cancel_reason,
+                    actual_order_submitted=False,
+                    **provenance,
                 )
                 continue
             order["cancel_attempted_at"] = now.isoformat()
             order["cancel_return_code"] = result.return_code
             order["cancel_order_no"] = result.order_no
+            order["cancel_reason"] = cancel_reason
+            if provenance:
+                order["cancel_provenance"] = provenance
             if result.accepted:
                 order["status"] = "CANCEL_REQUESTED"
             elif result.ambiguous:
@@ -1541,10 +1675,59 @@ class WidgetSignalAutoTrader:
                 "buy_cancel_requested" if result.accepted else "buy_cancel_failed",
                 spec,
                 now,
-                order_no=order.get("order_no"),
+                order_no=order_no,
+                cancel_order_no=result.order_no,
+                order_role=order.get("order_role"),
+                filled_qty=_positive_int(order.get("filled_qty")),
                 remaining_qty=remaining,
                 return_code=result.return_code,
+                ambiguous=result.ambiguous,
+                cancel_reason=cancel_reason,
+                actual_order_submitted=False,
+                broker_cancel_submitted=result.accepted,
+                **provenance,
             )
+
+    @staticmethod
+    def _has_market_weakness_cancellable_buy(
+        symbol_state: dict[str, Any], now: datetime
+    ) -> bool:
+        return any(
+            order.get("side") == "BUY"
+            and order.get("order_role")
+            in {ORDER_ROLE_ENTRY_BUY, ORDER_ROLE_SCALE_IN_BUY}
+            and order.get("broker_accepted") is True
+            and str(order.get("order_no") or "").strip()
+            and str(order.get("order_date") or "") == now.date().isoformat()
+            and order.get("status") in {"SUBMITTED", "CANCEL_AMBIGUOUS"}
+            and _positive_int(order.get("remaining_qty")) > 0
+            for order in symbol_state.get("orders") or []
+        )
+
+    def _cancel_market_weakness_pending_buys(
+        self,
+        *,
+        spec: WidgetSpec,
+        symbol_state: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        if not self._has_market_weakness_cancellable_buy(symbol_state, now):
+            return
+        decision = self._market_weakness_decision(spec=spec, now=now)
+        if not decision.exact_market_open_buy_cancel_allowed:
+            return
+        self._cancel_pending_buys(
+            spec,
+            symbol_state,
+            now,
+            cancel_reason="market_weakness_active_exact_market",
+            allowed_order_roles=frozenset(
+                {ORDER_ROLE_ENTRY_BUY, ORDER_ROLE_SCALE_IN_BUY}
+            ),
+            require_current_day=True,
+            require_fresh_reconciliation=True,
+            provenance=decision.event_fields(),
+        )
 
     @staticmethod
     def _has_pending(symbol_state: dict[str, Any], side: str) -> bool:
@@ -1890,6 +2073,27 @@ class WidgetSignalAutoTrader:
         )
         if current_price > trigger_price:
             return
+        route = str(symbol_state.get("entry_route") or "").upper()
+        if route not in {"KRX", "NXT"}:
+            return
+        scale_in_signal_id = f"{entry_signal_id}:ADD{next_leg_index}"
+        scale_in_counterfactual_anchor = {
+            "scope_id": f"{spec.code}:{context.name}:SCALE_IN",
+            "session": context.name,
+            "source_signal_id": scale_in_signal_id,
+            "signal_bar": str(
+                advisory.get("event_at")
+                or advisory.get("source_bar_at")
+                or now.isoformat()
+            ),
+            "reference_price": current_price,
+            "target_price": (
+                symbol_state.get("take_profit_target_price")
+                or advisory.get("target_price")
+            ),
+            "required_quantity": int(policy["leg_quantity_each"]),
+            "expected_venues": [route],
+        }
         exclusion = evaluate_manual_control_exclusion(spec.code)
         operator_source = manual_control_operator_exclusion_source(spec.code)
         if not exclusion.excluded or not operator_source:
@@ -1912,6 +2116,14 @@ class WidgetSignalAutoTrader:
                 reason="scale_in_blocked_global_buy_pause",
                 now=now,
             )
+            return
+        if self._market_weakness_blocks_entry(
+            spec=spec,
+            symbol_state=symbol_state,
+            signal_id=scale_in_signal_id,
+            now=now,
+            counterfactual_anchor=scale_in_counterfactual_anchor,
+        ):
             return
         if self._take_profit_filled_qty(symbol_state, entry_signal_id) > 0:
             if not symbol_state.get("scale_in_blocked_after_take_profit_fill_at"):
@@ -1948,9 +2160,6 @@ class WidgetSignalAutoTrader:
                 current_day_open_qty=open_qty,
                 pending_take_profit_qty=pending_take_profit_qty,
             )
-            return
-        route = str(symbol_state.get("entry_route") or "").upper()
-        if route not in {"KRX", "NXT"}:
             return
         scale_in_liquidity_identity = (
             f"{entry_signal_id}:ADD{next_leg_index}:{trigger_price}"
@@ -2051,9 +2260,28 @@ class WidgetSignalAutoTrader:
                 trigger_price=trigger_price,
                 current_price=current_price,
             )
+        # A scale-in creates new exposure and is covered by the same weakness
+        # freeze. Re-read before canceling the current target and again before
+        # the additional BUY broker write.
+        if self._market_weakness_blocks_entry(
+            spec=spec,
+            symbol_state=symbol_state,
+            signal_id=scale_in_signal_id,
+            now=now,
+            counterfactual_anchor=scale_in_counterfactual_anchor,
+        ):
+            return
         self._cancel_pending_take_profit_sells(spec, symbol_state, now)
         if self._has_pending(symbol_state, "SELL") or self._has_pending(
             symbol_state, "BUY"
+        ):
+            return
+        if self._market_weakness_blocks_entry(
+            spec=spec,
+            symbol_state=symbol_state,
+            signal_id=scale_in_signal_id,
+            now=now,
+            counterfactual_anchor=scale_in_counterfactual_anchor,
         ):
             return
         self._submit(
@@ -2373,6 +2601,11 @@ class WidgetSignalAutoTrader:
     ) -> None:
         symbol_state = self._state["symbols"][spec.code]
         self._reconcile(spec, symbol_state, now)
+        self._cancel_market_weakness_pending_buys(
+            spec=spec,
+            symbol_state=symbol_state,
+            now=now,
+        )
         self._recover_definitive_rejected_entry_episode(spec, symbol_state, now)
         if self._close_completed_take_profit_episode(spec, symbol_state, now):
             return
@@ -2748,6 +2981,46 @@ class WidgetSignalAutoTrader:
         timing_scope_id = f"{spec.code}:{timing_session}"
         advisory = payload.get("advisory")
         advisory = advisory if isinstance(advisory, dict) else {}
+        entry_quantity = (
+            int(entry_policy["leg_quantity_each"])
+            if entry_policy is not None
+            else self.entry_qty
+        )
+        counterfactual_reference_price = _positive_int(
+            advisory.get("entry_price_high")
+            or advisory.get("entry_price")
+            or payload.get("current_price")
+        )
+        counterfactual_target_price = _positive_int(advisory.get("target_price"))
+        if counterfactual_target_price <= 0 and counterfactual_reference_price > 0:
+            counterfactual_target_price = _take_profit_price(
+                counterfactual_reference_price,
+                profit_bps=(
+                    int(entry_policy["take_profit_bps_from_equal_share_average"])
+                    if entry_policy is not None
+                    else TAKE_PROFIT_BPS
+                ),
+            )
+        counterfactual_anchor = {
+            "scope_id": timing_scope_id,
+            "session": timing_session,
+            "source_signal_id": signal_id,
+            "signal_bar": str(
+                advisory.get("event_at") or advisory.get("source_bar_at") or signal_id
+            ),
+            "reference_price": counterfactual_reference_price or None,
+            "target_price": counterfactual_target_price or None,
+            "required_quantity": entry_quantity,
+            "expected_venues": [route],
+        }
+        if self._market_weakness_blocks_entry(
+            spec=spec,
+            symbol_state=symbol_state,
+            signal_id=signal_id,
+            now=now,
+            counterfactual_anchor=counterfactual_anchor,
+        ):
+            return
         confirmation_identity = (
             signal_id
             if spec.event_based
@@ -2866,11 +3139,6 @@ class WidgetSignalAutoTrader:
                     timing_policy_hash=timing_policy_provenance.get("policy_hash"),
                 )
                 return
-        entry_quantity = (
-            int(entry_policy["leg_quantity_each"])
-            if entry_policy is not None
-            else self.entry_qty
-        )
         if (
             symbol_state.get("last_entry_liquidity_block_identity")
             == confirmation_identity
@@ -2948,6 +3216,17 @@ class WidgetSignalAutoTrader:
             actual_order_submitted=False,
             **velocity_decision.event_fields(),
         )
+        # Re-read the independently updated latch immediately before consuming
+        # the signal and writing broker intent.  Liquidity/velocity collection
+        # may overlap a market-weakness transition.
+        if self._market_weakness_blocks_entry(
+            spec=spec,
+            symbol_state=symbol_state,
+            signal_id=signal_id,
+            now=now,
+            counterfactual_anchor=counterfactual_anchor,
+        ):
+            return
         for key in (
             "entry_submit_rejected_at",
             "entry_submit_rejected_signal_id",
@@ -3055,6 +3334,20 @@ class WidgetSignalAutoTrader:
             payload = self.snapshot_loader(spec.snapshot_path)
             if payload:
                 self.process_payload(spec, payload, now)
+            else:
+                # Broker reconciliation and an approved market-weakness
+                # cancellation must not depend on a producer snapshot being
+                # present.  This branch never creates a new entry signal.
+                symbol_state = self._state["symbols"][spec.code]
+                self._reconcile(spec, symbol_state, now)
+                self._cancel_market_weakness_pending_buys(
+                    spec=spec,
+                    symbol_state=symbol_state,
+                    now=now,
+                )
+                self._recover_definitive_rejected_entry_episode(spec, symbol_state, now)
+                self._close_completed_take_profit_episode(spec, symbol_state, now)
+                self._maybe_submit_take_profit(spec, symbol_state, now)
             self._notify_pending_buy_actions(
                 spec, self._state["symbols"][spec.code], now
             )

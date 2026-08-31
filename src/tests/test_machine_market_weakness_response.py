@@ -7,6 +7,8 @@ from src.engine.market_panic_breadth_collector import (
 )
 from src.engine.monitoring.machine_market_weakness_response import (
     METRIC_CONTRACT,
+    _counterfactual_30m_return,
+    _cumulative_counterfactual_evidence,
     build_machine_market_weakness_response,
 )
 from src.engine.scalping.micro_reversion.economic_reference import (
@@ -14,8 +16,27 @@ from src.engine.scalping.micro_reversion.economic_reference import (
     content_sha256,
 )
 
-
 TARGET_DATE = "2026-08-28"
+
+
+def test_same_timestamp_target_adverse_is_excluded_from_threshold_review():
+    assert (
+        _counterfactual_30m_return(
+            {
+                "counterfactual_source_quality_status": "eligible",
+                "executable_bbo_counterfactual": {
+                    "horizons_minutes": {
+                        "30": {
+                            "observed": True,
+                            "cost_aware_net_return_pct": 0.1,
+                        }
+                    },
+                    "target_adverse_first_hit": {"state": "same_timestamp_ambiguous"},
+                },
+            }
+        )
+        is None
+    )
 
 
 def _write_observation(
@@ -200,6 +221,160 @@ def _anchor(symbol: str, *, actual: bool = True) -> dict:
             "cost_aware_net_return_pct": -0.75,
         },
     }
+
+
+def _threshold_counterfactual_row(day: str, index: int) -> dict:
+    states = {
+        f"a{activation}_r{release}": False
+        for activation in (2, 3, 4)
+        for release in (2, 3, 4, 5)
+    }
+    states["a2_r3"] = True
+    return {
+        "anchor_id": f"{day}-counterfactual-{index}",
+        "owner": "episode" if index % 2 == 0 else "widget",
+        "listing_market": "KOSPI" if index % 2 == 0 else "KOSDAQ",
+        "effective_hysteresis": {
+            "activation_unique_observations": 2,
+            "release_unique_observations": 3,
+        },
+        "counterfactual_source_quality_status": "eligible",
+        "threshold_candidate_states": states,
+        "executable_bbo_counterfactual": {
+            "horizons_minutes": {
+                "30": {
+                    "observed": True,
+                    "cost_aware_net_return_pct": 0.1,
+                }
+            },
+            "target_adverse_first_hit": {"state": "target_first"},
+        },
+    }
+
+
+def test_threshold_review_uses_clean_cumulative_holdout_and_current_neighbor(
+    tmp_path,
+):
+    history_root = tmp_path / "machine_microstructure_attribution"
+    history_root.mkdir()
+    dates = [
+        "2026-08-14",
+        "2026-08-18",
+        "2026-08-19",
+        "2026-08-20",
+        "2026-08-21",
+        "2026-08-24",
+        "2026-08-25",
+        "2026-08-26",
+        "2026-08-27",
+        TARGET_DATE,
+    ]
+    for day in dates[:-1]:
+        response = {
+            "schema": "machine_market_weakness_response_v2",
+            "target_date": day,
+            "metric_contract": METRIC_CONTRACT,
+            "authority": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "broker_order_forbidden": True,
+            },
+            "entry_responses": [
+                _threshold_counterfactual_row(day, index) for index in range(5)
+            ],
+        }
+        (history_root / f"machine_microstructure_attribution_{day}.json").write_text(
+            json.dumps({"market_weakness_entry_response": response}),
+            encoding="utf-8",
+        )
+
+    result = _cumulative_counterfactual_evidence(
+        target_date=TARGET_DATE,
+        current_rows=[
+            _threshold_counterfactual_row(TARGET_DATE, index) for index in range(5)
+        ],
+        history_report_dir=history_root,
+        current_activation_observations=2,
+        current_release_observations=3,
+    )
+
+    assert result["counterfactual_entry_signal_count"] == 50
+    assert result["holdout_dates"] == dates[-3:]
+    assert all(result["sample_floor"].values())
+    assert result["policy_candidate_ready"] is True
+    assert result["selected_policy"]["candidate_key"] == "a3_r3"
+    assert result["selected_policy"]["changed_axis"] == (
+        "activation_unique_observations"
+    )
+
+
+def test_threshold_review_rejects_aggregate_gain_that_harms_episode_owner(tmp_path):
+    history_root = tmp_path / "machine_microstructure_attribution"
+    history_root.mkdir()
+    dates = [
+        "2026-08-14",
+        "2026-08-18",
+        "2026-08-19",
+        "2026-08-20",
+        "2026-08-21",
+        "2026-08-24",
+        "2026-08-25",
+        "2026-08-26",
+        "2026-08-27",
+        TARGET_DATE,
+    ]
+
+    def rows_for_day(day: str) -> list[dict]:
+        rows = []
+        for index in range(5):
+            row = _threshold_counterfactual_row(day, index)
+            row["owner"] = "widget" if index < 4 else "episode"
+            row["executable_bbo_counterfactual"]["horizons_minutes"]["30"][
+                "cost_aware_net_return_pct"
+            ] = (0.1 if index < 4 else -0.1)
+            row["executable_bbo_counterfactual"]["target_adverse_first_hit"] = {
+                "state": "target_first" if index < 4 else "adverse_first"
+            }
+            rows.append(row)
+        return rows
+
+    for day in dates[:-1]:
+        response = {
+            "schema": "machine_market_weakness_response_v2",
+            "target_date": day,
+            "metric_contract": METRIC_CONTRACT,
+            "authority": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "broker_order_forbidden": True,
+            },
+            "entry_responses": rows_for_day(day),
+        }
+        (history_root / f"machine_microstructure_attribution_{day}.json").write_text(
+            json.dumps({"market_weakness_entry_response": response}),
+            encoding="utf-8",
+        )
+
+    result = _cumulative_counterfactual_evidence(
+        target_date=TARGET_DATE,
+        current_rows=rows_for_day(TARGET_DATE),
+        history_report_dir=history_root,
+        current_activation_observations=2,
+        current_release_observations=3,
+    )
+
+    candidate = next(
+        row for row in result["candidates"] if row["candidate_key"] == "a3_r3"
+    )
+    assert candidate["full_incremental_vs_current_policy_avg_pct"] > 0.0
+    assert (
+        candidate["stratum_guards"]["owner:episode"][
+            "full_incremental_vs_current_policy_avg_pct"
+        ]
+        < 0.0
+    )
+    assert candidate["review_passed"] is False
+    assert result["policy_candidate_ready"] is False
 
 
 def test_response_joins_only_the_symbols_listing_market(tmp_path):

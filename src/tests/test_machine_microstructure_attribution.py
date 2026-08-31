@@ -1,6 +1,6 @@
 import gzip
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -10,6 +10,7 @@ from src.engine.monitoring.machine_microstructure_attribution import (
     OBJECTIVE_FOLLOWUP_METRIC_CONTRACT,
     _episode_exit_outcome_provenance,
     _fast_lifecycle_objective_followup,
+    _anchor_result,
     _episode_inventory,
     _lifecycle_objective_summary,
     _micro_entry_confirmation_summary,
@@ -311,9 +312,7 @@ def _depth_row(
         "item": (
             f"{symbol}_AL"
             if venue == "SOR"
-            else f"{symbol}_NX"
-            if venue == "NXT"
-            else symbol
+            else f"{symbol}_NX" if venue == "NXT" else symbol
         ),
         "orderbook_time_raw": "100000",
         "bid_depth": 1000,
@@ -333,6 +332,95 @@ def _depth_row(
         "broker_order_forbidden": True,
         "trading_runtime_effect": False,
     }
+
+
+def test_market_weakness_blocked_signal_uses_depth_backed_1_to_30m_bbo():
+    anchor_at = datetime(2026, 8, 31, 10, 0, tzinfo=KST)
+    points = [
+        (1, 9_950, 10_000),
+        (60, 10_100, 10_150),
+        (180, 10_050, 10_100),
+        (300, 10_120, 10_170),
+        (600, 10_150, 10_200),
+        (1200, 10_180, 10_230),
+        (1800, 10_200, 10_250),
+    ]
+    rows = []
+    depth_points = []
+    for sequence, (offset, bid, ask) in enumerate(points, start=1):
+        observed_at = anchor_at + timedelta(seconds=offset)
+        rows.append(
+            {
+                "timestamp": observed_at,
+                "price": ask,
+                "best_bid": bid,
+                "best_ask": ask,
+                "sequence_epoch": 1,
+            }
+        )
+        depth_points.append(
+            {
+                "timestamp": observed_at,
+                "best_bid": bid,
+                "best_ask": ask,
+                "best_bid_qty": 1_000,
+                "best_ask_qty": 1_000,
+                "sequence_epoch": 1,
+            }
+        )
+    result = _anchor_result(
+        {
+            "anchor_id": "market_weakness_blocked:test",
+            "lifecycle_id": "market_weakness_blocked:test",
+            "owner": "episode",
+            "scope_id": "005930:morning",
+            "symbol": "005930",
+            "session": "KRX_REGULAR",
+            "expected_venues": ["KRX"],
+            "expected_session_buckets": ["KRX_REGULAR"],
+            "anchor_at": anchor_at.isoformat(),
+            "anchor_price": 10_000,
+            "owner_target_price": 10_100,
+            "owner_requested_quantity": 20,
+            "owner_round_trip_cost_pct": 0.23,
+            "lifecycle_stage": "entry",
+            "anchor_role": "actual_market_weakness_blocked_entry_signal",
+            "entry_state": "MARKET_WEAKNESS_BLOCKED",
+            "owner_lifecycle_contract_valid": True,
+            "owner_policy_tuning_eligible": True,
+            "actual_order_submitted": False,
+        },
+        {
+            "observed_row_count": len(rows),
+            "invalid_contract_scope_counts": {},
+        },
+        {
+            "rows": rows,
+            "depth_points": depth_points,
+            "depth_rows": len(depth_points),
+            "shock_reference_count": 0,
+            "raw_market_rows": [],
+            "raw_depth_rows": [],
+        },
+        partition_loaded=True,
+        source_contract_gap=None,
+        clean_baseline_allowed=True,
+    )
+
+    counterfactual = result["metrics"]["market_weakness_counterfactual"]
+    assert counterfactual["source_quality_status"] == "eligible"
+    assert set(counterfactual["horizons_minutes"]) == {
+        "1",
+        "3",
+        "5",
+        "10",
+        "20",
+        "30",
+    }
+    assert counterfactual["horizons_minutes"]["1"]["cost_aware_net_return_pct"] == 0.77
+    assert counterfactual["mfe_executable_bid_pct"] == 2.0
+    assert counterfactual["mae_executable_bid_pct"] == -0.5
+    assert counterfactual["target_adverse_first_hit"]["state"] == "target_first"
 
 
 def test_episode_style_widget_signal_joins_advisory_exit_and_daily_cap_observation(
@@ -3534,9 +3622,9 @@ def test_actual_widget_manual_partial_exit_is_realized_loss_with_residual_custod
                 "order_date": target_date,
                 "side": "BUY",
                 "order_role": role,
-                "signal_id": signal_id
-                if role == "ENTRY_BUY"
-                else f"{signal_id}:{role}",
+                "signal_id": (
+                    signal_id if role == "ENTRY_BUY" else f"{signal_id}:{role}"
+                ),
                 "parent_entry_signal_id": None if role == "ENTRY_BUY" else signal_id,
                 "market_venue": "KRX",
                 "broker_execution_venue": "KRX",
@@ -3698,6 +3786,14 @@ def test_actual_widget_manual_partial_exit_is_realized_loss_with_residual_custod
     assert outcome["realized_loss"] is True
     assert outcome["cost_aware_net_return_pct"] < 0
     assert outcome["execution_venue_alignment_state"] == "cross_venue"
+    scale_in_signals = [
+        row for row in anchors if row["anchor_role"] == "actual_widget_scale_in_signal"
+    ]
+    assert len(scale_in_signals) == 2
+    assert all(row["owner_requested_quantity"] == 10 for row in scale_in_signals)
+    assert all(
+        row["actual_realized_response_eligible"] is False for row in scale_in_signals
+    )
     exit_anchor = next(
         row
         for row in anchors
@@ -3833,6 +3929,7 @@ def test_actual_widget_unfilled_entry_keeps_signal_and_submit_diagnostic(tmp_pat
     assert signal["anchor_price"] == 10_000
     assert signal["anchor_price_provenance"] == "accepted_entry_limit_price_unfilled"
     assert signal["owner_policy_tuning_eligible"] is False
+    assert signal["owner_requested_quantity"] == 10
     assert signal["owner_outcome"]["entry_fill_status"] == "unfilled"
     assert signal["owner_outcome"]["realized"] is False
 

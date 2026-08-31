@@ -15,11 +15,27 @@ from src.trading.order.entry_liquidity_guard import (
 )
 
 from src.engine.monitoring.samsung_widget_contract import KST
+from src.engine.risk.market_weakness_entry_guard import (
+    MarketWeaknessEntryDecision,
+)
 from src.trading.widget_auto_trade import engine
 from src.trading.widget_auto_trade.engine import WidgetSignalAutoTrader, WidgetSpec
 from src.trading.widget_auto_trade.gateway import ExecutionSnapshot, SubmitResult
 from src.trading.widget_auto_trade import gateway as gateway_module
 from src.trading.widget_auto_trade import service as service_module
+
+
+@pytest.fixture(autouse=True)
+def _isolate_market_weakness_counterfactual_writer(monkeypatch):
+    monkeypatch.setattr(
+        engine,
+        "record_market_weakness_blocked_entry",
+        lambda *_args, **_kwargs: {
+            "status": "test_isolated",
+            "observation_id": "test-market-weakness-block",
+            "path": "test-only",
+        },
+    )
 
 
 class FakeContract:
@@ -204,6 +220,39 @@ def _payload(now, *, entry_id=None, entry_state="ENTRY_CAUTION", exit_id=None):
             else None
         ),
     }
+
+
+def _market_weakness_decision(now, *, mode: str):
+    if mode == "active":
+        reason = "entry_blocked_market_weakness_active"
+        blocked = True
+        listing_market = "KOSPI"
+        active_markets = ("KOSPI",)
+    elif mode == "invalid_scope":
+        reason = "entry_blocked_market_weakness_state_invalid"
+        blocked = True
+        listing_market = "KOSPI"
+        active_markets = ()
+    else:
+        reason = "market_weakness_latch_not_active"
+        blocked = False
+        listing_market = "KOSPI"
+        active_markets = ()
+    return MarketWeaknessEntryDecision(
+        blocked=blocked,
+        reason=reason,
+        symbol="999999",
+        owner="widget",
+        listing_market=listing_market,
+        phase="active" if blocked else "released",
+        active_markets=active_markets,
+        session_key=now.date().isoformat(),
+        observation_id="weakness-cancel-1",
+        observation_as_of=now.isoformat(),
+        source_status="test",
+        state_path="test-state.json",
+        symbol_master_path="test-master.json",
+    )
 
 
 def _trader(tmp_path, monkeypatch, payload_box, *, qty=1):
@@ -1001,6 +1050,73 @@ def test_samsung_equal_share_policy_rechecks_global_buy_pause_before_add(
     assert len(gateway.buy_calls) == 1
     assert gateway.cancel_calls == []
     assert recorder.events[-1]["event_type"] == "scale_in_blocked_global_buy_pause"
+
+
+def test_samsung_scale_in_is_new_exposure_blocked_by_market_weakness(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _samsung_policy_payload(now)}
+    trader, gateway, recorder = _samsung_policy_trader(tmp_path, monkeypatch, box)
+    mode = {"value": "released"}
+
+    def decision():
+        active = mode["value"] == "active"
+        return MarketWeaknessEntryDecision(
+            blocked=active,
+            reason=(
+                "entry_blocked_market_weakness_active"
+                if active
+                else "market_weakness_latch_not_active"
+            ),
+            symbol="005930",
+            owner="widget",
+            listing_market="KOSPI",
+            phase="active" if active else "released",
+            active_markets=("KOSPI",) if active else (),
+            session_key=now.date().isoformat(),
+            observation_id="weakness-scale-in-1",
+            observation_as_of=now.isoformat(),
+            source_status="test",
+            state_path="test-state.json",
+            symbol_master_path="test-master.json",
+        )
+
+    monkeypatch.setattr(
+        engine,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: decision(),
+    )
+    counterfactual_calls = []
+    monkeypatch.setattr(
+        engine,
+        "record_market_weakness_blocked_entry",
+        lambda *_args, **kwargs: counterfactual_calls.append(kwargs)
+        or {
+            "status": "recorded",
+            "observation_id": "scale-in-counterfactual",
+            "path": "test-only",
+        },
+    )
+    trader.run_once(now)
+    _fill(gateway, "B1", qty=10, price=100_000)
+    trader.run_once(now)
+    assert gateway.limit_sell_calls == [("005930", 10, "SOR", 100_500)]
+    mode["value"] = "active"
+    box["payload"] = _samsung_policy_payload(now.replace(second=1), price=99_500)
+
+    trader.run_once(now.replace(second=1))
+
+    assert gateway.buy_calls == [("005930", 10, "SOR")]
+    assert gateway.cancel_calls == []
+    assert recorder.events[-1]["event_type"] == ("entry_blocked_market_weakness_active")
+    assert recorder.events[-1]["source_signal_id"].endswith(":ADD1")
+    assert len(counterfactual_calls) == 1
+    assert counterfactual_calls[0]["scope_id"] == "005930:KRX_REGULAR:SCALE_IN"
+    assert counterfactual_calls[0]["reference_price"] == 99_500
+    assert counterfactual_calls[0]["target_price"] == 100_500
+    assert counterfactual_calls[0]["required_quantity"] == 10
+    assert counterfactual_calls[0]["expected_venues"] == ["KRX"]
 
 
 def test_samsung_scale_in_liquidity_block_keeps_existing_target_open(
@@ -2104,6 +2220,215 @@ def test_global_buy_pause_does_not_consume_entry_episode(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "is_buy_side_paused", lambda: False)
     trader.run_once(now)
     assert gateway.buy_calls == [("999999", 1, "SOR")]
+
+
+def test_market_weakness_guard_does_not_consume_widget_signal(tmp_path, monkeypatch):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+
+    def decision(*, blocked):
+        return MarketWeaknessEntryDecision(
+            blocked=blocked,
+            reason=(
+                "entry_blocked_market_weakness_active"
+                if blocked
+                else "market_weakness_latch_not_active"
+            ),
+            symbol="999999",
+            owner="widget",
+            listing_market="KOSPI",
+            phase="active" if blocked else "released",
+            active_markets=("KOSPI",) if blocked else (),
+            session_key="2026-08-10",
+            observation_id="weakness-2",
+            observation_as_of=now.isoformat(),
+            source_status="test",
+            state_path="test-state.json",
+            symbol_master_path="test-master.json",
+        )
+
+    monkeypatch.setattr(
+        engine,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: decision(blocked=True),
+    )
+    blocked = trader.run_once(now)
+    assert gateway.buy_calls == []
+    assert blocked["symbols"]["999999"]["entry_episode_open"] is False
+    assert recorder.events[-1]["event_type"] == ("entry_blocked_market_weakness_active")
+
+    monkeypatch.setattr(
+        engine,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: decision(blocked=False),
+    )
+    trader.run_once(now)
+    assert gateway.buy_calls == [("999999", 1, "SOR")]
+
+
+def test_market_weakness_transition_during_entry_checks_blocks_pre_submit(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+    decisions = iter((False, True))
+
+    def evaluate(**kwargs):
+        blocked = next(decisions)
+        return MarketWeaknessEntryDecision(
+            blocked=blocked,
+            reason=(
+                "entry_blocked_market_weakness_active"
+                if blocked
+                else "market_weakness_latch_not_active"
+            ),
+            symbol="999999",
+            owner="widget",
+            listing_market="KOSPI",
+            phase="active" if blocked else "released",
+            active_markets=("KOSPI",) if blocked else (),
+            session_key="2026-08-10",
+            observation_id="weakness-transition",
+            observation_as_of=now.isoformat(),
+            source_status="test",
+            state_path="test-state.json",
+            symbol_master_path="test-master.json",
+        )
+
+    monkeypatch.setattr(engine, "evaluate_market_weakness_entry_guard", evaluate)
+    state = trader.run_once(now)
+
+    assert gateway.buy_calls == []
+    assert state["symbols"]["999999"]["entry_episode_open"] is False
+    assert recorder.events[-1]["event_type"] == ("entry_blocked_market_weakness_active")
+
+
+def test_market_weakness_cancels_reconciled_widget_buy_without_signal_snapshot(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box, qty=10)
+    mode = {"value": "released"}
+    monkeypatch.setattr(
+        engine,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: _market_weakness_decision(now, mode=mode["value"]),
+    )
+
+    submitted = trader.run_once(now)
+    order = submitted["symbols"]["999999"]["orders"][0]
+    assert order["order_no"] == "B1"
+    gateway.snapshots["B1"] = ExecutionSnapshot(
+        True, True, 4, 6, 10, fill_price=100_000
+    )
+    box["payload"] = None
+    mode["value"] = "active"
+
+    canceled = trader.run_once(now + timedelta(seconds=1))
+
+    order = canceled["symbols"]["999999"]["orders"][0]
+    assert gateway.cancel_calls == [("999999", "B1", 6, "SOR")]
+    assert order["filled_qty"] == 4
+    assert order["remaining_qty"] == 6
+    assert order["status"] == "CANCEL_REQUESTED"
+    assert order["cancel_reason"] == "market_weakness_active_exact_market"
+    cancel_event = next(
+        event
+        for event in reversed(recorder.events)
+        if event["event_type"] == "buy_cancel_requested"
+    )
+    assert cancel_event["order_role"] == "ENTRY_BUY"
+    assert cancel_event["market_weakness_open_buy_cancel_allowed"] is True
+
+
+def test_market_weakness_does_not_cancel_without_fresh_broker_reconciliation(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+    mode = {"value": "released"}
+    monkeypatch.setattr(
+        engine,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: _market_weakness_decision(now, mode=mode["value"]),
+    )
+    trader.run_once(now)
+    box["payload"] = None
+    mode["value"] = "active"
+
+    state = trader.run_once(now + timedelta(seconds=1))
+
+    assert gateway.cancel_calls == []
+    assert state["symbols"]["999999"]["orders"][0]["status"] == "SUBMITTED"
+    assert any(
+        event["event_type"] == "buy_cancel_blocked_reconciliation_not_fresh"
+        for event in recorder.events
+    )
+
+
+def test_market_weakness_widget_cancel_ambiguity_reconciles_before_bounded_retry(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box)
+    mode = {"value": "released"}
+    monkeypatch.setattr(
+        engine,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: _market_weakness_decision(now, mode=mode["value"]),
+    )
+    trader.run_once(now)
+    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 0, 1, 1)
+    box["payload"] = None
+    mode["value"] = "active"
+    cancel_attempts = []
+
+    def flaky_cancel(*, code, order_no, qty, route):
+        cancel_attempts.append((code, order_no, qty, route))
+        if len(cancel_attempts) == 1:
+            raise TimeoutError("ambiguous cancel transport")
+        return gateway._accepted("C")
+
+    monkeypatch.setattr(gateway, "cancel", flaky_cancel)
+
+    ambiguous = trader.run_once(now + timedelta(seconds=1))
+    throttled = trader.run_once(now + timedelta(seconds=2))
+    retried = trader.run_once(now + timedelta(seconds=6))
+
+    assert ambiguous["symbols"]["999999"]["orders"][0]["status"] == ("CANCEL_AMBIGUOUS")
+    assert throttled["symbols"]["999999"]["orders"][0]["status"] == ("CANCEL_AMBIGUOUS")
+    assert retried["symbols"]["999999"]["orders"][0]["status"] == ("CANCEL_REQUESTED")
+    assert cancel_attempts == [
+        ("999999", "B1", 1, "SOR"),
+        ("999999", "B1", 1, "SOR"),
+    ]
+
+
+def test_market_weakness_invalid_market_scope_never_authorizes_widget_cancel(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box)
+    mode = {"value": "released"}
+    monkeypatch.setattr(
+        engine,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: _market_weakness_decision(now, mode=mode["value"]),
+    )
+    trader.run_once(now)
+    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 0, 1, 1)
+    box["payload"] = None
+    mode["value"] = "invalid_scope"
+
+    trader.run_once(now + timedelta(seconds=1))
+
+    assert gateway.cancel_calls == []
 
 
 def test_shared_token_gateway_blocks_buy_during_global_pause(monkeypatch):

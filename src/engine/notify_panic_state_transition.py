@@ -11,11 +11,9 @@ from urllib import parse, request
 
 from src.database.db_manager import DBManager
 from src.engine.market_panic_breadth_collector import (
-    MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS,
-    MARKET_WEAKNESS_MIN_OBSERVATION_SPACING_SEC,
-    MARKET_WEAKNESS_RELEASE_OBSERVATIONS,
     market_weakness_observation_contract_errors,
 )
+from src.engine.risk.market_weakness_threshold_policy import observation_thresholds
 from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "tmp" / "panic_state_telegram_notify_state.json"
@@ -356,9 +354,18 @@ def _market_weakness_message(observation: dict, transition: str, state: dict) ->
         if isinstance(evidence.get("market_index_change_pct"), dict)
         else {}
     )
+    activation_required = _safe_int(state.get("activation_unique_observations"), 2)
+    release_required = _safe_int(state.get("release_unique_observations"), 3)
+    bridge_active = bool(
+        str(state.get("phase") or "") in {"active", "release_pending"}
+        and state.get("active_markets")
+    )
     if transition == "release":
         title = "✅ 시장 약세 관찰 해제"
-        body = "약세 임계치에서 충분히 벗어난 회복 근거가 3회 연속 확인되었습니다."
+        body = (
+            "약세 임계치에서 충분히 벗어난 회복 근거가 "
+            f"{release_required}회 연속 확인되었습니다."
+        )
     elif transition == "update":
         if len(state.get("active_markets") or []) == 2:
             title = "🔄 시장 전반 약세로 확산"
@@ -371,11 +378,24 @@ def _market_weakness_message(observation: dict, transition: str, state: dict) ->
         body = "현재 source-only 시장 약세 관찰 상태입니다."
     elif len(state.get("active_markets") or []) == 2:
         title = "🟠 시장 전반 약세 지속"
-        body = "지수와 시장 breadth의 약세가 2회 연속 확인되었습니다."
+        body = (
+            "지수와 시장 breadth의 약세가 "
+            f"{activation_required}회 연속 확인되었습니다."
+        )
     else:
         title = "⚠️ 한쪽 시장 약세 지속 관찰"
         body = (
-            "한쪽 시장 약세와 이를 뒷받침하는 하락 breadth가 2회 연속 확인되었습니다."
+            "한쪽 시장 약세와 이를 뒷받침하는 하락 breadth가 "
+            f"{activation_required}회 연속 확인되었습니다."
+        )
+    if bridge_active:
+        bridge_response = (
+            "- 실행 bridge: 해당 시장 위젯·에피소드 신규·추가 매수 차단 · "
+            "exact-owner 미체결 BUY는 broker 대사 후 잔량 취소"
+        )
+    else:
+        bridge_response = (
+            "- 실행 bridge: 위젯·에피소드 매수 차단 해제 · 유효 신호 재평가"
         )
     return "\n".join(
         [
@@ -394,12 +414,15 @@ def _market_weakness_message(observation: dict, transition: str, state: dict) ->
             ),
             (
                 "- 확인 누적: 약세 "
-                f"{_safe_int(state.get('weak_streak'))}/{MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS}회 · "
+                f"{_safe_int(state.get('weak_streak'))}/"
+                f"{_safe_int(state.get('activation_unique_observations'), 2)}회 · "
                 "회복 "
-                f"{_safe_int(state.get('recovery_streak'))}/{MARKET_WEAKNESS_RELEASE_OBSERVATIONS}회"
+                f"{_safe_int(state.get('recovery_streak'))}/"
+                f"{_safe_int(state.get('release_unique_observations'), 3)}회"
             ),
-            "- 대응: 현재는 관찰·반사실 수집만 수행",
-            "- 자동매매 변경: 없음",
+            "- 관찰 owner: source-only 상태·반사실 수집",
+            bridge_response,
+            "- 비영향: 메인봇·보유·매도·목표 주문 변경 없음",
         ]
     )
 
@@ -459,6 +482,12 @@ def _notify_market_weakness_from_report(
     observation = _effective_market_weakness_observation(report_file, report)
     if not observation:
         return "missing_observation"
+    try:
+        activation_observations, release_observations, minimum_spacing_sec = (
+            observation_thresholds(observation)
+        )
+    except ValueError:
+        return "invalid_hysteresis_policy"
     raw_state = str(observation.get("raw_state") or "UNKNOWN")
     observation_id = str(observation.get("observation_id") or "")
     current_session_key = _report_session_key(report_file, report)
@@ -470,6 +499,47 @@ def _notify_market_weakness_from_report(
     )
     if _previous_session_key(previous) != current_session_key:
         previous = {}
+    elif previous:
+        previous_policy = previous.get("hysteresis_policy")
+        current_policy = observation.get("hysteresis_policy")
+        previous_policy_key = (
+            (
+                str(previous_policy.get("source") or "")
+                if isinstance(previous_policy, dict)
+                else ""
+            ),
+            (
+                str(previous_policy.get("policy_hash") or "")
+                if isinstance(previous_policy, dict)
+                else ""
+            ),
+            _safe_int(previous.get("activation_unique_observations"), 0),
+            _safe_int(previous.get("release_unique_observations"), 0),
+            _safe_int(previous.get("minimum_observation_spacing_sec"), 0),
+        )
+        current_policy_key = (
+            (
+                str(current_policy.get("source") or "")
+                if isinstance(current_policy, dict)
+                else ""
+            ),
+            (
+                str(current_policy.get("policy_hash") or "")
+                if isinstance(current_policy, dict)
+                else ""
+            ),
+            activation_observations,
+            release_observations,
+            minimum_spacing_sec,
+        )
+        legacy_baseline_state = bool(
+            not isinstance(previous_policy, dict)
+            and not isinstance(current_policy, dict)
+            and previous_policy_key[2:] in {(0, 0, 0), (2, 3, 60)}
+            and current_policy_key[2:] == (2, 3, 60)
+        )
+        if not legacy_baseline_state and previous_policy_key != current_policy_key:
+            return "intraday_hysteresis_policy_mismatch"
     now = time.time() if now_ts is None else now_ts
     if (
         not force
@@ -501,7 +571,7 @@ def _notify_market_weakness_from_report(
         not force
         and previous
         and observation_spacing_sec is not None
-        and observation_spacing_sec < MARKET_WEAKNESS_MIN_OBSERVATION_SPACING_SEC
+        and observation_spacing_sec < minimum_spacing_sec
     ):
         pending_status = (
             _deliver_market_weakness_pending(
@@ -536,15 +606,19 @@ def _notify_market_weakness_from_report(
             "active": bool(prior.get("active", market in legacy_active_markets)),
             "weak_streak": _safe_int(
                 prior.get("weak_streak"),
-                _safe_int(previous.get("weak_streak"), 0)
-                if market in legacy_weak_markets
-                else 0,
+                (
+                    _safe_int(previous.get("weak_streak"), 0)
+                    if market in legacy_weak_markets
+                    else 0
+                ),
             ),
             "recovery_streak": _safe_int(
                 prior.get("recovery_streak"),
-                _safe_int(previous.get("recovery_streak"), 0)
-                if market in legacy_active_markets
-                else 0,
+                (
+                    _safe_int(previous.get("recovery_streak"), 0)
+                    if market in legacy_active_markets
+                    else 0
+                ),
             ),
             "last_class": str(
                 prior.get("last_class")
@@ -560,9 +634,7 @@ def _notify_market_weakness_from_report(
         classification = (
             "weak"
             if market in current_affected_markets
-            else "recovery"
-            if market in current_recovery_markets
-            else "neutral"
+            else "recovery" if market in current_recovery_markets else "neutral"
         )
         if classification == "weak":
             market_state["weak_streak"] = (
@@ -571,10 +643,7 @@ def _notify_market_weakness_from_report(
                 else 1
             )
             market_state["recovery_streak"] = 0
-            if (
-                _safe_int(market_state["weak_streak"], 0)
-                >= MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS
-            ):
+            if _safe_int(market_state["weak_streak"], 0) >= activation_observations:
                 market_state["active"] = True
         elif classification == "recovery":
             market_state["weak_streak"] = 0
@@ -584,10 +653,7 @@ def _notify_market_weakness_from_report(
                 and market_state.get("last_class") == "recovery"
                 else (1 if market_state.get("active") is True else 0)
             )
-            if (
-                _safe_int(market_state["recovery_streak"], 0)
-                >= MARKET_WEAKNESS_RELEASE_OBSERVATIONS
-            ):
+            if _safe_int(market_state["recovery_streak"], 0) >= release_observations:
                 market_state["active"] = False
         else:
             market_state["weak_streak"] = 0
@@ -651,6 +717,10 @@ def _notify_market_weakness_from_report(
         "weak_streak_markets": weak_streak_markets,
         "recovery_streak": recovery_streak,
         "market_states": market_states,
+        "activation_unique_observations": activation_observations,
+        "release_unique_observations": release_observations,
+        "minimum_observation_spacing_sec": minimum_spacing_sec,
+        "hysteresis_policy": observation.get("hysteresis_policy"),
         "last_observation_id": observation_id,
         "last_observation_as_of": observation.get("as_of"),
         "last_source_gate": observation.get("notifier_source_gate") or {},
@@ -659,6 +729,7 @@ def _notify_market_weakness_from_report(
         "report_file": str(report_file),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
+        "execution_bridge_runtime_effect": True,
     }
     if isinstance(previous.get("last_notification"), dict):
         next_state["last_notification"] = previous["last_notification"]

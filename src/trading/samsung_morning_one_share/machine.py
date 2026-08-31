@@ -210,33 +210,26 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 "buy_order_no": "",
                 "buy_order_date": "",
                 "buy_cancel_requested": False,
+                "buy_cancel_ambiguous": False,
+                "buy_cancel_attempt_count": 0,
+                "buy_cancel_attempted_at": "",
+                "buy_cancel_terminal_failure": False,
+                "buy_cancel_reason": "",
+                "buy_cancel_provenance": {},
+                "last_buy_reconciled_at": "",
+                "last_buy_remaining_qty": 0,
+                "last_buy_reconcile_source_ok": False,
             }
         )
         self._record(now, "nxt_leg_released_for_sor_fallback", leg_id=leg["leg_id"])
 
-    def _cancel_buy(self, now: datetime, leg: dict, elapsed: int) -> None:
-        leg["status"] = "BUY_CANCEL_SUBMITTING"
-        self._record(now, "buy_cancel_intent", leg_id=leg["leg_id"], route=leg["route"])
-        result = self.gateway.cancel(
+    def _submit_buy_cancel(self, leg: dict):
+        return self.gateway.cancel(
             route=str(leg["route"]), order_no=str(leg["buy_order_no"])
         )
-        if result.ambiguous:
-            self._block(now, f"buy_cancel_ambiguous:{leg['leg_id']}")
-            return
-        if not result.accepted:
-            leg["status"] = "BUY_OPEN"
-            self._record(
-                now,
-                "buy_cancel_rejected_retryable",
-                leg_id=leg["leg_id"],
-                return_code=result.return_code,
-            )
-            return
-        leg.update({"status": "BUY_CANCEL_PENDING", "buy_cancel_requested": True})
-        self._own_order(result.order_no)
-        self._record(
-            now, "buy_cancel_submitted", leg_id=leg["leg_id"], route=leg["route"]
-        )
+
+    def _buy_cancel_route_fields(self, leg: dict) -> dict[str, object]:
+        return {"route": str(leg.get("route") or "")}
 
     def _reconcile_buy(self, now: datetime, leg: dict, elapsed: int | None) -> None:
         try:
@@ -252,6 +245,10 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 error=snapshot.error,
             )
             return
+        if snapshot.found:
+            leg["last_buy_reconciled_at"] = now.astimezone(KST).isoformat()
+            leg["last_buy_remaining_qty"] = int(snapshot.remaining_qty)
+            leg["last_buy_reconcile_source_ok"] = True
         if snapshot.found and snapshot.filled_qty > 0:
             if not snapshot.fill_price:
                 self._block(now, f"buy_fill_price_missing:{leg['leg_id']}")
@@ -283,9 +280,24 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 remaining_qty=snapshot.remaining_qty,
             )
             if snapshot.remaining_qty == 0:
+                leg["buy_cancel_ambiguous"] = False
                 self._submit_target(now, leg)
             elif not leg.get("buy_cancel_requested"):
-                self._cancel_buy(now, leg, 0)
+                self._cancel_buy(
+                    now,
+                    leg,
+                    0,
+                    cancel_reason="partial_fill_remainder",
+                )
+            elif leg.get("buy_cancel_ambiguous"):
+                self._cancel_buy(
+                    now,
+                    leg,
+                    0,
+                    cancel_reason=str(
+                        leg.get("buy_cancel_reason") or "entry_validity_expired"
+                    ),
+                )
             return
         if snapshot.found and snapshot.filled_qty == 0 and snapshot.remaining_qty == 0:
             if leg["route"] == "NXT":
@@ -298,6 +310,16 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             return
         deadline = self._window(str(leg["route"])).deadline
         if leg.get("buy_cancel_requested"):
+            if leg.get("buy_cancel_ambiguous"):
+                self._cancel_buy(
+                    now,
+                    leg,
+                    0,
+                    cancel_reason=str(
+                        leg.get("buy_cancel_reason") or "entry_validity_expired"
+                    ),
+                )
+                return
             self._record(now, "buy_cancel_reconciliation_wait", leg_id=leg["leg_id"])
         elif now.time() >= deadline:
             self._cancel_buy(now, leg, 0)
@@ -387,6 +409,13 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
         return True
 
     def _submit_planned_buys(self, now: datetime) -> None:
+        if any(
+            leg.get("status") == "PLANNED" for leg in self._state.get("legs", [])
+        ) and not self._market_weakness_allows_new_buys(
+            now=now,
+            signal_bar=str(self._state.get("signal_bar") or ""),
+        ):
+            return
         approved_routes: set[str] = set()
         for leg in self._state.get("legs", []):
             if leg.get("status") != "PLANNED" or self._state.get("status") == "BLOCKED":
@@ -537,6 +566,17 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 }
             )
             self._save()
+            return self.snapshot()
+        if not self._market_weakness_allows_new_buys(
+            now=now,
+            signal_bar=str(signal_bar),
+            reference_price=int(open_price or 0),
+            required_quantity=EPISODE_TOTAL_QUANTITY,
+            expected_venues=[route],
+            counterfactual_session=(
+                "NXT_PREMARKET" if route == "NXT" else "KRX_REGULAR"
+            ),
+        ):
             return self.snapshot()
         timing_session = "NXT_PREMARKET" if route == "NXT" else "KRX_REGULAR"
         pending_confirmation = self._state.get("pending_entry_confirmation")

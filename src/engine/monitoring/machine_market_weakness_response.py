@@ -17,13 +17,22 @@ from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from src.engine.market_panic_breadth_collector import (
-    MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS,
-    MARKET_WEAKNESS_MIN_OBSERVATION_SPACING_SEC,
-    MARKET_WEAKNESS_RELEASE_OBSERVATIONS,
     market_weakness_observation_contract_errors,
+)
+from src.engine.risk.market_weakness_threshold_policy import (
+    ALLOWED_ACTIVATION_OBSERVATIONS,
+    ALLOWED_RELEASE_OBSERVATIONS,
+    BASELINE_ACTIVATION_OBSERVATIONS,
+    BASELINE_RELEASE_OBSERVATIONS,
+    MIN_OBSERVATION_SPACING_SEC,
+    observation_thresholds,
+    resolve_effective_thresholds,
+    THRESHOLD_REVIEW_METHOD,
+    threshold_recommendation_review_hash,
 )
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
 from src.utils.jsonl_io import read_json_object_strict
+from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 SUPPORTED_MARKETS = frozenset({"KOSPI", "KOSDAQ"})
@@ -36,7 +45,13 @@ METRIC_CONTRACT = {
         "exact_date_daily_then_clean_baseline_cumulative_before_policy_candidate"
     ),
     "sample_floor": {
-        "trading_dates": 5,
+        "actual_realized_trading_dates": 5,
+        "counterfactual_trading_dates": 10,
+        "counterfactual_entry_signals": 50,
+        "holdout_trading_dates": 3,
+        "current_policy_observed_trading_dates": 3,
+        "per_listing_market_signals": 10,
+        "per_owner_signals": 10,
         "affected_actual_realized_entries": 20,
     },
     "aggregation_unit": "owner_and_listing_market_cohort",
@@ -46,6 +61,29 @@ METRIC_CONTRACT = {
     "source_quality_gate": (
         "exact_date_schema_v2_market_scoped_observations_and_verified_symbol_master"
     ),
+    "forbidden_uses": [
+        "widget_entry_block",
+        "episode_entry_block",
+        "open_buy_cancel",
+        "target_order_cancel",
+        "forced_exit",
+        "stop_or_holding_policy_change",
+        "price_or_quantity_change",
+        "same_day_runtime_threshold_apply",
+        "order_submit",
+    ],
+}
+
+# Schema-v1 realized owner outcomes remain clean-baseline evidence for the
+# pre-existing skip-response diagnostic.  They are never admitted to the new
+# executable-BBO threshold review, which requires schema-v2 rows and the full
+# candidate-state matrix.
+LEGACY_REALIZED_METRIC_CONTRACT = {
+    **METRIC_CONTRACT,
+    "sample_floor": {
+        "trading_dates": 5,
+        "affected_actual_realized_entries": 20,
+    },
     "forbidden_uses": [
         "widget_entry_block",
         "episode_entry_block",
@@ -145,6 +183,7 @@ def _load_observations(
         raw_state = str(payload.get("raw_state") or "")
         affected = _normalized_markets(payload.get("affected_markets"))
         recovered = _normalized_markets(payload.get("recovery_evidence_markets"))
+        activation, release, spacing_sec = observation_thresholds(payload)
         seen_ids.add(observation_id)
         rows.append(
             {
@@ -153,6 +192,9 @@ def _load_observations(
                 "raw_state": raw_state,
                 "affected_markets": affected,
                 "recovery_evidence_markets": recovered,
+                "activation_unique_observations": activation,
+                "release_unique_observations": release,
+                "minimum_observation_spacing_sec": spacing_sec,
                 "path": str(path),
             }
         )
@@ -162,6 +204,17 @@ def _load_observations(
     if competing_count:
         rows = [row for row in rows if timestamp_counts[row["as_of"]] == 1]
         excluded["competing_same_timestamp_observation"] = competing_count
+    threshold_pairs = {
+        (
+            int(row["activation_unique_observations"]),
+            int(row["release_unique_observations"]),
+            int(row["minimum_observation_spacing_sec"]),
+        )
+        for row in rows
+    }
+    if len(threshold_pairs) > 1:
+        excluded["mixed_intraday_hysteresis_policy"] = len(rows)
+        rows = []
     return rows, {
         "path": str(source_dir),
         "status": "loaded" if rows else "no_schema_v2_observation",
@@ -172,6 +225,15 @@ def _load_observations(
             len(source_paths) == len(rows) + sum(excluded.values())
         ),
         "exclusion_counts": excluded,
+        "effective_hysteresis": (
+            {
+                "activation_unique_observations": next(iter(threshold_pairs))[0],
+                "release_unique_observations": next(iter(threshold_pairs))[1],
+                "minimum_observation_spacing_sec": next(iter(threshold_pairs))[2],
+            }
+            if len(threshold_pairs) == 1
+            else None
+        ),
     }
 
 
@@ -232,6 +294,9 @@ def _select_symbol_master(
 
 def _market_timelines(
     observations: Sequence[dict[str, Any]],
+    *,
+    activation_observations: int,
+    release_observations: int,
 ) -> dict[str, list[dict[str, Any]]]:
     timelines: dict[str, list[dict[str, Any]]] = {"KOSPI": [], "KOSDAQ": []}
     state = {
@@ -257,7 +322,7 @@ def _market_timelines(
             if (
                 last_counted_at is not None
                 and (observed_at - last_counted_at).total_seconds()
-                < MARKET_WEAKNESS_MIN_OBSERVATION_SPACING_SEC
+                < MIN_OBSERVATION_SPACING_SEC
             ):
                 continue
             current["last_counted_at"] = observed_at
@@ -268,8 +333,7 @@ def _market_timelines(
                 current["recovery_streak"] = 0
                 if (
                     not current["active"]
-                    and current["weak_streak"]
-                    >= MARKET_WEAKNESS_ACTIVATION_OBSERVATIONS
+                    and current["weak_streak"] >= activation_observations
                 ):
                     current["active"] = True
                     current["activation_at"] = observed_at
@@ -281,7 +345,7 @@ def _market_timelines(
                     if current["active"] and current["last_class"] == "recovery"
                     else (1 if current["active"] else 0)
                 )
-                if current["recovery_streak"] >= MARKET_WEAKNESS_RELEASE_OBSERVATIONS:
+                if current["recovery_streak"] >= release_observations:
                     current["active"] = False
                     current["activation_at"] = None
                     current["activation_observation_id"] = None
@@ -450,15 +514,31 @@ def _cumulative_skip_evidence(
             )
             if not (
                 isinstance(response, Mapping)
-                and response.get("schema") == "machine_market_weakness_response_v1"
+                and response.get("schema")
+                in {
+                    "machine_market_weakness_response_v1",
+                    "machine_market_weakness_response_v2",
+                }
                 and response.get("target_date") == source_date
                 and isinstance(authority, Mapping)
                 and authority.get("runtime_effect") is False
                 and authority.get("allowed_runtime_apply") is False
                 and authority.get("broker_order_forbidden") is True
                 and authority.get("actual_order_submitted") is False
-                and authority.get("policy_candidate_ready") is False
-                and response.get("metric_contract") == METRIC_CONTRACT
+                and (
+                    (
+                        response.get("schema") == "machine_market_weakness_response_v1"
+                        and (
+                            response.get("metric_contract") == METRIC_CONTRACT
+                            or response.get("metric_contract")
+                            == LEGACY_REALIZED_METRIC_CONTRACT
+                        )
+                    )
+                    or (
+                        response.get("schema") == "machine_market_weakness_response_v2"
+                        and response.get("metric_contract") == METRIC_CONTRACT
+                    )
+                )
             ):
                 source_census["rejected_history_report_count"] += 1
                 continue
@@ -493,7 +573,8 @@ def _cumulative_skip_evidence(
         cohort_dates = {source_date for source_date, _delta in cohort_comparisons}
         cohort_average = statistics.fmean(cohort) if cohort else None
         cohort_review_ready = bool(
-            len(cohort_dates) >= int(METRIC_CONTRACT["sample_floor"]["trading_dates"])
+            len(cohort_dates)
+            >= int(METRIC_CONTRACT["sample_floor"]["actual_realized_trading_dates"])
             and len(cohort)
             >= int(METRIC_CONTRACT["sample_floor"]["affected_actual_realized_entries"])
             and cohort_average is not None
@@ -519,7 +600,7 @@ def _cumulative_skip_evidence(
         )
     average = statistics.fmean(deltas) if deltas else None
     trading_date_floor_met = len(sample_dates) >= int(
-        METRIC_CONTRACT["sample_floor"]["trading_dates"]
+        METRIC_CONTRACT["sample_floor"]["actual_realized_trading_dates"]
     )
     comparison_floor_met = len(deltas) >= int(
         METRIC_CONTRACT["sample_floor"]["affected_actual_realized_entries"]
@@ -570,6 +651,452 @@ def _cumulative_skip_evidence(
     }
 
 
+def _counterfactual_30m_return(row: Mapping[str, Any]) -> float | None:
+    if row.get("counterfactual_source_quality_status") != "eligible":
+        return None
+    counterfactual = row.get("executable_bbo_counterfactual")
+    horizons = (
+        counterfactual.get("horizons_minutes")
+        if isinstance(counterfactual, Mapping)
+        else None
+    )
+    horizon = horizons.get("30") if isinstance(horizons, Mapping) else None
+    if not isinstance(horizon, Mapping) or horizon.get("observed") is not True:
+        return None
+    first_hit = counterfactual.get("target_adverse_first_hit")
+    if (
+        isinstance(first_hit, Mapping)
+        and first_hit.get("state") == "same_timestamp_ambiguous"
+    ):
+        return None
+    return _finite_float(horizon.get("cost_aware_net_return_pct"))
+
+
+def _cumulative_counterfactual_evidence(
+    *,
+    target_date: str,
+    current_rows: Sequence[dict[str, Any]],
+    history_report_dir: Path | None,
+    current_activation_observations: int,
+    current_release_observations: int,
+) -> dict[str, Any]:
+    rows_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    duplicate_keys: set[tuple[str, str, str]] = set()
+    rejected_history = 0
+    pre_baseline_history = 0
+    non_trading_day_history = 0
+
+    def include(source_date: str, rows: object) -> None:
+        if not isinstance(rows, list):
+            return
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            owner = str(row.get("owner") or "")
+            anchor_id = str(row.get("anchor_id") or "")
+            if not owner or not anchor_id:
+                continue
+            key = (source_date, owner, anchor_id)
+            if key in rows_by_key or key in duplicate_keys:
+                rows_by_key.pop(key, None)
+                duplicate_keys.add(key)
+                continue
+            rows_by_key[key] = row
+
+    if history_report_dir is not None:
+        for path in _logical_json_paths(
+            history_report_dir, "machine_microstructure_attribution_*.json*"
+        ):
+            source_date = path.stem.rsplit("_", 1)[-1]
+            try:
+                source_day = date.fromisoformat(source_date)
+            except ValueError:
+                continue
+            if source_day >= date.fromisoformat(target_date):
+                continue
+            if source_day < CLEAN_BASELINE_DATE:
+                pre_baseline_history += 1
+                continue
+            if not is_krx_trading_day(source_day):
+                non_trading_day_history += 1
+                continue
+            payload = _read_json(path)
+            response = payload.get("market_weakness_entry_response")
+            authority = (
+                response.get("authority") if isinstance(response, Mapping) else None
+            )
+            if not (
+                isinstance(response, Mapping)
+                and response.get("schema") == "machine_market_weakness_response_v2"
+                and response.get("target_date") == source_date
+                and response.get("metric_contract") == METRIC_CONTRACT
+                and isinstance(authority, Mapping)
+                and authority.get("runtime_effect") is False
+                and authority.get("allowed_runtime_apply") is False
+                and authority.get("broker_order_forbidden") is True
+            ):
+                rejected_history += 1
+                continue
+            include(source_date, response.get("entry_responses"))
+    include(target_date, list(current_rows))
+
+    eligible: list[tuple[str, dict[str, Any], float]] = []
+    exclusions: Counter[str] = Counter()
+    # Every daily row persists the complete bounded grid.  This keeps older
+    # clean-baseline rows comparable after the effective exact-date policy has
+    # moved away from 2/3, without relabeling or future-data leakage.
+    required_candidate_keys = {
+        f"a{activation}_r{release}"
+        for activation in ALLOWED_ACTIVATION_OBSERVATIONS
+        for release in ALLOWED_RELEASE_OBSERVATIONS
+    }
+    for (source_date, _owner, _anchor_id), row in rows_by_key.items():
+        net_return = _counterfactual_30m_return(row)
+        if net_return is None:
+            exclusions["counterfactual_30m_not_eligible"] += 1
+            continue
+        states = row.get("threshold_candidate_states")
+        if not isinstance(states, Mapping) or any(
+            not isinstance(states.get(key), bool) for key in required_candidate_keys
+        ):
+            exclusions["threshold_candidate_state_matrix_incomplete"] += 1
+            continue
+        if row.get("listing_market") not in SUPPORTED_MARKETS:
+            exclusions["listing_market_invalid"] += 1
+            continue
+        eligible.append((source_date, row, net_return))
+
+    dates = sorted({source_date for source_date, _row, _return in eligible})
+    holdout_date_count = min(
+        max(int(METRIC_CONTRACT["sample_floor"]["holdout_trading_dates"]), 3),
+        max(0, len(dates) // 3),
+    )
+    holdout_dates = set(dates[-holdout_date_count:]) if holdout_date_count else set()
+    calibration_dates = set(dates) - holdout_dates
+    market_counts = Counter(
+        str(row.get("listing_market")) for _day, row, _ret in eligible
+    )
+    owner_counts = Counter(str(row.get("owner")) for _day, row, _ret in eligible)
+    floors = {
+        "trading_dates_met": len(dates)
+        >= int(METRIC_CONTRACT["sample_floor"]["counterfactual_trading_dates"]),
+        "counterfactual_entry_signals_met": len(eligible)
+        >= int(METRIC_CONTRACT["sample_floor"]["counterfactual_entry_signals"]),
+        "holdout_trading_dates_met": len(holdout_dates)
+        >= int(METRIC_CONTRACT["sample_floor"]["holdout_trading_dates"]),
+        "per_listing_market_signals_met": all(
+            market_counts[market]
+            >= int(METRIC_CONTRACT["sample_floor"]["per_listing_market_signals"])
+            for market in SUPPORTED_MARKETS
+        ),
+        "per_owner_signals_met": all(
+            owner_counts[owner]
+            >= int(METRIC_CONTRACT["sample_floor"]["per_owner_signals"])
+            for owner in ("widget", "episode")
+        ),
+    }
+    current_key = f"a{current_activation_observations}_r{current_release_observations}"
+    current_policy_observed_dates = sorted(
+        {
+            source_date
+            for source_date, row, _net_return in eligible
+            if isinstance(row.get("effective_hysteresis"), Mapping)
+            and row["effective_hysteresis"].get("activation_unique_observations")
+            == current_activation_observations
+            and row["effective_hysteresis"].get("release_unique_observations")
+            == current_release_observations
+        }
+    )
+    floors["current_policy_observed_trading_dates_met"] = bool(
+        len(current_policy_observed_dates)
+        >= int(METRIC_CONTRACT["sample_floor"]["current_policy_observed_trading_dates"])
+    )
+    all_floors_met = all(floors.values())
+
+    def policy_metrics(key: str) -> dict[str, Any]:
+        deltas: list[tuple[str, float]] = []
+        candidate_returns: list[float] = []
+        current_policy_returns: list[float] = []
+        false_positive = false_negative = 0
+        stratum_rows: dict[str, list[dict[str, Any]]] = {
+            "owner:widget": [],
+            "owner:episode": [],
+            "market:KOSPI": [],
+            "market:KOSDAQ": [],
+        }
+        for source_date, row, net_return in eligible:
+            states = row["threshold_candidate_states"]
+            current_policy_blocked = bool(states[current_key])
+            candidate_blocked = bool(states[key])
+            current_policy_return = 0.0 if current_policy_blocked else net_return
+            candidate_policy_return = 0.0 if candidate_blocked else net_return
+            deltas.append(
+                (source_date, candidate_policy_return - current_policy_return)
+            )
+            candidate_returns.append(candidate_policy_return)
+            current_policy_returns.append(current_policy_return)
+            counterfactual = row.get("executable_bbo_counterfactual")
+            first_hit_payload = (
+                counterfactual.get("target_adverse_first_hit")
+                if isinstance(counterfactual, Mapping)
+                else None
+            )
+            first_hit = str(
+                (
+                    first_hit_payload.get("state")
+                    if isinstance(first_hit_payload, Mapping)
+                    else None
+                )
+                or "unresolved"
+            )
+            favorable = first_hit == "target_first" or net_return > 0.0
+            adverse = first_hit == "adverse_first" or net_return < 0.0
+            candidate_misclassified = int(
+                (candidate_blocked and favorable) or (not candidate_blocked and adverse)
+            )
+            current_misclassified = int(
+                (current_policy_blocked and favorable)
+                or (not current_policy_blocked and adverse)
+            )
+            false_positive += int(candidate_blocked and favorable)
+            false_negative += int(not candidate_blocked and adverse)
+            for stratum in (
+                f"owner:{row.get('owner')}",
+                f"market:{row.get('listing_market')}",
+            ):
+                if stratum in stratum_rows:
+                    stratum_rows[stratum].append(
+                        {
+                            "source_date": source_date,
+                            "delta": candidate_policy_return - current_policy_return,
+                            "candidate_misclassified": candidate_misclassified,
+                            "current_misclassified": current_misclassified,
+                        }
+                    )
+        calibration = [delta for day, delta in deltas if day in calibration_dates]
+        holdout = [delta for day, delta in deltas if day in holdout_dates]
+        full = [delta for _day, delta in deltas]
+
+        def stratum_guard(rows: list[dict[str, Any]]) -> dict[str, Any]:
+            stratum_holdout = [
+                float(row["delta"])
+                for row in rows
+                if row["source_date"] in holdout_dates
+            ]
+            stratum_full = [float(row["delta"]) for row in rows]
+            return {
+                "sample_count": len(stratum_full),
+                "holdout_sample_count": len(stratum_holdout),
+                "holdout_incremental_vs_current_policy_avg_pct": (
+                    round(statistics.fmean(stratum_holdout), 8)
+                    if stratum_holdout
+                    else None
+                ),
+                "full_incremental_vs_current_policy_avg_pct": (
+                    round(statistics.fmean(stratum_full), 8) if stratum_full else None
+                ),
+                "candidate_misclassification_count": sum(
+                    int(row["candidate_misclassified"]) for row in rows
+                ),
+                "current_policy_misclassification_count": sum(
+                    int(row["current_misclassified"]) for row in rows
+                ),
+            }
+
+        return {
+            "candidate_key": key,
+            "sample_count": len(full),
+            "calibration_sample_count": len(calibration),
+            "holdout_sample_count": len(holdout),
+            "calibration_incremental_vs_current_policy_avg_pct": (
+                round(statistics.fmean(calibration), 8) if calibration else None
+            ),
+            "holdout_incremental_vs_current_policy_avg_pct": (
+                round(statistics.fmean(holdout), 8) if holdout else None
+            ),
+            "full_incremental_vs_current_policy_avg_pct": (
+                round(statistics.fmean(full), 8) if full else None
+            ),
+            "full_incremental_vs_current_policy_p10_pct": (
+                round(value, 8)
+                if (value := _lower_percentile(full, 0.10)) is not None
+                else None
+            ),
+            "candidate_source_quality_adjusted_ev_pct": (
+                round(statistics.fmean(candidate_returns), 8)
+                if candidate_returns
+                else None
+            ),
+            "current_policy_source_quality_adjusted_ev_pct": (
+                round(statistics.fmean(current_policy_returns), 8)
+                if current_policy_returns
+                else None
+            ),
+            "false_positive_missed_upside_count": false_positive,
+            "false_negative_missed_weakness_count": false_negative,
+            "misclassification_count": false_positive + false_negative,
+            "stratum_guards": {
+                stratum: stratum_guard(rows)
+                for stratum, rows in sorted(stratum_rows.items())
+            },
+        }
+
+    candidate_rows: list[dict[str, Any]] = []
+    current_policy_metrics = policy_metrics(current_key)
+    neighboring_pairs = sorted(
+        {
+            (activation, current_release_observations)
+            for activation in ALLOWED_ACTIVATION_OBSERVATIONS
+            if abs(activation - current_activation_observations) == 1
+        }
+        | {
+            (current_activation_observations, release)
+            for release in ALLOWED_RELEASE_OBSERVATIONS
+            if abs(release - current_release_observations) == 1
+        }
+    )
+    for activation, release in neighboring_pairs:
+        key = f"a{activation}_r{release}"
+        metrics = policy_metrics(key)
+        calibration_ev = _finite_float(
+            metrics.get("calibration_incremental_vs_current_policy_avg_pct")
+        )
+        holdout_ev = _finite_float(
+            metrics.get("holdout_incremental_vs_current_policy_avg_pct")
+        )
+        full_ev = _finite_float(
+            metrics.get("full_incremental_vs_current_policy_avg_pct")
+        )
+        p10 = _finite_float(metrics.get("full_incremental_vs_current_policy_p10_pct"))
+        review_passed = bool(
+            all_floors_met
+            and calibration_ev is not None
+            and calibration_ev >= 0.005
+            and holdout_ev is not None
+            and holdout_ev >= 0.0
+            and full_ev is not None
+            and full_ev >= 0.003
+            and p10 is not None
+            and p10 >= -0.05
+            and int(metrics["misclassification_count"])
+            <= int(current_policy_metrics["misclassification_count"])
+            and all(
+                int(guard["sample_count"])
+                >= int(METRIC_CONTRACT["sample_floor"]["per_owner_signals"])
+                and int(guard["holdout_sample_count"]) > 0
+                and _finite_float(
+                    guard.get("holdout_incremental_vs_current_policy_avg_pct")
+                )
+                is not None
+                and float(guard["holdout_incremental_vs_current_policy_avg_pct"]) >= 0.0
+                and _finite_float(
+                    guard.get("full_incremental_vs_current_policy_avg_pct")
+                )
+                is not None
+                and float(guard["full_incremental_vs_current_policy_avg_pct"]) >= 0.0
+                and int(guard["candidate_misclassification_count"])
+                <= int(guard["current_policy_misclassification_count"])
+                for guard in metrics["stratum_guards"].values()
+            )
+        )
+        candidate_rows.append(
+            {
+                "activation_unique_observations": activation,
+                "release_unique_observations": release,
+                "changed_axis": (
+                    "activation_unique_observations"
+                    if activation != current_activation_observations
+                    else "release_unique_observations"
+                ),
+                **metrics,
+                "review_status": (
+                    "passed_out_of_sample_review"
+                    if review_passed
+                    else "blocked_by_sample_or_economic_guard"
+                ),
+                "review_passed": review_passed,
+            }
+        )
+    passing = [row for row in candidate_rows if row["review_passed"] is True]
+    selected = (
+        max(
+            passing,
+            key=lambda row: (
+                float(row["holdout_incremental_vs_current_policy_avg_pct"]),
+                float(row["full_incremental_vs_current_policy_avg_pct"]),
+                -int(row["misclassification_count"]),
+                row["candidate_key"],
+            ),
+        )
+        if passing
+        else None
+    )
+    selected_policy = (
+        {
+            key: value
+            for key, value in selected.items()
+            if key
+            in {
+                "activation_unique_observations",
+                "release_unique_observations",
+                "changed_axis",
+                "candidate_key",
+                "sample_count",
+                "calibration_sample_count",
+                "holdout_sample_count",
+                "calibration_incremental_vs_current_policy_avg_pct",
+                "holdout_incremental_vs_current_policy_avg_pct",
+                "full_incremental_vs_current_policy_avg_pct",
+                "full_incremental_vs_current_policy_p10_pct",
+                "candidate_source_quality_adjusted_ev_pct",
+                "current_policy_source_quality_adjusted_ev_pct",
+                "false_positive_missed_upside_count",
+                "false_negative_missed_weakness_count",
+                "misclassification_count",
+                "stratum_guards",
+                "review_status",
+            }
+        }
+        if selected is not None
+        else None
+    )
+    review_payload = {
+        "window_start": CLEAN_BASELINE_DATE.isoformat(),
+        "window_end": target_date,
+        "calibration_dates": sorted(calibration_dates),
+        "holdout_dates": sorted(holdout_dates),
+        "current_policy_observed_dates": current_policy_observed_dates,
+        "sample_floor": floors,
+        "current_policy": {
+            "activation_unique_observations": current_activation_observations,
+            "release_unique_observations": current_release_observations,
+            **current_policy_metrics,
+        },
+        "selected_policy": selected_policy,
+    }
+    recommendation = {
+        **review_payload,
+        "review_method": THRESHOLD_REVIEW_METHOD,
+        "counterfactual_entry_signal_count": len(eligible),
+        "owner_signal_counts": dict(sorted(owner_counts.items())),
+        "listing_market_signal_counts": dict(sorted(market_counts.items())),
+        "source_census": {
+            "unique_primary_key_count": len(rows_by_key),
+            "duplicate_conflicted_primary_key_count": len(duplicate_keys),
+            "pre_baseline_history_report_count": pre_baseline_history,
+            "non_trading_day_history_report_count": non_trading_day_history,
+            "rejected_history_report_count": rejected_history,
+            "comparison_exclusion_counts": dict(sorted(exclusions.items())),
+        },
+        "candidates": candidate_rows,
+        "policy_candidate_ready": selected_policy is not None,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    recommendation["review_hash"] = threshold_recommendation_review_hash(recommendation)
+    return recommendation
+
+
 def build_machine_market_weakness_response(
     entry_confirmation: Mapping[str, Any],
     *,
@@ -582,7 +1109,47 @@ def build_machine_market_weakness_response(
     symbol_markets, symbol_master_source = _select_symbol_master(
         symbol_master_dir, target_date
     )
-    timelines = _market_timelines(observations)
+    effective_hysteresis = observation_source.get("effective_hysteresis") or {}
+    if not effective_hysteresis:
+        effective = resolve_effective_thresholds(
+            target_date=date.fromisoformat(target_date)
+        )
+        effective_hysteresis = {
+            "activation_unique_observations": (
+                effective.activation_unique_observations
+            ),
+            "release_unique_observations": effective.release_unique_observations,
+            "minimum_observation_spacing_sec": MIN_OBSERVATION_SPACING_SEC,
+            "source": effective.source,
+            "status": effective.status,
+            "policy_hash": effective.policy_hash,
+        }
+    activation_observations = int(
+        effective_hysteresis.get("activation_unique_observations")
+        or BASELINE_ACTIVATION_OBSERVATIONS
+    )
+    release_observations = int(
+        effective_hysteresis.get("release_unique_observations")
+        or BASELINE_RELEASE_OBSERVATIONS
+    )
+    timelines = _market_timelines(
+        observations,
+        activation_observations=activation_observations,
+        release_observations=release_observations,
+    )
+    candidate_pairs = sorted(
+        (activation, release)
+        for activation in ALLOWED_ACTIVATION_OBSERVATIONS
+        for release in ALLOWED_RELEASE_OBSERVATIONS
+    )
+    candidate_timelines = {
+        f"a{activation}_r{release}": _market_timelines(
+            observations,
+            activation_observations=activation,
+            release_observations=release,
+        )
+        for activation, release in candidate_pairs
+    }
     anchors = entry_confirmation.get("entry_anchors")
     anchors = anchors if isinstance(anchors, list) else []
     rows: list[dict[str, Any]] = []
@@ -623,10 +1190,82 @@ def build_machine_market_weakness_response(
             else None
         )
         actual_realized = bool(
-            anchor.get("actual_order_submitted") is True and realized_return is not None
+            anchor.get("actual_order_submitted") is True
+            and anchor.get("actual_realized_response_eligible") is not False
+            and realized_return is not None
         )
-        if confirmed_weakness and realized_return is None:
-            gaps.append("completed_cost_aware_owner_outcome_missing")
+        counterfactual = (
+            anchor.get("market_weakness_counterfactual")
+            if isinstance(anchor.get("market_weakness_counterfactual"), Mapping)
+            else {}
+        )
+        counterfactual_30m = (
+            (counterfactual.get("horizons_minutes") or {}).get("30")
+            if isinstance(counterfactual.get("horizons_minutes"), Mapping)
+            else None
+        )
+        counterfactual_return = (
+            _finite_float(counterfactual_30m.get("cost_aware_net_return_pct"))
+            if isinstance(counterfactual_30m, Mapping)
+            and counterfactual_30m.get("observed") is True
+            else None
+        )
+        counterfactual_gaps: list[str] = []
+        if counterfactual.get("source_quality_status") != "eligible":
+            counterfactual_gaps.extend(
+                str(reason)
+                for reason in counterfactual.get("source_gap_reasons")
+                or ["executable_bbo_counterfactual_missing"]
+            )
+        first_hit = (
+            str(
+                (counterfactual.get("target_adverse_first_hit") or {}).get("state")
+                or "unresolved"
+            )
+            if isinstance(counterfactual.get("target_adverse_first_hit"), Mapping)
+            else "unresolved"
+        )
+        if confirmed_weakness:
+            accuracy_class = (
+                "true_positive_avoided_adverse"
+                if first_hit == "adverse_first"
+                or (counterfactual_return is not None and counterfactual_return < 0.0)
+                else (
+                    "false_positive_missed_upside"
+                    if first_hit == "target_first"
+                    or (
+                        counterfactual_return is not None
+                        and counterfactual_return > 0.0
+                    )
+                    else "positive_alert_unresolved"
+                )
+            )
+        else:
+            accuracy_class = (
+                "false_negative_missed_weakness"
+                if first_hit == "adverse_first"
+                or (counterfactual_return is not None and counterfactual_return < 0.0)
+                else (
+                    "true_negative_entry_opportunity"
+                    if first_hit == "target_first"
+                    or (
+                        counterfactual_return is not None
+                        and counterfactual_return > 0.0
+                    )
+                    else "negative_alert_unresolved"
+                )
+            )
+        threshold_candidate_states: dict[str, bool | None] = {}
+        if listing_market is not None and anchor_at is not None:
+            for key, candidate_timeline in candidate_timelines.items():
+                candidate_state, _candidate_release = _state_at(
+                    candidate_timeline[listing_market], anchor_at
+                )
+                threshold_candidate_states[key] = (
+                    candidate_state.get("active") is True
+                    if candidate_state is not None
+                    else None
+                )
         delay_seconds = (
             max(0.0, (release_at - anchor_at).total_seconds())
             if confirmed_weakness and release_at is not None and anchor_at is not None
@@ -656,6 +1295,17 @@ def build_machine_market_weakness_response(
                     if state_at_entry
                     else None
                 ),
+                "effective_hysteresis": {
+                    "activation_unique_observations": activation_observations,
+                    "release_unique_observations": release_observations,
+                },
+                "threshold_candidate_states": threshold_candidate_states,
+                "alert_accuracy_class": accuracy_class,
+                "executable_bbo_counterfactual": counterfactual,
+                "counterfactual_source_quality_status": (
+                    "eligible" if not counterfactual_gaps else "blocked"
+                ),
+                "counterfactual_source_gap_reasons": sorted(set(counterfactual_gaps)),
                 "control": {
                     "status": (
                         "actual_realized"
@@ -667,6 +1317,9 @@ def build_machine_market_weakness_response(
                         )
                     ),
                     "cost_aware_net_return_pct": realized_return,
+                    "counterfactual_30m_cost_aware_net_return_pct": (
+                        counterfactual_return
+                    ),
                 },
                 "candidate_arms": {
                     "delay_new_entry_until_recovery_confirmed": {
@@ -680,10 +1333,12 @@ def build_machine_market_weakness_response(
                         ),
                     },
                     "skip_new_entry_during_confirmed_weakness": {
-                        "eligible": confirmed_weakness and realized_return is not None,
+                        "eligible": confirmed_weakness
+                        and (actual_realized or counterfactual_return is not None),
                         "zero_exposure_counterfactual_return_pct": (
                             0.0
-                            if confirmed_weakness and realized_return is not None
+                            if confirmed_weakness
+                            and (actual_realized or counterfactual_return is not None)
                             else None
                         ),
                         "incremental_vs_control_pct": (
@@ -691,7 +1346,15 @@ def build_machine_market_weakness_response(
                             if confirmed_weakness and realized_return is not None
                             else None
                         ),
+                        "incremental_vs_counterfactual_30m_pct": (
+                            round(-counterfactual_return, 8)
+                            if confirmed_weakness and counterfactual_return is not None
+                            else None
+                        ),
                         "actual_realized_comparison": actual_realized,
+                        "executable_bbo_counterfactual_comparison": (
+                            counterfactual_return is not None
+                        ),
                     },
                     "relative_strength_and_liquidity_exception": {
                         "micro_supportive": (
@@ -722,22 +1385,35 @@ def build_machine_market_weakness_response(
         current_rows=rows,
         history_report_dir=history_report_dir,
     )
+    threshold_recommendation = _cumulative_counterfactual_evidence(
+        target_date=target_date,
+        current_rows=rows,
+        history_report_dir=history_report_dir,
+        current_activation_observations=activation_observations,
+        current_release_observations=release_observations,
+    )
     return {
-        "schema": "machine_market_weakness_response_v1",
+        "schema": "machine_market_weakness_response_v2",
         "target_date": target_date,
         "status": (
             "source_only_evidence_accumulating"
             if eligible_rows and observations and symbol_markets
             else "source_quality_blocked_or_no_entry_anchor"
         ),
-        "decision": "no_runtime_or_owner_policy_change",
+        "decision": (
+            "next_exact_date_hysteresis_candidate_review_passed"
+            if threshold_recommendation["policy_candidate_ready"]
+            else "accumulate_counterfactual_evidence_keep_baseline"
+        ),
         "metric_contract": METRIC_CONTRACT,
         "authority": {
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
-            "policy_candidate_ready": False,
+            "policy_candidate_ready": threshold_recommendation[
+                "policy_candidate_ready"
+            ],
         },
         "sources": {
             "market_weakness_observations": observation_source,
@@ -756,8 +1432,11 @@ def build_machine_market_weakness_response(
                 if actual_deltas
                 else None
             ),
-            "promotion_candidate_ready": False,
+            "promotion_candidate_ready": threshold_recommendation[
+                "policy_candidate_ready"
+            ],
         },
         "clean_baseline_cumulative": cumulative,
+        "threshold_recommendation": threshold_recommendation,
         "entry_responses": rows,
     }

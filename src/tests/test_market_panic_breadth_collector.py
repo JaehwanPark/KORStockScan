@@ -4,6 +4,10 @@ from pathlib import Path
 import pytest
 
 from src.engine import market_panic_breadth_collector as collector
+from src.engine.risk.market_weakness_threshold_policy import (
+    EffectiveMarketWeaknessThresholds,
+    threshold_hash,
+)
 
 
 def test_parse_kiwoom_industry_rows_from_nested_response():
@@ -411,6 +415,66 @@ def test_market_weakness_observation_requires_recovery_margin():
         recovered["response_research_contract"]["status"]
         == "source_only_counterfactual_collection"
     )
+
+
+def test_market_weakness_observation_binds_exact_date_reviewed_hysteresis(
+    monkeypatch,
+):
+    summary = collector.summarize_breadth(
+        [
+            {"code": "001", "name": "종합(KOSPI)", "change_pct": -1.5},
+            {"code": "101", "name": "코스닥", "change_pct": -1.3},
+            *[
+                {
+                    "code": str(200 + index),
+                    "name": f"KOSPI-{index}",
+                    "change_pct": -2.0,
+                    "source_market": "KOSPI",
+                }
+                for index in range(1, 4)
+            ],
+            *[
+                {
+                    "code": str(300 + index),
+                    "name": f"KOSDAQ-{index}",
+                    "change_pct": -2.0,
+                    "source_market": "KOSDAQ",
+                }
+                for index in range(1, 4)
+            ],
+        ]
+    )
+    effective = EffectiveMarketWeaknessThresholds(
+        activation_unique_observations=3,
+        release_unique_observations=4,
+        source="exact_date_applied_policy",
+        status="applied",
+        target_date="2026-08-31",
+        source_date="2026-08-28",
+        policy_path="/tmp/reviewed-policy.json",
+        policy_hash=threshold_hash(activation=3, release=4),
+        review_status="passed_out_of_sample_review",
+    )
+    monkeypatch.setattr(
+        collector,
+        "resolve_effective_thresholds",
+        lambda **_kwargs: effective,
+    )
+
+    observation = collector.build_market_weakness_observation(
+        summary,
+        target_date="2026-08-31",
+        as_of="2026-08-31T10:00:00+09:00",
+        source_quality_status="ok",
+    )
+
+    assert observation["sample_floor"]["activation_unique_observations"] == 3
+    assert observation["sample_floor"]["release_unique_observations"] == 4
+    assert observation["hysteresis_policy"]["policy_hash"] == threshold_hash(
+        activation=3,
+        release=4,
+    )
+    assert collector.market_weakness_observation_contract_errors(observation) == []
 
 
 def test_market_weakness_source_gate_requires_both_named_markets():

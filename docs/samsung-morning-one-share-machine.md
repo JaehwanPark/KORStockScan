@@ -74,6 +74,8 @@
 
 전용 기계와 widget은 같은 계좌에서 동시에 `005930`을 거래할 수 있지만 서로의 장부를 공유하지 않는다. 전용 기계는 자기 상태 파일의 leg별 broker 주문번호만 조회하고 해당 주문의 확인 체결수량만 매도하며, 매수 잔량 취소도 그 원주문번호에만 한다. 첫 episode, 추가 episode, 각 episode의 두 leg 사이에도 주문번호·체결·목표가·보유수량을 합치지 않는다. widget 역시 자기 episode/order ledger만 소유한다. 계좌의 삼성전자 총보유수량이나 상대 전략의 주문은 어느 한쪽의 매도수량·취소대상이 아니며, 상대 주문의 존재를 신규진입 차단 사유로 쓰지 않는다.
 
+`WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_FREEZE_OPEN_BUY_CANCEL_V2`의 당일 KOSPI `active|release_pending` latch가 확인되면 NXT·SOR 신규 leg 제출을 차단한다. 이미 접수된 leg는 전용 기계 owned-order ledger의 당일 원주문번호와 broker snapshot의 현재 미체결 잔량이 확인된 경우에만 그 원주문 잔량을 취소한다. NXT 취소가 확인돼 SOR fallback leg로 전환되더라도 latch 해제 전에는 SOR 주문을 제출하지 않는다. 부분체결분의 목표 주문, 기존 보유, SELL/target, widget·main bot·수동 주문에는 영향을 주지 않는다.
+
 모든 broker write 전에 intent를 원자적으로 기록한다. 호출 중 프로세스가 끊긴 상태에서는 자동 재주문하지 않고 `broker_write_interrupted`로 차단한다. 전일 목표 주문이나 보유수량이 남아 있으면 다음 날 신규매수를 금지한다. 목표 주문이 전일 이후에도 브로커에서 열려 있으면 원주문일 기준으로 계속 조회하고, 미체결 종료가 확인되면 자동 매도 없이 `HELD`로 닫는다.
 
 `ka10080` 분봉 읽기는 다른 독립 에피소드 기계와 공용 요청 제어를 사용한다. 같은 KST 분 안의 정상 완료봉 snapshot은 직전 1분 완료봉까지 포함한 경우에만 프로세스 안에서 재사용한다. 분 경계에서 아직 그 봉이 공개되지 않은 정상 응답은 캐시하지 않아 다음 bounded poll이 재조회한다. 프로세스 간 호출은 관측 요청량에 여유를 둔 로컬 0.4초 간격으로 직렬화한다. 명시적인 `1700`/HTTP 429 읽기만 최대 2회 bounded backoff 재시도하며, 실패·계약오류 snapshot은 캐시하지 않는다. 주문·취소 API는 중복 주문 방지를 위해 이 재시도 경로에서 제외한다.

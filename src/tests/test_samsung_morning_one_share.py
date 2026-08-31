@@ -4,6 +4,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 import pytest
 
+from src.engine.risk.market_weakness_entry_guard import (
+    MarketWeaknessEntryDecision,
+)
+from src.trading.order import regular_two_leg_machine as regular_machine_module
 from src.trading.order.entry_liquidity_guard import (
     EntryExecutionVelocitySnapshot,
     EntryLiquiditySnapshot,
@@ -23,6 +27,19 @@ from src.trading.samsung_morning_one_share.machine import (
 )
 from src.trading.samsung_morning_one_share.policy import DEFAULT_POLICY
 from src.trading.samsung_morning_one_share import service as service_module
+
+
+@pytest.fixture(autouse=True)
+def _isolate_market_weakness_counterfactual_writer(monkeypatch):
+    monkeypatch.setattr(
+        regular_machine_module,
+        "record_market_weakness_blocked_entry",
+        lambda *_args, **_kwargs: {
+            "status": "test_isolated",
+            "observation_id": "test-market-weakness-block",
+            "path": "test-only",
+        },
+    )
 
 
 class FakeGateway:
@@ -142,6 +159,106 @@ def test_policy_prices_are_fixed_to_two_independent_ten_share_legs():
         291_000,
     ]
     assert DEFAULT_POLICY.target_price(291_000) == 292_000
+
+
+def test_market_weakness_guard_preserves_morning_attempt_for_release(
+    tmp_path, monkeypatch
+):
+    gateway = FakeGateway()
+    machine = _machine(tmp_path, gateway)
+
+    def decision(blocked: bool):
+        return MarketWeaknessEntryDecision(
+            blocked=blocked,
+            reason=(
+                "entry_blocked_market_weakness_active"
+                if blocked
+                else "market_weakness_latch_not_active"
+            ),
+            symbol="005930",
+            owner="episode",
+            listing_market="KOSPI",
+            phase="active" if blocked else "released",
+            active_markets=("KOSPI",) if blocked else (),
+            session_key="2026-08-11",
+            observation_id="weakness-2",
+            observation_as_of="2026-08-11T08:01:00+09:00",
+            source_status="test",
+            state_path="test-state.json",
+            symbol_master_path="test-master.json",
+        )
+
+    monkeypatch.setattr(
+        regular_machine_module,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: decision(True),
+    )
+    blocked = machine.run_once(_at(11, 8, 1))
+    assert blocked["attempt_consumed"] is False
+    assert blocked["legs"] == []
+    assert gateway.buy_calls == []
+    assert blocked["last_action"] == "entry_blocked_market_weakness_active"
+
+    monkeypatch.setattr(
+        regular_machine_module,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: decision(False),
+    )
+    released = machine.run_once(_at(11, 8, 1))
+    assert released["attempt_consumed"] is True
+    assert gateway.buy_calls == [("NXT", 291_500), ("NXT", 291_000)]
+
+
+def test_market_weakness_cancels_nxt_buys_and_blocks_sor_fallback(
+    tmp_path, monkeypatch
+):
+    gateway = FakeGateway()
+    machine = _machine(tmp_path, gateway)
+    started_at = _at(11, 8, 1)
+    mode = {"value": "released"}
+
+    def decision():
+        active = mode["value"] == "active"
+        return MarketWeaknessEntryDecision(
+            blocked=active,
+            reason=(
+                "entry_blocked_market_weakness_active"
+                if active
+                else "market_weakness_latch_not_active"
+            ),
+            symbol="005930",
+            owner="episode",
+            listing_market="KOSPI",
+            phase="active" if active else "released",
+            active_markets=("KOSPI",) if active else (),
+            session_key=started_at.date().isoformat(),
+            observation_id="weakness-morning-cancel-1",
+            observation_as_of=started_at.isoformat(),
+            source_status="test",
+            state_path="test-state.json",
+            symbol_master_path="test-master.json",
+        )
+
+    monkeypatch.setattr(
+        regular_machine_module,
+        "evaluate_market_weakness_entry_guard",
+        lambda **kwargs: decision(),
+    )
+    machine.run_once(started_at)
+    mode["value"] = "active"
+
+    canceled = machine.run_once(started_at + timedelta(seconds=1))
+
+    assert gateway.cancel_calls == [("NXT", "B1"), ("NXT", "B2")]
+    assert {leg["status"] for leg in canceled["legs"]} == {"BUY_CANCEL_PENDING"}
+    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 0, 0, 10)
+    gateway.snapshots["B2"] = ExecutionSnapshot(True, True, 0, 0, 10)
+
+    resolved = machine.run_once(started_at + timedelta(seconds=2))
+
+    assert gateway.buy_calls == [("NXT", 291_500), ("NXT", 291_000)]
+    assert all(leg["route"] == "SOR" for leg in resolved["legs"])
+    assert resolved["last_action"] == "entry_blocked_market_weakness_active"
 
 
 def test_nxt_fills_submit_independent_two_tick_targets_and_complete(tmp_path):
