@@ -10,7 +10,7 @@ import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
@@ -28,7 +28,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v3"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v4"
 
 FORBIDDEN_USES = [
     "EV",
@@ -343,6 +343,58 @@ def _valid_lineage_token(value: Any) -> str:
     return token
 
 
+def _positive_integer_metadata(value: Any) -> int | None:
+    parsed = _to_float(value)
+    if parsed is None or parsed <= 0 or not parsed.is_integer():
+        return None
+    return int(parsed)
+
+
+def _scanner_venue_metadata(row: Mapping[str, Any]) -> str | None:
+    venue = str(row.get("effective_venue") or row.get("venue") or "").strip().upper()
+    return venue if venue in {"KRX", "PREMARKET_KRX_LIKE", "NXT"} else None
+
+
+def _scanner_session_metadata(row: Mapping[str, Any]) -> str | None:
+    session = _valid_lineage_token(row.get("market_session_bucket")).upper()
+    return session if session and session != "UNKNOWN" else None
+
+
+def _merge_immutable_scanner_metadata(
+    container: dict[str, Any],
+    field: str,
+    value: str | int | None,
+    *,
+    authoritative: bool = False,
+) -> None:
+    if value in (None, ""):
+        return
+    current = container.get(field)
+    if current in (None, "", "UNKNOWN"):
+        container[field] = value
+        return
+    if current == value:
+        return
+    container["metadata_conflicts"] = _append_unique(
+        container.get("metadata_conflicts"),
+        f"{field}:{current}!={value}",
+    )
+    if authoritative:
+        container[field] = value
+
+
+def _scanner_generation_has_structural_contract_conflict(
+    row: Mapping[str, Any],
+) -> bool:
+    return bool(
+        row.get("outcome_conflict_count")
+        or row.get("lineage_metadata_conflict_count")
+        or row.get("ranked_count_conflict_count")
+        or row.get("duplicate_rank_count")
+        or row.get("out_of_range_rank_count")
+    )
+
+
 def _scanner_funnel_state_from_mapping(value: Any) -> dict[str, Any]:
     value = value if isinstance(value, dict) else {}
     lineages = value.get("lineages") if isinstance(value.get("lineages"), dict) else {}
@@ -417,6 +469,12 @@ def _scanner_funnel_event_fingerprint(row: dict[str, Any]) -> str:
         "scan_generation_id": _valid_lineage_token(
             row.get("scanner_scan_generation_id")
         ),
+        "scan_rank": _positive_integer_metadata(row.get("scanner_scan_rank")),
+        "ranked_candidate_count": _positive_integer_metadata(
+            row.get("scanner_ranked_candidate_count")
+        ),
+        "venue": _scanner_venue_metadata(row),
+        "market_session_bucket": _scanner_session_metadata(row),
         "emitted_at": str(
             row.get("emitted_at")
             or row.get("generated_at")
@@ -453,6 +511,12 @@ def _update_scanner_funnel_state(
     code = str(row.get("stock_code") or row.get("code") or "").strip()[:6]
     promotion_id = _valid_lineage_token(row.get("scanner_promotion_id"))
     generation_id = _valid_lineage_token(row.get("scanner_scan_generation_id"))
+    scan_rank = _positive_integer_metadata(row.get("scanner_scan_rank"))
+    ranked_candidate_count = _positive_integer_metadata(
+        row.get("scanner_ranked_candidate_count")
+    )
+    venue = _scanner_venue_metadata(row)
+    market_session_bucket = _scanner_session_metadata(row)
     if stage == "scalping_scanner_candidate_pruned":
         if not generation_id or not code:
             state["missing_lineage_event_count"] += 1
@@ -464,18 +528,31 @@ def _update_scanner_funnel_state(
             {
                 "scan_generation_id": generation_id,
                 "code": code,
-                "scan_rank": row.get("scanner_scan_rank"),
-                "ranked_candidate_count": row.get("scanner_ranked_candidate_count"),
+                "scan_rank": scan_rank,
+                "ranked_candidate_count": ranked_candidate_count,
                 "reason": reason,
                 "reasons": [reason],
                 "source_signature": str(row.get("source_signature") or ""),
-                "venue": str(
-                    row.get("effective_venue") or row.get("venue") or "UNKNOWN"
-                ),
-                "market_session_bucket": str(
-                    row.get("market_session_bucket") or "UNKNOWN"
-                ),
+                "venue": venue or "UNKNOWN",
+                "market_session_bucket": market_session_bucket or "UNKNOWN",
+                "metadata_conflicts": [],
             },
+        )
+        _merge_immutable_scanner_metadata(
+            prune, "scan_rank", scan_rank, authoritative=True
+        )
+        _merge_immutable_scanner_metadata(
+            prune,
+            "ranked_candidate_count",
+            ranked_candidate_count,
+            authoritative=True,
+        )
+        _merge_immutable_scanner_metadata(prune, "venue", venue, authoritative=True)
+        _merge_immutable_scanner_metadata(
+            prune,
+            "market_session_bucket",
+            market_session_bucket,
+            authoritative=True,
         )
         prune["reasons"] = _append_unique(prune.get("reasons"), reason)
         return
@@ -489,8 +566,8 @@ def _update_scanner_funnel_state(
             "promotion_id": promotion_id,
             "code": code,
             "scan_generation_id": generation_id,
-            "scan_rank": row.get("scanner_scan_rank"),
-            "ranked_candidate_count": row.get("scanner_ranked_candidate_count"),
+            "scan_rank": scan_rank,
+            "ranked_candidate_count": ranked_candidate_count,
             "record_ids": [],
             "stages": {},
             "attach_outcomes": [],
@@ -504,16 +581,40 @@ def _update_scanner_funnel_state(
             "manual_control_exclusion_attach_skip": False,
             "manual_control_exclusion_terminalized": False,
             "handoff_provenance_complete": False,
+            "metadata_conflicts": [],
         },
     )
-    if code:
-        lineage["code"] = code
-    if generation_id:
-        lineage["scan_generation_id"] = generation_id
-    if row.get("scanner_scan_rank") not in (None, ""):
-        lineage["scan_rank"] = row.get("scanner_scan_rank")
-    if row.get("scanner_ranked_candidate_count") not in (None, ""):
-        lineage["ranked_candidate_count"] = row.get("scanner_ranked_candidate_count")
+    authoritative_metadata = stage == "scalping_scanner_candidate_promoted"
+    _merge_immutable_scanner_metadata(
+        lineage, "code", code, authoritative=authoritative_metadata
+    )
+    _merge_immutable_scanner_metadata(
+        lineage,
+        "scan_generation_id",
+        generation_id,
+        authoritative=authoritative_metadata,
+    )
+    _merge_immutable_scanner_metadata(
+        lineage,
+        "scan_rank",
+        scan_rank,
+        authoritative=authoritative_metadata,
+    )
+    _merge_immutable_scanner_metadata(
+        lineage,
+        "ranked_candidate_count",
+        ranked_candidate_count,
+        authoritative=authoritative_metadata,
+    )
+    _merge_immutable_scanner_metadata(
+        lineage, "venue", venue, authoritative=authoritative_metadata
+    )
+    _merge_immutable_scanner_metadata(
+        lineage,
+        "market_session_bucket",
+        market_session_bucket,
+        authoritative=authoritative_metadata,
+    )
     lineage["record_ids"] = _append_unique(
         lineage.get("record_ids"), row.get("runtime_record_id") or row.get("record_id")
     )
@@ -522,12 +623,6 @@ def _update_scanner_funnel_state(
     )
     stage_counts[stage] = int(stage_counts.get(stage) or 0) + 1
     lineage["stages"] = stage_counts
-    venue = str(row.get("effective_venue") or row.get("venue") or "").strip().upper()
-    if venue in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
-        lineage["venue"] = venue
-    session_bucket = str(row.get("market_session_bucket") or "").strip()
-    if session_bucket:
-        lineage["market_session_bucket"] = session_bucket
     lineage["decision_stage_stale_backoff"] = bool(
         lineage.get("decision_stage_stale_backoff")
         or event_class.get("decision_stage_stale_backoff")
@@ -600,6 +695,7 @@ def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
     generation_rank_codes: dict[str, dict[int, set[str]]] = defaultdict(
         lambda: defaultdict(set)
     )
+    generation_lineage_metadata_conflict_counts: Counter = Counter()
     for lineage in lineages:
         stages = (
             lineage.get("stages") if isinstance(lineage.get("stages"), dict) else {}
@@ -610,6 +706,9 @@ def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
             unique_symbols.add(str(lineage["code"]))
         generation_id = _valid_lineage_token(lineage.get("scan_generation_id"))
         if generation_id:
+            generation_lineage_metadata_conflict_counts[generation_id] += len(
+                lineage.get("metadata_conflicts") or []
+            )
             generation_terminal_keys[generation_id].add(
                 (str(lineage.get("code") or ""), "promoted")
             )
@@ -688,6 +787,9 @@ def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
             prune_reasons[str(reason)] += 1
         generation_id = _valid_lineage_token(prune.get("scan_generation_id"))
         if generation_id:
+            generation_lineage_metadata_conflict_counts[generation_id] += len(
+                prune.get("metadata_conflicts") or []
+            )
             for reason in reasons:
                 generation_terminal_keys[generation_id].add(
                     (str(prune.get("code") or ""), f"pruned:{reason}")
@@ -741,6 +843,9 @@ def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
                 not 1 <= rank <= ranked_count
                 for rank in generation_rank_codes[generation_id]
             ),
+            "lineage_metadata_conflict_count": int(
+                generation_lineage_metadata_conflict_counts[generation_id]
+            ),
         }
         row["metadata_conflict_count"] = sum(
             int(row[key])
@@ -750,6 +855,7 @@ def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
                 "duplicate_rank_count",
                 "missing_rank_count",
                 "out_of_range_rank_count",
+                "lineage_metadata_conflict_count",
             )
         )
         conservation_rows.append(row)
@@ -793,6 +899,15 @@ def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
                 or row["metadata_conflict_count"] != 0
                 for row in conservation_rows
             ),
+            "structural_contract_conflict_generation_count": sum(
+                _scanner_generation_has_structural_contract_conflict(row)
+                for row in conservation_rows
+            ),
+            "structural_contract_conflict_rows_sample": [
+                row
+                for row in conservation_rows
+                if _scanner_generation_has_structural_contract_conflict(row)
+            ][:50],
             "incomplete_rows_sample": [
                 row
                 for row in conservation_rows
@@ -1447,12 +1562,31 @@ def _build_workorders(
     conservation = scanner_funnel.get("scan_generation_conservation") or {}
     incomplete_generations = int(conservation.get("incomplete_generation_count") or 0)
     if incomplete_generations:
+        incomplete_rows = conservation.get("incomplete_rows_sample") or []
+        structural_rows = (
+            conservation.get("structural_contract_conflict_rows_sample") or []
+        )
+        structural_contract_conflict = bool(
+            int(conservation.get("structural_contract_conflict_generation_count") or 0)
+        )
         orders.append(
             {
                 **base,
-                "decision": "defer_evidence",
-                "next_action": "verify_after_next_natural_scan_generation",
-                "implementation_state": "candidate_prune_receipts_implemented",
+                "decision": (
+                    "implement_now"
+                    if structural_contract_conflict
+                    else "defer_evidence"
+                ),
+                "next_action": (
+                    "repair_scanner_metadata_contract_and_rebuild"
+                    if structural_contract_conflict
+                    else "verify_after_next_natural_scan_generation"
+                ),
+                "implementation_state": (
+                    "immutable_scanner_metadata_conflict_detected"
+                    if structural_contract_conflict
+                    else "candidate_prune_receipts_implemented"
+                ),
                 "order_id": "order_scanner_scan_generation_conservation_gap",
                 "title": "Scanner ranked-to-promotion funnel conservation gap",
                 "priority": 1,
@@ -1462,8 +1596,10 @@ def _build_workorders(
                 ),
                 "evidence": [
                     f"incomplete_generation_count={incomplete_generations}",
-                    "incomplete_conservation_rows_sample="
-                    f"{conservation.get('incomplete_rows_sample', [])}",
+                    "structural_contract_conflict_generation_count="
+                    f"{conservation.get('structural_contract_conflict_generation_count', 0)}",
+                    f"incomplete_conservation_rows_sample={incomplete_rows}",
+                    f"structural_contract_conflict_rows_sample={structural_rows}",
                 ],
                 "files_likely_touched": [
                     "src/scanners/scalping_scanner.py",

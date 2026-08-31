@@ -464,6 +464,15 @@ def test_exact_standing_candidate_materializes_registered_promotion() -> None:
         now=datetime(2026, 8, 17, 20, 30, tzinfo=KST),
     )
 
+    assert candidate["evidence"]["rolling_paired_complete_lifecycle_count"] == {
+        "5d": 20,
+        "10d": 20,
+        "20d": 20,
+    }
+    assert candidate["evidence"]["rolling_paired_complete_lifecycle_floor"] == (
+        approval.ROLLING_PAIRED_LIFECYCLE_FLOORS
+    )
+
     assert candidate["first_operator_approval_required"] is True
     assert approval.evidence_readiness_errors(candidate) == []
     assert approval.runtime_design_errors(candidate) == []

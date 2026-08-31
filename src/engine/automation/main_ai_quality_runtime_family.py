@@ -366,6 +366,13 @@ def build_promotion_candidate(
                 f"{key}d": windows[key].get("candidate_source_quality_adjusted_ev_pct")
                 for key in ("5", "10", "20")
             },
+            "rolling_paired_complete_lifecycle_count": {
+                f"{key}d": windows[key].get("unique_lifecycle_count")
+                for key in ("5", "10", "20")
+            },
+            "rolling_paired_complete_lifecycle_floor": dict(
+                approval.ROLLING_PAIRED_LIFECYCLE_FLOORS
+            ),
             "relative_primary_ev_uplift_pct": min(
                 float(windows[key].get("relative_uplift_pct"))
                 for key in ("5", "10", "20")

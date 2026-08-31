@@ -255,6 +255,8 @@ def test_scanner_unique_funnel_deduplicates_mirrors_and_closes_final_outcome(
     conservation = funnel["scan_generation_conservation"]
     assert conservation["complete_generation_count"] == 1
     assert conservation["incomplete_generation_count"] == 0
+    assert conservation["structural_contract_conflict_generation_count"] == 0
+    assert conservation["structural_contract_conflict_rows_sample"] == []
     assert conservation["rows"] == [
         {
             "scan_generation_id": "SCANGEN-1000",
@@ -267,6 +269,7 @@ def test_scanner_unique_funnel_deduplicates_mirrors_and_closes_final_outcome(
             "duplicate_rank_count": 0,
             "missing_rank_count": 0,
             "out_of_range_rank_count": 0,
+            "lineage_metadata_conflict_count": 0,
             "metadata_conflict_count": 0,
         }
     ]
@@ -314,10 +317,278 @@ def test_scanner_generation_flags_multiple_first_blockers_for_same_candidate(
     conservation = report["scanner_unique_funnel"]["scan_generation_conservation"]
     assert conservation["complete_generation_count"] == 0
     assert conservation["incomplete_generation_count"] == 1
+    assert conservation["structural_contract_conflict_generation_count"] == 1
+    assert conservation["structural_contract_conflict_rows_sample"] == [
+        conservation["rows"][0]
+    ]
     assert conservation["rows"][0]["conservation_delta"] == 0
     assert conservation["rows"][0]["outcome_conflict_count"] == 1
-    order_ids = {item["order_id"] for item in report["workorder_directives"]}
-    assert "order_scanner_scan_generation_conservation_gap" in order_ids
+    orders = {item["order_id"]: item for item in report["workorder_directives"]}
+    order = orders["order_scanner_scan_generation_conservation_gap"]
+    assert order["decision"] == "implement_now"
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
+
+
+def test_scanner_generation_ignores_downstream_not_applicable_rank_metadata(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    promotion_id = "SCANPROM-000404-1000000"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_promoted",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "scanner_scan_generation_id": "SCANGEN-SENTINEL",
+                    "scanner_scan_rank": 1,
+                    "scanner_ranked_candidate_count": 1,
+                    "effective_venue": "KRX",
+                },
+                code="000404",
+            ),
+            _event(
+                "scalping_scanner_fast_precheck",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "scanner_scan_generation_id": (
+                        "not_applicable_scanner_scan_generation_id"
+                    ),
+                    "scanner_scan_rank": "not_applicable_scanner_scan_rank",
+                    "scanner_ranked_candidate_count": (
+                        "not_applicable_scanner_ranked_candidate_count"
+                    ),
+                    "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                    "effective_venue": "KRX",
+                },
+                code="000404",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    conservation = report["scanner_unique_funnel"]["scan_generation_conservation"]
+    assert conservation["complete_generation_count"] == 1
+    assert conservation["incomplete_generation_count"] == 0
+    assert conservation["rows"][0]["scan_generation_id"] == "SCANGEN-SENTINEL"
+    assert conservation["rows"][0]["ranked_candidate_count"] == 1
+    assert conservation["rows"][0]["missing_rank_count"] == 0
+    assert conservation["rows"][0]["lineage_metadata_conflict_count"] == 0
+    assert conservation["rows"][0]["metadata_conflict_count"] == 0
+
+
+def test_scanner_generation_preserves_promotion_metadata_and_flags_conflict(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    promotion_id = "SCANPROM-000505-1000000"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_promoted",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "scanner_scan_generation_id": "SCANGEN-CONFLICTING-METADATA",
+                    "scanner_scan_rank": 1,
+                    "scanner_ranked_candidate_count": 1,
+                    "effective_venue": "KRX",
+                },
+                code="000505",
+            ),
+            _event(
+                "scalping_scanner_fast_precheck",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "scanner_scan_generation_id": "SCANGEN-CONFLICTING-METADATA",
+                    "scanner_scan_rank": 2,
+                    "scanner_ranked_candidate_count": 2,
+                    "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                    "effective_venue": "KRX",
+                },
+                code="000505",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    conservation = report["scanner_unique_funnel"]["scan_generation_conservation"]
+    row = conservation["rows"][0]
+    assert row["ranked_candidate_count"] == 1
+    assert row["terminal_candidate_count"] == 1
+    assert row["lineage_metadata_conflict_count"] == 2
+    assert row["metadata_conflict_count"] == 2
+    assert conservation["complete_generation_count"] == 0
+    assert conservation["incomplete_generation_count"] == 1
+    orders = {item["order_id"]: item for item in report["workorder_directives"]}
+    order = orders["order_scanner_scan_generation_conservation_gap"]
+    assert order["decision"] == "implement_now"
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
+
+
+def test_scanner_generation_preserves_promotion_owner_and_venue_metadata(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    promotion_id = "SCANPROM-000515-1000000"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_promoted",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "scanner_scan_generation_id": "SCANGEN-OWNER-VENUE",
+                    "scanner_scan_rank": 1,
+                    "scanner_ranked_candidate_count": 1,
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+                code="000515",
+            ),
+            _event(
+                "scalping_scanner_fast_precheck",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "scanner_scan_generation_id": "SCANGEN-OWNER-VENUE",
+                    "scanner_scan_rank": 1,
+                    "scanner_ranked_candidate_count": 1,
+                    "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                    "effective_venue": "NXT",
+                    "market_session_bucket": "NXT_REGULAR",
+                },
+                code="000516",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    funnel = report["scanner_unique_funnel"]
+    row = funnel["scan_generation_conservation"]["rows"][0]
+    assert funnel["unique_symbol_count"] == 1
+    assert funnel["venue_counts"] == {"KRX": 1}
+    assert row["terminal_candidate_count"] == 1
+    assert row["lineage_metadata_conflict_count"] == 3
+    assert row["metadata_conflict_count"] == 3
+    order = next(
+        item
+        for item in report["workorder_directives"]
+        if item["order_id"] == "order_scanner_scan_generation_conservation_gap"
+    )
+    assert order["decision"] == "implement_now"
+    assert order["runtime_effect"] is False
+
+
+def test_scanner_funnel_fingerprint_does_not_hide_mirror_metadata_conflict():
+    base = _event(
+        "scalping_scanner_candidate_promoted",
+        {
+            "scanner_promotion_id": "SCANPROM-000606-1000000",
+            "scanner_scan_generation_id": "SCANGEN-MIRROR-CONFLICT",
+            "scanner_scan_rank": 1,
+            "scanner_ranked_candidate_count": 1,
+        },
+        code="000606",
+    )
+    conflict = json.loads(json.dumps(base))
+    conflict["fields"]["scanner_scan_rank"] = 2
+
+    assert mod._scanner_funnel_event_fingerprint(
+        mod._flatten_event(base)
+    ) != mod._scanner_funnel_event_fingerprint(mod._flatten_event(conflict))
+
+
+def test_scanner_structural_conflict_census_is_not_limited_by_report_sample(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    rows = []
+    for index in range(50):
+        rows.append(
+            _event(
+                "scalping_scanner_candidate_pruned",
+                {
+                    "scanner_scan_generation_id": f"SCANGEN-INCOMPLETE-{index:02d}",
+                    "scanner_scan_rank": 1,
+                    "scanner_ranked_candidate_count": 2,
+                    "scanner_prune_reason": "max_new_codes_reached",
+                },
+                code=f"{index + 1:06d}",
+            )
+        )
+    for code in ("100001", "100002"):
+        rows.append(
+            _event(
+                "scalping_scanner_candidate_pruned",
+                {
+                    "scanner_scan_generation_id": "SCANGEN-STRUCTURAL-ZZZ",
+                    "scanner_scan_rank": 1,
+                    "scanner_ranked_candidate_count": 1,
+                    "scanner_prune_reason": "max_new_codes_reached",
+                },
+                code=code,
+            )
+        )
+    _write_jsonl(pipeline_path, rows)
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    conservation = report["scanner_unique_funnel"]["scan_generation_conservation"]
+    assert conservation["generation_count"] == 51
+    assert conservation["incomplete_generation_count"] == 51
+    assert len(conservation["rows"]) == 50
+    assert len(conservation["incomplete_rows_sample"]) == 50
+    assert conservation["structural_contract_conflict_generation_count"] == 1
+    assert (
+        conservation["structural_contract_conflict_rows_sample"][0][
+            "scan_generation_id"
+        ]
+        == "SCANGEN-STRUCTURAL-ZZZ"
+    )
+    order = next(
+        item
+        for item in report["workorder_directives"]
+        if item["order_id"] == "order_scanner_scan_generation_conservation_gap"
+    )
+    assert order["decision"] == "implement_now"
+    assert any(
+        evidence == "structural_contract_conflict_generation_count=1"
+        for evidence in order["evidence"]
+    )
 
 
 def test_scanner_manual_exclusion_attach_skip_is_terminal_not_right_censored(
@@ -623,6 +894,44 @@ def test_build_report_rebuilds_incremental_state_after_source_truncation(tmp_pat
         rebuilt["input_processing"]["incremental_state_reason"]
         == "pipeline_events_truncated"
     )
+
+
+def test_build_report_rebuilds_incremental_state_after_schema_change(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    state_path = tmp_path / "state.json"
+    event = _event(
+        "scalping_scanner_candidate_promoted",
+        {
+            "scanner_promotion_id": "SCANPROM-000707-1000000",
+            "scanner_scan_generation_id": "SCANGEN-SCHEMA-CHANGE",
+            "scanner_scan_rank": 1,
+            "scanner_ranked_candidate_count": 1,
+        },
+        code="000707",
+    )
+    _write_jsonl(pipeline_path, [event])
+    _write_jsonl(threshold_path, [])
+    mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+    )
+    stale_state = json.loads(state_path.read_text(encoding="utf-8"))
+    stale_state["schema_version"] = "intraday_ws_freshness_incremental_v3"
+    state_path.write_text(json.dumps(stale_state), encoding="utf-8")
+
+    rebuilt = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+    )
+
+    assert rebuilt["pipeline_event_count"] == 1
+    assert rebuilt["input_processing"]["mode"] == "full_streaming_rebuild"
+    assert rebuilt["input_processing"]["incremental_state_reason"] == "schema_changed"
 
 
 def test_build_report_does_not_advance_offset_past_partial_jsonl_line(tmp_path):
