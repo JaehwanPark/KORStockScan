@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from src.engine.monitoring import intraday_ws_freshness_monitor as mod
 
@@ -19,6 +20,36 @@ def _write_jsonl(path, rows):
         "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
         encoding="utf-8",
     )
+
+
+def _install_verified_symbol_master(monkeypatch):
+    class _VerifiedMaster:
+        def lookup(self, symbol, *, as_of):
+            assert symbol
+            assert as_of
+            return SimpleNamespace(
+                status=SimpleNamespace(value="verified"),
+                economic_metadata_allowed=True,
+            )
+
+    fixture = (
+        _VerifiedMaster(),
+        {
+            "status": "verified",
+            "path": "fixture://symbol-master",
+            "artifact_sha256": "a" * 64,
+            "symbol_count": 1,
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "_load_verified_symbol_master",
+        lambda target_date, symbol_master_path: (
+            fixture[0],
+            {**fixture[1], "path": f"fixture://symbol-master/{target_date}"},
+        ),
+    )
+    return fixture
 
 
 def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
@@ -250,7 +281,13 @@ def test_scanner_unique_funnel_deduplicates_mirrors_and_closes_final_outcome(
     assert funnel["final_outcome_counts"] == {"active_queue_lag_right_censored": 1}
     assert funnel["economic_cohorts"]["non_gainer_not_rising_repeat"] == 1
     assert funnel["economic_cohorts"]["executable_bbo_ev_status"] == (
-        "source_quality_blocked_until_exact_bbo_join"
+        "source_quality_blocked_official_symbol_master_binding"
+    )
+    assert (
+        funnel["economic_cohorts"]["executable_bbo_attribution"][
+            "source_quality_adjusted_ev_pct"
+        ]
+        is None
     )
     conservation = funnel["scan_generation_conservation"]
     assert conservation["complete_generation_count"] == 1
@@ -279,6 +316,424 @@ def test_scanner_unique_funnel_deduplicates_mirrors_and_closes_final_outcome(
     assert "order_scanner_eligible_no_heavy_closed_loop" in order_ids
     assert "order_scanner_runtime_handoff_provenance_gap" not in order_ids
     assert "order_scanner_scan_generation_conservation_gap" not in order_ids
+
+
+def test_scanner_funnel_exact_bbo_join_computes_cost_adjusted_first_hit(
+    tmp_path, monkeypatch
+):
+    _install_verified_symbol_master(monkeypatch)
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    promotion_id = "SCANPROM-BBO-ECONOMICS"
+    common = {
+        "scanner_promotion_id": promotion_id,
+        "scanner_scan_generation_id": "SCANGEN-BBO-ECONOMICS",
+        "scanner_scan_rank": 1,
+        "scanner_ranked_candidate_count": 1,
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+    }
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_promoted",
+                {
+                    **common,
+                    "market_data_effective_best_bid": 100,
+                    "market_data_effective_best_ask": 101,
+                    "market_data_effective_quote_age_ms": 10,
+                    "market_data_effective_price_source": "ws_executable_bbo",
+                },
+                code="000707",
+                emitted_at="2026-08-31T09:10:00+09:00",
+            ),
+            _event(
+                "scalping_scanner_fast_precheck",
+                {
+                    **common,
+                    "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                    "market_data_effective_best_bid": 103,
+                    "market_data_effective_best_ask": 104,
+                    "market_data_effective_quote_age_ms": 15,
+                    "market_data_effective_price_source": "ws_executable_bbo",
+                },
+                code="000707",
+                emitted_at="2026-08-31T09:10:02+09:00",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-08-31",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    attribution = report["scanner_unique_funnel"]["economic_cohorts"][
+        "executable_bbo_attribution"
+    ]
+    assert attribution["status"] == "source_only_economics_available"
+    assert attribution["economic_candidate_count"] == 1
+    assert attribution["exact_bbo_joined_count"] == 1
+    assert attribution["exact_promotion_venue_session_bbo_join_coverage_pct"] == 100.0
+    assert attribution["resolved_outcome_count"] == 1
+    assert attribution["first_hit_counts"] == {"sampled_gross_target_first": 1}
+    assert attribution["round_trip_cost_pct"] == 0.23
+    assert attribution["source_quality_adjusted_ev_pct"] == 1.75019802
+    assert attribution["aggregate_ev_status"] == "available_single_venue_session"
+    assert (
+        attribution["comparison_cost_contract"]["metric_contract"]["decision_authority"]
+        == "widget_postclose_comparison_cost_only"
+    )
+    assert (
+        attribution["comparison_cost_consumer_binding"]["decision_authority"]
+        == "scanner_funnel_executable_bbo_source_only"
+    )
+    assert attribution["first_hit_observation_contract"] == (
+        "sampled_scanner_stage_bbo_event_order_not_continuous_market_path"
+    )
+    assert attribution["rows"][0]["entry_best_ask"] == 101.0
+    assert attribution["rows"][0]["exit_best_bid"] == 103.0
+    assert not any(
+        item["order_id"] == "order_scanner_funnel_executable_bbo_join"
+        for item in report["workorder_directives"]
+    )
+
+
+def test_scanner_funnel_missing_quote_age_stays_blocked_not_zero_ev(
+    tmp_path, monkeypatch
+):
+    _install_verified_symbol_master(monkeypatch)
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    common = {
+        "scanner_promotion_id": "SCANPROM-BBO-GAP",
+        "scanner_scan_generation_id": "SCANGEN-BBO-GAP",
+        "scanner_scan_rank": 1,
+        "scanner_ranked_candidate_count": 1,
+        "effective_venue": "NXT",
+        "market_session_bucket": "NXT_REGULAR",
+    }
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_promoted",
+                {
+                    **common,
+                    "market_data_effective_best_bid": 100,
+                    "market_data_effective_best_ask": 101,
+                },
+                code="000708",
+            ),
+            _event(
+                "scalping_scanner_fast_precheck",
+                {**common, "fast_precheck_result": "eligible_for_heavy_entry_eval"},
+                code="000708",
+                emitted_at="2026-07-13T09:10:01+09:00",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    attribution = report["scanner_unique_funnel"]["economic_cohorts"][
+        "executable_bbo_attribution"
+    ]
+    assert attribution["exact_bbo_joined_count"] == 0
+    assert attribution["source_capture_design_required"] is False
+    assert attribution["source_capture_repair_required"] is True
+    assert attribution["cohort_source_quality"] == [
+        {
+            "cohort": "eligible_no_heavy",
+            "venue": "NXT",
+            "market_session_bucket": "NXT_REGULAR",
+            "source_census_count": 1,
+            "eligible_verified_common_stock_candidate_count": 1,
+            "official_symbol_master_excluded_count": 0,
+            "exact_bbo_joined_count": 0,
+            "exact_bbo_join_coverage_pct": 0.0,
+            "resolved_outcome_count": 0,
+            "source_capture_gap_count": 1,
+            "source_capture_gap": True,
+            "first_depleted_stage": (
+                "scanner_lifecycle_event_executable_bbo_provenance"
+            ),
+            "missing_reason_counts": {"fresh_executable_bbo_missing": 1},
+        }
+    ]
+    assert attribution["source_quality_adjusted_ev_pct"] is None
+    assert attribution["rows"][0]["gross_return_pct"] is None
+    order = next(
+        item
+        for item in report["workorder_directives"]
+        if item["order_id"] == "order_scanner_funnel_executable_bbo_join"
+    )
+    assert order["decision"] == "defer_evidence"
+    assert order["implementation_state"] == (
+        "executable_bbo_join_implemented_waiting_source_quality"
+    )
+    assert order["decision_authority"] == ("scanner_funnel_executable_bbo_source_only")
+    assert "EV" not in order["forbidden_uses"]
+    assert "live_auto_promotion" in order["forbidden_uses"]
+
+
+def test_scanner_funnel_does_not_borrow_lineage_venue_for_bbo_observation(
+    tmp_path, monkeypatch
+):
+    _install_verified_symbol_master(monkeypatch)
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    common = {
+        "scanner_promotion_id": "SCANPROM-BBO-MISSING-VENUE",
+        "scanner_scan_generation_id": "SCANGEN-BBO-MISSING-VENUE",
+        "scanner_scan_rank": 1,
+        "scanner_ranked_candidate_count": 1,
+    }
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_promoted",
+                {
+                    **common,
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+                code="000711",
+                emitted_at="2026-08-31T09:10:00+09:00",
+            ),
+            _event(
+                "scalping_scanner_fast_precheck",
+                {
+                    **common,
+                    "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                    "market_data_effective_best_bid": 100,
+                    "market_data_effective_best_ask": 101,
+                    "market_data_effective_quote_age_ms": 10,
+                    "market_data_effective_price_source": "ws_executable_bbo",
+                },
+                code="000711",
+                emitted_at="2026-08-31T09:10:02+09:00",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-08-31",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    attribution = report["scanner_unique_funnel"]["economic_cohorts"][
+        "executable_bbo_attribution"
+    ]
+    assert attribution["exact_bbo_joined_count"] == 0
+    assert attribution["source_quality_adjusted_ev_pct"] is None
+    assert (
+        attribution["missing_reason_counts"][
+            "market_data_effective_bbo:authoritative_venue_missing"
+        ]
+        == 1
+    )
+
+
+def test_scanner_funnel_keeps_venue_session_ev_separate(monkeypatch):
+    symbol_master, symbol_master_binding = _install_verified_symbol_master(monkeypatch)
+
+    def _lineage(promotion_id, code, venue, session, exit_bid):
+        return {
+            "promotion_id": promotion_id,
+            "code": code,
+            "venue": venue,
+            "market_session_bucket": session,
+            "eligible_for_heavy_entry_eval": True,
+            "stages": {"scalping_scanner_fast_precheck": 1},
+            "metadata_conflicts": [],
+            "bbo_observations": [
+                {
+                    "observed_at": "2026-08-31T09:10:00+09:00",
+                    "observed_epoch": 1788135000.0,
+                    "best_bid": 100.0,
+                    "best_ask": 101.0,
+                    "quote_age_ms": 10.0,
+                    "source": "market_data_effective_bbo",
+                    "source_provenance": "ws_executable_bbo",
+                    "venue": venue,
+                    "market_session_bucket": session,
+                },
+                {
+                    "observed_at": "2026-08-31T09:10:02+09:00",
+                    "observed_epoch": 1788135002.0,
+                    "best_bid": exit_bid,
+                    "best_ask": exit_bid + 1,
+                    "quote_age_ms": 10.0,
+                    "source": "market_data_effective_bbo",
+                    "source_provenance": "ws_executable_bbo",
+                    "venue": venue,
+                    "market_session_bucket": session,
+                },
+            ],
+        }
+
+    attribution = mod._scanner_bbo_economic_attribution(
+        [
+            _lineage("SCANPROM-KRX", "000712", "KRX", "KRX_REGULAR", 103.0),
+            _lineage("SCANPROM-NXT", "000713", "NXT", "NXT_REGULAR", 99.0),
+        ],
+        [],
+        target_date="2026-08-31",
+        symbol_master=symbol_master,
+        symbol_master_binding=symbol_master_binding,
+    )
+
+    assert attribution["status"] == "source_only_economics_available"
+    assert attribution["source_quality_adjusted_ev_pct"] is None
+    assert attribution["aggregate_ev_status"] == (
+        "not_computed_cross_venue_session_forbidden"
+    )
+    assert len(attribution["venue_session_economics"]) == 2
+    assert all(
+        row["source_quality_adjusted_ev_pct"] is not None
+        for row in attribution["venue_session_economics"]
+    )
+
+
+def test_scanner_funnel_excludes_unverified_symbol_without_blocking_verified_ev(
+    monkeypatch,
+):
+    class _PartiallyVerifiedMaster:
+        def lookup(self, symbol, *, as_of):
+            assert as_of
+            verified = symbol == "000710"
+            return SimpleNamespace(
+                status=SimpleNamespace(value="verified" if verified else "missing"),
+                economic_metadata_allowed=verified,
+            )
+
+    def _lineage(promotion_id, code):
+        return {
+            "promotion_id": promotion_id,
+            "code": code,
+            "venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+            "eligible_for_heavy_entry_eval": True,
+            "stages": {"scalping_scanner_fast_precheck": 1},
+            "metadata_conflicts": [],
+            "bbo_observations": [
+                {
+                    "observed_at": "2026-08-31T09:10:00+09:00",
+                    "observed_epoch": 1788135000.0,
+                    "best_bid": 100.0,
+                    "best_ask": 101.0,
+                    "quote_age_ms": 10.0,
+                    "source": "market_data_effective_bbo",
+                    "source_provenance": "ws_executable_bbo",
+                    "venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+                {
+                    "observed_at": "2026-08-31T09:10:02+09:00",
+                    "observed_epoch": 1788135002.0,
+                    "best_bid": 103.0,
+                    "best_ask": 104.0,
+                    "quote_age_ms": 10.0,
+                    "source": "market_data_effective_bbo",
+                    "source_provenance": "ws_executable_bbo",
+                    "venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+            ],
+        }
+
+    attribution = mod._scanner_bbo_economic_attribution(
+        [
+            _lineage("SCANPROM-VERIFIED", "000710"),
+            _lineage("SCANPROM-EXCLUDED", "900710"),
+        ],
+        [],
+        target_date="2026-08-31",
+        symbol_master=_PartiallyVerifiedMaster(),
+        symbol_master_binding={
+            "status": "verified",
+            "path": "fixture://symbol-master",
+            "artifact_sha256": "a" * 64,
+            "symbol_count": 1,
+        },
+    )
+
+    assert attribution["status"] == "source_only_economics_available"
+    assert attribution["economic_candidate_count"] == 2
+    assert attribution["eligible_verified_common_stock_candidate_count"] == 1
+    assert attribution["official_symbol_master_excluded_count"] == 1
+    assert attribution["exact_bbo_joined_count"] == 1
+    assert attribution["exact_promotion_venue_session_bbo_join_coverage_pct"] == 100.0
+    assert attribution["resolved_outcome_count"] == 1
+    assert attribution["source_quality_adjusted_ev_pct"] == 1.75019802
+    assert attribution["source_capture_design_required"] is False
+    excluded = next(row for row in attribution["rows"] if row["stock_code"] == "900710")
+    assert excluded["bbo_join_status"] == "excluded_official_symbol_master"
+    assert excluded["primary_exclusion_reason"] == "official_symbol_master_missing"
+
+
+def test_scanner_bbo_prebaseline_cost_contract_is_blocked_not_exception(monkeypatch):
+    symbol_master, symbol_master_binding = _install_verified_symbol_master(monkeypatch)
+    lineage = {
+        "promotion_id": "SCANPROM-PREBASELINE",
+        "code": "000709",
+        "venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+        "eligible_for_heavy_entry_eval": True,
+        "stages": {"scalping_scanner_fast_precheck": 1},
+        "metadata_conflicts": [],
+        "bbo_observations": [
+            {
+                "observed_at": "2026-06-04T09:10:00+09:00",
+                "observed_epoch": 1780531800.0,
+                "best_bid": 100.0,
+                "best_ask": 101.0,
+                "quote_age_ms": 10.0,
+                "source": "market_data_effective_bbo",
+                "source_provenance": "ws_executable_bbo",
+                "venue": "KRX",
+                "market_session_bucket": "KRX_REGULAR",
+            },
+            {
+                "observed_at": "2026-06-04T09:10:02+09:00",
+                "observed_epoch": 1780531802.0,
+                "best_bid": 103.0,
+                "best_ask": 104.0,
+                "quote_age_ms": 10.0,
+                "source": "market_data_effective_bbo",
+                "source_provenance": "ws_executable_bbo",
+                "venue": "KRX",
+                "market_session_bucket": "KRX_REGULAR",
+            },
+        ],
+    }
+
+    attribution = mod._scanner_bbo_economic_attribution(
+        [lineage],
+        [],
+        target_date="2026-06-04",
+        symbol_master=symbol_master,
+        symbol_master_binding=symbol_master_binding,
+    )
+
+    assert attribution["status"] == ("source_quality_blocked_comparison_cost_contract")
+    assert attribution["comparison_cost_contract_status"] == "blocked"
+    assert attribution["source_quality_adjusted_ev_pct"] is None
 
 
 def test_scanner_generation_flags_multiple_first_blockers_for_same_candidate(
@@ -928,6 +1383,77 @@ def test_build_report_incrementally_aggregates_only_appended_rows(tmp_path):
         ]
         is True
     )
+
+
+def test_incremental_state_preserves_scanner_bbo_first_hit_lineage(
+    tmp_path, monkeypatch
+):
+    _install_verified_symbol_master(monkeypatch)
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    state_path = tmp_path / "state.json"
+    common = {
+        "scanner_promotion_id": "SCANPROM-INCREMENTAL-BBO",
+        "scanner_scan_generation_id": "SCANGEN-INCREMENTAL-BBO",
+        "scanner_scan_rank": 1,
+        "scanner_ranked_candidate_count": 1,
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+    }
+    promotion = _event(
+        "scalping_scanner_candidate_promoted",
+        {
+            **common,
+            "scanner_promotion_reanchor_best_bid": 100,
+            "scanner_promotion_reanchor_best_ask": 101,
+            "scanner_promotion_reanchor_effective_quote_age_ms": 10,
+            "scanner_promotion_reanchor_source": "ws_executable_bbo",
+            "scanner_promotion_reanchor_source_fresh": True,
+        },
+        code="000709",
+        emitted_at="2026-08-31T09:10:00+09:00",
+    )
+    precheck = _event(
+        "scalping_scanner_fast_precheck",
+        {
+            **common,
+            "fast_precheck_result": "eligible_for_heavy_entry_eval",
+            "scanner_promotion_reanchor_best_bid": 103,
+            "scanner_promotion_reanchor_best_ask": 104,
+            "scanner_promotion_reanchor_effective_quote_age_ms": 10,
+            "scanner_promotion_reanchor_source": "ws_executable_bbo",
+            "scanner_promotion_reanchor_source_fresh": True,
+        },
+        code="000709",
+        emitted_at="2026-08-31T09:10:02+09:00",
+    )
+    _write_jsonl(pipeline_path, [promotion])
+    _write_jsonl(threshold_path, [])
+
+    mod.build_report(
+        "2026-08-31",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+    )
+    with pipeline_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(precheck, ensure_ascii=False) + "\n")
+    incremental = mod.build_report(
+        "2026-08-31",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+    )
+
+    attribution = incremental["scanner_unique_funnel"]["economic_cohorts"][
+        "executable_bbo_attribution"
+    ]
+    assert incremental["input_processing"]["mode"] == (
+        "incremental_streaming_aggregation"
+    )
+    assert attribution["status"] == "source_only_economics_available"
+    assert attribution["exact_bbo_joined_count"] == 1
+    assert attribution["first_hit_counts"] == {"sampled_gross_target_first": 1}
 
 
 def test_build_report_rebuilds_incremental_state_after_source_truncation(tmp_path):

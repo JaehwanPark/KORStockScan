@@ -178,6 +178,18 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
     assert decisions["order_cache_signature_noise"] == "defer_evidence"
     assert decisions["order_partial_fallback_shadow"] == "reject"
     assert report["generation_id"].startswith("2026-05-08-")
+    assert report["schema_version"] == 2
+    assert report["producer_contract_version"] == (
+        "code_improvement_workorder_producer_v2"
+    )
+    assert len(report["generation_hash"]) == 64
+    assert report["generation_inputs"] == {
+        "source_hash": report["source_hash"],
+        "schema_version": 2,
+        "producer_contract_version": "code_improvement_workorder_producer_v2",
+        "max_orders": 5,
+        "include_swing": True,
+    }
     assert report["source_hash"]
     assert report["lineage"]["previous_exists"] is False
     assert (doc_dir / "code_improvement_workorder_2026-05-08.md").exists()
@@ -189,6 +201,31 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
     assert "Snapshot Lineage" in markdown
     assert "order_latency_guard_miss_ev_recovery" in markdown
     assert "auto_bounded_live" in markdown
+
+
+def test_generation_fingerprint_binds_producer_contract_and_selection_scope():
+    source_hash = "a" * 64
+
+    base = mod._generation_fingerprint(
+        source_hash,
+        max_orders=12,
+        include_swing=False,
+    )
+    different_limit = mod._generation_fingerprint(
+        source_hash,
+        max_orders=13,
+        include_swing=False,
+    )
+    different_scope = mod._generation_fingerprint(
+        source_hash,
+        max_orders=12,
+        include_swing=True,
+    )
+
+    assert len(base["generation_hash"]) == 64
+    assert base["generation_id"] == base["generation_hash"][:12]
+    assert base["generation_hash"] != different_limit["generation_hash"]
+    assert base["generation_hash"] != different_scope["generation_hash"]
 
 
 def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monkeypatch):
@@ -390,6 +427,7 @@ def test_build_code_improvement_workorder_consumes_intraday_ws_directives(
                         "order_id": "order_scanner_eligible_no_heavy_closed_loop",
                         "title": "Scanner eligible-to-heavy evaluation loss closure",
                         "decision": "defer_evidence",
+                        "implementation_state": "closed_loop_instrumentation_active",
                         "priority": 1,
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
@@ -429,8 +467,82 @@ def test_build_code_improvement_workorder_consumes_intraday_ws_directives(
     assert orders[0]["order_id"] == ("order_scanner_eligible_no_heavy_closed_loop")
     assert orders[0]["runtime_effect"] is False
     assert orders[0]["allowed_runtime_apply"] is False
+    assert orders[0]["decision"] == "attach_existing_family"
+    assert orders[0]["implementation_status"] == "implemented_but_waiting_sample"
+    assert orders[0]["root_cause_closure_status"] == ("handoff_closed_root_cause_open")
+    assert (
+        orders[0]["implementation_provenance"]["source_implementation_state"]
+        == "closed_loop_instrumentation_active"
+    )
     assert report["summary"]["intraday_ws_freshness_source_order_count"] == 1
     assert report["source"]["intraday_ws_freshness_monitor"] == str(source_path)
+
+
+def test_intraday_ws_directive_state_mapping_does_not_close_pending_code_gap():
+    implemented_states = {
+        "closed_loop_instrumentation_active",
+        "scanner_prefilter_and_exact_terminalization_implemented",
+        "handoff_provenance_implemented_not_runtime_reflected",
+        "implemented_in_source_report",
+    }
+    directives = [
+        {
+            "order_id": f"order_{index}",
+            "implementation_state": state,
+            "decision": "defer_evidence",
+        }
+        for index, state in enumerate(sorted(implemented_states))
+    ]
+    directives.append(
+        {
+            "order_id": "order_pending",
+            "implementation_state": "cohorts_identified_bbo_join_pending",
+            "decision": "defer_evidence",
+        }
+    )
+    directives.append(
+        {
+            "order_id": "order_source_capture_design",
+            "implementation_state": (
+                "executable_bbo_consumer_implemented_source_capture_design_required"
+            ),
+            "decision": "design_family_candidate",
+            "decision_authority": "scanner_funnel_executable_bbo_source_only",
+        }
+    )
+
+    orders = mod._intraday_ws_freshness_followup_orders(
+        {"source_paths": {}, "workorder_directives": directives}
+    )
+    by_id = {item["order_id"]: item for item in orders}
+
+    assert all(
+        by_id[f"order_{index}"]["implementation_status"]
+        in {
+            "implemented_but_waiting_sample",
+            "implemented_source_quality_contract_waiting_sample",
+        }
+        for index in range(len(implemented_states))
+    )
+    assert by_id["order_pending"]["implementation_status"] is None
+    assert by_id["order_source_capture_design"]["implementation_status"] is None
+    assert by_id["order_source_capture_design"]["decision"] == (
+        "design_family_candidate"
+    )
+    classified = mod._classify_order(
+        by_id["order_source_capture_design"],
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+    assert classified.decision == "design_family_candidate"
+    assert classified.route == "design_family_candidate"
+    serialized = mod._serialize_classified_order(classified)
+    assert serialized["decision_authority"] == (
+        "scanner_funnel_executable_bbo_source_only"
+    )
+    assert serialized["root_cause_closure_status"] == "needs_followup_workorder"
 
 
 def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(

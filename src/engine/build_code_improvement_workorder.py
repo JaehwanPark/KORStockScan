@@ -53,7 +53,8 @@ ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR = REPORT_DIR / "one_share_threshold_opportun
 MICROSTRUCTURE_REACTION_CONTEXT_DIR = REPORT_DIR / "microstructure_reaction_context"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
-WORKORDER_SCHEMA_VERSION = 1
+WORKORDER_SCHEMA_VERSION = 2
+WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v2"
 IMPLEMENTED_STATUSES = {
     "implemented",
     "implemented_but_hold_sample",
@@ -170,6 +171,31 @@ def _source_fingerprint(source_paths: dict[str, Path]) -> dict[str, Any]:
         "source_hash": source_hash,
         "generation_id": source_hash[:12],
         "files": files,
+    }
+
+
+def _generation_fingerprint(
+    source_hash: str, *, max_orders: int, include_swing: bool
+) -> dict[str, Any]:
+    inputs = {
+        "source_hash": source_hash,
+        "schema_version": WORKORDER_SCHEMA_VERSION,
+        "producer_contract_version": WORKORDER_PRODUCER_CONTRACT_VERSION,
+        "max_orders": max(1, int(max_orders)),
+        "include_swing": bool(include_swing),
+    }
+    generation_hash = hashlib.sha256(
+        json.dumps(
+            inputs,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "generation_hash": generation_hash,
+        "generation_id": generation_hash[:12],
+        "inputs": inputs,
     }
 
 
@@ -646,15 +672,43 @@ def _intraday_ws_freshness_followup_orders(
         str(path) for path in (report.get("source_paths") or {}).values() if path
     ]
     orders: list[dict[str, Any]] = []
+    implemented_state_statuses = {
+        "closed_loop_instrumentation_active": "implemented_but_waiting_sample",
+        "scanner_prefilter_and_exact_terminalization_implemented": (
+            "implemented_but_waiting_sample"
+        ),
+        "handoff_provenance_implemented_not_runtime_reflected": (
+            "implemented_but_waiting_sample"
+        ),
+        "implemented_in_source_report": (
+            "implemented_source_quality_contract_waiting_sample"
+        ),
+    }
     for raw in directives:
         if not isinstance(raw, dict) or not raw.get("order_id"):
             continue
+        implementation_state = str(raw.get("implementation_state") or "").strip()
+        implementation_status = str(raw.get("implementation_status") or "").strip()
+        if not implementation_status:
+            implementation_status = implemented_state_statuses.get(
+                implementation_state, ""
+            )
+        source_provenance = (
+            raw.get("implementation_provenance")
+            if isinstance(raw.get("implementation_provenance"), dict)
+            else {}
+        )
+        source_decision = str(raw.get("decision") or "").strip()
         order = {
             **raw,
             "source_report_type": "intraday_ws_freshness_monitor",
             "lifecycle_stage": "entry",
             "target_subsystem": "scanner_runtime_freshness_funnel",
-            "route": "instrumentation_order",
+            "route": (
+                "design_family_candidate"
+                if source_decision == "design_family_candidate"
+                else "instrumentation_order"
+            ),
             "mapped_family": "scanner_runtime_freshness_funnel",
             "threshold_family": "scanner_runtime_freshness_funnel",
             "improvement_type": "scanner_funnel_source_quality_followup",
@@ -664,6 +718,26 @@ def _intraday_ws_freshness_followup_orders(
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "source_paths": source_paths,
+            "implementation_status": implementation_status or None,
+            "original_implementation_status": implementation_status or None,
+            "implementation_provenance": {
+                **source_provenance,
+                "implementation_type": (
+                    source_provenance.get("implementation_type")
+                    or "intraday_ws_freshness_source_only_instrumentation"
+                ),
+                "source_decision": source_decision or None,
+                "source_implementation_state": implementation_state or None,
+                "source_next_action": raw.get("next_action"),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "remaining_blocker_is_observation_or_policy_closure": bool(
+                    implementation_status
+                ),
+                "root_cause_closure_status_hint": None,
+            },
             "next_postclose_metric": (
                 "The next natural session must regenerate unique promotion/prune lineages, "
                 "handoff coverage, terminal outcomes, and executable-BBO source-quality status."
@@ -1920,6 +1994,8 @@ def _root_cause_closure_status_for_order(order: dict[str, Any]) -> str | None:
         or str(order.get("decision") or "").strip() == "implement_now"
     ):
         return "needs_followup_workorder"
+    if str(order.get("decision") or "").strip() == "design_family_candidate":
+        return "needs_followup_workorder"
     return None
 
 
@@ -2466,6 +2542,7 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "files_likely_touched": item.order.get("files_likely_touched") or [],
         "acceptance_tests": item.order.get("acceptance_tests") or [],
         "forbidden_uses": item.order.get("forbidden_uses") or [],
+        "decision_authority": item.order.get("decision_authority"),
         "adm_issue_types": item.order.get("adm_issue_types") or [],
         "automation_reentry": item.automation_reentry,
         "runtime_effect": bool(item.order.get("runtime_effect")),
@@ -2812,6 +2889,28 @@ def _classify_order(
             automation_reentry=(
                 f"Next postclose workorder should preserve implementation_status={status} and use the "
                 "source metrics as provenance only."
+            ),
+        )
+
+    if (
+        order.get("source_report_type") == "intraday_ws_freshness_monitor"
+        and str(order.get("decision") or "").strip() == "design_family_candidate"
+        and route == "design_family_candidate"
+    ):
+        return ClassifiedOrder(
+            order=order,
+            decision="design_family_candidate",
+            reason=(
+                "the executable-BBO consumer exists, but the depleted scanner cohort needs a reviewed "
+                "capacity-bounded source-only collection design before implementation"
+            ),
+            mapped_family=mapped_family or "scanner_funnel_executable_bbo_source_only",
+            route="design_family_candidate",
+            confidence=confidence or "deterministic_source_gap",
+            decision_source="intraday_ws_source_capture_design",
+            automation_reentry=(
+                "Keep runtime_effect=false and require reviewed WS item-budget, active-owner non-displacement, "
+                "exact venue/session lineage, and >=95% BBO coverage before implementation closure."
             ),
         )
 
@@ -7493,6 +7592,7 @@ def build_code_improvement_workorder(
     target_date: str, *, max_orders: int = 12, include_swing: bool = True
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
+    effective_max_orders = max(1, int(max_orders))
     isolated_source_mode = _workorder_isolated_source_mode()
     json_path, md_path = code_improvement_workorder_paths(target_date)
     previous_report = _load_json(json_path)
@@ -7789,6 +7889,11 @@ def build_code_improvement_workorder(
     ):
         source_paths["threshold_cycle_calibration"] = calibration_source_path
     source_fingerprint = _source_fingerprint(source_paths)
+    generation_fingerprint = _generation_fingerprint(
+        source_fingerprint["source_hash"],
+        max_orders=effective_max_orders,
+        include_swing=include_swing,
+    )
     finding_by_order_id, finding_by_title_slug = _finding_maps(automation)
     swing_finding_by_order_id, swing_finding_by_title_slug = _finding_maps(
         swing_automation
@@ -8153,7 +8258,7 @@ def build_code_improvement_workorder(
         )
     )
     classified = _sort_classified(classified)
-    selected = classified[: max(1, int(max_orders))]
+    selected = classified[:effective_max_orders]
     required_handoff_order_ids = {
         str(order.get("order_id"))
         for order in [
@@ -8453,9 +8558,12 @@ def build_code_improvement_workorder(
     }
     report = {
         "schema_version": WORKORDER_SCHEMA_VERSION,
+        "producer_contract_version": WORKORDER_PRODUCER_CONTRACT_VERSION,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "generation_id": f"{target_date}-{source_fingerprint['generation_id']}",
+        "generation_id": f"{target_date}-{generation_fingerprint['generation_id']}",
+        "generation_hash": generation_fingerprint["generation_hash"],
+        "generation_inputs": generation_fingerprint["inputs"],
         "source_hash": source_fingerprint["source_hash"],
         "purpose": "codex_code_improvement_workorder_from_postclose_automation",
         "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
@@ -8862,7 +8970,9 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- microstructure_reaction_context: `{source.get('microstructure_reaction_context') or '-'}`",
         f"- generated_at: `{report.get('generated_at')}`",
         f"- generation_id: `{report.get('generation_id')}`",
+        f"- generation_hash: `{report.get('generation_hash')}`",
         f"- source_hash: `{report.get('source_hash')}`",
+        f"- producer_contract_version: `{report.get('producer_contract_version')}`",
         "",
         "## 운영 원칙",
         "",

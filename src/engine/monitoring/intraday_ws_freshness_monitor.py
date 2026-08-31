@@ -6,12 +6,15 @@ import argparse
 import ast
 import hashlib
 import json
+import math
 import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
@@ -24,11 +27,18 @@ WORKORDER_DOC_DIR = (
 )
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 THRESHOLD_EVENTS_DIR = DATA_DIR / "threshold_cycle"
+SYMBOL_MASTER_DIR = DATA_DIR / "report" / "micro_reversion_economic_reference"
 DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v5"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v6"
+SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
+SCANNER_BBO_GROSS_TARGET_PCT = 1.30
+SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
+SCANNER_BBO_HORIZON_SEC = 20 * 60
+SCANNER_BBO_TIMEOUT_MAX_LAG_SEC = 5.0
+SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT = 95.0
 
 FORBIDDEN_USES = [
     "EV",
@@ -86,6 +96,36 @@ SCANNER_UNIQUE_FUNNEL_METRIC_CONTRACT = {
     "forbidden_uses": FORBIDDEN_USES,
     "runtime_effect": False,
     "allowed_runtime_apply": False,
+    "broker_order_forbidden": True,
+}
+
+SCANNER_EXECUTABLE_BBO_METRIC_CONTRACT = {
+    "metric_role": "source_only_comparison_economics",
+    "decision_authority": "scanner_funnel_executable_bbo_source_only",
+    "window_policy": "daily_unique_scanner_promotion_or_prune_lineage",
+    "sample_floor": (
+        "verified_official_common_stock_exact_promotion_venue_session_bbo_"
+        "join_coverage_pct>=95_and_one_resolved_outcome"
+    ),
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "source_quality_gate": (
+        "exact_lineage_venue_session_fresh_executable_bbo_effective_dated_cost_"
+        "contract_and_verified_official_common_stock_master"
+    ),
+    "forbidden_uses": [item for item in FORBIDDEN_USES if item != "EV"],
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+}
+
+SCANNER_COMPARISON_COST_CONSUMER_BINDING = {
+    "decision_authority": "scanner_funnel_executable_bbo_source_only",
+    "source_contract_owner": "widget_comparison_cost_policy_v1",
+    "binding_role": "shared_effective_dated_r0_r3_comparison_cost_input",
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
     "broker_order_forbidden": True,
 }
 
@@ -320,6 +360,41 @@ def _read_json(path: Path | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _load_verified_symbol_master(
+    target_date: str, symbol_master_path: Path | None
+) -> tuple[VerifiedSymbolMaster | None, dict[str, Any]]:
+    requested_path = symbol_master_path or (
+        SYMBOL_MASTER_DIR / f"micro_reversion_symbol_master_{target_date}.json"
+    )
+    actual_path = existing_or_gzip_path(requested_path)
+    if not actual_path.exists():
+        return None, {
+            "status": "missing",
+            "path": str(actual_path),
+            "artifact_sha256": None,
+            "symbol_count": 0,
+        }
+    try:
+        master = VerifiedSymbolMaster.from_json_path(
+            actual_path, require_canonical_owner=True
+        )
+        artifact_sha256 = hashlib.sha256(actual_path.read_bytes()).hexdigest()
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return None, {
+            "status": "invalid",
+            "path": str(actual_path),
+            "artifact_sha256": None,
+            "symbol_count": 0,
+            "error": f"{type(exc).__name__}:{exc}",
+        }
+    return master, {
+        "status": "verified",
+        "path": str(actual_path),
+        "artifact_sha256": artifact_sha256,
+        "symbol_count": master.symbol_count,
+    }
+
+
 def _event_time(row: dict[str, Any]) -> datetime | None:
     value = row.get("emitted_at") or row.get("generated_at") or row.get("timestamp")
     if not value:
@@ -358,6 +433,131 @@ def _scanner_venue_metadata(row: Mapping[str, Any]) -> str | None:
 def _scanner_session_metadata(row: Mapping[str, Any]) -> str | None:
     session = _valid_lineage_token(row.get("market_session_bucket")).upper()
     return session if session and session != "UNKNOWN" else None
+
+
+def _scanner_executable_bbo_observation(
+    row: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str]:
+    """Return one fresh executable BBO without mark/high/low fallback."""
+
+    venue = _scanner_venue_metadata(row)
+    market_session_bucket = _scanner_session_metadata(row)
+
+    candidates = (
+        (
+            "market_data_effective_bbo",
+            "market_data_effective_best_bid",
+            "market_data_effective_best_ask",
+            "market_data_effective_quote_age_ms",
+            "market_data_effective_price_source",
+            None,
+        ),
+        (
+            "scanner_promotion_reanchor_bbo",
+            "scanner_promotion_reanchor_best_bid",
+            "scanner_promotion_reanchor_best_ask",
+            "scanner_promotion_reanchor_effective_quote_age_ms",
+            "scanner_promotion_reanchor_source",
+            "scanner_promotion_reanchor_source_fresh",
+        ),
+    )
+    gap_reasons: list[str] = []
+    for (
+        source,
+        bid_key,
+        ask_key,
+        age_key,
+        provenance_key,
+        fresh_key,
+    ) in candidates:
+        bid = _to_float(row.get(bid_key))
+        ask = _to_float(row.get(ask_key))
+        if bid is None and ask is None:
+            continue
+        if venue is None:
+            gap_reasons.append(f"{source}:authoritative_venue_missing")
+            continue
+        if market_session_bucket is None:
+            gap_reasons.append(f"{source}:authoritative_session_missing")
+            continue
+        if (
+            bid is None
+            or ask is None
+            or not math.isfinite(bid)
+            or not math.isfinite(ask)
+            or bid <= 0
+            or ask < bid
+        ):
+            gap_reasons.append(f"{source}:invalid_or_crossed_bbo")
+            continue
+        quote_age_ms = _to_float(row.get(age_key))
+        if quote_age_ms is None or not math.isfinite(quote_age_ms) or quote_age_ms < 0:
+            gap_reasons.append(f"{source}:quote_age_missing")
+            continue
+        if quote_age_ms > SCANNER_BBO_MAX_QUOTE_AGE_MS:
+            gap_reasons.append(f"{source}:quote_stale")
+            continue
+        if (
+            fresh_key
+            and row.get(fresh_key) is not None
+            and not _boolish(row.get(fresh_key))
+        ):
+            gap_reasons.append(f"{source}:source_not_fresh")
+            continue
+        source_provenance = _valid_lineage_token(row.get(provenance_key))
+        if not source_provenance:
+            gap_reasons.append(f"{source}:price_source_missing")
+            continue
+        observed_at = _event_time(dict(row))
+        if observed_at is None:
+            gap_reasons.append(f"{source}:event_time_missing")
+            continue
+        return (
+            {
+                "observed_at": observed_at.isoformat(),
+                "observed_epoch": observed_at.timestamp(),
+                "best_bid": bid,
+                "best_ask": ask,
+                "quote_age_ms": quote_age_ms,
+                "source": source,
+                "source_provenance": source_provenance,
+                "venue": venue,
+                "market_session_bucket": market_session_bucket,
+            },
+            "pass",
+        )
+    if gap_reasons:
+        return None, "|".join(sorted(set(gap_reasons)))
+    return None, "executable_bbo_missing"
+
+
+def _append_scanner_bbo_observation(
+    container: dict[str, Any], row: Mapping[str, Any]
+) -> None:
+    observation, gap_reason = _scanner_executable_bbo_observation(row)
+    if observation is not None:
+        observations = container.setdefault("bbo_observations", [])
+        observation_key = (
+            observation["observed_at"],
+            observation["best_bid"],
+            observation["best_ask"],
+            observation["source"],
+        )
+        if not any(
+            (
+                item.get("observed_at"),
+                item.get("best_bid"),
+                item.get("best_ask"),
+                item.get("source"),
+            )
+            == observation_key
+            for item in observations
+            if isinstance(item, dict)
+        ):
+            observations.append(observation)
+        return
+    gap_counts = container.setdefault("bbo_gap_reason_counts", {})
+    gap_counts[gap_reason] = int(gap_counts.get(gap_reason) or 0) + 1
 
 
 def _merge_immutable_scanner_metadata(
@@ -535,6 +735,8 @@ def _update_scanner_funnel_state(
                 "source_signature": str(row.get("source_signature") or ""),
                 "venue": venue or "UNKNOWN",
                 "market_session_bucket": market_session_bucket or "UNKNOWN",
+                "bbo_observations": [],
+                "bbo_gap_reason_counts": {},
                 "metadata_conflicts": [],
             },
         )
@@ -555,6 +757,7 @@ def _update_scanner_funnel_state(
             authoritative=True,
         )
         prune["reasons"] = _append_unique(prune.get("reasons"), reason)
+        _append_scanner_bbo_observation(prune, row)
         return
     if not promotion_id:
         state["missing_lineage_event_count"] += 1
@@ -581,6 +784,8 @@ def _update_scanner_funnel_state(
             "manual_control_exclusion_attach_skip": False,
             "manual_control_exclusion_terminalized": False,
             "handoff_provenance_complete": False,
+            "bbo_observations": [],
+            "bbo_gap_reason_counts": {},
             "metadata_conflicts": [],
         },
     )
@@ -623,6 +828,7 @@ def _update_scanner_funnel_state(
     )
     stage_counts[stage] = int(stage_counts.get(stage) or 0) + 1
     lineage["stages"] = stage_counts
+    _append_scanner_bbo_observation(lineage, row)
     lineage["decision_stage_stale_backoff"] = bool(
         lineage.get("decision_stage_stale_backoff")
         or event_class.get("decision_stage_stale_backoff")
@@ -675,9 +881,591 @@ def _update_scanner_funnel_state(
         )
 
 
-def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
+def _scanner_lineage_economic_cohort(lineage: Mapping[str, Any]) -> str | None:
+    stages = lineage.get("stages") if isinstance(lineage.get("stages"), dict) else {}
+    stage_names = set(stages)
+    heavy = "scalping_scanner_heavy_eval_completion" in stage_names
+    if bool(lineage.get("eligible_for_heavy_entry_eval")) and not heavy:
+        return "eligible_no_heavy"
+    if (
+        heavy
+        and bool(lineage.get("runtime_queue_lag"))
+        and bool(lineage.get("decision_stage_stale_backoff"))
+        and bool(lineage.get("eviction_reasons"))
+    ):
+        return "heavy_then_stale_queue_evict"
+    return None
+
+
+def _scanner_prune_economic_cohort(prune: Mapping[str, Any]) -> str | None:
+    if prune.get(
+        "reason"
+    ) == "reentry_cooldown_no_material_upgrade" and "MARKET_GAINER" not in str(
+        prune.get("source_signature") or ""
+    ):
+        return "non_gainer_not_rising_repeat"
+    return None
+
+
+def _scanner_bbo_economic_attribution(
+    lineages: list[dict[str, Any]],
+    prunes: list[dict[str, Any]],
+    *,
+    target_date: str,
+    symbol_master: VerifiedSymbolMaster | None,
+    symbol_master_binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    try:
+        cost_contract = comparison_cost_contract(target_date)
+        round_trip_cost_pct = float(cost_contract["round_trip_cost_pct"])
+        cost_contract_status = "verified"
+    except ValueError as exc:
+        cost_contract = {
+            "status": "blocked",
+            "trade_date": target_date,
+            "error": str(exc),
+        }
+        round_trip_cost_pct = None
+        cost_contract_status = "blocked"
+    trade_date = date.fromisoformat(target_date)
+    candidates: list[tuple[str, str, Mapping[str, Any]]] = []
+    for lineage in lineages:
+        cohort = _scanner_lineage_economic_cohort(lineage)
+        if cohort:
+            candidates.append((cohort, str(lineage.get("promotion_id") or ""), lineage))
+    for prune in prunes:
+        cohort = _scanner_prune_economic_cohort(prune)
+        if cohort:
+            candidates.append(
+                (
+                    cohort,
+                    f"{prune.get('scan_generation_id') or ''}:{prune.get('code') or ''}",
+                    prune,
+                )
+            )
+
+    rows: list[dict[str, Any]] = []
+    missing_reason_counts: Counter = Counter()
+    symbol_master_status_counts: Counter = Counter()
+    for cohort, lineage_key, container in candidates:
+        stock_code = str(container.get("code") or "")
+        venue = str(container.get("venue") or "UNKNOWN").upper()
+        session = str(container.get("market_session_bucket") or "UNKNOWN").upper()
+        metadata_conflicts = container.get("metadata_conflicts") or []
+        symbol_lookup = (
+            symbol_master.lookup(stock_code, as_of=trade_date)
+            if symbol_master is not None and stock_code
+            else None
+        )
+        symbol_master_status = (
+            symbol_lookup.status.value
+            if symbol_lookup is not None
+            else "master_unavailable"
+        )
+        symbol_master_status_counts[symbol_master_status] += 1
+        observations = []
+        observation_filter_reasons: Counter = Counter()
+        for raw_observation in container.get("bbo_observations") or []:
+            if not isinstance(raw_observation, dict):
+                continue
+            observation_venue = str(raw_observation.get("venue") or "").upper()
+            observation_session = str(
+                raw_observation.get("market_session_bucket") or ""
+            ).upper()
+            if observation_venue != venue:
+                observation_filter_reasons[
+                    "bbo_observation_venue_mismatch_or_missing"
+                ] += 1
+                continue
+            if observation_session != session:
+                observation_filter_reasons[
+                    "bbo_observation_session_mismatch_or_missing"
+                ] += 1
+                continue
+            try:
+                observation_at = datetime.fromisoformat(
+                    str(raw_observation.get("observed_at") or "").replace("Z", "+00:00")
+                )
+                if observation_at.tzinfo is None:
+                    raise ValueError("observation timestamp must be timezone-aware")
+                observation_at = observation_at.astimezone(KST)
+            except ValueError:
+                observation_filter_reasons[
+                    "bbo_observation_time_invalid_or_missing"
+                ] += 1
+                continue
+            if observation_at.date() != trade_date:
+                observation_filter_reasons["bbo_observation_target_date_mismatch"] += 1
+                continue
+            observations.append(
+                {
+                    **raw_observation,
+                    "observed_at": observation_at.isoformat(),
+                    "observed_epoch": observation_at.timestamp(),
+                }
+            )
+        observations.sort(
+            key=lambda item: (
+                float(item.get("observed_epoch") or 0.0),
+                str(item.get("source") or ""),
+            )
+        )
+        symbol_master_block_reason = None
+        if symbol_master_binding.get("status") != "verified":
+            symbol_master_block_reason = (
+                "official_symbol_master_binding_missing_or_invalid"
+            )
+        elif symbol_lookup is None or not symbol_lookup.economic_metadata_allowed:
+            symbol_master_block_reason = (
+                f"official_symbol_master_{symbol_master_status}"
+            )
+        bbo_join_block_reason = None
+        if venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
+            bbo_join_block_reason = "authoritative_venue_missing"
+        elif session in {"", "UNKNOWN"}:
+            bbo_join_block_reason = "authoritative_session_missing"
+        elif metadata_conflicts:
+            bbo_join_block_reason = "immutable_lineage_metadata_conflict"
+        elif not observations:
+            bbo_join_block_reason = (
+                observation_filter_reasons.most_common(1)[0][0]
+                if observation_filter_reasons
+                else "fresh_executable_bbo_missing"
+            )
+        if bbo_join_block_reason or symbol_master_block_reason:
+            if bbo_join_block_reason:
+                missing_reason_counts[bbo_join_block_reason] += 1
+                for reason, count in (
+                    container.get("bbo_gap_reason_counts") or {}
+                ).items():
+                    missing_reason_counts[str(reason)] += int(count or 0)
+            if symbol_master_block_reason:
+                missing_reason_counts[symbol_master_block_reason] += 1
+            rows.append(
+                {
+                    "cohort": cohort,
+                    "lineage_key": lineage_key,
+                    "stock_code": stock_code,
+                    "venue": venue,
+                    "market_session_bucket": session,
+                    "symbol_master_status": symbol_master_status,
+                    "bbo_join_status": (
+                        "source_quality_blocked"
+                        if bbo_join_block_reason
+                        else "excluded_official_symbol_master"
+                    ),
+                    "bbo_join_block_reason": bbo_join_block_reason,
+                    "symbol_master_block_reason": symbol_master_block_reason,
+                    "primary_exclusion_reason": (
+                        symbol_master_block_reason
+                        if symbol_master_block_reason
+                        else bbo_join_block_reason
+                    ),
+                    "first_hit_label": (
+                        "excluded_official_symbol_master"
+                        if symbol_master_block_reason
+                        else "unresolved_source_quality_blocked"
+                    ),
+                    "gross_return_pct": None,
+                    "cost_adjusted_return_pct": None,
+                }
+            )
+            continue
+
+        entry = observations[0]
+        entry_epoch = float(entry["observed_epoch"])
+        entry_ask = float(entry["best_ask"])
+        horizon_epoch = entry_epoch + SCANNER_BBO_HORIZON_SEC
+        first_hit_label = "sampled_path_right_censored_no_timeout_bbo"
+        exit_observation: dict[str, Any] | None = None
+        for observation in observations[1:]:
+            observed_epoch = float(observation["observed_epoch"])
+            if observed_epoch <= entry_epoch or observed_epoch > horizon_epoch:
+                continue
+            move_pct = (float(observation["best_bid"]) - entry_ask) / entry_ask * 100.0
+            if move_pct >= SCANNER_BBO_GROSS_TARGET_PCT:
+                first_hit_label = "sampled_gross_target_first"
+                exit_observation = observation
+                break
+            if move_pct <= SCANNER_BBO_ADVERSE_STOP_PCT:
+                first_hit_label = "sampled_adverse_stop_first"
+                exit_observation = observation
+                break
+        if exit_observation is None:
+            timeout_candidates = [
+                observation
+                for observation in observations[1:]
+                if horizon_epoch
+                <= float(observation["observed_epoch"])
+                <= horizon_epoch + SCANNER_BBO_TIMEOUT_MAX_LAG_SEC
+            ]
+            if timeout_candidates:
+                first_hit_label = "sampled_timeout_exit"
+                exit_observation = timeout_candidates[0]
+
+        gross_return_pct = None
+        cost_adjusted_return_pct = None
+        if exit_observation is not None:
+            gross_return_pct = (
+                (float(exit_observation["best_bid"]) - entry_ask) / entry_ask * 100.0
+            )
+            cost_adjusted_return_pct = (
+                gross_return_pct - round_trip_cost_pct
+                if round_trip_cost_pct is not None
+                else None
+            )
+        rows.append(
+            {
+                "cohort": cohort,
+                "lineage_key": lineage_key,
+                "stock_code": stock_code,
+                "venue": venue,
+                "market_session_bucket": session,
+                "symbol_master_status": symbol_master_status,
+                "bbo_join_status": "joined",
+                "bbo_join_block_reason": None,
+                "symbol_master_block_reason": None,
+                "primary_exclusion_reason": None,
+                "entry_observed_at": entry.get("observed_at"),
+                "entry_best_bid": entry.get("best_bid"),
+                "entry_best_ask": entry.get("best_ask"),
+                "entry_quote_age_ms": entry.get("quote_age_ms"),
+                "entry_bbo_source": entry.get("source"),
+                "observed_bbo_count": len(observations),
+                "first_hit_label": first_hit_label,
+                "exit_observed_at": (
+                    exit_observation.get("observed_at")
+                    if exit_observation is not None
+                    else None
+                ),
+                "exit_best_bid": (
+                    exit_observation.get("best_bid")
+                    if exit_observation is not None
+                    else None
+                ),
+                "gross_return_pct": (
+                    round(gross_return_pct, 8) if gross_return_pct is not None else None
+                ),
+                "cost_adjusted_return_pct": (
+                    round(cost_adjusted_return_pct, 8)
+                    if cost_adjusted_return_pct is not None
+                    else None
+                ),
+            }
+        )
+
+    candidate_count = len(rows)
+    eligible_rows = [
+        row for row in rows if row.get("symbol_master_block_reason") is None
+    ]
+    symbol_master_excluded_rows = [
+        row for row in rows if row.get("symbol_master_block_reason") is not None
+    ]
+    joined_rows = [row for row in eligible_rows if row["bbo_join_status"] == "joined"]
+    resolved_rows = [
+        row for row in joined_rows if row.get("cost_adjusted_return_pct") is not None
+    ]
+    join_coverage_pct = _rate_pct(len(joined_rows), len(eligible_rows))
+    venue_session_economics: list[dict[str, Any]] = []
+    venue_session_keys = sorted(
+        {
+            (
+                str(row.get("venue") or "UNKNOWN"),
+                str(row.get("market_session_bucket") or "UNKNOWN"),
+            )
+            for row in rows
+        }
+    )
+    for venue, session in venue_session_keys:
+        group_rows = [
+            row
+            for row in rows
+            if row.get("venue") == venue and row.get("market_session_bucket") == session
+        ]
+        group_eligible_rows = [
+            row for row in group_rows if row.get("symbol_master_block_reason") is None
+        ]
+        group_joined_rows = [
+            row for row in group_eligible_rows if row.get("bbo_join_status") == "joined"
+        ]
+        group_resolved_rows = [
+            row
+            for row in group_joined_rows
+            if row.get("cost_adjusted_return_pct") is not None
+        ]
+        group_coverage_pct = _rate_pct(len(group_joined_rows), len(group_eligible_rows))
+        group_source_quality_ready = bool(
+            group_eligible_rows
+            and cost_contract_status == "verified"
+            and symbol_master_binding.get("status") == "verified"
+            and group_coverage_pct >= SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT
+        )
+        if cost_contract_status != "verified":
+            group_status = "source_quality_blocked_comparison_cost_contract"
+        elif symbol_master_binding.get("status") != "verified":
+            group_status = "source_quality_blocked_official_symbol_master_binding"
+        elif not group_eligible_rows:
+            group_status = "excluded_no_verified_official_common_stock_candidate"
+        elif not group_source_quality_ready:
+            group_status = (
+                "source_quality_blocked_executable_bbo_join_coverage_below_floor"
+            )
+        elif not group_resolved_rows:
+            group_status = "evidence_accumulating_no_resolved_executable_outcome"
+        else:
+            group_status = "source_only_economics_available"
+        group_ev_pct = (
+            round(
+                sum(
+                    float(row["cost_adjusted_return_pct"])
+                    for row in group_resolved_rows
+                )
+                / len(group_resolved_rows),
+                8,
+            )
+            if group_source_quality_ready and group_resolved_rows
+            else None
+        )
+        venue_session_economics.append(
+            {
+                "venue": venue,
+                "market_session_bucket": session,
+                "status": group_status,
+                "source_census_count": len(group_rows),
+                "eligible_verified_common_stock_candidate_count": len(
+                    group_eligible_rows
+                ),
+                "official_symbol_master_excluded_count": len(group_rows)
+                - len(group_eligible_rows),
+                "exact_bbo_joined_count": len(group_joined_rows),
+                "exact_bbo_join_coverage_pct": group_coverage_pct,
+                "resolved_outcome_count": len(group_resolved_rows),
+                "first_hit_counts": dict(
+                    sorted(
+                        Counter(
+                            str(row.get("first_hit_label") or "unknown")
+                            for row in group_rows
+                        ).items()
+                    )
+                ),
+                "source_quality_adjusted_ev_pct": group_ev_pct,
+                "source_quality_ready": group_source_quality_ready,
+            }
+        )
+    eligible_venue_session_economics = [
+        group
+        for group in venue_session_economics
+        if group["eligible_verified_common_stock_candidate_count"] > 0
+    ]
+    source_quality_ready = bool(
+        eligible_rows
+        and cost_contract_status == "verified"
+        and symbol_master_binding.get("status") == "verified"
+        and eligible_venue_session_economics
+        and all(
+            bool(group["source_quality_ready"])
+            for group in eligible_venue_session_economics
+        )
+    )
+    if not candidate_count:
+        status = "not_applicable_no_economic_cohort"
+    elif cost_contract_status != "verified":
+        status = "source_quality_blocked_comparison_cost_contract"
+    elif symbol_master_binding.get("status") != "verified":
+        status = "source_quality_blocked_official_symbol_master_binding"
+    elif not eligible_rows:
+        status = "source_quality_blocked_no_verified_official_common_stock_candidate"
+    elif not source_quality_ready:
+        status = "source_quality_blocked_executable_bbo_join_coverage_below_floor"
+    elif not resolved_rows:
+        status = "evidence_accumulating_no_resolved_executable_outcome"
+    else:
+        status = "source_only_economics_available"
+    single_group_ev = (
+        eligible_venue_session_economics[0]["source_quality_adjusted_ev_pct"]
+        if len(eligible_venue_session_economics) == 1
+        else None
+    )
+    ev_pct = single_group_ev if source_quality_ready else None
+    aggregate_ev_status = (
+        "not_computed_cross_venue_session_forbidden"
+        if len(eligible_venue_session_economics) > 1
+        else (
+            "available_single_venue_session"
+            if ev_pct is not None
+            else "unavailable_source_quality_or_outcome"
+        )
+    )
+    first_hit_counts = Counter(
+        str(row.get("first_hit_label") or "unknown") for row in rows
+    )
+    group_counts: Counter = Counter(
+        (
+            str(row.get("cohort") or "unknown"),
+            str(row.get("venue") or "UNKNOWN"),
+            str(row.get("market_session_bucket") or "UNKNOWN"),
+        )
+        for row in rows
+    )
+    cohort_source_quality: list[dict[str, Any]] = []
+    cohort_keys = sorted(
+        {
+            (
+                str(row.get("cohort") or "unknown"),
+                str(row.get("venue") or "UNKNOWN"),
+                str(row.get("market_session_bucket") or "UNKNOWN"),
+            )
+            for row in rows
+        }
+    )
+    for cohort, venue, session in cohort_keys:
+        cohort_rows = [
+            row
+            for row in rows
+            if row.get("cohort") == cohort
+            and row.get("venue") == venue
+            and row.get("market_session_bucket") == session
+        ]
+        cohort_eligible_rows = [
+            row for row in cohort_rows if row.get("symbol_master_block_reason") is None
+        ]
+        cohort_joined_rows = [
+            row
+            for row in cohort_eligible_rows
+            if row.get("bbo_join_status") == "joined"
+        ]
+        cohort_resolved_rows = [
+            row
+            for row in cohort_joined_rows
+            if row.get("cost_adjusted_return_pct") is not None
+        ]
+        cohort_missing_reasons = Counter(
+            str(row.get("primary_exclusion_reason") or "fresh_executable_bbo_missing")
+            for row in cohort_eligible_rows
+            if row.get("bbo_join_status") != "joined"
+        )
+        cohort_coverage_pct = _rate_pct(
+            len(cohort_joined_rows), len(cohort_eligible_rows)
+        )
+        source_capture_gap = bool(
+            symbol_master_binding.get("status") == "verified"
+            and cost_contract_status == "verified"
+            and cohort_eligible_rows
+            and cohort_coverage_pct < SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT
+        )
+        cohort_source_quality.append(
+            {
+                "cohort": cohort,
+                "venue": venue,
+                "market_session_bucket": session,
+                "source_census_count": len(cohort_rows),
+                "eligible_verified_common_stock_candidate_count": len(
+                    cohort_eligible_rows
+                ),
+                "official_symbol_master_excluded_count": len(cohort_rows)
+                - len(cohort_eligible_rows),
+                "exact_bbo_joined_count": len(cohort_joined_rows),
+                "exact_bbo_join_coverage_pct": cohort_coverage_pct,
+                "resolved_outcome_count": len(cohort_resolved_rows),
+                "source_capture_gap_count": len(cohort_eligible_rows)
+                - len(cohort_joined_rows),
+                "source_capture_gap": source_capture_gap,
+                "first_depleted_stage": (
+                    "scanner_candidate_pruned_executable_bbo_source_capture"
+                    if source_capture_gap and cohort == "non_gainer_not_rising_repeat"
+                    else (
+                        "scanner_lifecycle_event_executable_bbo_provenance"
+                        if source_capture_gap
+                        else None
+                    )
+                ),
+                "missing_reason_counts": dict(sorted(cohort_missing_reasons.items())),
+            }
+        )
+    source_capture_design_required = any(
+        row["source_capture_gap"]
+        and row["cohort"] == "non_gainer_not_rising_repeat"
+        and row["exact_bbo_joined_count"] == 0
+        for row in cohort_source_quality
+    )
+    source_capture_repair_required = any(
+        row["source_capture_gap"] for row in cohort_source_quality
+    )
+    return {
+        "metric_contract": SCANNER_EXECUTABLE_BBO_METRIC_CONTRACT,
+        "status": status,
+        "economic_candidate_count": candidate_count,
+        "eligible_verified_common_stock_candidate_count": len(eligible_rows),
+        "official_symbol_master_excluded_count": len(symbol_master_excluded_rows),
+        "exact_bbo_joined_count": len(joined_rows),
+        "exact_promotion_venue_session_bbo_join_coverage_pct": join_coverage_pct,
+        "join_coverage_floor_pct": SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT,
+        "resolved_outcome_count": len(resolved_rows),
+        "right_censored_or_blocked_count": candidate_count - len(resolved_rows),
+        "eligible_right_censored_or_blocked_count": len(eligible_rows)
+        - len(resolved_rows),
+        "right_censored_blocked_or_excluded_count": candidate_count
+        - len(resolved_rows),
+        "first_hit_counts": dict(sorted(first_hit_counts.items())),
+        "source_quality_adjusted_ev_pct": ev_pct,
+        "aggregate_ev_status": aggregate_ev_status,
+        "venue_session_economics": venue_session_economics,
+        "round_trip_cost_pct": round_trip_cost_pct,
+        "comparison_cost_contract_status": cost_contract_status,
+        "comparison_cost_contract": cost_contract,
+        "comparison_cost_consumer_binding": (SCANNER_COMPARISON_COST_CONSUMER_BINDING),
+        "official_symbol_master_binding": dict(symbol_master_binding),
+        "official_symbol_master_lookup_counts": dict(
+            sorted(symbol_master_status_counts.items())
+        ),
+        "gross_target_pct": SCANNER_BBO_GROSS_TARGET_PCT,
+        "adverse_stop_pct": SCANNER_BBO_ADVERSE_STOP_PCT,
+        "first_hit_boundary_contract_source": (
+            "rising_missed_intraday_feedback_tp1_contract"
+        ),
+        "horizon_sec": SCANNER_BBO_HORIZON_SEC,
+        "timeout_max_lag_sec": SCANNER_BBO_TIMEOUT_MAX_LAG_SEC,
+        "missing_reason_counts": dict(sorted(missing_reason_counts.items())),
+        "cohort_venue_session_counts": [
+            {
+                "cohort": cohort,
+                "venue": venue,
+                "market_session_bucket": session,
+                "count": count,
+            }
+            for (cohort, venue, session), count in sorted(group_counts.items())
+        ],
+        "cohort_source_quality": cohort_source_quality,
+        "source_capture_design_required": source_capture_design_required,
+        "source_capture_repair_required": source_capture_repair_required,
+        "first_hit_observation_contract": (
+            "sampled_scanner_stage_bbo_event_order_not_continuous_market_path"
+        ),
+        "rows": rows[:200],
+        "row_export_limit": 200,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def _scanner_unique_funnel_summary(
+    state: dict[str, Any],
+    *,
+    target_date: str,
+    symbol_master: VerifiedSymbolMaster | None,
+    symbol_master_binding: Mapping[str, Any],
+) -> dict[str, Any]:
     lineages = list((state.get("lineages") or {}).values())
     prunes = list((state.get("prunes") or {}).values())
+    bbo_attribution = _scanner_bbo_economic_attribution(
+        lineages,
+        prunes,
+        target_date=target_date,
+        symbol_master=symbol_master,
+        symbol_master_binding=symbol_master_binding,
+    )
     final_outcomes: Counter = Counter()
     prune_reasons: Counter = Counter()
     venues: Counter = Counter()
@@ -978,7 +1766,8 @@ def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
                 if prune.get("reason") == "reentry_cooldown_no_material_upgrade"
                 and "MARKET_GAINER" not in str(prune.get("source_signature") or "")
             ),
-            "executable_bbo_ev_status": "source_quality_blocked_until_exact_bbo_join",
+            "executable_bbo_ev_status": bbo_attribution["status"],
+            "executable_bbo_attribution": bbo_attribution,
         },
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -1458,12 +2247,71 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _scanner_economic_cohorts_evidence(
+    economic_cohorts: Mapping[str, Any],
+) -> dict[str, Any]:
+    attribution = (
+        economic_cohorts.get("executable_bbo_attribution")
+        if isinstance(economic_cohorts.get("executable_bbo_attribution"), dict)
+        else {}
+    )
+    return {
+        "eligible_no_heavy": int(economic_cohorts.get("eligible_no_heavy") or 0),
+        "heavy_then_stale_queue_evict": int(
+            economic_cohorts.get("heavy_then_stale_queue_evict") or 0
+        ),
+        "non_gainer_not_rising_repeat": int(
+            economic_cohorts.get("non_gainer_not_rising_repeat") or 0
+        ),
+        "executable_bbo_ev_status": economic_cohorts.get("executable_bbo_ev_status"),
+        "exact_bbo_joined_count": int(attribution.get("exact_bbo_joined_count") or 0),
+        "exact_promotion_venue_session_bbo_join_coverage_pct": attribution.get(
+            "exact_promotion_venue_session_bbo_join_coverage_pct"
+        ),
+        "resolved_outcome_count": int(attribution.get("resolved_outcome_count") or 0),
+        "source_quality_adjusted_ev_pct": attribution.get(
+            "source_quality_adjusted_ev_pct"
+        ),
+        "aggregate_ev_status": attribution.get("aggregate_ev_status"),
+        "venue_session_economics": attribution.get("venue_session_economics"),
+        "comparison_cost_contract_sha256": (
+            (attribution.get("comparison_cost_contract") or {}).get("contract_sha256")
+            if isinstance(attribution.get("comparison_cost_contract"), dict)
+            else None
+        ),
+        "official_symbol_master_status": (
+            (attribution.get("official_symbol_master_binding") or {}).get("status")
+            if isinstance(attribution.get("official_symbol_master_binding"), dict)
+            else None
+        ),
+        "official_symbol_master_artifact_sha256": (
+            (attribution.get("official_symbol_master_binding") or {}).get(
+                "artifact_sha256"
+            )
+            if isinstance(attribution.get("official_symbol_master_binding"), dict)
+            else None
+        ),
+        "official_symbol_master_lookup_counts": attribution.get(
+            "official_symbol_master_lookup_counts"
+        ),
+        "cohort_source_quality": attribution.get("cohort_source_quality"),
+        "source_capture_design_required": bool(
+            attribution.get("source_capture_design_required")
+        ),
+        "source_capture_repair_required": bool(
+            attribution.get("source_capture_repair_required")
+        ),
+    }
+
+
 def _build_workorders(
     summary: dict[str, Any], *, target_date: str
 ) -> list[dict[str, Any]]:
     counts = summary["pipeline_counts"]
     snapshot = summary["snapshot_summary"]
     scanner_funnel = summary.get("scanner_unique_funnel") or {}
+    economic_cohorts = scanner_funnel.get("economic_cohorts") or {}
+    economic_cohorts_evidence = _scanner_economic_cohorts_evidence(economic_cohorts)
     causal = summary.get("causal_attribution") or {}
     quiet_volume_counts = (causal.get("trade_tick_quiet") or {}).get(
         "cumulative_volume_provenance_counts", {}
@@ -1551,7 +2399,7 @@ def _build_workorders(
                     "eligible_without_heavy_evaluation_rate_pct="
                     f"{scanner_funnel.get('eligible_without_heavy_evaluation_rate_pct', 0.0)}",
                     f"final_outcome_counts={scanner_funnel.get('final_outcome_counts', {})}",
-                    f"economic_cohorts={scanner_funnel.get('economic_cohorts', {})}",
+                    f"economic_cohorts={economic_cohorts_evidence}",
                 ],
                 "files_likely_touched": [
                     "src/engine/monitoring/intraday_ws_freshness_monitor.py",
@@ -1665,7 +2513,6 @@ def _build_workorders(
                 ],
             }
         )
-    economic_cohorts = scanner_funnel.get("economic_cohorts") or {}
     economic_candidate_count = sum(
         int(economic_cohorts.get(key) or 0)
         for key in (
@@ -1677,35 +2524,64 @@ def _build_workorders(
     if (
         economic_candidate_count
         and economic_cohorts.get("executable_bbo_ev_status")
-        == "source_quality_blocked_until_exact_bbo_join"
+        != "source_only_economics_available"
     ):
+        source_capture_design_required = bool(
+            (economic_cohorts.get("executable_bbo_attribution") or {}).get(
+                "source_capture_design_required"
+            )
+        )
         orders.append(
             {
                 **base,
-                "decision": "defer_evidence",
-                "next_action": "join_exact_executable_bbo_and_first_hit_labels_postclose",
-                "implementation_state": "cohorts_identified_bbo_join_pending",
+                "decision_authority": SCANNER_EXECUTABLE_BBO_METRIC_CONTRACT[
+                    "decision_authority"
+                ],
+                "forbidden_uses": SCANNER_EXECUTABLE_BBO_METRIC_CONTRACT[
+                    "forbidden_uses"
+                ],
+                "decision": (
+                    "design_family_candidate"
+                    if source_capture_design_required
+                    else "defer_evidence"
+                ),
+                "next_action": (
+                    "design_capacity_bounded_source_only_bbo_capture_for_depleted_scanner_cohorts"
+                    if source_capture_design_required
+                    else "recheck_exact_bbo_coverage_and_resolved_outcomes_after_next_natural_session"
+                ),
+                "implementation_state": (
+                    "executable_bbo_consumer_implemented_source_capture_design_required"
+                    if source_capture_design_required
+                    else "executable_bbo_join_implemented_waiting_source_quality"
+                ),
                 "order_id": "order_scanner_funnel_executable_bbo_join",
                 "title": "Scanner funnel executable-BBO economic attribution",
                 "priority": 2,
                 "intent": (
                     "Join each unique lost scanner generation to fresh executable bid/ask, quote age, "
-                    "venue/session, fixed effective-dated costs, target/adverse first-hit, and timeout exit."
+                    "venue/session, fixed effective-dated costs, sampled target/adverse first-hit, and "
+                    "sampled timeout exit without claiming a continuous market path."
                 ),
                 "evidence": [
                     f"economic_candidate_count={economic_candidate_count}",
-                    f"economic_cohorts={economic_cohorts}",
+                    f"economic_cohorts={economic_cohorts_evidence}",
                 ],
                 "files_likely_touched": [
-                    "src/engine/scalping/rising_missed_intraday_feedback.py",
+                    "src/engine/scalping/micro_reversion/collection_targets.py",
+                    "src/engine/monitoring/rising_missed_intraday_feedback.py",
                     "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+                    "src/tests/test_micro_reversion_collection_targets.py",
                     "src/tests/test_rising_missed_intraday_feedback.py",
+                    "src/tests/test_intraday_ws_freshness_monitor.py",
                 ],
                 "acceptance_tests": [
+                    "source_capture_design_preserves_active_owner_targets_and_reviewed_ws_item_budget",
                     "exact_promotion_venue_session_bbo_join_coverage_pct>=95",
                     "missing_bbo_is_source_quality_blocked_not_zero_profit",
                     "KRX_PREMARKET_KRX_LIKE_NXT_results_are_separate",
                     "fixed_cost_contract_effective_date_and_source_hash_match",
+                    "official_common_stock_master_exact_date_hash_and_lookup_pass",
                 ],
             }
         )
@@ -1876,6 +2752,7 @@ def build_report(
     stale_sec: float = DEFAULT_STALE_SEC,
     generated_at: str | None = None,
     incremental_state_path: Path | None = None,
+    symbol_master_path: Path | None = None,
 ) -> dict[str, Any]:
     target_date = target_date or date.today().isoformat()
     stale_ms = float(stale_sec) * 1000.0
@@ -2083,7 +2960,15 @@ def build_report(
     ) = _resolve_snapshot(subscription_snapshot_path, target_date=target_date)
     snapshot_rows = _snapshot_rows(snapshot_payload, stale_ms=stale_ms)
     snapshot = _snapshot_summary(snapshot_rows)
-    scanner_unique_funnel = _scanner_unique_funnel_summary(scanner_funnel_state)
+    symbol_master, symbol_master_binding = _load_verified_symbol_master(
+        target_date, symbol_master_path
+    )
+    scanner_unique_funnel = _scanner_unique_funnel_summary(
+        scanner_funnel_state,
+        target_date=target_date,
+        symbol_master=symbol_master,
+        symbol_master_binding=symbol_master_binding,
+    )
 
     summary = {
         "target_date": target_date,
@@ -2094,6 +2979,7 @@ def build_report(
             DECISION_STAGE_STALE_BACKOFF_METRIC_CONTRACT
         ),
         "source_paths": {name: str(path) for name, path in paths.items()},
+        "official_symbol_master_binding": symbol_master_binding,
         "source_missing": source_missing,
         "input_processing": {
             "mode": (
@@ -2192,9 +3078,13 @@ def build_report(
         },
     }
     workorders = _build_workorders(summary, target_date=target_date)
+    workorder_decision_counts = Counter(
+        str(item.get("decision") or "unspecified") for item in workorders
+    )
     summary["workorder_directives"] = workorders
     summary["workorder_summary"] = {
         "selected_order_count": len(workorders),
+        "decision_counts": dict(sorted(workorder_decision_counts.items())),
         "implement_now_runtime_effect_false_count": sum(
             1
             for item in workorders
@@ -2203,6 +3093,11 @@ def build_report(
         ),
         "defer_evidence_count": sum(
             1 for item in workorders if item.get("decision") == "defer_evidence"
+        ),
+        "design_family_candidate_count": sum(
+            1
+            for item in workorders
+            if item.get("decision") == "design_family_candidate"
         ),
         "provider_none_incident_count": int(counts.get("provider_none", 0)),
         "runtime_effect": False,
@@ -2377,6 +3272,9 @@ def _run_once(args: argparse.Namespace) -> dict[str, Any]:
         incremental_state_path=(
             Path(args.incremental_state_path) if args.incremental_state_path else None
         ),
+        symbol_master_path=(
+            Path(args.symbol_master_path) if args.symbol_master_path else None
+        ),
     )
     if args.write:
         monitor_json, monitor_md, workorder_json, workorder_md = write_report(
@@ -2406,6 +3304,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--threshold-path")
     parser.add_argument("--subscription-snapshot")
     parser.add_argument("--incremental-state-path")
+    parser.add_argument("--symbol-master-path")
     parser.add_argument("--stale-sec", type=float, default=DEFAULT_STALE_SEC)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--monitor-only", action="store_true")
