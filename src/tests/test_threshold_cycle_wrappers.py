@@ -2119,6 +2119,60 @@ def test_stage2_ops_cron_extends_ws_freshness_monitor_into_nxt_open():
     assert "!/INTRADAY_WS_FRESHNESS_MONITOR_NXT_5MIN/" in script
 
 
+def test_stage2_ops_cron_owns_main_sentinels_through_nxt_session():
+    script = Path("deploy/install_stage2_ops_cron.sh").read_text(encoding="utf-8")
+
+    assert "!/BUY_FUNNEL_SENTINEL_/" in script
+    assert "!/HOLDING_EXIT_SENTINEL_/" in script
+    assert (
+        "*/5 16-18 * * 1-5 "
+        "$PROJECT_DIR/deploy/run_buy_funnel_sentinel_intraday.sh" in script
+    )
+    assert (
+        "0-20/5 19 * * 1-5 "
+        "$PROJECT_DIR/deploy/run_buy_funnel_sentinel_intraday.sh" in script
+    )
+    assert (
+        "*/5 16-18 * * 1-5 "
+        "$PROJECT_DIR/deploy/run_holding_exit_sentinel_intraday.sh" in script
+    )
+    assert (
+        "0-20/5 19 * * 1-5 "
+        "$PROJECT_DIR/deploy/run_holding_exit_sentinel_intraday.sh" in script
+    )
+    assert "BUY_FUNNEL_SENTINEL_NXT_1600_1855" in script
+    assert "HOLDING_EXIT_SENTINEL_NXT_1600_1855" in script
+
+
+def test_market_opportunity_census_wrapper_and_installer_are_source_only():
+    wrapper = Path("deploy/run_market_opportunity_census_intraday.sh").read_text(
+        encoding="utf-8"
+    )
+    installer = Path("deploy/install_market_opportunity_census_cron.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--capture-only" in wrapper
+    assert "--panels all,liquid_common" in wrapper
+    assert 'venues="NXT"' in wrapper
+    assert 'venues="KRX,NXT"' in wrapper
+    assert "0915|1200|1515|1945" in wrapper
+    assert "ionice -c2 -n7 nice -n 15" in wrapper
+    assert "runtime_effect=false" in wrapper
+    assert "MARKET_OPPORTUNITY_CENSUS_NXT_PREMARKET_5MIN" in installer
+    assert "MARKET_OPPORTUNITY_CENSUS_KRX_NXT_5MIN" in installer
+    assert "MARKET_OPPORTUNITY_CENSUS_KRX_NXT_CLOSE_5MIN" in installer
+    assert "MARKET_OPPORTUNITY_CENSUS_NXT_TRANSITION_5MIN" in installer
+    assert "MARKET_OPPORTUNITY_CENSUS_NXT_AFTERMARKET_5MIN" in installer
+    assert "awk '!/MARKET_OPPORTUNITY_CENSUS_/'" in installer
+    assert "SYSTEM_TIMEZONE" in installer
+    assert '"Asia/Seoul"' in installer
+    assert '"runtime_effect": False' in installer
+    assert '"allowed_runtime_apply": False' in installer
+    assert '"actual_order_submitted": False' in installer
+    assert '"broker_order_forbidden": True' in installer
+
+
 def test_stage2_ops_cron_uses_light_snapshot_at_noon():
     script = Path("deploy/install_stage2_ops_cron.sh").read_text(encoding="utf-8")
 

@@ -11,6 +11,11 @@ def _event(
     record_id: int = 1,
     fields: dict | None = None,
 ) -> dict:
+    event_fields = {
+        "holding_context_venue": "KRX",
+        "holding_context_session": "krx_regular",
+    }
+    event_fields.update(fields or {})
     return {
         "schema_version": 1,
         "event_type": "pipeline_event",
@@ -19,10 +24,118 @@ def _event(
         "stock_name": "테스트종목",
         "stock_code": "000001",
         "record_id": record_id,
-        "fields": fields or {},
+        "fields": event_fields,
         "emitted_at": f"{target_date}T{hhmmss}",
         "emitted_date": target_date,
     }
+
+
+def test_sell_drought_is_classified_without_cross_venue_denominator(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    rows = [
+        _event("2026-05-06", "10:00:00", "exit_signal", record_id=1),
+        _event(
+            "2026-05-06",
+            "17:00:00",
+            "exit_signal",
+            record_id=2,
+            fields={
+                "holding_context_venue": "NXT",
+                "holding_context_session": "nxt_aftermarket",
+            },
+        ),
+        _event(
+            "2026-05-06",
+            "17:00:05",
+            "sell_order_sent",
+            record_id=2,
+            fields={
+                "holding_context_venue": "NXT",
+                "holding_context_session": "nxt_aftermarket",
+            },
+        ),
+    ]
+    _write_events(tmp_path, "2026-05-06", rows)
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "17:05:00"),
+    )
+
+    scopes = report["current"]["by_venue_session"]
+    assert scopes["KRX|KRX_REGULAR"]["classification"]["primary"] == (
+        "SELL_EXECUTION_DROUGHT"
+    )
+    assert scopes["NXT|NXT_AFTERMARKET"]["classification"]["primary"] == "NORMAL"
+    assert report["classification"]["scope_key"] == "KRX|KRX_REGULAR"
+    assert report["classification"]["primary"] == "SELL_EXECUTION_DROUGHT"
+    assert report["current"]["session"]["decision_authority"].startswith(
+        "diagnostic_only"
+    )
+
+
+def test_current_holding_nxt_phase_overrides_legacy_krx_entry_venue():
+    payload = _event(
+        "2026-05-06",
+        "17:00:00",
+        "sell_order_sent",
+        fields={
+            "holding_context_venue": "NXT",
+            "holding_context_session": "NXT",
+            "entry_venue": "KRX",
+            "entry_session": "KRX_REGULAR",
+        },
+    )
+    event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
+
+    assert event is not None
+    assert sentinel._explicit_event_scope(event) == (
+        "NXT",
+        "NXT_AFTERMARKET",
+        "pass",
+    )
+
+
+def test_premarket_venue_rejects_regular_krx_session():
+    payload = _event(
+        "2026-05-06",
+        "08:30:00",
+        "ai_review",
+        fields={
+            "holding_context_venue": "PREMARKET_KRX_LIKE",
+            "holding_context_session": "KRX_REGULAR",
+        },
+    )
+    event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
+
+    assert event is not None
+    assert sentinel._explicit_event_scope(event) == (
+        "CONFLICT",
+        "CONFLICT",
+        "conflict",
+    )
+
+
+def test_runtime_krx_like_premarket_session_token_is_preserved():
+    payload = _event(
+        "2026-05-06",
+        "08:30:00",
+        "ai_review",
+        fields={
+            "holding_context_venue": "PREMARKET_KRX_LIKE",
+            "holding_context_session": "krx_like_premarket",
+        },
+    )
+    event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
+
+    assert event is not None
+    assert sentinel._explicit_event_scope(event) == (
+        "PREMARKET_KRX_LIKE",
+        "PREMARKET_KRX_LIKE",
+        "pass",
+    )
 
 
 def _write_events(tmp_path, target_date: str, rows: list[dict]) -> None:
@@ -448,7 +561,7 @@ def test_non_real_exit_signal_is_split_from_sell_execution_drought(
         as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
     )
 
-    assert report["schema_version"] == 2
+    assert report["schema_version"] == 3
     assert report["classification"]["primary"] == "NORMAL"
     assert "SELL_EXECUTION_DROUGHT" not in report["classification"]["matches"]
     assert report["classification"]["sell_execution_scope"] == {

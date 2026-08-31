@@ -5950,6 +5950,16 @@ def test_live_entry_and_holding_loggers_inject_exact_id_without_journal_write(
     assert holding_fields["pipeline_lifecycle_population_scope"] == (
         "real_record_bound"
     )
+    assert holding_fields["holding_context_venue"] in {
+        "KRX",
+        "NXT",
+        "PREMARKET_KRX_LIKE",
+    }
+    assert holding_fields["holding_context_session"]
+    assert holding_fields["holding_context_runtime_effect"] is False
+    assert holding_fields["holding_context_decision_authority"] == (
+        "telemetry_provenance_only"
+    )
     sim_fields = emitted[2][1]["fields"]
     assert sim_fields["pipeline_lifecycle_population_scope"] == "sim_observation_only"
     assert "main_lifecycle_id" not in sim_fields

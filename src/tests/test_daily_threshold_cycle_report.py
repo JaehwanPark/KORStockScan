@@ -2404,6 +2404,7 @@ def test_calibration_report_sources_preserve_buy_funnel_latency_microstructure_c
                     "primary": "PRICE_GUARD_DROUGHT",
                     "matches": ["PRICE_GUARD_DROUGHT", "LATENCY_DROUGHT"],
                     "secondary": ["LATENCY_DROUGHT"],
+                    "scope_key": "NXT|NXT_AFTERMARKET",
                     "submit_drought_root_cause": {
                         "latency_root_cause_counts": {
                             "spread_microstructure_guard": 17,
@@ -2412,7 +2413,20 @@ def test_calibration_report_sources_preserve_buy_funnel_latency_microstructure_c
                         }
                     },
                 },
-                "current": {"session": {"stage_events": {}, "ratios": {}}},
+                "current": {
+                    "session": {
+                        "stage_events": {"budget_pass": 999},
+                        "ratios": {"submitted_to_ai_unique_pct": 99.0},
+                    },
+                    "by_venue_session": {
+                        "NXT|NXT_AFTERMARKET": {
+                            "summary": {
+                                "stage_events": {"budget_pass": 7},
+                                "ratios": {"submitted_to_ai_unique_pct": 12.5},
+                            }
+                        }
+                    },
+                },
             }
         ),
         encoding="utf-8",
@@ -2427,6 +2441,8 @@ def test_calibration_report_sources_preserve_buy_funnel_latency_microstructure_c
     assert metrics["latency_spread_microstructure_guard_count"] == 17
     assert metrics["latency_spread_or_slippage_guard_count"] == 5
     assert metrics["latency_quote_stale_count"] == 3
+    assert metrics["budget_pass"] == 7
+    assert metrics["submitted_to_ai_unique_pct"] == 12.5
 
 
 def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates():

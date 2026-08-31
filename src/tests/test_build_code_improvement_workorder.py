@@ -5,6 +5,53 @@ from src.engine import build_code_improvement_workorder as mod
 from src.engine import lifecycle_decision_matrix as ldm_mod
 
 
+def test_buy_funnel_workorder_uses_selected_venue_session_summary():
+    report = {
+        "classification": {
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+            "scope_key": "NXT|NXT_AFTERMARKET",
+        },
+        "current": {
+            "session": {
+                "stage_unique": {"ai_confirmed": 999, "order_bundle_submitted": 999},
+                "ratios": {"submitted_to_ai_unique_pct": 100.0},
+                "blocker_top": [],
+                "upstream_blocker_top": [],
+                "latency_blocker_top": [],
+            },
+            "by_venue_session": {
+                "NXT|NXT_AFTERMARKET": {
+                    "summary": {
+                        "stage_unique": {
+                            "ai_confirmed": 20,
+                            "budget_pass": 5,
+                            "latency_pass": 2,
+                            "order_bundle_submitted": 1,
+                        },
+                        "ratios": {
+                            "submitted_to_ai_unique_pct": 5.0,
+                            "submitted_to_budget_unique_pct": 20.0,
+                        },
+                        "blocker_top": [],
+                        "upstream_blocker_top": [],
+                        "latency_blocker_top": [],
+                    }
+                }
+            },
+        },
+        "entry_submit_drought_contract": {"critical": True},
+    }
+
+    orders = mod._buy_funnel_sentinel_followup_orders(report)
+
+    evidence = orders[0]["evidence"]
+    assert "scope_key=NXT|NXT_AFTERMARKET" in evidence
+    assert "ai_confirmed_unique=20" in evidence
+    assert "submitted_unique=1" in evidence
+    assert "ai_confirmed_unique=999" not in evidence
+
+
 def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"

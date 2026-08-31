@@ -2,37 +2,37 @@
 
 ## 판정
 
-- panic_state: `RECOVERY_WATCH`
-- panic_regime_mode: `STABILIZING`
-- risk_regime_gate_state: `watch`
+- panic_state: `NORMAL`
+- panic_regime_mode: `NORMAL`
+- risk_regime_gate_state: `source_quality_blocked`
 - risk_regime_threshold_mode: `insufficient_sample`
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-08-31T13:48:02`
-- latest_event_at: `2026-08-31T13:48:07`
-- reasons: `live market panic breadth risk_off advisory; market breadth risk-off watch without panic confirmation`
+- as_of: `2026-08-31T15:28:02`
+- latest_event_at: `2026-08-31T15:28:13`
+- reasons: `panic thresholds not breached`
 
 ## 입력 자원 계약
 
 - memory_bounded_streaming: `true`
-- scanned_row_count: `136207`
-- retained_exit_event_count: `1287`
+- scanned_row_count: `192953`
+- retained_exit_event_count: `1692`
 - full_event_list_materialized: `false`
 - out_of_order_event_count: `0`
-- unique_market_observation_count: `11767`
-- duplicate_snapshot_skipped_count: `10081`
+- unique_market_observation_count: `32726`
+- duplicate_snapshot_skipped_count: `13873`
 
 ## 패닉 지표
 
 - panic_decision_basis: `broker_confirmed_exit_identity_deduplicated`
 - real_exit_provenance_required: `true`
-- raw_exit_signal_count: `8`
+- raw_exit_signal_count: `11`
 - real_exit_count: `2`
 - duplicate_real_exit_signal_count: `0`
 - duplicate_real_exit_signals_excluded_from_panic: `true`
-- non_real_exit_count: `6`
-- unproven_exit_count: `6`
+- non_real_exit_count: `9`
+- unproven_exit_count: `9`
 - exit_signal_partition_reconciled: `true`
 - sim_probe_exit_excluded_from_panic: `true`
 - stop_loss_exit_count: `0`
@@ -51,25 +51,25 @@
 
 ## 회복 지표
 
-- active_positions: `5`
-- active_profit_sample: `2`
-- active_avg_unrealized_profit_rate_pct: `-0.5524`
-- active_win_rate_pct: `50`
+- active_positions: `3`
+- active_profit_sample: `0`
+- active_avg_unrealized_profit_rate_pct: `-`
+- active_win_rate_pct: `-`
 - sim_probe_provenance_passed: `true`
 - post_sell_rebound_above_sell_10_20m_pct: `0`
 - post_sell_rebound_above_buy_10_20m_pct: `0`
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `803`
+- evaluated_symbol_count: `2249`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `301`
-- degraded_orderbook_count: `301`
-- stale_or_unhealthy_orderbook_count: `10`
+- missing_orderbook_count: `1228`
+- degraded_orderbook_count: `1228`
+- stale_or_unhealthy_orderbook_count: `0`
 - panic_report_entry_count: `0`
 - panic_active_confirmation_count: `0`
 - recovery_release_transition_count: `0`
@@ -84,22 +84,22 @@
 ## Microstructure Market Context
 
 - market_risk_state: `NEUTRAL`
-- market_panic_breadth_as_of: `2026-08-31T13:48:01+09:00`
+- market_panic_breadth_as_of: `2026-08-31T15:28:01+09:00`
 - market_panic_breadth_source_quality_status: `ok`
-- market_panic_breadth_risk_off_advisory: `true`
+- market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
-- evaluated_symbol_count: `803`
+- evaluated_symbol_count: `2249`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
-- confirmed_risk_off_advisory: `true`
+- confirmed_risk_off_advisory: `false`
 - portfolio_local_risk_off_only: `false`
 - source_quality_gate: `microstructure risk_off requires market RISK_OFF or broad evaluated-symbol confirmation`
-- reasons: `market_panic_breadth_risk_off`
+- reasons: ``
 
 ## Market Weakness Observation
 
-- raw_state: `BROAD_WEAKNESS`
-- observation_id: `market-weakness-0640825d66134422931b`
+- raw_state: `NEAR_WEAKNESS_BOUNDARY`
+- observation_id: `market-weakness-e926d7478979b9b57824`
 - source_quality_ready: `true`
 - release_margin_passed: `false`
 - runtime_effect: `false`
@@ -109,12 +109,11 @@
 
 - `hard_protect_emergency_delay_forbidden`: `enforced` / runtime_effect=`false`
 - `live_threshold_mutation_forbidden`: `enforced` / runtime_effect=`false`
-- `recovery_probe_review`: `candidate_only` / runtime_effect=`false`
 - `soft_trailing_flow_confirmation_review`: `candidate_only` / runtime_effect=`false`
 
 ## Canary Candidates
 
-- `panic_entry_freeze_guard`: `report_only_candidate`, allowed_runtime_apply=`false`
+- `panic_entry_freeze_guard`: `inactive_no_panic`, allowed_runtime_apply=`false`
 - `panic_stop_confirmation`: `report_only_candidate`, allowed_runtime_apply=`false`
 - `panic_rebound_probe`: `hold_until_recovery_confirmed`, allowed_runtime_apply=`false`
 - `panic_attribution_pack`: `active_report_only`, allowed_runtime_apply=`false`

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -24,6 +24,8 @@ IGNORED_STOCK_NAMES = {"TEST", "DUMMY", "MOCK"}
 DEFAULT_WINDOWS = (5, 10, 30)
 SESSION_START = time(9, 0)
 SENTINEL_END = time(15, 30)
+NXT_SENTINEL_START = time(16, 0)
+NXT_SENTINEL_END = time(19, 20)
 REPORT_DIRNAME = "holding_exit_sentinel"
 HOLDING_PIPELINE = "HOLDING_PIPELINE"
 EVENT_CACHE_SCHEMA_VERSION = 3
@@ -35,6 +37,30 @@ FORBIDDEN_AUTOMATIONS = [
     "ai_cache_ttl_mutation",
     "bot_restart",
 ]
+EXPLICIT_TRADABLE_VENUES = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+VENUE_SCOPE_FIELD_KEYS = (
+    "holding_context_venue",
+    "effective_venue",
+    "exit_venue",
+    "market_venue",
+    "entry_venue",
+    "venue",
+)
+SESSION_SCOPE_FIELD_KEYS = (
+    "holding_context_session",
+    "market_session_bucket",
+    "exit_session",
+    "entry_session",
+    "market_session",
+    "session",
+)
+HOLDING_CLASSIFICATION_PRIORITY = (
+    "RUNTIME_OPS",
+    "SELL_EXECUTION_DROUGHT",
+    "HOLD_DEFER_DANGER",
+    "AI_HOLDING_OPS",
+    "NORMAL",
+)
 
 
 @dataclass(frozen=True)
@@ -242,6 +268,190 @@ def _attempt_key(event: PipelineEvent) -> str:
     if event.stock_code:
         return f"code:{event.stock_code}"
     return f"name:{event.stock_name}"
+
+
+def _exact_attempt_key(event: PipelineEvent) -> str | None:
+    record_id = _safe_str(event.record_id).strip()
+    if not record_id or record_id.lower() in {"0", "none", "null", "-"}:
+        return None
+    return f"id:{record_id}"
+
+
+def _canonical_venue(value: Any) -> str | None:
+    text = _safe_str(value).upper()
+    if text in EXPLICIT_TRADABLE_VENUES:
+        return text
+    if text in {"_NX", "NXT_PREMARKET", "NXT_AFTERMARKET", "NXT_REGULAR"}:
+        return "NXT"
+    if text in {"KRX_REGULAR", "KRX"}:
+        return "KRX"
+    return None
+
+
+def _canonical_session(value: Any) -> str | None:
+    text = _safe_str(value).upper()
+    if not text:
+        return None
+    if "PREMARKET_KRX_LIKE" in text or "KRX_LIKE_PREMARKET" in text:
+        return "PREMARKET_KRX_LIKE"
+    if "NXT" in text and "PRE" in text:
+        return "NXT_PREMARKET"
+    if "NXT" in text and ("AFTER" in text or "POST" in text):
+        return "NXT_AFTERMARKET"
+    if "NXT" in text:
+        return "NXT_REGULAR"
+    if "KRX" in text:
+        return "KRX_REGULAR"
+    return None
+
+
+def _session_for_venue(venue: str, emitted_at: datetime) -> str:
+    if venue == "PREMARKET_KRX_LIKE":
+        return "PREMARKET_KRX_LIKE"
+    if venue == "KRX":
+        return "KRX_REGULAR"
+    if emitted_at.time() < time(9, 0):
+        return "NXT_PREMARKET"
+    if emitted_at.time() > time(15, 30):
+        return "NXT_AFTERMARKET"
+    return "NXT_REGULAR"
+
+
+def _explicit_event_scope(event: PipelineEvent) -> tuple[str, str, str] | None:
+    venue = next(
+        (
+            venue
+            for key in VENUE_SCOPE_FIELD_KEYS[:-1]
+            if (venue := _canonical_venue(event.fields.get(key))) is not None
+        ),
+        None,
+    )
+    fallback_venue = _canonical_venue(event.fields.get(VENUE_SCOPE_FIELD_KEYS[-1]))
+    session = next(
+        (
+            session
+            for key in SESSION_SCOPE_FIELD_KEYS[:-1]
+            if (session := _canonical_session(event.fields.get(key))) is not None
+        ),
+        None,
+    )
+    fallback_session = _canonical_session(
+        event.fields.get(SESSION_SCOPE_FIELD_KEYS[-1])
+    )
+    venue = venue or fallback_venue
+    session = session or fallback_session
+    if venue is None and session is not None:
+        venue = (
+            "PREMARKET_KRX_LIKE"
+            if session == "PREMARKET_KRX_LIKE"
+            else ("NXT" if session.startswith("NXT_") else "KRX")
+        )
+    if venue is None:
+        return None
+    if session is None:
+        session = _session_for_venue(venue, event.emitted_at)
+    elif venue == "NXT" and session == "NXT_REGULAR" and (
+        event.emitted_at.time() < time(9, 0)
+        or event.emitted_at.time() > time(15, 30)
+    ):
+        session = _session_for_venue(venue, event.emitted_at)
+    if (
+        (venue == "NXT" and not session.startswith("NXT_"))
+        or (venue == "KRX" and session != "KRX_REGULAR")
+        or (
+            venue == "PREMARKET_KRX_LIKE"
+            and session != "PREMARKET_KRX_LIKE"
+        )
+    ):
+        return "CONFLICT", "CONFLICT", "conflict"
+    return venue, session, "pass"
+
+
+def _partition_events_by_venue_session(
+    events: list[PipelineEvent],
+) -> tuple[dict[str, list[PipelineEvent]], dict[str, int]]:
+    explicit_by_attempt: dict[
+        str, list[tuple[datetime, tuple[str, str]]]
+    ] = defaultdict(list)
+    for event in events:
+        scope = _explicit_event_scope(event)
+        exact_key = _exact_attempt_key(event)
+        if scope and scope[2] == "pass" and exact_key:
+            explicit_by_attempt[exact_key].append(
+                (event.emitted_at, (scope[0], scope[1]))
+            )
+
+    groups: dict[str, list[PipelineEvent]] = defaultdict(list)
+    quality_counts: Counter[str] = Counter()
+    for event in events:
+        explicit = _explicit_event_scope(event)
+        if explicit is not None:
+            venue, session, quality = explicit
+        else:
+            exact_key = _exact_attempt_key(event)
+            candidates = explicit_by_attempt.get(exact_key or "", [])
+            nearest_scopes: set[tuple[str, str]] = set()
+            if candidates:
+                min_delta = min(
+                    abs((candidate_at - event.emitted_at).total_seconds())
+                    for candidate_at, _ in candidates
+                )
+                nearest_scopes = {
+                    scope
+                    for candidate_at, scope in candidates
+                    if abs((candidate_at - event.emitted_at).total_seconds())
+                    == min_delta
+                }
+            if len(nearest_scopes) == 1:
+                venue, session = next(iter(nearest_scopes))
+                quality = "inherited_nearest_exact_attempt"
+            elif len(nearest_scopes) > 1:
+                venue, session, quality = "CONFLICT", "CONFLICT", "conflict"
+            else:
+                venue, session, quality = "UNKNOWN", "UNKNOWN", "missing"
+        groups[f"{venue}|{session}"].append(event)
+        quality_counts[quality] += 1
+    return dict(groups), dict(sorted(quality_counts.items()))
+
+
+def _select_scope_classification(
+    scope_reports: dict[str, dict[str, Any]], fallback: dict[str, Any]
+) -> dict[str, Any]:
+    priority = {
+        label: len(HOLDING_CLASSIFICATION_PRIORITY) - index
+        for index, label in enumerate(HOLDING_CLASSIFICATION_PRIORITY)
+    }
+    candidates = [
+        (scope_key, row)
+        for scope_key, row in scope_reports.items()
+        if row.get("source_quality_status") == "pass"
+        and int((row.get("summary") or {}).get("event_count") or 0) > 0
+    ]
+    if not candidates:
+        selected = dict(fallback)
+        selected["classification_basis"] = "cross_venue_fallback_no_valid_scope"
+        selected["scope_key"] = None
+    else:
+        scope_key, row = max(
+            candidates,
+            key=lambda item: (
+                priority.get(
+                    _safe_str((item[1].get("classification") or {}).get("primary")),
+                    0,
+                ),
+                _safe_str((item[1].get("summary") or {}).get("latest_event_at")),
+            ),
+        )
+        selected = dict(row["classification"])
+        selected["classification_basis"] = (
+            "venue_session_split_without_cross_denominator"
+        )
+        selected["scope_key"] = scope_key
+    selected["by_venue_session"] = {
+        scope_key: row.get("classification")
+        for scope_key, row in sorted(scope_reports.items())
+    }
+    return selected
 
 
 def _ratio(numerator: int, denominator: int) -> float:
@@ -635,13 +845,19 @@ def _classify(
     observation_metrics: dict[str, Any],
     *,
     as_of: datetime,
+    scope_key: str | None = None,
 ) -> dict[str, Any]:
     stage_events = summary["stage_events"]
     unique = summary["stage_unique"]
     ratios = summary["ratios"]
     latest = _parse_iso_datetime(_safe_str(summary.get("latest_event_at")))
     stale_sec = int((as_of - latest).total_seconds()) if latest else None
-    during_sentinel_hours = SESSION_START <= as_of.time() <= SENTINEL_END
+    if _safe_str(scope_key).startswith("NXT|"):
+        during_sentinel_hours = (
+            NXT_SENTINEL_START <= as_of.time() <= NXT_SENTINEL_END
+        )
+    else:
+        during_sentinel_hours = SESSION_START <= as_of.time() <= SENTINEL_END
 
     real_exit_signal = int(unique.get("real_exit_signal", 0) or 0)
     real_sell_sent = int(unique.get("real_sell_order_sent", 0) or 0)
@@ -878,13 +1094,85 @@ def build_holding_exit_sentinel_report(
 
     observation = load_observation_report(target_date)
     obs_metrics = _observation_metrics(observation)
-    classification = _classify(
+    global_classification = _classify(
         session_summary, baseline_summary, obs_metrics, as_of=as_of
     )
+    scoped_events, scope_quality_counts = _partition_events_by_venue_session(events)
+    scoped_baseline_events, _ = _partition_events_by_venue_session(
+        baseline_events if baseline_date else []
+    )
+    scope_reports: dict[str, dict[str, Any]] = {}
+    for scope_key, source_events in sorted(scoped_events.items()):
+        scope_summary = _summarize_events(
+            source_events, start_at=session_start, end_at=as_of
+        )
+        scope_baseline = None
+        if baseline_date and scope_key in scoped_baseline_events:
+            scope_baseline = _summarize_events(
+                scoped_baseline_events[scope_key],
+                start_at=datetime.combine(
+                    _parse_target_date(baseline_date), SESSION_START
+                ),
+                end_at=_same_time_on_date(baseline_date, as_of),
+            )
+        venue, session = scope_key.split("|", 1)
+        source_quality_status = (
+            "pass" if venue not in {"UNKNOWN", "CONFLICT"} else "blocked"
+        )
+        scope_classification = _classify(
+            scope_summary,
+            scope_baseline,
+            {},
+            as_of=as_of,
+            scope_key=scope_key,
+        )
+        if source_quality_status == "blocked":
+            scope_classification = {
+                "primary": "SOURCE_QUALITY_BLOCKED",
+                "secondary": [],
+                "matches": ["SOURCE_QUALITY_BLOCKED"],
+                "reasons": ["venue/session provenance is missing or conflicting"],
+                "live_runtime_effect": False,
+                "forbidden_automations": FORBIDDEN_AUTOMATIONS,
+            }
+        scope_reports[scope_key] = {
+            "venue": venue,
+            "session": session,
+            "source_quality_status": source_quality_status,
+            "summary": scope_summary,
+            "baseline_same_time_summary": scope_baseline,
+            "classification": scope_classification,
+        }
+    classification = _select_scope_classification(
+        scope_reports, global_classification
+    )
+    if (
+        classification.get("primary") == "NORMAL"
+        and global_classification.get("primary")
+        in {"SOFT_STOP_WHIPSAW", "TRAILING_EARLY_EXIT"}
+    ):
+        classification = dict(global_classification)
+        classification["classification_basis"] = (
+            "cross_venue_observation_diagnostic_without_scope_denominator"
+        )
+        classification["scope_key"] = None
+        classification["by_venue_session"] = {
+            scope_key: row.get("classification")
+            for scope_key, row in sorted(scope_reports.items())
+        }
+    excluded_scope_event_count = sum(
+        int((row.get("summary") or {}).get("event_count") or 0)
+        for row in scope_reports.values()
+        if row.get("source_quality_status") != "pass"
+    )
+    classification["scope_source_quality_status"] = (
+        "warning_excluded_rows" if excluded_scope_event_count else "pass"
+    )
+    classification["scope_excluded_event_count"] = excluded_scope_event_count
     followup = _followup_route(classification)
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "report_type": "holding_exit_sentinel",
         "target_date": target_date,
         "as_of": as_of.isoformat(timespec="seconds"),
@@ -905,10 +1193,26 @@ def build_holding_exit_sentinel_report(
             "forbidden_automations": FORBIDDEN_AUTOMATIONS,
         },
         "baseline": {"date": baseline_date, "same_time_summary": baseline_summary},
-        "current": {"session": session_summary, "windows": windows},
+        "current": {
+            "session": {
+                **session_summary,
+                "aggregation_role": "cross_venue_diagnostic_compatibility_rollup",
+                "decision_authority": "diagnostic_only_use_by_venue_session",
+            },
+            "windows": windows,
+            "by_venue_session": scope_reports,
+            "scope_quality_counts": scope_quality_counts,
+            "scope_source_quality_gate": {
+                "status": classification["scope_source_quality_status"],
+                "excluded_event_count": excluded_scope_event_count,
+                "excluded_rows_decision_authority": "blocked_no_denominator",
+                "valid_scope_decision_allowed": True,
+            },
+        },
         "observation": {
             "path": str(_observation_path(target_date)),
             "metrics": obs_metrics,
+            "decision_authority": "cross_venue_observation_diagnostic_only",
         },
         "classification": classification,
         "followup": followup,

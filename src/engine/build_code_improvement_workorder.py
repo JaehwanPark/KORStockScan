@@ -6245,11 +6245,24 @@ def _buy_funnel_sentinel_followup_orders(
         and "SUBMIT_DROUGHT_CRITICAL" not in matches
     ):
         return []
-    session = (
-        ((report.get("current") or {}).get("session") or {})
-        if isinstance(report.get("current"), dict)
+    current = report.get("current") if isinstance(report.get("current"), dict) else {}
+    scope_key = str(classification.get("scope_key") or "").strip()
+    scope_reports = (
+        current.get("by_venue_session")
+        if isinstance(current.get("by_venue_session"), dict)
         else {}
     )
+    selected_scope = (
+        scope_reports.get(scope_key)
+        if isinstance(scope_reports.get(scope_key), dict)
+        else {}
+    )
+    session = (
+        selected_scope.get("summary")
+        if isinstance(selected_scope.get("summary"), dict)
+        else current.get("session")
+    )
+    session = session if isinstance(session, dict) else {}
     ratios = session.get("ratios") if isinstance(session.get("ratios"), dict) else {}
     unique = (
         session.get("stage_unique")
@@ -6287,6 +6300,7 @@ def _buy_funnel_sentinel_followup_orders(
         else []
     )
     evidence = [
+        f"scope_key={scope_key or 'legacy_cross_venue'}",
         f"ai_confirmed_unique={_safe_int(unique.get('ai_confirmed'), 0)}",
         f"budget_pass_unique={_safe_int(unique.get('budget_pass'), 0)}",
         f"latency_pass_unique={_safe_int(unique.get('latency_pass'), 0)}",

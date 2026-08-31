@@ -19556,6 +19556,43 @@ def _holding_pipeline_stable_block_log_decision(
     }
 
 
+def _holding_pipeline_observation_scope_fields(
+    stock: dict | None,
+    *,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    """Attach the current evaluation venue/session to HOLDING telemetry only."""
+
+    observed_ts = float(time.time() if now_ts is None else now_ts)
+    session = _holding_sell_execution_session_bucket(observed_ts)
+    if session == "krx_regular":
+        venue = "KRX"
+    elif session == "krx_like_premarket":
+        venue = "PREMARKET_KRX_LIKE"
+    elif session.startswith("nxt_"):
+        venue = "NXT"
+    else:
+        stock_fields = stock if isinstance(stock, dict) else {}
+        venue = str(
+            stock_fields.get("effective_venue")
+            or stock_fields.get("rising_missed_effective_venue")
+            or "UNKNOWN"
+        ).strip().upper()
+        if venue not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}:
+            venue = "UNKNOWN"
+    return {
+        "holding_context_venue": venue,
+        "holding_context_session": session,
+        "holding_context_scope_source": "runtime_evaluation_clock_session_v1",
+        "holding_context_decision_authority": "telemetry_provenance_only",
+        "holding_context_runtime_effect": False,
+        "holding_context_forbidden_uses": (
+            "order_submit|sell_submit|threshold_mutation|provider_route_change|"
+            "broker_guard_bypass|bot_restart"
+        ),
+    }
+
+
 def _log_holding_pipeline(stock, code, stage, **fields):
     should_emit, throttle_fields = _holding_pipeline_stable_block_log_decision(
         stock,
@@ -19565,6 +19602,8 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     if not should_emit:
         return
     fields.update(throttle_fields)
+    for key, value in _holding_pipeline_observation_scope_fields(stock).items():
+        fields.setdefault(key, value)
     if _holding_stage_needs_probe_residual_causality(stage):
         for key, value in _probe_residual_scale_in_causal_fields(stock).items():
             fields.setdefault(key, value)

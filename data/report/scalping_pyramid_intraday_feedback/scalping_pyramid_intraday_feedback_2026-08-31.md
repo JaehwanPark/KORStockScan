@@ -1,6 +1,6 @@
 # 2026-08-31 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-08-31T13:45:02+09:00
+- generated_at: 2026-08-31T19:35:02+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -8,12 +8,12 @@
 
 ## Summary
 
-- pyramid_feedback_row_count: 2
+- pyramid_feedback_row_count: 6
 - closed_pyramid_row_count: 0
 - pyramid_would_have_helped_count: 0
 - pyramid_correctly_blocked_count: 0
 - pyramid_overheat_or_reversal_risk_count: 0
-- pyramid_open_unresolved_count: 2
+- pyramid_open_unresolved_count: 6
 - one_share_event_count: 0
 - one_share_closed_count: 0
 - one_share_pyramid_opportunity_count: 0
@@ -52,13 +52,18 @@
 
 ## Blocker Metrics
 
-- blocker=profit_not_enough sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
+- blocker=micro_vwap_overheated sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
+- blocker=profit_not_enough sample=4 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
 - blocker=pyramid_quality_blocked:ai_score_below_min,tick_accel_stale,micro_context_stale sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
 
 ## Rows
 
 - record_id= code=054940 name=엑사이엔씨 label=pyramid_open_unresolved blocker=pyramid_quality_blocked:ai_score_below_min,tick_accel_stale,micro_context_stale profit=1.22 final=None ai=60.0 tick=0.5 micro_vwap=81.91
 - record_id= code=484870 name=엠앤씨솔루션 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.57 final=None ai=54.0 tick=1.0 micro_vwap=55.48
+- record_id= code=134580 name=탑코미디어 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.18 final=None ai=50.0 tick=3.5 micro_vwap=-144.29
+- record_id= code=023530 name=롯데쇼핑 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.62 final=None ai=50.0 tick=0.235 micro_vwap=11.85
+- record_id= code=187660 name=페니트리움바이오 label=pyramid_open_unresolved blocker=micro_vwap_overheated profit=2.88 final=None ai=61.0 tick=3.0 micro_vwap=-79.2
+- record_id= code=199430 name=케이엔알시스템 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.37 final=None ai=39.0 tick=1.0 micro_vwap=-88.54
 
 ## Real Scale-In Performance Rows
 

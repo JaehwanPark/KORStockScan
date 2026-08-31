@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from src.engine.monitoring import market_opportunity_census as census
 from src.utils import kiwoom_utils
@@ -32,7 +34,7 @@ def test_ka10027_forwards_official_venue_and_filter_contract(monkeypatch):
                         "now_trde_qty": "26175580",
                         "cntr_str": "112.5",
                         "pred_pre_sig": "2",
-                    }
+                    },
                 ]
             }
         ]
@@ -211,7 +213,479 @@ def test_capture_is_sanitized_source_only_and_separates_venues():
     assert {call[1]["stex_tp"] for call in calls} == {"1", "2"}
     assert all(row["metric_contract"]["runtime_effect"] is False for row in rows)
     assert all(row["source"]["credential_fields_stored"] == [] for row in rows)
+    assert all(
+        len(row["source"]["normalized_source_payload_sha256"]) == 64
+        for row in rows
+    )
+    assert all(
+        row["source"]["source_hash_scope"]
+        == "sanitized_request_contract_plus_normalized_response_rows"
+        for row in rows
+    )
+    assert {row["session"] for row in rows} == {
+        "KRX_REGULAR",
+        "NXT_REGULAR_OVERLAP",
+    }
     assert "secret-token" not in json.dumps(rows, ensure_ascii=False)
+
+
+def test_snapshot_source_hash_detects_normalized_row_tampering():
+    records = census.capture_market_snapshots(
+        "secret-token",
+        target_date="2026-07-30",
+        captured_at=datetime.fromisoformat("2026-07-30T10:00:00+09:00"),
+        venues=("KRX",),
+        panels=("liquid_common",),
+        fetcher=lambda *_args, **_kwargs: [
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 100000,
+                "ChangeRate": 5.0,
+                "Volume": 100000,
+                "CntrStr": 120.0,
+                "PreSig": "2",
+            }
+        ],
+    )
+
+    assert census._snapshot_contract_error(
+        records[0], target_date="2026-07-30"
+    ) == ""
+    records[0]["rows"][0]["current_price"] = 100001
+    assert census._snapshot_contract_error(
+        records[0], target_date="2026-07-30"
+    ) == "source_payload_hash_mismatch"
+
+
+def test_capture_normalizes_nonfinite_numbers_before_source_hashing():
+    records = census.capture_market_snapshots(
+        "secret-token",
+        target_date="2026-07-30",
+        captured_at=datetime.fromisoformat("2026-07-30T10:00:00+09:00"),
+        venues=("KRX",),
+        panels=("liquid_common",),
+        fetcher=lambda *_args, **_kwargs: [
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": "NaN",
+                "ChangeRate": "Infinity",
+                "Volume": "-Infinity",
+            }
+        ],
+    )
+
+    row = records[0]["rows"][0]
+    assert row["current_price"] is None
+    assert row["change_rate_pct"] is None
+    assert row["volume"] is None
+    assert census._snapshot_contract_error(
+        records[0], target_date="2026-07-30"
+    ) == ""
+
+
+def test_opportunity_episode_id_is_stable_and_resets_after_declared_gap():
+    base = {
+        "schema_version": census.SCHEMA_VERSION,
+        "target_date": "2026-07-30",
+        "venue": "KRX",
+        "session": "KRX_REGULAR",
+        "panel": "liquid_common",
+        "source_quality_status": "ok",
+        "rows": [
+            {
+                "rank": 1,
+                "stock_code": "005930",
+                "stock_name": "삼성전자",
+                "current_price": 100000,
+                "change_rate_pct": 5.0,
+            }
+        ],
+    }
+    snapshots = [
+        {**base, "captured_at": "2026-07-30T10:00:00+09:00"},
+        {**base, "captured_at": "2026-07-30T10:05:00+09:00"},
+        {**base, "captured_at": "2026-07-30T10:20:01+09:00"},
+    ]
+
+    episodes = census._build_episodes(
+        snapshots,
+        panel="liquid_common",
+        top_n=20,
+    )
+
+    assert len(episodes) == 2
+    assert episodes[0]["snapshot_count"] == 2
+    assert episodes[0]["opportunity_episode_id"].startswith("MOC-EPI-")
+    assert (
+        episodes[0]["opportunity_episode_id"] != episodes[1]["opportunity_episode_id"]
+    )
+
+
+def test_named_primary_metric_exists_and_missing_contracts_fail_closed(tmp_path):
+    snapshot_path = tmp_path / "snapshots.jsonl"
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    ai_path = tmp_path / "ai.jsonl"
+    _write_jsonl(
+        snapshot_path,
+        [
+            {
+                "schema_version": census.SCHEMA_VERSION,
+                "target_date": "2026-07-30",
+                "captured_at": "2026-07-30T10:00:00+09:00",
+                "venue": "KRX",
+                "session": "KRX_REGULAR",
+                "panel": "liquid_common",
+                "source_quality_status": "ok",
+                "rows": [
+                    {
+                        "rank": 1,
+                        "stock_code": "005930",
+                        "stock_name": "삼성전자",
+                        "current_price": 100000,
+                        "change_rate_pct": 5.0,
+                    }
+                ],
+            }
+        ],
+    )
+    _write_jsonl(pipeline_path, [])
+    _write_jsonl(ai_path, [])
+
+    report = census.build_report(
+        "2026-07-30",
+        snapshot_path=snapshot_path,
+        pipeline_path=pipeline_path,
+        ai_trace_path=ai_path,
+        symbol_master_path=tmp_path / "missing-master.json",
+        trigger_receipt_path=tmp_path / "missing-trigger.json",
+    )
+    summary = report["coverage"]["liquid_common"]["top_20"]["forward_exact"]
+
+    assert (
+        census.METRIC_CONTRACT["primary_decision_metric"]
+        == "entry_ai_provider_reach_rate_pct"
+    )
+    assert summary["entry_ai_provider_reach_rate_pct"] == 0.0
+    assert summary["denominator_unique_opportunity_episode_count"] == 1
+    assert report["schema_version"] == census.REPORT_SCHEMA_VERSION
+    assert report["primary_decision"]["metric"] == ("entry_ai_provider_reach_rate_pct")
+    assert report["primary_decision"]["by_venue"]["KRX"] == {
+        "denominator_unique_opportunity_episode_count": 0,
+        "entry_ai_provider_reached_unique": 0,
+        "entry_ai_provider_reach_rate_pct": 0.0,
+        "promotion_recall_pct": 0.0,
+        "terminal_coverage_reason_counts": {},
+        "terminal_coverage_reason_count_sum": 0,
+        "terminal_denominator_conservation_delta": 0,
+        "terminal_denominator_conservation_status": "pass",
+    }
+    assert report["status"] == "early_evidence_hold_sample"
+    assert report["scanner_recall_state"] == "insufficient_evidence_scanner_recall"
+    assert (
+        "official_symbol_master_binding_missing" in report["instrumentation_blockers"]
+    )
+    assert "installed_trigger_contract_missing" in report["instrumentation_blockers"]
+    assert report["source_quality"]["primary_symbol_master_lookup_counts"] == {
+        "master_unavailable": 1
+    }
+    assert report["source_quality"]["primary_symbol_master_lookup_codes"] == {
+        "master_unavailable": ["005930"]
+    }
+    assert report["source_quality"]["missing_session_capture_ids"] == []
+    assert report["source_quality"]["missing_source_hash_snapshot_count"] == 1
+    assert report["source_quality"]["verified_source_hash_snapshot_count"] == 0
+    assert "capture_source_hash_missing" in report["instrumentation_blockers"]
+
+
+def test_primary_master_eligible_terminal_reasons_conserve_denominator(
+    tmp_path, monkeypatch
+):
+    snapshot_path = tmp_path / "snapshots.jsonl"
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    ai_path = tmp_path / "ai.jsonl"
+    _write_jsonl(
+        snapshot_path,
+        [
+            {
+                "schema_version": census.SCHEMA_VERSION,
+                "target_date": "2026-07-30",
+                "captured_at": "2026-07-30T10:00:00+09:00",
+                "venue": "KRX",
+                "session": "KRX_REGULAR",
+                "panel": "liquid_common",
+                "source_quality_status": "ok",
+                "rows": [
+                    {
+                        "rank": 1,
+                        "stock_code": "005930",
+                        "stock_name": "삼성전자",
+                        "current_price": 100000,
+                        "change_rate_pct": 5.0,
+                    }
+                ],
+            }
+        ],
+    )
+    _write_jsonl(pipeline_path, [])
+    _write_jsonl(ai_path, [])
+
+    class FakeMaster:
+        def lookup(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                status=SimpleNamespace(value="verified"),
+                record=SimpleNamespace(
+                    listing_market=SimpleNamespace(value="KOSPI"),
+                    instrument_type=SimpleNamespace(value="EQUITY"),
+                ),
+            )
+
+    monkeypatch.setattr(
+        census,
+        "_load_symbol_master_binding",
+        lambda *_args, **_kwargs: (FakeMaster(), {"status": "verified"}),
+    )
+    report = census.build_report(
+        "2026-07-30",
+        snapshot_path=snapshot_path,
+        pipeline_path=pipeline_path,
+        ai_trace_path=ai_path,
+        trigger_receipt_path=tmp_path / "missing-trigger.json",
+    )
+
+    primary = report["primary_decision"]["by_venue"]["KRX"]
+    assert primary["denominator_unique_opportunity_episode_count"] == 1
+    assert primary["terminal_coverage_reason_counts"] == {
+        "scanner_discovery_gap_or_unobserved": 1
+    }
+    assert primary["terminal_coverage_reason_count_sum"] == 1
+    assert primary["terminal_denominator_conservation_delta"] == 0
+    assert primary["terminal_denominator_conservation_status"] == "pass"
+
+
+def test_trigger_contract_requires_current_wrapper_and_installed_exact_lines(
+    tmp_path, monkeypatch
+):
+    wrapper = tmp_path / "run_market_opportunity_census_intraday.sh"
+    wrapper.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    wrapper.chmod(0o700)
+    monkeypatch.setattr(census, "DEFAULT_TRIGGER_WRAPPER", wrapper)
+    trigger_lines = [
+        f"{prefix}{wrapper} # {marker}"
+        for prefix, marker in zip(
+            census.EXPECTED_TRIGGER_SCHEDULE_PREFIXES,
+            census.EXPECTED_TRIGGER_MARKERS,
+        )
+    ]
+    canonical_lines = "\n".join(trigger_lines) + "\n"
+    payload = {
+        "schema_version": census.TRIGGER_SCHEMA_VERSION,
+        "trigger_id": "MARKET_OPPORTUNITY_CENSUS_5MIN",
+        "enabled": True,
+        "contract_source": "installed_crontab_verified",
+        "schedule_timezone": "Asia/Seoul",
+        "capture_cadence_sec": census.CAPTURE_CADENCE_SEC,
+        "installed_exec_start": str(wrapper),
+        "wrapper_sha256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+        "trigger_lines": trigger_lines,
+        "trigger_lines_sha256": hashlib.sha256(
+            canonical_lines.encode("utf-8")
+        ).hexdigest(),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    receipt = tmp_path / "installed_trigger.json"
+    receipt.write_text(json.dumps(payload), encoding="utf-8")
+
+    verified = census._load_trigger_contract(
+        receipt,
+        installed_crontab_text=canonical_lines,
+        system_timezone="Asia/Seoul",
+    )
+    missing_line = census._load_trigger_contract(
+        receipt,
+        installed_crontab_text="\n".join(trigger_lines[:-1]) + "\n",
+        system_timezone="Asia/Seoul",
+    )
+    payload["trigger_lines"][0] = payload["trigger_lines"][0].replace("*/5 8", "*/10 8")
+    tampered_lines = "\n".join(payload["trigger_lines"]) + "\n"
+    payload["trigger_lines_sha256"] = hashlib.sha256(
+        tampered_lines.encode("utf-8")
+    ).hexdigest()
+    receipt.write_text(json.dumps(payload), encoding="utf-8")
+    invalid_schedule = census._load_trigger_contract(
+        receipt,
+        installed_crontab_text=tampered_lines,
+        system_timezone="Asia/Seoul",
+    )
+
+    assert verified["status"] == "verified"
+    assert verified["reason_codes"] == []
+    assert verified["trigger_lines_installed"] is True
+    assert missing_line["status"] == "invalid"
+    assert "trigger_lines_installed" in missing_line["reason_codes"]
+    assert invalid_schedule["status"] == "invalid"
+    assert "trigger_schedule" in invalid_schedule["reason_codes"]
+
+
+def test_existing_pipeline_events_cover_source_watch_authority_and_submit_safety(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    ai_path = tmp_path / "ai.jsonl"
+    common = {
+        "stock_code": "005930",
+        "emitted_at": "2026-07-30T10:00:01+09:00",
+    }
+    _write_jsonl(
+        pipeline_path,
+        [
+            {
+                **common,
+                "stage": "scalping_scanner_candidate_pruned",
+                "fields": {"effective_venue": "KRX_REGULAR"},
+            },
+            {
+                **common,
+                "stage": "scalping_scanner_candidate_promoted",
+                "fields": {
+                    "effective_venue": "KRX_REGULAR",
+                    "scanner_promotion_id": "SCANPROM-1",
+                },
+            },
+            {
+                **common,
+                "record_id": 42,
+                "stage": "scalping_scanner_runtime_target_attach",
+                "fields": {
+                    "effective_venue": "KRX_REGULAR",
+                    "scanner_promotion_id": "SCANPROM-1",
+                    "runtime_target_attach_outcome": "attached",
+                },
+            },
+            {
+                **common,
+                "record_id": 42,
+                "stage": "scalp_entry_action_decision_snapshot",
+                "fields": {
+                    "effective_venue": "KRX_REGULAR",
+                    "scanner_promotion_id": "SCANPROM-1",
+                    "decision_authority": "existing_entry_owner",
+                },
+            },
+            {
+                **common,
+                "record_id": 42,
+                "stage": "entry_submit_revalidation_block",
+                "fields": {
+                    "effective_venue": "KRX_REGULAR",
+                    "scanner_promotion_id": "SCANPROM-1",
+                    "block_reason": "stale_context_or_quote",
+                },
+            },
+        ],
+    )
+    _write_jsonl(ai_path, [])
+
+    index = census._load_stage_index(
+        pipeline_path,
+        ai_path,
+        target_date="2026-07-30",
+    )
+
+    assert len(index["005930"]["source_seen"]) == 2
+    assert len(index["005930"]["candidate_evaluated"]) == 2
+    assert len(index["005930"]["watch_admitted"]) == 1
+    assert len(index["005930"]["runtime_watch_attached"]) == 1
+    assert len(index["005930"]["entry_authority_decided"]) == 1
+    assert len(index["005930"]["submit_safety_checked"]) == 1
+    assert index["005930"]["submit_safety_checked"][0]["raw_stage"] == (
+        "entry_submit_revalidation_block"
+    )
+
+
+def test_exact_terminal_reason_preserves_submit_safety_block(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    ai_path = tmp_path / "ai.jsonl"
+    promotion_id = "SCANPROM-BLOCKED"
+    _write_jsonl(
+        pipeline_path,
+        [
+            {
+                "stock_code": "005930",
+                "record_id": 42,
+                "stage": stage,
+                "emitted_at": f"2026-07-30T10:00:0{index}+09:00",
+                "fields": {
+                    "effective_venue": "KRX_REGULAR",
+                    "scanner_promotion_id": promotion_id,
+                    **(
+                        {"runtime_target_attach_outcome": "attached"}
+                        if stage == "scalping_scanner_runtime_target_attach"
+                        else {}
+                    ),
+                    **(
+                        {"block_reason": "stale_context_or_quote"}
+                        if stage == "entry_submit_revalidation_block"
+                        else {}
+                    ),
+                },
+            }
+            for index, stage in enumerate(
+                [
+                    "scalping_scanner_candidate_promoted",
+                    "scalping_scanner_runtime_target_attach",
+                    "scalping_scanner_fast_precheck",
+                    "scalping_scanner_heavy_eval_completion",
+                    "scalp_entry_action_decision_snapshot",
+                    "entry_submit_revalidation_block",
+                ]
+            )
+        ],
+    )
+    _write_jsonl(
+        ai_path,
+        [
+            {
+                "stock_code": "005930",
+                "record_id": 42,
+                "endpoint": "scalping_entry",
+                "decision_ts": "2026-07-30T10:00:04+09:00",
+                "effective_venue": "KRX_REGULAR",
+                "provider_called": True,
+                "provider_actual": "openai",
+                "action": "BUY",
+            }
+        ],
+    )
+    stage_index = census._load_stage_index(
+        pipeline_path,
+        ai_path,
+        target_date="2026-07-30",
+    )
+
+    row = census._coverage_row(
+        {
+            "venue": "KRX",
+            "session": "KRX_REGULAR",
+            "stock_code": "005930",
+            "stock_name": "삼성전자",
+            "first_census_at": datetime.fromisoformat("2026-07-30T10:00:00+09:00"),
+        },
+        stage_index,
+        after=datetime.fromisoformat("2026-07-30T10:00:00+09:00"),
+        before=datetime.fromisoformat("2026-07-30T10:05:00+09:00"),
+        require_venue=True,
+        require_lineage=True,
+    )
+
+    assert row["terminal_coverage_reason"] == "submit_safety_block"
+    assert row["stage_reason_codes"]["submit_safety_checked"] == [
+        "stale_context_or_quote"
+    ]
 
 
 def test_report_splits_forward_exact_from_noncausal_retrospective(tmp_path):
@@ -525,14 +999,16 @@ def test_coverage_records_scanner_to_ai_latency_and_terminal_owner():
         require_lineage=True,
     )
 
-    assert row["terminal_coverage_reason"] == "post_ai_or_submit_gap"
+    assert row["terminal_coverage_reason"] == "entry_authority_decision_gap"
     assert row["stage_latency_from_scanner_promoted_sec"]["fast_precheck"] == 1.0
     assert (
         row["stage_latency_from_scanner_promoted_sec"]["entry_ai_provider_called"]
         == 3.5
     )
     summary = census._summarize_rows_base([row])
-    assert summary["terminal_coverage_reason_counts"] == {"post_ai_or_submit_gap": 1}
+    assert summary["terminal_coverage_reason_counts"] == {
+        "entry_authority_decision_gap": 1
+    }
     assert summary["scanner_lineage_status_counts"] == {
         "scanner_promotion_lineage_proven": 1
     }
@@ -553,6 +1029,58 @@ def test_coverage_records_scanner_to_ai_latency_and_terminal_owner():
         "source_signature": "PREV_CLOSE_GAINER",
         "prev_close_gainer_source": True,
     }
+
+
+def test_primary_provider_rate_excludes_provider_reach_after_detection_sla():
+    census_at = datetime.fromisoformat("2026-07-30T10:00:00+09:00")
+    promoted_at = datetime.fromisoformat("2026-07-30T10:02:01+09:00")
+    row = census._coverage_row(
+        {
+            "venue": "KRX",
+            "stock_code": "005930",
+            "stock_name": "삼성전자",
+            "first_census_at": census_at,
+        },
+        {
+            "005930": {
+                "scanner_promoted": [
+                    {
+                        "ts": promoted_at,
+                        "venue": "KRX",
+                        "scanner_promotion_id": "SCANPROM-005930-LATE",
+                    }
+                ],
+                "fast_precheck": [
+                    {
+                        "ts": promoted_at,
+                        "venue": "KRX",
+                        "record_id": "late-42",
+                        "scanner_promotion_id": "SCANPROM-005930-LATE",
+                    }
+                ],
+                "entry_ai_provider_called": [
+                    {
+                        "ts": datetime.fromisoformat("2026-07-30T10:02:02+09:00"),
+                        "venue": "KRX",
+                        "record_id": "late-42",
+                        "provider_called": True,
+                    }
+                ],
+            }
+        },
+        after=census_at,
+        before=datetime.fromisoformat("2026-07-30T10:05:00+09:00"),
+        require_venue=True,
+        require_lineage=True,
+    )
+
+    summary = census._summarize_rows_base([row])
+
+    assert row["scanner_detection_latency_sec"] == 121.0
+    assert row["scanner_detection_sla_met"] is False
+    assert summary["stage_counts"]["entry_ai_provider_called"] == 1
+    assert summary["entry_ai_provider_reached_within_sla_count"] == 0
+    assert summary["entry_ai_provider_reach_rate_pct"] == 0.0
 
 
 def test_forward_lineage_does_not_join_next_promotion_ai_result():
@@ -606,6 +1134,39 @@ def test_forward_lineage_does_not_join_next_promotion_ai_result():
     assert row["stage_reached"]["fast_precheck"] is True
     assert row["stage_reached"]["entry_ai_provider_called"] is False
     assert row["terminal_coverage_reason"] == "scanner_heavy_eval_gap"
+
+
+def test_forward_exact_does_not_join_event_after_session_boundary():
+    census_at = datetime.fromisoformat("2026-07-30T15:29:30+09:00")
+    row = census._coverage_row(
+        {
+            "venue": "KRX",
+            "session": "KRX_REGULAR",
+            "stock_code": "005930",
+            "stock_name": "삼성전자",
+            "first_census_at": census_at,
+        },
+        {
+            "005930": {
+                "scanner_promoted": [
+                    {
+                        "ts": datetime.fromisoformat("2026-07-30T15:30:01+09:00"),
+                        "venue": "KRX",
+                        "session": "OUTSIDE_KRX_BUY_WINDOW",
+                        "scanner_promotion_id": "SCANPROM-005930-AFTER-CLOSE",
+                    }
+                ]
+            }
+        },
+        after=census_at,
+        before=datetime.fromisoformat("2026-07-30T15:34:30+09:00"),
+        require_venue=True,
+        require_lineage=True,
+    )
+
+    assert row["stage_reached"]["scanner_promoted"] is False
+    assert row["scanner_lineage"]["status"] == ("not_applicable_no_scanner_promotion")
+    assert row["terminal_coverage_reason"] == ("scanner_discovery_gap_or_unobserved")
 
 
 def test_current_heavy_eval_completion_stage_is_counted():
@@ -667,7 +1228,30 @@ def test_snapshot_append_and_markdown_forbid_live_authority(tmp_path):
             "target_date": "2026-07-30",
             "status": "ok",
             "coverage": {},
+            "primary_decision": {
+                "panel": "liquid_common",
+                "top_n": 20,
+                "view": "forward_exact",
+                "metric": "entry_ai_provider_reach_rate_pct",
+                "by_venue": {
+                    "KRX": {
+                        "denominator_unique_opportunity_episode_count": 19,
+                        "entry_ai_provider_reached_unique": 2,
+                        "entry_ai_provider_reach_rate_pct": 10.53,
+                        "promotion_recall_pct": 10.53,
+                        "terminal_coverage_reason_counts": {
+                            "scanner_discovery_gap_or_unobserved": 19,
+                        },
+                        "terminal_coverage_reason_count_sum": 19,
+                        "terminal_denominator_conservation_delta": 0,
+                        "terminal_denominator_conservation_status": "pass",
+                    },
+                },
+            },
         }
     )
     assert "runtime_effect: `false`" in markdown
+    assert "| KRX | 19 | 2 | 10.53 | 10.53 | 19 | 0 | pass |" in markdown
+    assert "### Terminal Coverage Reasons" in markdown
+    assert "KRX terminal coverage reasons:" in markdown
     assert "`standalone_buy`" in markdown

@@ -2198,6 +2198,29 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     buy_classification = (
         buy_classification if isinstance(buy_classification, dict) else {}
     )
+    buy_scope_key = str(buy_classification.get("scope_key") or "").strip()
+    buy_scope_reports = (
+        buy_current.get("by_venue_session")
+        if isinstance(buy_current.get("by_venue_session"), dict)
+        else {}
+    )
+    buy_selected_scope = (
+        buy_scope_reports.get(buy_scope_key)
+        if isinstance(buy_scope_reports.get(buy_scope_key), dict)
+        else {}
+    )
+    if isinstance(buy_selected_scope.get("summary"), dict):
+        buy_session = buy_selected_scope["summary"]
+        buy_stage_events = (
+            buy_session.get("stage_events")
+            if isinstance(buy_session.get("stage_events"), dict)
+            else {}
+        )
+        buy_ratios = (
+            buy_session.get("ratios")
+            if isinstance(buy_session.get("ratios"), dict)
+            else {}
+        )
     buy_submit_drought_root = (
         buy_classification.get("submit_drought_root_cause")
         if isinstance(buy_classification.get("submit_drought_root_cause"), dict)
@@ -2331,6 +2354,24 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         else {}
     )
     classification = classification if isinstance(classification, dict) else {}
+    holding_scope_key = str(classification.get("scope_key") or "").strip()
+    holding_scope_reports = (
+        current.get("by_venue_session")
+        if isinstance(current.get("by_venue_session"), dict)
+        else {}
+    )
+    holding_selected_scope = (
+        holding_scope_reports.get(holding_scope_key)
+        if isinstance(holding_scope_reports.get(holding_scope_key), dict)
+        else {}
+    )
+    if isinstance(holding_selected_scope.get("summary"), dict):
+        session = holding_selected_scope["summary"]
+        stage_events = (
+            session.get("stage_events")
+            if isinstance(session.get("stage_events"), dict)
+            else {}
+        )
     panic_metrics = (
         panic_sell_defense.get("panic_metrics")
         if isinstance(panic_sell_defense, dict)
