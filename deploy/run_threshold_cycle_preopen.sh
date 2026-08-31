@@ -137,7 +137,17 @@ raise SystemExit("preopen_manifest_json_not_found")
 '
 }
 
-trap 'rc=$?; write_preopen_status failed command_failed "$rc" 1 || true; exit "$rc"' ERR
+mark_preopen_failed() {
+  local rc="${1:-1}"
+  local failed_at
+  trap - ERR
+  failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+  write_preopen_status failed command_failed "$rc" 1 || true
+  echo "[FAIL] threshold-cycle preopen target_date=$TARGET_DATE reason=command_failed exit_code=$rc failed_at=$failed_at"
+  exit "$rc"
+}
+
+trap 'mark_preopen_failed "$?"' ERR
 write_preopen_status running started 0 0
 LOCK_FILE="$PROJECT_DIR/logs/threshold_cycle_preopen.lock"
 exec 9>"$LOCK_FILE"
@@ -193,7 +203,13 @@ manifest_payload="$(printf '%s\n' "$manifest_output" | sed '/__THRESHOLD_PREOPEN
 printf '%s\n' "$manifest_payload"
 manifest_json="$(printf '%s\n' "$manifest_payload" | extract_manifest_json)"
 printf '%s\n' "$manifest_json" > "$MANIFEST_CAPTURE_FILE"
-handle_preopen_apply_result "$MANIFEST_CAPTURE_FILE" "${manifest_exit_code:-1}"
+preopen_apply_result_rc=0
+handle_preopen_apply_result \
+  "$MANIFEST_CAPTURE_FILE" \
+  "${manifest_exit_code:-1}" || preopen_apply_result_rc=$?
+if [ "$preopen_apply_result_rc" -ne 0 ]; then
+  mark_preopen_failed "$preopen_apply_result_rc"
+fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_live_policy \
   --target-date "$TARGET_DATE" \
   --runtime-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/threshold_runtime_env_${TARGET_DATE}.env" \

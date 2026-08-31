@@ -4809,9 +4809,13 @@ def _persistent_operator_overrides_runtime_audit(
 
 def _scalp_sim_auto_runtime_policy_audit(
     effective_env: dict[str, str],
+    *,
+    operator_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    operator_overrides = operator_overrides or {}
+    direct_enabled_key = "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED"
     direct_enabled = _runtime_env_enabled(
-        effective_env.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED")
+        effective_env.get(direct_enabled_key)
     )
     direct_policy_file = str(
         effective_env.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE") or ""
@@ -4825,7 +4829,17 @@ def _scalp_sim_auto_runtime_policy_audit(
     direct_contract_complete = direct_enabled and bool(direct_policy_file)
     lifecycle_contract_complete = lifecycle_enabled and bool(lifecycle_policy_file)
     use_lifecycle_handoff = not direct_contract_complete and lifecycle_contract_complete
-    enabled = direct_enabled or lifecycle_enabled
+    direct_operator_lock_disabled = bool(
+        direct_enabled_key in operator_overrides
+        and not _runtime_env_enabled(operator_overrides.get(direct_enabled_key))
+    )
+    # Match the runtime loader's effective-owner contract.  The lifecycle
+    # discovery flag alone is not a request to load its catalog: the handoff
+    # becomes effective only when the lifecycle policy file is present.  This
+    # matters when a persistent operator override explicitly disables the
+    # direct scalp-sim policy while the shared discovery instrumentation flag
+    # remains enabled.
+    enabled = direct_enabled or use_lifecycle_handoff
     policy_file = (
         direct_policy_file if direct_contract_complete else lifecycle_policy_file
     )
@@ -4842,6 +4856,7 @@ def _scalp_sim_auto_runtime_policy_audit(
         "lifecycle_requested": lifecycle_enabled,
         "lifecycle_contract_complete": lifecycle_contract_complete,
         "lifecycle_handoff_enabled": use_lifecycle_handoff,
+        "direct_operator_lock_disabled": direct_operator_lock_disabled,
         "policy_source": policy_source,
         "policy_file": policy_file or None,
         "status": "disabled",
@@ -4849,6 +4864,8 @@ def _scalp_sim_auto_runtime_policy_audit(
         "required_env_keys": [],
     }
     if not enabled:
+        if direct_operator_lock_disabled:
+            audit["reason"] = "operator_lock_disabled"
         return audit
     if not direct_contract_complete and not lifecycle_contract_complete:
         required_env_keys = []
@@ -5440,7 +5457,10 @@ def verify_runtime_env_handoff(
             )
     runtime_policy_audits = [
         *_split_runtime_policy_audits(target_date, effective_env_overrides),
-        _scalp_sim_auto_runtime_policy_audit(effective_env_overrides),
+        _scalp_sim_auto_runtime_policy_audit(
+            effective_env_overrides,
+            operator_overrides={**operator_overrides, **dated_operator_overrides},
+        ),
         _holding_decision_context_runtime_audit(
             target_date,
             effective_env_overrides,
@@ -5454,6 +5474,7 @@ def verify_runtime_env_handoff(
         selected_policy_disabled = bool(
             audit.get("status") == "disabled"
             and audit.get("family") in selected_families
+            and audit.get("reason") != "operator_lock_disabled"
         )
         if audit.get("status") != "fail" and not selected_policy_disabled:
             continue

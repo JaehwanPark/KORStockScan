@@ -9826,6 +9826,68 @@ def test_scalp_sim_policy_audit_rejects_enabled_policy_without_any_file():
     assert audit["required_env_keys"] == ["KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE"]
 
 
+def test_scalp_sim_policy_audit_ignores_incomplete_lifecycle_handoff_when_direct_disabled(
+):
+    audit = mod._scalp_sim_auto_runtime_policy_audit(
+        {
+            "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED": "false",
+            "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED": "true",
+        },
+        operator_overrides={"KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED": "false"},
+    )
+
+    assert audit["status"] == "disabled"
+    assert audit["reason"] == "operator_lock_disabled"
+    assert audit["direct_requested"] is False
+    assert audit["direct_operator_lock_disabled"] is True
+    assert audit["lifecycle_requested"] is True
+    assert audit["lifecycle_contract_complete"] is False
+    assert audit["lifecycle_handoff_enabled"] is False
+
+
+def test_verify_runtime_env_handoff_allows_selected_scalp_sim_operator_lock_disable(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    policy_path = tmp_path / "scalp_sim_policy_catalog.json"
+    (runtime_dir / "threshold_runtime_env_2026-09-01.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-09-01",
+                "selected_families": ["scalp_sim_auto_approval"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED": "true",
+                    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE": str(policy_path),
+                    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_VERSION": (
+                        "scalp_sim_auto_approval:2026-08-31"
+                    ),
+                    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE": "2026-08-31",
+                    "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED": "true",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "export KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED=false\n",
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-09-01")
+
+    assert result["status"] == "pass"
+    audit = next(
+        item
+        for item in result["runtime_policy_audits"]
+        if item["family"] == "scalp_sim_auto_approval"
+    )
+    assert audit["status"] == "disabled"
+    assert audit["reason"] == "operator_lock_disabled"
+    assert audit["direct_operator_lock_disabled"] is True
+
+
 def test_verify_runtime_env_handoff_rejects_pre_clean_baseline_embedded_plan(
     tmp_path, monkeypatch
 ):

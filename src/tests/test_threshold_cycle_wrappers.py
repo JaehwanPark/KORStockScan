@@ -3094,6 +3094,51 @@ def test_preopen_wrapper_smoke_allows_operator_lock_runtime_env_without_source_r
     assert manifest["status"] == "operator_runtime_env_lock_ready_missing_source_report"
 
 
+def test_preopen_wrapper_failure_closes_status_and_writes_fail_marker(tmp_path):
+    project = tmp_path / "project"
+    date = "2026-09-01"
+    engine_dir = project / "src/engine"
+    engine_dir.mkdir(parents=True)
+    (project / "src/__init__.py").write_text("", encoding="utf-8")
+    (engine_dir / "__init__.py").write_text("", encoding="utf-8")
+    (engine_dir / "threshold_cycle_preopen_apply.py").write_text(
+        "import json\n"
+        "print(json.dumps({\n"
+        "    'status': 'auto_bounded_live_ready',\n"
+        "    'runtime_change': True,\n"
+        "    'runtime_env_handoff_verification': {'status': 'fail'},\n"
+        "}))\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", "deploy/run_threshold_cycle_preopen.sh", date],
+        cwd=Path.cwd(),
+        env={**os.environ, "PROJECT_DIR": str(project), "VENV_PY": "python3"},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert result.returncode == 1, result.stdout
+    assert (
+        f"[FAIL] threshold-cycle preopen target_date={date} "
+        "reason=command_failed exit_code=1"
+    ) in result.stdout
+    status = json.loads(
+        (
+            project
+            / f"data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_{date}.status.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert status["status"] == "failed"
+    assert status["reason"] == "command_failed"
+    assert status["exit_code"] == 1
+    assert status["finished_at"] == status["updated_at"]
+
+
 def test_opening_rotation_tuning_and_preopen_apply_are_retired():
     postclose = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
         encoding="utf-8"
