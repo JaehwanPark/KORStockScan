@@ -4480,11 +4480,21 @@ def _blocked_observation_records_fail_closed_source_gap(
                 "not_evaluated_transport_timeout",
             }
         )
+        final_source_quality_blocked = (
+            _contract_bool(fields.get("entry_action_final_blocked"), True)
+            and "source_quality" in str(
+                fields.get("entry_action_final_block_reason")
+                or fields.get("entry_action_final_reason")
+                or fields.get("block_reason")
+                or ""
+            ).strip().lower()
+        )
         return (
             (
                 source_stage == "latency_block"
                 or preflight_blocked
                 or provider_transport_failed_closed
+                or final_source_quality_blocked
             )
             and str(fields.get("minute_candle_evaluation_state") or "").strip().lower()
             == "unavailable_fail_closed"
@@ -4562,7 +4572,30 @@ def _blocked_observation_records_fail_closed_source_gap(
     )
     return (
         str(fields.get(state_field) or "").strip().lower() == "unavailable_fail_closed"
+        and _contract_bool(fields.get("actual_order_submitted"), False)
+        and _contract_bool(fields.get("broker_order_forbidden"), True)
+        and _contract_bool(fields.get("allowed_runtime_apply"), False)
     )
+
+
+def _explicit_fail_closed_optional_feature_fields(
+    stage: str, fields: dict[str, Any]
+) -> set[str]:
+    """Return non-imputed feature values made inapplicable by an explicit veto.
+
+    The provenance fields that prove the source gap remain mandatory.  Only the
+    feature values that were deliberately not evaluated may stay absent, so a
+    fail-closed blocker is not misclassified as a malformed observation row.
+    """
+
+    optional: set[str] = set()
+    if _blocked_observation_records_fail_closed_source_gap(
+        stage, fields, source="minute_candle"
+    ):
+        optional.update({"curr_vs_micro_vwap_bp", "micro_vwap_bp"})
+        if stage == "adverse_fill_observed":
+            optional.add("micro_context_usable")
+    return optional
 
 
 def _pressure_provenance_unusable(fields: dict[str, Any], *, stage: str = "") -> bool:
@@ -4678,10 +4711,14 @@ def _row_contract_violations(
     fields = _normalized_fields_for_contract(
         stage, row.get("fields") if isinstance(row.get("fields"), dict) else {}
     )
+    fail_closed_optional_fields = _explicit_fail_closed_optional_feature_fields(
+        stage, fields
+    )
     missing = [
         field
         for field in contract.required_fields
         if not _is_present(fields.get(field))
+        and field not in fail_closed_optional_fields
     ]
     for field in _conditional_required_fields(stage, fields):
         if not _is_present(fields.get(field)) and field not in missing:

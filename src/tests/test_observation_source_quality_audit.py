@@ -1007,6 +1007,89 @@ def test_entry_transport_timeout_accepts_explicit_fail_closed_candle_gap():
     )
 
 
+def test_entry_final_source_quality_block_accepts_explicit_fail_closed_candle_gap():
+    fields = {
+        "source_stage": "real_weak_ai_micro_entry_block",
+        "entry_action_final_blocked": True,
+        "entry_action_final_block_reason": "source_quality_unknown",
+        "minute_candle_evaluation_state": "unavailable_fail_closed",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+    assert audit._blocked_observation_records_fail_closed_source_gap(
+        "scalp_entry_action_decision_snapshot",
+        fields,
+        source="minute_candle",
+    )
+
+
+def test_explicit_fail_closed_rows_keep_provenance_but_allow_unevaluated_values():
+    pyramid_contract = audit.STAGE_CONTRACTS["pyramid_blocked_reason"]
+    pyramid_fields = {field: "observed" for field in pyramid_contract.required_fields}
+    pyramid_fields.update(
+        {
+            "curr_vs_micro_vwap_bp": "-",
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
+            "micro_vwap_available": False,
+            "minute_candle_context_quality": "missing",
+            "minute_candle_window_fresh": False,
+            "minute_candle_latest_age_ms": -1.0,
+            "minute_candle_evaluation_state": "unavailable_fail_closed",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_runtime_apply": False,
+        }
+    )
+    pyramid_violations = audit._row_contract_violations(
+        "pyramid_blocked_reason",
+        {"fields": pyramid_fields},
+        pyramid_contract,
+    )
+
+    assert "curr_vs_micro_vwap_bp" not in pyramid_violations["missing_fields"]
+    assert (
+        "minute_candle_window_fresh_contract"
+        not in pyramid_violations["invalid_fields"]
+    )
+
+    submitted_pyramid_fields = {
+        **pyramid_fields,
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+    }
+    submitted_pyramid_violations = audit._row_contract_violations(
+        "pyramid_blocked_reason",
+        {"fields": submitted_pyramid_fields},
+        pyramid_contract,
+    )
+    assert "curr_vs_micro_vwap_bp" in submitted_pyramid_violations["missing_fields"]
+
+    adverse_contract = audit.STAGE_CONTRACTS["adverse_fill_observed"]
+    adverse_fields = {field: "observed" for field in adverse_contract.required_fields}
+    adverse_fields.update(
+        {
+            "feature_valid": False,
+            "micro_context_usable": "-",
+            "tick_aggressor_trusted_count": 0,
+            "tick_aggressor_pressure_usable": False,
+            "micro_vwap_available": False,
+            "minute_candle_context_quality": "missing",
+            "minute_candle_window_fresh": False,
+            "minute_candle_latest_age_ms": -1.0,
+        }
+    )
+    adverse_violations = audit._row_contract_violations(
+        "adverse_fill_observed",
+        {"fields": adverse_fields},
+        adverse_contract,
+    )
+
+    assert "micro_context_usable" not in adverse_violations["missing_fields"]
+    assert adverse_violations["invalid_fields"] == []
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     (
