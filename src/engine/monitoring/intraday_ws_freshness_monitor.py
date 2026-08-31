@@ -28,7 +28,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v4"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v5"
 
 FORBIDDEN_USES = [
     "EV",
@@ -696,6 +696,8 @@ def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
         lambda: defaultdict(set)
     )
     generation_lineage_metadata_conflict_counts: Counter = Counter()
+    immutable_metadata_conflict_count = 0
+    immutable_metadata_conflict_rows_sample: list[dict[str, Any]] = []
     for lineage in lineages:
         stages = (
             lineage.get("stages") if isinstance(lineage.get("stages"), dict) else {}
@@ -704,10 +706,28 @@ def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
         unique_records.update(str(item) for item in lineage.get("record_ids") or [])
         if lineage.get("code"):
             unique_symbols.add(str(lineage["code"]))
+        metadata_conflicts = (
+            lineage.get("metadata_conflicts")
+            if isinstance(lineage.get("metadata_conflicts"), list)
+            else []
+        )
+        immutable_metadata_conflict_count += len(metadata_conflicts)
+        if metadata_conflicts and len(immutable_metadata_conflict_rows_sample) < 50:
+            immutable_metadata_conflict_rows_sample.append(
+                {
+                    "lineage_type": "promotion",
+                    "promotion_id": str(lineage.get("promotion_id") or ""),
+                    "scan_generation_id": _valid_lineage_token(
+                        lineage.get("scan_generation_id")
+                    ),
+                    "code": str(lineage.get("code") or ""),
+                    "metadata_conflicts": list(metadata_conflicts),
+                }
+            )
         generation_id = _valid_lineage_token(lineage.get("scan_generation_id"))
         if generation_id:
             generation_lineage_metadata_conflict_counts[generation_id] += len(
-                lineage.get("metadata_conflicts") or []
+                metadata_conflicts
             )
             generation_terminal_keys[generation_id].add(
                 (str(lineage.get("code") or ""), "promoted")
@@ -785,10 +805,28 @@ def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
         reasons = prune.get("reasons") or [prune.get("reason") or "unknown"]
         for reason in reasons:
             prune_reasons[str(reason)] += 1
+        metadata_conflicts = (
+            prune.get("metadata_conflicts")
+            if isinstance(prune.get("metadata_conflicts"), list)
+            else []
+        )
+        immutable_metadata_conflict_count += len(metadata_conflicts)
+        if metadata_conflicts and len(immutable_metadata_conflict_rows_sample) < 50:
+            immutable_metadata_conflict_rows_sample.append(
+                {
+                    "lineage_type": "prune",
+                    "promotion_id": None,
+                    "scan_generation_id": _valid_lineage_token(
+                        prune.get("scan_generation_id")
+                    ),
+                    "code": str(prune.get("code") or ""),
+                    "metadata_conflicts": list(metadata_conflicts),
+                }
+            )
         generation_id = _valid_lineage_token(prune.get("scan_generation_id"))
         if generation_id:
             generation_lineage_metadata_conflict_counts[generation_id] += len(
-                prune.get("metadata_conflicts") or []
+                metadata_conflicts
             )
             for reason in reasons:
                 generation_terminal_keys[generation_id].add(
@@ -885,6 +923,10 @@ def _scanner_unique_funnel_summary(state: dict[str, Any]) -> dict[str, Any]:
         "manual_control_exclusion_terminalized_count": manual_terminalized_count,
         "unique_pruned_candidate_count": len(prunes),
         "prune_reason_counts": dict(sorted(prune_reasons.items())),
+        "immutable_metadata_conflict_count": immutable_metadata_conflict_count,
+        "immutable_metadata_conflict_rows_sample": (
+            immutable_metadata_conflict_rows_sample
+        ),
         "scan_generation_conservation": {
             "generation_count": len(conservation_rows),
             "complete_generation_count": sum(
@@ -1561,13 +1603,17 @@ def _build_workorders(
         )
     conservation = scanner_funnel.get("scan_generation_conservation") or {}
     incomplete_generations = int(conservation.get("incomplete_generation_count") or 0)
-    if incomplete_generations:
+    immutable_metadata_conflicts = int(
+        scanner_funnel.get("immutable_metadata_conflict_count") or 0
+    )
+    if incomplete_generations or immutable_metadata_conflicts:
         incomplete_rows = conservation.get("incomplete_rows_sample") or []
         structural_rows = (
             conservation.get("structural_contract_conflict_rows_sample") or []
         )
         structural_contract_conflict = bool(
             int(conservation.get("structural_contract_conflict_generation_count") or 0)
+            or immutable_metadata_conflicts
         )
         orders.append(
             {
@@ -1591,15 +1637,19 @@ def _build_workorders(
                 "title": "Scanner ranked-to-promotion funnel conservation gap",
                 "priority": 1,
                 "intent": (
-                    "Require each ranked candidate in a scan generation to terminate as exactly one "
+                    "Preserve exact code, generation, rank, ranked count, venue, and session on each "
+                    "scanner lineage, then require every ranked candidate to terminate as exactly one "
                     "promotion, explicit guard block, or first-blocker prune receipt."
                 ),
                 "evidence": [
                     f"incomplete_generation_count={incomplete_generations}",
+                    f"immutable_metadata_conflict_count={immutable_metadata_conflicts}",
                     "structural_contract_conflict_generation_count="
                     f"{conservation.get('structural_contract_conflict_generation_count', 0)}",
                     f"incomplete_conservation_rows_sample={incomplete_rows}",
                     f"structural_contract_conflict_rows_sample={structural_rows}",
+                    "immutable_metadata_conflict_rows_sample="
+                    f"{scanner_funnel.get('immutable_metadata_conflict_rows_sample', [])}",
                 ],
                 "files_likely_touched": [
                     "src/scanners/scalping_scanner.py",
@@ -1610,6 +1660,8 @@ def _build_workorders(
                 "acceptance_tests": [
                     "ranked_candidate_count=unique_promoted_plus_unique_pruned_per_generation",
                     "incomplete_generation_count=0",
+                    "immutable_metadata_conflict_count=0",
+                    "structural_contract_conflict_generation_count=0",
                 ],
             }
         )

@@ -257,6 +257,8 @@ def test_scanner_unique_funnel_deduplicates_mirrors_and_closes_final_outcome(
     assert conservation["incomplete_generation_count"] == 0
     assert conservation["structural_contract_conflict_generation_count"] == 0
     assert conservation["structural_contract_conflict_rows_sample"] == []
+    assert funnel["immutable_metadata_conflict_count"] == 0
+    assert funnel["immutable_metadata_conflict_rows_sample"] == []
     assert conservation["rows"] == [
         {
             "scan_generation_id": "SCANGEN-1000",
@@ -504,6 +506,77 @@ def test_scanner_generation_preserves_promotion_owner_and_venue_metadata(
     )
     assert order["decision"] == "implement_now"
     assert order["runtime_effect"] is False
+
+
+def test_scanner_immutable_metadata_conflict_without_generation_is_not_hidden(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    promotion_id = "SCANPROM-000525-1000000"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_promoted",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+                code="000525",
+            ),
+            _event(
+                "scalping_scanner_fast_precheck",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                    "effective_venue": "NXT",
+                    "market_session_bucket": "NXT_REGULAR",
+                },
+                code="000526",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    funnel = report["scanner_unique_funnel"]
+    conservation = funnel["scan_generation_conservation"]
+    assert conservation["generation_count"] == 0
+    assert conservation["incomplete_generation_count"] == 0
+    assert funnel["immutable_metadata_conflict_count"] == 3
+    assert funnel["immutable_metadata_conflict_rows_sample"] == [
+        {
+            "lineage_type": "promotion",
+            "promotion_id": promotion_id,
+            "scan_generation_id": "",
+            "code": "000525",
+            "metadata_conflicts": [
+                "code:000525!=000526",
+                "venue:KRX!=NXT",
+                "market_session_bucket:KRX_REGULAR!=NXT_REGULAR",
+            ],
+        }
+    ]
+    order = next(
+        item
+        for item in report["workorder_directives"]
+        if item["order_id"] == "order_scanner_scan_generation_conservation_gap"
+    )
+    assert order["decision"] == "implement_now"
+    assert order["runtime_effect"] is False
+    assert any(
+        evidence == "immutable_metadata_conflict_count=3"
+        for evidence in order["evidence"]
+    )
+    assert "immutable_metadata_conflict_count=0" in order["acceptance_tests"]
 
 
 def test_scanner_funnel_fingerprint_does_not_hide_mirror_metadata_conflict():
@@ -919,7 +992,7 @@ def test_build_report_rebuilds_incremental_state_after_schema_change(tmp_path):
         incremental_state_path=state_path,
     )
     stale_state = json.loads(state_path.read_text(encoding="utf-8"))
-    stale_state["schema_version"] = "intraday_ws_freshness_incremental_v3"
+    stale_state["schema_version"] = "intraday_ws_freshness_incremental_v4"
     state_path.write_text(json.dumps(stale_state), encoding="utf-8")
 
     rebuilt = mod.build_report(
