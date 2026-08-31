@@ -53,10 +53,12 @@ class _RuntimeRecordDB:
 
 
 class _ExpireQuery:
-    def __init__(self, calls):
+    def __init__(self, calls, filters):
         self.calls = calls
+        self.filters = filters
 
     def filter(self, *conditions):
+        self.filters.extend(str(condition) for condition in conditions)
         return self
 
     def update(self, values, synchronize_session=False):
@@ -65,8 +67,9 @@ class _ExpireQuery:
 
 
 class _ExpireSession:
-    def __init__(self, calls):
+    def __init__(self, calls, filters):
         self.calls = calls
+        self.filters = filters
 
     def __enter__(self):
         return self
@@ -75,15 +78,16 @@ class _ExpireSession:
         return False
 
     def query(self, model):
-        return _ExpireQuery(self.calls)
+        return _ExpireQuery(self.calls, self.filters)
 
 
 class _ExpireDB:
     def __init__(self):
         self.calls = []
+        self.filters = []
 
     def get_session(self):
-        return _ExpireSession(self.calls)
+        return _ExpireSession(self.calls, self.filters)
 
 
 def _reset_scanner_hot_override_cache():
@@ -2495,6 +2499,36 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
             {"codes": ["011930"], "source": "scanner_runtime_target_refresh"},
         )
     ]
+
+
+def test_scanner_runtime_handoff_provenance_preserves_same_generation_only(
+    monkeypatch,
+):
+    monkeypatch.setattr(kiwoom_sniper_v2.time, "time", lambda: 200.0)
+    existing = {
+        "scanner_runtime_handoff_epoch": 100.0,
+        "scanner_runtime_handoff_promotion_id": "PROMO-A",
+    }
+
+    same = kiwoom_sniper_v2._scanner_runtime_handoff_updates(
+        {"scanner_promotion_id": "PROMO-A"},
+        source="promotion_event_refresh",
+        existing=existing,
+    )
+    rotated = kiwoom_sniper_v2._scanner_runtime_handoff_updates(
+        {"scanner_promotion_id": "PROMO-B"},
+        source="promotion_event_refresh",
+        existing=existing,
+    )
+
+    assert same["scanner_runtime_handoff_epoch"] == 100.0
+    assert rotated["scanner_runtime_handoff_epoch"] == 200.0
+    assert rotated["scanner_runtime_handoff_promotion_id"] == "PROMO-B"
+    assert rotated["scanner_attach_provenance_version"] == (
+        "scanner_runtime_handoff_v1"
+    )
+    assert "scanner_attach_epoch" not in same
+    assert "scanner_attach_epoch" not in rotated
 
 
 def test_scalping_scanner_promoted_target_refresh_preserves_higher_positive_delta(
@@ -11331,6 +11365,19 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     assert emitted[-1]["fields"]["scanner_promotion_id"] == "SCANPROM-005930-1000000"
     assert emitted[-1]["fields"]["scanner_promotion_emitted_epoch"] == 1000.0
     assert emitted[-1]["fields"]["source_signature"] == "PRICE_JUMP_START"
+    assert targets[0]["scanner_runtime_handoff_source"] == (
+        "database_poll_recovery_attach"
+    )
+    assert targets[0]["scanner_runtime_handoff_promotion_id"] == (
+        "SCANPROM-005930-1000000"
+    )
+    assert targets[0]["scanner_attach_provenance_version"] == (
+        "scanner_runtime_handoff_v1"
+    )
+    assert emitted[-1]["fields"]["scanner_runtime_handoff_epoch"] > 0
+    assert emitted[-1]["fields"]["scanner_runtime_instance_id"].startswith(
+        "scanner-runtime-"
+    )
     assert targets[0]["scanner_watch_budget_owner"] == "rising_missed"
     assert (
         emitted[-1]["fields"]["scanner_watch_budget_owner_source"]
@@ -11592,6 +11639,59 @@ def test_db_poll_scanner_target_skips_manual_control_excluded_code(
         == "operator_manual_control_excluded_symbol"
     )
     assert emitted[-1]["fields"]["manual_control_exclusion_applied"] is True
+
+
+def test_db_poll_manual_exclusion_terminalizes_only_exact_zero_fill_generation(
+    monkeypatch, tmp_path
+):
+    emitted = []
+    fake_db = _ExpireDB()
+    excluded_path = tmp_path / "manual_control_excluded_codes.txt"
+    excluded_path.write_text("005930\n", encoding="utf-8")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(excluded_path)
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2, "DB", fake_db)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+
+    attached = kiwoom_sniper_v2.attach_db_poll_target_if_missing(
+        {
+            "id": 99,
+            "code": "005930",
+            "name": "SAMSUNG",
+            "strategy": "SCALPING",
+            "status": "WATCHING",
+            "position_tag": "SCANNER",
+            "buy_qty": 0,
+            "buy_time": None,
+            "scanner_promotion_id": "SCANPROM-005930-1000000",
+        },
+        [],
+        now_ts=1002.0,
+    )
+
+    assert attached is False
+    assert fake_db.calls == [({"status": "EXPIRED"}, False)]
+    filter_contract = " ".join(fake_db.filters)
+    assert "recommendation_history.id" in filter_contract
+    assert "recommendation_history.stock_code" in filter_contract
+    assert "recommendation_history.status" in filter_contract
+    assert "recommendation_history.strategy" in filter_contract
+    assert "recommendation_history.position_tag" in filter_contract
+    assert "recommendation_history.scanner_promotion_id" in filter_contract
+    assert "recommendation_history.buy_time IS NULL" in filter_contract
+    assert "recommendation_history.buy_qty" in filter_contract
+    assert emitted[-1]["fields"]["manual_control_exclusion_terminalized"] is True
+    assert (
+        emitted[-1]["fields"]["manual_control_exclusion_terminalization_scope"]
+        == "exact_record_promotion_zero_fill"
+    )
 
 
 def test_db_poll_holding_target_skips_manual_control_excluded_code(

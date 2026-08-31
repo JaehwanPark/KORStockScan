@@ -41,6 +41,9 @@ from src.engine.scalping.opening_rotation import (
     RETIRED as OPENING_ROTATION_RETIRED,
     load_active_runtime_policy as load_active_opening_rotation_runtime_policy,
 )
+from src.engine.risk.manual_control_exclusion import (
+    evaluate_manual_control_exclusion,
+)
 from src.engine.sniper_time import (
     SCALPING_BUY_WINDOWS,
     describe_scalping_buy_windows,
@@ -3606,6 +3609,17 @@ def _scanner_event_fields(target, source_guard=None):
             "scanner_promotion_emitted_epoch"
         )
         or "",
+        "scanner_scan_generation_id": source_guard.get("scanner_scan_generation_id")
+        or target.get("ScannerScanGenerationId")
+        or "",
+        "scanner_scan_rank": source_guard.get("scanner_scan_rank")
+        or target.get("ScannerScanRank")
+        or "",
+        "scanner_ranked_candidate_count": source_guard.get(
+            "scanner_ranked_candidate_count"
+        )
+        or target.get("ScannerRankedCandidateCount")
+        or "",
         "late_confirmation_recheck_once": bool(
             source_guard.get("late_confirmation_recheck_once")
         ),
@@ -3729,6 +3743,63 @@ def _log_scanner_candidate_event(
     )
 
 
+def _log_scanner_candidate_pruned(
+    target,
+    *,
+    reason,
+    scan_generation_id,
+    scan_rank,
+    ranked_candidate_count,
+    venue_fields=None,
+    context=None,
+):
+    """Emit one explicit first-blocker receipt for a ranked candidate."""
+
+    context = dict(context or {})
+    emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        str(target.get("Name") or "-"),
+        str(target.get("Code") or "").strip()[:6],
+        "scalping_scanner_candidate_pruned",
+        fields={
+            **_scanner_event_fields(
+                target,
+                {
+                    "blocked": True,
+                    "reason": str(reason or "unknown_scanner_prune"),
+                    "candidate_role": _scanner_candidate_role(target),
+                    "source_signature": ",".join(_source_signature(target)),
+                    **context,
+                },
+            ),
+            **dict(venue_fields or {}),
+            **context,
+            "metric_role": "funnel_count",
+            "decision_authority": (
+                "real_scalping_scanner_existing_promotion_guard_observation"
+            ),
+            "window_policy": "per_scan_generation_first_blocker",
+            "sample_floor": "one_ranked_scanner_candidate",
+            "primary_decision_metric": "ranked_candidate_terminal_outcome_count",
+            "source_quality_gate": "scan_generation_code_and_first_blocker_required",
+            "forbidden_uses": (
+                "standalone_buy,broker_submit,score_threshold_change,provider_route_change,"
+                "order_price_change,quantity_or_cap_change,broker_guard_change,"
+                "stale_quote_bypass,hard_safety_bypass,real_execution_quality_approval"
+            ),
+            "runtime_effect": True,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "scanner_prune_reason": str(reason or "unknown_scanner_prune"),
+            "scanner_prune_first_blocker": True,
+            "scanner_scan_generation_id": str(scan_generation_id),
+            "scanner_scan_rank": int(scan_rank),
+            "scanner_ranked_candidate_count": int(ranked_candidate_count),
+        },
+    )
+
+
 def _log_scanner_real_source_guard_block(
     target,
     source_guard,
@@ -3774,6 +3845,10 @@ def _scanner_runtime_target_payload(
         "scanner_promotion_id": fields.get("scanner_promotion_id") or "",
         "scanner_promotion_reason": fields.get("scanner_promotion_reason") or "",
         "scanner_promotion_emitted_epoch": fields.get("scanner_promotion_emitted_epoch")
+        or "",
+        "scanner_scan_generation_id": fields.get("scanner_scan_generation_id") or "",
+        "scanner_scan_rank": fields.get("scanner_scan_rank") or "",
+        "scanner_ranked_candidate_count": fields.get("scanner_ranked_candidate_count")
         or "",
         "late_confirmation_recheck_once": bool(
             fields.get("late_confirmation_recheck_once")
@@ -3966,10 +4041,35 @@ def promote_candidates(
 ):
     now_ts = time.time() if now_ts is None else now_ts
     candidate_venue_fields = scalping_session_venue_provenance(now_ts)
+    scan_generation_id = f"SCANGEN-{os.getpid()}-{int(float(now_ts or 0.0) * 1000)}-{time.monotonic_ns()}"
+    ranked_targets = list(ranked_targets or [])
+    ranked_candidate_count = len(ranked_targets)
     new_codes_found = []
     recent_picks = _filter_picks_within_cooldown(
         recent_picks, now_ts, reentry_cooldown_sec
     )
+    eligible_ranked_targets = []
+    for scan_rank, target in enumerate(ranked_targets, start=1):
+        exclusion = evaluate_manual_control_exclusion(target.get("Code"))
+        if exclusion.excluded:
+            _log_scanner_candidate_pruned(
+                target,
+                reason="manual_control_excluded",
+                scan_generation_id=scan_generation_id,
+                scan_rank=scan_rank,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+                context=exclusion.as_log_fields(),
+            )
+            continue
+        target["ScannerScanRank"] = scan_rank
+        target["ScannerScanGenerationId"] = scan_generation_id
+        target["ScannerRankedCandidateCount"] = ranked_candidate_count
+        eligible_ranked_targets.append(target)
+    ranked_targets = eligible_ranked_targets
+    if not ranked_targets:
+        return [], recent_picks
+
     watch_budget_enabled = _scanner_watch_budget_reallocation_enabled()
     now_dt = datetime.fromtimestamp(now_ts)
     opening_config = _scanner_watch_budget_opening_config()
@@ -4248,6 +4348,21 @@ def promote_candidates(
         + replacement_probe_slots,
     )
     if remaining_slots <= 0:
+        for target in ranked_targets:
+            _log_scanner_candidate_pruned(
+                target,
+                reason="no_remaining_capacity",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+                context={
+                    "scanner_active_watching_count": active_count,
+                    "scanner_max_active": max_active,
+                    "scanner_max_new_codes": max_new_limit,
+                    "scanner_observation_slot_count": observation_slots,
+                },
+            )
         print(
             "🧯 [SCALPING 스캐너 cap] 신규 후보 등록 생략 "
             f"active={active_count} max_active={max_active} max_new_codes={max_new_codes}"
@@ -4268,8 +4383,10 @@ def promote_candidates(
     general_promoted_count = 0
     market_gainer_promoted_count = 0
     open_slot_promotions_remaining = open_slots
+    processed_scan_ranks = set()
 
     for target in ranked_targets:
+        processed_scan_ranks.add(target.get("ScannerScanRank"))
         code = target["Code"]
         is_limit_down_live_target = LIMIT_DOWN_LIVE_UNLOCK_SOURCE in set(
             _source_signature(target)
@@ -4279,8 +4396,28 @@ def promote_candidates(
             and transferable_limit_down_slot > 0
             and open_slot_promotions_remaining <= transferable_limit_down_slot
         ):
+            _log_scanner_candidate_pruned(
+                target,
+                reason="reserved_limit_down_capacity",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+                context={
+                    "scanner_transferable_limit_down_slot": transferable_limit_down_slot,
+                    "scanner_open_slot_promotions_remaining": open_slot_promotions_remaining,
+                },
+            )
             continue
         if _has_active_non_scanner_scalping_watching_code(db, code):
+            _log_scanner_candidate_pruned(
+                target,
+                reason="active_non_scanner_owner",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+            )
             continue
         is_low_rebound_reserved_priority_target = (
             _is_low_rebound_reserved_priority_target(target)
@@ -4295,6 +4432,19 @@ def promote_candidates(
             and not is_limit_down_live_target
             and general_promoted_count >= general_slot_limit
         ):
+            _log_scanner_candidate_pruned(
+                target,
+                reason="general_slot_limit",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+                context={
+                    "scanner_general_slot_limit": general_slot_limit,
+                    "scanner_general_promoted_count": general_promoted_count,
+                    "scanner_low_rebound_reserved_slots": low_rebound_reserved_slots,
+                },
+            )
             continue
         watch_owner = target.get("ScannerWatchBudgetOwner") or GENERAL_SCALPING
         is_market_gainer_target = MARKET_GAINER_SOURCE in set(_source_signature(target))
@@ -4303,8 +4453,29 @@ def promote_candidates(
             and market_gainer_active_count + market_gainer_promoted_count
             >= market_gainer_reserved_slots
         ):
+            _log_scanner_candidate_pruned(
+                target,
+                reason="market_gainer_reserved_full",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+                context={
+                    "scanner_market_gainer_reserved_slots": market_gainer_reserved_slots,
+                    "scanner_market_gainer_active_count": market_gainer_active_count,
+                    "scanner_market_gainer_promoted_count": market_gainer_promoted_count,
+                },
+            )
             continue
         if replacement_probe_mode and watch_owner == GENERAL_SCALPING:
+            _log_scanner_candidate_pruned(
+                target,
+                reason="replacement_probe_general_disallowed",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+            )
             continue
         if watch_owner == GENERAL_SCALPING:
             owner_limit = promotion_policy.general_max
@@ -4354,6 +4525,14 @@ def promote_candidates(
                 venue_fields=candidate_venue_fields,
             )
             _remember_guard_block(recent_picks, target, now_ts, pre_filter_reason)
+            _log_scanner_candidate_pruned(
+                target,
+                reason=pre_filter_reason,
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+            )
             continue
         should_promote = (
             market_gainer_cached["should_promote"]
@@ -4363,6 +4542,15 @@ def promote_candidates(
             )
         )
         if not should_promote:
+            _log_scanner_candidate_pruned(
+                target,
+                reason="reentry_cooldown_no_material_upgrade",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+                context={"scanner_reentry_cooldown_sec": reentry_cooldown_sec},
+            )
             continue
 
         source_guard = (
@@ -4404,6 +4592,14 @@ def promote_candidates(
                 _remember_guard_block(
                     recent_picks, target, now_ts, source_guard.get("reason")
                 )
+            _log_scanner_candidate_pruned(
+                target,
+                reason=source_guard.get("reason") or "real_source_guard_blocked",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+            )
             continue
 
         curr_p = float(target.get("Price", 0))
@@ -4434,6 +4630,14 @@ def promote_candidates(
                 venue_fields=candidate_venue_fields,
             )
             _remember_guard_block(recent_picks, target, now_ts, "invalid_stock_filter")
+            _log_scanner_candidate_pruned(
+                target,
+                reason="invalid_stock_filter",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+            )
             continue
 
         identity_decision = (
@@ -4472,6 +4676,15 @@ def promote_candidates(
                 now_ts,
                 "scanner_identity_name_mismatch",
             )
+            _log_scanner_candidate_pruned(
+                target,
+                reason=identity_decision.get("reason")
+                or "scanner_identity_name_mismatch",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+            )
             continue
         source_guard = {
             **source_guard,
@@ -4493,6 +4706,21 @@ def promote_candidates(
             and active_target_owner != watch_owner
             and not market_gainer_replacement_available
         ):
+            _log_scanner_candidate_pruned(
+                target,
+                reason="owner_quota",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+                context={
+                    "scanner_watch_budget_owner": watch_owner,
+                    "scanner_watch_budget_owner_limit": owner_limit,
+                    "scanner_watch_budget_owner_promoted_count": owner_promoted_counts[
+                        watch_owner
+                    ],
+                },
+            )
             continue
 
         score = _freshness_score(target)
@@ -4510,6 +4738,9 @@ def promote_candidates(
             **source_guard,
             "scanner_promotion_id": f"SCANPROM-{code}-{int(float(now_ts or 0.0) * 1000)}",
             "scanner_promotion_emitted_epoch": f"{float(now_ts or 0.0):.3f}",
+            "scanner_scan_generation_id": scan_generation_id,
+            "scanner_scan_rank": target.get("ScannerScanRank") or 0,
+            "scanner_ranked_candidate_count": ranked_candidate_count,
             "scanner_low_rebound_reserved_slots": low_rebound_reserved_slots,
             "scanner_low_rebound_reserved_promotion": uses_low_rebound_reserved_slot,
             "scanner_low_rebound_active_floor": low_rebound_active_floor,
@@ -4636,12 +4867,33 @@ def promote_candidates(
                     record_id = getattr(record, "id", None)
         except Exception as e:
             log_error(f"⚠️ DB 저장 실패 ({code}): {e}")
+            _log_scanner_candidate_pruned(
+                target,
+                reason="database_persistence_failed",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+                context={"scanner_persistence_error_class": e.__class__.__name__},
+            )
             continue
         if capacity_unavailable:
             log_info(
                 "[SCALPING_SCANNER_MARKET_GAINER_CAPACITY_SKIP] "
                 f"code={code} owner={watch_owner} "
                 "reason=atomic_replacement_unavailable"
+            )
+            _log_scanner_candidate_pruned(
+                target,
+                reason="atomic_replacement_unavailable",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+                context={
+                    "scanner_watch_budget_owner": watch_owner,
+                    "scanner_watch_budget_owner_limit": owner_limit,
+                },
             )
             continue
 
@@ -4734,6 +4986,23 @@ def promote_candidates(
             or low_rebound_promoted_count >= low_rebound_reserved_slots
         ) and general_promoted_count >= general_slot_limit:
             break
+
+    trailing_reason = (
+        "max_new_codes_reached"
+        if len(new_codes_found) >= remaining_slots
+        else "promotion_partition_capacity_satisfied"
+    )
+    for target in ranked_targets:
+        if target.get("ScannerScanRank") in processed_scan_ranks:
+            continue
+        _log_scanner_candidate_pruned(
+            target,
+            reason=trailing_reason,
+            scan_generation_id=scan_generation_id,
+            scan_rank=target.get("ScannerScanRank") or 0,
+            ranked_candidate_count=ranked_candidate_count,
+            venue_fields=candidate_venue_fields,
+        )
 
     if new_codes_found:
         print(f"📡 웹소켓 감시 등록 요청 완료: {len(new_codes_found)} 종목")

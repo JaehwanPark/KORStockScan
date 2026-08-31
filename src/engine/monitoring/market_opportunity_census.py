@@ -101,7 +101,11 @@ PIPELINE_STAGE_MAP = {
     },
     "scanner_promoted": {"scalping_scanner_candidate_promoted"},
     "fast_precheck": {"scalping_scanner_fast_precheck"},
-    "heavy_eval": {"scanner_async_eval_dispatched", "scanner_async_result_commit"},
+    "heavy_eval": {
+        "scanner_async_eval_dispatched",
+        "scanner_async_result_commit",
+        "scalping_scanner_heavy_eval_completion",
+    },
     "submitted": {"order_bundle_submitted", "order_leg_sent"},
 }
 STAGE_ORDER = (

@@ -397,7 +397,7 @@ def test_report_forward_exact_joins_pipeline_and_ai_by_scanner_lineage(tmp_path)
                 },
             },
             {
-                "stage": "scanner_async_eval_dispatched",
+                "stage": "scalping_scanner_heavy_eval_completion",
                 "record_id": 42,
                 "stock_code": "005930",
                 "emitted_at": "2026-07-30T10:00:03+09:00",
@@ -606,6 +606,14 @@ def test_forward_lineage_does_not_join_next_promotion_ai_result():
     assert row["stage_reached"]["fast_precheck"] is True
     assert row["stage_reached"]["entry_ai_provider_called"] is False
     assert row["terminal_coverage_reason"] == "scanner_heavy_eval_gap"
+
+
+def test_current_heavy_eval_completion_stage_is_counted():
+    assert (
+        "scalping_scanner_heavy_eval_completion"
+        in census.PIPELINE_STAGE_MAP["heavy_eval"]
+    )
+    assert "scanner_async_eval_dispatched" in census.PIPELINE_STAGE_MAP["heavy_eval"]
 
 
 def test_empty_fetch_preserves_source_unavailable_evidence():

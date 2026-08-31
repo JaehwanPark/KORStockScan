@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from datetime import datetime, time, timezone
 
+import pytest
+
 from src.scanners import scalping_scanner
 from src.utils import kiwoom_utils
 
@@ -80,6 +82,18 @@ def _event_payloads(event_bus, name):
     return [payload for event_name, payload in event_bus.events if event_name == name]
 
 
+@pytest.fixture(autouse=True)
+def _isolate_manual_control_exclusion(monkeypatch, tmp_path):
+    empty_path = tmp_path / "manual_control_excluded_codes.empty.txt"
+    empty_path.write_text("", encoding="utf-8")
+    monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_WATCH_EXCLUDED_CODES", raising=False)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(empty_path)
+    )
+    monkeypatch.delenv("KORSTOCKSCAN_WATCH_EXCLUDED_CODES_FILE", raising=False)
+
+
 def test_resolve_scan_interval_matches_intraday_schedule():
     assert scalping_scanner._resolve_scan_interval_sec(time(9, 5)) == 60
     assert scalping_scanner._resolve_scan_interval_sec(time(10, 29)) == 60
@@ -87,6 +101,52 @@ def test_resolve_scan_interval_matches_intraday_schedule():
     assert scalping_scanner._resolve_scan_interval_sec(time(13, 59)) == 90
     assert scalping_scanner._resolve_scan_interval_sec(time(14, 0)) == 60
     assert scalping_scanner._resolve_scan_interval_sec(time(15, 0)) == 60
+
+
+def test_promote_candidates_prunes_manual_exclusion_before_db_and_ws(
+    monkeypatch,
+):
+    emitted = []
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", "005930")
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "code": code, "fields": fields or {}}
+        ),
+    )
+    db = _DB()
+    event_bus = _EventBus()
+
+    codes, _recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 70000,
+                "FluRate": 2.0,
+                "Source": "PRICE_JUMP_START",
+                "SourceSet": {"PRICE_JUMP_START"},
+            }
+        ],
+        {},
+        max_new_codes=1,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    assert db.records == []
+    assert event_bus.events == []
+    assert len(emitted) == 1
+    assert emitted[0]["stage"] == "scalping_scanner_candidate_pruned"
+    assert emitted[0]["fields"]["scanner_prune_reason"] == ("manual_control_excluded")
+    assert emitted[0]["fields"]["scanner_prune_first_blocker"] is True
+    assert emitted[0]["fields"]["metric_role"] == "funnel_count"
+    assert emitted[0]["fields"]["actual_order_submitted"] is False
 
 
 def test_market_gainer_source_filters_prev_close_gain_at_or_above_25_pct(
@@ -4887,6 +4947,7 @@ def test_real_source_guard_blocks_value_top_first_seen_as_probe(monkeypatch):
     assert [event["stage"] for event in emitted] == [
         "scalping_scanner_candidate_observed",
         "scalping_scanner_real_source_guard_block",
+        "scalping_scanner_candidate_pruned",
     ]
     assert emitted[0]["fields"]["scanner_candidate_role"] == "liquidity_enrichment_only"
     assert (
@@ -5027,6 +5088,7 @@ def test_real_source_guard_promotes_probe_after_price_or_flu_acceleration(monkey
     assert [event["stage"] for event in emitted] == [
         "scalping_scanner_candidate_observed",
         "scalping_scanner_real_source_guard_block",
+        "scalping_scanner_candidate_pruned",
     ]
     blocked_fields = emitted[0]["fields"]
     assert blocked_fields["scanner_block_reason"] == "liquidity_only_source_not_seed"
@@ -5453,6 +5515,7 @@ def test_real_source_guard_strength_available_promotion_keeps_provenance(monkeyp
     assert [event["stage"] for event in emitted] == [
         "scalping_scanner_candidate_observed",
         "scalping_scanner_real_source_guard_block",
+        "scalping_scanner_candidate_pruned",
     ]
     blocked_fields = emitted[0]["fields"]
     assert blocked_fields["scanner_block_reason"] == "liquidity_only_source_not_seed"
@@ -5735,6 +5798,7 @@ def test_promote_candidates_records_invalid_stock_filter_as_block(monkeypatch):
     assert [event["stage"] for event in emitted] == [
         "scalping_scanner_candidate_observed",
         "scalping_scanner_real_source_guard_block",
+        "scalping_scanner_candidate_pruned",
     ]
     assert emitted[0]["fields"]["scanner_block_reason"] == "invalid_stock_filter"
     assert emitted[0]["fields"]["scanner_filter_reason"] == "invalid_stock_filter"
