@@ -82,10 +82,12 @@ def test_cross_process_pacer_reserves_minimum_interval(tmp_path: Path) -> None:
 
     pacer.wait("ka10080")
     clock.value += 0.1
+    pacer.wait("ka10075")
+    clock.value += 0.1
     pacer.wait("kt00007")
 
-    assert clock.sleeps == pytest.approx([0.3])
-    assert float((tmp_path / "ka10080.pacer").read_text()) == pytest.approx(100.4)
+    assert clock.sleeps == pytest.approx([0.3, 0.3])
+    assert float((tmp_path / "ka10080.pacer").read_text()) == pytest.approx(100.8)
 
 
 def test_ka10080_retries_only_explicit_1700_with_bounded_backoff() -> None:

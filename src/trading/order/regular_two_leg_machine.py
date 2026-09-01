@@ -868,7 +868,63 @@ class SamsungRegularTwoLegMachine:
                 position_qty=leg["position_qty"],
             )
         elif snapshot.source_ok and snapshot.found:
-            self._record(now, "target_open_wait", leg_id=leg["leg_id"])
+            current_open_reader = getattr(
+                self.gateway, "current_open_sell_snapshot", None
+            )
+            if not callable(current_open_reader):
+                self._record(now, "target_open_wait", leg_id=leg["leg_id"])
+                return
+            try:
+                current_open = current_open_reader(
+                    order_no=str(leg.get("target_order_no") or ""),
+                    order_date=str(leg.get("target_order_date") or ""),
+                    observed_date=now.date().isoformat(),
+                )
+            except Exception as exc:
+                self._record(
+                    now,
+                    "target_current_open_reconciliation_wait",
+                    leg_id=leg["leg_id"],
+                    error=type(exc).__name__,
+                )
+                return
+            if not bool(getattr(current_open, "source_ok", False)):
+                self._record(
+                    now,
+                    "target_current_open_reconciliation_wait",
+                    leg_id=leg["leg_id"],
+                    error=str(
+                        getattr(current_open, "error", "") or "source_unavailable"
+                    ),
+                )
+                return
+            successor_order_no = str(
+                getattr(current_open, "successor_order_no", "") or ""
+            ).strip()
+            if successor_order_no:
+                self._block(
+                    now,
+                    f"target_successor_order_not_owned:{leg.get('leg_id')}",
+                )
+                return
+            if bool(getattr(current_open, "found", False)):
+                self._record(
+                    now,
+                    "target_open_wait",
+                    leg_id=leg["leg_id"],
+                    current_open_source="ka10075_exact_order",
+                )
+                return
+            leg["status"] = "HELD" if leg["position_qty"] > 0 else "COMPLETE"
+            self._record(
+                now,
+                "target_terminal_absence_position_held",
+                leg_id=leg["leg_id"],
+                filled_qty=target_filled_qty,
+                position_qty=leg["position_qty"],
+                dated_execution_source="kt00007",
+                current_open_source="ka10075_terminal_absence_confirmed",
+            )
 
     def _source(self, now: datetime):
         return self.gateway.completed_sor_minute_bars(trade_date=now.date(), now=now)

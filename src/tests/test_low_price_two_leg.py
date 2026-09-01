@@ -30,6 +30,7 @@ from src.engine.monitoring.low_price_two_leg_tuning import (
 )
 from src.engine.monitoring.low_price_two_leg_entry_spot_research import candidate_grid
 from src.trading.low_price_two_leg.gateway import (
+    CurrentOpenOrderSnapshot,
     ExecutionSnapshot,
     KiwoomLowPriceTwoLegGateway,
     MinuteBarsSnapshot,
@@ -72,7 +73,6 @@ from src.trading.low_price_two_leg.profiles import (
     AFTERNOON_WINDOW,
     CJ_CGV_AFTERNOON_WINDOW,
     CJ_CGV_LATE_MORNING_WINDOW,
-    CJ_CGV_MIDDAY_WINDOW,
     CJ_CGV_MIDDAY_20260831_WINDOW,
     DOOSAN_ENERBILITY_AFTERNOON_WINDOW,
     DOOSAN_ENERBILITY_MORNING_WINDOW,
@@ -123,7 +123,6 @@ from src.trading.low_price_two_leg.profiles import (
     SD_BIOSENSOR_MIDDAY_WINDOW,
     SD_BIOSENSOR_MORNING_20260828_WINDOW,
     TYM_AFTERNOON_WINDOW,
-    TYM_MIDDAY_WINDOW,
     TYM_MIDDAY_20260831_WINDOW,
     NHN_AFTERNOON_WINDOW,
     YOUNGONE_AFTERNOON_REVISED_WINDOW,
@@ -2218,6 +2217,296 @@ def test_gateway_minute_request_uses_integrated_sor_code_and_completed_bar_only(
     assert len(snapshot.bars) == 1
     assert session.calls[0][1]["headers"]["api-id"] == "ka10080"
     assert session.calls[0][1]["json"]["stk_cd"] == "475150_AL"
+
+
+def test_gateway_current_open_sell_snapshot_requires_exact_ka10075_order():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "return_code": 0,
+                    "oso": [
+                        {
+                            "ord_no": "0000123",
+                            "orig_ord_no": "0000000",
+                            "stk_cd": "A475150",
+                            "oso_qty": "10",
+                        }
+                    ],
+                }
+            )
+        ]
+    )
+    gateway = KiwoomLowPriceTwoLegGateway(
+        symbol="475150", request_session=session, token_loader=lambda: "TOKEN"
+    )
+
+    snapshot = gateway.current_open_sell_snapshot(
+        order_no="123", order_date="2026-09-01", observed_date="2026-09-01"
+    )
+
+    assert snapshot == CurrentOpenOrderSnapshot(
+        True, True, exact_order_no="0000123"
+    )
+    call = session.calls[0][1]
+    assert call["headers"]["api-id"] == "ka10075"
+    assert call["json"] == {
+        "all_stk_tp": "1",
+        "trde_tp": "1",
+        "stk_cd": "475150",
+        "stex_tp": "0",
+    }
+
+
+@pytest.mark.parametrize(
+    ("method", "response_body", "expected_error"),
+    [
+        (
+            "execution",
+            {"return_code": 0, "acnt_ord_cntr_prps_dtl": []},
+            "execution_continuation_header_invalid",
+        ),
+        (
+            "current_open",
+            {"return_code": 0, "oso": []},
+            "current_unfilled_continuation_header_invalid",
+        ),
+    ],
+)
+def test_gateway_rejects_missing_next_key_on_continuation(
+    method, response_body, expected_error
+):
+    session = FakeSession(
+        [FakeResponse(response_body, headers={"cont-yn": "Y", "next-key": ""})]
+    )
+    gateway = KiwoomLowPriceTwoLegGateway(
+        symbol="475150", request_session=session, token_loader=lambda: "TOKEN"
+    )
+
+    if method == "execution":
+        snapshot = gateway.execution_snapshot(
+            order_no="123", order_date="2026-09-01", expected_order_qty=10
+        )
+    else:
+        snapshot = gateway.current_open_sell_snapshot(
+            order_no="123", order_date="2026-09-01", observed_date="2026-09-01"
+        )
+
+    assert snapshot.source_ok is False
+    assert snapshot.found is False
+    assert snapshot.error == expected_error
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"ord_no": "NOT-NUMERIC", "stk_cd": "475150", "oso_qty": "10"},
+        {"ord_no": "0000123", "stk_cd": "475150", "oso_qty": "-10"},
+    ],
+)
+def test_gateway_never_infers_terminal_absence_from_malformed_open_rows(row):
+    session = FakeSession([FakeResponse({"return_code": 0, "oso": [row]})])
+    gateway = KiwoomLowPriceTwoLegGateway(
+        symbol="475150", request_session=session, token_loader=lambda: "TOKEN"
+    )
+
+    snapshot = gateway.current_open_sell_snapshot(
+        order_no="123", order_date="2026-09-01", observed_date="2026-09-01"
+    )
+
+    assert snapshot.source_ok is False
+    assert snapshot.found is False
+    assert snapshot.error == "current_unfilled_row_contract_invalid"
+
+
+def test_gateway_never_joins_prior_date_target_to_reused_current_order_number():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "return_code": 0,
+                    "oso": [
+                        {
+                            "ord_no": "0000123",
+                            "orig_ord_no": "0000000",
+                            "stk_cd": "475150",
+                            "oso_qty": "10",
+                        }
+                    ],
+                }
+            )
+        ]
+    )
+    gateway = KiwoomLowPriceTwoLegGateway(
+        symbol="475150", request_session=session, token_loader=lambda: "TOKEN"
+    )
+
+    snapshot = gateway.current_open_sell_snapshot(
+        order_no="123", order_date="2026-08-26", observed_date="2026-09-01"
+    )
+
+    assert snapshot == CurrentOpenOrderSnapshot(True, False)
+
+
+def test_target_absent_from_current_unfilled_ledger_becomes_held(tmp_path):
+    profile = PROFILES["sk_eternix_midday"]
+
+    class CurrentOpenAwareGateway(FakeGateway):
+        def current_open_sell_snapshot(self, **kwargs):
+            return CurrentOpenOrderSnapshot(True, False)
+
+    gateway = CurrentOpenAwareGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "target-terminal-absence.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    started_at = _profile_run_at(profile.profile_id)
+    submitted = machine.run_once(started_at)
+    first_buy, second_buy = [leg["buy_order_no"] for leg in submitted["legs"]]
+    first_entry = submitted["legs"][0]["entry_price"]
+    gateway.snapshots[first_buy] = ExecutionSnapshot(
+        True, True, 10, 0, 10, first_entry
+    )
+    gateway.snapshots[second_buy] = ExecutionSnapshot(True, True, 0, 0, 10)
+    targeted = machine.run_once(started_at + timedelta(seconds=1))
+    target_order_no = targeted["legs"][0]["target_order_no"]
+    gateway.snapshots[target_order_no] = ExecutionSnapshot(
+        True, True, 0, 10, 10
+    )
+
+    reconciled = machine.run_once(started_at + timedelta(seconds=2))
+
+    assert reconciled["status"] == "HELD"
+    assert reconciled["position_qty"] == 10
+    assert reconciled["legs"][0]["status"] == "HELD"
+    assert reconciled["last_action"] == "target_terminal_absence_position_held"
+    assert reconciled["audit"][-1]["current_open_source"] == (
+        "ka10075_terminal_absence_confirmed"
+    )
+
+
+def test_target_exact_current_unfilled_order_remains_target_open(tmp_path):
+    profile = PROFILES["sk_eternix_midday"]
+
+    class CurrentOpenAwareGateway(FakeGateway):
+        def current_open_sell_snapshot(self, **kwargs):
+            return CurrentOpenOrderSnapshot(
+                True, True, exact_order_no=str(kwargs["order_no"])
+            )
+
+    gateway = CurrentOpenAwareGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "target-exact-current-open.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    started_at = _profile_run_at(profile.profile_id)
+    submitted = machine.run_once(started_at)
+    first_buy, second_buy = [leg["buy_order_no"] for leg in submitted["legs"]]
+    first_entry = submitted["legs"][0]["entry_price"]
+    gateway.snapshots[first_buy] = ExecutionSnapshot(
+        True, True, 10, 0, 10, first_entry
+    )
+    gateway.snapshots[second_buy] = ExecutionSnapshot(True, True, 0, 0, 10)
+    targeted = machine.run_once(started_at + timedelta(seconds=1))
+    target_order_no = targeted["legs"][0]["target_order_no"]
+    gateway.snapshots[target_order_no] = ExecutionSnapshot(
+        True, True, 0, 10, 10
+    )
+
+    reconciled = machine.run_once(started_at + timedelta(seconds=2))
+
+    assert reconciled["status"] == "TARGET_OPEN"
+    assert reconciled["position_qty"] == 10
+    assert reconciled["legs"][0]["status"] == "TARGET_OPEN"
+    assert reconciled["last_action"] == "target_open_wait"
+    assert reconciled["audit"][-1]["current_open_source"] == (
+        "ka10075_exact_order"
+    )
+
+
+def test_target_successor_open_order_fails_closed_without_adopting_it(tmp_path):
+    profile = PROFILES["sk_eternix_midday"]
+
+    class SuccessorGateway(FakeGateway):
+        def current_open_sell_snapshot(self, **kwargs):
+            return CurrentOpenOrderSnapshot(
+                True, True, successor_order_no="SUCCESSOR-1"
+            )
+
+    gateway = SuccessorGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "target-successor.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    started_at = _profile_run_at(profile.profile_id)
+    submitted = machine.run_once(started_at)
+    first_buy, second_buy = [leg["buy_order_no"] for leg in submitted["legs"]]
+    first_entry = submitted["legs"][0]["entry_price"]
+    gateway.snapshots[first_buy] = ExecutionSnapshot(
+        True, True, 10, 0, 10, first_entry
+    )
+    gateway.snapshots[second_buy] = ExecutionSnapshot(True, True, 0, 0, 10)
+    targeted = machine.run_once(started_at + timedelta(seconds=1))
+    target_order_no = targeted["legs"][0]["target_order_no"]
+    gateway.snapshots[target_order_no] = ExecutionSnapshot(
+        True, True, 0, 10, 10
+    )
+
+    reconciled = machine.run_once(started_at + timedelta(seconds=2))
+
+    assert reconciled["status"] == "BLOCKED"
+    assert reconciled["blocked_reason"].startswith(
+        "target_successor_order_not_owned:"
+    )
+    assert "SUCCESSOR-1" not in reconciled["owned_order_nos"]
+
+
+def test_target_current_unfilled_source_failure_keeps_target_open(tmp_path):
+    profile = PROFILES["sk_eternix_midday"]
+
+    class SourceUnavailableGateway(FakeGateway):
+        def current_open_sell_snapshot(self, **kwargs):
+            return CurrentOpenOrderSnapshot(
+                False, False, error="current_unfilled_request_failed"
+            )
+
+    gateway = SourceUnavailableGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "target-current-open-source-failure.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    started_at = _profile_run_at(profile.profile_id)
+    submitted = machine.run_once(started_at)
+    first_buy, second_buy = [leg["buy_order_no"] for leg in submitted["legs"]]
+    first_entry = submitted["legs"][0]["entry_price"]
+    gateway.snapshots[first_buy] = ExecutionSnapshot(
+        True, True, 10, 0, 10, first_entry
+    )
+    gateway.snapshots[second_buy] = ExecutionSnapshot(True, True, 0, 0, 10)
+    targeted = machine.run_once(started_at + timedelta(seconds=1))
+    target_order_no = targeted["legs"][0]["target_order_no"]
+    gateway.snapshots[target_order_no] = ExecutionSnapshot(
+        True, True, 0, 10, 10
+    )
+
+    reconciled = machine.run_once(started_at + timedelta(seconds=2))
+
+    assert reconciled["status"] == "TARGET_OPEN"
+    assert reconciled["position_qty"] == 10
+    assert reconciled["last_action"] == "target_current_open_reconciliation_wait"
+    assert reconciled["audit"][-1]["error"] == "current_unfilled_request_failed"
 
 
 def test_research_evidence_gate_validates_each_selected_profile(tmp_path):

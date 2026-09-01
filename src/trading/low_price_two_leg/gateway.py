@@ -29,6 +29,7 @@ from src.trading.order.entry_liquidity_guard import (
 )
 from src.trading.order.kiwoom_episode_read_control import (
     EPISODE_READ_API_IDS,
+    KA10075_API_ID,
     KT00007_API_ID,
     KiwoomEpisodeReadPacer,
     SameMinuteSnapshotCache,
@@ -62,6 +63,19 @@ OFFICIAL_REFERENCE = {
         "ka10004": "src.trading.order.entry_liquidity_guard.KIWOOM_OFFICIAL_REFERENCE",
     },
 }
+CURRENT_OPEN_ORDER_REFERENCE = {
+    "repository": "Kiwoom-Securities/Kiwoom-REST-API",
+    "commit_sha": "e24843fc82a78fe7b6ec68625b57f267eda95e77",
+    "retrieved_at_kst": "2026-09-01T11:21:56+09:00",
+    "inspected_paths": [
+        "kiwoom/_data/kiwoom_api_spec.json:ka10075,kt00007",
+        "kiwoom/specs.py:common REST headers",
+        "kiwoom/core/client.py:continuation headers",
+        "postman/kiwoom-openapi.postman_collection.json:ka10075,kt00007",
+    ],
+    "request_scope": ["ka10075", "kt00007"],
+    "authority": "read_only_exact_owner_target_reconciliation",
+}
 
 TokenLoader = Callable[[], str | None]
 
@@ -87,6 +101,15 @@ class ExecutionSnapshot:
 
 
 @dataclass(frozen=True)
+class CurrentOpenOrderSnapshot:
+    source_ok: bool
+    found: bool
+    exact_order_no: str = ""
+    successor_order_no: str = ""
+    error: str = ""
+
+
+@dataclass(frozen=True)
 class MinuteBarsSnapshot:
     source_ok: bool
     bars: tuple[MinuteBar, ...] = ()
@@ -102,6 +125,17 @@ def _positive_int(value: object) -> int:
         return 0
 
 
+def _strict_nonnegative_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).replace(",", "").strip()
+    if text.startswith("+"):
+        text = text[1:]
+    if not text.isdigit():
+        return None
+    return int(text)
+
+
 def _clean(value: object) -> str:
     return str(value or "").strip()
 
@@ -113,18 +147,6 @@ def _same_order_no(left: object, right: object) -> bool:
         and right_text
         and (left_text == right_text or left_text.lstrip("0") == right_text.lstrip("0"))
     )
-
-
-def _extract_rows(payload: object) -> list[dict[str, Any]]:
-    if not isinstance(payload, dict):
-        return []
-    return [
-        item
-        for value in payload.values()
-        if isinstance(value, list)
-        for item in value
-        if isinstance(item, dict)
-    ]
 
 
 class KiwoomLowPriceTwoLegGateway:
@@ -163,6 +185,7 @@ class KiwoomLowPriceTwoLegGateway:
         self.read_retry_sleep = read_retry_sleep
         self._minute_bars_cache = SameMinuteSnapshotCache()
         self._account_read_cache = ShortTtlSnapshotCache(ttl_sec=1.0)
+        self._current_open_read_cache = ShortTtlSnapshotCache(ttl_sec=1.0)
 
     def _token(self) -> str:
         token = str(self.token_loader() or "").replace("Bearer ", "").strip()
@@ -203,10 +226,14 @@ class KiwoomLowPriceTwoLegGateway:
         kwargs: dict[str, Any] = {}
         if self.read_retry_sleep is not None:
             kwargs["sleep"] = self.read_retry_sleep
-        if api_id == KT00007_API_ID:
+        if api_id in {KA10075_API_ID, KT00007_API_ID}:
             kwargs.update(
                 {
-                    "cache": self._account_read_cache,
+                    "cache": (
+                        self._current_open_read_cache
+                        if api_id == KA10075_API_ID
+                        else self._account_read_cache
+                    ),
                     "cache_key": (
                         api_id,
                         tuple(sorted(payload.items())),
@@ -450,7 +477,7 @@ class KiwoomLowPriceTwoLegGateway:
             "fr_ord_no": "",
             "dmst_stex_tp": "SOR",
         }
-        pages: list[dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         cont_yn, next_key = "N", ""
         for _ in range(3):
             try:
@@ -475,10 +502,40 @@ class KiwoomLowPriceTwoLegGateway:
                     0,
                     error=str(body.get("return_msg") or f"HTTP_{response.status_code}"),
                 )
-            pages.append(body)
+            page_rows = body.get("acnt_ord_cntr_prps_dtl")
+            if not isinstance(page_rows, list) or any(
+                not isinstance(item, dict) for item in page_rows
+            ):
+                return ExecutionSnapshot(
+                    False,
+                    False,
+                    0,
+                    0,
+                    0,
+                    error="execution_response_contract_invalid",
+                )
+            rows.extend(page_rows)
             cont_yn = str(response.headers.get("cont-yn", "N") or "N").upper()
             next_key = str(response.headers.get("next-key", "") or "").strip()
-            if cont_yn != "Y" or not next_key:
+            if cont_yn not in {"N", "Y"}:
+                return ExecutionSnapshot(
+                    False,
+                    False,
+                    0,
+                    0,
+                    0,
+                    error="execution_continuation_header_invalid",
+                )
+            if cont_yn == "Y" and not next_key:
+                return ExecutionSnapshot(
+                    False,
+                    False,
+                    0,
+                    0,
+                    0,
+                    error="execution_continuation_header_invalid",
+                )
+            if cont_yn != "Y":
                 break
         if cont_yn == "Y" and next_key:
             return ExecutionSnapshot(
@@ -491,8 +548,7 @@ class KiwoomLowPriceTwoLegGateway:
             )
         matches = [
             row
-            for page in pages
-            for row in _extract_rows(page)
+            for row in rows
             if _same_order_no(row.get("ord_no"), clean_order_no)
             and kiwoom_utils.normalize_stock_code(str(row.get("stk_cd") or ""))
             == self.symbol
@@ -500,12 +556,17 @@ class KiwoomLowPriceTwoLegGateway:
         if not matches:
             return ExecutionSnapshot(True, False, 0, 0, 0)
         row = max(matches, key=lambda item: _positive_int(item.get("cntr_qty")))
-        order_qty = _positive_int(row.get("ord_qty"))
-        filled_qty = _positive_int(row.get("cntr_qty"))
+        parsed_order_qty = _strict_nonnegative_int(row.get("ord_qty"))
+        parsed_filled_qty = _strict_nonnegative_int(row.get("cntr_qty"))
         raw_remaining = row.get("ord_remnq", row.get("oso_qty"))
-        remaining_qty = _positive_int(raw_remaining)
+        parsed_remaining_qty = _strict_nonnegative_int(raw_remaining)
+        order_qty = int(parsed_order_qty or 0)
+        filled_qty = int(parsed_filled_qty or 0)
+        remaining_qty = int(parsed_remaining_qty or 0)
         if (
-            raw_remaining is None
+            parsed_order_qty is None
+            or parsed_filled_qty is None
+            or parsed_remaining_qty is None
             or order_qty != expected_order_qty
             or filled_qty > expected_order_qty
             or remaining_qty > expected_order_qty
@@ -526,4 +587,123 @@ class KiwoomLowPriceTwoLegGateway:
             remaining_qty,
             order_qty,
             _positive_int(row.get("cntr_uv", row.get("cntr_pric"))) or None,
+        )
+
+    def current_open_sell_snapshot(
+        self, *, order_no: str, order_date: str, observed_date: str
+    ) -> CurrentOpenOrderSnapshot:
+        """Confirm whether one owned SELL order is in the current open ledger.
+
+        ``kt00007`` is the dated order/execution history owner.  A historical
+        row can retain a non-zero ``ord_remnq`` after the day order is no
+        longer active, so terminal absence must come from the current
+        ``ka10075`` unfilled-order ledger.  This read never submits, cancels,
+        replaces, or adopts an order.
+        """
+
+        clean_order_no = _clean(order_no)
+        if not clean_order_no.isdigit():
+            return CurrentOpenOrderSnapshot(False, False, error="invalid_order_no")
+        try:
+            target_date = date.fromisoformat(_clean(order_date))
+            ledger_date = date.fromisoformat(_clean(observed_date))
+        except ValueError:
+            return CurrentOpenOrderSnapshot(
+                False, False, error="invalid_order_date_contract"
+            )
+        if target_date > ledger_date:
+            return CurrentOpenOrderSnapshot(
+                False, False, error="future_order_date_contract"
+            )
+        payload = {
+            "all_stk_tp": "1",
+            "trde_tp": "1",
+            "stk_cd": self.symbol,
+            "stex_tp": "0",
+        }
+        rows: list[dict[str, Any]] = []
+        cont_yn, next_key = "N", ""
+        for _ in range(3):
+            try:
+                response, body = self._post(
+                    endpoint="/api/dostk/acnt",
+                    api_id=KA10075_API_ID,
+                    payload=payload,
+                    cont_yn=cont_yn,
+                    next_key=next_key,
+                )
+            except Exception as exc:
+                return CurrentOpenOrderSnapshot(
+                    False,
+                    False,
+                    error=f"current_unfilled_read_failed:{type(exc).__name__}",
+                )
+            code = str(body.get("return_code", body.get("rt_cd", "")))
+            page_rows = body.get("oso")
+            if response.status_code != 200 or code != "0":
+                return CurrentOpenOrderSnapshot(
+                    False,
+                    False,
+                    error=str(body.get("return_msg") or f"HTTP_{response.status_code}"),
+                )
+            if not isinstance(page_rows, list) or any(
+                not isinstance(item, dict) for item in page_rows
+            ):
+                return CurrentOpenOrderSnapshot(
+                    False, False, error="current_unfilled_response_contract_invalid"
+                )
+            rows.extend(page_rows)
+            cont_yn = str(response.headers.get("cont-yn", "N") or "N").upper()
+            next_key = str(response.headers.get("next-key", "") or "").strip()
+            if cont_yn not in {"N", "Y"}:
+                return CurrentOpenOrderSnapshot(
+                    False,
+                    False,
+                    error="current_unfilled_continuation_header_invalid",
+                )
+            if cont_yn == "Y" and not next_key:
+                return CurrentOpenOrderSnapshot(
+                    False,
+                    False,
+                    error="current_unfilled_continuation_header_invalid",
+                )
+            if cont_yn != "Y":
+                break
+        if cont_yn == "Y" and next_key:
+            return CurrentOpenOrderSnapshot(
+                False,
+                False,
+                error="current_unfilled_continuation_limit_exceeded",
+            )
+
+        exact_order_no = ""
+        successor_order_no = ""
+        for row in rows:
+            row_order_no = _clean(row.get("ord_no"))
+            row_original_order_no = _clean(row.get("orig_ord_no"))
+            row_symbol = kiwoom_utils.normalize_stock_code(
+                str(row.get("stk_cd") or "")
+            )
+            remaining_qty = _strict_nonnegative_int(row.get("oso_qty"))
+            if (
+                not row_order_no.isdigit()
+                or (row_original_order_no and not row_original_order_no.isdigit())
+                or row_symbol != self.symbol
+                or remaining_qty is None
+                or remaining_qty <= 0
+            ):
+                return CurrentOpenOrderSnapshot(
+                    False, False, error="current_unfilled_row_contract_invalid"
+                )
+            if target_date != ledger_date:
+                continue
+            if _same_order_no(row_order_no, clean_order_no):
+                exact_order_no = row_order_no
+            elif _same_order_no(row_original_order_no, clean_order_no):
+                successor_order_no = row_order_no
+        return CurrentOpenOrderSnapshot(
+            True,
+            bool(exact_order_no or successor_order_no),
+            exact_order_no=exact_order_no,
+            successor_order_no=successor_order_no,
         )

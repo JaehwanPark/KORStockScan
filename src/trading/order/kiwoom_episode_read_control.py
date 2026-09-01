@@ -3,8 +3,9 @@
 The official Kiwoom contract identifies ``1700`` as a request-count error but
 does not publish a pacing interval.  This module therefore owns a conservative
 local guard shared by episode-machine ``ka10080`` market-data reads and
-``kt00007`` order/execution reconciliation reads.  Broker writes must not use
-this retry path because replaying an ambiguous order can duplicate it.
+``kt00007`` dated order/execution plus ``ka10075`` current-unfilled
+reconciliation reads.  Broker writes must not use this retry path because
+replaying an ambiguous order can duplicate it.
 """
 
 from __future__ import annotations
@@ -18,8 +19,11 @@ from typing import Any, Callable, TypeVar, cast
 from src.utils.constants import DATA_DIR
 
 KA10080_API_ID = "ka10080"
+KA10075_API_ID = "ka10075"
 KT00007_API_ID = "kt00007"
-EPISODE_READ_API_IDS = frozenset({KA10080_API_ID, KT00007_API_ID})
+EPISODE_READ_API_IDS = frozenset(
+    {KA10080_API_ID, KA10075_API_ID, KT00007_API_ID}
+)
 DEFAULT_MIN_INTERVAL_SEC = 0.4
 DEFAULT_PACER_PATH = DATA_DIR / "runtime" / "kiwoom_episode_ka10080.lock"
 MAX_RATE_LIMIT_RETRIES = 2

@@ -905,6 +905,33 @@ def test_daily_reset_archives_but_never_sells_prior_day_quantity(tmp_path, monke
     assert gateway.sell_calls == [("999999", 1, "SOR")]
 
 
+def test_daily_reset_preserves_older_unmanaged_inventory_across_flat_day(
+    tmp_path, monkeypatch
+):
+    day_one = _at(10)
+    box = {"payload": _payload(day_one, entry_id="DAY1-ENTRY")}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box)
+    trader.run_once(day_one)
+    _fill(gateway, "B1")
+    trader.run_once(day_one)
+
+    day_two = _at(11)
+    box["payload"] = _payload(day_two)
+    rolled_day_two = trader.run_once(day_two)
+    assert rolled_day_two["symbols"]["999999"]["prior_day_unmanaged_qty"] == 1
+    assert len(gateway.buy_calls) == 1
+
+    day_three = _at(12)
+    box["payload"] = _payload(day_three)
+    rolled_day_three = trader.run_once(day_three)
+
+    assert rolled_day_three["symbols"]["999999"]["prior_day_unmanaged_qty"] == 1
+    assert rolled_day_three["history"][-1]["symbols"]["999999"][
+        "unmanaged_overnight_qty"
+    ] == 1
+    assert len(gateway.buy_calls) == 1
+
+
 def test_configurable_quantity_and_non_final_states_do_not_submit(
     tmp_path, monkeypatch
 ):

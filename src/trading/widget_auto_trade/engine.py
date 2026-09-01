@@ -699,6 +699,19 @@ class WidgetSignalAutoTrader:
             - cls._filled_qty(symbol_state, "SELL"),
         )
 
+    @classmethod
+    def _unmanaged_overnight_qty(cls, symbol_state: dict[str, Any]) -> int:
+        """Preserve older widget-owned carry across trade-date resets.
+
+        ``orders`` contains only the active trade date after each reset.  The
+        prior-day field therefore owns inventory carried from still older
+        dates and must be added to the active-date open quantity instead of
+        being replaced by it.
+        """
+
+        prior_qty = _positive_int(symbol_state.get("prior_day_unmanaged_qty"))
+        return prior_qty + cls._open_qty(symbol_state)
+
     def _activate_date(self, observed_at: datetime) -> None:
         day = observed_at.date().isoformat()
         if self._state.get("active_date") == day:
@@ -708,8 +721,10 @@ class WidgetSignalAutoTrader:
                 self._state["symbols"] = symbols
             changed = False
             for spec in self.specs:
-                if spec.code not in symbols:
-                    symbols[spec.code] = self._empty_symbol_state(spec)
+                symbol_state = symbols.get(spec.code)
+                if not isinstance(symbol_state, dict):
+                    symbol_state = self._empty_symbol_state(spec)
+                    symbols[spec.code] = symbol_state
                     changed = True
             if changed:
                 self._save()
@@ -727,7 +742,9 @@ class WidgetSignalAutoTrader:
                         code: {
                             "buy_filled_qty": self._filled_qty(value, "BUY"),
                             "sell_filled_qty": self._filled_qty(value, "SELL"),
-                            "unmanaged_overnight_qty": self._open_qty(value),
+                            "unmanaged_overnight_qty": self._unmanaged_overnight_qty(
+                                value
+                            ),
                             "unresolved_order_count": sum(
                                 1
                                 for order in value.get("orders") or []
@@ -753,7 +770,13 @@ class WidgetSignalAutoTrader:
             symbol_state = self._empty_symbol_state(spec)
             prior_state = prior_symbols.get(spec.code)
             if isinstance(prior_state, dict):
-                symbol_state["prior_day_unmanaged_qty"] = self._open_qty(prior_state)
+                symbol_state["prior_day_unmanaged_qty"] = (
+                    self._unmanaged_overnight_qty(prior_state)
+                )
+                symbol_state["prior_day_unmanaged_qty_source"] = (
+                    "previous_state_prior_carry_plus_current_day_widget_orders"
+                )
+                symbol_state["prior_day_unmanaged_qty_broker_reconciled"] = False
                 symbol_state["prior_day_unresolved_order_count"] = sum(
                     1
                     for order in prior_state.get("orders") or []
