@@ -355,8 +355,17 @@ def record_market_weakness_blocked_entry(
     try:
         if path.exists() or path.with_name(path.name + ".gz").exists():
             existing = read_json_object_strict(path)
-            if existing.get("observation_id") != observation_id:
-                raise ValueError("blocked_entry_observation_identity_conflict")
+            existing_errors = market_weakness_blocked_entry_contract_errors(
+                existing,
+                target_date=observed_at.date().isoformat(),
+            )
+            if existing_errors:
+                return {
+                    "status": "existing_immutable_observation_invalid",
+                    "observation_id": observation_id,
+                    "path": str(path),
+                    "validation_errors": existing_errors,
+                }
             immutable_fields = (
                 "schema",
                 "trade_date",
@@ -376,20 +385,24 @@ def record_market_weakness_blocked_entry(
                 "guard_policy_id",
                 "decision_authority",
                 "counterfactual_contract",
-                "content_sha256",
             )
-            if any(
-                existing.get(field) != payload.get(field) for field in immutable_fields
-            ):
+            conflict_fields = [
+                field
+                for field in immutable_fields
+                if existing.get(field) != payload.get(field)
+            ]
+            if conflict_fields:
                 return {
                     "status": "existing_immutable_observation_conflict",
                     "observation_id": observation_id,
                     "path": str(path),
+                    "conflict_fields": conflict_fields,
                 }
             return {
                 "status": "existing_immutable_observation",
                 "observation_id": observation_id,
                 "path": str(path),
+                "content_sha256": existing.get("content_sha256"),
             }
         write_json_object_generation_safe(
             path,

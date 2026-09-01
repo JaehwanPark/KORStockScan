@@ -124,6 +124,11 @@ METRIC_CONTRACT = {
         "terminal_coverage_reason_counts": (
             "first missing funnel owner or post-AI/submit terminal state"
         ),
+        "candidate_not_promoted_first_reason_counts": (
+            "first scanner_prune_reason by event time among unique opportunity "
+            "episodes whose terminal coverage reason is candidate_not_promoted; "
+            "reason_missing is an explicit source-quality diagnostic bucket"
+        ),
     },
     "source_quality_gate": (
         "kiwoom_ka10027_success_same_venue_session_timestamp_official_master_"
@@ -737,6 +742,25 @@ def _load_stage_index(
             continue
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
         event_venue = _event_venue(row)
+        if raw_stage == "scalping_scanner_candidate_pruned":
+            reason = str(
+                fields.get("scanner_prune_reason")
+                or fields.get("scanner_block_reason")
+                or fields.get("scanner_filter_reason")
+                or fields.get("reason")
+                or fields.get("block_reason")
+                or ""
+            )
+        else:
+            reason = str(
+                fields.get("reason")
+                or fields.get("block_reason")
+                or fields.get("scanner_prune_reason")
+                or fields.get("scanner_block_reason")
+                or fields.get("scanner_filter_reason")
+                or fields.get("scanner_promotion_reason")
+                or ""
+            )
         stage_row = {
             "raw_stage": raw_stage,
             "ts": ts,
@@ -751,12 +775,7 @@ def _load_stage_index(
             ),
             "scanner_promotion_id": _lineage_value(fields.get("scanner_promotion_id")),
             "source_signature": str(fields.get("source_signature") or ""),
-            "reason": str(
-                fields.get("reason")
-                or fields.get("block_reason")
-                or fields.get("scanner_promotion_reason")
-                or ""
-            ),
+            "reason": reason,
             "runtime_target_attach_outcome": str(
                 fields.get("runtime_target_attach_outcome") or ""
             ),
@@ -1086,6 +1105,21 @@ def _coverage_row(
         )
         for stage in STAGE_ORDER
     }
+    first_stage_reason_code = {
+        stage: str(first_row.get("reason") or "") if first_row else None
+        for stage in STAGE_ORDER
+        for first_row in [
+            min(
+                (row for row in candidate_rows[stage] if row.get("reason")),
+                key=lambda row: (
+                    row["ts"],
+                    str(row.get("raw_stage") or ""),
+                    str(row.get("reason") or ""),
+                ),
+                default=None,
+            )
+        ]
+    }
 
     promoted_at = first_times.get("scanner_promoted")
     scanner_detection_latency_sec = (
@@ -1175,6 +1209,7 @@ def _coverage_row(
         "stage_latency_from_scanner_promoted_sec": (stage_latency_from_promotion_sec),
         "stage_raw_events": stage_raw_events,
         "stage_reason_codes": stage_reason_codes,
+        "first_stage_reason_code": first_stage_reason_code,
         "scanner_lineage": {
             "required": require_lineage,
             "status": lineage_status,
@@ -1227,6 +1262,27 @@ def _latency_summary(values: list[float]) -> dict[str, Any]:
 
 def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(rows)
+    candidate_not_promoted_rows = [
+        row
+        for row in rows
+        if row.get("terminal_coverage_reason") == "candidate_not_promoted"
+    ]
+    candidate_not_promoted_first_reason_counts = dict(
+        sorted(
+            Counter(
+                str(
+                    (row.get("first_stage_reason_code") or {}).get(
+                        "candidate_evaluated"
+                    )
+                    or "reason_missing"
+                )
+                for row in candidate_not_promoted_rows
+            ).items()
+        )
+    )
+    candidate_not_promoted_first_reason_count_sum = sum(
+        candidate_not_promoted_first_reason_counts.values()
+    )
     counts = {
         stage: sum(bool(row["stage_reached"].get(stage)) for row in rows)
         for stage in STAGE_ORDER
@@ -1296,6 +1352,22 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "submit_safety_check_recall_pct": rates["submit_safety_checked"],
         "terminal_coverage_reason_counts": dict(
             sorted(Counter(row["terminal_coverage_reason"] for row in rows).items())
+        ),
+        "candidate_not_promoted_first_reason_counts": (
+            candidate_not_promoted_first_reason_counts
+        ),
+        "candidate_not_promoted_first_reason_count_sum": (
+            candidate_not_promoted_first_reason_count_sum
+        ),
+        "candidate_not_promoted_first_reason_conservation_delta": (
+            len(candidate_not_promoted_rows)
+            - candidate_not_promoted_first_reason_count_sum
+        ),
+        "candidate_not_promoted_first_reason_conservation_status": (
+            "pass"
+            if len(candidate_not_promoted_rows)
+            == candidate_not_promoted_first_reason_count_sum
+            else "fail"
         ),
         "scanner_lineage_status_counts": dict(
             sorted(
@@ -1572,6 +1644,17 @@ def build_report(
             }
 
     primary_episode_count = primary_eligible_forward_summary.get("episode_count", 0)
+    primary_candidate_not_promoted_reason_missing_count = sum(
+        int(
+            (
+                venue_summary.get("candidate_not_promoted_first_reason_counts")
+                or {}
+            ).get("reason_missing", 0)
+        )
+        for venue_summary in (
+            primary_eligible_forward_summary.get("by_venue") or {}
+        ).values()
+    )
     instrumentation_blockers = []
     if symbol_master_binding.get("status") != "verified":
         instrumentation_blockers.append("official_symbol_master_binding_missing")
@@ -1590,6 +1673,8 @@ def build_report(
         instrumentation_blockers.append("capture_source_hash_missing")
     if primary_episode_count < MIN_PRIMARY_OPPORTUNITY_EPISODES:
         instrumentation_blockers.append("opportunity_episode_sample_floor_not_met")
+    if primary_candidate_not_promoted_reason_missing_count:
+        instrumentation_blockers.append("scanner_prune_first_reason_missing")
     instrumentation_blockers.append(
         "ex_post_executable_opportunity_label_not_available"
     )
@@ -1635,6 +1720,24 @@ def build_report(
             ),
             "terminal_denominator_conservation_status": (
                 "pass" if denominator == terminal_count_sum else "fail"
+            ),
+            "candidate_not_promoted_first_reason_counts": dict(
+                venue_summary.get("candidate_not_promoted_first_reason_counts")
+                or {}
+            ),
+            "candidate_not_promoted_first_reason_count_sum": venue_summary.get(
+                "candidate_not_promoted_first_reason_count_sum", 0
+            ),
+            "candidate_not_promoted_first_reason_conservation_delta": (
+                venue_summary.get(
+                    "candidate_not_promoted_first_reason_conservation_delta", 0
+                )
+            ),
+            "candidate_not_promoted_first_reason_conservation_status": (
+                venue_summary.get(
+                    "candidate_not_promoted_first_reason_conservation_status",
+                    "unknown",
+                )
             ),
         }
 
@@ -1711,6 +1814,9 @@ def build_report(
                 status: sorted(code for code in codes if code)
                 for status, codes in sorted(primary_symbol_master_lookup_codes.items())
             },
+            "primary_candidate_not_promoted_reason_missing_count": (
+                primary_candidate_not_promoted_reason_missing_count
+            ),
             "raw_opportunity_episode_counts_before_master_gate": raw_episode_counts,
             "installed_trigger_contract": trigger_contract,
             "funnel_instrumentation_contract": {
@@ -1775,6 +1881,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     terminal_reason_lines: list[str] = []
+    candidate_not_promoted_reason_lines: list[str] = []
     for venue, summary in (primary.get("by_venue") or {}).items():
         lines.append(
             "| "
@@ -1795,12 +1902,36 @@ def render_markdown(report: dict[str, Any]) -> str:
                 for reason, count in sorted(reason_counts.items())
             )
         )
+        first_reason_counts = (
+            summary.get("candidate_not_promoted_first_reason_counts") or {}
+        )
+        candidate_not_promoted_reason_lines.append(
+            f"- {venue}: "
+            + (
+                ", ".join(
+                    f"`{reason}`={count}"
+                    for reason, count in sorted(first_reason_counts.items())
+                )
+                if first_reason_counts
+                else "none"
+            )
+            + "; count_sum="
+            f"{summary.get('candidate_not_promoted_first_reason_count_sum', 0)}"
+            + "; conservation_delta="
+            f"{summary.get('candidate_not_promoted_first_reason_conservation_delta', 0)}"
+            + "; conservation_status="
+            f"`{summary.get('candidate_not_promoted_first_reason_conservation_status', 'unknown')}`"
+        )
     lines.extend(
         [
             "",
             "### Terminal Coverage Reasons",
             "",
             *terminal_reason_lines,
+            "",
+            "### Candidate Not Promoted First Reasons",
+            "",
+            *candidate_not_promoted_reason_lines,
             "",
             "## Coverage",
             "",
@@ -1810,7 +1941,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     )
     for panel, panel_rows in report.get("coverage", {}).items():
         for window, views in panel_rows.items():
-            for view, summary in views.items():
+            for view, summary in sorted(views.items()):
                 summaries = [("ALL", summary), *summary.get("by_venue", {}).items()]
                 for venue, venue_summary in summaries:
                     counts = venue_summary.get("stage_counts") or {}

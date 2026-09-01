@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.engine.risk.market_weakness_entry_guard import (
@@ -205,16 +205,24 @@ def test_blocked_entry_counterfactual_anchor_is_immutable_and_idempotent(tmp_pat
     }
 
     first = record_market_weakness_blocked_entry(decision, **arguments)
-    second = record_market_weakness_blocked_entry(decision, **arguments)
+    second = record_market_weakness_blocked_entry(
+        decision,
+        **{
+            **arguments,
+            "now": _now() + timedelta(seconds=2),
+        },
+    )
     conflict = record_market_weakness_blocked_entry(
         decision,
         **{**arguments, "target_price": 100_300},
     )
+    payload = read_json_object_strict(Path(first["path"]))
 
     assert first["status"] == "recorded"
     assert second["status"] == "existing_immutable_observation"
+    assert second["content_sha256"] == payload["content_sha256"]
     assert conflict["status"] == "existing_immutable_observation_conflict"
-    payload = read_json_object_strict(Path(first["path"]))
+    assert conflict["conflict_fields"] == ["target_price"]
     assert payload["actual_order_submitted"] is False
     assert payload["required_quantity"] == 20
     assert payload["counterfactual_contract"]["horizons_minutes"] == [
@@ -224,4 +232,50 @@ def test_blocked_entry_counterfactual_anchor_is_immutable_and_idempotent(tmp_pat
         10,
         20,
         30,
+    ]
+
+
+def test_blocked_entry_counterfactual_rejects_corrupt_existing_anchor(tmp_path):
+    state_path = tmp_path / "state.json"
+    output_dir = tmp_path / "blocked"
+    _write_state(state_path)
+    decision = evaluate_market_weakness_entry_guard(
+        symbol="005930",
+        owner="episode",
+        now=_now(),
+        state_path=state_path,
+        listing_market="KOSPI",
+    )
+    arguments = {
+        "now": _now(),
+        "scope_id": "005930:morning",
+        "session": "KRX_REGULAR",
+        "source_signal_id": "005930:2026-08-31:morning:entry-1",
+        "signal_bar": "2026-08-31T09:59:00+09:00",
+        "reference_price": 100_000,
+        "target_price": 100_200,
+        "required_quantity": 20,
+        "expected_venues": ["SOR"],
+        "output_dir": output_dir,
+    }
+
+    first = record_market_weakness_blocked_entry(decision, **arguments)
+    payload = read_json_object_strict(Path(first["path"]))
+    payload["content_sha256"] = "0" * 64
+    Path(first["path"]).write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    repeated = record_market_weakness_blocked_entry(
+        decision,
+        **{
+            **arguments,
+            "now": _now() + timedelta(seconds=2),
+        },
+    )
+
+    assert repeated["status"] == "existing_immutable_observation_invalid"
+    assert repeated["validation_errors"] == [
+        "blocked_entry_content_sha256_invalid"
     ]

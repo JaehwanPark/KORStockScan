@@ -380,6 +380,10 @@ def test_named_primary_metric_exists_and_missing_contracts_fail_closed(tmp_path)
         "terminal_coverage_reason_count_sum": 0,
         "terminal_denominator_conservation_delta": 0,
         "terminal_denominator_conservation_status": "pass",
+        "candidate_not_promoted_first_reason_counts": {},
+        "candidate_not_promoted_first_reason_count_sum": 0,
+        "candidate_not_promoted_first_reason_conservation_delta": 0,
+        "candidate_not_promoted_first_reason_conservation_status": "pass",
     }
     assert report["status"] == "early_evidence_hold_sample"
     assert report["scanner_recall_state"] == "insufficient_evidence_scanner_recall"
@@ -428,7 +432,17 @@ def test_primary_master_eligible_terminal_reasons_conserve_denominator(
             }
         ],
     )
-    _write_jsonl(pipeline_path, [])
+    _write_jsonl(
+        pipeline_path,
+        [
+            {
+                "stock_code": "005930",
+                "stage": "scalping_scanner_candidate_pruned",
+                "emitted_at": "2026-07-30T10:00:01+09:00",
+                "fields": {"effective_venue": "KRX_REGULAR"},
+            }
+        ],
+    )
     _write_jsonl(ai_path, [])
 
     class FakeMaster:
@@ -457,11 +471,21 @@ def test_primary_master_eligible_terminal_reasons_conserve_denominator(
     primary = report["primary_decision"]["by_venue"]["KRX"]
     assert primary["denominator_unique_opportunity_episode_count"] == 1
     assert primary["terminal_coverage_reason_counts"] == {
-        "scanner_discovery_gap_or_unobserved": 1
+        "candidate_not_promoted": 1
     }
     assert primary["terminal_coverage_reason_count_sum"] == 1
     assert primary["terminal_denominator_conservation_delta"] == 0
     assert primary["terminal_denominator_conservation_status"] == "pass"
+    assert primary["candidate_not_promoted_first_reason_counts"] == {
+        "reason_missing": 1
+    }
+    assert (
+        report["source_quality"][
+            "primary_candidate_not_promoted_reason_missing_count"
+        ]
+        == 1
+    )
+    assert "scanner_prune_first_reason_missing" in report["instrumentation_blockers"]
 
 
 def test_trigger_contract_requires_current_wrapper_and_installed_exact_lines(
@@ -686,6 +710,88 @@ def test_exact_terminal_reason_preserves_submit_safety_block(tmp_path):
     assert row["stage_reason_codes"]["submit_safety_checked"] == [
         "stale_context_or_quote"
     ]
+
+
+def test_candidate_prune_reason_is_preserved_for_scanner_attribution(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    ai_path = tmp_path / "ai.jsonl"
+    _write_jsonl(
+        pipeline_path,
+        [
+            {
+                "stock_code": "005930",
+                "stage": "scalping_scanner_candidate_pruned",
+                "emitted_at": "2026-07-30T10:00:01+09:00",
+                "fields": {
+                    "effective_venue": "KRX_REGULAR",
+                    "reason": "generic_noncanonical_reason",
+                    "scanner_prune_reason": "general_slot_limit",
+                    "scanner_block_reason": "less_specific_fallback",
+                },
+            },
+            {
+                "stock_code": "005930",
+                "stage": "scalping_scanner_candidate_pruned",
+                "emitted_at": "2026-07-30T10:00:02+09:00",
+                "fields": {
+                    "effective_venue": "KRX_REGULAR",
+                    "scanner_prune_reason": "market_gainer_reserved_full",
+                },
+            },
+        ],
+    )
+    _write_jsonl(ai_path, [])
+
+    stage_index = census._load_stage_index(
+        pipeline_path,
+        ai_path,
+        target_date="2026-07-30",
+    )
+    row = census._coverage_row(
+        {
+            "venue": "KRX",
+            "session": "KRX_REGULAR",
+            "stock_code": "005930",
+            "stock_name": "삼성전자",
+            "first_census_at": datetime.fromisoformat("2026-07-30T10:00:00+09:00"),
+        },
+        stage_index,
+        after=datetime.fromisoformat("2026-07-30T10:00:00+09:00"),
+        before=datetime.fromisoformat("2026-07-30T10:05:00+09:00"),
+        require_venue=True,
+        require_lineage=True,
+    )
+
+    assert row["terminal_coverage_reason"] == "candidate_not_promoted"
+    assert row["stage_reason_codes"]["candidate_evaluated"] == [
+        "general_slot_limit",
+        "market_gainer_reserved_full",
+    ]
+    assert row["first_stage_reason_code"]["candidate_evaluated"] == (
+        "general_slot_limit"
+    )
+
+    summary = census._summarize_rows_base([row])
+    assert summary["candidate_not_promoted_first_reason_counts"] == {
+        "general_slot_limit": 1
+    }
+    assert summary["candidate_not_promoted_first_reason_count_sum"] == 1
+    assert summary["candidate_not_promoted_first_reason_conservation_delta"] == 0
+    assert (
+        summary["candidate_not_promoted_first_reason_conservation_status"] == "pass"
+    )
+
+    missing_reason_row = {
+        **row,
+        "first_stage_reason_code": {
+            **row["first_stage_reason_code"],
+            "candidate_evaluated": None,
+        },
+    }
+    missing_reason_summary = census._summarize_rows_base([missing_reason_row])
+    assert missing_reason_summary["candidate_not_promoted_first_reason_counts"] == {
+        "reason_missing": 1
+    }
 
 
 def test_report_splits_forward_exact_from_noncausal_retrospective(tmp_path):
@@ -1245,6 +1351,14 @@ def test_snapshot_append_and_markdown_forbid_live_authority(tmp_path):
                         "terminal_coverage_reason_count_sum": 19,
                         "terminal_denominator_conservation_delta": 0,
                         "terminal_denominator_conservation_status": "pass",
+                        "candidate_not_promoted_first_reason_counts": {
+                            "general_slot_limit": 19,
+                        },
+                        "candidate_not_promoted_first_reason_count_sum": 19,
+                        "candidate_not_promoted_first_reason_conservation_delta": 0,
+                        "candidate_not_promoted_first_reason_conservation_status": (
+                            "pass"
+                        ),
                     },
                 },
             },
@@ -1254,4 +1368,28 @@ def test_snapshot_append_and_markdown_forbid_live_authority(tmp_path):
     assert "| KRX | 19 | 2 | 10.53 | 10.53 | 19 | 0 | pass |" in markdown
     assert "### Terminal Coverage Reasons" in markdown
     assert "KRX terminal coverage reasons:" in markdown
+    assert "### Candidate Not Promoted First Reasons" in markdown
+    assert "`general_slot_limit`=19" in markdown
+    assert "conservation_status=`pass`" in markdown
     assert "`standalone_buy`" in markdown
+
+
+def test_markdown_is_stable_after_sorted_json_round_trip():
+    empty_summary = census._summarize_rows([])
+    report = {
+        "target_date": "2026-07-30",
+        "status": "ok",
+        "coverage": {
+            "liquid_common": {
+                "top_20": {
+                    "forward_exact": empty_summary,
+                    "same_day_venue_consistent_retrospective": empty_summary,
+                    "same_day_any_venue_retrospective_noncausal": empty_summary,
+                }
+            }
+        },
+        "primary_decision": {"by_venue": {}},
+    }
+    round_tripped = json.loads(json.dumps(report, sort_keys=True))
+
+    assert census.render_markdown(report) == census.render_markdown(round_tripped)
