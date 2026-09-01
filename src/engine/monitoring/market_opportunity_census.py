@@ -501,6 +501,7 @@ def _load_trigger_contract(
             trigger_lines,
             EXPECTED_TRIGGER_SCHEDULE_PREFIXES,
             EXPECTED_TRIGGER_MARKERS,
+            strict=True,
         )
     )
     calculated_lines_sha256 = _canonical_trigger_lines_sha256(trigger_lines)
@@ -1456,7 +1457,9 @@ def build_report(
         for row in target_date_snapshots
     ]
     snapshots = [
-        row for row, error in zip(target_date_snapshots, contract_errors) if not error
+        row
+        for row, error in zip(target_date_snapshots, contract_errors, strict=True)
+        if not error
     ]
     stage_index = _load_stage_index(events_path, trace_path, target_date=target_date)
     valid_snapshots = [
@@ -1512,7 +1515,7 @@ def build_report(
                 ordered = sorted(values)
                 gaps = [
                     (right - left).total_seconds()
-                    for left, right in zip(ordered, ordered[1:])
+                    for left, right in zip(ordered, ordered[1:], strict=False)
                 ]
                 session_summaries[session] = {
                     "capture_time_count": len(ordered),

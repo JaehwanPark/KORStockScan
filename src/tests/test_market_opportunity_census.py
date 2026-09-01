@@ -500,6 +500,7 @@ def test_trigger_contract_requires_current_wrapper_and_installed_exact_lines(
         for prefix, marker in zip(
             census.EXPECTED_TRIGGER_SCHEDULE_PREFIXES,
             census.EXPECTED_TRIGGER_MARKERS,
+            strict=True,
         )
     ]
     canonical_lines = "\n".join(trigger_lines) + "\n"

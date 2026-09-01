@@ -4344,10 +4344,12 @@ def _clean_baseline_rolling_nxt_post_block_outcomes(
             _safe_int(row.get("no_hit_within_20m_count")) for _, row in dated_rows
         )
 
-        def _weighted_average(field: str) -> float | None:
+        def _weighted_average(
+            rows: list[tuple[str, dict[str, Any]]], field: str
+        ) -> float | None:
             weighted_sum = 0.0
             weight = 0
-            for _, row in dated_rows:
+            for _, row in rows:
                 value = _safe_float(row.get(field))
                 row_count = _safe_int(row.get("completed_sample_count"))
                 if value is None or row_count <= 0:
@@ -4356,8 +4358,12 @@ def _clean_baseline_rolling_nxt_post_block_outcomes(
                 weight += row_count
             return round(weighted_sum / weight, 6) if weight else None
 
-        avg_mfe = _weighted_average("equal_weight_avg_mfe_after_block_pct")
-        avg_mae = _weighted_average("equal_weight_avg_mae_after_block_pct")
+        avg_mfe = _weighted_average(
+            dated_rows, "equal_weight_avg_mfe_after_block_pct"
+        )
+        avg_mae = _weighted_average(
+            dated_rows, "equal_weight_avg_mae_after_block_pct"
+        )
         gross_first_hit_payoff_proxy_pct = round(
             (target_count * TP1_GROSS_TARGET_PCT + adverse_count * TP1_ADVERSE_STOP_PCT)
             / sample_count,
@@ -5518,7 +5524,7 @@ def _risky_micro_horizon_measurement(
     max_gap_sec = max(
         (
             (right - left).total_seconds()
-            for left, right in zip(path_times, path_times[1:])
+            for left, right in zip(path_times, path_times[1:], strict=False)
         ),
         default=0.0,
     )

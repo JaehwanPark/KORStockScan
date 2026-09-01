@@ -4819,6 +4819,47 @@ def test_clean_baseline_rolling_nxt_post_block_outcomes(monkeypatch, tmp_path):
     ]
 
 
+def test_clean_baseline_rolling_nxt_post_block_outcomes_isolates_group_weights(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    current_rows = [
+        {
+            "source_block_stage": "tp1_selector",
+            "source_block_reason": "reason_a",
+            "completed_sample_count": 2,
+            "unique_symbol_count": 2,
+            "gross_target_first_count": 1,
+            "adverse_stop_first_count": 0,
+            "no_hit_within_20m_count": 1,
+            "equal_weight_avg_mfe_after_block_pct": 1.0,
+            "equal_weight_avg_mae_after_block_pct": -0.1,
+        },
+        {
+            "source_block_stage": "submit_safety",
+            "source_block_reason": "reason_b",
+            "completed_sample_count": 3,
+            "unique_symbol_count": 3,
+            "gross_target_first_count": 0,
+            "adverse_stop_first_count": 1,
+            "no_hit_within_20m_count": 2,
+            "equal_weight_avg_mfe_after_block_pct": 4.0,
+            "equal_weight_avg_mae_after_block_pct": -2.0,
+        },
+    ]
+
+    rows, _ = mod._clean_baseline_rolling_nxt_post_block_outcomes(
+        "2026-08-03", current_rows
+    )
+
+    assert len(rows) == 2
+    by_reason = {row["source_block_reason"]: row for row in rows}
+    assert by_reason["reason_a"]["equal_weight_avg_mfe_after_block_pct"] == 1.0
+    assert by_reason["reason_a"]["equal_weight_avg_mae_after_block_pct"] == -0.1
+    assert by_reason["reason_b"]["equal_weight_avg_mfe_after_block_pct"] == 4.0
+    assert by_reason["reason_b"]["equal_weight_avg_mae_after_block_pct"] == -2.0
+
+
 def test_clean_baseline_rolling_latency_candidates_separates_venue_and_gaps(
     monkeypatch, tmp_path
 ):
