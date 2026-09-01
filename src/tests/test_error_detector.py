@@ -288,7 +288,9 @@ class TestErrorDetectionEngine:
             dry_run=True, mode="health_only", run_id="expected-run"
         )
         report = engine.build_report(engine.run_all())
-        report["summary_severity"] = "fail"
+        report["summary_severity"] = (
+            "fail" if report["summary_severity"] != "fail" else "pass"
+        )
 
         errors = validate_report_contract(
             report,

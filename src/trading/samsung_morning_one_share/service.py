@@ -90,7 +90,9 @@ def main(argv: list[str] | None = None) -> int:
     if live_enabled and (args.state_path is not None or args.lock_path is not None):
         raise SystemExit("live mode forbids custom state or lock paths")
     if live_enabled:
-        authority_ok, authority_reason = validate_authority(DEFAULT_AUTHORITY_PATH)
+        authority_ok, authority_reason = validate_authority(
+            DEFAULT_AUTHORITY_PATH, require_live_main_bot_runtime=True
+        )
         if not authority_ok:
             print(f"live authority artifact blocked: {authority_reason}")
             return 4

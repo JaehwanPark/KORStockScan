@@ -84,9 +84,7 @@ ENTRY_AI_GATE_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
 CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
 POST_PROBE_WINNER_RECOVERY_FAMILY = "post_probe_winner_recovery"
 POST_PROBE_WINNER_RECOVERY_STAGE = "post_probe_recovery"
-POST_PROBE_WINNER_RECOVERY_READY_STATE = (
-    "bounded_one_share_canary_evidence_ready"
-)
+POST_PROBE_WINNER_RECOVERY_READY_STATE = "bounded_one_share_canary_evidence_ready"
 POST_PROBE_WINNER_RECOVERY_VENUES = ("KRX", "NXT", "PREMARKET_KRX_LIKE")
 RUNTIME_GAP_PROVENANCE_DIR = DATA_DIR / "threshold_cycle" / "runtime_gap_provenance"
 ENTRY_CANCEL_WAIT_TUNING_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
@@ -1191,9 +1189,7 @@ def _winner_recovery_auto_apply_candidate(
 
     observation = (
         payload.get("winner_recovery_bounded_canary_observation")
-        if isinstance(
-            payload.get("winner_recovery_bounded_canary_observation"), dict
-        )
+        if isinstance(payload.get("winner_recovery_bounded_canary_observation"), dict)
         else {}
     )
     real_observation = (
@@ -1237,9 +1233,7 @@ def _winner_recovery_auto_apply_candidate(
         counterfactual_ev = _bridge_candidate_float(
             evidence.get("notional_weighted_ev_pct")
         )
-        if str(evidence.get("state") or "") != (
-            POST_PROBE_WINNER_RECOVERY_READY_STATE
-        ):
+        if str(evidence.get("state") or "") != (POST_PROBE_WINNER_RECOVERY_READY_STATE):
             blockers.append("counterfactual_state_not_ready")
         if not bool(evidence.get("sample_floor_met")):
             blockers.append("counterfactual_sample_floor_not_met")
@@ -1254,12 +1248,12 @@ def _winner_recovery_auto_apply_candidate(
         real_count = (
             _int_or_default(real.get("source_quality_valid_closed_count"), 0) or 0
         )
-        real_floor = (
-            _int_or_default(real_observation.get("sample_floor"), 0) or 0
-        )
+        real_floor = _int_or_default(real_observation.get("sample_floor"), 0) or 0
         real_ev = _bridge_candidate_float(real.get("source_quality_adjusted_ev_pct"))
-        if real_floor > 0 and real_count >= real_floor and (
-            real_ev is None or real_ev <= 0
+        if (
+            real_floor > 0
+            and real_count >= real_floor
+            and (real_ev is None or real_ev <= 0)
         ):
             blockers.append("real_execution_ev_non_positive_rollback")
 
@@ -1304,9 +1298,7 @@ def _winner_recovery_auto_apply_candidate(
         "calibration_reason": (
             "positive_exact_blocker_ev_and_venue_sample_floor_auto_apply"
         ),
-        "threshold_version": (
-            f"{POST_PROBE_WINNER_RECOVERY_FAMILY}:{target_date}:v1"
-        ),
+        "threshold_version": (f"{POST_PROBE_WINNER_RECOVERY_FAMILY}:{target_date}:v1"),
         "allowed_runtime_apply": True,
         "safety_revert_required": False,
         "post_apply_attribution_required": True,
@@ -1364,9 +1356,7 @@ def _winner_recovery_auto_apply_candidate(
             "postclose_deterministic_next_preopen_bounded_live_candidate"
         ),
         "metric_role": "bounded_tunable_post_probe_winner_recovery",
-        "window_policy": (
-            "rolling_clean_baseline_exact_blocker_by_effective_venue"
-        ),
+        "window_policy": ("rolling_clean_baseline_exact_blocker_by_effective_venue"),
         "primary_decision_metric": "notional_weighted_ev_pct",
         "forbidden_uses": [
             "intraday_runtime_apply",
@@ -4814,9 +4804,7 @@ def _scalp_sim_auto_runtime_policy_audit(
 ) -> dict[str, Any]:
     operator_overrides = operator_overrides or {}
     direct_enabled_key = "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED"
-    direct_enabled = _runtime_env_enabled(
-        effective_env.get(direct_enabled_key)
-    )
+    direct_enabled = _runtime_env_enabled(effective_env.get(direct_enabled_key))
     direct_policy_file = str(
         effective_env.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE") or ""
     ).strip()
@@ -5224,10 +5212,23 @@ def _drop_unusable_selected_split_policies(
     return filtered_selected, updated_decisions, filtered_env
 
 
+class _PidEnviron(dict[str, str]):
+    """PID environment plus a non-secret procfs read failure classification."""
+
+    def __init__(
+        self,
+        values: dict[str, str] | None = None,
+        *,
+        read_error: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(values or {})
+        self.read_error = read_error
+
+
 def _read_pid_environ(pid: int) -> dict[str, str]:
+    proc_path = f"/proc/{pid}/environ"
     try:
-        raw = f"/proc/{pid}/environ"
-        text = Path(raw).read_bytes()
+        text = Path(proc_path).read_bytes()
         env: dict[str, str] = {}
         for entry in text.split(b"\x00"):
             if not entry:
@@ -5238,9 +5239,16 @@ def _read_pid_environ(pid: int) -> dict[str, str]:
                 env[key.strip()] = value.strip()
             else:
                 env[decoded.strip()] = ""
-        return env
-    except OSError:
-        return {}
+        return _PidEnviron(env)
+    except OSError as exc:
+        return _PidEnviron(
+            read_error={
+                "status": "unreadable",
+                "path": proc_path,
+                "error_type": type(exc).__name__,
+                "errno": exc.errno,
+            }
+        )
 
 
 def _read_shell_export_env(path: Path) -> dict[str, str]:
@@ -5736,6 +5744,7 @@ def verify_runtime_env_handoff(
                 }
             )
     pid_env: dict[str, str] = {}
+    pid_env_read_error: dict[str, Any] | None = None
     pid_mismatches: list[dict[str, Any]] = []
     pid_missing: list[dict[str, Any]] = []
     pid_expected_env, launcher_safe_disabled_keys = _launcher_pid_expected_env(
@@ -5744,6 +5753,9 @@ def verify_runtime_env_handoff(
     )
     if pid is not None:
         pid_env = _read_pid_environ(pid)
+        candidate_read_error = getattr(pid_env, "read_error", None)
+        if isinstance(candidate_read_error, dict):
+            pid_env_read_error = dict(candidate_read_error)
         pid_required_keys: dict[str, list[str]] = {
             family: list(SELECTED_FAMILY_REQUIRED_ENV_KEYS.get(family, []))
             for family in selected_families
@@ -5799,6 +5811,12 @@ def verify_runtime_env_handoff(
             pid_required_keys[persistent_family] = [
                 key for key in persistent_keys if key not in specifically_owned_keys
             ]
+        # A procfs access failure is a single execution-context defect, not one
+        # missing finding per expected key.  Keeping the per-key loop empty also
+        # prevents bounded preflight retries from flooding journald with a full
+        # runtime manifest on every attempt.
+        if pid_env_read_error is not None:
+            pid_required_keys.clear()
         for family, required_keys in pid_required_keys.items():
             for key in required_keys:
                 manifest_value = pid_expected_env.get(key)
@@ -5845,7 +5863,11 @@ def verify_runtime_env_handoff(
                         }
                     )
     passed = len(findings) == 0
-    pid_passed = len(pid_mismatches) == 0 and len(pid_missing) == 0
+    pid_passed = (
+        pid_env_read_error is None
+        and len(pid_mismatches) == 0
+        and len(pid_missing) == 0
+    )
     result: dict[str, Any] = {
         "target_date": target_date,
         "manifest_path": str(manifest_path) if manifest_path.exists() else None,
@@ -5864,6 +5886,7 @@ def verify_runtime_env_handoff(
         "missing_family_count": len(missing_families),
         "pid": pid,
         "pid_env_available": bool(pid_env),
+        "pid_env_read_error": pid_env_read_error,
         "retired_manifest_override_keys_blocked": retired_manifest_override_keys,
         "retired_operator_override_keys_blocked": retired_operator_override_keys,
         "retired_dated_operator_override_keys_blocked": (
@@ -5911,6 +5934,9 @@ def verify_runtime_env_handoff(
     elif not passed:
         result["status"] = "fail"
         result["fail_reason"] = "runtime_env_handoff_missing"
+    elif pid_env_read_error is not None:
+        result["status"] = "fail"
+        result["fail_reason"] = "runtime_env_pid_unreadable"
     elif pid_missing:
         result["status"] = "fail"
         result["fail_reason"] = "runtime_env_pid_missing"

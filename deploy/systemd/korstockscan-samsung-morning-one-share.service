@@ -9,7 +9,10 @@ StartLimitBurst=30
 [Service]
 Type=simple
 User=ubuntu
-Group=www-data
+# validate_authority(require_live_main_bot_runtime=True) rechecks the bound
+# bot PID environment, so the live consumer needs the same procfs credentials
+# as the preflight and bot_main.py.
+Group=ubuntu
 WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
 Environment="KORSTOCKSCAN_SAMSUNG_MORNING_ONE_SHARE_ENABLED=true"

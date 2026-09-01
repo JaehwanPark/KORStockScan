@@ -467,9 +467,7 @@ def test_post_probe_winner_recovery_auto_candidate_emits_dated_venue_env():
     assert decisions[0]["decision_reason"] == "deterministic_policy_handoff"
     assert env == {
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED": "true",
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE": (
-            "2026-08-24"
-        ),
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE": ("2026-08-24"),
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED": "true",
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED": "false",
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED": "false",
@@ -9826,8 +9824,7 @@ def test_scalp_sim_policy_audit_rejects_enabled_policy_without_any_file():
     assert audit["required_env_keys"] == ["KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE"]
 
 
-def test_scalp_sim_policy_audit_ignores_incomplete_lifecycle_handoff_when_direct_disabled(
-):
+def test_scalp_sim_policy_audit_ignores_incomplete_lifecycle_handoff_when_direct_disabled():
     audit = mod._scalp_sim_auto_runtime_policy_audit(
         {
             "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED": "false",
@@ -10010,6 +10007,63 @@ def test_verify_runtime_env_handoff_pid_missing_key(tmp_path, monkeypatch):
         == "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"
     )
     assert result["pid_missing"][0]["severity"] == "runtime_env_pid_missing"
+
+
+def test_verify_runtime_env_handoff_distinguishes_unreadable_pid_env(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    manifest = runtime_dir / "threshold_runtime_env_2026-06-11.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-11",
+                "selected_families": ["soft_stop_whipsaw_confirmation"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "true",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "_read_pid_environ",
+        lambda pid: mod._PidEnviron(
+            read_error={
+                "status": "unreadable",
+                "path": f"/proc/{pid}/environ",
+                "error_type": "PermissionError",
+                "errno": 13,
+            }
+        ),
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-06-11", pid=12345)
+
+    assert result["status"] == "fail"
+    assert result["fail_reason"] == "runtime_env_pid_unreadable"
+    assert result["pid_passed"] is False
+    assert result["pid_missing"] == []
+    assert result["pid_mismatches"] == []
+    assert result["pid_env_read_error"] == {
+        "status": "unreadable",
+        "path": "/proc/12345/environ",
+        "error_type": "PermissionError",
+        "errno": 13,
+    }
 
 
 def test_verify_runtime_env_handoff_pid_uses_operator_runtime_overrides(

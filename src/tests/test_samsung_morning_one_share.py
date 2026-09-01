@@ -844,22 +844,30 @@ def test_live_service_rejects_once_and_custom_state_paths(monkeypatch, tmp_path)
 
 
 def test_live_service_fails_closed_without_daily_authority(monkeypatch):
+    validation_calls = []
     monkeypatch.setenv(service_module.ENABLE_ENV, "true")
     monkeypatch.setattr(
         service_module,
         "validate_authority",
-        lambda path: (False, "authority_target_date_mismatch"),
+        lambda path, **kwargs: validation_calls.append((path, kwargs))
+        or (False, "authority_target_date_mismatch"),
     )
     result = service_module.main(
         ["--live", "--confirm", service_module.LIVE_CONFIRMATION]
     )
     assert result == 4
+    assert validation_calls == [
+        (
+            service_module.DEFAULT_AUTHORITY_PATH,
+            {"require_live_main_bot_runtime": True},
+        )
+    ]
 
 
 def test_live_service_fails_closed_without_exact_date_applied_policy(monkeypatch):
     monkeypatch.setenv(service_module.ENABLE_ENV, "true")
     monkeypatch.setattr(
-        service_module, "validate_authority", lambda path: (True, "ready")
+        service_module, "validate_authority", lambda path, **kwargs: (True, "ready")
     )
     monkeypatch.setattr(
         service_module,
@@ -909,7 +917,7 @@ def test_live_service_runs_reentry_only_after_first_episode_complete(monkeypatch
 
     monkeypatch.setenv(service_module.ENABLE_ENV, "true")
     monkeypatch.setattr(
-        service_module, "validate_authority", lambda path: (True, "ready")
+        service_module, "validate_authority", lambda path, **kwargs: (True, "ready")
     )
     monkeypatch.setattr(
         service_module,
@@ -971,8 +979,63 @@ def test_systemd_live_unit_uses_exact_two_leg_confirmation():
     live_unit = (
         project_root / "deploy/systemd/korstockscan-samsung-morning-one-share.service"
     ).read_text(encoding="utf-8")
+    live_timer = (
+        project_root / "deploy/systemd/korstockscan-samsung-morning-one-share.timer"
+    ).read_text(encoding="utf-8")
+    installer = (
+        project_root / "deploy/install_samsung_morning_one_share_systemd.sh"
+    ).read_text(encoding="utf-8")
+    preflight_script = (
+        project_root / "deploy/run_samsung_morning_one_share_preflight.sh"
+    ).read_text(encoding="utf-8")
     assert "PrivateTmp=true" not in preflight_unit
+    assert "TimeoutStartSec=5400" in preflight_unit
+    assert "User=ubuntu" in preflight_unit
+    assert "Group=ubuntu" in preflight_unit
     assert "PrivateTmp=true" in live_unit
+    assert "User=ubuntu\n" in live_unit
+    assert "Group=ubuntu" in live_unit
+    assert "Group=www-data" not in preflight_unit
+    assert "Group=www-data" not in live_unit
     assert "Requires=korstockscan-samsung-one-share-preflight.service" in live_unit
     assert "RestartPreventExitStatus=4 5 6" in live_unit
     assert service_module.LIVE_CONFIRMATION in live_unit
+    assert "OnCalendar=Mon..Fri *-*-* 07:57:00 Asia/Seoul" in live_timer
+    assert not (
+        project_root / "deploy/systemd/korstockscan-samsung-one-share-preflight.timer"
+    ).exists()
+    assert (
+        'LEGACY_PREFLIGHT_TIMER="korstockscan-samsung-one-share-preflight.timer"'
+        in installer
+    )
+    assert (
+        "/bin/systemctl enable --now korstockscan-samsung-morning-one-share.timer"
+        in installer
+    )
+    assert 'installed_group="$(/bin/systemctl show' in installer
+    assert 'installed_group" != "ubuntu"' in installer
+    assert installer.index('installed_group="$(/bin/systemctl show') < installer.index(
+        "/bin/systemctl enable --now korstockscan-samsung-morning-one-share.timer"
+    )
+    assert "PREFLIGHT_DEADLINE_HHMMSS" in preflight_script
+    assert "compact_verify_detail" in preflight_script
+    assert "pid_env_read_error" in preflight_script
+    assert "detail=$verify_output" not in preflight_script
+    assert '--pid "$bot_pid"' in preflight_script
+    assert "--write-verify-artifact" in preflight_script
+    assert '--main-bot-pid "$bot_pid"' in preflight_script
+    assert '--authority-deadline-hhmmss "$PREFLIGHT_DEADLINE_HHMMSS"' in (
+        preflight_script
+    )
+    initial_deadline_guard = preflight_script.index("if deadline_elapsed; then")
+    policy_apply = preflight_script.index("samsung_machine_entry_policy_apply")
+    polling_verify = preflight_script.index('verify_output="$(')
+    polling_verify_end = preflight_script.index(')"; then', polling_verify)
+    verify_commit = preflight_script.index('verify_commit_output="$(')
+    verify_artifact_write = preflight_script.index("--write-verify-artifact")
+    assert initial_deadline_guard < policy_apply
+    assert (
+        "--write-verify-artifact"
+        not in preflight_script[polling_verify:polling_verify_end]
+    )
+    assert polling_verify_end < verify_commit < verify_artifact_write

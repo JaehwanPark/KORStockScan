@@ -463,7 +463,7 @@ profile may propose one tightening axis for the next PREOPEN:
 - drawdown from the profile baseline to at most `baseline + 0.25%p`, or
 - near-low proximity from the profile baseline to at most `baseline - 0.10%p`.
 
-Across all forty-six profiles and the existing Samsung regular machines, at most one
+Across all forty-eight profiles and the existing Samsung regular machines, at most one
 profile/machine and one entry axis may change per day.  The Samsung candidate is
 produced first; if it owns a valid mutation, or its same-date candidate is
 invalid, the lower-price family carries all policies forward. Quantity is fixed
@@ -506,6 +506,14 @@ eight existing profiles and adds `sk_telecom_morning`, producing 46 profiles.
 Its nine-row evidence hash and source-report hash are checked independently;
 target dates through 2026-08-27 continue to resolve the immutable 45-profile
 generation so open orders and held custody are never reinterpreted.
+The user-approved 2026-08-28 postclose generation takes effect only on
+2026-08-31: it revises five existing profiles and adds `fan_ocean_morning` and
+`fan_ocean_late_morning`, producing 48 profiles. Its seven-row evidence is bound
+to canonical SHA-256
+`d5f6e6cb6f80e2fa70c1807f39dc18955060f74d14cdf2111821f1a6b9d1e944`.
+Target dates from 2026-08-28 through 2026-08-30 continue to resolve the
+immutable 46-profile generation; existing orders and held custody retain their
+original signal-date policy snapshot across the 48-profile transition.
 
 ## Daily implementation-candidate recommendation
 

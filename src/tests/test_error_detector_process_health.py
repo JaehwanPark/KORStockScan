@@ -15,6 +15,10 @@ from src.engine.error_detectors.process_health import (
     POSTCLOSE_BOT_ISOLATION_PATH,
 )
 
+_ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT = (
+    process_health_module._samsung_morning_runtime_contract
+)
+
 
 @pytest.fixture(autouse=True)
 def _force_trading_day(monkeypatch, tmp_path):
@@ -29,6 +33,20 @@ def _force_trading_day(monkeypatch, tmp_path):
     )
     monkeypatch.setitem(globals(), "HEARTBEAT_PATH", heartbeat_path)
     monkeypatch.setitem(globals(), "POSTCLOSE_BOT_ISOLATION_PATH", isolation_path)
+    monkeypatch.setattr(
+        process_health_module,
+        "_samsung_morning_runtime_contract",
+        lambda now: {
+            "severity": "pass",
+            "status": "not_applicable_test_default",
+            "target_date": now.date().isoformat(),
+        },
+    )
+    monkeypatch.setattr(
+        process_health_module,
+        "_pid_cmdline_contains_bot_main",
+        lambda pid: True,
+    )
 
 
 class TestProcessHealthDetector:
@@ -83,6 +101,44 @@ class TestProcessHealthDetector:
         result = detector.check()
         assert result.severity == "pass"
 
+    def test_detector_fails_when_samsung_expected_runtime_fails(self, monkeypatch):
+        monkeypatch.setattr(
+            process_health_module,
+            "_samsung_morning_runtime_contract",
+            lambda now: {
+                "severity": "fail",
+                "status": "expected_process_not_healthy",
+                "reason": "exact_date_authority_missing_or_stale",
+            },
+        )
+        write_heartbeat("main_loop")
+        write_heartbeat("telegram")
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "fail"
+        assert "Samsung morning" in result.summary
+        assert result.details["samsung_morning_runtime"]["reason"] == (
+            "exact_date_authority_missing_or_stale"
+        )
+
+    def test_detector_preserves_concurrent_main_and_samsung_failures(self, monkeypatch):
+        monkeypatch.setattr(
+            process_health_module,
+            "_samsung_morning_runtime_contract",
+            lambda now: {
+                "severity": "fail",
+                "status": "expected_process_not_healthy",
+                "reason": "exact_date_authority_missing_or_stale",
+            },
+        )
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "fail"
+        assert "Heartbeat file not found" in result.summary
+        assert "Samsung morning expected runtime" in result.summary
+
     def test_detector_fails_immediately_when_thread_reports_stopped(self):
         write_heartbeat("main_loop")
         write_heartbeat("sniper_engine", alive=False)
@@ -95,8 +151,10 @@ class TestProcessHealthDetector:
         assert "sniper_engine" in result.summary
 
     def test_detector_passes_for_sniper_normal_market_close(self, monkeypatch):
-        now = datetime.now().astimezone().replace(
-            hour=20, minute=0, second=3, microsecond=0
+        now = (
+            datetime.now()
+            .astimezone()
+            .replace(hour=20, minute=0, second=3, microsecond=0)
         )
         monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
         write_heartbeat("main_loop")
@@ -126,8 +184,10 @@ class TestProcessHealthDetector:
         assert "sniper_engine" in result.summary
 
     def test_detector_rejects_market_close_reason_before_cutoff(self, monkeypatch):
-        now = datetime.now().astimezone().replace(
-            hour=19, minute=59, second=59, microsecond=0
+        now = (
+            datetime.now()
+            .astimezone()
+            .replace(hour=19, minute=59, second=59, microsecond=0)
         )
         monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
         write_heartbeat("main_loop")
@@ -149,8 +209,10 @@ class TestProcessHealthDetector:
         assert result.details["stopped_threads"] == ["sniper_engine"]
 
     def test_detector_rejects_prior_date_market_close_terminal(self, monkeypatch):
-        now = datetime.now().astimezone().replace(
-            hour=20, minute=1, second=0, microsecond=0
+        now = (
+            datetime.now()
+            .astimezone()
+            .replace(hour=20, minute=1, second=0, microsecond=0)
         )
         prior = now - timedelta(days=1)
         monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
@@ -447,3 +509,472 @@ class TestProcessHealthDetector:
 
         assert result.severity == "warning"
         assert result.details["main_loop_status"] == "startup_grace_waiting"
+
+
+def _mock_samsung_systemd_states(
+    monkeypatch, *, live: dict, preflight: dict | None = None
+):
+    states = {
+        process_health_module._SAMSUNG_MORNING_TIMER_UNIT: {
+            "LoadState": "loaded",
+            "UnitFileState": "enabled",
+            "ActiveState": "active",
+            "SubState": "waiting",
+            "Result": "success",
+            "Triggers": process_health_module._SAMSUNG_MORNING_LIVE_UNIT,
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "",
+        },
+        process_health_module._SAMSUNG_MORNING_PREFLIGHT_UNIT: preflight
+        or {
+            "LoadState": "loaded",
+            "User": "ubuntu",
+            "Group": "ubuntu",
+            "ActiveState": "activating",
+            "SubState": "start",
+            "Result": "success",
+            "MainPID": 15132,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "Wed 2026-09-02 07:57:00 KST",
+        },
+        process_health_module._SAMSUNG_MORNING_LIVE_UNIT: live,
+    }
+    states[process_health_module._SAMSUNG_MORNING_PREFLIGHT_UNIT].setdefault(
+        "User", "ubuntu"
+    )
+    states[process_health_module._SAMSUNG_MORNING_PREFLIGHT_UNIT].setdefault(
+        "Group", "ubuntu"
+    )
+    states[process_health_module._SAMSUNG_MORNING_LIVE_UNIT].setdefault(
+        "User", "ubuntu"
+    )
+    states[process_health_module._SAMSUNG_MORNING_LIVE_UNIT].setdefault(
+        "Group", "ubuntu"
+    )
+    monkeypatch.setattr(
+        process_health_module,
+        "_systemd_unit_state",
+        lambda unit: {"unit": unit, **states[unit]},
+    )
+
+
+def _write_samsung_authority(path, *, target_date: str, ready: bool):
+    path.write_text(
+        json.dumps(
+            {
+                "schema": process_health_module._SAMSUNG_MORNING_AUTHORITY_SCHEMA,
+                "target_date": target_date,
+                "status": "ready" if ready else "blocked",
+                "observed_at_kst": f"{target_date}T07:57:00+09:00",
+                "valid_until_kst": f"{target_date}T23:59:59+09:00",
+                "decision_authority": (
+                    "explicit_user_directed_morning_two_episode_live_start"
+                ),
+                "source_quality_gate": "PASS",
+                "runtime_effect": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": False,
+                "policy": {
+                    "symbol": "005930",
+                    "quantity": 20,
+                    "allocation": (
+                        "ten_shares_base_limit_and_ten_shares_base_plus_1tick"
+                    ),
+                    "maximum_episodes_per_day": 2,
+                    "unfilled_target": "hold_position_without_forced_exit",
+                },
+                "rollback": {
+                    "action": (
+                        "fail_closed_and_disable_only_morning_two_leg_timer_and_services"
+                    ),
+                    "widget_service_effect": "none",
+                },
+                "decision": {
+                    "ready": ready,
+                    "target_date": target_date,
+                    "main_bot_active": ready,
+                    "main_bot_runtime_env_verified": ready,
+                    "main_bot_pid": 14307 if ready else 0,
+                    "shared_token_available": ready,
+                    "operator_exclusion_source": "manual_operator" if ready else "",
+                    "prior_reentry_state_clear": ready,
+                    "parallel_widget_trading_allowed": True,
+                    "independent_order_ledger_required": True,
+                    "blockers": [] if ready else ["blocked"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_samsung_runtime_warns_before_acceptance_deadline(monkeypatch, tmp_path):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-01", ready=True)
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "Result": "success",
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "",
+        },
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T08:04:59+09:00")
+    )
+
+    assert result["severity"] == "warning"
+    assert result["status"] == "bounded_wait"
+    assert result["reason"] == "exact_date_authority_missing_or_stale"
+
+
+def test_samsung_runtime_fails_at_acceptance_deadline(monkeypatch, tmp_path):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-01", ready=True)
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "Result": "success",
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "",
+        },
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T08:05:00+09:00")
+    )
+
+    assert result["severity"] == "fail"
+    assert result["status"] == "expected_process_not_healthy"
+    assert result["reason"] == "exact_date_authority_missing_or_stale"
+
+
+def test_samsung_runtime_passes_with_exact_authority_and_live_pid(
+    monkeypatch, tmp_path
+):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-02", ready=True)
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "active",
+            "SubState": "running",
+            "Result": "success",
+            "MainPID": 15555,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "Wed 2026-09-02 07:57:01 KST",
+        },
+        preflight={
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "Result": "success",
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "Wed 2026-09-02 07:57:00 KST",
+        },
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T08:05:00+09:00")
+    )
+
+    assert result["severity"] == "pass"
+    assert result["status"] == "healthy_active"
+
+
+def test_samsung_runtime_rejects_corrupt_authority_schema(monkeypatch, tmp_path):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-02", ready=True)
+    payload = json.loads(authority_path.read_text(encoding="utf-8"))
+    payload["schema"] = "stale_schema"
+    authority_path.write_text(json.dumps(payload), encoding="utf-8")
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "active",
+            "SubState": "running",
+            "Result": "success",
+            "MainPID": 15555,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "Wed 2026-09-02 07:57:01 KST",
+        },
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T08:05:00+09:00")
+    )
+
+    assert result["severity"] == "fail"
+    assert result["reason"] == "exact_date_authority_schema_invalid"
+
+
+def test_samsung_runtime_rejects_authority_policy_drift(monkeypatch, tmp_path):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-02", ready=True)
+    payload = json.loads(authority_path.read_text(encoding="utf-8"))
+    payload["policy"]["quantity"] = 21
+    authority_path.write_text(json.dumps(payload), encoding="utf-8")
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "active",
+            "SubState": "running",
+            "Result": "success",
+            "MainPID": 15555,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "Wed 2026-09-02 07:57:01 KST",
+        },
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T08:05:00+09:00")
+    )
+
+    assert result["severity"] == "fail"
+    assert result["reason"] == "exact_date_authority_policy_invalid"
+
+
+def test_samsung_runtime_rejects_prior_date_terminal_result(monkeypatch, tmp_path):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-02", ready=True)
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "Result": "success",
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "Tue 2026-09-01 07:57:01 KST",
+        },
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T08:05:00+09:00")
+    )
+
+    assert result["severity"] == "fail"
+    assert result["reason"] == "morning_live_service_not_started"
+
+
+def test_samsung_runtime_rejects_dead_bound_main_bot_pid(monkeypatch, tmp_path):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-02", ready=True)
+    monkeypatch.setattr(
+        process_health_module,
+        "_pid_cmdline_contains_bot_main",
+        lambda pid: False,
+    )
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "active",
+            "SubState": "running",
+            "Result": "success",
+            "MainPID": 15555,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "Wed 2026-09-02 07:57:01 KST",
+        },
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T08:05:00+09:00")
+    )
+
+    assert result["severity"] == "fail"
+    assert result["reason"] == "exact_date_authority_main_bot_pid_inactive"
+
+
+def test_samsung_terminal_success_survives_planned_main_bot_shutdown(
+    monkeypatch, tmp_path
+):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-02", ready=True)
+    monkeypatch.setattr(
+        process_health_module,
+        "_pid_cmdline_contains_bot_main",
+        lambda pid: False,
+    )
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "Result": "success",
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "Wed 2026-09-02 07:57:01 KST",
+        },
+        preflight={
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "Result": "success",
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "Wed 2026-09-02 07:57:00 KST",
+        },
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T21:55:00+09:00")
+    )
+
+    assert result["severity"] == "pass"
+    assert result["status"] == "one_shot_completed"
+
+
+def test_samsung_runtime_fails_immediately_for_explicit_preflight_failure(
+    monkeypatch, tmp_path
+):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-02", ready=False)
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "Result": "success",
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "",
+        },
+        preflight={
+            "LoadState": "loaded",
+            "ActiveState": "failed",
+            "SubState": "failed",
+            "Result": "failed",
+            "MainPID": 0,
+            "ExecMainStatus": 3,
+            "ExecMainStartTimestamp": "Wed 2026-09-02 07:57:00 KST",
+        },
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T08:00:00+09:00")
+    )
+
+    assert result["severity"] == "fail"
+    assert result["reason"] == "morning_preflight_failed"
+
+
+def test_samsung_runtime_rejects_installed_credential_drift(monkeypatch, tmp_path):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-02", ready=True)
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        live={
+            "LoadState": "loaded",
+            "User": "ubuntu",
+            "Group": "www-data",
+            "ActiveState": "active",
+            "SubState": "running",
+            "Result": "success",
+            "MainPID": 15555,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "Wed 2026-09-02 07:57:01 KST",
+        },
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T08:05:00+09:00")
+    )
+
+    assert result["severity"] == "fail"
+    assert result["reason"] == "morning_service_credential_contract_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("timer_change", "expected_reason"),
+    [
+        ({"UnitFileState": "disabled"}, "morning_timer_not_enabled"),
+        (
+            {"Triggers": "wrong-owner.service"},
+            "morning_timer_trigger_contract_mismatch",
+        ),
+    ],
+)
+def test_samsung_runtime_rejects_timer_install_contract_drift(
+    monkeypatch, tmp_path, timer_change, expected_reason
+):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-02", ready=True)
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "active",
+            "SubState": "running",
+            "Result": "success",
+            "MainPID": 15555,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "Wed 2026-09-02 07:57:01 KST",
+        },
+    )
+    original_state = process_health_module._systemd_unit_state
+
+    def changed_state(unit):
+        state = original_state(unit)
+        if unit == process_health_module._SAMSUNG_MORNING_TIMER_UNIT:
+            state.update(timer_change)
+        return state
+
+    monkeypatch.setattr(process_health_module, "_systemd_unit_state", changed_state)
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T08:05:00+09:00")
+    )
+
+    assert result["severity"] == "fail"
+    assert result["reason"] == expected_reason

@@ -13,6 +13,7 @@ from pathlib import Path
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
+from src.engine.threshold_cycle_preopen_apply import verify_runtime_env_handoff
 from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.trading.order.samsung_entry_policy import (
     effective_target_ticks,
@@ -25,11 +26,47 @@ from src.trading.samsung_morning_one_share.reentry import (
 )
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
+from src.utils.market_day import get_krx_trading_day_status
 
-AUTHORITY_SCHEMA = "samsung_morning_two_episode_authority_v6"
+AUTHORITY_SCHEMA = "samsung_morning_two_episode_authority_v7"
 DEFAULT_AUTHORITY_PATH = (
     DATA_DIR / "runtime" / "samsung_morning_one_share_authority.json"
 )
+
+
+def _is_bot_main_pid(pid: int, *, proc_root: Path = Path("/proc")) -> bool:
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        cmdline = (proc_root / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return False
+    return any(
+        Path(token.decode("utf-8", errors="replace")).name == "bot_main.py"
+        for token in cmdline.split(b"\0")
+        if token
+    )
+
+
+def _parse_hhmmss(value: str) -> time:
+    try:
+        parsed = time.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected HH:MM:SS") from exc
+    if (
+        len(value) != 8
+        or parsed.strftime("%H:%M:%S") != value
+        or parsed.tzinfo is not None
+        or parsed.microsecond != 0
+    ):
+        raise argparse.ArgumentTypeError("expected timezone-free HH:MM:SS")
+    return parsed
+
+
+def _authority_deadline_elapsed(deadline: time | None, *, now: datetime) -> bool:
+    if deadline is None:
+        return False
+    return now.astimezone(KST).time().replace(tzinfo=None) >= deadline
 
 
 @dataclass(frozen=True)
@@ -37,6 +74,8 @@ class PreflightDecision:
     ready: bool
     target_date: str
     main_bot_active: bool
+    main_bot_pid: int
+    main_bot_runtime_env_verified: bool
     shared_token_available: bool
     operator_exclusion_source: str
     parallel_widget_trading_allowed: bool
@@ -49,6 +88,8 @@ def evaluate_preflight(
     *,
     target_date: date,
     main_bot_active: bool,
+    main_bot_pid: int,
+    main_bot_runtime_env_verified: bool,
     shared_token_available: bool,
     operator_exclusion_source: str,
     prior_reentry_state_clear: bool = True,
@@ -56,6 +97,10 @@ def evaluate_preflight(
     blockers: list[str] = []
     if not main_bot_active:
         blockers.append("main_bot_inactive")
+    if main_bot_pid <= 0:
+        blockers.append("main_bot_pid_missing")
+    if not main_bot_runtime_env_verified:
+        blockers.append("main_bot_runtime_env_unverified")
     if not shared_token_available:
         blockers.append("shared_token_unavailable")
     if not operator_exclusion_source:
@@ -66,6 +111,8 @@ def evaluate_preflight(
         ready=not blockers,
         target_date=target_date.isoformat(),
         main_bot_active=bool(main_bot_active),
+        main_bot_pid=max(0, int(main_bot_pid)),
+        main_bot_runtime_env_verified=bool(main_bot_runtime_env_verified),
         shared_token_available=bool(shared_token_available),
         operator_exclusion_source=str(operator_exclusion_source or ""),
         parallel_widget_trading_allowed=True,
@@ -80,8 +127,12 @@ def build_authority_artifact(
 ) -> dict:
     if not decision.ready:
         raise ValueError("preflight_not_ready")
+    if observed_at.tzinfo is None:
+        raise ValueError("preflight_observed_at_timezone_missing")
     observed_at = observed_at.astimezone(KST)
     target_date = date.fromisoformat(decision.target_date)
+    if observed_at.date() != target_date:
+        raise ValueError("preflight_target_date_not_observed_date")
     target_ticks = effective_target_ticks(
         "morning", target_date=target_date, as_of=observed_at
     )
@@ -135,7 +186,7 @@ def build_authority_artifact(
                 "order or ambiguous position state, source failure, or two-leg "
                 "contract breach"
             ),
-            "action": "fail_closed_and_disable_only_morning_two_leg_timers_and_service",
+            "action": "fail_closed_and_disable_only_morning_two_leg_timer_and_services",
             "widget_service_effect": "none",
         },
         "forbidden_uses": [
@@ -167,7 +218,10 @@ def _atomic_write(path: Path, payload: dict) -> None:
 
 
 def validate_authority(
-    path: Path = DEFAULT_AUTHORITY_PATH, *, now: datetime | None = None
+    path: Path = DEFAULT_AUTHORITY_PATH,
+    *,
+    now: datetime | None = None,
+    require_live_main_bot_runtime: bool = False,
 ) -> tuple[bool, str]:
     now = (now or datetime.now(tz=KST)).astimezone(KST)
     try:
@@ -178,8 +232,28 @@ def validate_authority(
         return False, "authority_schema_invalid"
     if payload.get("status") != "ready":
         return False, "authority_not_ready"
+    if (
+        payload.get("decision_authority")
+        != "explicit_user_directed_morning_two_episode_live_start"
+        or payload.get("source_quality_gate") != "PASS"
+        or payload.get("runtime_effect") is not True
+        or payload.get("actual_order_submitted") is not False
+        or payload.get("broker_order_forbidden") is not False
+    ):
+        return False, "authority_runtime_contract_mismatch"
     if payload.get("target_date") != now.date().isoformat():
         return False, "authority_target_date_mismatch"
+    try:
+        observed_at = datetime.fromisoformat(str(payload.get("observed_at_kst") or ""))
+    except ValueError:
+        return False, "authority_observed_at_invalid"
+    if observed_at.tzinfo is None:
+        return False, "authority_observed_at_invalid"
+    observed_at = observed_at.astimezone(KST)
+    if observed_at.date().isoformat() != payload.get("target_date"):
+        return False, "authority_observed_target_date_mismatch"
+    if observed_at > now:
+        return False, "authority_observed_in_future"
     try:
         valid_until = datetime.fromisoformat(str(payload.get("valid_until_kst") or ""))
     except ValueError:
@@ -189,12 +263,31 @@ def validate_authority(
     decision = payload.get("decision")
     if not isinstance(decision, dict) or decision.get("ready") is not True:
         return False, "authority_decision_invalid"
+    if decision.get("target_date") != payload.get("target_date"):
+        return False, "authority_decision_target_date_mismatch"
+    if decision.get("main_bot_active") is not True:
+        return False, "authority_main_bot_inactive"
+    if decision.get("shared_token_available") is not True:
+        return False, "authority_shared_token_unavailable"
+    if not str(decision.get("operator_exclusion_source") or "").strip():
+        return False, "authority_manual_operator_exclusion_missing"
+    if decision.get("blockers") != []:
+        return False, "authority_decision_blockers_present"
     if decision.get("parallel_widget_trading_allowed") is not True:
         return False, "authority_parallel_widget_contract_missing"
     if decision.get("independent_order_ledger_required") is not True:
         return False, "authority_independent_ledger_contract_missing"
     if decision.get("prior_reentry_state_clear") is not True:
         return False, "authority_prior_reentry_state_not_clear"
+    main_bot_pid = decision.get("main_bot_pid")
+    if (
+        isinstance(main_bot_pid, bool)
+        or not isinstance(main_bot_pid, int)
+        or main_bot_pid <= 0
+    ):
+        return False, "authority_main_bot_pid_missing"
+    if decision.get("main_bot_runtime_env_verified") is not True:
+        return False, "authority_main_bot_runtime_env_unverified"
     policy = payload.get("policy")
     if not isinstance(policy, dict):
         return False, "authority_policy_missing"
@@ -228,6 +321,25 @@ def validate_authority(
     }
     if any(policy.get(key) != value for key, value in expected.items()):
         return False, "authority_sor_policy_mismatch"
+    rollback = payload.get("rollback")
+    if (
+        not isinstance(rollback, dict)
+        or rollback.get("action")
+        != "fail_closed_and_disable_only_morning_two_leg_timer_and_services"
+        or rollback.get("widget_service_effect") != "none"
+    ):
+        return False, "authority_rollback_contract_mismatch"
+    if require_live_main_bot_runtime:
+        if not _is_bot_main_pid(main_bot_pid):
+            return False, "authority_main_bot_inactive"
+        runtime_verification = verify_runtime_env_handoff(
+            str(payload.get("target_date") or ""), pid=main_bot_pid
+        )
+        if (
+            runtime_verification.get("status") != "pass"
+            or runtime_verification.get("pid") != main_bot_pid
+        ):
+            return False, "authority_main_bot_runtime_env_unverified"
     return True, "ready"
 
 
@@ -236,6 +348,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-date", default=None)
     parser.add_argument("--authority-path", type=Path, default=DEFAULT_AUTHORITY_PATH)
     parser.add_argument("--main-bot-active", action="store_true")
+    parser.add_argument("--main-bot-pid", type=int, default=0)
+    parser.add_argument(
+        "--authority-deadline-hhmmss",
+        type=_parse_hhmmss,
+        default=None,
+        help="Fail closed if authority publication reaches this KST deadline.",
+    )
     parser.add_argument("--write", action="store_true")
     return parser
 
@@ -246,12 +365,80 @@ def main(argv: list[str] | None = None) -> int:
     target_date = (
         date.fromisoformat(args.target_date) if args.target_date else observed_at.date()
     )
+    if target_date != observed_at.date():
+        print(
+            json.dumps(
+                {
+                    "decision": {
+                        "ready": False,
+                        "target_date": target_date.isoformat(),
+                        "blockers": ["target_date_not_observed_date"],
+                    },
+                    "authority_path": str(args.authority_path),
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+    if _authority_deadline_elapsed(
+        args.authority_deadline_hhmmss,
+        now=observed_at,
+    ):
+        print(
+            json.dumps(
+                {
+                    "decision": {
+                        "ready": False,
+                        "target_date": target_date.isoformat(),
+                        "blockers": ["authority_creation_deadline_elapsed"],
+                    },
+                    "authority_path": str(args.authority_path),
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+    trading_day, trading_day_reason = get_krx_trading_day_status(target_date)
+    if not trading_day:
+        print(
+            json.dumps(
+                {
+                    "decision": {
+                        "ready": False,
+                        "target_date": target_date.isoformat(),
+                        "blockers": ["target_date_not_krx_trading_day"],
+                    },
+                    "authority_path": str(args.authority_path),
+                    "trading_day_reason": trading_day_reason,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
     prior_reentry_clear, prior_reentry_reason = prior_reentry_allows_new_first_episode(
         DEFAULT_REENTRY_STATE_PATH, target_date=target_date
     )
+    main_bot_active = bool(args.main_bot_active and _is_bot_main_pid(args.main_bot_pid))
+    runtime_env_verification = {"status": "not_checked", "pid": args.main_bot_pid}
+    if main_bot_active:
+        runtime_env_verification = verify_runtime_env_handoff(
+            target_date.isoformat(), pid=args.main_bot_pid
+        )
+    runtime_env_verified = bool(
+        runtime_env_verification.get("status") == "pass"
+        and runtime_env_verification.get("pid") == args.main_bot_pid
+    )
     decision = evaluate_preflight(
         target_date=target_date,
-        main_bot_active=args.main_bot_active,
+        main_bot_active=main_bot_active,
+        main_bot_pid=args.main_bot_pid,
+        main_bot_runtime_env_verified=runtime_env_verified,
         shared_token_available=bool(kiwoom_utils.get_cached_kiwoom_token()),
         operator_exclusion_source=manual_control_operator_exclusion_source("005930"),
         prior_reentry_state_clear=prior_reentry_clear,
@@ -260,8 +447,18 @@ def main(argv: list[str] | None = None) -> int:
         "decision": asdict(decision),
         "authority_path": str(args.authority_path),
         "prior_reentry_state_reason": prior_reentry_reason,
+        "main_bot_identity_verified": main_bot_active,
+        "main_bot_runtime_env_verification": runtime_env_verification,
     }
     if decision.ready and args.write:
+        if _authority_deadline_elapsed(
+            args.authority_deadline_hhmmss,
+            now=datetime.now(tz=KST),
+        ):
+            output["decision"]["ready"] = False
+            output["decision"]["blockers"] = ["authority_creation_deadline_elapsed"]
+            print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
+            return 2
         artifact = build_authority_artifact(decision, observed_at=observed_at)
         _atomic_write(args.authority_path, artifact)
         output["artifact"] = artifact

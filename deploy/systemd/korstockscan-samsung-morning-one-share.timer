@@ -1,8 +1,8 @@
 [Unit]
-Description=Start Samsung Morning One-Share Machine Before NXT Premarket
+Description=Start Samsung Morning Two-Episode Machine Through PREOPEN Dependency
 
 [Timer]
-OnCalendar=Mon..Fri *-*-* 07:59:00 Asia/Seoul
+OnCalendar=Mon..Fri *-*-* 07:57:00 Asia/Seoul
 Persistent=false
 AccuracySec=1s
 Unit=korstockscan-samsung-morning-one-share.service

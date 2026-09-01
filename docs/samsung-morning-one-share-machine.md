@@ -91,7 +91,7 @@
 3. `005930`의 명시적 `manual_operator` 제외 소유권
 4. 당일 07:57 PREOPEN 점검에서 생성한 `data/runtime/samsung_morning_one_share_authority.json`
 
-`korstockscan-samsung-one-share-preflight.timer`는 평일 07:57에 메인 봇 tmux, 공유 캐시 토큰, 메인 봇 제외 소유권, 전일 추가 episode 주문·보유 해소를 확인한다. 통과한 당일에만 `korstockscan-samsung-morning-one-share.timer`가 07:59부터 전용 기계를 시작한다. service는 첫 episode가 `COMPLETE`이면 추가 episode의 terminal 상태까지 계속 custody하고, 첫 episode가 `NO_TRADE`, `HELD`, `BLOCKED`이면 추가 매수를 열지 않고 종료한다. 두 timer는 `Persistent=false`라 설치 시각에 이미 지난 당일 작업을 소급 실행하지 않는다.
+`korstockscan-samsung-morning-one-share.timer`는 평일 07:57에 live service와 필수 preflight service를 단일 systemd transaction으로 시작한다. 별도 preflight timer는 같은 oneshot을 두 번 실행할 수 있어 retired됐으며 installer가 기존 설치본을 disable/remove한다. preflight는 당일 KRX 거래일 여부, 공유 캐시 토큰, 메인 봇 제외 소유권, 전일 추가 episode 주문·보유 해소를 확인한다. 평일 휴장일은 authority를 만들지 않고 dependency를 fail-closed한다. 메인 봇 준비는 tmux 세션 이름만 보지 않고 exact-date threshold runtime env를 로드한 단일 `bot_main.py` PID의 `threshold_cycle_preopen_apply --verify --pid` pass를 요구하며, authority v7에 PID와 검증 상태를 함께 고정한다. preflight와 live unit은 이 PID의 `/proc` 환경을 읽는 main bot과 동일한 `User=ubuntu`, `Group=ubuntu` fs credential 계약을 사용한다. procfs 접근 자체가 거부되면 개별 env key missing으로 오인하지 않고 `runtime_env_pid_unreadable`로 차단한다. live service는 같은 transaction의 `Requires`/`After` dependency가 terminal success일 때만 이어서 시작한다. PREOPEN이 늦으면 NXT 08:00~08:10을 소급 실행하지 않고 SOR 09:00~09:30 계약 안에서만 기다리며, 09:25가 되면 authority 생성 없이 fail-closed한다. service는 첫 episode가 `COMPLETE`이면 추가 episode의 terminal 상태까지 계속 custody하고, 첫 episode가 `NO_TRADE`, `HELD`, `BLOCKED`이면 추가 매수를 열지 않고 종료한다. timer는 `Persistent=false`라 설치 시각에 이미 지난 당일 작업을 소급 실행하지 않는다.
 
 preflight 서비스는 메인 봇의 사용자 tmux 소켓을 확인해야 하므로 `PrivateTmp` 격리를 사용하지 않는다. 실매매 서비스는 별도 임시 디렉터리 격리인 `PrivateTmp=true`를 유지한다.
 
@@ -110,6 +110,6 @@ report 자체는 `runtime_effect=false`, `allowed_runtime_apply=false`이고, cl
 preflight wrapper는 정확일자 applied artifact를 먼저 생성하고 service는 schema/hash가 검증된 오전 policy만 읽는다. 후보 없음/기간 만료는 baseline으로 닫고, 최신 후보 또는 이미 생성된 당일 artifact가 손상되면 broker gateway 생성 전에 기동을 차단한다. 당일 기본 artifact는 덮어쓰지 않고, 2026-08-14 09:21:07 KST 후부터는 명시적 사용자 오버라이드를 시간 제한 overlay로 결합해 신규 목표만 +3호가로 검증한다. 무손절·미청산 보유, 신규 leg별 10주 두 개, 독립 주문원장, provider/bot/cap/broker guard는 튜닝 축이 아니다. 목표 호가도 postclose 자동 튜닝 축은 아니며, 명시적 사용자 지시와 before/after·효력시각·rollback 기록으로만 변경한다. 배포 전부터 소유한 1주 leg는 호환 custody로 유지하며 10주로 소급 확대하거나 매도수량을 바꾸지 않는다.
 
 ```bash
-sudo systemctl disable --now korstockscan-samsung-morning-one-share.timer korstockscan-samsung-one-share-preflight.timer
+sudo systemctl disable --now korstockscan-samsung-morning-one-share.timer
 sudo systemctl stop korstockscan-samsung-morning-one-share.service korstockscan-samsung-one-share-preflight.service
 ```

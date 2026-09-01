@@ -506,7 +506,11 @@ def main(argv: list[str] | None = None) -> int:
     now = datetime.now(tz=KST)
     if now.date() != TARGET_DATE:
         raise SystemExit("exact-date manual add-on authority expired")
-    authority_ok, authority_reason = validate_authority(DEFAULT_AUTHORITY_PATH, now=now)
+    authority_ok, authority_reason = validate_authority(
+        DEFAULT_AUTHORITY_PATH,
+        now=now,
+        require_live_main_bot_runtime=True,
+    )
     if not authority_ok:
         print(f"manual add-on blocked by morning authority: {authority_reason}")
         return 4
