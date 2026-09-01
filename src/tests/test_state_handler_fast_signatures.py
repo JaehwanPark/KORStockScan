@@ -77,6 +77,11 @@ def test_holding_pipeline_stable_block_logging_is_bounded_and_preserves_changes(
     monkeypatch.setattr(handlers.time, "time", lambda: next(times))
     monkeypatch.setattr(
         handlers,
+        "_holding_pipeline_observation_scope_fields",
+        lambda _stock: {},
+    )
+    monkeypatch.setattr(
+        handlers,
         "emit_pipeline_event",
         lambda *args, **kwargs: emitted.append((args, kwargs)),
     )
@@ -292,6 +297,21 @@ def test_caution_micro_block_log_deduplicates_explicit_block_reason():
 
     assert '"block_reason",' in block_source
     assert "block_reason=block_reason" in block_source
+
+
+def test_entry_opportunity_recheck_cap_block_deduplicates_authority_kwargs():
+    source = inspect.getsource(handlers._handle_watching_strategy_branch)
+    start = source.index('"entry_opportunity_recheck_exploration_cap_block"')
+    end = source.index("elif entry_opportunity_recheck.allowed:", start)
+    block_source = source[start:end]
+
+    assert "**_without_entry_pipeline_fields(" in block_source
+    assert '"actual_order_submitted",' in block_source
+    assert '"broker_order_forbidden",' in block_source
+    assert '"runtime_effect",' in block_source
+    assert "actual_order_submitted=False" in block_source
+    assert "broker_order_forbidden=True" in block_source
+    assert "runtime_effect=True" in block_source
 
 
 def _fresh_spread_latency_gate(**overrides):

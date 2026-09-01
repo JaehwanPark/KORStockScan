@@ -63096,7 +63096,12 @@ def _handle_watching_strategy_branch(
                             stock,
                             code,
                             "entry_opportunity_recheck_exploration_cap_block",
-                            **recheck_log_fields,
+                            **_without_entry_pipeline_fields(
+                                recheck_log_fields,
+                                "actual_order_submitted",
+                                "broker_order_forbidden",
+                                "runtime_effect",
+                            ),
                             entry_setup_live_policy_mode=("one_share_exploration"),
                             entry_setup_exploration_daily_probe_count=(
                                 bounded_exploration_observed_probe_count

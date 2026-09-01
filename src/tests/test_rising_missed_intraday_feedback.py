@@ -3457,6 +3457,49 @@ def test_first_touch_regression_blocks_source_quality_when_ai_provenance_missing
     assert report["summary"]["first_touch_ai_provenance_missing_count"] == 1
 
 
+def test_first_touch_regression_does_not_require_ai_provenance_when_not_eligible(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            504,
+            "000504",
+            "deterministic-not-eligible",
+            "rising_missed_one_share_entry",
+            {"forced_entry_reason": "rising_missed_one_share_entry"},
+            emitted_at="2026-07-03T08:03:00",
+        ),
+        _event(
+            504,
+            "000504",
+            "deterministic-not-eligible",
+            "stop_line_touch_mandatory_avg_down_not_eligible",
+            {
+                "profit_rate": "-3.04",
+                "peak_profit": "0.04",
+                "current_ai_score": "45",
+                "gate_reason": "deep_recovery_pnl_out_of_range",
+            },
+            emitted_at="2026-07-03T08:06:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-07-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    row = report["first_touch_regression_rows"][0]
+    assert row["first_touch_not_eligible_seen"] is True
+    assert row["first_touch_not_eligible_reason"] == "deep_recovery_pnl_out_of_range"
+    assert report["summary"]["first_touch_ai_provenance_missing_count"] == 0
+    assert report["source_quality"]["status"] == "pass"
+
+
 def test_first_touch_regression_accepts_runtime_usable_holding_ai_not_called_score(
     tmp_path,
 ):

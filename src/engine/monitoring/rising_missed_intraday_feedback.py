@@ -958,6 +958,12 @@ def _build_forced_submit_lineage_rows(
 
 
 def _first_touch_ai_provenance_missing(item: dict[str, Any]) -> bool:
+    # A mandatory-avg-down attempt can be rejected by the deterministic
+    # eligibility gate before the avg-down AI decision is evaluated.  The
+    # generic current_ai_score logged on that row is position context, not
+    # evidence that avg-down AI provenance was expected.
+    if item.get("first_touch_not_eligible_seen"):
+        return False
     if (
         item.get("first_touch_avgdown_ai_score") is None
         and item.get("first_touch_ai_score") is None
