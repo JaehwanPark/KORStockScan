@@ -916,7 +916,21 @@ def test_watch_budget_rollback_keeps_full_cap_short_circuit(monkeypatch):
 
 
 def test_promote_candidates_emits_rising_replacement_probe_at_full_cap(monkeypatch):
+    emitted = []
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {
+                "pipeline": pipeline,
+                "name": name,
+                "code": code,
+                "stage": stage,
+                "fields": fields or {},
+            }
+        ),
+    )
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: ""
@@ -950,10 +964,22 @@ def test_promote_candidates_emits_rising_replacement_probe_at_full_cap(monkeypat
                 "Name": "RISING_REPLACEMENT",
                 "Price": 12000,
                 "Source": "PRICE_JUMP_START",
-            }
+            },
+            {
+                "Code": "000004",
+                "Name": "RISING_CUTOFF_1",
+                "Price": 12100,
+                "Source": "PRICE_JUMP_START",
+            },
+            {
+                "Code": "000005",
+                "Name": "RISING_CUTOFF_2",
+                "Price": 12200,
+                "Source": "PRICE_JUMP_START",
+            },
         ],
         {},
-        max_new_codes=12,
+        max_new_codes=1,
         reentry_cooldown_sec=1500,
         token="TOKEN",
         now_ts=1000.0,
@@ -962,6 +988,22 @@ def test_promote_candidates_emits_rising_replacement_probe_at_full_cap(monkeypat
     assert codes == ["000003"]
     payload = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[-1]
     assert payload["scanner_watch_budget_owner"] == "rising_missed"
+    cutoff_receipts = [
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_candidate_pruned"
+        and event["fields"].get("scanner_prune_reason")
+        == "replacement_probe_rank_cutoff"
+    ]
+    assert [event["code"] for event in cutoff_receipts] == ["000004", "000005"]
+    assert [event["fields"]["scanner_scan_rank"] for event in cutoff_receipts] == [
+        2,
+        3,
+    ]
+    assert all(
+        event["fields"]["scanner_ranked_candidate_count"] == 3
+        for event in cutoff_receipts
+    )
 
 
 def test_runtime_target_payload_preserves_promotion_strength_context():

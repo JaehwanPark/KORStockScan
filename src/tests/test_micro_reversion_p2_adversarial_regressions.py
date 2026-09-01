@@ -3407,7 +3407,12 @@ def test_current_r3_natural_lifecycle_absence_is_parent_exclusion_not_global_blo
     )
 
     assert rolling["global_candidate_blockers"] == []
-    assert rolling["exclusions"][0]["reason"] == "lifecycle_exact_join_missing"
+    exclusion = rolling["exclusions"][0]
+    assert exclusion["reason"] == "lifecycle_not_applicable_non_order_entry"
+    assert exclusion["lifecycle_join_requirement"] == (
+        "not_applicable_non_order_entry"
+    )
+    assert exclusion["repair_required"] is False
     assert rolling["status"] == "no_joined_lifecycle_rows"
     assert manifest["status"] == "no_source_only_candidate_passed_all_gates"
     assert diagnostic["status"] == "counterfactual_entry_diagnostic_evaluated"

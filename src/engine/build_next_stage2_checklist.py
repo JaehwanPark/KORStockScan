@@ -52,6 +52,7 @@ MAIN_AI_QUALITY_SOURCE_GAP_OWNERS = frozenset(
         "MicroReversionForwardCollectorContinuity",
         "MicroReversionIntegratedRouteProof",
         "RuntimeExecutionReceiptCustodyRepair",
+        "MainAIQualityMaterializedCompanionBindingRepair",
     }
 )
 MAIN_AI_QUALITY_OPTIONAL_NO_AUTHORITY_FIELDS = (
@@ -1298,6 +1299,15 @@ def _build_tasks(
                 "동일 request의 explicit route item과 raw venue/session proof를 대사하고, "
                 "ambiguous SOR row는 거래소를 추정하지 않은 채 exact window에서 제외한다."
             )
+        elif owner == "MainAIQualityMaterializedCompanionBindingRepair":
+            slot = "POSTCLOSE"
+            time_window = "18:00~18:20"
+            title = "main AI materialized companion exact-hash 결속 복구 확인"
+            owner_action = (
+                "reason_codes에 명시된 source date별 execution report와 materialized "
+                "request/response companion의 exact hash를 재검증하고, 불변 원천에 "
+                "결속할 수 없는 historical row는 합성 없이 제외한다."
+            )
         else:
             slot = "POSTCLOSE"
             time_window = "18:00~18:20"
@@ -1435,7 +1445,7 @@ def _build_tasks(
                 task_id=f"PostcloseSourceQualityGateReview{mmdd}",
                 title="장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인",
                 slot="POSTCLOSE",
-                time_window="16:25~16:35",
+                time_window="21:40~21:55",
                 track="RuntimeStability",
                 source=(
                     f"[observation_source_quality_audit_{target_date}.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_{target_date}.json), "
@@ -1626,9 +1636,9 @@ def _render_auto_block(
         "",
     ]
     sections = (
-        ("PREOPEN", "장전 체크리스트 (08:45~09:00)"),
+        ("PREOPEN", "장전 체크리스트 (07:45~09:00)"),
         ("INTRADAY", "장중 체크리스트 (09:05~15:20)"),
-        ("POSTCLOSE", "장후 체크리스트 (20:05~21:55)"),
+        ("POSTCLOSE", "장후 체크리스트 (16:25~21:55)"),
     )
     for slot, heading in sections:
         lines.append(f"## {heading}")

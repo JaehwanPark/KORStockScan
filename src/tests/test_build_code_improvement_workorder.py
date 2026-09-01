@@ -482,6 +482,7 @@ def test_intraday_ws_directive_state_mapping_does_not_close_pending_code_gap():
     implemented_states = {
         "closed_loop_instrumentation_active",
         "scanner_prefilter_and_exact_terminalization_implemented",
+        "scanner_candidate_prune_receipts_implemented_waiting_natural_generation",
         "handoff_provenance_implemented_not_runtime_reflected",
         "implemented_in_source_report",
     }

@@ -305,6 +305,13 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(
     assert "[SimProbeIntradayCoverage0511]" in text
     assert "[IntradaySourceQualityGateCheck0511]" in text
     assert "[PostcloseSourceQualityGateReview0511]" in text
+    assert "## 장전 체크리스트 (07:45~09:00)" in text
+    assert "## 장후 체크리스트 (16:25~21:55)" in text
+    assert "TimeWindow: 21:40~21:55" in next(
+        line
+        for line in text.splitlines()
+        if "[PostcloseSourceQualityGateReview0511]" in line
+    )
     assert "unknown-token warning" in text
     assert "[CodeImprovementWorkorderReview0511]" in text
     assert "terminal_non_implement_longstanding" in text
@@ -467,10 +474,10 @@ def test_build_next_stage2_checklist_skips_optional_tasks_when_optional_artifact
         "ThresholdEnvAutoApplyPreopen0526",
         "RisingMissedScoutRuntimePreopen0526",
         "IntradaySourceQualityGateCheck0526",
-        "PostcloseSourceQualityGateReview0526",
         "ThresholdDailyEVReport0526",
         "HumanInterventionSummary0526",
         "MachineMicroPolicyApprovalSourceGap0526",
+        "PostcloseSourceQualityGateReview0526",
     ]
     assert "report_missing_or_unreadable" in text
     assert "source_status=missing" in text
@@ -1666,6 +1673,7 @@ def test_build_next_stage2_checklist_hands_off_main_ai_source_gap_workorders(
             [
                 "MicroReversionForwardCollectorContinuity",
                 "RuntimeExecutionReceiptCustodyRepair",
+                "MainAIQualityMaterializedCompanionBindingRepair",
             ],
         ),
     )
@@ -1677,8 +1685,13 @@ def test_build_next_stage2_checklist_hands_off_main_ai_source_gap_workorders(
         "[MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0824]" in text
     )
     assert "[MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824]" in text
+    assert (
+        "[MainAIQualitySourceGapMainAIQualityMaterializedCompanionBindingRepair0824]"
+        in text
+    )
     assert "closed-date verified compression" in text
     assert "공식 raw execution envelope" in text
+    assert "materialized request/response companion의 exact hash" in text
     assert "runtime env, 실주문·취소" in text
     monkeypatch.setenv("DOC_CHECKLIST_PATH", summary["path"])
     parsed = parse_checklist_tasks()
@@ -1689,6 +1702,11 @@ def test_build_next_stage2_checklist_hands_off_main_ai_source_gap_workorders(
     )
     assert any(
         "MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824" in title
+        for title in parsed_titles
+    )
+    assert any(
+        "MainAIQualitySourceGapMainAIQualityMaterializedCompanionBindingRepair0824"
+        in title
         for title in parsed_titles
     )
 

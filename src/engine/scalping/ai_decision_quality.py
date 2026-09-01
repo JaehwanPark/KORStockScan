@@ -1360,6 +1360,220 @@ def _load_exact_p2_json(path: Path) -> dict[str, Any]:
     return read_json_object_strict(path)
 
 
+def _provider_execution_companion_freeze_report(
+    target_date: str,
+) -> dict[str, Any] | None:
+    """Return a hash-valid Provider result that freezes its exact companions.
+
+    Once any Provider result has been committed, regenerating a companion at
+    the same logical daily path would silently invalidate the persisted result's
+    exact-generation hashes.  Reports without committed results remain
+    regenerable because no Provider response depends on their companion bytes.
+    """
+
+    execution_path = micro_reversion_execution_result_path(target_date)
+    if not existing_or_gzip_path(execution_path).exists():
+        return None
+    report = _load_exact_p2_json(execution_path)
+    report_body = {
+        key: value
+        for key, value in report.items()
+        if key != "report_content_sha256"
+    }
+    if (
+        report.get("schema") != MICRO_REVERSION_EXECUTION_RESULT_SCHEMA
+        or report.get("target_date") != target_date
+        or report.get("report_content_sha256") != _sha256(report_body)
+    ):
+        raise ValueError("micro_reversion_execution_companion_freeze_report_invalid")
+
+    def positive_native_count(field: str) -> bool:
+        value = report.get(field)
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+    if not (
+        report.get("provider_call_performed") is True
+        or positive_native_count("result_count")
+        or positive_native_count("committed_parent_count")
+    ):
+        return None
+    return report
+
+
+def _json_companion_logical_path(path: Path) -> Path:
+    candidate = path.absolute()
+    if candidate.suffix == ".gz":
+        candidate = candidate.with_name(candidate.name.removesuffix(".gz"))
+    return candidate
+
+
+def _provider_checkpoint_companion_freeze(
+    target_date: str,
+    *,
+    locked_checkpoint_path: Path | None = None,
+) -> dict[str, Any] | None:
+    checkpoint_path = (
+        locked_checkpoint_path
+        if locked_checkpoint_path is not None
+        else micro_reversion_execution_checkpoint_path(target_date)
+    )
+    checkpoint_record_dir = _micro_reversion_checkpoint_record_dir(checkpoint_path)
+    checkpoint_present = any(
+        candidate.exists() or candidate.is_symlink()
+        for candidate in (
+            checkpoint_path,
+            checkpoint_path.with_name(f"{checkpoint_path.name}.gz"),
+            checkpoint_record_dir,
+        )
+    )
+    if not checkpoint_present:
+        return None
+    try:
+        checkpoint = (
+            _load_micro_reversion_checkpoint_unlocked(
+                checkpoint_path,
+                repair_manifest=True,
+            )
+            if locked_checkpoint_path is not None
+            else _load_micro_reversion_checkpoint(
+                checkpoint_path,
+                repair_manifest=False,
+            )
+        )
+    except ValueError as exc:
+        if (
+            locked_checkpoint_path is None
+            and str(exc) == "micro_reversion_checkpoint_manifest_missing"
+        ):
+            checkpoint = _load_micro_reversion_checkpoint(
+                checkpoint_path,
+                repair_manifest=True,
+            )
+        else:
+            raise
+    results = checkpoint.get("results")
+    if not isinstance(results, list):
+        raise ValueError("micro_reversion_provider_checkpoint_result_census_invalid")
+    if not results:
+        return None
+    if any(not isinstance(result, Mapping) for result in results):
+        raise ValueError("micro_reversion_provider_checkpoint_result_census_invalid")
+    if checkpoint.get("provider_call_performed") is not True:
+        raise ValueError("micro_reversion_provider_checkpoint_call_census_invalid")
+    return checkpoint
+
+
+def _frozen_provider_materialized_companion(
+    target_date: str,
+    *,
+    logical_path: Path,
+    locked_checkpoint_path: Path | None = None,
+) -> dict[str, Any] | None:
+    """Load the exact materialized generation already bound to Provider output."""
+
+    execution = _provider_execution_companion_freeze_report(target_date)
+    checkpoint = (
+        None
+        if execution is not None
+        else _provider_checkpoint_companion_freeze(
+            target_date,
+            locked_checkpoint_path=locked_checkpoint_path,
+        )
+    )
+    if execution is None and checkpoint is None:
+        return None
+    if execution is None:
+        materialized = _load_exact_p2_json(logical_path)
+        _validate_micro_reversion_materialized_report(materialized)
+        if checkpoint.get("materialized_report_content_sha256") != (
+            _micro_reversion_materialized_request_census_sha256(materialized)
+        ):
+            raise ValueError(
+                "micro_reversion_frozen_checkpoint_materialized_binding_mismatch"
+            )
+        return materialized
+    raw_path = str(execution.get("materialized_artifact_path") or "").strip()
+    if not raw_path:
+        raise ValueError(
+            "micro_reversion_frozen_materialized_companion_binding_missing"
+        )
+    bound_path = Path(raw_path)
+    if _json_companion_logical_path(bound_path) != _json_companion_logical_path(
+        logical_path
+    ):
+        return None
+    materialized = _load_exact_p2_json(bound_path)
+    if (
+        execution.get("materialized_report_content_sha256")
+        != materialized.get("report_content_sha256")
+        or execution.get("materialized_report_artifact_sha256")
+        != _sha256(materialized)
+        or execution.get("materialized_request_census_sha256")
+        != _micro_reversion_materialized_request_census_sha256(materialized)
+    ):
+        raise ValueError(
+            "micro_reversion_frozen_materialized_companion_binding_mismatch"
+        )
+    return materialized
+
+
+def _frozen_provider_outcome_companion(
+    target_date: str,
+) -> tuple[Path, dict[str, Any]] | None:
+    """Load the exact outcome generation already bound to Provider output."""
+
+    execution = _provider_execution_companion_freeze_report(target_date)
+    if execution is None:
+        checkpoint = _provider_checkpoint_companion_freeze(target_date)
+        if checkpoint is None:
+            return None
+        if any(
+            not str(result.get("outcome_join_key") or "")
+            or not _is_sha256(result.get("outcome_label_content_sha256"))
+            for result in checkpoint["results"]
+        ):
+            # Keep the Provider request generation frozen, but do not bless an
+            # unbound outcome companion.  The existing terminal custody gate
+            # will classify the repaired checkpoint before any new call.
+            return None
+        outcome_path = micro_reversion_action_neutral_label_path(target_date)
+        outcome = _load_exact_p2_json(outcome_path)
+        labels = outcome.get("labels")
+        if not isinstance(labels, list) or any(
+            not isinstance(label, Mapping) for label in labels
+        ):
+            raise ValueError(
+                "micro_reversion_frozen_checkpoint_outcome_census_invalid"
+            )
+        label_by_id = {
+            str(label.get("label_id") or ""): label
+            for label in labels
+            if str(label.get("label_id") or "")
+        }
+        for result in checkpoint["results"]:
+            join_key = str(result.get("outcome_join_key") or "")
+            proof = label_by_id.get(join_key)
+            if (
+                proof is None
+                or result.get("outcome_label_content_sha256") != _sha256(proof)
+            ):
+                raise ValueError(
+                    "micro_reversion_frozen_checkpoint_outcome_binding_mismatch"
+                )
+        return outcome_path, outcome
+    raw_path = str(execution.get("outcome_label_artifact_path") or "").strip()
+    expected_sha256 = str(
+        execution.get("outcome_label_artifact_sha256") or ""
+    ).strip()
+    if not raw_path or not expected_sha256:
+        raise ValueError("micro_reversion_frozen_outcome_companion_binding_missing")
+    outcome_path = Path(raw_path)
+    outcome = _load_exact_p2_json(outcome_path)
+    if _sha256(outcome) != expected_sha256:
+        raise ValueError("micro_reversion_frozen_outcome_companion_binding_mismatch")
+    return outcome_path, outcome
+
+
 def load_promotion_for_target_date(
     target_date: str,
 ) -> tuple[dict[str, Any], Path, str]:
@@ -29455,8 +29669,22 @@ def main(argv: list[str] | None = None) -> int:
             "report_content_sha256": _sha256(report_without_hash),
         }
         path = micro_reversion_materialized_request_path(args.date)
+        frozen_materialized = None
         if args.write:
-            _atomic_write_json(path, report)
+            checkpoint_path = micro_reversion_execution_checkpoint_path(args.date)
+            with _micro_reversion_checkpoint_custody_lock(
+                checkpoint_path,
+                exclusive=True,
+            ) as locked_checkpoint_path:
+                frozen_materialized = _frozen_provider_materialized_companion(
+                    args.date,
+                    logical_path=path,
+                    locked_checkpoint_path=locked_checkpoint_path,
+                )
+                if frozen_materialized is None:
+                    _atomic_write_json(path, report)
+                else:
+                    report = frozen_materialized
             printable = {
                 "schema": report["schema"],
                 "status": report["status"],
@@ -29468,6 +29696,9 @@ def main(argv: list[str] | None = None) -> int:
                 "provider_call_performed": False,
                 "runtime_effect": False,
                 "actual_order_submitted": False,
+                "provider_execution_companion_frozen": (
+                    frozen_materialized is not None
+                ),
             }
         else:
             printable = report
@@ -29542,7 +29773,15 @@ def main(argv: list[str] | None = None) -> int:
             args.micro_reversion_outcome_labels
             or micro_reversion_action_neutral_label_path(args.date)
         )
-        if (
+        frozen_outcome = (
+            _frozen_provider_outcome_companion(args.date)
+            if args.execute_candidate
+            and args.micro_reversion_outcome_labels is None
+            else None
+        )
+        if frozen_outcome is not None:
+            outcome_path, outcome_artifact = frozen_outcome
+        elif (
             args.execute_candidate
             and args.micro_reversion_outcome_labels is None
             and source_bridge_report is not None
@@ -29899,6 +30138,23 @@ def main(argv: list[str] | None = None) -> int:
             checkpoint_transaction_path = (
                 locked_checkpoint_path if args.execute_candidate else checkpoint_path
             )
+            if args.execute_candidate:
+                locked_materialized_report = _load_exact_p2_json(
+                    args.micro_reversion_materialized_requests
+                )
+                if _sha256(locked_materialized_report) != _sha256(
+                    materialized_report
+                ):
+                    raise ValueError(
+                        "micro_reversion_materialized_changed_before_execution_lock"
+                    )
+                outcome_candidate_path = existing_or_gzip_path(outcome_path)
+                if outcome_candidate_path.exists():
+                    locked_outcome_artifact = _load_exact_p2_json(outcome_path)
+                    if _sha256(locked_outcome_artifact) != _sha256(outcome_artifact):
+                        raise ValueError(
+                            "micro_reversion_outcome_changed_before_execution_lock"
+                        )
             resolved_execution_result_path = existing_or_gzip_path(path)
             persisted_result_artifact = None
             compressed_execution_result_path = path.with_name(f"{path.name}.gz")

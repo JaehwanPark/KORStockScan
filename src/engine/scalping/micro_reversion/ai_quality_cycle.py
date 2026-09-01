@@ -6506,8 +6506,18 @@ def build_rolling_source_only_candidates(
                         "target_date": report_date,
                         "paired_replay_parent_id": row.get("paired_replay_parent_id"),
                         "decision_trace_id": row.get("decision_trace_id"),
-                        "reason": findings[0],
+                        "reason": (
+                            "lifecycle_not_applicable_non_order_entry"
+                            if natural_entry_non_order_absence
+                            else findings[0]
+                        ),
                         "findings": findings,
+                        "lifecycle_join_requirement": (
+                            "not_applicable_non_order_entry"
+                            if natural_entry_non_order_absence
+                            else "required"
+                        ),
+                        "repair_required": not natural_entry_non_order_absence,
                     }
                 )
                 continue
@@ -7417,8 +7427,35 @@ def _source_only_gap_diagnostics(
             "execution_report_materialized_companion_binding_mismatch", 0
         )
     )
-    lifecycle_exact_join_missing_count = int(
-        rolling_reason_counts.get("lifecycle_exact_join_missing", 0)
+    companion_binding_mismatch_dates = sorted(
+        {
+            str(row.get("target_date") or "")
+            for row in rolling_exclusions
+            if isinstance(row, Mapping)
+            and row.get("reason")
+            == "execution_report_materialized_companion_binding_mismatch"
+            and str(row.get("target_date") or "")
+        }
+    )
+    lifecycle_exact_join_missing_count = sum(
+        1
+        for row in rolling_exclusions
+        if isinstance(row, Mapping)
+        and row.get("reason") == "lifecycle_exact_join_missing"
+        and row.get("repair_required") is not False
+    )
+    lifecycle_exact_join_missing_dates = sorted(
+        {
+            str(row.get("target_date") or "")
+            for row in rolling_exclusions
+            if isinstance(row, Mapping)
+            and row.get("reason") == "lifecycle_exact_join_missing"
+            and row.get("repair_required") is not False
+            and str(row.get("target_date") or "")
+        }
+    )
+    natural_entry_non_order_lifecycle_not_applicable_count = int(
+        rolling_reason_counts.get("lifecycle_not_applicable_non_order_entry", 0)
     )
     workorders: list[dict[str, Any]] = []
     blocker_codes: list[str] = []
@@ -7495,21 +7532,17 @@ def _source_only_gap_diagnostics(
                 "main_lifecycle_execution_receipt_custody_gap:"
                 f"{max(lifecycle_pipeline_gap, lifecycle_real_submitted)}"
             )
-    if (
-        current_lifecycle_receipt_gap
-        or companion_binding_mismatch_count > 0
-        or lifecycle_exact_join_missing_count > 0
-    ):
+    if current_lifecycle_receipt_gap or lifecycle_exact_join_missing_count > 0:
         reason_codes = []
-        if lifecycle_gap > 0:
+        if current_lifecycle_receipt_gap and lifecycle_gap > 0:
             reason_codes.append(
                 f"broker_execution_provenance_gap_count={lifecycle_gap}"
             )
-        if lifecycle_pipeline_gap > 0:
+        if current_lifecycle_receipt_gap and lifecycle_pipeline_gap > 0:
             reason_codes.append(
                 f"pipeline_lifecycle_instrumentation_gap_count={lifecycle_pipeline_gap}"
             )
-        if lifecycle_real_submitted > 0:
+        if current_lifecycle_receipt_gap and lifecycle_real_submitted > 0:
             reason_codes.extend(
                 [
                     f"real_submitted_lifecycle_count={lifecycle_real_submitted}",
@@ -7517,23 +7550,42 @@ def _source_only_gap_diagnostics(
                     f"{lifecycle_broker_execution_unique}",
                 ]
             )
-        if companion_binding_mismatch_count > 0:
-            reason_codes.append(
-                "execution_report_materialized_companion_binding_mismatch_count="
-                f"{companion_binding_mismatch_count}"
-            )
         if lifecycle_exact_join_missing_count > 0:
             reason_codes.append(
                 "lifecycle_exact_join_missing_count="
                 f"{lifecycle_exact_join_missing_count}"
             )
+            if lifecycle_exact_join_missing_dates:
+                reason_codes.append(
+                    "lifecycle_exact_join_missing_dates="
+                    + ",".join(lifecycle_exact_join_missing_dates)
+                )
         add_workorder(
             "RuntimeExecutionReceiptCustodyRepair",
             reason_codes,
             (
                 "official raw execution envelope/order/execution identity is complete for "
-                "at least one reconciled lifecycle; materialized execution companions bind "
-                "to their exact request census; custody and order authority remain unchanged"
+                "each repair-required lifecycle or the affected row remains explicitly "
+                "excluded; custody and order authority remain unchanged"
+            ),
+        )
+    if companion_binding_mismatch_count > 0:
+        companion_reason_codes = [
+            "execution_report_materialized_companion_binding_mismatch_count="
+            f"{companion_binding_mismatch_count}"
+        ]
+        if companion_binding_mismatch_dates:
+            companion_reason_codes.append(
+                "execution_report_materialized_companion_binding_mismatch_dates="
+                + ",".join(companion_binding_mismatch_dates)
+            )
+        add_workorder(
+            "MainAIQualityMaterializedCompanionBindingRepair",
+            companion_reason_codes,
+            (
+                "each affected execution report binds the exact materialized request and "
+                "response companion hashes for its own source date; unchanged immutable "
+                "historical rows remain excluded and no runtime or order authority changes"
             ),
         )
     if contract_findings:
@@ -7569,7 +7621,14 @@ def _source_only_gap_diagnostics(
         "execution_report_materialized_companion_binding_mismatch_count": (
             companion_binding_mismatch_count
         ),
+        "execution_report_materialized_companion_binding_mismatch_dates": (
+            companion_binding_mismatch_dates
+        ),
         "lifecycle_exact_join_missing_count": lifecycle_exact_join_missing_count,
+        "lifecycle_exact_join_missing_dates": lifecycle_exact_join_missing_dates,
+        "natural_entry_non_order_lifecycle_not_applicable_count": (
+            natural_entry_non_order_lifecycle_not_applicable_count
+        ),
         "contract_findings": sorted(set(contract_findings)),
         "blocker_codes": blocker_codes,
         "workorders": workorders,
@@ -8715,6 +8774,222 @@ def _bind_current_run_rolling_inputs(
     return bound_execution, bound_lifecycle
 
 
+def _load_provider_bound_r0_generation(
+    *,
+    target_date: str,
+    selected_paths: Mapping[str, Path],
+) -> dict[str, Any] | None:
+    """Load an immutable R0 generation once Provider results depend on it.
+
+    A repeated cycle may refresh mutable daily inputs before it reaches the
+    materialize/execute leaf.  Once at least one Provider result is committed,
+    doing so would strand that receipt against a mixed generation.  Reuse the
+    complete exact companion set, or fail closed without rewriting it.
+    """
+
+    def positive_native_count(field: str) -> bool:
+        value = execution.get(field)
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+    execution_path = selected_paths["execution"]
+    execution: dict[str, Any] = {}
+    execution_committed = False
+    if _artifact_path_present(existing_or_gzip_path(execution_path)):
+        execution = _load_json_auto(execution_path)
+        execution_content = {
+            key: value
+            for key, value in execution.items()
+            if key != "report_content_sha256"
+        }
+        if (
+            execution.get("schema")
+            != quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA
+            or execution.get("target_date") != target_date
+            or execution.get("report_content_sha256") != _sha256(execution_content)
+        ):
+            raise ValueError("provider_bound_execution_receipt_invalid")
+        execution_committed = bool(
+            execution.get("provider_call_performed") is True
+            or positive_native_count("result_count")
+            or positive_native_count("committed_parent_count")
+        )
+
+    checkpoint: dict[str, Any] = {}
+    checkpoint_results: list[Mapping[str, Any]] = []
+    if not execution_committed:
+        checkpoint_path = selected_paths.get("execution_checkpoint")
+        if checkpoint_path is not None:
+            checkpoint_record_dir = quality._micro_reversion_checkpoint_record_dir(
+                checkpoint_path
+            )
+            checkpoint_present = any(
+                candidate.exists() or candidate.is_symlink()
+                for candidate in (
+                    checkpoint_path,
+                    checkpoint_path.with_name(f"{checkpoint_path.name}.gz"),
+                    checkpoint_record_dir,
+                )
+            )
+            if checkpoint_present:
+                try:
+                    checkpoint = quality._load_micro_reversion_checkpoint(
+                        checkpoint_path,
+                        repair_manifest=False,
+                    )
+                except ValueError as exc:
+                    if str(exc) == "micro_reversion_checkpoint_manifest_missing":
+                        checkpoint = quality._load_micro_reversion_checkpoint(
+                            checkpoint_path,
+                            repair_manifest=True,
+                        )
+                    else:
+                        raise
+                raw_results = checkpoint.get("results")
+                if not isinstance(raw_results, list) or any(
+                    not isinstance(result, Mapping) for result in raw_results
+                ):
+                    raise ValueError("provider_bound_checkpoint_result_census_invalid")
+                if any(
+                    not str(result.get("outcome_join_key") or "")
+                    or not _valid_sha256(
+                        result.get("outcome_label_content_sha256")
+                    )
+                    for result in raw_results
+                ):
+                    raise ValueError(
+                        "provider_bound_checkpoint_outcome_binding_invalid"
+                    )
+                checkpoint_results = list(raw_results)
+                if checkpoint_results and checkpoint.get(
+                    "provider_call_performed"
+                ) is not True:
+                    raise ValueError("provider_bound_checkpoint_call_census_invalid")
+    if not execution_committed and not checkpoint_results:
+        return None
+
+    materialized = _load_json_auto(selected_paths["materialized"])
+    labels = _load_json_auto(selected_paths["labels"])
+    source_bundle = _load_json_auto(selected_paths["source_bundle"])
+    prepared = _load_json_auto(selected_paths["prepared"])
+    bridge = _load_json_auto(selected_paths["bridge_report"])
+    paired = _load_json_auto(selected_paths["paired_report"])
+    if execution_committed:
+        _validate_execution_external_companion_bindings(
+            execution,
+            materialized_report=materialized,
+            outcome_label_artifact=labels,
+        )
+    elif checkpoint.get("materialized_report_content_sha256") != (
+        quality._micro_reversion_materialized_request_census_sha256(materialized)
+    ):
+        raise ValueError("provider_bound_checkpoint_materialized_mismatch")
+    quality.validate_current_materialized_source_lineage(
+        materialized_report=materialized,
+        source_bundle_report=source_bundle,
+        prepared_artifact=prepared,
+        source_bridge_report=bridge,
+        paired_report=paired,
+    )
+
+    path_bindings = [
+        (materialized.get("source_bundle_path"), selected_paths["source_bundle"]),
+        (
+            materialized.get("prepared_request_artifact_path"),
+            selected_paths["prepared"],
+        ),
+    ]
+    if execution_committed:
+        path_bindings.extend(
+            (
+                (
+                    execution.get("materialized_artifact_path"),
+                    selected_paths["materialized"],
+                ),
+                (execution.get("outcome_label_artifact_path"), selected_paths["labels"]),
+            )
+        )
+    if any(
+        not str(declared or "").strip()
+        or quality._json_companion_logical_path(Path(str(declared)))
+        != quality._json_companion_logical_path(expected)
+        for declared, expected in path_bindings
+    ):
+        raise ValueError("provider_bound_r0_companion_path_mismatch")
+
+    source_commitment = source_bundle.get("outcome_source_commitment")
+    if not isinstance(source_commitment, Mapping) or (
+        source_commitment.get("bridge_report_content_sha256")
+        != bridge.get("artifact_content_sha256")
+        or source_commitment.get("bridge_report_artifact_sha256")
+        != _sha256(bridge)
+    ):
+        raise ValueError("provider_bound_bridge_companion_mismatch")
+    if prepared.get("source_paired_report_content_sha256") != _sha256(paired):
+        raise ValueError("provider_bound_paired_companion_mismatch")
+
+    if checkpoint_results:
+        label_rows = labels.get("labels")
+        if not isinstance(label_rows, list) or any(
+            not isinstance(row, Mapping) for row in label_rows
+        ):
+            raise ValueError("provider_bound_checkpoint_outcome_census_invalid")
+        label_by_id = {
+            str(row.get("label_id") or ""): row
+            for row in label_rows
+            if str(row.get("label_id") or "")
+        }
+        for result in checkpoint_results:
+            join_key = str(result.get("outcome_join_key") or "")
+            proof = label_by_id.get(join_key)
+            if (
+                proof is None
+                or result.get("outcome_label_content_sha256") != _sha256(proof)
+            ):
+                raise ValueError("provider_bound_checkpoint_outcome_mismatch")
+
+    floor_path = (
+        _execution_provider_floor_logical_path(
+            execution,
+            execution_target_date=target_date,
+        )
+        if execution_committed
+        else selected_paths.get("provider_ablation_floor")
+    )
+    if floor_path is None:
+        raise ValueError("provider_bound_floor_companion_path_missing")
+    provider_floor = _load_json_auto(floor_path)
+    if execution_committed and (
+        execution.get("provider_ablation_sample_floor_content_sha256")
+        != provider_floor.get("floor_content_sha256")
+        or execution.get("provider_ablation_sample_floor_artifact_sha256")
+        != _sha256(provider_floor)
+    ):
+        raise ValueError("provider_bound_floor_companion_mismatch")
+    if checkpoint_results:
+        quality._micro_reversion_provider_checkpoint_bindings(
+            target_date=target_date,
+            materialized_report=materialized,
+            outcome_label_artifact=labels,
+            checkpoint_artifact=checkpoint,
+            provider_ablation_sample_floor_content_sha256=str(
+                provider_floor.get("floor_content_sha256") or ""
+            ),
+        )
+
+    return {
+        "execution": execution,
+        "materialized": materialized,
+        "labels": labels,
+        "source_bundle": source_bundle,
+        "prepared": prepared,
+        "bridge": bridge,
+        "paired": paired,
+        "provider_floor": provider_floor,
+        "provider_floor_path": floor_path,
+        "checkpoint": checkpoint,
+    }
+
+
 def run_cycle(
     *,
     target_date: str,
@@ -8772,6 +9047,7 @@ def run_cycle(
     prepared: dict[str, Any] = {}
     source_bundle: dict[str, Any] = {}
     bridge: dict[str, Any] = {}
+    paired_report: dict[str, Any] = {}
     materialized: dict[str, Any] = {}
     labels: dict[str, Any] = {}
     current_execution_report: dict[str, Any] = {}
@@ -8790,6 +9066,8 @@ def run_cycle(
     historical_backfill_admissions: list[dict[str, Any]] = []
     historical_backfill_selected_parent_slots = 0
     historical_backfill_provider_call_performed = False
+    provider_bound_r0_generation: dict[str, Any] | None = None
+    provider_bound_r0_locked = False
 
     storage_capacity_gate = _capacity_gate_fail_closed(
         target=target,
@@ -8819,6 +9097,45 @@ def run_cycle(
         audit = {}
         audit_source = {}
         blockers.append(f"source_quality_audit_unavailable:{type(exc).__name__}")
+
+    try:
+        provider_bound_r0_generation = _load_provider_bound_r0_generation(
+            target_date=target_date,
+            selected_paths=selected_paths,
+        )
+        if provider_bound_r0_generation is not None:
+            provider_bound_r0_locked = True
+            current_execution_report = provider_bound_r0_generation["execution"]
+            materialized = provider_bound_r0_generation["materialized"]
+            labels = provider_bound_r0_generation["labels"]
+            source_bundle = provider_bound_r0_generation["source_bundle"]
+            prepared = provider_bound_r0_generation["prepared"]
+            bridge = provider_bound_r0_generation["bridge"]
+            paired_report = provider_bound_r0_generation["paired"]
+            provider_ablation_sample_floor = provider_bound_r0_generation[
+                "provider_floor"
+            ]
+            current_checkpoint_artifact = provider_bound_r0_generation["checkpoint"]
+            steps.append(
+                {
+                    "name": "provider_bound_r0_generation",
+                    "status": "pass",
+                    "returncode": 0,
+                    "artifact_reused": True,
+                }
+            )
+    except (
+        FileNotFoundError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        provider_bound_r0_locked = True
+        blockers.append(
+            "provider_bound_r0_generation_invalid:"
+            f"{type(exc).__name__}:{exc}"
+        )
 
     owner_command = [
         sys.executable,
@@ -8860,6 +9177,8 @@ def run_cycle(
             json.JSONDecodeError,
         ):
             reuse_existing_economic_chain = False
+    if provider_bound_r0_locked and not reuse_existing_economic_chain:
+        blockers.append("provider_bound_economic_chain_invalid")
     if not write:
         blockers.append("write_required_for_composed_r0_r3_artifact_chain")
     elif not blockers and reuse_existing_economic_chain:
@@ -8945,7 +9264,7 @@ def run_cycle(
             ):
                 blockers.append("economic_reference_not_verified")
             cost_profile, symbol_master = _economic_outputs(economic)
-            if write:
+            if write and not provider_bound_r0_locked:
                 _atomic_write_json(selected_paths["cost_profile"], cost_profile)
                 _atomic_write_json(selected_paths["symbol_master"], symbol_master)
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -8953,8 +9272,7 @@ def run_cycle(
     elif not blockers:
         blockers.append("economic_reference_artifact_missing")
 
-    paired_report: dict[str, Any] = {}
-    if not blockers:
+    if not blockers and provider_bound_r0_generation is None:
         try:
             paired_report, paired_source = _load_json_with_raw_artifact(
                 selected_paths["paired_report"]
@@ -8986,7 +9304,16 @@ def run_cycle(
         ) as exc:
             blockers.append(f"r0_prepared_contract_failed:{type(exc).__name__}:{exc}")
 
-    if not blockers:
+    if not blockers and provider_bound_r0_generation is not None:
+        steps.append(
+            {
+                "name": "bridge",
+                "status": "pass",
+                "returncode": 0,
+                "artifact_reused": True,
+            }
+        )
+    elif not blockers:
         bridge_command = _scheduled_bridge_command(
             target_date=target_date,
             selected_paths=selected_paths,
@@ -8999,7 +9326,16 @@ def run_cycle(
         if steps[-1]["returncode"] != 0:
             blockers.append("bridge_command_failed")
 
-    if not blockers:
+    if not blockers and provider_bound_r0_generation is not None:
+        steps.append(
+            {
+                "name": "source_bundle",
+                "status": "pass",
+                "returncode": 0,
+                "artifact_reused": True,
+            }
+        )
+    elif not blockers:
         source_command = [
             sys.executable,
             "-m",
@@ -9029,7 +9365,16 @@ def run_cycle(
         if steps[-1]["returncode"] != 0:
             blockers.append("source_bundle_command_failed")
 
-    if not blockers:
+    if not blockers and provider_bound_r0_generation is not None:
+        steps.append(
+            {
+                "name": "materialize",
+                "status": "pass",
+                "returncode": 0,
+                "artifact_reused": True,
+            }
+        )
+    elif not blockers:
         materialize_command = [
             sys.executable,
             "-m",
@@ -9100,7 +9445,7 @@ def run_cycle(
                     f"materialized_artifact_invalid:{type(exc).__name__}:{exc}"
                 )
 
-    if not blockers:
+    if not blockers and provider_bound_r0_generation is None:
         try:
             bridge = _load_json_auto(selected_paths["bridge_report"])
             labels = quality.build_micro_reversion_action_neutral_outcome_labels(
@@ -9120,7 +9465,11 @@ def run_cycle(
         ) as exc:
             blockers.append(f"action_neutral_label_failed:{type(exc).__name__}:{exc}")
 
-    if execute_provider_replay and not blockers:
+    if (
+        execute_provider_replay
+        and not blockers
+        and provider_bound_r0_generation is None
+    ):
         try:
             provider_ablation_sample_floor = _collect_provider_ablation_sample_floor(
                 target_date=target_date,

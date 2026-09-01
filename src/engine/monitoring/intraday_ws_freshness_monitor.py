@@ -2479,7 +2479,10 @@ def _build_workorders(
                 "implementation_state": (
                     "immutable_scanner_metadata_conflict_detected"
                     if structural_contract_conflict
-                    else "candidate_prune_receipts_implemented"
+                    else (
+                        "scanner_candidate_prune_receipts_implemented_"
+                        "waiting_natural_generation"
+                    )
                 ),
                 "order_id": "order_scanner_scan_generation_conservation_gap",
                 "title": "Scanner ranked-to-promotion funnel conservation gap",

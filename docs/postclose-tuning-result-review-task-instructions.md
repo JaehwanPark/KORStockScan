@@ -1,10 +1,12 @@
 # 장후 튜닝결과 점검 작업지시문
 
-작성 기준: `2026-08-27 KST`
+작성 기준: `2026-09-01 KST`
 
 현재 대상 거래일의 키움증권 연동 SCALPING 장후 자동화 산출물을 대상으로 자동화체인 완결성, source quality, 비용 차감 EV, owner별 실현 결과, sim/source-only 후보, 다음 PREOPEN handoff와 code-improvement workorder를 점검한다. 메인 봇, 위젯 매매기계, 에피소드 매매기계는 서로 독립된 주문 owner로 유지하며 주문번호·보유수량·청산·손익 귀속을 혼합하지 않는다.
 
 튜닝 원칙과 active/open 상태는 `docs/plan-korStockScanPerformanceOptimization.rebase.md` §1~§8, 당일 실행 항목은 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 실행·복구 권한은 `docs/time-based-operations-runbook.md`, producer/consumer 의존 순서와 R0→R6 추적성은 `docs/report-based-automation-traceability.md`를 기준으로 한다. 실제 실행 단계는 대상 run이 시작할 때 검증한 immutable wrapper snapshot과 설치된 cron/systemd `ExecStart`를 함께 대조한다. runbook·traceability·설치 trigger·wrapper snapshot의 단계, 조건, 실패 우선순위가 다르면 최신 mtime이나 실제 실행 사실만으로 한쪽을 권한 계약으로 선택하지 않고 `contract_drift`로 fail-closed한 뒤 owner 문서와 구현을 review gate로 정합화한다. 이 문서는 반복 점검 절차이며 특정 날짜의 family 목록, report 존재 또는 과거 추천을 현재 runtime 적용 권한으로 만들지 않는다.
+
+이 지시문으로 장후 점검을 실행하라는 사용자 요청은 §2의 허용 범위에 속하는 `implement_now` 중 `runtime_effect=false`인 항목을 §9의 2-pass로 구현·리뷰·재판정하라는 지시를 포함한다. 별도의 “구현해줘” 재지시나 controller/runner opt-in을 기다리지 않는다. 다만 대상 workorder가 `not_yet_due|in_progress`이거나 필수 계약 증거가 없으면 구현을 추정하지 않고 해당 gate를 미완료로 남긴다. `runtime_effect=true`나 §2 금지 권한은 이 자동 구현 지시에 포함되지 않는다.
 
 ## 1. 목표와 완료 정의
 
@@ -21,6 +23,7 @@
 9. 당일 적용된 입력은 메인·위젯·에피소드 process에 실제 소비됐으며, 당일 장후 생성된 다음-session 산출물은 그 authority에 맞는 마지막 consumer와 handoff까지만 정확히 전달됐는가?
 10. 실행 예정 process가 살아 있고 의미 있는 output과 consumer를 가지며 dead·hung·duplicate·no-op·orphan 경로가 남지 않았는가?
 11. 보고서의 각 표본·모집단 부족은 `시간이 해결하는 부족`과 `구조적으로 모집단이 고갈되는 부족` 중 무엇이며, 최초 고갈 단계·예상 해소 시점 또는 구조 보완·재판정 조건이 근거와 함께 닫혔는가?
+12. 대상 generation의 `implement_now` 전수가 stable `order_id`로 intake됐고, 허용 범위의 `runtime_effect=false` 항목이 Pass 1 구현과 재생성 후 Pass 2 fixed-point 재판정까지 누락 없이 닫혔는가?
 
 장후 완료는 다음 두 층을 분리한다.
 
@@ -31,7 +34,7 @@
 
 ## 2. 권한 경계
 
-이 지시문은 읽기 전용 점검과 source-quality·parser/schema·report·test·instrumentation·sim/source-only 범위의 보완을 허용한다. 다음 변경은 별도 사용자 지시와 유효한 approval/apply artifact 없이는 수행하지 않는다.
+이 지시문은 읽기 전용 점검과 source-quality·parser/schema·report·test·instrumentation·sim/source-only 범위의 보완을 허용한다. 대상 workorder의 `decision=implement_now`, `runtime_effect=false`, `allowed_runtime_apply=false`가 확인되고 보완이 이 허용 범위에 속하면 §9 2-pass는 선택 항목이 아니라 필수 실행 항목이다. 구현된 것으로 보이는 항목도 source→producer→consumer→acceptance-test 근거로 `already_implemented_verified`를 입증하지 못하면 미완료로 유지한다. 다음 변경은 별도 사용자 지시와 유효한 approval/apply artifact 없이는 수행하지 않는다.
 
 - PREOPEN live env 선택 또는 수동 작성
 - provider route, model, failback 순서, timeout 정책 변경
@@ -55,6 +58,7 @@
 5. main/widget/episode/manual owner별 broker receipt, 미체결, custody와 terminal ledger
 6. artifact 계약이 선언한 경우 generation ID/source hash/input artifact hash, 선언하지 않은 경우 direct source path/fingerprint·generated/completion time·downstream link
 7. 현재 worktree·branch·commit·source-dirty 상태와 이미 존재하는 사용자 변경
+8. 대상 workorder JSON의 `implement_now` 전수, stable `order_id`, `runtime_effect`, `allowed_runtime_apply`, 현재 implementation evidence와 2-pass 진행 상태
 
 ### 3.1 High/XHigh 실행 원칙
 
@@ -64,12 +68,13 @@
 2. Chain gate: process·wrapper·artifact·producer/consumer 전체 inventory와 terminal 상태 확인
 3. Calculation gate: 결정론적 층화 표본 독립 재계산, 전체 집계 reconciliation, AI/micro negative·boundary case 검증
 4. Consumption gate: 당일 적용 입력의 main/widget/episode 실제 소비와 당일 장후 생성 입력의 다음-PREOPEN handoff를 서로 다른 시간축으로 확인
-5. Repair gate: 최소 보완, 독립 코드리뷰, finding 수정과 targeted validation 반복
-6. Regeneration gate: upstream부터 ordered regeneration, old/new diff, verifier/controller 최종 판정
+5. Implement-now intake gate: authoritative workorder의 `implement_now` 전수와 권한·구현 상태를 stable `order_id`로 고정하고 Pass 1 대상 누락 0을 확인
+6. Repair/Pass 1 gate: 허용 범위의 `runtime_effect=false` 항목 전수에 대한 구현 또는 `already_implemented_verified`, 독립 코드리뷰, finding 수정과 targeted validation 반복
+7. Regeneration/Pass 2 gate: upstream부터 ordered regeneration, old/new workorder diff, 신규·판정변경 `implement_now` 추가 구현, fixed-point 확인, verifier/controller 최종 판정
 
-high/xhigh의 추가 추론은 조사 깊이를 높이는 데 사용하고 scope나 실행 권한을 넓히지 않는다. `high`는 위 6개 gate, 독립 producer/consumer review와 finding-0 재검증을 모두 수행한다. `xhigh`는 여기에 반대 가설·오탐/누락·경계 표본·authority leak를 겨냥한 adversarial second pass와 수정 후 전체 영향면 재리뷰를 추가한다. 현재 target date와 직접 연결된 producer/consumer부터 닫고, 무관한 repository 전역 개선은 별도 backlog로 분리한다.
+high/xhigh의 추가 추론은 조사 깊이를 높이는 데 사용하고 scope나 실행 권한을 넓히지 않는다. `high`는 위 7개 gate, 독립 producer/consumer review와 finding-0 재검증을 모두 수행한다. `xhigh`는 여기에 반대 가설·오탐/누락·경계 표본·authority leak를 겨냥한 adversarial second pass와 수정 후 전체 영향면 재리뷰를 추가한다. 현재 target date와 직접 연결된 producer/consumer부터 닫고, 무관한 repository 전역 개선은 별도 backlog로 분리한다.
 
-긴 실행에서는 최소 `target date / commit·dirty / artifact path·hash·time / process PID·start·status / finding severity / shortage_id·shortage_class·evidence window·ETA 또는 구조 보완 / 수정 파일 / validation / regeneration step`을 evidence ledger로 유지한다. context가 축약되거나 작업이 다음 turn으로 이어져도 이 ledger와 마지막 완료 gate에서 재개하고 이미 닫힌 단계를 무근거로 반복하지 않는다.
+긴 실행에서는 최소 `target date / commit·dirty / artifact path·hash·time / process PID·start·status / finding severity / shortage_id·shortage_class·evidence window·ETA 또는 구조 보완 / workorder generation·source hash / implement_now order_id·2-pass status / 수정 파일 / validation / regeneration step`을 evidence ledger로 유지한다. context가 축약되거나 작업이 다음 turn으로 이어져도 이 ledger와 마지막 완료 gate에서 재개하고 이미 닫힌 단계를 무근거로 반복하지 않는다.
 
 서로 독립된 read-only 계산, process inventory와 producer/consumer review는 병렬 검토할 수 있다. 최종 판정은 단일 owner가 source hash와 finding을 합쳐 내며, sub-review의 추정만으로 결함을 확정하거나 runtime을 변경하지 않는다.
 
@@ -151,6 +156,7 @@ EOD 실행이 정상 허용시간 안에서 진행 중이면 기다린다. 최�
 - source-quality hard blocker와 warning follow-up 상태
 - AI review provider/parse/schema 상태
 - entry/submit/holding/scale-in/exit/lifecycle bucket handoff 상태
+- workorder `implement_now_total`, stable `order_id` census, 2-pass ledger/fixed-point, `final_eligible_actionable_open_count`, `implement_now_unaccounted_count`
 - controller `status`, `final_verifier_status`, `root_cause`, `selected_recovery_action`, attempts
 - full-wrapper rerun 여부와 rerun 사유가 허용된 recoverable 범위인지
 - `logs/postclose_done_controller_cron.log`의 대상일 latest `[DONE]`과, default-enabled paired replay는 21:05 이후 batch `status=completed_offline_only` 및 follower state `terminal_ready:validated_batch_and_candidate|terminal_ready:no_krx_candidate` 중 하나가 exact hash 검증으로 닫혔는지. 명시적으로 reviewed disabled인 경로는 `[SKIP] ... reason=disabled`와 설정 provenance를 남기고 AI replay 성공으로 세지 않는다.
@@ -458,6 +464,8 @@ dead/no-op/orphan 판정만으로 process를 즉시 kill·disable·restart하거
 10. 다음 checklist가 영향받으면 generator로 갱신하고 parser validation을 실행한다.
 11. verifier를 재실행하고 controller는 runbook이 허용한 same-date recovery 또는 최종 판정 경로로만 닫는다.
 
+§9 Pass 1을 시작할 때는 수정 전 authoritative final workorder를 intake한다. 위 ordered regeneration의 중간 workorder는 lineage diff로만 추적하고, step 9의 final workorder가 terminal이 된 뒤 Pass 2 전수 재점검을 수행한다. Pass 2 수정으로 영향 producer가 바뀐 경우에는 관련 부분만 이 순서로 다시 재생성하고, eligible `new|decision_changed implement_now=0`인 fixed-point를 확인한 뒤에만 verifier/controller 최종 판정을 최신으로 인정한다.
+
 각 step은 exact command, input/output hash, 시작·종료시각, exit code, reused checkpoint와 skipped reason을 기록한다. 중간 step이 실패하면 뒤 결과를 최신으로 표시하지 않는다. 결함 영향 밖으로 검증된 마지막 유효 generation만 authoritative하게 유지하고, known-bad generation은 audit bytes로만 보존하며 consumer reference를 0건 또는 명시적 blocked receipt로 닫는다. full wrapper 재실행이 필요하면 현재 동일 날짜 process가 없고 controller의 `allow_wrapper_rerun` 사유가 맞는지 먼저 확인한다.
 
 이 순서는 해당 날짜 execution profile에서 enabled된 producer에만 적용한다. OFF/disabled/retired stage를 freshness 충족 목적으로 임의 실행하거나 빈 artifact로 합성하지 않는다.
@@ -554,32 +562,50 @@ source-quality 결손 때문에 실제 모집단을 셀 수 없거나 owner의 `
 
 ## 9. Code-improvement workorder 2-pass 처리
 
-사용자가 workorder 구현을 명시적으로 지시했거나 수동 opt-in runner가 허용된 경우에만 실행한다. controller `DONE` 자체는 Codex runner 실행이나 구현 완료를 요구하지 않는다.
+사용자가 이 지시문에 따른 장후 점검을 Codex에 요청한 실행에서 authoritative workorder가 terminal이고 `implement_now`를 하나라도 선언하면 이 절의 2-pass는 필수다. 이 요청을 runbook의 “사용자가 Codex 구현을 명시적으로 지시”한 경로로 고정하며, 스케줄된 controller와 runner에 새 자동 권한을 부여하지 않는다. 별도 사용자 재지시, controller `DONE`, 수동 opt-in runner 설정 또는 runner 실행 여부를 면제 근거로 삼지 않는다. 합법적인 skip은 authoritative intake의 `implement_now_total=0`일 때뿐이다. workorder가 `not_yet_due|in_progress`이면 bounded wait하고, 끝내 terminal intake를 못 했으면 2-pass 미완료로 보고하며 튜닝 판정 완료를 선언하지 않는다.
+
+2-pass의 자동 구현 범위는 `decision=implement_now`, `runtime_effect=false`, `allowed_runtime_apply=false`이고 §2가 허용한 calculation/parser/schema/instrumentation/report/provenance/process-liveness/test/documentation/sim/source-only 보완으로 한정한다. 권한 필드가 누락·충돌하거나 구현이 PREOPEN live env, provider/model, bot/process, cap, 실주문, broker/order guard, threshold, hard safety를 바꾸어야 하면 추정 구현하지 않고 `blocked_missing_evidence|user_authority`로 분리한다. 이를 허용 범위의 `implement_now`를 건너뛰는 근거로 사용하지 않는다.
 
 ### 9.1 Intake와 snapshot 고정
 
-대상일 JSON/Markdown workorder의 다음 값을 먼저 기록한다.
+대상일 machine-readable JSON workorder를 authority로 삼고 Markdown parity를 대조한다. workorder 내 selected/non-selected·source-gap·root-cause follow-up에 퍼져 있는 모든 `implement_now`를 stable `order_id`로 전수 집계해 run evidence ledger의 `implement_now_2pass_ledger`로 만든다. 스키마가 별도 stable native ID를 선언한 항목은 `<source_schema>:<native_id>`를 canonical order ID로 보존하고, stable ID가 전혀 없으면 자체 ID를 추정 생성하지 않고 `invalid_or_missing_authority`로 차단한다. 각 row의 다음 값을 먼저 기록한다.
 
 - `generation_id`, `source_hash`
 - selected/non-selected order count와 고유 `order_id`
 - `lineage.new_order_ids`, `removed_order_ids`, `decision_changed_order_ids`
 - `runtime_effect`, `allowed_runtime_apply`, `target_subsystem`, `lifecycle_stage`
 - `root_cause_followup_contract`, acceptance tests, expected EV effect
+- source/producer/consumer path, 기존 구현 후보, 예상 수정 파일과 validation owner
+- `pass1_status`, `regeneration_status`, `pass2_status`, finding severity, 최종 `implementation_disposition`
 
-`duplicate_order_warnings`가 비어 있고 summary count와 실제 order가 일치해야 한다. 같은 날짜 artifact는 mtime이 아니라 generation ID, source hash와 lineage diff로 구분한다.
+`duplicate_order_warnings`가 비어 있고 summary count와 실제 order가 일치해야 한다. 같은 날짜 artifact는 mtime이 아니라 generation ID, source hash와 lineage diff로 구분한다. 다음 intake 보존식을 닫지 못하면 Pass 1을 시작하지 않고 workorder contract defect로 fail-closed한다.
+
+- `all_order_id_total = selected_order_count + non_selected_order_count = source_order_count = 전체 고유 order_id 수`
+- `implement_now_total = orders + non_selected_orders에서 decision=implement_now인 고유 order_id 수`; summary가 `implementation_required_count` 또는 동등 count를 선언하면 일치해야 함
+- `implement_now_total = eligible_runtime_effect_false_total + user_authority_total + invalid_or_missing_authority_total`
+- producer가 선언한 lineage scope를 기록하고, 이전 generation이 있으면 `prior_lineage_scope_total = unchanged_total + removed_total + decision_changed_total`
+- 이전 generation이 있으면 `current_lineage_scope_total = unchanged_total + new_total + decision_changed_total`
+- first generation은 `prior_lineage_scope_total=0`, `unchanged_total=removed_total=decision_changed_total=0`, `new_total=current_lineage_scope_total`로 기록
+- `implement_now_unaccounted_count=0`
+
+이미 구현된 것으로 보이는 order는 코드 존재만으로 닫지 않는다. exact source→producer→consumer, target-date output, acceptance test와 현재 authority 비확대를 재검증한 경우에만 `already_implemented_verified`로 분류한다.
+
+`eligible_actionable_open_count`는 허용 범위의 eligible order 중 `already_implemented_verified|implemented_pass1|implemented_pass2`로 닫히지 않았고, 외부 증거·권한 부족으로 terminal blocked 분류도 되지 않은 현재 구현 가능 항목 수다. blocked row는 이 count에서 빼더라도 별도 blocker count와 severity로 계속 보존한다.
 
 ### 9.2 Pass 1
 
-1. `implement_now` 중 `runtime_effect=false`인 calculation/parser/schema/instrumentation/report/provenance/process-liveness 결함을 우선 구현한다.
-2. 실제 raw→producer→모든 consumer→machine input 경로, parser/schema, silent-fail, no-op/orphan process와 authority leak를 함께 검토한다.
-3. 관련 targeted test, compile/syntax, parser validation과 `git diff --check`를 실행한다.
-4. `$korstockscan-review-gate`에 따라 `review → defect fix → re-review → validation`을 finding 0까지 반복한다.
+1. intake에서 고정한 `eligible_runtime_effect_false_total` 전수를 순회한다. 각 order를 `already_implemented_verified|implemented_pass1|blocked_missing_evidence|blocked_external_dependency` 중 하나로 닫고 근거 없이 skip하지 않는다.
+2. 미구현 order의 calculation/parser/schema/instrumentation/report/provenance/process-liveness/test/documentation/sim/source-only 결함을 target date와 직접 연결된 최소 범위로 구현한다. 목록 순서를 구현 우선순위로 삼아 뒷순위 order를 생략하지 않는다.
+3. 실제 raw→producer→모든 consumer→machine input 경로, parser/schema, silent-fail, no-op/orphan process와 authority leak를 함께 검토한다.
+4. 관련 targeted test, compile/syntax, parser validation과 `git diff --check`를 실행한다.
+5. `$korstockscan-review-gate`에 따라 `review → defect fix → re-review → validation`을 finding 0까지 반복한다.
+6. `pass1_eligible_actionable_open_count=0`, `pass1_unaccounted_count=0`을 확인한 뒤에만 재생성 gate로 이동한다. 코드로 닫을 수 없는 blocker는 owner·직접 원인·acceptance test·severity를 가진 상태로 보존하고, P0~P2이면 GREEN/튜닝 판정 완료를 차단한다.
 
 Pass 1 review gate가 닫히기 전 bot 재기동, 비싼 report 재생성, runtime apply를 수행하지 않는다.
 
 ### 9.3 Regeneration과 diff
 
-review finding 0과 targeted validation 후 필요한 producer부터 consumer 순서로 관련 report만 재생성한다. 변경과 무관한 전체 체인을 습관적으로 재실행하지 않는다.
+review finding 0과 targeted validation 후 필요한 producer부터 consumer 순서로 관련 report와 workorder만 재생성한다. 변경과 무관한 전체 체인을 습관적으로 재실행하지 않는다. 재생성 전 pre-snapshot과 transaction/publish 계약은 §7.6을 따르며, AI Provider 신규 호출, full-wrapper rerun, runtime apply가 필요하다면 2-pass 구현 권한으로 추정하지 않고 checkpoint 재사용·runbook 권한·user authority를 별도 판정한다.
 
 재생성 후 다음을 비교한다.
 
@@ -589,13 +615,26 @@ review finding 0과 targeted validation 후 필요한 producer부터 consumer �
 - EV/calibration/runtime-summary generation 순서
 - workorder source fingerprint와 downstream lineage
 - verifier와 controller의 최종 판정
+- pre/post 각 `order_id`의 `unchanged|new|removed|decision_changed` 분류와 `implement_now_unaccounted_count=0`
+
+중간 producer 실패, publish 미완료, workorder terminal 미도달을 valid-empty나 Pass 2 완료로 정규화하지 않는다. 그 상태에서는 이전 authoritative generation을 유지하고 `regeneration_blocked` 및 acceptance condition을 남긴다.
 
 ### 9.4 Pass 2와 final freeze
 
-1. 재생성으로 새로 나타나거나 판정이 바뀐 `implement_now` 중 `runtime_effect=false`인 항목만 추가 구현한다.
-2. 동일 review/fix/re-review/validation loop를 finding 0까지 반복한다.
-3. 최종 필요한 report와 workorder를 다시 생성해 lineage가 안정됐는지 확인한다.
-4. 최종 generation ID와 source hash를 고정하고 `기존 구현`, `신규 구현`, `보류 항목`을 분리한다.
+1. 재생성된 authoritative workorder의 `implement_now` 전수를 다시 intake하고, 기존 각 `order_id`와 `unchanged|new|removed|decision_changed`로 대조한다.
+2. `new|decision_changed` 중 `runtime_effect=false`이고 허용 범위인 항목을 전수 구현한다. Pass 1에서 누락된 order가 발견되면 신규 order로 포장하지 않고 `pass1_omission` finding으로 복구한다.
+3. 동일 review/fix/re-review/validation loop를 finding 0까지 반복한다.
+4. Pass 2 수정이 producer/workorder 판정을 바꾸면 영향 report와 workorder를 다시 생성하고 diff를 재계산한다. 이 최종 재생성에서 또 다른 eligible `new|decision_changed implement_now`가 나오면 Pass 2 내부의 `구현→리뷰→재생성→diff` 루프를 fixed-point까지 반복한다. “2-pass”를 딱 두 번만 보고 신규 order를 남기는 면제로 해석하지 않는다.
+5. 최신 두 generation 사이에 eligible `new|decision_changed implement_now=0`, `final_eligible_actionable_open_count=0`, `implement_now_unaccounted_count=0`, review finding 0이 모두 확인될 때 fixed-point로 판정한다.
+6. 최종 generation ID와 source hash를 고정하고 `already_implemented_verified`, `implemented_pass1`, `implemented_pass2`, `blocked_missing_evidence`, `blocked_external_dependency`, `user_authority`, `removed|superseded`를 분리한다.
+
+최종 ledger에서 다음 보존식을 모두 닫는다.
+
+- `final_eligible_runtime_effect_false_total = already_implemented_verified_total + implemented_pass1_total + implemented_pass2_total + blocked_missing_evidence_total + blocked_external_dependency_total`
+- `final_implement_now_total = final_eligible_runtime_effect_false_total + user_authority_total + invalid_or_missing_authority_total`
+- `final_eligible_actionable_open_count=0`, `implement_now_unaccounted_count=0`
+
+`blocked_missing_evidence|blocked_external_dependency`는 계상에서 숨기지 않는 것이지 구현 완료가 아니다. 필수 P0~P2 범위에 남으면 튜닝 판정 완료와 GREEN을 차단하고 owner·acceptance condition을 최종 보고에 남긴다.
 
 `runtime_effect=true`, 실주문 권한, provider/bot/cap, broker/order guard, hard safety 또는 PREOPEN live env 변경이 필요한 항목은 구현하지 않고 `user_authority`로 보류한다.
 
@@ -606,6 +645,8 @@ review finding 0과 targeted validation 후 필요한 producer부터 consumer �
 - `defer_evidence`: `time_resolvable_shortage`로 입증됐거나 신규 경로의 `pending_declared_window`가 명시한 earliest review date까지인 항목만 사용한다. 새 표본으로 승격됐는지, ETA·예상 유입량을 지켰는지, 구조적 고갈로 재분류할지, stale로 폐기할지 판정하며 단순한 반복 `hold_sample`만으로 구조적 승격하지 않는다.
 - `structural_population_exhaustion`: 최초 고갈 stage와 최소 source/instrumentation/sim 보완이 명확하면 `implement_now|attach_existing_family|design_family_candidate`로 보내고, 안전 우회나 폐기축 부활만 가능한 경우 `reject`, 권한 변경이 필요하면 `user_authority`로 보류한다.
 - `reject`: safety 우회, 폐기축 부활, fallback/shadow 재개 요구는 사유와 함께 유지한다.
+
+eligible `implement_now` 항목을 2-pass에서 제외하기 위해 `defer_evidence|attach_existing_family|design_family_candidate|reject`로 임의 재분류하지 않는다. non-implement 전환은 source hash가 바뀐 authoritative workorder의 명시적 decision change와 직접 근거·acceptance contract가 있을 때만 인정한다.
 
 최근 10일 창에서 3회 이상 반복되고 downstream closure가 계속 필요한 구조적 항목은 `repeat_unresolved_structural_blocker`로 재분류해 root cause, 장기 미해결 이유, 최소 안전 보완, 새 evidence requirement와 acceptance test를 다시 확인한다. 명백한 impossible predicate, key/hook 단절 또는 ETA 초과는 3회 반복을 기다리지 않고 즉시 구조적 고갈로 판정한다. 설계상 visibility만 유지하는 rollup은 `keep_visible_by_design`으로 분리한다.
 
@@ -638,7 +679,7 @@ wrapper·cron·threshold/postclose 체인을 변경했다면 관련 shell syntax
 8. 검증 coverage 안에서 AI 판단품질과 micro-reversion의 exact input, join, label, cost, first-hit, aggregation 결과에 leakage·중복·단위·시간·venue 오류가 없다.
 9. 대상일 applied main runtime, widget exact policy와 episode exact profile이 실제 process/state/ledger에 정확히 소비됐고 미호출·old policy·fallback을 정상 효과와 분리했다. 대상일 장후 생성된 다음-session artifact는 authority별 intended last consumer·schema/hash·loader dry-validation·PREOPEN handoff까지만 확인했으며, 다음 거래일 실제 PID load·자연 호출·post-apply를 다음 checklist OPEN acceptance로 남겼다.
 10. runtime/bridge 후보의 실제 sim 적용과 real 반영 blocker가 구분됐다.
-11. workorder generation/source hash/lineage가 안정됐고 2-pass를 실행한 경우 review finding 0과 targeted validation이 통과했다.
+11. authoritative workorder의 `implement_now` 전수 intake와 2-pass ledger가 존재한다. `implement_now_total=0`이 아니면 Pass 1→ordered regeneration→Pass 2 fixed-point가 필수로 실행됐고, pre/post `order_id` diff·generation/source hash/lineage 보존식·review finding 0·targeted validation이 닫혔으며 `final_eligible_actionable_open_count=0`, `implement_now_unaccounted_count=0`이다. `not_yet_due|in_progress`, 미생성 workorder, 코드로 닫을 수 없는 P0~P2 blocker는 2-pass skip 사유가 아니며 튜닝 판정 완료를 차단한다.
 12. tuning monitoring, 20:10 widget evaluation, 21:15 machine final refresh와 paired replay가 due인 경우 각 owner의 terminal 상태와 authority가 확인됐다.
 13. 20:50 archive, 21:00 log rotation/cleanup과 21:55 detector final window가 terminal이며 미검증 원본을 손상하지 않았다.
 14. authoritative expected set의 process 전체가 근거 있는 liveness/meaningfulness 분류를 가졌고 unexplained dead·hung·duplicate·no-op·orphan·unconsumed process가 없다.
@@ -660,6 +701,8 @@ Tuning Chain Control State는 다음처럼 사용한다.
 
 shortage class 하나만으로 색을 자동 결정하지 않는다. 수집 경로와 finite ETA가 검증된 `time_resolvable_shortage`는 후속 관찰이 남은 `YELLOW` 근거가 될 수 있다. source-only 범위에서 fail-closed되고 구조 보완 owner가 지정된 `structural_population_exhaustion`도 영향에 따라 `YELLOW`일 수 있지만, 필수 입력·consumer를 고갈시켰거나 잘못된 정상 판정을 만들었거나 보완·차단이 없는 경우는 `RED`다. 필수 scope에 unresolved structural shortage 또는 `blocked_missing_evidence|pending_declared_window`가 남으면 `GREEN`으로 판정하지 않는다.
 
+허용 범위의 `runtime_effect=false implement_now`가 actionable/open으로 남았거나 `implement_now_unaccounted_count>0`이면 shortage class와 무관하게 `GREEN`을 금지하고 2-pass 미완료로 보고한다. 그 누락이 잘못된 machine input, source-quality pass, verifier/controller pass를 만들었으면 `RED`, 영향 scope가 source-only로 fail-closed되고 owner·acceptance·due가 명시된 외부 blocker라면 최대 `YELLOW`로 한정한다.
+
 마지막에는 반드시 다음을 분리한다.
 
 - Tuning Chain Control State: `GREEN|YELLOW|RED`, 막힌 단계, 영향, 조치
@@ -675,7 +718,7 @@ shortage class 하나만으로 색을 자동 결정하지 않는다. 수집 경�
 - AI: exact payload/prompt/label lineage, 호출·입력·판단 품질, provider/parse/schema/receipt, R0→R3·paired replay 상태
 - smoothing: whipsaw 감소와 진입·청산 지연·이익반납 trade-off
 - runtime/handoff: 대상일 applied input 실제 소비와 장후 생성 next-session artifact의 authority별 intended last consumer를 분리하고, R0→R6 sim 경로와 main/widget/episode 독립 handoff, 다음 거래일 OPEN acceptance, real runtime remaining blocker와 post-apply attribution
-- workorder: 최종 generation ID/source hash, 기존 구현, 신규 구현, 보류, non-implement 재판정
+- workorder 2-pass: intake/final generation ID·source hash, `implement_now_total`, eligible/user-authority/invalid 전수, stable `order_id` pre/post diff, `already_implemented_verified|implemented_pass1|implemented_pass2|blocked|removed` disposition, Pass 1/Pass 2 validation, fixed-point 근거, `final_eligible_actionable_open_count`, `implement_now_unaccounted_count`, non-implement 재판정
 - 재생성: 수정 전/후 result·generation·source fingerprint diff, 해결된 오류와 남은 blocker
 - 장기 미해결: shortage class의 날짜별 변화, 반복 횟수, root cause, 기존 wait/보완 시도 실패 이유, 새 처리방안과 acceptance test
 

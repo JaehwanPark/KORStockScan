@@ -787,6 +787,51 @@ def test_scanner_generation_flags_multiple_first_blockers_for_same_candidate(
     assert order["allowed_runtime_apply"] is False
 
 
+def test_scanner_generation_nonstructural_gap_waits_for_natural_receipt_sample(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_pruned",
+                {
+                    "scanner_scan_generation_id": "SCANGEN-NATURAL-WAIT",
+                    "scanner_scan_rank": 1,
+                    "scanner_ranked_candidate_count": 2,
+                    "scanner_prune_reason": "general_slot_limit",
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+                code="000304",
+            )
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    conservation = report["scanner_unique_funnel"]["scan_generation_conservation"]
+    assert conservation["incomplete_generation_count"] == 1
+    assert conservation["structural_contract_conflict_generation_count"] == 0
+    order = next(
+        item
+        for item in report["workorder_directives"]
+        if item["order_id"] == "order_scanner_scan_generation_conservation_gap"
+    )
+    assert order["decision"] == "defer_evidence"
+    assert order["implementation_state"] == (
+        "scanner_candidate_prune_receipts_implemented_waiting_natural_generation"
+    )
+
+
 def test_scanner_generation_ignores_downstream_not_applicable_rank_metadata(
     tmp_path,
 ):

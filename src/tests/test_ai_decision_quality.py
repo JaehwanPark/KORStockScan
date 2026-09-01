@@ -6056,6 +6056,210 @@ def _reseal_current_materialized_report(report: dict) -> None:
     )
 
 
+def test_provider_execution_freezes_exact_materialized_and_outcome_companions(
+    tmp_path, monkeypatch
+):
+    target_date = "2026-08-14"
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    materialized_path = tmp_path / "materialized.json"
+    materialized_gzip_path = materialized_path.with_name(
+        f"{materialized_path.name}.gz"
+    )
+    with gzip.open(materialized_gzip_path, "wt", encoding="utf-8") as handle:
+        json.dump(materialized, handle)
+    outcome_path = tmp_path / "outcome.json"
+    outcome = {"schema": "test_outcome_v1", "target_date": target_date}
+    outcome_path.write_text(json.dumps(outcome), encoding="utf-8")
+    execution_path = tmp_path / "execution.json"
+    execution_body = {
+        "schema": quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA,
+        "target_date": target_date,
+        "provider_call_performed": True,
+        "result_count": 1,
+        "committed_parent_count": 1,
+        "materialized_artifact_path": str(materialized_gzip_path),
+        "materialized_report_content_sha256": materialized[
+            "report_content_sha256"
+        ],
+        "materialized_report_artifact_sha256": quality._sha256(materialized),
+        "materialized_request_census_sha256": (
+            quality._micro_reversion_materialized_request_census_sha256(
+                materialized
+            )
+        ),
+        "outcome_label_artifact_path": str(outcome_path),
+        "outcome_label_artifact_sha256": quality._sha256(outcome),
+    }
+    execution = {
+        **execution_body,
+        "report_content_sha256": quality._sha256(execution_body),
+    }
+    execution_path.write_text(json.dumps(execution), encoding="utf-8")
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_execution_result_path",
+        lambda _target_date: execution_path,
+    )
+
+    frozen_materialized = quality._frozen_provider_materialized_companion(
+        target_date,
+        logical_path=materialized_path,
+    )
+    assert frozen_materialized is not None
+    assert quality._sha256(frozen_materialized) == quality._sha256(materialized)
+    assert quality._frozen_provider_outcome_companion(target_date) == (
+        outcome_path,
+        outcome,
+    )
+
+    mutated_outcome = {**outcome, "mutated": True}
+    outcome_path.write_text(json.dumps(mutated_outcome), encoding="utf-8")
+    with pytest.raises(
+        ValueError, match="frozen_outcome_companion_binding_mismatch"
+    ):
+        quality._frozen_provider_outcome_companion(target_date)
+
+    outcome_path.write_text(json.dumps(outcome), encoding="utf-8")
+    mutated_materialized = deepcopy(materialized)
+    mutated_materialized["generated_at"] = "2026-08-14T23:59:59+09:00"
+    mutated_materialized["report_content_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in mutated_materialized.items()
+            if key != "report_content_sha256"
+        }
+    )
+    with gzip.open(materialized_gzip_path, "wt", encoding="utf-8") as handle:
+        json.dump(mutated_materialized, handle)
+    with pytest.raises(
+        ValueError, match="frozen_materialized_companion_binding_mismatch"
+    ):
+        quality._frozen_provider_materialized_companion(
+            target_date,
+            logical_path=materialized_path,
+        )
+
+
+def test_uncommitted_execution_does_not_freeze_companions(tmp_path, monkeypatch):
+    target_date = "2026-08-14"
+    execution_path = tmp_path / "execution.json"
+    execution_body = {
+        "schema": quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA,
+        "target_date": target_date,
+        "provider_call_performed": False,
+        "result_count": 0,
+        "committed_parent_count": 0,
+    }
+    execution_path.write_text(
+        json.dumps(
+            {
+                **execution_body,
+                "report_content_sha256": quality._sha256(execution_body),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_execution_result_path",
+        lambda _target_date: execution_path,
+    )
+
+    assert quality._provider_execution_companion_freeze_report(target_date) is None
+
+
+def test_provider_checkpoint_results_freeze_materialized_companion(
+    tmp_path, monkeypatch
+):
+    target_date = "2026-08-14"
+    prepared, source_bundle = _micro_reversion_materialization_fixture()
+    materialized = quality.materialize_micro_reversion_offline_requests(
+        prepared_requests=prepared,
+        bridge_source_bundle=source_bundle,
+    )
+    materialized_path = tmp_path / "materialized.json"
+    materialized_path.write_text(json.dumps(materialized), encoding="utf-8")
+    execution_path = tmp_path / "execution.json"
+    checkpoint_path = tmp_path / "execution.checkpoint.json"
+    checkpoint_path.write_text("{}", encoding="utf-8")
+    outcome_path = tmp_path / "outcome.json"
+    outcome_proof = {"label_id": "label-1", "status": "mature"}
+    outcome = {"labels": [outcome_proof]}
+    outcome_path.write_text(json.dumps(outcome), encoding="utf-8")
+    checkpoint = {
+        "schema": "micro_reversion_execution_checkpoint_v1",
+        "provider_call_performed": True,
+        "materialized_report_content_sha256": (
+            quality._micro_reversion_materialized_request_census_sha256(
+                materialized
+            )
+        ),
+        "results": [
+            {
+                "paired_replay_id": "committed-request",
+                "outcome_join_key": "label-1",
+                "outcome_label_content_sha256": quality._sha256(outcome_proof),
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_execution_result_path",
+        lambda _target_date: execution_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_execution_checkpoint_path",
+        lambda _target_date: checkpoint_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_action_neutral_label_path",
+        lambda _target_date: outcome_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "_load_micro_reversion_checkpoint",
+        lambda *_args, **_kwargs: checkpoint,
+    )
+
+    frozen = quality._frozen_provider_materialized_companion(
+        target_date,
+        logical_path=materialized_path,
+    )
+    assert frozen is not None
+    assert quality._sha256(frozen) == quality._sha256(materialized)
+    assert quality._frozen_provider_outcome_companion(target_date) == (
+        outcome_path,
+        outcome,
+    )
+
+    checkpoint["materialized_report_content_sha256"] = "f" * 64
+    with pytest.raises(
+        ValueError, match="frozen_checkpoint_materialized_binding_mismatch"
+    ):
+        quality._frozen_provider_materialized_companion(
+            target_date,
+            logical_path=materialized_path,
+        )
+
+    checkpoint["materialized_report_content_sha256"] = (
+        quality._micro_reversion_materialized_request_census_sha256(materialized)
+    )
+    checkpoint["results"][0]["outcome_label_content_sha256"] = ""
+    assert quality._sha256(
+        quality._frozen_provider_materialized_companion(
+            target_date,
+            logical_path=materialized_path,
+        )
+    ) == quality._sha256(materialized)
+    assert quality._frozen_provider_outcome_companion(target_date) is None
+
+
 def test_materializes_micro_reversion_requests_from_actual_prepared_output():
     prepared, source_bundle = _micro_reversion_materialization_fixture()
     persisted_prepared = json.loads(json.dumps(prepared))
@@ -6331,6 +6535,7 @@ def test_micro_reversion_materialize_cli_does_not_enter_provider_source_flow(
     prepared_path = tmp_path / "prepared.json"
     source_path = tmp_path / "source.json"
     output_path = tmp_path / "materialized.json"
+    execution_path = tmp_path / "execution.json"
     capacity_path = tmp_path / "capacity.json"
     prepared_artifact = cycle.build_prepared_request_artifact(
         target_date="2026-08-14",
@@ -6353,6 +6558,11 @@ def test_micro_reversion_materialize_cli_does_not_enter_provider_source_flow(
         quality,
         "micro_reversion_materialized_request_path",
         lambda target_date: output_path,
+    )
+    monkeypatch.setattr(
+        quality,
+        "micro_reversion_execution_result_path",
+        lambda target_date: execution_path,
     )
     monkeypatch.setattr(
         quality,
@@ -6394,6 +6604,99 @@ def test_micro_reversion_materialize_cli_does_not_enter_provider_source_flow(
     assert written["provider_call_performed"] is False
     assert written["runtime_effect"] is False
     assert written["actual_order_submitted"] is False
+
+    execution_body = {
+        "schema": quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA,
+        "target_date": "2026-08-14",
+        "provider_call_performed": True,
+        "result_count": 1,
+        "materialized_artifact_path": str(output_path),
+        "materialized_report_content_sha256": written["report_content_sha256"],
+        "materialized_report_artifact_sha256": quality._sha256(written),
+        "materialized_request_census_sha256": (
+            quality._micro_reversion_materialized_request_census_sha256(written)
+        ),
+    }
+    execution_path.write_text(
+        json.dumps(
+            {
+                **execution_body,
+                "report_content_sha256": quality._sha256(execution_body),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        quality,
+        "_atomic_write_json",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Provider-bound materialized companion must not be overwritten"
+        ),
+    )
+    assert (
+        quality.main(
+            [
+                "--date",
+                "2026-08-14",
+                "--mode",
+                "micro_reversion_materialize",
+                "--micro-reversion-prepared-requests",
+                str(prepared_path),
+                "--micro-reversion-source-bundle",
+                str(source_path),
+                "--micro-reversion-storage-capacity-status",
+                str(capacity_path),
+                "--write",
+            ]
+        )
+        == 0
+    )
+    frozen_printed = json.loads(capsys.readouterr().out)
+    assert frozen_printed["provider_execution_companion_frozen"] is True
+
+    execution_path.unlink()
+    checkpoint_path = quality.micro_reversion_execution_checkpoint_path(
+        "2026-08-14"
+    )
+    checkpoint_path.write_text("{}", encoding="utf-8")
+    checkpoint = {
+        "provider_call_performed": True,
+        "materialized_report_content_sha256": (
+            quality._micro_reversion_materialized_request_census_sha256(written)
+        ),
+        "results": [
+            {
+                "paired_replay_id": "committed-request",
+                "outcome_join_key": "label-1",
+                "outcome_label_content_sha256": "f" * 64,
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        quality,
+        "_load_micro_reversion_checkpoint_unlocked",
+        lambda *_args, **_kwargs: checkpoint,
+    )
+    assert (
+        quality.main(
+            [
+                "--date",
+                "2026-08-14",
+                "--mode",
+                "micro_reversion_materialize",
+                "--micro-reversion-prepared-requests",
+                str(prepared_path),
+                "--micro-reversion-source-bundle",
+                str(source_path),
+                "--micro-reversion-storage-capacity-status",
+                str(capacity_path),
+                "--write",
+            ]
+        )
+        == 0
+    )
+    checkpoint_frozen_printed = json.loads(capsys.readouterr().out)
+    assert checkpoint_frozen_printed["provider_execution_companion_frozen"] is True
 
 
 def test_micro_reversion_json_loader_resolves_archived_gzip(tmp_path):

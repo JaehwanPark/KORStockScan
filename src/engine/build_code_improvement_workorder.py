@@ -677,6 +677,9 @@ def _intraday_ws_freshness_followup_orders(
         "scanner_prefilter_and_exact_terminalization_implemented": (
             "implemented_but_waiting_sample"
         ),
+        "scanner_candidate_prune_receipts_implemented_waiting_natural_generation": (
+            "implemented_but_waiting_sample"
+        ),
         "handoff_provenance_implemented_not_runtime_reflected": (
             "implemented_but_waiting_sample"
         ),

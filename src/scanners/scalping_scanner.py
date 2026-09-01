@@ -4339,6 +4339,19 @@ def promote_candidates(
     ):
         replacement_probe_slots = min(4, max_new_limit)
         replacement_probe_mode = replacement_probe_slots > 0
+        for target in ranked_targets[replacement_probe_slots:]:
+            _log_scanner_candidate_pruned(
+                target,
+                reason="replacement_probe_rank_cutoff",
+                scan_generation_id=scan_generation_id,
+                scan_rank=target.get("ScannerScanRank") or 0,
+                ranked_candidate_count=ranked_candidate_count,
+                venue_fields=candidate_venue_fields,
+                context={
+                    "scanner_replacement_probe_slots": replacement_probe_slots,
+                    "scanner_max_new_codes": max_new_limit,
+                },
+            )
         ranked_targets = ranked_targets[:replacement_probe_slots]
     remaining_slots = min(
         max_new_limit,

@@ -2038,7 +2038,17 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "src.engine.monitoring.quote_consistency_report" not in script
     assert "quote_consistency_report=$RUN_QUOTE_CONSISTENCY_REPORT" not in script
     assert "THRESHOLD_CYCLE_RUN_INTRADAY_WS_FRESHNESS_MONITOR" not in script
-    assert "intraday_ws_freshness_monitor_postclose" not in script
+    assert "THRESHOLD_CYCLE_RUN_INTRADAY_WS_FRESHNESS_FINALIZE" in script
+    assert "intraday_ws_freshness_finalize" in script
+    assert '--symbol-master-path "$intraday_ws_symbol_master"' in script
+    assert (
+        'wait_for_json_artifact "$intraday_ws_symbol_master" '
+        '"intraday_ws_freshness_symbol_master"'
+        not in script
+    )
+    assert script.index("intraday_ws_freshness_finalize") < script.index(
+        'run_threshold_cycle_ev_and_wait "pre_workorder"'
+    )
     assert "ai_score_optimization_backtest" not in script
     assert (
         "rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE"

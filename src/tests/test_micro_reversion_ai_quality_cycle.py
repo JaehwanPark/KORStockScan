@@ -3982,6 +3982,207 @@ def test_cycle_does_not_claim_or_roll_same_date_stale_execution_when_step_skips(
     assert report["status"] == "source_only_blocked_or_deferred"
 
 
+def test_provider_bound_r0_generation_reuses_exact_companion_set(
+    tmp_path,
+    monkeypatch,
+):
+    target_date = "2026-08-14"
+    paths = {
+        "execution": tmp_path / "execution.json",
+        "materialized": tmp_path / "materialized.json",
+        "labels": tmp_path / "labels.json",
+        "source_bundle": tmp_path / "source-bundle.json",
+        "prepared": tmp_path / "prepared.json",
+        "bridge_report": tmp_path / "bridge.json",
+        "paired_report": tmp_path / "paired.json",
+    }
+    paired = {"schema": "paired-test", "target_date": target_date}
+    bridge_body = {"schema": "bridge-test", "target_date": target_date}
+    bridge = {
+        **bridge_body,
+        "artifact_content_sha256": cycle._sha256(bridge_body),
+    }
+    prepared = {
+        "schema": "prepared-test",
+        "target_date": target_date,
+        "source_paired_report_content_sha256": cycle._sha256(paired),
+    }
+    source_bundle = {
+        "schema": "source-bundle-test",
+        "target_date": target_date,
+        "outcome_source_commitment": {
+            "bridge_report_content_sha256": bridge["artifact_content_sha256"],
+            "bridge_report_artifact_sha256": cycle._sha256(bridge),
+        },
+    }
+    materialized = {
+        "schema": quality.MICRO_REVERSION_MATERIALIZED_REQUEST_SCHEMA,
+        "target_date": target_date,
+        "source_bundle_path": str(paths["source_bundle"]),
+        "prepared_request_artifact_path": str(paths["prepared"]),
+        "report_content_sha256": "a" * 64,
+    }
+    labels = {"schema": "labels-test", "target_date": target_date}
+    floor_body = {"schema": "floor-test", "target_date": target_date}
+    provider_floor = {
+        **floor_body,
+        "floor_content_sha256": cycle._sha256(floor_body),
+    }
+    floor_path = (
+        tmp_path
+        / f"micro_reversion_provider_ablation_sample_floor_{target_date}.json"
+    )
+    for path, payload in (
+        (paths["materialized"], materialized),
+        (paths["labels"], labels),
+        (paths["source_bundle"], source_bundle),
+        (paths["prepared"], prepared),
+        (paths["bridge_report"], bridge),
+        (paths["paired_report"], paired),
+        (floor_path, provider_floor),
+    ):
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    execution_body = {
+        "schema": quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA,
+        "target_date": target_date,
+        "provider_call_performed": True,
+        "result_count": 1,
+        "materialized_artifact_path": str(paths["materialized"]),
+        "outcome_label_artifact_path": str(paths["labels"]),
+        "provider_ablation_sample_floor_path": str(floor_path),
+        "provider_ablation_sample_floor_content_sha256": provider_floor[
+            "floor_content_sha256"
+        ],
+        "provider_ablation_sample_floor_artifact_sha256": cycle._sha256(
+            provider_floor
+        ),
+    }
+    paths["execution"].write_text(
+        json.dumps(
+            {
+                **execution_body,
+                "report_content_sha256": cycle._sha256(execution_body),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cycle,
+        "_validate_execution_external_companion_bindings",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        quality,
+        "validate_current_materialized_source_lineage",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cycle,
+        "provider_ablation_floor_path",
+        lambda _target_date: floor_path,
+    )
+
+    frozen = cycle._load_provider_bound_r0_generation(
+        target_date=target_date,
+        selected_paths=paths,
+    )
+
+    assert frozen is not None
+    assert frozen["prepared"] == prepared
+    assert frozen["source_bundle"] == source_bundle
+    assert frozen["provider_floor"] == provider_floor
+
+    mutated_bridge = {**bridge, "mutated": True}
+    paths["bridge_report"].write_text(
+        json.dumps(mutated_bridge),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="provider_bound_bridge_companion_mismatch"):
+        cycle._load_provider_bound_r0_generation(
+            target_date=target_date,
+            selected_paths=paths,
+        )
+
+    paths["bridge_report"].write_text(json.dumps(bridge), encoding="utf-8")
+    outcome_proof = {"label_id": "label-1", "status": "mature"}
+    labels = {
+        "schema": "labels-test",
+        "target_date": target_date,
+        "labels": [outcome_proof],
+    }
+    paths["labels"].write_text(json.dumps(labels), encoding="utf-8")
+    checkpoint_path = tmp_path / "execution.checkpoint.json"
+    checkpoint_path.write_text("{}", encoding="utf-8")
+    paths["execution_checkpoint"] = checkpoint_path
+    paths["provider_ablation_floor"] = floor_path
+    checkpoint = {
+        "provider_call_performed": True,
+        "materialized_report_content_sha256": (
+            quality._micro_reversion_materialized_request_census_sha256(
+                materialized
+            )
+        ),
+        "results": [
+            {
+                "outcome_join_key": "label-1",
+                "outcome_label_content_sha256": cycle._sha256(outcome_proof),
+            }
+        ],
+    }
+    uncommitted_execution_body = {
+        "schema": quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA,
+        "target_date": target_date,
+        "provider_call_performed": False,
+        "result_count": 0,
+        "committed_parent_count": 0,
+    }
+    paths["execution"].write_text(
+        json.dumps(
+            {
+                **uncommitted_execution_body,
+                "report_content_sha256": cycle._sha256(
+                    uncommitted_execution_body
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        quality,
+        "_load_micro_reversion_checkpoint",
+        lambda *_args, **_kwargs: checkpoint,
+    )
+    checkpoint_binding_calls = []
+    monkeypatch.setattr(
+        quality,
+        "_micro_reversion_provider_checkpoint_bindings",
+        lambda **kwargs: checkpoint_binding_calls.append(kwargs) or {},
+    )
+
+    checkpoint_frozen = cycle._load_provider_bound_r0_generation(
+        target_date=target_date,
+        selected_paths=paths,
+    )
+    assert checkpoint_frozen is not None
+    assert checkpoint_frozen["execution"] == {
+        **uncommitted_execution_body,
+        "report_content_sha256": cycle._sha256(uncommitted_execution_body),
+    }
+    assert checkpoint_frozen["checkpoint"] == checkpoint
+    assert checkpoint_binding_calls[0][
+        "provider_ablation_sample_floor_content_sha256"
+    ] == provider_floor["floor_content_sha256"]
+
+    checkpoint["results"][0]["outcome_label_content_sha256"] = ""
+    with pytest.raises(
+        ValueError, match="provider_bound_checkpoint_outcome_binding_invalid"
+    ):
+        cycle._load_provider_bound_r0_generation(
+            target_date=target_date,
+            selected_paths=paths,
+        )
+
+
 def test_cycle_capacity_gate_blocks_large_chain_but_keeps_lifecycle_source_work(
     tmp_path,
     monkeypatch,
@@ -5748,14 +5949,97 @@ def test_source_gap_diagnostics_surfaces_rejected_execution_and_companion_gaps()
         == 1
     )
     assert diagnostics["lifecycle_exact_join_missing_count"] == 1
-    workorder = diagnostics["workorders"][0]
-    assert workorder["owner"] == "RuntimeExecutionReceiptCustodyRepair"
-    assert workorder["reason_codes"] == [
+    assert [row["owner"] for row in diagnostics["workorders"]] == [
+        "RuntimeExecutionReceiptCustodyRepair",
+        "MainAIQualityMaterializedCompanionBindingRepair",
+    ]
+    receipt_workorder, companion_workorder = diagnostics["workorders"]
+    assert receipt_workorder["reason_codes"] == [
         "pipeline_lifecycle_instrumentation_gap_count=36",
         "real_submitted_lifecycle_count=15",
         "broker_execution_unique_count=0",
-        "execution_report_materialized_companion_binding_mismatch_count=1",
         "lifecycle_exact_join_missing_count=1",
+    ]
+    assert companion_workorder["reason_codes"] == [
+        "execution_report_materialized_companion_binding_mismatch_count=1",
+    ]
+
+
+def test_source_gap_diagnostics_does_not_repair_natural_non_order_lifecycle_absence():
+    diagnostics = cycle._source_only_gap_diagnostics(
+        target_date="2026-08-25",
+        observer_canary={"status": "pass"},
+        bridge_report=None,
+        lifecycle_report=None,
+        rolling_exclusions=[
+            {
+                "target_date": "2026-08-18",
+                "reason": "lifecycle_not_applicable_non_order_entry",
+                "lifecycle_join_requirement": "not_applicable_non_order_entry",
+                "repair_required": False,
+            },
+            {
+                "target_date": "2026-08-19",
+                "reason": "lifecycle_exact_join_missing",
+                "lifecycle_join_requirement": "not_applicable_non_order_entry",
+                "repair_required": False,
+            },
+        ],
+    )
+
+    assert diagnostics["lifecycle_exact_join_missing_count"] == 0
+    assert diagnostics["natural_entry_non_order_lifecycle_not_applicable_count"] == 1
+    assert diagnostics["workorders"] == []
+
+
+def test_source_gap_diagnostics_does_not_bind_historical_gap_to_healthy_current_census():
+    target_date = "2026-08-31"
+    lifecycle_report = {
+        "target_date": target_date,
+        "promotion_evidence_eligible_count": 0,
+        "broker_execution_provenance_gap_count": 0,
+        "pipeline_lifecycle_instrumentation_gap_count": 0,
+        "real_submitted_lifecycle_count": 3,
+        "broker_execution_unique_count": 4,
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    lifecycle_report["artifact_content_sha256"] = cycle._content_hash(
+        lifecycle_report, "artifact_content_sha256"
+    )
+    exclusions = [
+        {
+            "target_date": "2026-08-24",
+            "reason": "execution_report_materialized_companion_binding_mismatch",
+        }
+    ]
+    exclusions.extend(
+        {
+            "target_date": "2026-08-18",
+            "reason": "lifecycle_not_applicable_non_order_entry",
+            "repair_required": False,
+        }
+        for _ in range(7)
+    )
+
+    diagnostics = cycle._source_only_gap_diagnostics(
+        target_date=target_date,
+        observer_canary={"status": "pass"},
+        bridge_report=None,
+        lifecycle_report=lifecycle_report,
+        rolling_exclusions=exclusions,
+    )
+
+    assert diagnostics["lifecycle_exact_join_missing_count"] == 0
+    assert diagnostics["natural_entry_non_order_lifecycle_not_applicable_count"] == 7
+    assert diagnostics[
+        "execution_report_materialized_companion_binding_mismatch_dates"
+    ] == ["2026-08-24"]
+    assert [row["owner"] for row in diagnostics["workorders"]] == [
+        "MainAIQualityMaterializedCompanionBindingRepair"
+    ]
+    assert diagnostics["workorders"][0]["reason_codes"] == [
+        "execution_report_materialized_companion_binding_mismatch_count=1",
+        "execution_report_materialized_companion_binding_mismatch_dates=2026-08-24",
     ]
 
 
