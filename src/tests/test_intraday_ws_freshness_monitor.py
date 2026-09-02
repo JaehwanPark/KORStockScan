@@ -52,6 +52,81 @@ def _install_verified_symbol_master(monkeypatch):
     return fixture
 
 
+def test_symbol_master_loader_uses_latest_prior_effective_dated_artifact(
+    tmp_path, monkeypatch
+):
+    prior_path = tmp_path / "micro_reversion_symbol_master_2026-09-01.json"
+    future_path = tmp_path / "micro_reversion_symbol_master_2026-09-03.json"
+    prior_path.write_text(json.dumps({"fixture_id": "prior"}), encoding="utf-8")
+    future_path.write_text(json.dumps({"fixture_id": "future"}), encoding="utf-8")
+    parsed_payloads = []
+
+    class _FixtureMaster:
+        symbol_count = 2551
+
+        @classmethod
+        def from_payload(cls, payload, *, require_canonical_owner):
+            assert require_canonical_owner is True
+            parsed_payloads.append(payload)
+            return cls()
+
+    monkeypatch.setattr(mod, "SYMBOL_MASTER_DIR", tmp_path)
+    monkeypatch.setattr(mod, "VerifiedSymbolMaster", _FixtureMaster)
+
+    master, binding = mod._load_verified_symbol_master("2026-09-02", None)
+
+    assert master is not None
+    assert parsed_payloads == [{"fixture_id": "prior"}]
+    assert binding["status"] == "verified"
+    assert binding["target_date"] == "2026-09-02"
+    assert binding["source_date"] == "2026-09-01"
+    assert binding["path"] == str(prior_path)
+    assert binding["selection_policy"] == (
+        "latest_canonical_source_date_on_or_before_target_date"
+    )
+    assert binding["artifact_sha256"]
+    assert binding["symbol_count"] == 2551
+
+
+def test_symbol_master_loader_fails_closed_on_invalid_latest_prior_artifact(
+    tmp_path, monkeypatch
+):
+    older_path = tmp_path / "micro_reversion_symbol_master_2026-08-31.json"
+    latest_path = tmp_path / "micro_reversion_symbol_master_2026-09-01.json"
+    older_path.write_text(json.dumps({"fixture_id": "older"}), encoding="utf-8")
+    latest_path.write_text(json.dumps({"fixture_id": "invalid"}), encoding="utf-8")
+
+    class _FixtureMaster:
+        @classmethod
+        def from_payload(cls, payload, *, require_canonical_owner):
+            assert require_canonical_owner is True
+            if payload["fixture_id"] == "invalid":
+                raise ValueError("fixture_invalid")
+            return cls()
+
+    monkeypatch.setattr(mod, "SYMBOL_MASTER_DIR", tmp_path)
+    monkeypatch.setattr(mod, "VerifiedSymbolMaster", _FixtureMaster)
+
+    master, binding = mod._load_verified_symbol_master("2026-09-02", None)
+
+    assert master is None
+    assert binding["status"] == "invalid"
+    assert binding["path"] == str(latest_path)
+    assert "fixture_invalid" in binding["error"]
+
+
+def test_symbol_master_loader_never_auto_selects_future_artifact(tmp_path, monkeypatch):
+    future_path = tmp_path / "micro_reversion_symbol_master_2026-09-03.json"
+    future_path.write_text(json.dumps({"fixture_id": "future"}), encoding="utf-8")
+    monkeypatch.setattr(mod, "SYMBOL_MASTER_DIR", tmp_path)
+
+    master, binding = mod._load_verified_symbol_master("2026-09-02", None)
+
+    assert master is None
+    assert binding["status"] == "missing"
+    assert binding["source_date"] is None
+
+
 def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-13.jsonl"
     threshold_path = tmp_path / "threshold_events_2026-07-13.jsonl"
@@ -403,6 +478,225 @@ def test_scanner_funnel_exact_bbo_join_computes_cost_adjusted_first_hit(
     )
 
 
+def test_scanner_hotset_capacity_proxy_separates_queue_rank_and_right_censoring(
+    monkeypatch,
+):
+    symbol_master, binding = _install_verified_symbol_master(monkeypatch)
+
+    def _lineage(
+        promotion_id,
+        code,
+        queue_rank,
+        watching_count,
+        observations,
+    ):
+        return {
+            "promotion_id": promotion_id,
+            "code": code,
+            "venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+            "first_fast_precheck_queue_rank": queue_rank,
+            "first_fast_precheck_watching_count": watching_count,
+            "promotion_emitted_epoch": 1788310800.0,
+            "first_heavy_eval_epoch": 1788310802.0,
+            "first_eviction_epoch": None,
+            "eligible_for_heavy_entry_eval": True,
+            "decision_stage_stale_backoff": False,
+            "promotion_reason": "price_jump_start_acceleration",
+            "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+            "metadata_conflicts": [],
+            "stages": {"scalping_scanner_heavy_eval_completion": 1},
+            "bbo_observations": observations,
+        }
+
+    def _bbo(second, bid, ask):
+        return {
+            "observed_at": f"2026-09-02T09:00:{second:02d}+09:00",
+            "best_bid": bid,
+            "best_ask": ask,
+            "source": "market_data_effective_bbo",
+            "venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+        }
+
+    result = mod._scanner_hotset_capacity_counterfactual(
+        [
+            _lineage(
+                "PROMO-1",
+                "000701",
+                1,
+                6,
+                [_bbo(0, 99, 100), _bbo(2, 101, 102)],
+            ),
+            _lineage(
+                "PROMO-2",
+                "000702",
+                2,
+                10,
+                [_bbo(0, 99, 100), _bbo(2, 99, 100)],
+            ),
+            _lineage(
+                "PROMO-3",
+                "000703",
+                3,
+                14,
+                [_bbo(0, 99, 100)],
+            ),
+        ],
+        target_date="2026-09-02",
+        symbol_master=symbol_master,
+        symbol_master_binding=binding,
+    )
+
+    scenario_by_capacity = {
+        row["capacity_proxy"]: row
+        for row in result["scenarios"]
+        if row["gross_target_pct"] == 0.3 and row["adverse_stop_pct"] == -0.3
+    }
+    assert result["status"] == "source_only_capacity_proxy_available"
+    assert scenario_by_capacity[1]["selected_candidate_count"] == 1
+    assert scenario_by_capacity[1]["source_quality_adjusted_ev_pct"] == 0.77
+    assert scenario_by_capacity[1]["daily_diagnostic_comparison_ready"] is False
+    assert scenario_by_capacity[1]["daily_diagnostic_comparison_block_reasons"] == [
+        "resolved_outcome_floor_not_met"
+    ]
+    assert scenario_by_capacity[2]["selected_candidate_count"] == 2
+    assert scenario_by_capacity[2]["source_quality_adjusted_ev_pct"] == -0.23
+    assert scenario_by_capacity[4]["selected_candidate_count"] == 3
+    assert scenario_by_capacity[4]["resolved_outcome_count"] == 2
+    assert scenario_by_capacity[4]["right_censored_count"] == 1
+    assert scenario_by_capacity[4]["right_censored_rate_pct"] == 33.3333
+    assert result["best_daily_scenario_by_venue_session"][0]["decision"] == (
+        "capacity_comparison_floor_not_met"
+    )
+    assert (
+        result["best_daily_scenario_by_venue_session"][0][
+            "best_floor_eligible_daily_diagnostic_scenario_no_selection_authority"
+        ]
+        is None
+    )
+    assert all(
+        scenario["runtime_effect"] is False
+        and scenario["allowed_runtime_apply"] is False
+        and scenario["actual_order_submitted"] is False
+        and scenario["broker_order_forbidden"] is True
+        for scenario in result["scenarios"]
+    )
+    assert result["watch_pressure_observational_summary"] == [
+        {
+            "watching_count_bucket": "5_8",
+            "promotion_count": 1,
+            "eligible_for_heavy_count": 1,
+            "heavy_eval_reached_count": 1,
+            "decision_stage_stale_backoff_count": 0,
+            "eligible_for_heavy_rate_pct": 100.0,
+            "heavy_eval_reach_rate_pct": 100.0,
+            "decision_stage_stale_backoff_rate_pct": 0.0,
+            "promotion_to_heavy_p50_sec": 2.0,
+            "promotion_to_heavy_p90_sec": 2.0,
+            "promotion_to_eviction_p50_sec": None,
+            "observational_only_not_causal_cap_replay": True,
+        },
+        {
+            "watching_count_bucket": "9_12",
+            "promotion_count": 1,
+            "eligible_for_heavy_count": 1,
+            "heavy_eval_reached_count": 1,
+            "decision_stage_stale_backoff_count": 0,
+            "eligible_for_heavy_rate_pct": 100.0,
+            "heavy_eval_reach_rate_pct": 100.0,
+            "decision_stage_stale_backoff_rate_pct": 0.0,
+            "promotion_to_heavy_p50_sec": 2.0,
+            "promotion_to_heavy_p90_sec": 2.0,
+            "promotion_to_eviction_p50_sec": None,
+            "observational_only_not_causal_cap_replay": True,
+        },
+        {
+            "watching_count_bucket": "13_16",
+            "promotion_count": 1,
+            "eligible_for_heavy_count": 1,
+            "heavy_eval_reached_count": 1,
+            "decision_stage_stale_backoff_count": 0,
+            "eligible_for_heavy_rate_pct": 100.0,
+            "heavy_eval_reach_rate_pct": 100.0,
+            "decision_stage_stale_backoff_rate_pct": 0.0,
+            "promotion_to_heavy_p50_sec": 2.0,
+            "promotion_to_heavy_p90_sec": 2.0,
+            "promotion_to_eviction_p50_sec": None,
+            "observational_only_not_causal_cap_replay": True,
+        },
+    ]
+    assert result["runtime_effect"] is False
+    assert result["allowed_runtime_apply"] is False
+    assert result["actual_order_submitted"] is False
+    assert result["broker_order_forbidden"] is True
+    assert "daily_results_cannot_select_a_live_watch_cap_or_single_lead_entry" in (
+        result["limitations"]
+    )
+
+
+def test_scanner_hotset_capacity_proxy_does_not_zero_fill_missing_cost_contract(
+    monkeypatch,
+):
+    symbol_master, binding = _install_verified_symbol_master(monkeypatch)
+    monkeypatch.setattr(
+        mod,
+        "comparison_cost_contract",
+        lambda _target_date: (_ for _ in ()).throw(ValueError("cost_gap")),
+    )
+
+    result = mod._scanner_hotset_capacity_counterfactual(
+        [
+            {
+                "promotion_id": "PROMO-COST-GAP",
+                "code": "000701",
+                "venue": "KRX",
+                "market_session_bucket": "KRX_REGULAR",
+                "first_fast_precheck_queue_rank": 1,
+                "first_fast_precheck_watching_count": 1,
+                "metadata_conflicts": [],
+                "stages": {},
+                "bbo_observations": [
+                    {
+                        "observed_at": "2026-09-02T09:00:00+09:00",
+                        "best_bid": 99,
+                        "best_ask": 100,
+                        "source": "market_data_effective_bbo",
+                        "venue": "KRX",
+                        "market_session_bucket": "KRX_REGULAR",
+                    },
+                    {
+                        "observed_at": "2026-09-02T09:00:02+09:00",
+                        "best_bid": 101,
+                        "best_ask": 102,
+                        "source": "market_data_effective_bbo",
+                        "venue": "KRX",
+                        "market_session_bucket": "KRX_REGULAR",
+                    },
+                ],
+            }
+        ],
+        target_date="2026-09-02",
+        symbol_master=symbol_master,
+        symbol_master_binding=binding,
+    )
+
+    scenario = result["scenarios"][0]
+    assert result["status"] == "source_quality_blocked"
+    assert result["comparison_cost_contract_status"] == "blocked"
+    assert scenario["status"] == "source_quality_blocked"
+    assert scenario["first_hit_counts"] == {"sampled_gross_target_first": 1}
+    assert scenario["resolved_outcome_count"] == 1
+    assert scenario["cost_adjusted_resolved_outcome_count"] == 0
+    assert scenario["source_quality_adjusted_ev_pct"] is None
+    assert scenario["avg_target_first_net_return_pct"] is None
+    assert scenario["worst_resolved_net_return_pct"] is None
+    assert (
+        "source_quality_not_ready"
+        in scenario["daily_diagnostic_comparison_block_reasons"]
+    )
+
+
 def test_scanner_funnel_missing_quote_age_stays_blocked_not_zero_ev(
     tmp_path, monkeypatch
 ):
@@ -608,6 +902,84 @@ def test_scanner_funnel_keeps_venue_session_ev_separate(monkeypatch):
         row["source_quality_adjusted_ev_pct"] is not None
         for row in attribution["venue_session_economics"]
     )
+    assert all(
+        row["source_quality_adjusted_ev_pct"] is not None
+        for row in attribution["cohort_venue_session_economics"]
+    )
+
+
+def test_scanner_funnel_keeps_ready_cohort_ev_when_sibling_cohort_has_bbo_gap(
+    monkeypatch,
+):
+    symbol_master, symbol_master_binding = _install_verified_symbol_master(monkeypatch)
+    eligible_lineage = {
+        "promotion_id": "SCANPROM-READY-COHORT",
+        "code": "000714",
+        "venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+        "eligible_for_heavy_entry_eval": True,
+        "stages": {"scalping_scanner_fast_precheck": 1},
+        "metadata_conflicts": [],
+        "bbo_observations": [
+            {
+                "observed_at": "2026-08-31T09:10:00+09:00",
+                "observed_epoch": 1788135000.0,
+                "best_bid": 100.0,
+                "best_ask": 101.0,
+                "quote_age_ms": 10.0,
+                "source": "market_data_effective_bbo",
+                "source_provenance": "ws_executable_bbo",
+                "venue": "KRX",
+                "market_session_bucket": "KRX_REGULAR",
+            },
+            {
+                "observed_at": "2026-08-31T09:10:02+09:00",
+                "observed_epoch": 1788135002.0,
+                "best_bid": 103.0,
+                "best_ask": 104.0,
+                "quote_age_ms": 10.0,
+                "source": "market_data_effective_bbo",
+                "source_provenance": "ws_executable_bbo",
+                "venue": "KRX",
+                "market_session_bucket": "KRX_REGULAR",
+            },
+        ],
+    }
+    non_gainer_prune = {
+        "scan_generation_id": "SCANGEN-NO-BBO",
+        "code": "000715",
+        "venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+        "reason": "reentry_cooldown_no_material_upgrade",
+        "source_signature": "PRICE_JUMP_START",
+        "metadata_conflicts": [],
+        "bbo_observations": [],
+    }
+
+    attribution = mod._scanner_bbo_economic_attribution(
+        [eligible_lineage],
+        [non_gainer_prune],
+        target_date="2026-08-31",
+        symbol_master=symbol_master,
+        symbol_master_binding=symbol_master_binding,
+    )
+
+    assert attribution["status"] == (
+        "source_quality_blocked_executable_bbo_join_coverage_below_floor"
+    )
+    groups = {
+        row["cohort"]: row for row in attribution["cohort_venue_session_economics"]
+    }
+    ready = groups["eligible_no_heavy"]
+    assert ready["status"] == "source_only_economics_available"
+    assert ready["exact_bbo_join_coverage_pct"] == 100.0
+    assert ready["resolved_outcome_count"] == 1
+    assert ready["source_quality_adjusted_ev_pct"] == 1.75019802
+    blocked = groups["non_gainer_not_rising_repeat"]
+    assert blocked["status"] == (
+        "source_quality_blocked_executable_bbo_join_coverage_below_floor"
+    )
+    assert blocked["source_quality_adjusted_ev_pct"] is None
 
 
 def test_scanner_funnel_excludes_unverified_symbol_without_blocking_verified_ev(

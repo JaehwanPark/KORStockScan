@@ -13555,6 +13555,11 @@ def _log_rising_missed_tp1_counterfactual_submit_safety(
         "rising_missed_tp1_counterfactual_submit_safety",
         **projection_fields,
     )
+    _emit_rising_missed_entry_turn_pre_anchor_bbo_path(
+        stock if isinstance(stock, dict) else {},
+        str(code or ""),
+        projection_fields,
+    )
     _register_rising_missed_nxt_post_block_sampler(
         stock if isinstance(stock, dict) else {},
         str(code or ""),
@@ -13584,6 +13589,18 @@ _RISING_MISSED_TP1_WAIT_CONFIRMATION_MIN_INTERVAL_SEC = 0.25
 _RISING_MISSED_TP1_WAIT_CONFIRMATION_MAX_INTERVAL_SEC = 20.0
 _RISING_MISSED_TP1_WAIT_CONFIRMATION_REQUIRED_COUNT = 2
 _RISING_MISSED_TP1_REPRICE_CONTEXT_MAX_AGE_SEC = 5.0
+_RISING_MISSED_ENTRY_TURN_BBO_RING_KEY = "_rising_missed_entry_turn_bbo_ring"
+_RISING_MISSED_ENTRY_TURN_BBO_EMITTED_IDS_KEY = (
+    "_rising_missed_entry_turn_bbo_emitted_evaluation_ids"
+)
+_RISING_MISSED_ENTRY_TURN_BBO_LAST_CAPTURE_KEY = (
+    "_rising_missed_entry_turn_bbo_last_capture"
+)
+_RISING_MISSED_ENTRY_TURN_BBO_LOOKBACK_SEC = 120.0
+_RISING_MISSED_ENTRY_TURN_BBO_MAX_QUOTE_AGE_MS = 1_000.0
+_RISING_MISSED_ENTRY_TURN_BBO_MIN_SAMPLE_INTERVAL_SEC = 0.5
+_RISING_MISSED_ENTRY_TURN_BBO_MAX_SAMPLES = 256
+_RISING_MISSED_ENTRY_TURN_BBO_MAX_EMITTED_IDS = 64
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS: dict[str, dict[str, Any]] = {}
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK = threading.RLock()
 _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS_RESTORED = False
@@ -17279,6 +17296,12 @@ def emit_scanner_watching_runtime_skip(
     if not _is_scanner_watching_runtime_observation_target(stock):
         return False
     now_value = time.time() if now_ts is None else float(now_ts)
+    _capture_rising_missed_entry_turn_bbo(
+        stock,
+        code,
+        ws_data,
+        now_ts=now_value,
+    )
     throttle = max(0, int(throttle_sec or 0))
     key = str(skip_reason or "unknown_skip")
     if key in SCANNER_WATCH_EVICTION_NON_TERMINAL_SKIP_REASONS:
@@ -17361,6 +17384,9 @@ def _scanner_runtime_queue_lag_fields(
     anchor_to_loop_sec = max(0.0, loop_epoch - anchor_time) if anchor_time > 0 else 0.0
     loop_to_emit_sec = max(0.0, emit_epoch - loop_epoch)
     scanner_attach_epoch = _safe_float(stock.get("scanner_attach_epoch"), 0.0)
+    entry_realtime_attach_anchor_epoch, entry_realtime_attach_anchor_source = (
+        _scanner_entry_realtime_attach_anchor(stock)
+    )
     first_realtime_epoch = _safe_float(
         stock.get("scanner_first_entry_realtime_epoch"), 0.0
     )
@@ -17371,8 +17397,8 @@ def _scanner_runtime_queue_lag_fields(
         else 0.0
     )
     external_first_ws_delay_sec = (
-        max(0.0, first_realtime_epoch - scanner_attach_epoch)
-        if scanner_attach_epoch > 0 and first_realtime_epoch > 0
+        max(0.0, first_realtime_epoch - entry_realtime_attach_anchor_epoch)
+        if entry_realtime_attach_anchor_epoch > 0 and first_realtime_epoch > 0
         else None
     )
     queue_lag_causal_class = (
@@ -17426,6 +17452,18 @@ def _scanner_runtime_queue_lag_fields(
             if scanner_attach_epoch > 0
             else "not_available_scanner_attach_epoch"
         ),
+        "scanner_entry_realtime_attach_anchor_epoch": (
+            f"{entry_realtime_attach_anchor_epoch:.3f}"
+            if entry_realtime_attach_anchor_epoch > 0
+            else "not_available_entry_realtime_attach_anchor_epoch"
+        ),
+        "scanner_entry_realtime_attach_anchor_source": (
+            entry_realtime_attach_anchor_source
+        ),
+        "scanner_entry_realtime_attach_anchor_promotion_id": stock.get(
+            "scanner_entry_realtime_attach_anchor_promotion_id"
+        )
+        or "not_available_entry_realtime_attach_anchor_promotion_id",
         "scanner_first_entry_realtime_epoch": (
             f"{first_realtime_epoch:.3f}"
             if first_realtime_epoch > 0
@@ -17916,6 +17954,62 @@ def _scanner_promotion_price_consistency_fields(
     }
 
 
+def _scanner_entry_realtime_attach_anchor(stock):
+    """Read only validated runtime-recorded anchors; never infer a REG ACK."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    recorded_epoch = _safe_float(
+        stock.get("scanner_entry_realtime_attach_anchor_epoch"),
+        0.0,
+    )
+    recorded_source = str(
+        stock.get("scanner_entry_realtime_attach_anchor_source") or ""
+    ).strip()
+    recorded_promotion_id = str(
+        stock.get("scanner_entry_realtime_attach_anchor_promotion_id") or ""
+    ).strip()
+    current_promotion_id = str(stock.get("scanner_promotion_id") or "").strip()
+    recorded_lineage_matches = bool(
+        (current_promotion_id and recorded_promotion_id == current_promotion_id)
+        or (not current_promotion_id and not recorded_promotion_id)
+    )
+    if (
+        recorded_epoch > 0
+        and recorded_source
+        in {
+            "legacy_scanner_attach_epoch",
+            "runtime_handoff_pre_ws_reg_lower_bound",
+        }
+        and recorded_lineage_matches
+    ):
+        return recorded_epoch, recorded_source
+    handoff_promotion_id = str(
+        stock.get("scanner_runtime_handoff_promotion_id") or ""
+    ).strip()
+    if handoff_promotion_id and handoff_promotion_id != current_promotion_id:
+        return 0.0, "runtime_handoff_unvalidated"
+    legacy_epoch = _safe_float(stock.get("scanner_attach_epoch"), 0.0)
+    if legacy_epoch > 0:
+        code = str(stock.get("code") or "").strip()[:6]
+        generation_id = str(stock.get("scanner_generation_id") or "").strip()
+        if handoff_promotion_id and not (
+            code and generation_id.startswith(f"{code}:{current_promotion_id}:r")
+        ):
+            return 0.0, "runtime_handoff_unvalidated"
+        return legacy_epoch, "legacy_scanner_attach_epoch"
+    if any(
+        stock.get(key) not in (None, "")
+        for key in (
+            "scanner_runtime_handoff_epoch",
+            "scanner_runtime_handoff_promotion_id",
+            "scanner_runtime_instance_id",
+            "scanner_attach_provenance_version",
+        )
+    ):
+        return 0.0, "runtime_handoff_unvalidated"
+    return 0.0, "missing"
+
+
 def _scanner_fast_precheck_fields_impl(
     stock,
     *,
@@ -17969,14 +18063,21 @@ def _scanner_fast_precheck_fields_impl(
     latest_history_age_sec = None
     if latest_history_ts > 0:
         latest_history_age_sec = max(0.0, float(now_ts) - latest_history_ts)
-    scanner_attach_epoch = _safe_float(
-        (stock or {}).get("scanner_attach_epoch"),
-        0.0,
+    legacy_scanner_attach_epoch = _safe_float(
+        (stock or {}).get("scanner_attach_epoch"), 0.0
+    )
+    scanner_attach_epoch, scanner_attach_anchor_source = (
+        _scanner_entry_realtime_attach_anchor(stock)
     )
     post_attach_entry_realtime = bool(
-        scanner_attach_epoch <= 0.0
-        or last_0b_ts >= scanner_attach_epoch
-        or latest_history_ts >= scanner_attach_epoch
+        (scanner_attach_epoch <= 0.0 and scanner_attach_anchor_source == "missing")
+        or (
+            scanner_attach_epoch > 0.0
+            and (
+                last_0b_ts >= scanner_attach_epoch
+                or latest_history_ts >= scanner_attach_epoch
+            )
+        )
     )
     fresh_realtime_evidence = (
         last_0b_age_sec is not None and last_0b_age_sec <= max_age_sec
@@ -18482,10 +18583,20 @@ def _scanner_fast_precheck_fields_impl(
         ),
         "fast_precheck_seen_epoch": f"{float(now_ts):.3f}",
         "scanner_attach_epoch": (
-            f"{scanner_attach_epoch:.6f}"
-            if scanner_attach_epoch > 0.0
+            f"{legacy_scanner_attach_epoch:.6f}"
+            if legacy_scanner_attach_epoch > 0.0
             else "not_available_scanner_attach_epoch"
         ),
+        "scanner_entry_realtime_attach_anchor_epoch": (
+            f"{scanner_attach_epoch:.6f}"
+            if scanner_attach_epoch > 0.0
+            else "not_available_entry_realtime_attach_anchor_epoch"
+        ),
+        "scanner_entry_realtime_attach_anchor_source": scanner_attach_anchor_source,
+        "scanner_entry_realtime_attach_anchor_promotion_id": (stock or {}).get(
+            "scanner_entry_realtime_attach_anchor_promotion_id"
+        )
+        or "not_available_entry_realtime_attach_anchor_promotion_id",
         "fast_precheck_post_attach_entry_realtime": post_attach_entry_realtime,
         "fast_precheck_post_attach_last_0b": bool(
             scanner_attach_epoch > 0.0 and last_0b_ts >= scanner_attach_epoch
@@ -18545,6 +18656,347 @@ def _scanner_fast_precheck_fields_impl(
         "fast_precheck_result": result,
         "fast_precheck_reason": reason,
     }
+
+
+def _capture_rising_missed_entry_turn_bbo_impl(
+    stock: dict | None,
+    code: str | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Keep a bounded exact-route BBO path without changing runtime decisions.
+
+    The hot path uses only the already-subscribed in-memory 0D snapshot.  Any
+    provenance or parsing gap is fail-closed and cannot interrupt the scanner.
+    """
+
+    target = stock if isinstance(stock, dict) else {}
+    snapshot = ws_data if isinstance(ws_data, dict) else {}
+    normalized_code = str(code or target.get("code") or "").strip()[:6]
+    promotion_id = str(target.get("scanner_promotion_id") or "").strip()
+    base = {
+        "captured": False,
+        "reason": "not_scanner_candidate",
+        "sample_count": 0,
+    }
+    if not (
+        normalized_code
+        and promotion_id
+        and _is_scanner_watching_runtime_observation_target(target)
+    ):
+        return base
+    explicit_venues = {
+        str(target.get(key) or "").strip().upper()
+        for key in ("effective_venue", "venue")
+        if str(target.get(key) or "").strip().upper()
+        in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+    }
+    venue = next(iter(explicit_venues)) if len(explicit_venues) == 1 else "UNKNOWN"
+    session = _rising_missed_nxt_session_bucket(float(now_ts))
+    expected_session_prefixes = {
+        "KRX": ("krx_regular",),
+        "NXT": ("nxt_",),
+        "PREMARKET_KRX_LIKE": ("krx_like_premarket",),
+    }
+    if venue == "UNKNOWN" or not session.startswith(
+        expected_session_prefixes.get(venue, ("never_match",))
+    ):
+        return {**base, "reason": "explicit_venue_or_session_missing"}
+    type_routes = snapshot.get("last_realtime_type_market_route")
+    type_routes = type_routes if isinstance(type_routes, dict) else {}
+    expected_market_route = str(type_routes.get("0D") or "").strip().lower()
+    try:
+        scoped_ws, route_fields = _risky_micro_route_scoped_0d_bbo(
+            snapshot,
+            code=normalized_code,
+            venue=venue,
+            session=session,
+            expected_market_route=expected_market_route,
+        )
+    except Exception:
+        return {**base, "reason": "exact_route_bbo_resolution_error"}
+    if not route_fields.get(
+        "risky_micro_episode_horizon_observer_route_scope_eligible"
+    ):
+        return {
+            **base,
+            "reason": str(
+                route_fields.get(
+                    "risky_micro_episode_horizon_observer_route_scope_status"
+                )
+                or "exact_route_bbo_missing"
+            ),
+        }
+    observed_venue = (
+        str(
+            route_fields.get("risky_micro_episode_horizon_observer_observed_venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    route_scope_status = str(
+        route_fields.get("risky_micro_episode_horizon_observer_route_scope_status")
+        or ""
+    ).strip()
+    expected_observed_venue = "NXT" if venue == "PREMARKET_KRX_LIKE" else venue
+    if (
+        observed_venue != expected_observed_venue
+        or not route_scope_status.startswith("exact_0d_")
+        or route_scope_status == "exact_0d_integrated_sor_execution_route"
+    ):
+        return {**base, "reason": "exact_route_venue_provenance_invalid"}
+    best_bid = _safe_int(scoped_ws.get("best_bid"), 0)
+    best_ask = _safe_int(scoped_ws.get("best_ask"), 0)
+    observed_epoch = _safe_float(scoped_ws.get("last_ws_update_ts"), 0.0)
+    quote_age_ms = (
+        max(0.0, (float(now_ts) - observed_epoch) * 1_000.0)
+        if observed_epoch > 0
+        else None
+    )
+    if (
+        best_bid <= 0
+        or best_ask < best_bid
+        or quote_age_ms is None
+        or observed_epoch > float(now_ts)
+        or quote_age_ms > _RISING_MISSED_ENTRY_TURN_BBO_MAX_QUOTE_AGE_MS
+    ):
+        return {**base, "reason": "exact_route_bbo_invalid_or_stale"}
+    sample = {
+        "observed_epoch": round(observed_epoch, 6),
+        "recorded_epoch": round(float(now_ts), 6),
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "quote_age_ms": round(quote_age_ms, 3),
+        "source_provenance": "existing_ws_route_scoped_0d_snapshot",
+        "effective_venue": venue,
+        "market_session_bucket": session,
+        "market_route": expected_market_route
+        or str(
+            route_fields.get("risky_micro_episode_horizon_observer_observed_route")
+            or ""
+        ).strip(),
+        "observed_item": str(
+            route_fields.get("risky_micro_episode_horizon_observer_observed_item") or ""
+        ).strip(),
+        "observed_venue": observed_venue,
+        "route_scope_status": route_scope_status,
+        "scanner_promotion_id": promotion_id,
+    }
+    cutoff_epoch = float(now_ts) - _RISING_MISSED_ENTRY_TURN_BBO_LOOKBACK_SEC
+    with ENTRY_LOCK:
+        raw_ring = target.get(_RISING_MISSED_ENTRY_TURN_BBO_RING_KEY)
+        ring = (
+            [
+                dict(item)
+                for item in raw_ring
+                if isinstance(item, dict)
+                and str(item.get("scanner_promotion_id") or "") == promotion_id
+                and _safe_float(item.get("observed_epoch"), 0.0) >= cutoff_epoch
+            ]
+            if isinstance(raw_ring, list)
+            else []
+        )
+        last_epoch = _safe_float(ring[-1].get("observed_epoch"), 0.0) if ring else 0.0
+        if ring and observed_epoch < last_epoch:
+            target[_RISING_MISSED_ENTRY_TURN_BBO_RING_KEY] = ring
+            return {
+                **base,
+                "reason": "exact_route_bbo_event_time_regression",
+                "sample_count": len(ring),
+            }
+        interval_throttled = bool(
+            ring
+            and observed_epoch - last_epoch
+            < _RISING_MISSED_ENTRY_TURN_BBO_MIN_SAMPLE_INTERVAL_SEC
+        )
+        if not ring or not interval_throttled:
+            ring.append(sample)
+        if len(ring) > _RISING_MISSED_ENTRY_TURN_BBO_MAX_SAMPLES:
+            ring = ring[-_RISING_MISSED_ENTRY_TURN_BBO_MAX_SAMPLES:]
+        target[_RISING_MISSED_ENTRY_TURN_BBO_RING_KEY] = ring
+    return {
+        **base,
+        "captured": True,
+        "reason": (
+            "fresh_exact_route_ws_bbo_interval_throttled"
+            if interval_throttled
+            else "fresh_exact_route_ws_bbo"
+        ),
+        "sample_count": len(ring),
+    }
+
+
+def _capture_rising_missed_entry_turn_bbo(
+    stock: dict | None,
+    code: str | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Fail-safe wrapper: source-only capture must never block the scanner."""
+
+    try:
+        result = _capture_rising_missed_entry_turn_bbo_impl(
+            stock,
+            code,
+            ws_data,
+            now_ts=now_ts,
+        )
+    except Exception as exc:
+        result = {
+            "captured": False,
+            "reason": "source_only_capture_internal_error",
+            "sample_count": 0,
+            "error_class": type(exc).__name__,
+        }
+    if isinstance(stock, dict):
+        with ENTRY_LOCK:
+            stock[_RISING_MISSED_ENTRY_TURN_BBO_LAST_CAPTURE_KEY] = {
+                **result,
+                "capture_attempt_epoch": round(float(now_ts), 6),
+            }
+    return result
+
+
+def _emit_rising_missed_entry_turn_pre_anchor_bbo_path(
+    stock: dict | None,
+    code: str | None,
+    decision_fields: dict[str, Any] | None,
+) -> bool:
+    """Flush one evaluation-scoped source-only path from the bounded ring."""
+
+    target = stock if isinstance(stock, dict) else {}
+    fields = decision_fields if isinstance(decision_fields, dict) else {}
+    evaluation_id = str(fields.get("rising_missed_tp1_evaluation_id") or "").strip()
+    promotion_id = str(
+        fields.get("scanner_promotion_id") or target.get("scanner_promotion_id") or ""
+    ).strip()
+    if not evaluation_id or not promotion_id:
+        return False
+    candidate_epoch = time.time()
+    event_venue = (
+        str(
+            fields.get("rising_missed_effective_venue")
+            or fields.get("effective_venue")
+            or fields.get("venue")
+            or "UNKNOWN"
+        )
+        .strip()
+        .upper()
+    )
+    event_session = (
+        str(
+            fields.get("rising_missed_market_session_bucket")
+            or fields.get("market_session_bucket")
+            or "UNKNOWN"
+        )
+        .strip()
+        .lower()
+    )
+    with ENTRY_LOCK:
+        raw_emitted = target.get(_RISING_MISSED_ENTRY_TURN_BBO_EMITTED_IDS_KEY)
+        emitted_ids = (
+            [str(value) for value in raw_emitted if str(value)]
+            if isinstance(raw_emitted, list)
+            else []
+        )
+        if evaluation_id in emitted_ids:
+            return False
+        raw_ring = target.get(_RISING_MISSED_ENTRY_TURN_BBO_RING_KEY)
+        samples = (
+            [
+                dict(item)
+                for item in raw_ring
+                if isinstance(item, dict)
+                and str(item.get("scanner_promotion_id") or "") == promotion_id
+                and str(item.get("effective_venue") or "").strip().upper()
+                == event_venue
+                and str(item.get("market_session_bucket") or "").strip().lower()
+                == event_session
+                and candidate_epoch - _RISING_MISSED_ENTRY_TURN_BBO_LOOKBACK_SEC
+                <= _safe_float(item.get("observed_epoch"), 0.0)
+                <= candidate_epoch
+            ]
+            if isinstance(raw_ring, list)
+            else []
+        )
+        last_capture = target.get(_RISING_MISSED_ENTRY_TURN_BBO_LAST_CAPTURE_KEY)
+        last_capture = dict(last_capture) if isinstance(last_capture, dict) else {}
+        emitted_ids.append(evaluation_id)
+        target[_RISING_MISSED_ENTRY_TURN_BBO_EMITTED_IDS_KEY] = emitted_ids[
+            -_RISING_MISSED_ENTRY_TURN_BBO_MAX_EMITTED_IDS:
+        ]
+    event_fields = {
+        "rising_missed_tp1_evaluation_id": evaluation_id,
+        "scanner_promotion_id": promotion_id,
+        "rising_missed_effective_venue": event_venue,
+        "rising_missed_market_session_bucket": event_session,
+        "rising_missed_entry_turn_bbo_samples": samples,
+        "rising_missed_entry_turn_bbo_sample_count": len(samples),
+        "rising_missed_entry_turn_bbo_capture_status": (
+            "captured" if samples else "no_fresh_exact_route_pre_anchor_samples"
+        ),
+        "rising_missed_entry_turn_bbo_last_capture_reason": (
+            last_capture.get("reason") or "not_available"
+        ),
+        "rising_missed_entry_turn_bbo_last_capture_error_class": (
+            last_capture.get("error_class") or "not_applicable"
+        ),
+        "rising_missed_entry_turn_bbo_last_capture_attempt_epoch": (
+            last_capture.get("capture_attempt_epoch") or "not_available"
+        ),
+        "rising_missed_entry_turn_bbo_lookback_sec": (
+            _RISING_MISSED_ENTRY_TURN_BBO_LOOKBACK_SEC
+        ),
+        "rising_missed_entry_turn_bbo_max_quote_age_ms": (
+            _RISING_MISSED_ENTRY_TURN_BBO_MAX_QUOTE_AGE_MS
+        ),
+        "rising_missed_entry_turn_bbo_max_samples": (
+            _RISING_MISSED_ENTRY_TURN_BBO_MAX_SAMPLES
+        ),
+        "rising_missed_entry_turn_bbo_min_sample_interval_sec": (
+            _RISING_MISSED_ENTRY_TURN_BBO_MIN_SAMPLE_INTERVAL_SEC
+        ),
+        "metric_role": "source_quality_instrumentation",
+        "decision_authority": (
+            "entry_turn_pre_anchor_existing_ws_bbo_observation_only"
+        ),
+        "window_policy": (
+            "same_promotion_exact_symbol_venue_session_past_only_120s_bounded_ring"
+        ),
+        "sample_floor": "not_applicable_instrumentation",
+        "primary_decision_metric": "fresh_exact_route_pre_anchor_bbo_coverage",
+        "source_quality_gate": (
+            "existing_subscription_exact_route_0d_bbo_age_le_1000ms"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "broker_order_submit|broker_order_cancel|scanner_slot_or_cooldown_change|"
+            "entry_or_exit_authority|threshold_or_provider_change|quantity_or_cap_change|"
+            "stale_quote_or_hard_safety_bypass"
+        ),
+    }
+    try:
+        _log_entry_pipeline(
+            target,
+            str(code or target.get("code") or ""),
+            "rising_missed_entry_turn_pre_anchor_bbo_path",
+            **event_fields,
+        )
+    except Exception:
+        with ENTRY_LOCK:
+            raw_emitted = target.get(_RISING_MISSED_ENTRY_TURN_BBO_EMITTED_IDS_KEY)
+            if isinstance(raw_emitted, list):
+                target[_RISING_MISSED_ENTRY_TURN_BBO_EMITTED_IDS_KEY] = [
+                    value for value in raw_emitted if str(value) != evaluation_id
+                ]
+        return False
+    return True
 
 
 def _scanner_fast_precheck_fields(
@@ -18616,6 +19068,12 @@ def emit_scanner_fast_precheck(
     if not _is_scanner_watching_runtime_observation_target(stock):
         return False
     now_value = time.time() if now_ts is None else float(now_ts)
+    _capture_rising_missed_entry_turn_bbo(
+        stock,
+        code,
+        ws_data,
+        now_ts=now_value,
+    )
     throttle = max(0, int(throttle_sec or 0))
     last_logged = _safe_float(stock.get("_scanner_fast_precheck_logged_at"), 0.0)
     if throttle > 0 and now_value - last_logged < throttle:
@@ -19137,10 +19595,10 @@ def _emit_scalp_entry_adm_snapshot(
         "null",
     ):
         result_source = str(fields.get("ai_result_source") or "").strip().lower()
-        transport_timeout = result_source == "timeout" or _truthy_field(
-            fields.get("openai_timeout_like")
-        ) or _truthy_field(
-            fields.get("openai_http_timeout_budget_exhausted")
+        transport_timeout = (
+            result_source == "timeout"
+            or _truthy_field(fields.get("openai_timeout_like"))
+            or _truthy_field(fields.get("openai_http_timeout_budget_exhausted"))
         )
         fields["ai_decision_evaluation_status"] = (
             "not_evaluated_transport_timeout"
@@ -19557,11 +20015,15 @@ def _holding_pipeline_observation_scope_fields(
         venue = "NXT"
     else:
         stock_fields = stock if isinstance(stock, dict) else {}
-        venue = str(
-            stock_fields.get("effective_venue")
-            or stock_fields.get("rising_missed_effective_venue")
-            or "UNKNOWN"
-        ).strip().upper()
+        venue = (
+            str(
+                stock_fields.get("effective_venue")
+                or stock_fields.get("rising_missed_effective_venue")
+                or "UNKNOWN"
+            )
+            .strip()
+            .upper()
+        )
         if venue not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}:
             venue = "UNKNOWN"
     return {
@@ -55271,9 +55733,7 @@ def _commit_entry_setup_exploration_probe_cap(
     """Commit every broker-accepted exploration order to the durable cap."""
 
     stock = stock if isinstance(stock, dict) else {}
-    if not _truthy_field(
-        stock.get("entry_opportunity_recheck_exploration_probe_only")
-    ):
+    if not _truthy_field(stock.get("entry_opportunity_recheck_exploration_probe_only")):
         return False
     trade_date = datetime.fromtimestamp(now_ts, _KST).date().isoformat()
     ledger_committed = False
@@ -59359,31 +59819,44 @@ def _scanner_entry_realtime_latency_fields(
         (stock or {}).get("scanner_first_entry_realtime_epoch"),
         0.0,
     )
-    attach_epoch = _safe_float((stock or {}).get("scanner_attach_epoch"), 0.0)
+    attach_epoch, attach_anchor_source = _scanner_entry_realtime_attach_anchor(stock)
     first_realtime_type = str(
         (stock or {}).get("scanner_first_entry_realtime_type") or ""
     ).strip()
     observed_value = _safe_float(observed_epoch, 0.0)
+    legacy_attach_anchor = attach_anchor_source == "legacy_scanner_attach_epoch"
     fields = {
         "scanner_latency_boundary_contract": (
-            "attach_to_first_entry_realtime_external_then_post_source_ready_pipeline"
+            "entry_realtime_anchor_to_first_input_then_post_source_ready_pipeline"
         ),
         "scanner_external_wait_owner": (
-            "external_or_subscription_state_first_post_attach_entry_realtime"
+            "external_or_subscription_state_first_post_anchor_entry_realtime"
         ),
         "scanner_external_wait_causal_attribution": (
             "not_assigned_without_server_subscription_ack"
         ),
+        "scanner_entry_realtime_attach_anchor_source": attach_anchor_source,
+        "scanner_entry_realtime_attach_anchor_epoch": (
+            f"{attach_epoch:.6f}"
+            if attach_epoch > 0
+            else "not_available_entry_realtime_attach_anchor_epoch"
+        ),
+        "scanner_entry_realtime_attach_anchor_promotion_id": (stock or {}).get(
+            "scanner_entry_realtime_attach_anchor_promotion_id"
+        )
+        or "not_available_entry_realtime_attach_anchor_promotion_id",
         "scanner_external_wait_excluded_from_post_source_ready_latency": True,
         "scanner_post_source_ready_latency_anchor": (
             "first_post_attach_entry_realtime"
+            if legacy_attach_anchor
+            else "first_post_runtime_handoff_entry_realtime_lower_bound"
         ),
         "scanner_post_source_ready_latency_terminal": terminal_name,
     }
     if first_realtime_epoch <= 0:
-        not_comparable_reason = "first_post_attach_entry_realtime_missing"
+        not_comparable_reason = "first_post_entry_realtime_anchor_input_missing"
     elif attach_epoch > 0 and first_realtime_epoch < attach_epoch:
-        not_comparable_reason = "first_entry_realtime_before_attach"
+        not_comparable_reason = "first_entry_realtime_before_recorded_anchor"
     elif observed_value <= 0:
         not_comparable_reason = f"{terminal_name}_epoch_missing"
     elif observed_value < first_realtime_epoch:
@@ -59400,6 +59873,9 @@ def _scanner_entry_realtime_latency_fields(
                 "attach_to_first_entry_realtime_sec": (
                     "not_available_attach_to_first_entry_realtime_sec"
                 ),
+                "entry_realtime_anchor_to_first_entry_realtime_sec": (
+                    "not_available_entry_realtime_anchor_to_first_entry_realtime_sec"
+                ),
                 f"first_entry_realtime_to_{terminal_name}_sec": (
                     f"not_available_first_entry_realtime_to_{terminal_name}_sec"
                 ),
@@ -59414,8 +59890,13 @@ def _scanner_entry_realtime_latency_fields(
             "scanner_first_entry_realtime_type": first_realtime_type or "unknown",
             "attach_to_first_entry_realtime_sec": (
                 round(max(0.0, first_realtime_epoch - attach_epoch), 6)
+                if attach_epoch > 0 and legacy_attach_anchor
+                else "not_comparable_no_server_subscription_ack"
+            ),
+            "entry_realtime_anchor_to_first_entry_realtime_sec": (
+                round(max(0.0, first_realtime_epoch - attach_epoch), 6)
                 if attach_epoch > 0
-                else "not_available_attach_to_first_entry_realtime_sec"
+                else "not_available_entry_realtime_anchor_to_first_entry_realtime_sec"
             ),
             f"first_entry_realtime_to_{terminal_name}_sec": round(
                 observed_value - first_realtime_epoch,
@@ -79306,11 +79787,9 @@ def _retire_unowned_scale_in_qty_manual_control_handoff(
         removal_reason=(
             removal.reason if removal is not None else "not_applicable_stale_state"
         ),
-        target_status=(stock or {}).get("status")
-        or "not_applicable_target_status",
+        target_status=(stock or {}).get("status") or "not_applicable_target_status",
         target_strategy=normalize_strategy((stock or {}).get("strategy")),
-        runtime_record_id=(stock or {}).get("id")
-        or "not_applicable_runtime_record_id",
+        runtime_record_id=(stock or {}).get("id") or "not_applicable_runtime_record_id",
         observed_epoch=f"{float(now_ts):.3f}",
         metric_role="runtime_owner_reconciliation",
         decision_authority="legacy_unowned_auto_handoff_retirement",
@@ -79750,9 +80229,7 @@ def _scale_in_order_submitted(add_result) -> bool:
     raw_return_code = add_result.get("return_code")
     if raw_return_code is not None:
         return str(raw_return_code).strip() == "0"
-    order_no = str(
-        add_result.get("ord_no") or add_result.get("odno") or ""
-    ).strip()
+    order_no = str(add_result.get("ord_no") or add_result.get("odno") or "").strip()
     return bool(order_no)
 
 

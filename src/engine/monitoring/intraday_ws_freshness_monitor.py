@@ -16,7 +16,11 @@ from typing import Any, Iterable, Mapping
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
+from src.utils.jsonl_io import (
+    existing_or_gzip_path,
+    iter_jsonl,
+    read_json_object_strict_receipt,
+)
 
 KST = timezone(timedelta(hours=9))
 REPORT_TYPE = "intraday_ws_freshness_monitor"
@@ -32,13 +36,18 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v6"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v7"
 SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 SCANNER_BBO_GROSS_TARGET_PCT = 1.30
 SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
 SCANNER_BBO_HORIZON_SEC = 20 * 60
 SCANNER_BBO_TIMEOUT_MAX_LAG_SEC = 5.0
 SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT = 95.0
+SCANNER_HOTSET_CAPACITY_VALUES = (1, 2, 4, 6, 8, 12, 16)
+SCANNER_HOTSET_GROSS_TARGET_VALUES = (0.30, 0.40, 0.50, 0.70, 1.30)
+SCANNER_HOTSET_ADVERSE_STOP_VALUES = (-0.30, -0.50, -0.70)
+SCANNER_HOTSET_COMPARISON_RESOLVED_FLOOR = 20
+SCANNER_HOTSET_COMPARISON_RIGHT_CENSORED_MAX_PCT = 20.0
 
 FORBIDDEN_USES = [
     "EV",
@@ -113,6 +122,34 @@ SCANNER_EXECUTABLE_BBO_METRIC_CONTRACT = {
         "contract_and_verified_official_common_stock_master"
     ),
     "forbidden_uses": [item for item in FORBIDDEN_USES if item != "EV"],
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+}
+
+SCANNER_HOTSET_CAPACITY_PROXY_METRIC_CONTRACT = {
+    "metric_role": "source_only_counterfactual_economics",
+    "decision_authority": "scanner_hotset_rank_capacity_proxy_source_only",
+    "window_policy": (
+        "daily_first_fast_precheck_queue_rank_by_exact_promotion_venue_session"
+    ),
+    "sample_floor": (
+        "verified_official_common_stock_exact_bbo_join_coverage_pct>=95_"
+        "one_resolved_outcome_for_daily_diagnostic_only_and_20_resolved_"
+        "with_right_censored_pct<=20_for_capacity_comparison"
+    ),
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "source_quality_gate": (
+        "exact_promotion_first_queue_rank_venue_session_fresh_executable_bbo_"
+        "effective_dated_cost_contract_and_verified_official_common_stock_master"
+    ),
+    "forbidden_uses": [
+        *[item for item in FORBIDDEN_USES if item != "EV"],
+        "standalone_hotset_cap_selection",
+        "single_lead_live_entry_selection",
+        "daily_only_live_promotion",
+    ],
     "runtime_effect": False,
     "allowed_runtime_apply": False,
     "actual_order_submitted": False,
@@ -360,37 +397,106 @@ def _read_json(path: Path | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _logical_symbol_master_date(path: Path) -> date | None:
+    name = path.name
+    for suffix in (".json.gz", ".json"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    prefix = "micro_reversion_symbol_master_"
+    if not name.startswith(prefix):
+        return None
+    try:
+        return date.fromisoformat(name[len(prefix) :])
+    except ValueError:
+        return None
+
+
+def _select_symbol_master_path(target_date: str) -> Path | None:
+    """Select the newest canonical master available on or before target date.
+
+    Intraday reports cannot require the target day's postclose economic-chain
+    artifact.  A prior artifact remains eligible only through each record's
+    effective window, which is checked again during symbol lookup.
+    """
+
+    as_of = date.fromisoformat(target_date)
+    candidates: dict[date, Path] = {}
+    for pattern in (
+        "micro_reversion_symbol_master_*.json",
+        "micro_reversion_symbol_master_*.json.gz",
+    ):
+        for path in SYMBOL_MASTER_DIR.glob(pattern):
+            source_date = _logical_symbol_master_date(path)
+            if source_date is None or source_date > as_of:
+                continue
+            logical_path = (
+                path.with_suffix("") if path.name.endswith(".json.gz") else path
+            )
+            candidates[source_date] = logical_path
+    if not candidates:
+        return None
+    return candidates[max(candidates)]
+
+
 def _load_verified_symbol_master(
     target_date: str, symbol_master_path: Path | None
 ) -> tuple[VerifiedSymbolMaster | None, dict[str, Any]]:
-    requested_path = symbol_master_path or (
-        SYMBOL_MASTER_DIR / f"micro_reversion_symbol_master_{target_date}.json"
+    selected_path = symbol_master_path or _select_symbol_master_path(target_date)
+    selection_policy = (
+        "explicit_path"
+        if symbol_master_path is not None
+        else "latest_canonical_source_date_on_or_before_target_date"
     )
-    actual_path = existing_or_gzip_path(requested_path)
-    if not actual_path.exists():
+    if selected_path is None:
+        expected_path = (
+            SYMBOL_MASTER_DIR / f"micro_reversion_symbol_master_{target_date}.json"
+        )
         return None, {
             "status": "missing",
-            "path": str(actual_path),
+            "path": str(expected_path),
+            "physical_path": None,
+            "target_date": target_date,
+            "source_date": None,
+            "selection_policy": selection_policy,
             "artifact_sha256": None,
+            "raw_artifact_sha256": None,
+            "content_sha256": None,
             "symbol_count": 0,
         }
     try:
-        master = VerifiedSymbolMaster.from_json_path(
-            actual_path, require_canonical_owner=True
+        receipt = read_json_object_strict_receipt(selected_path)
+        source_date = _logical_symbol_master_date(receipt.logical_path)
+        if source_date is not None and source_date > date.fromisoformat(target_date):
+            raise ValueError("symbol_master_source_date_after_target_date")
+        master = VerifiedSymbolMaster.from_payload(
+            receipt.payload, require_canonical_owner=True
         )
-        artifact_sha256 = hashlib.sha256(actual_path.read_bytes()).hexdigest()
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
         return None, {
             "status": "invalid",
-            "path": str(actual_path),
+            "path": str(selected_path),
+            "physical_path": None,
+            "target_date": target_date,
+            "source_date": None,
+            "selection_policy": selection_policy,
             "artifact_sha256": None,
+            "raw_artifact_sha256": None,
+            "content_sha256": None,
             "symbol_count": 0,
             "error": f"{type(exc).__name__}:{exc}",
         }
     return master, {
         "status": "verified",
-        "path": str(actual_path),
-        "artifact_sha256": artifact_sha256,
+        "path": str(receipt.logical_path),
+        "physical_path": str(receipt.physical_path),
+        "target_date": target_date,
+        "source_date": source_date.isoformat() if source_date is not None else None,
+        "selection_policy": selection_policy,
+        "artifact_sha256": receipt.decoded_sha256,
+        "raw_artifact_sha256": receipt.raw_sha256,
+        "content_sha256": receipt.payload.get("content_sha256"),
+        "artifact_id": receipt.payload.get("artifact_id"),
         "symbol_count": master.symbol_count,
     }
 
@@ -768,6 +874,9 @@ def _update_scanner_funnel_state(
         {
             "promotion_id": promotion_id,
             "code": code,
+            "promotion_emitted_epoch": None,
+            "promotion_reason": "",
+            "source_signature": "",
             "scan_generation_id": generation_id,
             "scan_rank": scan_rank,
             "ranked_candidate_count": ranked_candidate_count,
@@ -781,6 +890,17 @@ def _update_scanner_funnel_state(
             "decision_stage_stale_backoff": False,
             "runtime_queue_lag": False,
             "eligible_for_heavy_entry_eval": False,
+            "first_fast_precheck_epoch": None,
+            "first_fast_precheck_queue_rank": None,
+            "first_fast_precheck_watching_count": None,
+            "first_fast_precheck_result": "",
+            "first_fast_precheck_reason": "",
+            "first_heavy_eval_epoch": None,
+            "first_eviction_epoch": None,
+            "first_entry_realtime_epoch": None,
+            "first_entry_realtime_type": "",
+            "first_entry_realtime_attach_anchor_epoch": None,
+            "first_entry_realtime_attach_anchor_source": "",
             "manual_control_exclusion_attach_skip": False,
             "manual_control_exclusion_terminalized": False,
             "handoff_provenance_complete": False,
@@ -823,6 +943,19 @@ def _update_scanner_funnel_state(
     lineage["record_ids"] = _append_unique(
         lineage.get("record_ids"), row.get("runtime_record_id") or row.get("record_id")
     )
+    promotion_epoch = _to_float(row.get("scanner_promotion_emitted_epoch"))
+    if promotion_epoch is not None and (
+        lineage.get("promotion_emitted_epoch") is None
+        or stage == "scalping_scanner_candidate_promoted"
+    ):
+        lineage["promotion_emitted_epoch"] = promotion_epoch
+    if stage == "scalping_scanner_candidate_promoted":
+        lineage["promotion_reason"] = str(row.get("scanner_promotion_reason") or "")
+        lineage["source_signature"] = str(row.get("source_signature") or "")
+    elif not lineage.get("promotion_reason"):
+        lineage["promotion_reason"] = str(row.get("scanner_promotion_reason") or "")
+    if not lineage.get("source_signature"):
+        lineage["source_signature"] = str(row.get("source_signature") or "")
     stage_counts = (
         lineage.get("stages") if isinstance(lineage.get("stages"), dict) else {}
     )
@@ -841,6 +974,57 @@ def _update_scanner_funnel_state(
         lineage.get("eligible_for_heavy_entry_eval")
         or str(row.get("fast_precheck_result") or "") == "eligible_for_heavy_entry_eval"
     )
+    event_time = _event_time(row)
+    event_epoch = event_time.timestamp() if event_time is not None else None
+    if stage == "scalping_scanner_fast_precheck":
+        event_epoch = _to_float(row.get("fast_precheck_seen_epoch"), event_epoch)
+        existing_first_epoch = _to_float(lineage.get("first_fast_precheck_epoch"))
+        if event_epoch is not None and (
+            existing_first_epoch is None or event_epoch < existing_first_epoch
+        ):
+            lineage["first_fast_precheck_epoch"] = event_epoch
+            lineage["first_fast_precheck_queue_rank"] = _positive_integer_metadata(
+                row.get("scanner_queue_rank")
+            ) or _positive_integer_metadata(row.get("queue_rank"))
+            lineage["first_fast_precheck_watching_count"] = _positive_integer_metadata(
+                row.get("scanner_watching_count")
+            ) or _positive_integer_metadata(row.get("watching_count"))
+            lineage["first_fast_precheck_result"] = str(
+                row.get("fast_precheck_result") or ""
+            )
+            lineage["first_fast_precheck_reason"] = str(
+                row.get("fast_precheck_reason") or ""
+            )
+        first_realtime_epoch = _to_float(row.get("scanner_first_entry_realtime_epoch"))
+        retained_realtime_epoch = _to_float(lineage.get("first_entry_realtime_epoch"))
+        if first_realtime_epoch is not None and (
+            retained_realtime_epoch is None
+            or first_realtime_epoch < retained_realtime_epoch
+        ):
+            lineage["first_entry_realtime_epoch"] = first_realtime_epoch
+            lineage["first_entry_realtime_type"] = str(
+                row.get("scanner_first_entry_realtime_type") or ""
+            )
+            lineage["first_entry_realtime_attach_anchor_epoch"] = _to_float(
+                row.get("scanner_entry_realtime_attach_anchor_epoch")
+            )
+            lineage["first_entry_realtime_attach_anchor_source"] = str(
+                row.get("scanner_entry_realtime_attach_anchor_source") or ""
+            )
+    elif stage == "scalping_scanner_heavy_eval_completion":
+        event_epoch = _to_float(row.get("heavy_eval_completed_epoch"), event_epoch)
+        existing_heavy_epoch = _to_float(lineage.get("first_heavy_eval_epoch"))
+        if event_epoch is not None and (
+            existing_heavy_epoch is None or event_epoch < existing_heavy_epoch
+        ):
+            lineage["first_heavy_eval_epoch"] = event_epoch
+    elif stage == "scalping_scanner_watch_eviction":
+        event_epoch = _to_float(row.get("observed_epoch"), event_epoch)
+        existing_eviction_epoch = _to_float(lineage.get("first_eviction_epoch"))
+        if event_epoch is not None and (
+            existing_eviction_epoch is None or event_epoch < existing_eviction_epoch
+        ):
+            lineage["first_eviction_epoch"] = event_epoch
     if stage == "scalping_scanner_runtime_target_attach":
         outcome = str(row.get("runtime_target_attach_outcome") or "unknown")
         reason = str(row.get("runtime_target_attach_reason") or "unknown")
@@ -905,6 +1089,614 @@ def _scanner_prune_economic_cohort(prune: Mapping[str, Any]) -> str | None:
     ):
         return "non_gainer_not_rising_repeat"
     return None
+
+
+def _nearest_rank_percentile(
+    values: Iterable[float], percentile: float
+) -> float | None:
+    parsed_values: list[float] = []
+    for value in values:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(parsed):
+            parsed_values.append(parsed)
+    ordered = sorted(parsed_values)
+    if not ordered:
+        return None
+    rank = max(1, math.ceil(len(ordered) * float(percentile)))
+    return ordered[min(len(ordered), rank) - 1]
+
+
+def _scanner_hotset_bbo_observations(
+    lineage: Mapping[str, Any],
+    *,
+    venue: str,
+    session: str,
+    trade_date: date,
+) -> tuple[list[dict[str, Any]], Counter]:
+    observations: list[dict[str, Any]] = []
+    filter_reasons: Counter = Counter()
+    for raw_observation in lineage.get("bbo_observations") or []:
+        if not isinstance(raw_observation, dict):
+            filter_reasons["bbo_observation_invalid_type"] += 1
+            continue
+        if str(raw_observation.get("venue") or "").upper() != venue:
+            filter_reasons["bbo_observation_venue_mismatch_or_missing"] += 1
+            continue
+        if str(raw_observation.get("market_session_bucket") or "").upper() != session:
+            filter_reasons["bbo_observation_session_mismatch_or_missing"] += 1
+            continue
+        try:
+            observed_at = datetime.fromisoformat(
+                str(raw_observation.get("observed_at") or "").replace("Z", "+00:00")
+            )
+            if observed_at.tzinfo is None:
+                raise ValueError("observation timestamp must be timezone-aware")
+            observed_at = observed_at.astimezone(KST)
+            bid = float(raw_observation["best_bid"])
+            ask = float(raw_observation["best_ask"])
+        except (KeyError, TypeError, ValueError):
+            filter_reasons["bbo_observation_invalid_or_missing"] += 1
+            continue
+        if observed_at.date() != trade_date:
+            filter_reasons["bbo_observation_target_date_mismatch"] += 1
+            continue
+        if not math.isfinite(bid) or not math.isfinite(ask) or bid <= 0 or ask < bid:
+            filter_reasons["bbo_observation_invalid_or_crossed"] += 1
+            continue
+        observations.append(
+            {
+                **raw_observation,
+                "best_bid": bid,
+                "best_ask": ask,
+                "observed_at": observed_at.isoformat(),
+                "observed_epoch": observed_at.timestamp(),
+            }
+        )
+    observations.sort(
+        key=lambda item: (
+            float(item.get("observed_epoch") or 0.0),
+            str(item.get("source") or ""),
+        )
+    )
+    return observations, filter_reasons
+
+
+def _scanner_hotset_sampled_first_hit(
+    observations: list[dict[str, Any]],
+    *,
+    gross_target_pct: float,
+    adverse_stop_pct: float,
+    round_trip_cost_pct: float | None,
+) -> dict[str, Any]:
+    if not observations:
+        return {
+            "label": "unresolved_source_quality_blocked",
+            "gross_return_pct": None,
+            "cost_adjusted_return_pct": None,
+            "hit_sec": None,
+        }
+    entry = observations[0]
+    entry_epoch = float(entry["observed_epoch"])
+    entry_ask = float(entry["best_ask"])
+    horizon_epoch = entry_epoch + SCANNER_BBO_HORIZON_SEC
+    label = "sampled_path_right_censored_no_timeout_bbo"
+    exit_observation: dict[str, Any] | None = None
+    for observation in observations[1:]:
+        observed_epoch = float(observation["observed_epoch"])
+        if observed_epoch <= entry_epoch or observed_epoch > horizon_epoch:
+            continue
+        move_pct = (float(observation["best_bid"]) - entry_ask) / entry_ask * 100.0
+        if move_pct >= float(gross_target_pct):
+            label = "sampled_gross_target_first"
+            exit_observation = observation
+            break
+        if move_pct <= float(adverse_stop_pct):
+            label = "sampled_adverse_stop_first"
+            exit_observation = observation
+            break
+    if exit_observation is None:
+        timeout_candidates = [
+            observation
+            for observation in observations[1:]
+            if horizon_epoch
+            <= float(observation["observed_epoch"])
+            <= horizon_epoch + SCANNER_BBO_TIMEOUT_MAX_LAG_SEC
+        ]
+        if timeout_candidates:
+            label = "sampled_timeout_exit"
+            exit_observation = timeout_candidates[0]
+    if exit_observation is None:
+        return {
+            "label": label,
+            "gross_return_pct": None,
+            "cost_adjusted_return_pct": None,
+            "hit_sec": None,
+        }
+    gross_return_pct = (
+        (float(exit_observation["best_bid"]) - entry_ask) / entry_ask * 100.0
+    )
+    return {
+        "label": label,
+        "gross_return_pct": gross_return_pct,
+        "cost_adjusted_return_pct": (
+            gross_return_pct - round_trip_cost_pct
+            if round_trip_cost_pct is not None
+            else None
+        ),
+        "hit_sec": max(0.0, float(exit_observation["observed_epoch"]) - entry_epoch),
+    }
+
+
+def _scanner_watch_pressure_summary(
+    lineages: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    buckets = (
+        ("1_4", 1, 4),
+        ("5_8", 5, 8),
+        ("9_12", 9, 12),
+        ("13_16", 13, 16),
+        ("17_plus", 17, 10_000),
+    )
+    rows: list[dict[str, Any]] = []
+    lineage_list = list(lineages)
+    for label, lower, upper in buckets:
+        selected = [
+            item
+            for item in lineage_list
+            if lower
+            <= int(item.get("first_fast_precheck_watching_count") or 0)
+            <= upper
+        ]
+        if not selected:
+            continue
+        heavy_lags: list[float] = []
+        eviction_lags: list[float] = []
+        for item in selected:
+            promotion_epoch = _to_float(item.get("promotion_emitted_epoch"))
+            heavy_epoch = _to_float(item.get("first_heavy_eval_epoch"))
+            eviction_epoch = _to_float(item.get("first_eviction_epoch"))
+            if (
+                promotion_epoch is not None
+                and heavy_epoch is not None
+                and heavy_epoch >= promotion_epoch
+            ):
+                heavy_lags.append(heavy_epoch - promotion_epoch)
+            if (
+                promotion_epoch is not None
+                and eviction_epoch is not None
+                and eviction_epoch >= promotion_epoch
+            ):
+                eviction_lags.append(eviction_epoch - promotion_epoch)
+        heavy_count = sum(
+            "scalping_scanner_heavy_eval_completion" in (item.get("stages") or {})
+            for item in selected
+        )
+        stale_count = sum(
+            bool(item.get("decision_stage_stale_backoff")) for item in selected
+        )
+        eligible_count = sum(
+            bool(item.get("eligible_for_heavy_entry_eval")) for item in selected
+        )
+        rows.append(
+            {
+                "watching_count_bucket": label,
+                "promotion_count": len(selected),
+                "eligible_for_heavy_count": eligible_count,
+                "heavy_eval_reached_count": heavy_count,
+                "decision_stage_stale_backoff_count": stale_count,
+                "eligible_for_heavy_rate_pct": _rate_pct(eligible_count, len(selected)),
+                "heavy_eval_reach_rate_pct": _rate_pct(heavy_count, len(selected)),
+                "decision_stage_stale_backoff_rate_pct": _rate_pct(
+                    stale_count, len(selected)
+                ),
+                "promotion_to_heavy_p50_sec": (
+                    round(_nearest_rank_percentile(heavy_lags, 0.50), 6)
+                    if heavy_lags
+                    else None
+                ),
+                "promotion_to_heavy_p90_sec": (
+                    round(_nearest_rank_percentile(heavy_lags, 0.90), 6)
+                    if heavy_lags
+                    else None
+                ),
+                "promotion_to_eviction_p50_sec": (
+                    round(_nearest_rank_percentile(eviction_lags, 0.50), 6)
+                    if eviction_lags
+                    else None
+                ),
+                "observational_only_not_causal_cap_replay": True,
+            }
+        )
+    return rows
+
+
+def _scanner_hotset_capacity_counterfactual(
+    lineages: Iterable[Mapping[str, Any]],
+    *,
+    target_date: str,
+    symbol_master: VerifiedSymbolMaster | None,
+    symbol_master_binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    lineage_list = list(lineages)
+    trade_date = date.fromisoformat(target_date)
+    try:
+        cost_contract = comparison_cost_contract(target_date)
+        round_trip_cost_pct = float(cost_contract["round_trip_cost_pct"])
+        cost_contract_status = "verified"
+    except ValueError as exc:
+        cost_contract = {
+            "status": "blocked",
+            "trade_date": target_date,
+            "error": str(exc),
+        }
+        round_trip_cost_pct = None
+        cost_contract_status = "blocked"
+
+    rows: list[dict[str, Any]] = []
+    rank_missing_count = 0
+    source_gap_counts: Counter = Counter()
+    symbol_master_status_counts: Counter = Counter()
+    for lineage in lineage_list:
+        queue_rank = _positive_integer_metadata(
+            lineage.get("first_fast_precheck_queue_rank")
+        )
+        if queue_rank is None:
+            rank_missing_count += 1
+            continue
+        code = str(lineage.get("code") or "").strip()[:6]
+        venue = str(lineage.get("venue") or "UNKNOWN").upper()
+        session = str(lineage.get("market_session_bucket") or "UNKNOWN").upper()
+        lookup = (
+            symbol_master.lookup(code, as_of=trade_date)
+            if symbol_master is not None and code
+            else None
+        )
+        symbol_master_status = (
+            lookup.status.value if lookup is not None else "master_unavailable"
+        )
+        symbol_master_status_counts[symbol_master_status] += 1
+        symbol_master_block_reason = None
+        if symbol_master_binding.get("status") != "verified":
+            symbol_master_block_reason = (
+                "official_symbol_master_binding_missing_or_invalid"
+            )
+        elif lookup is None or not lookup.economic_metadata_allowed:
+            symbol_master_block_reason = (
+                f"official_symbol_master_{symbol_master_status}"
+            )
+
+        observations, observation_filter_reasons = _scanner_hotset_bbo_observations(
+            lineage,
+            venue=venue,
+            session=session,
+            trade_date=trade_date,
+        )
+        bbo_block_reason = None
+        if venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
+            bbo_block_reason = "authoritative_venue_missing"
+        elif session in {"", "UNKNOWN"}:
+            bbo_block_reason = "authoritative_session_missing"
+        elif lineage.get("metadata_conflicts"):
+            bbo_block_reason = "immutable_lineage_metadata_conflict"
+        elif not observations:
+            bbo_block_reason = (
+                observation_filter_reasons.most_common(1)[0][0]
+                if observation_filter_reasons
+                else "fresh_executable_bbo_missing"
+            )
+        if bbo_block_reason:
+            source_gap_counts[bbo_block_reason] += 1
+        if symbol_master_block_reason:
+            source_gap_counts[symbol_master_block_reason] += 1
+        rows.append(
+            {
+                "promotion_id": str(lineage.get("promotion_id") or ""),
+                "stock_code": code,
+                "venue": venue,
+                "market_session_bucket": session,
+                "first_queue_rank": queue_rank,
+                "first_watching_count": _positive_integer_metadata(
+                    lineage.get("first_fast_precheck_watching_count")
+                ),
+                "promotion_reason": str(lineage.get("promotion_reason") or ""),
+                "source_signature": str(lineage.get("source_signature") or ""),
+                "symbol_master_status": symbol_master_status,
+                "symbol_master_block_reason": symbol_master_block_reason,
+                "bbo_join_status": "joined" if bbo_block_reason is None else "blocked",
+                "bbo_join_block_reason": bbo_block_reason,
+                "observations": observations,
+            }
+        )
+
+    scenarios: list[dict[str, Any]] = []
+    group_keys = sorted(
+        {
+            (row["venue"], row["market_session_bucket"])
+            for row in rows
+            if row["symbol_master_block_reason"] is None
+        }
+    )
+    for venue, session in group_keys:
+        group_rows = [
+            row
+            for row in rows
+            if row["venue"] == venue and row["market_session_bucket"] == session
+        ]
+        for capacity in SCANNER_HOTSET_CAPACITY_VALUES:
+            selected_rows = [
+                row for row in group_rows if row["first_queue_rank"] <= capacity
+            ]
+            eligible_rows = [
+                row
+                for row in selected_rows
+                if row["symbol_master_block_reason"] is None
+            ]
+            joined_rows = [
+                row for row in eligible_rows if row["bbo_join_status"] == "joined"
+            ]
+            join_coverage_pct = _rate_pct(len(joined_rows), len(eligible_rows))
+            source_quality_ready = bool(
+                eligible_rows
+                and cost_contract_status == "verified"
+                and symbol_master_binding.get("status") == "verified"
+                and join_coverage_pct >= SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT
+            )
+            for gross_target_pct in SCANNER_HOTSET_GROSS_TARGET_VALUES:
+                for adverse_stop_pct in SCANNER_HOTSET_ADVERSE_STOP_VALUES:
+                    outcomes = [
+                        _scanner_hotset_sampled_first_hit(
+                            row["observations"],
+                            gross_target_pct=gross_target_pct,
+                            adverse_stop_pct=adverse_stop_pct,
+                            round_trip_cost_pct=round_trip_cost_pct,
+                        )
+                        for row in joined_rows
+                    ]
+                    path_resolved = [
+                        item
+                        for item in outcomes
+                        if item["gross_return_pct"] is not None
+                    ]
+                    cost_adjusted_resolved = [
+                        item
+                        for item in outcomes
+                        if item["cost_adjusted_return_pct"] is not None
+                    ]
+                    first_hit_counts = Counter(item["label"] for item in outcomes)
+                    target_returns = [
+                        float(item["cost_adjusted_return_pct"])
+                        for item in cost_adjusted_resolved
+                        if item["label"] == "sampled_gross_target_first"
+                    ]
+                    adverse_returns = [
+                        float(item["cost_adjusted_return_pct"])
+                        for item in cost_adjusted_resolved
+                        if item["label"] == "sampled_adverse_stop_first"
+                    ]
+                    resolved_returns = [
+                        float(item["cost_adjusted_return_pct"])
+                        for item in cost_adjusted_resolved
+                    ]
+                    right_censored_count = int(
+                        first_hit_counts.get(
+                            "sampled_path_right_censored_no_timeout_bbo", 0
+                        )
+                    )
+                    right_censored_rate_pct = _rate_pct(
+                        right_censored_count, len(outcomes)
+                    )
+                    ev_pct = (
+                        sum(resolved_returns) / len(resolved_returns)
+                        if source_quality_ready and resolved_returns
+                        else None
+                    )
+                    daily_diagnostic_comparison_ready = bool(
+                        source_quality_ready
+                        and len(cost_adjusted_resolved)
+                        >= SCANNER_HOTSET_COMPARISON_RESOLVED_FLOOR
+                        and right_censored_rate_pct
+                        <= SCANNER_HOTSET_COMPARISON_RIGHT_CENSORED_MAX_PCT
+                    )
+                    status = (
+                        "source_only_economics_available"
+                        if ev_pct is not None
+                        else (
+                            "evidence_accumulating_no_resolved_executable_outcome"
+                            if source_quality_ready
+                            else "source_quality_blocked"
+                        )
+                    )
+                    scenarios.append(
+                        {
+                            "venue": venue,
+                            "market_session_bucket": session,
+                            "capacity_proxy": capacity,
+                            "gross_target_pct": gross_target_pct,
+                            "adverse_stop_pct": adverse_stop_pct,
+                            "status": status,
+                            "selected_candidate_count": len(selected_rows),
+                            "eligible_verified_common_stock_candidate_count": len(
+                                eligible_rows
+                            ),
+                            "exact_bbo_joined_count": len(joined_rows),
+                            "exact_bbo_join_coverage_pct": join_coverage_pct,
+                            "resolved_outcome_count": len(path_resolved),
+                            "cost_adjusted_resolved_outcome_count": len(
+                                cost_adjusted_resolved
+                            ),
+                            "right_censored_count": right_censored_count,
+                            "right_censored_rate_pct": right_censored_rate_pct,
+                            "first_hit_counts": dict(sorted(first_hit_counts.items())),
+                            "target_first_rate_pct_of_resolved": _rate_pct(
+                                int(
+                                    first_hit_counts.get(
+                                        "sampled_gross_target_first", 0
+                                    )
+                                ),
+                                len(path_resolved),
+                            ),
+                            "source_quality_adjusted_ev_pct": (
+                                round(ev_pct, 8) if ev_pct is not None else None
+                            ),
+                            "avg_target_first_net_return_pct": (
+                                round(sum(target_returns) / len(target_returns), 8)
+                                if target_returns
+                                else None
+                            ),
+                            "avg_adverse_first_net_return_pct": (
+                                round(sum(adverse_returns) / len(adverse_returns), 8)
+                                if adverse_returns
+                                else None
+                            ),
+                            "worst_resolved_net_return_pct": (
+                                round(min(resolved_returns), 8)
+                                if resolved_returns
+                                else None
+                            ),
+                            "source_quality_ready": source_quality_ready,
+                            "daily_diagnostic_comparison_ready": (
+                                daily_diagnostic_comparison_ready
+                            ),
+                            "daily_diagnostic_comparison_block_reasons": [
+                                reason
+                                for reason, blocked in (
+                                    (
+                                        "source_quality_not_ready",
+                                        not source_quality_ready,
+                                    ),
+                                    (
+                                        "resolved_outcome_floor_not_met",
+                                        len(cost_adjusted_resolved)
+                                        < SCANNER_HOTSET_COMPARISON_RESOLVED_FLOOR,
+                                    ),
+                                    (
+                                        "right_censored_rate_above_max",
+                                        right_censored_rate_pct
+                                        > SCANNER_HOTSET_COMPARISON_RIGHT_CENSORED_MAX_PCT,
+                                    ),
+                                )
+                                if blocked
+                            ],
+                            "round_trip_cost_pct": round_trip_cost_pct,
+                            "ev_population_contract": (
+                                "resolved_sampled_first_hit_or_timeout_only_"
+                                "right_censored_excluded_not_zero_filled"
+                            ),
+                            "decision_authority": (
+                                "scanner_hotset_rank_capacity_proxy_source_only"
+                            ),
+                            "runtime_effect": False,
+                            "allowed_runtime_apply": False,
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                        }
+                    )
+
+    best_by_group: list[dict[str, Any]] = []
+    for venue, session in group_keys:
+        available = [
+            row
+            for row in scenarios
+            if row["venue"] == venue
+            and row["market_session_bucket"] == session
+            and row["source_quality_adjusted_ev_pct"] is not None
+        ]
+        comparison_ready = [
+            row for row in available if row["daily_diagnostic_comparison_ready"]
+        ]
+        best = max(
+            comparison_ready,
+            key=lambda item: float(item["source_quality_adjusted_ev_pct"]),
+            default=None,
+        )
+        highest_daily_diagnostic = max(
+            available,
+            key=lambda item: float(item["source_quality_adjusted_ev_pct"]),
+            default=None,
+        )
+        best_by_group.append(
+            {
+                "venue": venue,
+                "market_session_bucket": session,
+                "decision": (
+                    "positive_daily_proxy_requires_multi_date_holdout_and_fill_review"
+                    if best is not None
+                    and float(best["source_quality_adjusted_ev_pct"]) > 0
+                    else (
+                        "no_positive_cost_adjusted_capacity_proxy"
+                        if best is not None
+                        else (
+                            "capacity_comparison_floor_not_met"
+                            if highest_daily_diagnostic is not None
+                            else "source_quality_or_resolved_sample_blocked"
+                        )
+                    )
+                ),
+                "best_floor_eligible_daily_diagnostic_scenario_no_selection_authority": best,
+                "highest_daily_diagnostic_scenario_no_selection_authority": (
+                    highest_daily_diagnostic
+                ),
+            }
+        )
+
+    available_scenario_count = sum(
+        row["source_quality_adjusted_ev_pct"] is not None for row in scenarios
+    )
+    return {
+        "metric_contract": SCANNER_HOTSET_CAPACITY_PROXY_METRIC_CONTRACT,
+        "status": (
+            "source_only_capacity_proxy_available"
+            if available_scenario_count
+            else (
+                "not_applicable_no_ranked_fast_precheck_lineage"
+                if not rows
+                else "source_quality_blocked"
+            )
+        ),
+        "counterfactual_type": (
+            "first_observed_queue_rank_capacity_proxy_not_runtime_scheduler_replay"
+        ),
+        "ranked_lineage_count": len(rows),
+        "rank_missing_lineage_count": rank_missing_count,
+        "official_symbol_master_lookup_counts": dict(
+            sorted(symbol_master_status_counts.items())
+        ),
+        "source_gap_counts": dict(sorted(source_gap_counts.items())),
+        "capacity_values": list(SCANNER_HOTSET_CAPACITY_VALUES),
+        "gross_target_values": list(SCANNER_HOTSET_GROSS_TARGET_VALUES),
+        "adverse_stop_values": list(SCANNER_HOTSET_ADVERSE_STOP_VALUES),
+        "capacity_comparison_resolved_floor": (
+            SCANNER_HOTSET_COMPARISON_RESOLVED_FLOOR
+        ),
+        "capacity_comparison_right_censored_max_pct": (
+            SCANNER_HOTSET_COMPARISON_RIGHT_CENSORED_MAX_PCT
+        ),
+        "scenario_count": len(scenarios),
+        "available_scenario_count": available_scenario_count,
+        "best_daily_scenario_by_venue_session": best_by_group,
+        "watch_pressure_observational_summary": _scanner_watch_pressure_summary(
+            lineage_list
+        ),
+        "scenarios": scenarios,
+        "comparison_cost_contract_status": cost_contract_status,
+        "comparison_cost_contract": cost_contract,
+        "official_symbol_master_binding": dict(symbol_master_binding),
+        "limitations": [
+            "capacity_proxy_filters_actual_first_queue_rank_and_does_not_rerun_admission_or_eviction",
+            "sampled_scanner_stage_bbo_event_order_is_not_a_continuous_market_path",
+            "right_censored_rows_are_not_normalized_to_zero_profit",
+            "passive_bid_or_bid_plus_one_fill_feasibility_is_not_claimed",
+            "daily_results_cannot_select_a_live_watch_cap_or_single_lead_entry",
+            "cross_venue_session_ev_aggregation_is_forbidden",
+        ],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
 
 
 def _scanner_bbo_economic_attribution(
@@ -1166,22 +1958,12 @@ def _scanner_bbo_economic_attribution(
         row for row in joined_rows if row.get("cost_adjusted_return_pct") is not None
     ]
     join_coverage_pct = _rate_pct(len(joined_rows), len(eligible_rows))
-    venue_session_economics: list[dict[str, Any]] = []
-    venue_session_keys = sorted(
-        {
-            (
-                str(row.get("venue") or "UNKNOWN"),
-                str(row.get("market_session_bucket") or "UNKNOWN"),
-            )
-            for row in rows
-        }
-    )
-    for venue, session in venue_session_keys:
-        group_rows = [
-            row
-            for row in rows
-            if row.get("venue") == venue and row.get("market_session_bucket") == session
-        ]
+
+    def _economic_group_summary(
+        group_rows: list[dict[str, Any]],
+        *,
+        dimensions: Mapping[str, str],
+    ) -> dict[str, Any]:
         group_eligible_rows = [
             row for row in group_rows if row.get("symbol_master_block_reason") is None
         ]
@@ -1226,31 +2008,54 @@ def _scanner_bbo_economic_attribution(
             if group_source_quality_ready and group_resolved_rows
             else None
         )
+        return {
+            **dimensions,
+            "status": group_status,
+            "source_census_count": len(group_rows),
+            "eligible_verified_common_stock_candidate_count": len(group_eligible_rows),
+            "official_symbol_master_excluded_count": len(group_rows)
+            - len(group_eligible_rows),
+            "exact_bbo_joined_count": len(group_joined_rows),
+            "exact_bbo_join_coverage_pct": group_coverage_pct,
+            "resolved_outcome_count": len(group_resolved_rows),
+            "right_censored_or_blocked_count": len(group_eligible_rows)
+            - len(group_resolved_rows),
+            "first_hit_counts": dict(
+                sorted(
+                    Counter(
+                        str(row.get("first_hit_label") or "unknown")
+                        for row in group_rows
+                    ).items()
+                )
+            ),
+            "source_quality_adjusted_ev_pct": group_ev_pct,
+            "source_quality_ready": group_source_quality_ready,
+        }
+
+    venue_session_economics: list[dict[str, Any]] = []
+    venue_session_keys = sorted(
+        {
+            (
+                str(row.get("venue") or "UNKNOWN"),
+                str(row.get("market_session_bucket") or "UNKNOWN"),
+            )
+            for row in rows
+        }
+    )
+    for venue, session in venue_session_keys:
+        group_rows = [
+            row
+            for row in rows
+            if row.get("venue") == venue and row.get("market_session_bucket") == session
+        ]
         venue_session_economics.append(
-            {
-                "venue": venue,
-                "market_session_bucket": session,
-                "status": group_status,
-                "source_census_count": len(group_rows),
-                "eligible_verified_common_stock_candidate_count": len(
-                    group_eligible_rows
-                ),
-                "official_symbol_master_excluded_count": len(group_rows)
-                - len(group_eligible_rows),
-                "exact_bbo_joined_count": len(group_joined_rows),
-                "exact_bbo_join_coverage_pct": group_coverage_pct,
-                "resolved_outcome_count": len(group_resolved_rows),
-                "first_hit_counts": dict(
-                    sorted(
-                        Counter(
-                            str(row.get("first_hit_label") or "unknown")
-                            for row in group_rows
-                        ).items()
-                    )
-                ),
-                "source_quality_adjusted_ev_pct": group_ev_pct,
-                "source_quality_ready": group_source_quality_ready,
-            }
+            _economic_group_summary(
+                group_rows,
+                dimensions={
+                    "venue": venue,
+                    "market_session_bucket": session,
+                },
+            )
         )
     eligible_venue_session_economics = [
         group
@@ -1308,6 +2113,7 @@ def _scanner_bbo_economic_attribution(
         for row in rows
     )
     cohort_source_quality: list[dict[str, Any]] = []
+    cohort_venue_session_economics: list[dict[str, Any]] = []
     cohort_keys = sorted(
         {
             (
@@ -1346,6 +2152,16 @@ def _scanner_bbo_economic_attribution(
         )
         cohort_coverage_pct = _rate_pct(
             len(cohort_joined_rows), len(cohort_eligible_rows)
+        )
+        cohort_venue_session_economics.append(
+            _economic_group_summary(
+                cohort_rows,
+                dimensions={
+                    "cohort": cohort,
+                    "venue": venue,
+                    "market_session_bucket": session,
+                },
+            )
         )
         source_capture_gap = bool(
             symbol_master_binding.get("status") == "verified"
@@ -1436,6 +2252,7 @@ def _scanner_bbo_economic_attribution(
             for (cohort, venue, session), count in sorted(group_counts.items())
         ],
         "cohort_source_quality": cohort_source_quality,
+        "cohort_venue_session_economics": cohort_venue_session_economics,
         "source_capture_design_required": source_capture_design_required,
         "source_capture_repair_required": source_capture_repair_required,
         "first_hit_observation_contract": (
@@ -1462,6 +2279,12 @@ def _scanner_unique_funnel_summary(
     bbo_attribution = _scanner_bbo_economic_attribution(
         lineages,
         prunes,
+        target_date=target_date,
+        symbol_master=symbol_master,
+        symbol_master_binding=symbol_master_binding,
+    )
+    hotset_capacity_counterfactual = _scanner_hotset_capacity_counterfactual(
+        lineages,
         target_date=target_date,
         symbol_master=symbol_master,
         symbol_master_binding=symbol_master_binding,
@@ -1769,6 +2592,7 @@ def _scanner_unique_funnel_summary(
             "executable_bbo_ev_status": bbo_attribution["status"],
             "executable_bbo_attribution": bbo_attribution,
         },
+        "hotset_capacity_counterfactual": hotset_capacity_counterfactual,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
@@ -2295,6 +3119,9 @@ def _scanner_economic_cohorts_evidence(
             "official_symbol_master_lookup_counts"
         ),
         "cohort_source_quality": attribution.get("cohort_source_quality"),
+        "cohort_venue_session_economics": attribution.get(
+            "cohort_venue_session_economics"
+        ),
         "source_capture_design_required": bool(
             attribution.get("source_capture_design_required")
         ),

@@ -3406,7 +3406,7 @@ def _scanner_watch_eviction_decision_from_no_trade(target, ws_data, *, now_ts):
         received_types = sorted(str(item) for item in received if str(item).strip())
     except Exception:
         received_types = []
-    attach_epoch = _safe_float((target or {}).get("scanner_attach_epoch"), 0.0)
+    attach_epoch, attach_anchor_source = _scanner_entry_realtime_attach_anchor(target)
     last_0b_epoch = _scanner_latency_ws_type_epoch(ws_data, "0B")
     last_history_epoch = _scanner_latest_strength_history_epoch(ws_data)
     post_attach_trade_evidence = bool(
@@ -3423,7 +3423,11 @@ def _scanner_watch_eviction_decision_from_no_trade(target, ws_data, *, now_ts):
             "eviction_reason": "scanner_no_trade_waiting_realtime_type",
             "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
         }
-    if post_attach_trade_evidence or (attach_epoch <= 0 and "0B" in received_types):
+    if post_attach_trade_evidence or (
+        attach_epoch <= 0
+        and attach_anchor_source == "missing"
+        and "0B" in received_types
+    ):
         target.pop("_scanner_watch_no_trade_count", None)
         target.pop("_scanner_watch_no_trade_first_observed_epoch", None)
         target.pop("_scanner_watch_no_trade_last_observed_epoch", None)
@@ -3446,7 +3450,7 @@ def _scanner_watch_eviction_decision_from_no_trade(target, ws_data, *, now_ts):
             "no_trade_grace_sec": round(grace_sec, 3),
             "no_trade_watch_anchor_epoch": f"{watch_anchor_epoch:.3f}",
             "no_trade_watch_anchor_source": (
-                "scanner_attach_epoch"
+                attach_anchor_source
                 if attach_epoch > 0 and not post_attach_trade_evidence
                 else "scanner_evaluation_lifetime"
             ),
@@ -4348,9 +4352,8 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
             .split(",")
             if item.strip()
         }
-        attach_epoch = _safe_float(
-            (target or {}).get("scanner_attach_epoch"),
-            0.0,
+        attach_epoch, attach_anchor_source = _scanner_entry_realtime_attach_anchor(
+            target
         )
         post_attach_received_types = {
             realtime_type
@@ -4467,8 +4470,9 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
             "initial_entry_ws_receipt_attach_epoch": (
                 f"{attach_epoch:.3f}"
                 if attach_epoch > 0
-                else "not_available_scanner_attach_epoch"
+                else "not_available_entry_realtime_attach_anchor_epoch"
             ),
+            "initial_entry_ws_receipt_attach_anchor_source": attach_anchor_source,
             "initial_entry_ws_receipt_lifetime_contract_sec": (
                 round(max_sec, 3)
                 if initial_entry_ws_receipt_pending
@@ -5399,6 +5403,9 @@ def _reset_scanner_runtime_eval_state(target):
         "scanner_first_entry_realtime_epoch",
         "scanner_first_entry_realtime_type",
         "scanner_first_entry_realtime_latency_ms",
+        "scanner_entry_realtime_attach_anchor_epoch",
+        "scanner_entry_realtime_attach_anchor_source",
+        "scanner_entry_realtime_attach_anchor_promotion_id",
         "scanner_evaluation_anchor_epoch",
         "scanner_evaluation_anchor_source",
         "scanner_warm_first_fresh_price",
@@ -6612,17 +6619,120 @@ def _scanner_latest_strength_history_epoch(ws_data):
     return 0.0
 
 
+def _scanner_entry_realtime_attach_anchor(target):
+    """Resolve an observation anchor without claiming a websocket REG receipt."""
+
+    target = target if isinstance(target, dict) else {}
+    attach_epoch = _safe_float(target.get("scanner_attach_epoch"), 0.0)
+    handoff_epoch = _safe_float(target.get("scanner_runtime_handoff_epoch"), 0.0)
+    promotion_id = str(target.get("scanner_promotion_id") or "").strip()
+    handoff_promotion_id = str(
+        target.get("scanner_runtime_handoff_promotion_id") or ""
+    ).strip()
+    runtime_instance_id = str(target.get("scanner_runtime_instance_id") or "").strip()
+    provenance_version = str(
+        target.get("scanner_attach_provenance_version") or ""
+    ).strip()
+    handoff_contract_present = bool(
+        handoff_epoch
+        or handoff_promotion_id
+        or runtime_instance_id
+        or provenance_version
+    )
+    if (
+        handoff_epoch > 0
+        and promotion_id
+        and promotion_id == handoff_promotion_id
+        and runtime_instance_id == _SCANNER_RUNTIME_INSTANCE_ID
+        and provenance_version == _SCANNER_ATTACH_PROVENANCE_VERSION
+    ):
+        code = str(target.get("code") or "").strip()[:6]
+        generation_id = str(target.get("scanner_generation_id") or "").strip()
+        generation_matches = bool(
+            code and generation_id.startswith(f"{code}:{promotion_id}:r")
+        )
+        if generation_matches and attach_epoch >= handoff_epoch:
+            return attach_epoch, "legacy_scanner_attach_epoch"
+        return handoff_epoch, "runtime_handoff_pre_ws_reg_lower_bound"
+    if handoff_contract_present:
+        return 0.0, "runtime_handoff_generation_mismatch_or_invalid"
+    if attach_epoch > 0:
+        return attach_epoch, "legacy_scanner_attach_epoch"
+    return 0.0, "missing"
+
+
 def _scanner_record_first_entry_realtime(target, ws_data, *, now_ts):
-    """Anchor evaluation lifetime to the first real post-attach trade input."""
+    """Anchor evaluation lifetime to the first real post-handoff trade input."""
 
     if not isinstance(target, dict):
         return {}
-    attach_epoch = _safe_float(target.get("scanner_attach_epoch"), 0.0)
+    attach_epoch, attach_anchor_source = _scanner_entry_realtime_attach_anchor(target)
     if attach_epoch <= 0:
+        for key in (
+            "scanner_first_entry_realtime_epoch",
+            "scanner_first_entry_realtime_type",
+            "scanner_first_entry_realtime_latency_ms",
+            "scanner_entry_realtime_attach_anchor_epoch",
+            "scanner_entry_realtime_attach_anchor_source",
+            "scanner_entry_realtime_attach_anchor_promotion_id",
+            "scanner_evaluation_anchor_epoch",
+            "scanner_evaluation_anchor_source",
+        ):
+            target.pop(key, None)
         return {
             "scanner_entry_realtime_state": "attach_epoch_missing",
+            "scanner_entry_realtime_attach_anchor_source": attach_anchor_source,
             "scanner_evaluation_anchor_source": "promotion_time_fallback",
         }
+    retained_first_epoch = _safe_float(
+        target.get("scanner_first_entry_realtime_epoch"), 0.0
+    )
+    retained_first_valid = False
+    if retained_first_epoch > 0:
+        retained_attach_epoch = _safe_float(
+            target.get("scanner_entry_realtime_attach_anchor_epoch"),
+            0.0,
+        )
+        retained_attach_source = str(
+            target.get("scanner_entry_realtime_attach_anchor_source") or ""
+        ).strip()
+        retained_attach_promotion_id = str(
+            target.get("scanner_entry_realtime_attach_anchor_promotion_id") or ""
+        ).strip()
+        current_promotion_id = str(target.get("scanner_promotion_id") or "").strip()
+        retained_lineage_matches = bool(
+            (
+                current_promotion_id
+                and retained_attach_promotion_id == current_promotion_id
+            )
+            or (not current_promotion_id and not retained_attach_promotion_id)
+        )
+        if (
+            retained_attach_epoch > 0
+            and retained_attach_source
+            in {
+                "legacy_scanner_attach_epoch",
+                "runtime_handoff_pre_ws_reg_lower_bound",
+            }
+            and retained_lineage_matches
+        ):
+            attach_epoch = retained_attach_epoch
+            attach_anchor_source = retained_attach_source
+            retained_first_valid = retained_first_epoch >= retained_attach_epoch
+    if retained_first_epoch > 0 and not retained_first_valid:
+        for key in (
+            "scanner_first_entry_realtime_epoch",
+            "scanner_first_entry_realtime_type",
+            "scanner_first_entry_realtime_latency_ms",
+            "scanner_evaluation_anchor_epoch",
+            "scanner_evaluation_anchor_source",
+        ):
+            target.pop(key, None)
+    target["scanner_entry_realtime_attach_anchor_epoch"] = attach_epoch
+    target["scanner_entry_realtime_attach_anchor_source"] = attach_anchor_source
+    target["scanner_entry_realtime_attach_anchor_promotion_id"] = str(
+        target.get("scanner_promotion_id") or ""
+    ).strip()
     candidates = []
     last_0b_epoch = _scanner_latency_ws_type_epoch(ws_data, "0B")
     if last_0b_epoch >= attach_epoch:
@@ -6630,8 +6740,12 @@ def _scanner_record_first_entry_realtime(target, ws_data, *, now_ts):
     last_history_epoch = _scanner_latest_strength_history_epoch(ws_data)
     if last_history_epoch >= attach_epoch:
         candidates.append(("strength_history", last_history_epoch))
-    first_epoch = _safe_float(target.get("scanner_first_entry_realtime_epoch"), 0.0)
-    first_type = str(target.get("scanner_first_entry_realtime_type") or "")
+    first_epoch = retained_first_epoch if retained_first_valid else 0.0
+    first_type = (
+        str(target.get("scanner_first_entry_realtime_type") or "")
+        if retained_first_valid
+        else ""
+    )
     if candidates and first_epoch <= 0:
         first_type, first_epoch = min(candidates, key=lambda item: item[1])
         target["scanner_first_entry_realtime_epoch"] = first_epoch
@@ -6641,7 +6755,11 @@ def _scanner_record_first_entry_realtime(target, ws_data, *, now_ts):
             3,
         )
         target["scanner_evaluation_anchor_epoch"] = first_epoch
-        target["scanner_evaluation_anchor_source"] = "first_post_attach_entry_realtime"
+        target["scanner_evaluation_anchor_source"] = (
+            "first_post_attach_entry_realtime"
+            if attach_anchor_source == "legacy_scanner_attach_epoch"
+            else "first_post_runtime_handoff_entry_realtime"
+        )
     if first_epoch > 0:
         return {
             "scanner_entry_realtime_state": "received",
@@ -6650,8 +6768,15 @@ def _scanner_record_first_entry_realtime(target, ws_data, *, now_ts):
             "scanner_first_entry_realtime_latency_ms": target.get(
                 "scanner_first_entry_realtime_latency_ms"
             ),
+            "scanner_entry_realtime_attach_anchor_epoch": f"{attach_epoch:.6f}",
+            "scanner_entry_realtime_attach_anchor_source": attach_anchor_source,
+            "scanner_entry_realtime_attach_anchor_promotion_id": target.get(
+                "scanner_entry_realtime_attach_anchor_promotion_id"
+            ),
             "scanner_evaluation_anchor_epoch": f"{first_epoch:.6f}",
-            "scanner_evaluation_anchor_source": "first_post_attach_entry_realtime",
+            "scanner_evaluation_anchor_source": target.get(
+                "scanner_evaluation_anchor_source"
+            ),
         }
     grace_sec = max(
         _scanner_no_trade_eviction_grace_sec(),
@@ -6659,7 +6784,11 @@ def _scanner_record_first_entry_realtime(target, ws_data, *, now_ts):
     )
     return {
         "scanner_entry_realtime_state": "awaiting_first_post_attach_trade_input",
-        "scanner_attach_epoch": f"{attach_epoch:.6f}",
+        "scanner_entry_realtime_attach_anchor_epoch": f"{attach_epoch:.6f}",
+        "scanner_entry_realtime_attach_anchor_source": attach_anchor_source,
+        "scanner_entry_realtime_attach_anchor_promotion_id": target.get(
+            "scanner_entry_realtime_attach_anchor_promotion_id"
+        ),
         "scanner_entry_realtime_grace_deadline_epoch": f"{attach_epoch + grace_sec:.6f}",
         "scanner_entry_realtime_grace_remaining_sec": round(
             max(0.0, attach_epoch + grace_sec - float(now_ts)),
@@ -6734,6 +6863,18 @@ def _scanner_promotion_latency_trace_fields(
         "promotion_anchor_epoch": f"{float(anchor_epoch):.3f}",
         "scanner_attach_epoch": target.get("scanner_attach_epoch")
         or "not_available_scanner_attach_epoch",
+        "scanner_entry_realtime_attach_anchor_epoch": target.get(
+            "scanner_entry_realtime_attach_anchor_epoch"
+        )
+        or "not_available_entry_realtime_attach_anchor_epoch",
+        "scanner_entry_realtime_attach_anchor_source": target.get(
+            "scanner_entry_realtime_attach_anchor_source"
+        )
+        or "not_available_entry_realtime_attach_anchor_source",
+        "scanner_entry_realtime_attach_anchor_promotion_id": target.get(
+            "scanner_entry_realtime_attach_anchor_promotion_id"
+        )
+        or "not_available_entry_realtime_attach_anchor_promotion_id",
         "scanner_first_entry_realtime_epoch": target.get(
             "scanner_first_entry_realtime_epoch"
         )
@@ -8288,6 +8429,14 @@ def _scanner_pipeline_stock_snapshot(stock_value):
             "scanner_runtime_handoff_promotion_id",
             "scanner_runtime_instance_id",
             "scanner_attach_provenance_version",
+            "scanner_first_entry_realtime_epoch",
+            "scanner_first_entry_realtime_type",
+            "scanner_first_entry_realtime_latency_ms",
+            "scanner_entry_realtime_attach_anchor_epoch",
+            "scanner_entry_realtime_attach_anchor_source",
+            "scanner_entry_realtime_attach_anchor_promotion_id",
+            "scanner_evaluation_anchor_epoch",
+            "scanner_evaluation_anchor_source",
             "source_signature",
             # Deferred observation events are emitted from this compact copy.
             # Preserve the attach-time venue contract so queue/heavy-eval
@@ -12589,6 +12738,12 @@ def run_sniper(is_test_mode=False):
                     stock_value
                 ):
                     return False
+                sniper_state_handlers._capture_rising_missed_entry_turn_bbo(
+                    stock_value,
+                    code_value,
+                    ws_snapshot,
+                    now_ts=float(now_value),
+                )
                 throttle = max(0, int(throttle_sec or 0))
                 last_logged = _safe_float(
                     stock_value.get("_scanner_fast_precheck_logged_at"), 0.0

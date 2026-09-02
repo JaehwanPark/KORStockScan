@@ -9,30 +9,30 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-09-02T11:54:02`
-- latest_event_at: `2026-09-02T11:54:09`
+- as_of: `2026-09-02T15:28:02`
+- latest_event_at: `2026-09-02T15:28:19`
 - reasons: `live market panic breadth risk_off advisory; market breadth risk-off watch without panic confirmation`
 
 ## 입력 자원 계약
 
 - memory_bounded_streaming: `true`
-- scanned_row_count: `96697`
-- retained_exit_event_count: `693`
+- scanned_row_count: `209545`
+- retained_exit_event_count: `2752`
 - full_event_list_materialized: `false`
 - out_of_order_event_count: `0`
-- unique_market_observation_count: `35156`
-- duplicate_snapshot_skipped_count: `11317`
+- unique_market_observation_count: `75055`
+- duplicate_snapshot_skipped_count: `20031`
 
 ## 패닉 지표
 
 - panic_decision_basis: `broker_confirmed_exit_identity_deduplicated`
 - real_exit_provenance_required: `true`
-- raw_exit_signal_count: `5`
+- raw_exit_signal_count: `10`
 - real_exit_count: `0`
 - duplicate_real_exit_signal_count: `0`
 - duplicate_real_exit_signals_excluded_from_panic: `true`
-- non_real_exit_count: `5`
-- unproven_exit_count: `5`
+- non_real_exit_count: `10`
+- unproven_exit_count: `10`
 - exit_signal_partition_reconciled: `true`
 - sim_probe_exit_excluded_from_panic: `true`
 - stop_loss_exit_count: `0`
@@ -51,7 +51,7 @@
 
 ## 회복 지표
 
-- active_positions: `4`
+- active_positions: `3`
 - active_profit_sample: `0`
 - active_avg_unrealized_profit_rate_pct: `-`
 - active_win_rate_pct: `-`
@@ -61,19 +61,19 @@
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `2494`
+- evaluated_symbol_count: `2905`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `1642`
-- degraded_orderbook_count: `1642`
+- missing_orderbook_count: `2269`
+- degraded_orderbook_count: `2269`
 - stale_or_unhealthy_orderbook_count: `0`
 - panic_report_entry_count: `0`
 - panic_active_confirmation_count: `0`
 - recovery_release_transition_count: `0`
-- max_observed_panic_score: `0.4658`
+- max_observed_panic_score: `0.5`
 - panic_near_threshold_observation_count: `0`
 - max_panic_score: `0.3`
 - max_recovery_score: `0.6793`
@@ -84,11 +84,11 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-09-02T11:54:01+09:00`
+- market_panic_breadth_as_of: `2026-09-02T15:28:01+09:00`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `true`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
-- evaluated_symbol_count: `2494`
+- evaluated_symbol_count: `2905`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
 - confirmed_risk_off_advisory: `true`
@@ -99,7 +99,7 @@
 ## Market Weakness Observation
 
 - raw_state: `BROAD_WEAKNESS`
-- observation_id: `market-weakness-a81d864e7353dd37a51a`
+- observation_id: `market-weakness-6dea1469fe322ffd9b63`
 - source_quality_ready: `true`
 - release_margin_passed: `false`
 - runtime_effect: `false`

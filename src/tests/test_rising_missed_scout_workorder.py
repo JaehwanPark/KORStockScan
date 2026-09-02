@@ -520,6 +520,59 @@ def test_build_report_ingests_intraday_feedback_order(tmp_path):
     assert "scale_in_guard_bypass" in order["forbidden_uses"]
 
 
+def test_build_report_forwards_distinct_intraday_feedback_workorder(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    post_sell_path = tmp_path / "post_sell.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    intraday_feedback_path = tmp_path / "feedback.json"
+    classifier_prior_path = tmp_path / "missing_prior.json"
+    pipeline_path.write_text("", encoding="utf-8")
+    post_sell_path.write_text("", encoding="utf-8")
+    diagnostic_path.write_text(json.dumps({"rising_missed_buy": []}), encoding="utf-8")
+    intraday_feedback_path.write_text(
+        json.dumps(
+            {
+                "summary": {},
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_rising_missed_entry_turn_bbo_coverage",
+                        "mapped_family": "rising_missed_entry_turn_point_replay",
+                        "runtime_effect": True,
+                        "allowed_runtime_apply": True,
+                        "actual_order_submitted": True,
+                        "broker_order_forbidden": False,
+                        "implementation_status": "implemented_but_waiting_sample",
+                        "implementation_provenance": {"runtime_effect": True},
+                        "forbidden_uses": ["bot_restart"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-02",
+        pipeline_path=pipeline_path,
+        post_sell_path=post_sell_path,
+        diagnostic_path=diagnostic_path,
+        intraday_feedback_path=intraday_feedback_path,
+        classifier_prior_path=classifier_prior_path,
+        generated_at="fixed",
+    )
+
+    assert report["summary"]["code_improvement_order_count"] == 1
+    order = report["code_improvement_orders"][0]
+    assert order["order_id"] == "order_rising_missed_entry_turn_bbo_coverage"
+    assert order["implementation_status"] == "implemented_but_waiting_sample"
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
+    assert order["actual_order_submitted"] is False
+    assert order["broker_order_forbidden"] is True
+    assert order["implementation_provenance"]["actual_order_submitted"] is False
+    assert "runtime_threshold_mutation" in order["forbidden_uses"]
+
+
 def test_build_report_ingests_classifier_prior_source_only_order(tmp_path):
     pipeline_path = tmp_path / "pipeline.jsonl"
     post_sell_path = tmp_path / "post_sell.jsonl"

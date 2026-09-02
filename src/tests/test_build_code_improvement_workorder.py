@@ -651,8 +651,13 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(
     assert scout_orders[0]["decision"] == "attach_existing_family"
     assert scout_orders[0]["runtime_effect"] is False
     assert scout_orders[0]["allowed_runtime_apply"] is False
+    assert scout_orders[0]["actual_order_submitted"] is False
+    assert scout_orders[0]["broker_order_forbidden"] is True
     assert scout_orders[0]["implementation_status"] == "implemented"
     assert scout_orders[0]["implementation_provenance"]["runtime_effect"] is False
+    assert (
+        scout_orders[0]["implementation_provenance"]["actual_order_submitted"] is False
+    )
     assert "forced_one_share_success_counting" in scout_orders[0]["forbidden_uses"]
     assert "runtime_threshold_mutation" in scout_orders[0]["forbidden_uses"]
     assert "broker_guard_bypass" in scout_orders[0]["forbidden_uses"]

@@ -1,7 +1,7 @@
 """Account/DB sync helpers for the sniper engine."""
 
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from math import isclose
 from pathlib import Path
 import re
@@ -68,6 +68,7 @@ _SCALPING_RUNTIME_ARCHIVE_CUTOFF_DATE = date.fromisoformat(
     SCALPING_RUNTIME_ARCHIVE_CUTOFF_DATE
 )
 _INVENTORY_CUSTODY_REQUIRED_EXCHANGES = frozenset({"KRX", "NXT"})
+_KST = timezone(timedelta(hours=9))
 
 
 def _inventory_custody_snapshot_complete(successful_exchanges) -> bool:
@@ -339,9 +340,7 @@ def _aggregate_inventory_by_code(inventory) -> dict[str, dict]:
             or raw_item.get("pchs_avg_pric")
             or 0
         )
-        price = float(
-            _strict_inventory_nonnegative_int(raw_price, field="buy_price")
-        )
+        price = float(_strict_inventory_nonnegative_int(raw_price, field="buy_price"))
         current = aggregated.setdefault(
             code,
             {
@@ -538,8 +537,11 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
     broker_recovered = bool(getattr(record, "_broker_recovered", False))
     broker_recovered_legacy = bool(getattr(record, "_broker_recovered_legacy", False))
     broker_recovered_at = getattr(record, "_broker_recovered_at", None) or time.time()
-    broker_recovered_execution_verified = bool(
-        getattr(record, "_broker_recovered_execution_verified", False)
+    broker_recovered_order_reference_verified = bool(
+        getattr(record, "_broker_recovered_order_reference_verified", False)
+    )
+    broker_recovered_settlement_context_observed = bool(
+        getattr(record, "_broker_recovered_settlement_context_observed", False)
     )
 
     if target is None:
@@ -565,7 +567,12 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
             "broker_recovered": broker_recovered,
             "broker_recovered_legacy": broker_recovered_legacy,
             "broker_recovered_at": broker_recovered_at,
-            "broker_recovered_execution_verified": broker_recovered_execution_verified,
+            "broker_recovered_order_reference_verified": (
+                broker_recovered_order_reference_verified
+            ),
+            "broker_recovered_settlement_context_observed": (
+                broker_recovered_settlement_context_observed
+            ),
         }
         if order_refs.get("buy_ord_no"):
             target["odno"] = order_refs["buy_ord_no"]
@@ -618,9 +625,14 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
     target["broker_recovered_legacy"] = broker_recovered_legacy or bool(
         target.get("broker_recovered_legacy")
     )
-    target["broker_recovered_execution_verified"] = (
-        broker_recovered_execution_verified
-        or bool(target.get("broker_recovered_execution_verified"))
+    target["broker_recovered_order_reference_verified"] = (
+        broker_recovered_order_reference_verified
+        or bool(target.get("broker_recovered_order_reference_verified"))
+    )
+    target.pop("broker_recovered_execution_verified", None)
+    target["broker_recovered_settlement_context_observed"] = (
+        broker_recovered_settlement_context_observed
+        or bool(target.get("broker_recovered_settlement_context_observed"))
     )
     if broker_recovered:
         target["broker_recovered_at"] = broker_recovered_at
@@ -659,7 +671,7 @@ def _publish_broker_recovered_buy_message(
     qty,
     buy_price,
     order_no,
-    execution_verified,
+    order_reference_verified,
 ):
     if EVENT_BUS is None or target is None:
         return False
@@ -668,7 +680,9 @@ def _publish_broker_recovered_buy_message(
 
     name = str(target.get("name") or target.get("code") or "UNKNOWN")
     order_line = f"\n주문번호: `{order_no}`" if order_no else ""
-    verify_line = "체결/주문조회 확인" if execution_verified else "잔고조회 확인"
+    verify_line = (
+        "잔고+주문번호 조회 확인" if order_reference_verified else "잔고조회 확인"
+    )
     msg = (
         f"🛒 **[{name}]** 매수 체결 확인 (브로커 복구)\n"
         f"평균 체결가: `{float(buy_price):,.0f}원`\n"
@@ -690,15 +704,15 @@ def _publish_broker_recovered_buy_message(
 def _recover_missing_broker_holdings(session, real_codes):
     recovered = 0
     today = datetime.now().date()
-    execution_snapshot = []
+    settlement_context_snapshot = []
     order_ref_snapshot = []
     if KIWOOM_TOKEN:
         try:
-            execution_snapshot = kiwoom_utils.get_account_execution_snapshot_kt00008(
-                KIWOOM_TOKEN
+            settlement_context_snapshot = (
+                kiwoom_utils.get_account_execution_snapshot_kt00008(KIWOOM_TOKEN)
             )
         except Exception:
-            execution_snapshot = []
+            settlement_context_snapshot = []
         use_order_ref_2nd_pass = False
         if isinstance(CONF, dict) and "ENABLE_ORDER_REF_2ND_PASS" in CONF:
             use_order_ref_2nd_pass = bool(CONF.get("ENABLE_ORDER_REF_2ND_PASS"))
@@ -762,10 +776,10 @@ def _recover_missing_broker_holdings(session, real_codes):
         )
         real_buy_uv = _to_int(raw_price)
         stock_name = _inventory_name(real_data) or code
-        execution_match = next(
+        settlement_context_match = next(
             (
                 row
-                for row in execution_snapshot
+                for row in settlement_context_snapshot
                 if row.get("code") == code
                 and row.get("side") == "매수"
                 and _to_int(row.get("qty")) == real_qty
@@ -847,10 +861,10 @@ def _recover_missing_broker_holdings(session, real_codes):
 
         rec_date = getattr(record, "rec_date", None)
         legacy_recovered = bool(rec_date and rec_date < today)
-        if execution_match and execution_match.get("trade_date"):
+        if settlement_context_match and settlement_context_match.get("trade_date"):
             try:
                 exec_trade_date = datetime.strptime(
-                    execution_match["trade_date"], "%Y%m%d"
+                    settlement_context_match["trade_date"], "%Y%m%d"
                 ).date()
                 legacy_recovered = legacy_recovered or exec_trade_date < today
             except Exception:
@@ -858,8 +872,11 @@ def _recover_missing_broker_holdings(session, real_codes):
         record._broker_recovered = True
         record._broker_recovered_legacy = legacy_recovered
         record._broker_recovered_at = time.time()
-        record._broker_recovered_execution_verified = bool(
-            execution_match or order_ref_match
+        # kt00008 is settlement context only.  Do not promote it to exact
+        # execution provenance; only an order-reference match may set this bit.
+        record._broker_recovered_order_reference_verified = bool(order_ref_match)
+        record._broker_recovered_settlement_context_observed = bool(
+            settlement_context_match
         )
         record._broker_recovered_buy_ord_no = str(
             (order_ref_match or {}).get("ord_no", "") or ""
@@ -871,7 +888,8 @@ def _recover_missing_broker_holdings(session, real_codes):
         log_info(
             f"🔄 [BROKER_RECOVER] {stock_name}({code}) -> HOLDING "
             f"(qty={real_qty}, buy_price={real_buy_uv}, strategy={getattr(record, 'strategy', '')}, "
-            f"legacy={legacy_recovered}, exec_verified={bool(execution_match or order_ref_match)}, "
+            f"legacy={legacy_recovered}, exec_verified={bool(order_ref_match)}, "
+            f"settlement_context={bool(settlement_context_match)}, "
             f"order_ref_verified={bool(order_ref_match)})"
         )
         target = _ensure_runtime_target(record, buy_qty=real_qty, buy_price=real_buy_uv)
@@ -881,7 +899,7 @@ def _recover_missing_broker_holdings(session, real_codes):
                 qty=real_qty,
                 buy_price=real_buy_uv,
                 order_no=str((order_ref_match or {}).get("ord_no", "") or "").strip(),
-                execution_verified=bool(execution_match or order_ref_match),
+                order_reference_verified=bool(order_ref_match),
             )
         if HIGHEST_PRICES is not None and real_buy_uv > 0:
             HIGHEST_PRICES.setdefault(code, real_buy_uv)
@@ -949,9 +967,7 @@ def _restore_sell_receipt_recovery(
         if not restored_retry_anchor:
             custody_retry_succeeded = False
             reason = f"{reason}:submit_custody_retry_snapshot_invalid"
-        elif target_stock.get(
-            "exit_receipt_submission_custody_retry_required"
-        ) is True:
+        elif target_stock.get("exit_receipt_submission_custody_retry_required") is True:
             custody_retry_succeeded = bool(
                 _receipt_handlers.retry_pending_sell_execution_receipt_custody(
                     target_stock
@@ -1082,7 +1098,8 @@ def _restore_pending_sell_submit_custody(*, target_stock, record, code: str):
         target_id <= 0
         or position_qty <= 0
         or _to_int(target_stock.get("id")) != target_id
-        or str(target_stock.get("code") or "").strip()[:6] != str(code or "").strip()[:6]
+        or str(target_stock.get("code") or "").strip()[:6]
+        != str(code or "").strip()[:6]
         or runtime_owner_position_qty != position_qty
     ):
         return False, "pending_submit_runtime_identity_mismatch"
@@ -1249,9 +1266,7 @@ def sync_balance_with_db():
             protected_recovery_ids.update(
                 _to_int(record_id)
                 for (record_id,) in session.query(RecommendationHistory.id)
-                .filter(
-                    RecommendationHistory.status.in_(("HOLDING", "SELL_ORDERED"))
-                )
+                .filter(RecommendationHistory.status.in_(("HOLDING", "SELL_ORDERED")))
                 .all()
                 if _to_int(record_id) > 0
             )
@@ -1359,9 +1374,7 @@ def sync_balance_with_db():
                 in {"HOLDING", "SELL_ORDERED"}
             ]
             for record in archive_active_records:
-                record_status = str(
-                    getattr(record, "status", "") or ""
-                ).upper()
+                record_status = str(getattr(record, "status", "") or "").upper()
                 code = str(record.stock_code).strip()[:6]
                 target = next(
                     (
@@ -1428,14 +1441,12 @@ def sync_balance_with_db():
                             f"{record.stock_name}({code}) id={record.id} "
                             f"reason={pending_probe_reason}"
                         )
-                if (
-                    isinstance(pending_fields, dict)
-                    and pending_fields.get("sell_submit_terminal_outcome_kind")
-                    in {
-                        "cancel_ack_terminal_absence_reconciled",
-                        "cancel_intent_terminal_absence_reconciled",
-                    }
-                ):
+                if isinstance(pending_fields, dict) and pending_fields.get(
+                    "sell_submit_terminal_outcome_kind"
+                ) in {
+                    "cancel_ack_terminal_absence_reconciled",
+                    "cancel_intent_terminal_absence_reconciled",
+                }:
                     if target is None:
                         record.scale_in_locked = True
                         continue
@@ -1454,9 +1465,7 @@ def sync_balance_with_db():
                         )
                         or ""
                     ).strip()
-                    empty_receipt_hash = _receipt_handlers._receipt_snapshot_sha256(
-                        {}
-                    )
+                    empty_receipt_hash = _receipt_handlers._receipt_snapshot_sha256({})
                     if expected_receipt_hash != empty_receipt_hash:
                         restored_receipt, receipt_restore_reason = (
                             _restore_sell_receipt_recovery(
@@ -1528,9 +1537,11 @@ def sync_balance_with_db():
                             }
                         )
                     continue
-                if isinstance(pending_fields, dict) and pending_fields.get(
-                    "sell_submit_terminal_outcome_kind"
-                ) == "definitive_reject_no_broker_order":
+                if (
+                    isinstance(pending_fields, dict)
+                    and pending_fields.get("sell_submit_terminal_outcome_kind")
+                    == "definitive_reject_no_broker_order"
+                ):
                     if target is None:
                         record.scale_in_locked = True
                         continue
@@ -2000,33 +2011,92 @@ def _unique_sell_execution_reconciliation(
     code,
     qty,
     trade_date,
+    owner_buy_time,
+    expected_order_no="",
+    observed_at=None,
 ):
-    """Return one exact same-day broker sell row or a fail-closed reason."""
+    """Return one exact kt00007 sell receipt or a fail-closed reason.
+
+    Same-day code/side/quantity alone can borrow a prior position cycle.  The
+    broker row must also prove a terminal fill, official identity/route, and an
+    order timestamp within this owner lifecycle.
+    """
 
     normalized_code = str(code or "").strip()[:6]
     expected_qty = max(0, _to_int(qty))
     expected_date = str(trade_date or "").replace("-", "").strip()
+    normalized_expected_order_no = str(expected_order_no or "").strip()
+    if not isinstance(owner_buy_time, datetime):
+        return None, "owner_buy_time_missing"
+    if owner_buy_time.tzinfo is not None:
+        owner_buy_time = owner_buy_time.astimezone(_KST).replace(tzinfo=None)
+    if isinstance(observed_at, datetime):
+        observed_dt = observed_at
+    elif observed_at not in (None, ""):
+        try:
+            observed_dt = datetime.fromtimestamp(float(observed_at), _KST).replace(
+                tzinfo=None
+            )
+        except (TypeError, ValueError, OSError):
+            return None, "broker_snapshot_at_invalid"
+    else:
+        observed_dt = datetime.now()
+    if observed_dt is not None and observed_dt.tzinfo is not None:
+        observed_dt = observed_dt.astimezone(_KST).replace(tzinfo=None)
+
     matches = []
     for row in rows or []:
+        if str((row or {}).get("source_api") or "").strip() != "kt00007":
+            continue
         row_code = str((row or {}).get("code") or "").strip()[:6]
         row_side = str((row or {}).get("side") or "").strip().upper()
         row_date = str((row or {}).get("trade_date") or "").replace("-", "").strip()
         row_qty = max(0, _to_int((row or {}).get("qty")))
-        row_price = max(0, _to_int((row or {}).get("unit_price")))
+        row_filled_qty = max(0, _to_int((row or {}).get("filled_qty")))
+        row_remaining_qty = max(0, _to_int((row or {}).get("remaining_qty")))
+        row_price = max(0, _to_int((row or {}).get("execution_price")))
+        row_order_no = str((row or {}).get("ord_no") or "").strip()
+        row_order_time = str((row or {}).get("order_time") or "").replace(":", "")
+        try:
+            row_order_dt = datetime.strptime(
+                f"{row_date}{row_order_time[:6]}", "%Y%m%d%H%M%S"
+            )
+        except (TypeError, ValueError):
+            continue
         if (
             row_code == normalized_code
             and row_side in {"매도", "SELL", "S", "1"}
             and row_date == expected_date
             and expected_qty > 0
             and row_qty == expected_qty
+            and row_filled_qty == expected_qty
+            and row_remaining_qty == 0
             and row_price > 0
+            and bool((row or {}).get("trade_date_contract_valid"))
+            and bool((row or {}).get("submitted_quantity_source_valid"))
+            and bool((row or {}).get("quantity_contract_valid"))
+            and bool((row or {}).get("filled_quantity_contract_valid"))
+            and bool((row or {}).get("remaining_quantity_contract_valid"))
+            and bool((row or {}).get("execution_price_contract_valid"))
+            and bool((row or {}).get("order_no_contract_valid"))
+            and bool((row or {}).get("side_contract_valid"))
+            and bool((row or {}).get("route_contract_valid"))
+            and bool((row or {}).get("order_time_contract_valid"))
+            and (
+                not normalized_expected_order_no
+                or row_order_no == normalized_expected_order_no
+            )
+            and row_order_dt >= owner_buy_time
+            and row_order_dt <= observed_dt
         ):
-            matches.append(dict(row))
+            matched = dict(row)
+            matched["owner_execution_order_datetime"] = row_order_dt
+            matches.append(matched)
     if len(matches) == 1:
-        return matches[0], "unique_same_day_code_side_qty_execution"
+        return matches[0], "unique_owner_cycle_kt00007_terminal_sell_execution"
     if not matches:
-        return None, "exact_sell_execution_not_found"
-    return None, "ambiguous_multiple_sell_executions"
+        return None, "exact_owner_cycle_sell_execution_not_found"
+    return None, "ambiguous_multiple_owner_cycle_sell_executions"
 
 
 def _committed_trade_lifecycle_snapshot(record_id):
@@ -2177,10 +2247,8 @@ def _retry_pending_final_sell_receipts_in_process() -> dict[str, int]:
                 if state.get("final_pending_db_commit") is True:
                     recovered = _receipt_handlers.recover_final_sell_receipt(target)
                 else:
-                    recovered = (
-                        _receipt_handlers.recover_pending_sell_lifecycle_outbox(
-                            target
-                        )
+                    recovered = _receipt_handlers.recover_pending_sell_lifecycle_outbox(
+                        target
                     )
             except Exception as exc:
                 recovered = False
@@ -2244,23 +2312,41 @@ def periodic_account_sync():
     unfilled_snapshot_ok = False
     unfilled_rows = []
     open_qty_by_code = {}
-    sell_execution_snapshot = None
+    sell_execution_snapshots = {}
 
-    def _sell_execution_rows():
-        nonlocal sell_execution_snapshot
-        if sell_execution_snapshot is None:
+    def _sell_execution_snapshot(code, trade_date):
+        snapshot_key = (str(code or "").strip()[:6], str(trade_date or "").strip())
+        if snapshot_key not in sell_execution_snapshots:
             try:
-                sell_execution_snapshot = (
-                    kiwoom_utils.get_account_execution_snapshot_kt00008(KIWOOM_TOKEN)
-                    or []
+                rows, source_meta = (
+                    kiwoom_utils.get_order_reference_snapshot_kt00007_with_meta(
+                        KIWOOM_TOKEN,
+                        ord_dt=snapshot_key[1],
+                        qry_tp="4",
+                        stk_bond_tp="1",
+                        sell_tp="1",
+                        stk_cd=snapshot_key[0],
+                        dmst_stex_tp="%",
+                    )
+                )
+                sell_execution_snapshots[snapshot_key] = (
+                    list(rows or []),
+                    dict(source_meta or {}),
                 )
             except Exception as exc:
                 log_error(
-                    "🚨 [정기 동기화] 매도 체결 reconciliation snapshot 조회 실패: "
-                    f"{exc}"
+                    "🚨 [정기 동기화] kt00007 exact sell receipt 조회 실패: "
+                    f"code={snapshot_key[0]} date={snapshot_key[1]} error={exc}"
                 )
-                sell_execution_snapshot = []
-        return sell_execution_snapshot
+                sell_execution_snapshots[snapshot_key] = (
+                    [],
+                    {
+                        "request_succeeded": False,
+                        "normalization_contract_complete": False,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+        return sell_execution_snapshots[snapshot_key]
 
     def get_exchange(code):
         is_nxt = DB.get_latest_is_nxt(code)
@@ -2438,10 +2524,13 @@ def periodic_account_sync():
                                 if target_stock is not None:
                                     target_stock["status"] = committed_status
                                     if committed_snapshot.get("sell_price") is not None:
-                                        target_stock["sell_price"] = (
-                                            committed_snapshot["sell_price"]
-                                        )
-                                    if committed_snapshot.get("profit_rate") is not None:
+                                        target_stock["sell_price"] = committed_snapshot[
+                                            "sell_price"
+                                        ]
+                                    if (
+                                        committed_snapshot.get("profit_rate")
+                                        is not None
+                                    ):
                                         target_stock["profit_rate"] = (
                                             committed_snapshot["profit_rate"]
                                         )
@@ -2511,33 +2600,52 @@ def periodic_account_sync():
                             )
                         )
                         exact_execution = None
-                        exact_execution_reason = "prior_status_not_sell_ordered"
+                        exact_execution_reason = "exact_receipt_not_queried"
                         if prior_partial_qty > 0:
                             exact_execution_reason = (
                                 "partial_realized_context_requires_fill_receipt"
                             )
-                        elif prior_status == "SELL_ORDERED":
-                            # kt00008 has no order number or execution time.
-                            # Limit this weaker date/code/side/qty fallback to
-                            # a lifecycle that already owns a submitted SELL;
-                            # HOLDING rows require the committed receipt check
-                            # above and must not borrow an earlier cycle's fill.
-                            exact_execution, exact_execution_reason = (
-                                _unique_sell_execution_reconciliation(
-                                    _sell_execution_rows(),
-                                    code=code,
-                                    qty=getattr(record, "buy_qty", 0),
-                                    trade_date=datetime.now().strftime("%Y%m%d"),
-                                )
+                        else:
+                            receipt_trade_date = datetime.now().strftime("%Y%m%d")
+                            receipt_rows, receipt_source_meta = (
+                                _sell_execution_snapshot(code, receipt_trade_date)
                             )
+                            if not bool(
+                                receipt_source_meta.get("request_succeeded", False)
+                            ):
+                                exact_execution_reason = (
+                                    "kt00007_exact_receipt_snapshot_unconfirmed"
+                                )
+                            elif not bool(
+                                receipt_source_meta.get(
+                                    "normalization_contract_complete", False
+                                )
+                            ):
+                                exact_execution_reason = (
+                                    "kt00007_exact_receipt_contract_incomplete"
+                                )
+                            else:
+                                exact_execution, exact_execution_reason = (
+                                    _unique_sell_execution_reconciliation(
+                                        receipt_rows,
+                                        code=code,
+                                        qty=getattr(record, "buy_qty", 0),
+                                        trade_date=receipt_trade_date,
+                                        owner_buy_time=getattr(
+                                            record, "buy_time", None
+                                        ),
+                                        expected_order_no=sell_order_no,
+                                        observed_at=broker_snapshot_at,
+                                    )
+                                )
 
                         # Balance absence proves that the position is no
-                        # longer held.  Only a unique same-day broker
-                        # execution row proves fill price and realized PnL;
-                        # an intended target price never does.
+                        # longer held.  Only one exact owner-cycle kt00007
+                        # terminal fill proves price and realized PnL; an
+                        # intended target price never does.
                         if exact_execution:
                             reconciled_sell_price = _to_int(
-                                exact_execution.get("unit_price")
+                                exact_execution.get("execution_price")
                             )
                             reconciled_profit_rate = calculate_net_profit_rate(
                                 record.buy_price,
@@ -2548,7 +2656,7 @@ def periodic_account_sync():
                                 reconciled_sell_price,
                                 getattr(record, "buy_qty", 0),
                             )
-                            reconciliation_state = "broker_execution_snapshot_recovered"
+                            reconciliation_state = "broker_exact_order_fill_recovered"
                         else:
                             reconciled_sell_price = None
                             reconciled_profit_rate = None
@@ -2575,7 +2683,15 @@ def periodic_account_sync():
                             continue
 
                         print(
-                            f"⚠️ [정기 동기화] {record.stock_name}({code}) 잔고 없음. 매도 영수증 누락으로 판단하여 COMPLETED 강제 전환."
+                            f"⚠️ [정기 동기화] {record.stock_name}({code}) 잔고 없음. "
+                            + (
+                                "kt00007 exact 매도 영수증으로 COMPLETED reconciliation."
+                                if exact_execution
+                                else (
+                                    "exact 매도 영수증 미확인 상태로 COMPLETED 전환; "
+                                    "realized PnL 차단."
+                                )
+                            )
                         )
                         record.status = "COMPLETED"
                         record.sell_time = None
@@ -2637,7 +2753,7 @@ def periodic_account_sync():
                                         "same_position_cycle_periodic_account_sync"
                                     ),
                                     "sample_floor": (
-                                        "one_unique_same_day_broker_sell_execution"
+                                        "one_unique_owner_cycle_kt00007_terminal_sell_fill"
                                         if exact_execution
                                         else (
                                             "one_missing_holding_with_no_fill_receipt"
@@ -2647,7 +2763,8 @@ def periodic_account_sync():
                                         "confirmed_broker_sell_fill_price"
                                     ),
                                     "source_quality_gate": (
-                                        "unique_same_day_code_side_qty_broker_execution"
+                                        "exact_order_identity_route_terminal_fill_"
+                                        "owner_time_window"
                                     ),
                                     "runtime_effect": True,
                                     "actual_order_submitted": bool(exact_execution),
@@ -2689,7 +2806,7 @@ def periodic_account_sync():
                                     "buy_price": getattr(record, "buy_price", "-"),
                                     "buy_qty": getattr(record, "buy_qty", "-"),
                                     "sell_qty": (
-                                        exact_execution.get("qty")
+                                        exact_execution.get("filled_qty")
                                         if exact_execution
                                         else "-"
                                     ),
@@ -2704,19 +2821,33 @@ def periodic_account_sync():
                                         or "-"
                                     ),
                                     "sell_completion_receipt_source": (
-                                        "kt00008_unique_execution_reconciliation"
+                                        "kt00007_exact_order_fill_reconciliation"
                                         if exact_execution
                                         else "missing"
                                     ),
                                     "sell_time_precision": (
-                                        "date_only" if exact_execution else "missing"
+                                        "order_second_not_fill_second"
+                                        if exact_execution
+                                        else "missing"
                                     ),
                                     "sell_time_forbidden_for_intraday_horizon": True,
                                     "prior_status": prior_status or "-",
                                     "prior_sell_submission_observed": (
                                         prior_status == "SELL_ORDERED"
                                     ),
-                                    "sell_order_no": sell_order_no or "-",
+                                    "sell_order_no": (
+                                        exact_execution.get("ord_no")
+                                        if exact_execution
+                                        else sell_order_no or "-"
+                                    ),
+                                    "sell_order_time": (
+                                        exact_execution.get("order_time")
+                                        if exact_execution
+                                        else "-"
+                                    ),
+                                    "broker_sell_submission_observed": bool(
+                                        exact_execution
+                                    ),
                                     "sell_target_price_observed": (
                                         estimated_sell_price or "-"
                                     ),

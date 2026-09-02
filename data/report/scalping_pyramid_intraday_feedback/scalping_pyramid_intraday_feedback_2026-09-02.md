@@ -1,6 +1,6 @@
 # 2026-09-02 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-09-02T11:45:03+09:00
+- generated_at: 2026-09-02T18:40:01+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -8,12 +8,12 @@
 
 ## Summary
 
-- pyramid_feedback_row_count: 1
+- pyramid_feedback_row_count: 5
 - closed_pyramid_row_count: 0
 - pyramid_would_have_helped_count: 0
 - pyramid_correctly_blocked_count: 0
 - pyramid_overheat_or_reversal_risk_count: 0
-- pyramid_open_unresolved_count: 1
+- pyramid_open_unresolved_count: 5
 - one_share_event_count: 0
 - one_share_closed_count: 0
 - one_share_pyramid_opportunity_count: 0
@@ -52,11 +52,16 @@
 
 ## Blocker Metrics
 
-- blocker=profit_not_enough sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
+- blocker=profit_not_enough sample=4 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
+- blocker=pyramid_quality_blocked:ai_score_below_min,tick_accel_stale,micro_context_stale sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
 
 ## Rows
 
 - record_id= code=175330 name=JB금융지주 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.75 final=None ai=43.0 tick=1.667 micro_vwap=-33.6
+- record_id= code=091590 name=남화토건 label=pyramid_open_unresolved blocker=pyramid_quality_blocked:ai_score_below_min,tick_accel_stale,micro_context_stale profit=1.57 final=None ai=55.0 tick=2.0 micro_vwap=105.69
+- record_id= code=024850 name=HLB이노베이션 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.66 final=None ai=50.0 tick=1.5 micro_vwap=-16.39
+- record_id= code=396300 name=세아메카닉스 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.28 final=None ai=50.0 tick=0.0 micro_vwap=-36.71
+- record_id= code=216080 name=제테마 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.24 final=None ai=45.0 tick=3.4 micro_vwap=-36.87
 
 ## Real Scale-In Performance Rows
 

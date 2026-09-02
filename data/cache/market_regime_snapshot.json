@@ -1,14 +1,14 @@
 {
-  "timestamp": "2026-09-02T10:03:30.277457",
+  "timestamp": "2026-09-02T12:32:51.098824",
   "vix_close": 16.34000015258789,
   "vix_ma3": 15.256666819254557,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 91.7699966430664,
-  "wti_rsi": 65.94037357141906,
-  "wti_macd": 1.494964141599226,
-  "wti_macd_signal": 1.083121591381801,
+  "wti_close": 90.68000030517578,
+  "wti_rsi": 64.57208198920327,
+  "wti_macd": 1.408012866781732,
+  "wti_macd_signal": 1.0657313364183023,
   "wti_dead_cross": false,
   "wti_from_recent_high_pct": 0.0,
   "oil_reversal": false,
@@ -96,5 +96,5 @@
     "local_breadth_signal": "bullish"
   },
   "cached_session_date": "2026-09-02",
-  "cached_at": "2026-09-02T10:03:30.291104+09:00"
+  "cached_at": "2026-09-02T12:32:51.113848+09:00"
 }

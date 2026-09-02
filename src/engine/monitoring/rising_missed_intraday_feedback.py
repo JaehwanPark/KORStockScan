@@ -7,6 +7,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from src.engine.monitoring.entry_turn_point_replay import (
+    MILESTONE_STAGES as ENTRY_TURN_MILESTONE_STAGES,
+    build_entry_turn_point_replay,
+    load_verified_symbol_master as load_entry_turn_verified_symbol_master,
+)
 from src.engine.scalping.risky_micro_episode import (
     POLICY_VERSION as RISKY_MICRO_POLICY_VERSION,
     PRIMARY_ENTRY_PROFILE as RISKY_MICRO_PRIMARY_ENTRY_PROFILE,
@@ -118,6 +123,8 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "market_data_effective_price_source",
         "market_data_effective_best_ask",
         "market_data_effective_best_bid",
+        "market_data_effective_quote_age_ms",
+        "market_data_effective_quote_observed_epoch",
         "market_data_freshness_state",
         "market_data_rest_age_basis",
         "market_data_rest_quote_age_ms",
@@ -139,6 +146,16 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "executable_sell_price",
         "quantity",
         "rising_missed_effective_venue",
+        "rising_missed_entry_turn_bbo_capture_status",
+        "rising_missed_entry_turn_bbo_lookback_sec",
+        "rising_missed_entry_turn_bbo_last_capture_attempt_epoch",
+        "rising_missed_entry_turn_bbo_last_capture_error_class",
+        "rising_missed_entry_turn_bbo_last_capture_reason",
+        "rising_missed_entry_turn_bbo_max_quote_age_ms",
+        "rising_missed_entry_turn_bbo_max_samples",
+        "rising_missed_entry_turn_bbo_min_sample_interval_sec",
+        "rising_missed_entry_turn_bbo_sample_count",
+        "rising_missed_entry_turn_bbo_samples",
         "rising_missed_market_session_bucket",
         "rising_missed_nxt_post_block_first_hit_move_pct",
         "rising_missed_nxt_post_block_first_hit_ts",
@@ -147,6 +164,8 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "rising_missed_nxt_post_block_min_move_pct",
         "rising_missed_nxt_post_block_ws_0d_best_ask",
         "rising_missed_nxt_post_block_ws_0d_best_bid",
+        "rising_missed_nxt_post_block_ws_0d_age_ms",
+        "rising_missed_nxt_post_block_price_source",
         "rising_missed_nxt_post_block_sampler_outcome_label",
         "rising_missed_tp1_actual_watch_delta_pct",
         "rising_missed_tp1_ai_action",
@@ -178,6 +197,9 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "rising_missed_tp1_ws_micro_provenance_ready",
         "selector_deferred",
         "selector_reason",
+        "scanner_promotion_id",
+        "scanner_promotion_emitted_epoch",
+        "scanner_promotion_reason",
         "stock_code",
         "stock_name",
         "submitted_order_price",
@@ -3452,6 +3474,7 @@ def _load_tp1_label_event_projection(
     """
 
     candidate_codes: set[str] = set()
+    candidate_promotion_ids: set[str] = set()
     observation_watermark: datetime | None = None
     for row in iter_jsonl(pipeline_path):
         timestamp = _tp1_label_timestamp(_event_ts(row))
@@ -3463,6 +3486,9 @@ def _load_tp1_label_event_projection(
             code = _event_code(row)
             if code:
                 candidate_codes.add(code)
+            promotion_id = str(_fields(row).get("scanner_promotion_id") or "").strip()
+            if promotion_id:
+                candidate_promotion_ids.add(promotion_id)
 
     if not candidate_codes:
         return [], observation_watermark
@@ -3476,11 +3502,19 @@ def _load_tp1_label_event_projection(
         price, _price_source = _tp1_observation_price(row)
         executable_bid, executable_ask, _bbo_source = _event_executable_bbo(row)
         fee, tax = _tp1_actual_costs(fields)
+        promotion_id = str(fields.get("scanner_promotion_id") or "").strip()
+        exact_candidate_milestone = bool(
+            promotion_id
+            and promotion_id in candidate_promotion_ids
+            and stage in ENTRY_TURN_MILESTONE_STAGES
+        )
         if (
             _tp1_label_candidate_kind(row)
             or (price is not None and price > 0)
             or (executable_bid is not None and executable_ask is not None)
             or stage.startswith("rising_missed_nxt_post_block_")
+            or stage == "rising_missed_entry_turn_pre_anchor_bbo_path"
+            or exact_candidate_milestone
             or fee is not None
             or tax is not None
         ):
@@ -4358,12 +4392,8 @@ def _clean_baseline_rolling_nxt_post_block_outcomes(
                 weight += row_count
             return round(weighted_sum / weight, 6) if weight else None
 
-        avg_mfe = _weighted_average(
-            dated_rows, "equal_weight_avg_mfe_after_block_pct"
-        )
-        avg_mae = _weighted_average(
-            dated_rows, "equal_weight_avg_mae_after_block_pct"
-        )
+        avg_mfe = _weighted_average(dated_rows, "equal_weight_avg_mfe_after_block_pct")
+        avg_mae = _weighted_average(dated_rows, "equal_weight_avg_mae_after_block_pct")
         gross_first_hit_payoff_proxy_pct = round(
             (target_count * TP1_GROSS_TARGET_PCT + adverse_count * TP1_ADVERSE_STOP_PCT)
             / sample_count,
@@ -6702,6 +6732,7 @@ def build_report(
     *,
     pipeline_path: Path | None = None,
     generated_at: str | None = None,
+    entry_turn_symbol_master_path: Path | None = None,
 ) -> dict[str, Any]:
     pipeline_path = pipeline_path or _pipeline_path(target_date)
     resolved_pipeline_path = existing_or_gzip_path(pipeline_path)
@@ -6810,6 +6841,20 @@ def build_report(
             label_events=tp1_label_events,
             observation_watermark=tp1_observation_watermark,
         )
+    )
+    entry_turn_symbol_master, entry_turn_symbol_master_binding = (
+        load_entry_turn_verified_symbol_master(
+            target_date,
+            symbol_master_path=entry_turn_symbol_master_path,
+        )
+    )
+    entry_turn_point_replay = build_entry_turn_point_replay(
+        tp1_label_events,
+        target_date=target_date,
+        current_label_rows=tp1_counterfactual_label_rows,
+        observation_watermark=tp1_observation_watermark,
+        symbol_master=entry_turn_symbol_master,
+        symbol_master_binding=entry_turn_symbol_master_binding,
     )
     (
         tp1_counterfactual_direct_target_summary,
@@ -6936,6 +6981,102 @@ def build_report(
                 "forbidden_uses": FORBIDDEN_USES,
             }
         )
+    entry_turn_acceptance = entry_turn_point_replay.get("acceptance")
+    entry_turn_acceptance = (
+        entry_turn_acceptance if isinstance(entry_turn_acceptance, dict) else {}
+    )
+    if _safe_int(entry_turn_point_replay.get("candidate_count")) > 0 and not _boolish(
+        entry_turn_acceptance.get("all_floors_met")
+    ):
+        code_improvement_orders.append(
+            {
+                "order_id": "order_rising_missed_entry_turn_bbo_coverage",
+                "title": "rising missed entry-turn executable BBO coverage closure",
+                "source_report_type": "rising_missed_intraday_feedback",
+                "lifecycle_stage": "entry",
+                "target_subsystem": "scanner_existing_ws_bbo_observation",
+                "route": "instrumentation_order",
+                "mapped_family": "rising_missed_entry_turn_point_replay",
+                "threshold_family": "rising_missed_entry_turn_point_replay",
+                "improvement_type": "source_only_existing_ws_bbo_coverage_workorder",
+                "confidence": "same_day_source_quality_blocked",
+                "priority": 1,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": (
+                    "source_only_entry_turn_bbo_coverage_no_runtime_mutation"
+                ),
+                "implementation_status": "implemented_but_waiting_sample",
+                "implementation_provenance": {
+                    "implementation_type": (
+                        "bounded_existing_subscription_exact_route_0d_bbo_ring"
+                    ),
+                    "source_only_stage": (
+                        "rising_missed_entry_turn_pre_anchor_bbo_path"
+                    ),
+                    "new_ws_subscription_or_rest_call_added": False,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "sample_status": "waiting_next_pid_natural_sample",
+                    "root_cause_closure_status_hint": (
+                        "implementation_done_current_pid_not_reflected"
+                    ),
+                },
+                "expected_ev_effect": (
+                    "Separate discovery delay, watch/evaluation delay, late turn "
+                    "recognition, and false signals with same-lineage executable BBO "
+                    "before any entry policy proposal."
+                ),
+                "evidence": [
+                    "entry_turn_replay_status="
+                    + str(entry_turn_point_replay.get("status") or "unknown"),
+                    "candidate_count="
+                    + str(entry_turn_point_replay.get("candidate_count") or 0),
+                    "exact_ws_bbo_join_coverage_pct="
+                    + str(
+                        entry_turn_point_replay.get("exact_ws_bbo_join_coverage_pct")
+                        or 0
+                    ),
+                    "pre_anchor_bbo_coverage_pct="
+                    + str(
+                        entry_turn_point_replay.get("pre_anchor_bbo_coverage_pct") or 0
+                    ),
+                    "paired_coverage_pct="
+                    + str(entry_turn_point_replay.get("paired_coverage_pct") or 0),
+                    "primary_right_censored_pct="
+                    + str(
+                        entry_turn_point_replay.get("primary_right_censored_pct") or 0
+                    ),
+                    "source_quality_gap_counts="
+                    + json.dumps(
+                        entry_turn_point_replay.get("source_quality_gap_counts") or {},
+                        ensure_ascii=True,
+                        sort_keys=True,
+                    ),
+                ],
+                "source_paths": [str(resolved_pipeline_path)],
+                "files_likely_touched": [
+                    "src/engine/sniper_state_handlers.py",
+                    "src/engine/kiwoom_sniper_v2.py",
+                    "src/engine/monitoring/entry_turn_point_replay.py",
+                    "src/engine/monitoring/rising_missed_intraday_feedback.py",
+                ],
+                "acceptance_tests": [
+                    "exact_ws_bbo_join_coverage_pct>=95",
+                    "pre_anchor_bbo_coverage_pct>=95",
+                    "paired_coverage_pct>=95",
+                    "primary_right_censored_pct<=20",
+                    "primary_resolved_outcome_count>=20",
+                    "source_quality_adjusted_ev_pct remains null until every floor passes",
+                    "runtime_effect=false, allowed_runtime_apply=false, actual_order_submitted=false, broker_order_forbidden=true",
+                ],
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
 
     return {
         "schema_version": 1,
@@ -6944,6 +7085,8 @@ def build_report(
         "generated_at": generated_at,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
         "decision_authority": "source_only_intraday_feedback_no_runtime_mutation",
         "forbidden_uses": FORBIDDEN_USES,
         "metric_contracts": {
@@ -7072,6 +7215,7 @@ def build_report(
                 "source_quality_gate": "tp1_freshness_envelope_and_selector_provenance",
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "entry_turn_point_replay": entry_turn_point_replay["metric_contract"],
             "rising_missed_tp1_counterfactual_outcome_label": {
                 "metric_role": "source_only_tp1_counterfactual_outcome_label",
                 "decision_authority": "source_only_tp1_counterfactual_outcome_label",
@@ -7374,6 +7518,12 @@ def build_report(
             **adverse_micro_recovery_summary,
             **risky_micro_episode_summary,
             **risky_micro_episode_rolling_summary,
+            "entry_turn_point_replay": {
+                key: value
+                for key, value in entry_turn_point_replay.items()
+                if key
+                not in {"metric_contract", "rows", "economics_by_profile_scenario"}
+            },
             "code_improvement_order_count": len(code_improvement_orders),
             "consumer_readiness": {
                 "scout_workorder_input_ready": bool(forced),
@@ -7417,6 +7567,7 @@ def build_report(
         "rising_missed_tp1_counterfactual_direct_target_first_rows": (
             tp1_counterfactual_direct_target_rows[:TP1_DETAIL_ROW_EXPORT_LIMIT]
         ),
+        "entry_turn_point_replay": entry_turn_point_replay,
         "rising_missed_nxt_session_observation_rows": nxt_session_rows[:200],
         "rising_missed_nxt_order_resolution_rows": nxt_order_rows[:200],
         "rising_missed_nxt_post_block_price_sampler_rows": nxt_post_block_sampler_rows[
@@ -7547,6 +7698,7 @@ def write_outputs(
         f"{summary.get('rising_missed_tp1_counterfactual_submit_safety_count')}",
         f"- rising_missed_tp1_counterfactual_unique_symbol_count: "
         f"{summary.get('rising_missed_tp1_counterfactual_unique_symbol_count')}",
+        f"- entry_turn_point_replay: {summary.get('entry_turn_point_replay')}",
         f"- rising_missed_tp1_counterfactual_action_counts: "
         f"{summary.get('rising_missed_tp1_counterfactual_action_counts')}",
         f"- rising_missed_tp1_counterfactual_selector_reason_counts: "
@@ -8006,6 +8158,53 @@ def write_outputs(
                 recovery_reason=recovery.get("reason") or "-",
             )
         )
+    entry_turn_replay = report.get("entry_turn_point_replay") or {}
+    lines.extend(["", "## Entry Turn Point Replay", ""])
+    lines.append(
+        "- status={status} candidate_units={candidate_count} "
+        "raw_evaluations={candidate_evaluation_count} verified_common={verified} "
+        "exact_bbo_join_pct={join_pct} pre_anchor_bbo_coverage_pct={pre_anchor_pct} "
+        "paired_pct={paired_pct} "
+        "resolved={resolved} right_censored_pct={censored_pct} "
+        "profiles={profiles} causal_buckets={causes} floors_met={floors_met}".format(
+            status=entry_turn_replay.get("status"),
+            candidate_count=entry_turn_replay.get("candidate_count"),
+            candidate_evaluation_count=entry_turn_replay.get(
+                "candidate_evaluation_count"
+            ),
+            verified=entry_turn_replay.get(
+                "verified_official_common_stock_candidate_count"
+            ),
+            join_pct=entry_turn_replay.get("exact_ws_bbo_join_coverage_pct"),
+            pre_anchor_pct=entry_turn_replay.get("pre_anchor_bbo_coverage_pct"),
+            paired_pct=entry_turn_replay.get("paired_coverage_pct"),
+            resolved=entry_turn_replay.get("primary_resolved_outcome_count"),
+            censored_pct=entry_turn_replay.get("primary_right_censored_pct"),
+            profiles=entry_turn_replay.get("profile_counts"),
+            causes=entry_turn_replay.get("causal_bucket_counts"),
+            floors_met=(entry_turn_replay.get("acceptance") or {}).get(
+                "all_floors_met"
+            ),
+        )
+    )
+    for item in entry_turn_replay.get("rows") or []:
+        turn = item.get("turn") or {}
+        outcome = item.get("primary_outcome") or {}
+        lines.append(
+            "- ts={candidate_at} code={stock_code} lane={candidate_lane} "
+            "venue={effective_venue} session={market_session_bucket} "
+            "turn={turn_profile} turn_lag_sec={turn_lag} "
+            "primary={primary_label}/{primary_net} cause={cause} "
+            "pre_anchor_bbo={pre_anchor_count}".format(
+                **item,
+                turn_profile=turn.get("profile") or "-",
+                turn_lag=item.get("turn_lag_vs_candidate_sec"),
+                primary_label=outcome.get("label") or "-",
+                primary_net=outcome.get("cost_adjusted_return_pct"),
+                cause=item.get("causal_bucket"),
+                pre_anchor_count=item.get("pre_anchor_ws_bbo_observation_count"),
+            )
+        )
     lines.extend(
         [
             "",
@@ -8060,6 +8259,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--target-date", default=datetime.now(KST).strftime("%Y-%m-%d"))
     parser.add_argument("--pipeline-path", type=Path)
+    parser.add_argument("--entry-turn-symbol-master-path", type=Path)
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-md", type=Path)
     parser.add_argument("--generated-at")
@@ -8069,6 +8269,7 @@ def main(argv: list[str] | None = None) -> int:
         args.target_date,
         pipeline_path=args.pipeline_path,
         generated_at=args.generated_at,
+        entry_turn_symbol_master_path=args.entry_turn_symbol_master_path,
     )
     default_json, default_md = _default_output_paths(args.target_date)
     output_json = args.output_json or default_json

@@ -896,9 +896,11 @@ def get_account_balance_kt00005_with_meta(token):
 
 def get_account_execution_snapshot_kt00008(token):
     """
-    [kt00008] 계좌별주문체결현황요청
-    전일 체결 기준 익일 결제 예정 내역을 반환합니다.
-    주문번호는 포함되지 않지만 종목/매수매도/수량/체결단가 대조에 활용할 수 있습니다.
+    [kt00008] 계좌별익일결제예정내역요청.
+
+    This is settlement context, not an exact order/fill receipt: it has no
+    order number or order/execution timestamp.  Consumers must not use it to
+    establish owner lifecycle, exact execution quality, or realized PnL.
     """
     url = get_api_url("/api/dostk/acnt")
     results = fetch_kiwoom_api_continuous(
@@ -1109,6 +1111,16 @@ def _pick_first_positive_int(item, keys):
     return 0
 
 
+def _pick_first_positive_int_with_key(item, keys):
+    """Return the first positive integer together with its source field."""
+    for key in keys:
+        value = item.get(key)
+        parsed = _to_int_safe(value)
+        if parsed > 0:
+            return key, value, parsed
+    return "", "", 0
+
+
 def _normalize_side(value):
     raw = str(value or "").strip().upper()
     compact = raw.replace("+", "").replace("-", "").replace(" ", "")
@@ -1129,14 +1141,20 @@ def _extract_order_rows(res):
     return rows
 
 
-def _normalize_order_history_rows(*, results, source_api):
+def _normalize_order_history_rows(*, results, source_api, requested_trade_date=""):
     normalized = []
     for res in results or []:
         if not isinstance(res, dict):
             continue
-        trade_date = str(
+        response_trade_date = str(
             res.get("trde_dt") or res.get("ord_dt") or res.get("dt") or ""
         ).strip()
+        trade_date = response_trade_date or str(requested_trade_date or "").strip()
+        trade_date_source = (
+            "response_envelope"
+            if response_trade_date
+            else ("request_ord_dt" if trade_date else "missing")
+        )
         rows = _extract_order_rows(res)
         for item in rows:
             code = normalize_stock_code(
@@ -1167,8 +1185,33 @@ def _normalize_order_history_rows(*, results, source_api):
                 item,
                 ("oso_qty", "osop_qty", "ord_remnq", "remaining_qty"),
             )
+            raw_filled_qty_source, raw_filled_qty_value = _pick_first_with_key(
+                item,
+                ("cntr_qty", "exct_qty", "cnfm_qty", "filled_qty"),
+            )
+            (
+                raw_execution_price_source,
+                raw_execution_price_value,
+                execution_price,
+            ) = _pick_first_positive_int_with_key(
+                item,
+                (
+                    "cntr_uv",
+                    "cntr_prc",
+                    "cntr_pric",
+                    "unit_cntr_pric",
+                    "exec_pric",
+                ),
+            )
             qty = _to_int_safe(raw_qty_value)
             remaining_qty = _to_int_safe(raw_remaining_qty_value)
+            filled_qty = _to_int_safe(raw_filled_qty_value)
+            raw_order_time = str(_pick_first(item, ("ord_tm", "order_time"))).strip()
+            raw_confirmation_time = str(
+                _pick_first(item, ("cnfm_tm", "confirmation_time"))
+            ).strip()
+            order_time = raw_order_time.replace(":", "")
+            confirmation_time = raw_confirmation_time.replace(":", "")
             if source_api == "ka10075":
                 # Open-order reconciliation owns the submitted limit price.  A
                 # partial fill price is execution evidence, not order identity.
@@ -1241,6 +1284,10 @@ def _normalize_order_history_rows(*, results, source_api):
                 {
                     "source_api": source_api,
                     "trade_date": trade_date,
+                    "trade_date_source": trade_date_source,
+                    "trade_date_contract_valid": bool(
+                        re.fullmatch(r"[0-9]{8}", trade_date)
+                    ),
                     "code": code,
                     "name": str(
                         _pick_first(item, ("stk_nm", "name", "hts_kor_isnm"))
@@ -1253,11 +1300,17 @@ def _normalize_order_history_rows(*, results, source_api):
                     "side_contract_valid": side in {"매수", "매도"},
                     "route_contract_valid": route_contract_valid,
                     "qty": qty,
+                    "filled_qty": filled_qty,
                     "remaining_qty": remaining_qty,
                     "raw_qty_value": raw_qty_value,
                     "raw_qty_source": raw_qty_source,
                     "raw_remaining_qty_value": raw_remaining_qty_value,
                     "raw_remaining_qty_source": raw_remaining_qty_source,
+                    "raw_filled_qty_value": raw_filled_qty_value,
+                    "raw_filled_qty_source": raw_filled_qty_source,
+                    "filled_quantity_contract_valid": (
+                        _strict_nonnegative_integer_contract(raw_filled_qty_value)
+                    ),
                     "submitted_quantity_source_valid": raw_qty_source
                     in {"qty", "ord_qty"},
                     "quantity_contract_valid": (
@@ -1267,6 +1320,20 @@ def _normalize_order_history_rows(*, results, source_api):
                         _strict_nonnegative_integer_contract(raw_remaining_qty_value)
                     ),
                     "unit_price": unit_price,
+                    "execution_price": execution_price,
+                    "raw_execution_price_value": raw_execution_price_value,
+                    "raw_execution_price_source": raw_execution_price_source,
+                    "execution_price_contract_valid": bool(
+                        _strict_nonnegative_integer_contract(raw_execution_price_value)
+                        and execution_price > 0
+                    ),
+                    "order_time": order_time,
+                    "raw_order_time": raw_order_time,
+                    "order_time_contract_valid": bool(
+                        re.fullmatch(r"[0-9]{6}", order_time)
+                    ),
+                    "confirmation_time": confirmation_time,
+                    "raw_confirmation_time": raw_confirmation_time,
                     "ord_no": ord_no,
                     "orig_ord_no": orig_ord_no,
                     "stex_tp": str(
@@ -1399,7 +1466,11 @@ def get_order_reference_snapshot_kt00007(
         payload=payload,
         use_continuous=True,
     )
-    return _normalize_order_history_rows(results=results, source_api="kt00007")
+    return _normalize_order_history_rows(
+        results=results,
+        source_api="kt00007",
+        requested_trade_date=payload["ord_dt"],
+    )
 
 
 def get_order_reference_snapshot_kt00007_with_meta(
@@ -1438,7 +1509,11 @@ def get_order_reference_snapshot_kt00007_with_meta(
         payload=payload,
         use_continuous=True,
     )
-    rows = _normalize_order_history_rows(results=results, source_api="kt00007")
+    rows = _normalize_order_history_rows(
+        results=results,
+        source_api="kt00007",
+        requested_trade_date=payload["ord_dt"],
+    )
     return rows, _order_snapshot_contract_meta(
         results=results,
         rows=rows,

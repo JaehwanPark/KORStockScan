@@ -174,9 +174,7 @@ def test_sell_lifecycle_outbox_ack_uses_receive_clock_and_retains_fid908(
     monkeypatch,
     receive_source,
 ):
-    occurred_at = datetime(
-        2026, 8, 26, 9, 0, 3, tzinfo=timezone(timedelta(hours=9))
-    )
+    occurred_at = datetime(2026, 8, 26, 9, 0, 3, tzinfo=timezone(timedelta(hours=9)))
     received_at = occurred_at + timedelta(milliseconds=250)
     stock = {
         "id": 7,
@@ -230,9 +228,7 @@ def test_sell_lifecycle_outbox_ack_uses_receive_clock_and_retains_fid908(
             "incremental_qty": 2,
             "cumulative_qty": 2,
             "remaining_qty": 8,
-            "incremental_net_pnl_krw": calculate_net_realized_pnl(
-                10_000, 10_010, 2
-            ),
+            "incremental_net_pnl_krw": calculate_net_realized_pnl(10_000, 10_010, 2),
             "economics_complete": True,
             "quantity_contract_complete": True,
             "unit_fill_consistent": True,
@@ -320,8 +316,7 @@ def test_sell_lifecycle_outbox_replays_same_second_legs_by_cumulative_qty(
                     "main_lifecycle_exit_qty": 2,
                     "main_lifecycle_exit_price": 10_010.0,
                     "main_lifecycle_broker_reconciled": stage == "sell_completed",
-                    "main_lifecycle_reconciled_final_exit": stage
-                    == "sell_completed",
+                    "main_lifecycle_reconciled_final_exit": stage == "sell_completed",
                 },
             )
         )
@@ -338,10 +333,7 @@ def test_sell_lifecycle_outbox_replays_same_second_legs_by_cumulative_qty(
     monkeypatch.setattr(
         receipts,
         "_emit_standard_sell_partial_lifecycle_outbox_leg",
-        lambda leg: emitted.append(
-            leg["event_fields"]["cumulative_sell_qty"]
-        )
-        or True,
+        lambda leg: emitted.append(leg["event_fields"]["cumulative_sell_qty"]) or True,
     )
     monkeypatch.setattr(
         receipts, "_persist_sell_receipt_recovery_or_interlock", lambda *a, **k: True
@@ -415,9 +407,7 @@ def test_final_sell_outbox_recovers_in_process_after_transient_append_failure(
     receipts._finalize_standard_sell_execution(
         target_id=7,
         exec_price=10_100,
-        now=datetime(
-            2026, 8, 26, 9, 10, tzinfo=timezone(timedelta(hours=9))
-        ),
+        now=datetime(2026, 8, 26, 9, 10, tzinfo=timezone(timedelta(hours=9))),
         target_stock=stock,
         strategy="SCALPING",
         is_scalp_revive=False,
@@ -428,14 +418,10 @@ def test_final_sell_outbox_recovers_in_process_after_transient_append_failure(
             "expected_qty": 1,
             "cumulative_qty": 1,
             "cumulative_amount": 10_100,
-            "cumulative_net_pnl_krw": calculate_net_realized_pnl(
-                10_000, 10_100, 1
-            ),
+            "cumulative_net_pnl_krw": calculate_net_realized_pnl(10_000, 10_100, 1),
             "incremental_qty": 1,
             "incremental_price": 10_100,
-            "incremental_net_pnl_krw": calculate_net_realized_pnl(
-                10_000, 10_100, 1
-            ),
+            "incremental_net_pnl_krw": calculate_net_realized_pnl(10_000, 10_100, 1),
             "economics_complete": True,
             "quantity_contract_complete": True,
             "unit_fill_consistent": True,
@@ -447,9 +433,10 @@ def test_final_sell_outbox_recovers_in_process_after_transient_append_failure(
 
     assert record.status == "COMPLETED"
     assert stock["status"] == "SELL_ORDERED"
-    assert stock[receipts._SELL_EXECUTION_RECEIPT_STATE_KEY][
-        "final_pending_db_commit"
-    ] is True
+    assert (
+        stock[receipts._SELL_EXECUTION_RECEIPT_STATE_KEY]["final_pending_db_commit"]
+        is True
+    )
     assert (tmp_path / "7.json").exists()
 
     append_available["value"] = True
@@ -531,9 +518,7 @@ def test_nxt_tp1_outbox_recovers_progress_and_completion_before_runner_release(
         order_no="0000701",
         exec_price=10_010,
         exec_qty=2,
-        now=datetime(
-            2026, 8, 26, 17, 0, 3, tzinfo=timezone(timedelta(hours=9))
-        ),
+        now=datetime(2026, 8, 26, 17, 0, 3, tzinfo=timezone(timedelta(hours=9))),
         safe_buy_price=10_000,
         order_qty=4,
         remaining_qty=2,
@@ -549,9 +534,7 @@ def test_nxt_tp1_outbox_recovers_progress_and_completion_before_runner_release(
         order_no="0000701",
         exec_price=10_020,
         exec_qty=4,
-        now=datetime(
-            2026, 8, 26, 17, 0, 4, tzinfo=timezone(timedelta(hours=9))
-        ),
+        now=datetime(2026, 8, 26, 17, 0, 4, tzinfo=timezone(timedelta(hours=9))),
         safe_buy_price=10_000,
         order_qty=4,
         remaining_qty=0,
@@ -705,9 +688,7 @@ def test_nxt_tp1_outbox_is_fsynced_before_db_interlock(
         order_no="0000701",
         exec_price=10_010,
         exec_qty=cumulative_qty,
-        now=datetime(
-            2026, 8, 26, 17, 0, 3, tzinfo=timezone(timedelta(hours=9))
-        ),
+        now=datetime(2026, 8, 26, 17, 0, 3, tzinfo=timezone(timedelta(hours=9))),
         safe_buy_price=10_000,
         order_qty=4,
         remaining_qty=remaining_qty,
@@ -866,10 +847,8 @@ def test_late_prior_terminal_fill_waits_for_replacement_order_absence(
             ),
         }
     )
-    terminal_state[
-        receipts._REPLACEMENT_TERMINAL_RECONCILIATION_GENERATION_KEY
-    ] = receipts._replacement_terminal_reconciliation_generation_sha256(
-        terminal_state
+    terminal_state[receipts._REPLACEMENT_TERMINAL_RECONCILIATION_GENERATION_KEY] = (
+        receipts._replacement_terminal_reconciliation_generation_sha256(terminal_state)
     )
     stock[receipts._SELL_EXECUTION_RECEIPT_STATE_KEY] = terminal_state
 
@@ -960,9 +939,9 @@ def test_replacement_terminal_absence_query_never_overwrites_newer_receipt(
                 receipts._receipt_snapshot_sha256(provenance)
             ),
         }
-        state[
-            receipts._REPLACEMENT_TERMINAL_RECONCILIATION_GENERATION_KEY
-        ] = receipts._replacement_terminal_reconciliation_generation_sha256(state)
+        state[receipts._REPLACEMENT_TERMINAL_RECONCILIATION_GENERATION_KEY] = (
+            receipts._replacement_terminal_reconciliation_generation_sha256(state)
+        )
         return state
 
     old_state = _terminal_state("REPLACEMENT-OLD", "OLD")
@@ -1131,14 +1110,10 @@ def test_scalp_revive_recovers_crash_after_precommit_watch_id_fsync(
         "expected_qty": 10,
         "cumulative_qty": 10,
         "cumulative_amount": 101_000,
-        "cumulative_net_pnl_krw": calculate_net_realized_pnl(
-            10_000, 10_100, 10
-        ),
+        "cumulative_net_pnl_krw": calculate_net_realized_pnl(10_000, 10_100, 10),
         "incremental_qty": 10,
         "incremental_price": 10_100,
-        "incremental_net_pnl_krw": calculate_net_realized_pnl(
-            10_000, 10_100, 10
-        ),
+        "incremental_net_pnl_krw": calculate_net_realized_pnl(10_000, 10_100, 10),
         "economics_complete": True,
         "quantity_contract_complete": True,
         "unit_fill_consistent": True,
@@ -1152,9 +1127,7 @@ def test_scalp_revive_recovers_crash_after_precommit_watch_id_fsync(
             code="123456",
             exec_price=10_100,
             exec_qty=10,
-            now=datetime(
-                2026, 8, 26, 9, 30, tzinfo=timezone(timedelta(hours=9))
-            ),
+            now=datetime(2026, 8, 26, 9, 30, tzinfo=timezone(timedelta(hours=9))),
             profit_rate=0.0,
             safe_buy_price=10_000,
             strategy="SCALPING",
@@ -1589,6 +1562,49 @@ class _SyncDB:
         return 0
 
 
+def _exact_kt00007_sell_row(
+    *,
+    code="123456",
+    qty=1,
+    price=100_100,
+    order_no="0000001",
+    order_time="120049",
+    trade_date=None,
+):
+    return {
+        "source_api": "kt00007",
+        "trade_date": trade_date or datetime.now().strftime("%Y%m%d"),
+        "trade_date_contract_valid": True,
+        "code": code,
+        "side": "매도",
+        "code_contract_valid": True,
+        "order_no_contract_valid": True,
+        "side_contract_valid": True,
+        "route_contract_valid": True,
+        "qty": qty,
+        "filled_qty": qty,
+        "remaining_qty": 0,
+        "submitted_quantity_source_valid": True,
+        "quantity_contract_valid": True,
+        "filled_quantity_contract_valid": True,
+        "remaining_quantity_contract_valid": True,
+        "execution_price": price,
+        "execution_price_contract_valid": True,
+        "order_time": order_time,
+        "order_time_contract_valid": True,
+        "ord_no": order_no,
+        "stex_tp": "SOR",
+        "sor_yn": "Y",
+    }
+
+
+def _complete_order_snapshot(rows=()):
+    return list(rows), {
+        "request_succeeded": True,
+        "normalization_contract_complete": True,
+    }
+
+
 class _FailingSyncDB(_SyncDB):
     def get_session(self):
         session = super().get_session()
@@ -1957,6 +1973,7 @@ def test_standard_sell_waits_for_full_cumulative_receipt_and_emits_exact_legs(
     monkeypatch.setattr(
         receipts, "move_orders_to_terminal", lambda *_args, **_kwargs: None
     )
+
     def _capture_successful_outbox(*args, **kwargs):
         logged.append((args[3], kwargs))
         return {
@@ -2157,9 +2174,9 @@ def test_standard_sell_waits_for_full_cumulative_receipt_and_emits_exact_legs(
     assert lifecycle_stock["market_session_bucket"] == "krx_regular"
     assert transition["venue"] == "NXT"
     assert transition["session_bucket"] == "nxt_entry_window"
-    assert transition["data"].get("broker_execution_actual_venue") == "NXT", (
-        transition["data"]
-    )
+    assert transition["data"].get("broker_execution_actual_venue") == "NXT", transition[
+        "data"
+    ]
 
 
 def test_final_cumulative_sell_closes_custody_but_keeps_unit_gap_source_only(
@@ -2734,18 +2751,14 @@ def test_scalp_revive_sell_receipt_declares_real_execution_contract(
     assert logged_fields["realized_pnl_krw"] == calculate_net_realized_pnl(
         10_000, 10_108, 10
     )
-    assert logged_fields["realized_pnl_krw_source"] == (
-        "broker_fill_prices_fee_aware"
-    )
+    assert logged_fields["realized_pnl_krw_source"] == ("broker_fill_prices_fee_aware")
     assert logged_fields["main_lifecycle_broker_reconciled"] is True
     assert logged_fields["main_lifecycle_reconciled_final_exit"] is True
     final_leg_net_pnl = calculate_net_realized_pnl(
         10_000, 10_108, 10
     ) - calculate_net_realized_pnl(10_000, 10_120, 4)
     assert logged_fields["main_lifecycle_realized_net_pnl_krw"] == final_leg_net_pnl
-    assert logged_fields["main_lifecycle_fees_taxes_krw"] == (
-        600 - final_leg_net_pnl
-    )
+    assert logged_fields["main_lifecycle_fees_taxes_krw"] == (600 - final_leg_net_pnl)
 
 
 def test_sell_receipt_propagates_scale_in_counterfactual_diagnostics(monkeypatch):
@@ -2918,6 +2931,7 @@ def test_periodic_account_sync_does_not_invent_pnl_for_missing_sell_receipt(
             "status": "SELL_ORDERED",
             "buy_price": 100000.0,
             "buy_qty": 1,
+            "buy_time": datetime.now().replace(hour=9, minute=0, second=0),
             "sell_price": 0,
             "sell_time": None,
             "profit_rate": 0.0,
@@ -2939,8 +2953,8 @@ def test_periodic_account_sync_does_not_invent_pnl_for_missing_sell_receipt(
     )
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
-        "get_account_execution_snapshot_kt00008",
-        lambda token: [],
+        "get_order_reference_snapshot_kt00007_with_meta",
+        lambda *args, **kwargs: _complete_order_snapshot(),
     )
     removals = []
 
@@ -3242,8 +3256,8 @@ def test_periodic_account_sync_does_not_overwrite_concurrent_sell_receipt(
     )
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
-        "get_account_execution_snapshot_kt00008",
-        lambda token: [],
+        "get_order_reference_snapshot_kt00007_with_meta",
+        lambda *args, **kwargs: _complete_order_snapshot(),
     )
 
     refresh_calls = []
@@ -3438,7 +3452,14 @@ def test_prebaseline_scalping_buy_order_is_not_quarantined_as_missing_holding():
     assert record.status == "BUY_ORDERED"
 
 
-def test_periodic_account_sync_recovers_unique_exact_sell_execution(monkeypatch):
+@pytest.mark.parametrize(
+    ("prior_status", "owned_sell_order_no"),
+    (("SELL_ORDERED", "0015635"), ("HOLDING", "")),
+)
+def test_periodic_account_sync_recovers_unique_exact_sell_execution(
+    monkeypatch, prior_status, owned_sell_order_no
+):
+    now = datetime.now()
     record = type(
         "Record",
         (),
@@ -3446,9 +3467,10 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(monkeypatch)
             "id": 22758,
             "stock_code": "096770",
             "stock_name": "SK이노베이션",
-            "status": "SELL_ORDERED",
+            "status": prior_status,
             "buy_price": 132100.0,
             "buy_qty": 1,
+            "buy_time": now - timedelta(minutes=2),
             "sell_price": 0,
             "sell_time": None,
             "profit_rate": None,
@@ -3458,8 +3480,8 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(monkeypatch)
     target = {
         "id": 22758,
         "code": "096770",
-        "status": "SELL_ORDERED",
-        "sell_odno": "0015635",
+        "status": prior_status,
+        "sell_odno": owned_sell_order_no,
         "sell_target_price": 132000,
     }
     sniper_sync.KIWOOM_TOKEN = "token"
@@ -3472,19 +3494,26 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(monkeypatch)
         "get_account_balance_kt00005",
         lambda token: ([], {"KRX", "NXT"}),
     )
+    snapshot_calls = []
+
+    def exact_receipt_snapshot(*args, **kwargs):
+        snapshot_calls.append({"args": args, "kwargs": kwargs})
+        return _complete_order_snapshot(
+            [
+                _exact_kt00007_sell_row(
+                    code="096770",
+                    qty=1,
+                    price=132250,
+                    order_no="0015635",
+                    order_time=(now - timedelta(minutes=1)).strftime("%H%M%S"),
+                )
+            ]
+        )
+
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
-        "get_account_execution_snapshot_kt00008",
-        lambda token: [
-            {
-                "trade_date": datetime.now().strftime("%Y%m%d"),
-                "code": "096770",
-                "side": "매도",
-                "qty": 1,
-                "unit_price": 132250,
-                "seq": "1",
-            }
-        ],
+        "get_order_reference_snapshot_kt00007_with_meta",
+        exact_receipt_snapshot,
     )
     monkeypatch.setattr(
         sniper_sync,
@@ -3513,7 +3542,7 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(monkeypatch)
     assert record.sell_price == 132250
     assert record.profit_rate == calculate_net_profit_rate(132100, 132250)
     assert target["sell_completion_reconciliation_state"] == (
-        "broker_execution_snapshot_recovered"
+        "broker_exact_order_fill_recovered"
     )
     assert target["sell_price"] == 132250
     assert emitted[0][0][3] == "sell_completed"
@@ -3522,10 +3551,25 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(monkeypatch)
     assert exact_fields["actual_order_submitted"] is True
     assert exact_fields["broker_order_forbidden"] is False
     assert exact_fields["sell_completion_receipt_source"] == (
-        "kt00008_unique_execution_reconciliation"
+        "kt00007_exact_order_fill_reconciliation"
     )
-    assert exact_fields["sell_time_precision"] == "date_only"
+    assert exact_fields["sell_time_precision"] == "order_second_not_fill_second"
     assert exact_fields["sell_time_forbidden_for_intraday_horizon"] is True
+    assert exact_fields["sell_order_no"] == "0015635"
+    assert exact_fields["broker_sell_submission_observed"] is True
+    assert snapshot_calls == [
+        {
+            "args": ("token",),
+            "kwargs": {
+                "ord_dt": now.strftime("%Y%m%d"),
+                "qry_tp": "4",
+                "stk_bond_tp": "1",
+                "sell_tp": "1",
+                "stk_cd": "096770",
+                "dmst_stex_tp": "%",
+            },
+        }
+    ]
     assert exact_fields["realized_pnl_krw"] == calculate_net_realized_pnl(
         132100, 132250, 1
     )
@@ -3621,9 +3665,10 @@ def test_periodic_account_sync_preserves_concurrent_fast_fill_completion(
     assert emitted == []
 
 
-def test_periodic_account_sync_does_not_borrow_kt00008_sell_for_holding(
+def test_periodic_account_sync_does_not_borrow_prior_kt00007_sell_for_holding(
     monkeypatch,
 ):
+    now = datetime.now()
     record = type(
         "Record",
         (),
@@ -3634,6 +3679,7 @@ def test_periodic_account_sync_does_not_borrow_kt00008_sell_for_holding(
             "status": "HOLDING",
             "buy_price": 19000.0,
             "buy_qty": 1,
+            "buy_time": now - timedelta(minutes=1),
             "sell_price": 0,
             "sell_time": None,
             "profit_rate": None,
@@ -3658,17 +3704,17 @@ def test_periodic_account_sync_does_not_borrow_kt00008_sell_for_holding(
     )
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
-        "get_account_execution_snapshot_kt00008",
-        lambda token: [
-            {
-                "trade_date": datetime.now().strftime("%Y%m%d"),
-                "code": "059090",
-                "side": "매도",
-                "qty": 1,
-                "unit_price": 18780,
-                "seq": "prior-cycle",
-            }
-        ],
+        "get_order_reference_snapshot_kt00007_with_meta",
+        lambda *args, **kwargs: _complete_order_snapshot(
+            [
+                _exact_kt00007_sell_row(
+                    code="059090",
+                    qty=1,
+                    price=18780,
+                    order_time=(now - timedelta(minutes=2)).strftime("%H%M%S"),
+                )
+            ]
+        ),
     )
     monkeypatch.setattr(
         sniper_sync,
@@ -3698,7 +3744,7 @@ def test_periodic_account_sync_does_not_borrow_kt00008_sell_for_holding(
     assert record.profit_rate is None
     assert emitted[0][0][3] == "sell_completion_reconciliation_gap"
     assert emitted[0][1]["fields"]["execution_match_reason"] == (
-        "prior_status_not_sell_ordered"
+        "exact_owner_cycle_sell_execution_not_found"
     )
     assert emitted[0][1]["fields"]["execution_match_count"] == 0
 
@@ -3837,8 +3883,8 @@ def test_periodic_account_sync_does_not_remove_manual_control_exclusion_on_db_er
     )
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
-        "get_account_execution_snapshot_kt00008",
-        lambda token: [],
+        "get_order_reference_snapshot_kt00007_with_meta",
+        lambda *args, **kwargs: _complete_order_snapshot(),
     )
     removals = []
     emitted = []
@@ -4090,7 +4136,14 @@ def test_periodic_account_sync_marks_legacy_broker_recovered_holding(monkeypatch
     assert legacy_watch.status == "HOLDING"
     assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered"] is True
     assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_legacy"] is True
-    assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_execution_verified"] is True
+    assert (
+        sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_order_reference_verified"]
+        is False
+    )
+    assert (
+        sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_settlement_context_observed"]
+        is True
+    )
     assert not any(
         topic == "TELEGRAM_BROADCAST"
         and "매수 체결 확인 (브로커 복구)" in payload["message"]
@@ -4163,7 +4216,10 @@ def test_periodic_account_sync_recovers_order_ref_when_kt00008_empty(monkeypatch
     sniper_sync.periodic_account_sync()
 
     assert legacy_watch.status == "HOLDING"
-    assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_execution_verified"] is True
+    assert (
+        sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_order_reference_verified"]
+        is True
+    )
     assert sniper_sync.ACTIVE_TARGETS[0]["odno"] == "0412345"
     telegram_events = [
         payload
@@ -4171,7 +4227,9 @@ def test_periodic_account_sync_recovers_order_ref_when_kt00008_empty(monkeypatch
         if topic == "TELEGRAM_BROADCAST"
     ]
     assert any("주문번호: `0412345`" in event["message"] for event in telegram_events)
-    assert any("체결/주문조회 확인" in event["message"] for event in telegram_events)
+    assert any(
+        "잔고+주문번호 조회 확인" in event["message"] for event in telegram_events
+    )
 
 
 def test_sync_balance_with_db_requests_restart_on_auth_failure(tmp_path, monkeypatch):
@@ -4453,8 +4511,7 @@ def test_holding_state_uses_net_profit_rate_for_sell_decision(monkeypatch):
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
         lambda **kwargs: (
-            sell_calls.append(kwargs)
-            or {"return_code": "0", "ord_no": "0000001"}
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "0000001"}
         ),
     )
     monkeypatch.setattr(
@@ -4612,9 +4669,7 @@ def test_ws_sell_receipt_before_http_response_never_rolls_back_terminal_state(
             ),
             "main_lifecycle_broker_raw_source_type": "00",
             "broker_execution_received_at": received_at.isoformat(),
-            "broker_execution_receive_time_source": (
-                "websocket_packet_ingress"
-            ),
+            "broker_execution_receive_time_source": ("websocket_packet_ingress"),
             "broker_execution_observed_at": fixed_at.isoformat(),
             "broker_execution_time_source": "official_fid_908",
             "broker_actual_execution_venue": "UNKNOWN",

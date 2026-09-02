@@ -301,6 +301,8 @@ def test_kt00007_completed_fill_keeps_execution_price_identity(monkeypatch):
                         "ord_uv": "276000",
                         "ord_no": "0004597",
                         "ori_ord": "0001234",
+                        "ord_tm": "12:00:49",
+                        "dmst_stex_tp": "SOR",
                     }
                 ],
                 "return_code": 0,
@@ -308,10 +310,77 @@ def test_kt00007_completed_fill_keeps_execution_price_identity(monkeypatch):
         ],
     )
 
-    rows = kiwoom_utils.get_order_reference_snapshot_kt00007("token")
+    rows = kiwoom_utils.get_order_reference_snapshot_kt00007("token", ord_dt="20260902")
 
     assert rows[0]["unit_price"] == 275500
+    assert rows[0]["execution_price"] == 275500
+    assert rows[0]["filled_qty"] == 5
     assert rows[0]["remaining_qty"] == 0
+    assert rows[0]["trade_date"] == "20260902"
+    assert rows[0]["trade_date_source"] == "request_ord_dt"
+    assert rows[0]["order_time"] == "120049"
+    assert rows[0]["order_time_contract_valid"] is True
+    assert rows[0]["execution_price_contract_valid"] is True
+    assert rows[0]["filled_quantity_contract_valid"] is True
+
+
+def test_kt00007_exact_fill_meta_accepts_official_owner_receipt_fields(monkeypatch):
+    calls = []
+
+    def fake_fetch(**kwargs):
+        calls.append(kwargs)
+        return (
+            [
+                {
+                    "acnt_ord_cntr_prps_dtl": [
+                        {
+                            "stk_cd": "A249420",
+                            "io_tp_nm": "현금매도",
+                            "ord_qty": "0000000011",
+                            "cntr_qty": "0000000011",
+                            "ord_remnq": "0000000000",
+                            "cntr_uv": "0000016440",
+                            "ord_uv": "0000000000",
+                            "ord_no": "0037426",
+                            "ori_ord": "0000000",
+                            "ord_tm": "12:00:49",
+                            "cnfm_tm": "",
+                            "dmst_stex_tp": "SOR",
+                        }
+                    ],
+                    "return_code": 0,
+                }
+            ],
+            {"api_id": "kt00007", "page_count": 1},
+        )
+
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "_fetch_kiwoom_api_continuous_with_meta",
+        fake_fetch,
+    )
+
+    rows, meta = kiwoom_utils.get_order_reference_snapshot_kt00007_with_meta(
+        "token",
+        ord_dt="20260902",
+        qry_tp="4",
+        stk_bond_tp="1",
+        sell_tp="1",
+        stk_cd="249420",
+        dmst_stex_tp="%",
+    )
+
+    assert meta["request_succeeded"] is True
+    assert meta["normalization_contract_complete"] is True
+    assert meta["contract_incomplete_count"] == 0
+    assert rows[0]["trade_date"] == "20260902"
+    assert rows[0]["qty"] == 11
+    assert rows[0]["filled_qty"] == 11
+    assert rows[0]["remaining_qty"] == 0
+    assert rows[0]["execution_price"] == 16440
+    assert rows[0]["order_time"] == "120049"
+    assert rows[0]["ord_no"] == "0037426"
+    assert calls[0]["payload"]["ord_dt"] == "20260902"
 
 
 def test_unfilled_order_snapshot_meta_distinguishes_empty_success_from_failure(

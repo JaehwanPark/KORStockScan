@@ -846,7 +846,19 @@ def _rising_missed_scout_followup_orders(
         order["source_report_type"] = "rising_missed_scout_workorder"
         order["runtime_effect"] = False
         order["allowed_runtime_apply"] = False
+        order["actual_order_submitted"] = False
+        order["broker_order_forbidden"] = True
         order["decision_authority"] = "source_only_operational_workorder"
+        provenance = order.get("implementation_provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+        order["implementation_provenance"] = {
+            **provenance,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
         existing_forbidden = order.get("forbidden_uses")
         if not isinstance(existing_forbidden, list):
             existing_forbidden = []

@@ -6557,13 +6557,17 @@ def test_scanner_fast_precheck_not_eligible_skips_before_heavy_eval():
 def test_scanner_fast_precheck_deferred_call_preserves_code_for_backoff_lookup():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     helper_idx = source.index("def _defer_emit_scanner_fast_precheck(")
+    capture_idx = source.index(
+        "sniper_state_handlers._capture_rising_missed_entry_turn_bbo(", helper_idx
+    )
+    throttle_idx = source.index("throttle = max(", helper_idx)
     fields_call_idx = source.index(
         "sniper_state_handlers._scanner_fast_precheck_fields(", helper_idx
     )
     code_arg_idx = source.index("code=code_value", fields_call_idx)
     ws_arg_idx = source.index("ws_data=ws_snapshot", fields_call_idx)
 
-    assert fields_call_idx < code_arg_idx < ws_arg_idx
+    assert capture_idx < throttle_idx < fields_call_idx < code_arg_idx < ws_arg_idx
 
 
 def test_scanner_fast_precheck_is_flushed_before_non_scanner_targets():
@@ -7207,6 +7211,46 @@ def test_scanner_initial_attach_lifetime_contract_accepts_post_attach_0b():
     assert retained["ws_backoff_retention_max_sec"] == 30.0
 
 
+def test_scanner_initial_attach_lifetime_uses_runtime_handoff_lower_bound():
+    stock = {
+        "id": 92,
+        "code": "399721",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROMO-399721-A",
+        "scanner_runtime_handoff_epoch": 2000.0,
+        "scanner_runtime_handoff_promotion_id": "PROMO-399721-A",
+        "scanner_runtime_instance_id": kiwoom_sniper_v2._SCANNER_RUNTIME_INSTANCE_ID,
+        "scanner_attach_provenance_version": "scanner_runtime_handoff_v1",
+        "_scanner_fast_precheck_fields": {
+            "fast_precheck_result": "budget_reallocated",
+            "fast_precheck_reason": "scanner_ws_stale_backoff_active",
+            "scanner_ws_stale_backoff_until": 2035.0,
+            "ws_received_types": "0B,0D",
+            "ws_last_0b_epoch": "1999.000000",
+            "ws_last_0d_epoch": "2001.000000",
+        },
+        "_scanner_ws_backoff_watch_retention_first_epoch": 2000.0,
+        "_scanner_ws_backoff_watch_retention_count": 1,
+    }
+
+    retained = (
+        kiwoom_sniper_v2._scanner_watch_eviction_decision_from_fast_precheck_budget(
+            stock,
+            now_ts=2031.0,
+        )
+    )
+
+    assert retained["should_evict"] is False
+    assert retained["initial_entry_ws_receipt_pending"] is True
+    assert retained["initial_entry_ws_receipt_attach_epoch"] == "2000.000"
+    assert retained["initial_entry_ws_receipt_attach_anchor_source"] == (
+        "runtime_handoff_pre_ws_reg_lower_bound"
+    )
+    assert retained["initial_entry_ws_receipt_lifetime_contract_sec"] == 90.0
+
+
 def test_scanner_first_entry_realtime_anchors_lifetime_to_post_attach_strength():
     stock = {
         "id": 92,
@@ -7243,6 +7287,160 @@ def test_scanner_first_entry_realtime_anchors_lifetime_to_post_attach_strength()
     assert received["scanner_first_entry_realtime_latency_ms"] == 3250.0
     assert kiwoom_sniper_v2._scanner_evaluation_lifetime_anchor(stock) == 2003.25
     assert kiwoom_sniper_v2._runtime_added_time_for_target(stock) == 1990.0
+
+
+def test_scanner_first_entry_realtime_uses_matching_runtime_handoff_lower_bound():
+    stock = {
+        "id": 93,
+        "code": "399721",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROMO-399721-A",
+        "scanner_runtime_handoff_epoch": 2000.0,
+        "scanner_runtime_handoff_promotion_id": "PROMO-399721-A",
+        "scanner_runtime_instance_id": kiwoom_sniper_v2._SCANNER_RUNTIME_INSTANCE_ID,
+        "scanner_attach_provenance_version": "scanner_runtime_handoff_v1",
+        "entry_armed_at_epoch": 1990.0,
+    }
+
+    received = kiwoom_sniper_v2._scanner_record_first_entry_realtime(
+        stock,
+        {
+            "last_realtime_type_ts": {"0B": 2000.25},
+            "strength_momentum_history": [{"ts": 1999.0}],
+        },
+        now_ts=2000.5,
+    )
+
+    assert received["scanner_entry_realtime_state"] == "received"
+    assert received["scanner_first_entry_realtime_type"] == "0B"
+    assert received["scanner_first_entry_realtime_latency_ms"] == 250.0
+    assert received["scanner_entry_realtime_attach_anchor_source"] == (
+        "runtime_handoff_pre_ws_reg_lower_bound"
+    )
+    assert received["scanner_entry_realtime_attach_anchor_promotion_id"] == (
+        "PROMO-399721-A"
+    )
+    assert received["scanner_evaluation_anchor_source"] == (
+        "first_post_runtime_handoff_entry_realtime"
+    )
+    assert "scanner_attach_epoch" not in stock
+    assert kiwoom_sniper_v2._scanner_evaluation_lifetime_anchor(stock) == 2000.25
+    latency_fields = (
+        kiwoom_sniper_v2.sniper_state_handlers._scanner_entry_realtime_latency_fields(
+            stock,
+            observed_epoch=2001.0,
+            terminal="ai_dispatch",
+        )
+    )
+    assert latency_fields["scanner_post_source_ready_latency_comparable"] is True
+    assert latency_fields["scanner_entry_realtime_attach_anchor_source"] == (
+        "runtime_handoff_pre_ws_reg_lower_bound"
+    )
+    assert latency_fields["attach_to_first_entry_realtime_sec"] == (
+        "not_comparable_no_server_subscription_ack"
+    )
+    assert latency_fields["entry_realtime_anchor_to_first_entry_realtime_sec"] == 0.25
+    assert latency_fields["first_entry_realtime_to_ai_dispatch_sec"] == 0.75
+    fast_fields = kiwoom_sniper_v2.sniper_state_handlers._scanner_fast_precheck_fields(
+        stock,
+        now_ts=2000.5,
+        code="399721",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": 2000.25,
+            "last_realtime_type_ts": {"0B": 2000.25},
+            "strength_momentum_history": [],
+        },
+    )
+    assert fast_fields["fast_precheck_post_attach_entry_realtime"] is True
+    assert fast_fields["scanner_entry_realtime_attach_anchor_source"] == (
+        "runtime_handoff_pre_ws_reg_lower_bound"
+    )
+
+    mismatched = {
+        **stock,
+        "scanner_first_entry_realtime_epoch": None,
+        "scanner_first_entry_realtime_type": None,
+        "scanner_evaluation_anchor_epoch": None,
+        "scanner_promotion_id": "PROMO-399721-B",
+    }
+    blocked = kiwoom_sniper_v2._scanner_record_first_entry_realtime(
+        mismatched,
+        {"last_realtime_type_ts": {"0B": 2001.0}},
+        now_ts=2001.0,
+    )
+    assert blocked["scanner_entry_realtime_state"] == "attach_epoch_missing"
+    assert blocked["scanner_entry_realtime_attach_anchor_source"] == (
+        "runtime_handoff_generation_mismatch_or_invalid"
+    )
+    assert "scanner_entry_realtime_attach_anchor_epoch" not in mismatched
+    assert "scanner_evaluation_anchor_epoch" not in mismatched
+    assert kiwoom_sniper_v2.sniper_state_handlers._scanner_entry_realtime_attach_anchor(
+        mismatched
+    ) == (0.0, "runtime_handoff_unvalidated")
+    mismatched_fast_fields = (
+        kiwoom_sniper_v2.sniper_state_handlers._scanner_fast_precheck_fields(
+            mismatched,
+            now_ts=2001.0,
+            code="399721",
+            ws_data={
+                "curr": 10_000,
+                "last_ws_update_ts": 2001.0,
+                "last_realtime_type_ts": {"0B": 2001.0},
+                "strength_momentum_history": [],
+            },
+        )
+    )
+    assert mismatched_fast_fields["fast_precheck_result"] == "source_quality_blocked"
+    assert mismatched_fast_fields["fast_precheck_reason"] == (
+        "awaiting_first_post_attach_trade_input"
+    )
+    assert mismatched_fast_fields["scanner_entry_realtime_attach_anchor_source"] == (
+        "runtime_handoff_unvalidated"
+    )
+    foreign_runtime = {
+        **stock,
+        "scanner_first_entry_realtime_epoch": None,
+        "scanner_first_entry_realtime_type": None,
+        "scanner_evaluation_anchor_epoch": None,
+        "scanner_runtime_instance_id": "scanner-runtime-foreign",
+    }
+    foreign_blocked = kiwoom_sniper_v2._scanner_record_first_entry_realtime(
+        foreign_runtime,
+        {"last_realtime_type_ts": {"0B": 2001.0}},
+        now_ts=2001.0,
+    )
+    assert foreign_blocked["scanner_entry_realtime_state"] == "attach_epoch_missing"
+
+    refreshed = {
+        **stock,
+        "scanner_promotion_id": "PROMO-399721-B",
+        "scanner_runtime_handoff_epoch": 2010.0,
+        "scanner_runtime_handoff_promotion_id": "PROMO-399721-B",
+        "scanner_generation_id": "399721:PROMO-399721-A:r1",
+        "scanner_attach_epoch": 2000.0,
+        "scanner_first_entry_realtime_epoch": 2000.25,
+        "scanner_first_entry_realtime_type": "0B",
+        "scanner_entry_realtime_attach_anchor_epoch": 2000.0,
+        "scanner_entry_realtime_attach_anchor_source": ("legacy_scanner_attach_epoch"),
+        "scanner_entry_realtime_attach_anchor_promotion_id": "PROMO-399721-A",
+        "scanner_evaluation_anchor_epoch": None,
+    }
+    refreshed_received = kiwoom_sniper_v2._scanner_record_first_entry_realtime(
+        refreshed,
+        {"last_realtime_type_ts": {"0B": 2010.25}},
+        now_ts=2010.5,
+    )
+    assert refreshed_received["scanner_entry_realtime_state"] == "received"
+    assert refreshed_received["scanner_entry_realtime_attach_anchor_epoch"] == (
+        "2010.000000"
+    )
+    assert refreshed_received["scanner_entry_realtime_attach_anchor_source"] == (
+        "runtime_handoff_pre_ws_reg_lower_bound"
+    )
+    assert refreshed_received["scanner_first_entry_realtime_epoch"] == "2010.250000"
 
 
 def test_scanner_rising_insufficient_history_evicts_after_buy_window(monkeypatch):
@@ -10387,6 +10585,59 @@ def test_scanner_no_trade_does_not_accept_pre_attach_0b(monkeypatch):
 
     assert decision["should_evict"] is False
     assert decision["eviction_reason"] == "scanner_no_trade_grace_active"
+
+
+def test_scanner_no_trade_uses_runtime_handoff_lower_bound(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_GRACE_SEC", "60")
+    target = {
+        "id": 77,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_qty": 0,
+        "buy_time": None,
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_promotion_id": "PROMO-005930-A",
+        "scanner_runtime_handoff_epoch": 1050.0,
+        "scanner_runtime_handoff_promotion_id": "PROMO-005930-A",
+        "scanner_runtime_instance_id": kiwoom_sniper_v2._SCANNER_RUNTIME_INSTANCE_ID,
+        "scanner_attach_provenance_version": "scanner_runtime_handoff_v1",
+    }
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_no_trade(
+        target,
+        {
+            "received_types": {"0B", "0D"},
+            "last_realtime_type_ts": {"0B": 1049.0, "0D": 1060.0},
+            "last_ws_update_ts": 1060.0,
+        },
+        now_ts=1061.0,
+    )
+
+    assert decision["should_evict"] is False
+    assert decision["eviction_reason"] == "scanner_no_trade_grace_active"
+    assert decision["no_trade_watch_anchor_epoch"] == "1050.000"
+    assert decision["no_trade_watch_anchor_source"] == (
+        "runtime_handoff_pre_ws_reg_lower_bound"
+    )
+
+    mismatched = {
+        **target,
+        "scanner_promotion_id": "PROMO-005930-B",
+    }
+    mismatch_decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_no_trade(
+        mismatched,
+        {
+            "received_types": {"0B", "0D"},
+            "last_realtime_type_ts": {"0B": 1060.0, "0D": 1060.0},
+            "last_ws_update_ts": 1060.0,
+        },
+        now_ts=1061.0,
+    )
+    assert mismatch_decision["should_evict"] is False
+    assert mismatch_decision["eviction_attempt_count"] == 1
+    assert mismatch_decision["terminal_reason"] == "no_0b_after_grace"
 
 
 def test_scanner_no_trade_eviction_waits_for_realtime_type(monkeypatch):

@@ -1366,6 +1366,53 @@ def _build_operational_workorders(
     return orders
 
 
+def _append_intraday_feedback_workorders(
+    orders: list[dict[str, Any]],
+    *,
+    intraday_feedback: dict[str, Any],
+) -> None:
+    """Forward distinct source-only feedback workorders into the central chain."""
+    raw_orders = intraday_feedback.get("code_improvement_orders")
+    if not isinstance(raw_orders, list):
+        return
+    known_order_ids = {
+        str(order.get("order_id") or "").strip()
+        for order in orders
+        if isinstance(order, dict)
+    }
+    for raw in raw_orders:
+        if not isinstance(raw, dict):
+            continue
+        order_id = str(raw.get("order_id") or "").strip()
+        if not order_id or order_id in known_order_ids:
+            continue
+        order = dict(raw)
+        order["runtime_effect"] = False
+        order["allowed_runtime_apply"] = False
+        order["actual_order_submitted"] = False
+        order["broker_order_forbidden"] = True
+        provenance = order.get("implementation_provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+        order["implementation_provenance"] = {
+            **provenance,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        forbidden = (
+            order.get("forbidden_uses")
+            if isinstance(order.get("forbidden_uses"), list)
+            else []
+        )
+        order["forbidden_uses"] = list(
+            dict.fromkeys([*(str(item) for item in forbidden), *FORBIDDEN_USES])
+        )
+        orders.append(order)
+        known_order_ids.add(order_id)
+
+
 def build_report(
     target_date: str,
     *,
@@ -1439,6 +1486,10 @@ def build_report(
         intraday_feedback=intraday_feedback,
         classifier_prior=classifier_prior,
         source_paths=source_paths,
+    )
+    _append_intraday_feedback_workorders(
+        code_improvement_orders,
+        intraday_feedback=intraday_feedback,
     )
     intraday_feedback_summary = (
         intraday_feedback.get("summary")
