@@ -69,6 +69,39 @@ def test_ka10004_preserves_explicit_nxt_market_suffix(monkeypatch):
     assert snapshot["request_code"] == "005930_NX"
 
 
+def test_ka10004_explicit_request_code_bypasses_implicit_db_route(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_effective_kiwoom_code",
+        lambda _code: "005930_NX",
+    )
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **kwargs: calls.append(kwargs)
+        or [
+            {
+                "sel_fpr_bid": "10100",
+                "buy_fpr_bid": "10000",
+            }
+        ],
+    )
+
+    snapshot = kiwoom_utils.get_stock_orderbook_ka10004(
+        "token",
+        "005930",
+        explicit_request_code=True,
+        max_retries=1,
+    )
+
+    assert calls[0]["payload"]["stk_cd"] == "005930"
+    assert calls[0]["max_retries"] == 1
+    assert snapshot["request_code"] == "005930"
+    assert snapshot["explicit_request_code"] is True
+
+
 def test_effective_kiwoom_code_preserves_explicit_market_suffix():
     assert kiwoom_utils.normalize_stock_code("A005930_NX") == "005930"
     assert (

@@ -245,7 +245,7 @@ def test_non_reusable_output_status_forces_run(tmp_path, monkeypatch):
     assert decision["outputs"][0]["status"] == "non_reusable_json"
 
 
-def test_lifecycle_window_drift_signal_runs_even_when_outputs_are_fresh(
+def test_lifecycle_window_persistent_drift_signal_does_not_repeat_fresh_output(
     tmp_path, monkeypatch
 ):
     _patch_roots(tmp_path, monkeypatch)
@@ -266,8 +266,37 @@ def test_lifecycle_window_drift_signal_runs_even_when_outputs_are_fresh(
 
     decision = mod.evaluate_step(spec, env={})
 
-    assert decision["decision"] == "run"
-    assert "upstream_drift_signal" in decision["trigger_reasons"]
+    assert decision["decision"] == "skip"
+    assert decision["trigger_reasons"] == ["fresh_outputs_no_trigger"]
+    assert decision["upstream_drift_signal_present"] is True
+
+
+def test_descriptive_candidate_text_is_not_a_drift_signal(tmp_path, monkeypatch):
+    _patch_roots(tmp_path, monkeypatch)
+    spec = mod.StepSpec(
+        step_id="pattern_lab_currentness_audit",
+        scope="deep_audits",
+        output_paths=("out.json", "out.md"),
+        source_paths=("source.json", "source.md"),
+        force_env="THRESHOLD_CYCLE_FORCE_DEEP_AUDITS",
+        description="test",
+    )
+    _write_json(tmp_path / "out.json", {"status": "pass"}, 200)
+    _write_text(tmp_path / "out.md", "# output\n", 200)
+    _write_json(
+        tmp_path / "source.json",
+        {
+            "status": "pass",
+            "description": "candidate review completed without a source quality gap",
+        },
+        100,
+    )
+    _write_text(tmp_path / "source.md", "# source\n", 100)
+
+    decision = mod.evaluate_step(spec, env={})
+
+    assert decision["decision"] == "skip"
+    assert decision["upstream_drift_signal_present"] is False
 
 
 def test_lifecycle_window_specs_only_depend_on_pre_window_sources():

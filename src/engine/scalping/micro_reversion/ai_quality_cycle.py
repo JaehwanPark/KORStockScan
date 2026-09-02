@@ -65,6 +65,7 @@ from src.engine.scalping.micro_reversion.provider_budget import BUDGET_SUMMARY_S
 from src.engine.scalping.micro_reversion.replay_ablation_contract import (
     CURRENT_DESIGN_ACTIVATION_DATE,
     CURRENT_DESIGN_VERSION,
+    CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE,
     LEGACY_ARMS,
     LEGACY_DESIGN_VERSION,
     PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE,
@@ -7319,6 +7320,37 @@ def _source_only_gap_diagnostics(
         if bridge_available
         else 0
     )
+    paired_eligible = (
+        nonnegative_int(
+            bridge_summary.get(
+                "paired_decision_quality_eligible_primary_episode_count"
+            ),
+            "paired_decision_quality_eligible_primary_episode_count",
+            missing_is_zero=True,
+        )
+        if bridge_available
+        else 0
+    )
+    economic_eligible = (
+        nonnegative_int(
+            bridge_summary.get("net_economic_eligible_primary_episode_count"),
+            "net_economic_eligible_primary_episode_count",
+            missing_is_zero=True,
+        )
+        if bridge_available
+        else 0
+    )
+    current_exact_eligible = (
+        nonnegative_int(
+            bridge_summary.get(
+                "current_ablation_source_eligible_primary_episode_count"
+            ),
+            "current_ablation_source_eligible_primary_episode_count",
+            missing_is_zero=True,
+        )
+        if bridge_available
+        else 0
+    )
     past_market_missing = (
         nonnegative_int(
             exclusion_counts.get("past_market_row_missing"),
@@ -7337,6 +7369,72 @@ def _source_only_gap_diagnostics(
         if bridge_available
         else 0
     )
+    depth_route_rejection_counts: dict[str, int] = {}
+    raw_depth_route_rejection_counts = bridge_summary.get(
+        "depth_route_rejection_counts"
+    )
+    if bridge_available and raw_depth_route_rejection_counts is not None:
+        if not isinstance(raw_depth_route_rejection_counts, Mapping):
+            contract_findings.append("depth_route_rejection_counts_invalid")
+        else:
+            for reason, value in raw_depth_route_rejection_counts.items():
+                normalized_reason = str(reason or "")
+                if not normalized_reason:
+                    contract_findings.append("depth_route_rejection_reason_invalid")
+                    continue
+                depth_route_rejection_counts[normalized_reason] = nonnegative_int(
+                    value,
+                    f"depth_route_rejection_counts.{normalized_reason}",
+                )
+    allocator_classification_counts: dict[str, int] = {}
+    raw_allocator_classification_counts = bridge_summary.get(
+        "entry_pipeline_allocator_classification_counts"
+    )
+    if bridge_available and raw_allocator_classification_counts is not None:
+        if not isinstance(raw_allocator_classification_counts, Mapping):
+            contract_findings.append(
+                "entry_pipeline_allocator_classification_counts_invalid"
+            )
+        else:
+            for classification, value in raw_allocator_classification_counts.items():
+                normalized_classification = str(classification or "")
+                if not normalized_classification:
+                    contract_findings.append(
+                        "entry_pipeline_allocator_classification_invalid"
+                    )
+                    continue
+                allocator_classification_counts[normalized_classification] = (
+                    nonnegative_int(
+                        value,
+                        "entry_pipeline_allocator_classification_counts."
+                        f"{normalized_classification}",
+                    )
+                )
+    ask_depletion_depth_availability: dict[str, dict[str, int]] = {}
+    raw_depth_availability = bridge_summary.get("ask_depletion_depth_availability")
+    if bridge_available and raw_depth_availability is not None:
+        if not isinstance(raw_depth_availability, Mapping):
+            contract_findings.append("ask_depletion_depth_availability_invalid")
+        else:
+            for label in ("top1", "top3", "top5"):
+                raw_census = raw_depth_availability.get(label)
+                if not isinstance(raw_census, Mapping):
+                    contract_findings.append(
+                        f"ask_depletion_depth_availability.{label}_invalid"
+                    )
+                    continue
+                census = {
+                    field: nonnegative_int(
+                        raw_census.get(field),
+                        f"ask_depletion_depth_availability.{label}.{field}",
+                    )
+                    for field in ("available", "unavailable", "denominator")
+                }
+                if census["available"] + census["unavailable"] != census["denominator"]:
+                    contract_findings.append(
+                        f"ask_depletion_depth_availability.{label}_census_mismatch"
+                    )
+                ask_depletion_depth_availability[label] = census
     lifecycle_available = artifact_valid(lifecycle_report, "lifecycle")
     lifecycle_gap = (
         nonnegative_int(
@@ -7513,6 +7611,83 @@ def _source_only_gap_diagnostics(
                 "ambiguous SOR rows remain excluded without inferred venue"
             ),
         )
+    current_exact_contract_active = bool(
+        date.fromisoformat(target_date)
+        >= date.fromisoformat(CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE)
+    )
+    if (
+        bridge_available
+        and current_exact_contract_active
+        and current_exact_eligible <= 0
+        and (paired_eligible > 0 or economic_eligible > 0)
+    ):
+        blocker_codes.append(
+            "micro_current_ablation_exact_intersection_empty:"
+            f"paired={paired_eligible}:economic={economic_eligible}"
+        )
+        add_workorder(
+            "MainAIMicroExactEconomicIntersectionRepair",
+            [
+                f"paired_decision_quality_eligible={paired_eligible}",
+                f"net_economic_eligible={economic_eligible}",
+                f"current_exact_source_eligible={current_exact_eligible}",
+            ],
+            (
+                "bridge current exact trace census equals the source-bundle eligible "
+                "parent census; a parent is materialized only when the same primary "
+                "trace is paired, mature, sidecar-valid, and net-economic eligible"
+            ),
+        )
+    route_contract_rejections = sum(
+        count
+        for reason, count in depth_route_rejection_counts.items()
+        if reason
+        in {
+            "depth_component_route_totals_do_not_reconcile",
+            "depth_integrated_route_components_missing",
+        }
+    )
+    if (
+        bridge_available
+        and current_exact_eligible <= 0
+        and route_contract_rejections > 0
+    ):
+        blocker_codes.append(
+            f"micro_depth_route_contract_rejections:{route_contract_rejections}"
+        )
+        add_workorder(
+            "MicroReversionDepthRouteContractRepair",
+            [
+                f"depth_route_contract_rejections={route_contract_rejections}",
+                *[
+                    f"{reason}={count}"
+                    for reason, count in sorted(depth_route_rejection_counts.items())
+                    if count > 0
+                ],
+            ],
+            (
+                "plain KRX/NXT 0D rows accept combined totals without requiring SOR "
+                "component decomposition; SOR rows still require exact KRX+NXT "
+                "reconciliation and invalid rows remain excluded"
+            ),
+        )
+    missing_expected_allocator = allocator_classification_counts.get(
+        "missing_expected_submitted_trace", 0
+    )
+    if bridge_available and missing_expected_allocator > 0:
+        blocker_codes.append(
+            f"micro_allocator_missing_expected_submitted_trace:"
+            f"{missing_expected_allocator}"
+        )
+        add_workorder(
+            "MainAIAllocatorSubmittedTraceCustodyRepair",
+            ["missing_expected_submitted_trace=" f"{missing_expected_allocator}"],
+            (
+                "each submitted allocator trace joins one exact immutable receipt or "
+                "is explicitly source-quality excluded; non-submitted stages remain "
+                "not-applicable and are not promoted to missing evidence"
+            ),
+        )
     current_lifecycle_receipt_gap = bool(
         lifecycle_available
         and lifecycle_eligible <= 0
@@ -7594,8 +7769,16 @@ def _source_only_gap_diagnostics(
         "schema": "main_ai_quality_source_only_gap_diagnostics_v1",
         "target_date": target_date,
         "bridge_micro_eligible_count": micro_eligible,
+        "bridge_paired_eligible_count": paired_eligible,
+        "bridge_net_economic_eligible_count": economic_eligible,
+        "bridge_current_exact_source_eligible_count": current_exact_eligible,
         "past_market_row_missing_count": past_market_missing,
         "integrated_route_proof_missing_count": route_proof_missing,
+        "depth_route_rejection_counts": depth_route_rejection_counts,
+        "ask_depletion_depth_availability": ask_depletion_depth_availability,
+        "entry_pipeline_allocator_classification_counts": (
+            allocator_classification_counts
+        ),
         "lifecycle_promotion_eligible_count": lifecycle_eligible,
         "broker_execution_provenance_gap_count": lifecycle_gap,
         "pipeline_lifecycle_instrumentation_gap_count": lifecycle_pipeline_gap,

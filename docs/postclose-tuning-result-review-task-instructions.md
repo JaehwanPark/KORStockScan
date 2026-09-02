@@ -1,12 +1,14 @@
 # 장후 튜닝결과 점검 작업지시문
 
-작성 기준: `2026-09-01 KST`
+작성 기준: `2026-09-02 KST`
 
 현재 대상 거래일의 키움증권 연동 SCALPING 장후 자동화 산출물을 대상으로 자동화체인 완결성, source quality, 비용 차감 EV, owner별 실현 결과, sim/source-only 후보, 다음 PREOPEN handoff와 code-improvement workorder를 점검한다. 메인 봇, 위젯 매매기계, 에피소드 매매기계는 서로 독립된 주문 owner로 유지하며 주문번호·보유수량·청산·손익 귀속을 혼합하지 않는다.
 
 튜닝 원칙과 active/open 상태는 `docs/plan-korStockScanPerformanceOptimization.rebase.md` §1~§8, 당일 실행 항목은 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 실행·복구 권한은 `docs/time-based-operations-runbook.md`, producer/consumer 의존 순서와 R0→R6 추적성은 `docs/report-based-automation-traceability.md`를 기준으로 한다. 실제 실행 단계는 대상 run이 시작할 때 검증한 immutable wrapper snapshot과 설치된 cron/systemd `ExecStart`를 함께 대조한다. runbook·traceability·설치 trigger·wrapper snapshot의 단계, 조건, 실패 우선순위가 다르면 최신 mtime이나 실제 실행 사실만으로 한쪽을 권한 계약으로 선택하지 않고 `contract_drift`로 fail-closed한 뒤 owner 문서와 구현을 review gate로 정합화한다. 이 문서는 반복 점검 절차이며 특정 날짜의 family 목록, report 존재 또는 과거 추천을 현재 runtime 적용 권한으로 만들지 않는다.
 
 이 지시문으로 장후 점검을 실행하라는 사용자 요청은 §2의 허용 범위에 속하는 `implement_now` 중 `runtime_effect=false`인 항목을 §9의 2-pass로 구현·리뷰·재판정하라는 지시를 포함한다. 별도의 “구현해줘” 재지시나 controller/runner opt-in을 기다리지 않는다. 다만 대상 workorder가 `not_yet_due|in_progress`이거나 필수 계약 증거가 없으면 구현을 추정하지 않고 해당 gate를 미완료로 남긴다. `runtime_effect=true`나 §2 금지 권한은 이 자동 구현 지시에 포함되지 않는다.
+
+장후 작업 효율화는 튜닝결과 효용성 검증 뒤에 수행한다. 실행 주기 축소, change-triggered skip, 파일 크기 감소, cache/checkpoint 재사용 또는 `DONE` marker는 운영비용·완결성 근거일 뿐 튜닝결과 유효성 근거가 아니다. raw source가 충분한데 source-quality-valid, exact join, mature label, 비용 차감 eligible 또는 intended consumer 표본이 반복적으로 0이 되는 경로는 먼저 최초 고갈 단계를 찾아 `structural_population_exhaustion|blocked_missing_evidence`로 닫고 source-only workorder에 전달한다. 구조적 결함을 고치지 않은 채 같은 0건 산출물을 더 가볍거나 드물게 생성하는 것을 효율화 완료로 인정하지 않는다.
 
 ## 1. 목표와 완료 정의
 
@@ -24,10 +26,11 @@
 10. 실행 예정 process가 살아 있고 의미 있는 output과 consumer를 가지며 dead·hung·duplicate·no-op·orphan 경로가 남지 않았는가?
 11. 보고서의 각 표본·모집단 부족은 `시간이 해결하는 부족`과 `구조적으로 모집단이 고갈되는 부족` 중 무엇이며, 최초 고갈 단계·예상 해소 시점 또는 구조 보완·재판정 조건이 근거와 함께 닫혔는가?
 12. 대상 generation의 `implement_now` 전수가 stable `order_id`로 intake됐고, 허용 범위의 `runtime_effect=false` 항목이 Pass 1 구현과 재생성 후 Pass 2 fixed-point 재판정까지 누락 없이 닫혔는가?
+13. 각 고비용·대용량·반복 producer가 실제 source-quality-valid 경제성 표본, 후보 또는 필수 downstream receipt를 만들었는가? 만들지 못했다면 자연 부재, 계약상 N/A, 증거 결손, 구조적 모집단 고갈 중 무엇이며 최초 0-conversion stage가 어디인가?
 
 장후 완료는 다음 두 층을 분리한다.
 
-- 운영 완료: main postclose wrapper와 verifier가 terminal이고, controller artifact뿐 아니라 controller wrapper의 대상일 latest `[DONE]`, 필수 follower, 20:50/21:00 보관 작업과 21:55 detector final window가 계약에 맞게 닫혔다.
+- 운영 완료: main postclose wrapper와 verifier가 terminal이고, controller artifact뿐 아니라 controller wrapper의 대상일 latest `[DONE]`, 필수 follower, 20:50 archive와 21:55 terminal-aware cleanup/final detector가 계약에 맞게 닫혔다.
 - 튜닝 판정 완료: source quality, EV, handoff, workorder lineage와 미해결 blocker가 근거와 함께 판정됐다.
 
 `postclose_done_controller status=done` JSON만으로 운영 완료를 선언하지 않는다. controller JSON 뒤에 실행되는 paired-replay follower와 opt-in runner가 있으므로 controller cron log의 대상일 latest `[DONE]`까지 확인해야 한다. 이 운영 완료도 수익성 우수, live 승격 가능 또는 실주문 권한 획득을 뜻하지 않는다.
@@ -66,19 +69,30 @@
 
 1. Contract gate: source-of-truth, target date, active/OFF/retired owner와 권한 경계 고정
 2. Chain gate: process·wrapper·artifact·producer/consumer 전체 inventory와 terminal 상태 확인
-3. Calculation gate: 결정론적 층화 표본 독립 재계산, 전체 집계 reconciliation, AI/micro negative·boundary case 검증
-4. Consumption gate: 당일 적용 입력의 main/widget/episode 실제 소비와 당일 장후 생성 입력의 다음-PREOPEN handoff를 서로 다른 시간축으로 확인
-5. Implement-now intake gate: authoritative workorder의 `implement_now` 전수와 권한·구현 상태를 stable `order_id`로 고정하고 Pass 1 대상 누락 0을 확인
-6. Repair/Pass 1 gate: 허용 범위의 `runtime_effect=false` 항목 전수에 대한 구현 또는 `already_implemented_verified`, 독립 코드리뷰, finding 수정과 targeted validation 반복
-7. Regeneration/Pass 2 gate: upstream부터 ordered regeneration, old/new workorder diff, 신규·판정변경 `implement_now` 추가 구현, fixed-point 확인, verifier/controller 최종 판정
+3. Structural effectiveness gate: enabled·run·skip step별 입력 모집단→source-quality-valid→exact join→mature label→비용 차감 eligible→candidate/consumer receipt funnel을 대조하고 최초 고갈 단계와 결과 효용성을 판정
+4. Calculation gate: 결정론적 층화 표본 독립 재계산, 전체 집계 reconciliation, AI/micro negative·boundary case 검증
+5. Consumption gate: 당일 적용 입력의 main/widget/episode 실제 소비와 당일 장후 생성 입력의 다음-PREOPEN handoff를 서로 다른 시간축으로 확인
+6. Implement-now intake gate: authoritative workorder의 `implement_now` 전수와 권한·구현 상태를 stable `order_id`로 고정하고 Pass 1 대상 누락 0을 확인
+7. Repair/Pass 1 gate: 허용 범위의 `runtime_effect=false` 항목 전수에 대한 구현 또는 `already_implemented_verified`, 독립 코드리뷰, finding 수정과 targeted validation 반복
+8. Regeneration/Pass 2 gate: upstream부터 ordered regeneration, old/new workorder diff, 신규·판정변경 `implement_now` 추가 구현, fixed-point 확인, verifier/controller 최종 판정
 
-high/xhigh의 추가 추론은 조사 깊이를 높이는 데 사용하고 scope나 실행 권한을 넓히지 않는다. `high`는 위 7개 gate, 독립 producer/consumer review와 finding-0 재검증을 모두 수행한다. `xhigh`는 여기에 반대 가설·오탐/누락·경계 표본·authority leak를 겨냥한 adversarial second pass와 수정 후 전체 영향면 재리뷰를 추가한다. 현재 target date와 직접 연결된 producer/consumer부터 닫고, 무관한 repository 전역 개선은 별도 backlog로 분리한다.
+high/xhigh의 추가 추론은 조사 깊이를 높이는 데 사용하고 scope나 실행 권한을 넓히지 않는다. `high`는 위 8개 gate, 독립 producer/consumer review와 finding-0 재검증을 모두 수행한다. `xhigh`는 여기에 반대 가설·오탐/누락·경계 표본·authority leak를 겨냥한 adversarial second pass와 수정 후 전체 영향면 재리뷰를 추가한다. 현재 target date와 직접 연결된 producer/consumer부터 닫고, 무관한 repository 전역 개선은 별도 backlog로 분리한다.
 
-긴 실행에서는 최소 `target date / commit·dirty / artifact path·hash·time / process PID·start·status / finding severity / shortage_id·shortage_class·evidence window·ETA 또는 구조 보완 / workorder generation·source hash / implement_now order_id·2-pass status / 수정 파일 / validation / regeneration step`을 evidence ledger로 유지한다. context가 축약되거나 작업이 다음 turn으로 이어져도 이 ledger와 마지막 완료 gate에서 재개하고 이미 닫힌 단계를 무근거로 반복하지 않는다.
+긴 실행에서는 최소 `target date / commit·dirty / artifact path·hash·time·bytes / process PID·start·status / step run|skip·trigger reason / source→valid→join→mature→economic→consumer funnel / first depleted stage / finding severity / shortage_id·shortage_class·evidence window·ETA 또는 구조 보완 / workorder generation·source hash / implement_now order_id·2-pass status / 수정 파일 / validation / regeneration step`을 evidence ledger로 유지한다. context가 축약되거나 작업이 다음 turn으로 이어져도 이 ledger와 마지막 완료 gate에서 재개하고 이미 닫힌 단계를 무근거로 반복하지 않는다.
 
 서로 독립된 read-only 계산, process inventory와 producer/consumer review는 병렬 검토할 수 있다. 최종 판정은 단일 owner가 source hash와 finding을 합쳐 내며, sub-review의 추정만으로 결함을 확정하거나 runtime을 변경하지 않는다.
 
 finding은 `P0 safety/owner breach`, `P1 incorrect result or machine input`, `P2 source/process/contract defect`, `P3 documentation/maintainability`로 분류한다. P0~P2가 남아 있으면 finding 0이 아니며, 수정 후 동일 범위 재리뷰와 targeted validation을 반복한다. 외부 source 부재나 사용자 권한처럼 코드로 닫을 수 없는 항목은 숨기지 않고 blocked owner와 acceptance condition을 기록한다.
+
+### 3.2 이미 시작된 장후 run의 전환 계약
+
+대상일 main wrapper의 `[START]`와 실제 snapshot PID가 확인되고 terminal marker가 아직 없으면 해당 run을 `current_generation_in_progress`로 고정한다.
+
+- 실행 중 repository 문서·코드 수정은 해당 run에 반영된 것으로 보지 않는다. 시작 시 검증된 immutable wrapper snapshot, 설치 trigger와 당시 source revision이 그 run의 실행 계약이다.
+- P0 안전사고에 대한 기존 runbook 권한이나 controller의 bounded recovery가 아닌 한, 구조 보완을 위해 실행 중 snapshot/process를 중단·교체·중복 실행하지 않는다. follower도 predecessor terminal을 기다리게 둔다.
+- 현재 run은 main wrapper, verifier, controller JSON/wrapper, due follower와 보관·detector 단계가 terminal이 될 때까지 운영 상태만 점검한다. 이 terminal은 `운영 완료`일 수 있으나 구조적 source/result 결함이 남으면 `튜닝 판정 완료`가 아니다.
+- terminal 뒤 현재 generation의 artifact path/hash/bytes/status, exact source fingerprint, step run/skip reason과 producer/consumer funnel을 pre-repair snapshot으로 고정한다. 알려진 결함 영향 generation은 그 artifact의 intended consumer와 downstream scope에서만 `quarantined|source_quality_blocked|not_authoritative`로 분리하고, source-only artifact에 없던 PREOPEN/live authority를 새로 만들거나 무관한 family를 차단하지 않는다.
+- 그 뒤에만 최소 source-only 코드·schema·instrumentation 보완, review finding 0, targeted validation을 닫고 영향 producer부터 필요한 downstream만 §7.6 순서로 재생성한다. 이미 성공한 무관 단계나 full wrapper를 습관적으로 다시 실행하지 않는다.
 
 표준 읽기 전용 시작 명령은 다음과 같다.
 
@@ -139,6 +153,29 @@ EOD 실행이 정상 허용시간 안에서 진행 중이면 기다린다. 최�
 
 장시간 wrapper는 시작 시 검증한 immutable snapshot을 실행한다. 실행 중 repository 파일이 바뀌었다는 이유로 현재 run에 새 코드가 반영됐다고 보지 않으며, 새 revision 검증이 필요하면 현재 run의 terminal 상태와 review gate를 먼저 닫는다.
 
+#### 4.2.1 Change-triggered 실행과 결과 효용성 gate
+
+변경된 장후 체인은 step을 다음과 같이 분류한다.
+
+- `core_daily`: source-quality hard gate, target-date 핵심 attribution/EV, final workorder fingerprint, runtime summary, checklist와 final verifier처럼 매 거래일 또는 의존 generation마다 반드시 닫혀야 하는 단계
+- `change_triggered`: rolling/MTD 재계산, deep audit와 workorder side branch처럼 source 신규성, non-reusable output, 명시적 force가 있을 때만 실행하는 단계
+- `repair_blocked`: source나 output은 존재하지만 구조적 producer/join/schema 결함 때문에 유효 결과를 만들 수 없어 코드 보완 전 재실행이 무의미한 단계
+- `manual_or_weekly`: 명시적 owner·due·trigger가 있을 때만 실행하는 deep/비싼 분석
+- `disabled_by_contract|retired_absent`: 명시적 OFF 또는 은퇴로 실행·freshness 요구에서 제외되는 단계
+
+이 분류는 장후 감사 metadata이며 기존 wrapper step status, artifact schema 또는 runtime authority 값을 대체하지 않는다.
+
+`automation_chain_trigger_decision`의 `fresh_outputs_no_trigger` skip과 `upstream_drift_signal_present=true`는 동일 generation의 중복 계산을 피하는 운영 판정이다. 이는 persistent gap, source-quality blocker, 구조적 모집단 고갈 또는 미완료 workorder를 해결하거나 숨기는 판정이 아니다. skip step도 마지막 유효 output의 structural-effectiveness 상태, blocker owner, stable shortage/workorder ID와 다음 acceptance를 계속 보고해야 한다.
+
+각 enabled producer에 대해 감사 evidence ledger가 최소 `input_unique → source_quality_valid_unique → exact_join_unique → mature_label_unique → economic_eligible_unique → candidate_or_intended_consumer_receipt_unique`를 schema상 applicable한 마지막 단계까지 재구성한다. producer schema가 이미 이 census를 선언하면 해당 필드와 보존식을 사용하고, 선언하지 않으면 immutable direct source와 consumer receipt로 계산하되 새 runtime schema를 추정하지 않는다. 원천 bytes·row가 충분한데 중간 단계가 0이면 다음을 적용한다.
+
+- 정상 희소 도착과 finite ETA가 입증되면 `time_resolvable_shortage`
+- 계약상 표본을 요구하지 않으면 `N/A_by_contract`
+- floor/window/authority 증거가 없으면 `blocked_missing_evidence`
+- producer/consumer 불일치, impossible predicate, 반복 전량 배제 또는 exact intersection 0이 기다림으로 늘지 않으면 `structural_population_exhaustion`
+
+`status=pass`, `[DONE]`, 큰 artifact bytes, source row 수, 개별 marginal eligible count 또는 cache hit만으로 결과 효용성을 선언하지 않는다. 구조형으로 판정한 step은 `repair_blocked`로 두고 source-only workorder/verifier에 전달한 뒤 코드 보완 전 동일 고비용 재실행을 막는다. 보완 후에는 explicit force 또는 새 source generation으로 한 번만 재생성하고 old/new exact intersection과 downstream receipt를 비교한다.
+
 ### 4.3 Verifier와 DONE controller
 
 다음 artifact를 같은 target date, 직접 downstream link/fingerprint와 생성 순서로 대조한다. 여러 artifact에 공통 `generation_id`가 있다고 가정하지 않으며, `generation_id/source_hash/lineage`는 workorder snapshot 안에서 비교한다.
@@ -172,8 +209,8 @@ main controller와 병렬 또는 후행으로 실행되는 owner를 각각 분�
 - `run_machine_microstructure_final_refresh.sh` 21:15 owner: 현재 reviewed wrapper 계약의 한 번 결정한 completed target date, expansion → attribution → market-weakness-hysteresis → entry-timing → approval/notification → checklist builder 단계별 return code와 `builder > policy > weakness-hysteresis > entry-timing > attribution > expansion` 실패 우선순위. weakness-hysteresis와 entry-timing은 `attribution_rc==0`일 때만 실행되며, attribution 실패 때의 각 `rc=0`은 성공이 아니라 `skipped_due_to_attribution_failure`로 판정한다. weakness-hysteresis는 차단·실행 진입의 1·3·5·10·20·30분 executable-BBO 반사실, 최신 3거래일 holdout과 충분한 누적 표본을 통과한 단일 activation/release 축만 다음 exact KRX session 정책으로 발행하고 당일 hot mutation은 금지한다. 시작 시점 wrapper snapshot·설치 unit·runbook·traceability 중 단계 또는 실패 우선순위가 어긋나면 이 고정 예시로 정상화하지 않고 `contract_drift`로 차단한다.
 - AI paired replay: 대상 stage/venue/session별 terminal batch, exact source/batch hash, checkpoint, provider receipt, `completed_offline_only`
 - 20:50 dashboard DB archive: wrapper `[DONE]/[FAIL]`, `DASHBOARD_ARCHIVE_*`, verified/backfilled source와 `skipped_unverified`
-- 21:00 log rotation/cleanup: wrapper terminal marker, declared writer별 pre-open rollover receipt, archive generation/source hash·gzip roundtrip, open-inode 0·owner lock, writer-active defer, escalation/state failure와 원본 보존
-- 21:55 error detector final window: 대상일 canonical report, 고유 `run_id`, 7개 detector accounting, `summary_severity`, wrapper `[DONE]/[FAIL]`
+- 21:55 terminal-aware finalization: main postclose·controller/follower·tuning monitoring·dashboard archive의 exact-date terminal을 bounded wait한 뒤에만 log rotation/cleanup을 실행하고, 실패/timeout이면 cleanup을 건너뛰어 원본을 보존하는지 확인한다.
+- final error detector: finalization의 cleanup 뒤 대상일 canonical report, 고유 `run_id`, 7개 detector accounting, `summary_severity`, wrapper `[DONE]/[FAIL]`이 닫혔는지 확인한다.
 
 후행 source-only replay의 성공을 live 적용으로 해석하지 않는다. `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, `broker_order_forbidden=true` 계약을 확인한다.
 
@@ -271,6 +308,16 @@ AI는 세 층을 분리한다.
 AI가 필수인 경로는 `provider=none`, unparsed, schema reject, missing receipt를 fail-closed한다. 의도적으로 AI를 사용하지 않는 OFF/disabled 경로는 provider 부재를 장애로 세지 않되 AI 검토 성공으로 포장하지 않는다. provider/schema 성공만으로 판단 품질 성공을 주장하지 않는다. 일반 paired replay는 동일 payload 계약을 사용하고, 의도된 feature/prompt ablation은 아래 R0→R3의 manipulated-field 계약으로 따로 검증한다.
 
 Smoothing은 raw/smoothed score, EWMA state, persistence, snapshot age, policy version과 최종 action을 결속한다. whipsaw 감소와 함께 늦은 손절, 이익반납, 진입·익절 지연이 증가했는지 확인하며 stale/observer-unhealthy 입력의 smoothed 값을 사용하지 않는다.
+
+main AI micro bridge는 결과 파일 크기나 개별 marginal counter가 아니라 같은 canonical primary parent의 exact intersection으로 판정한다.
+
+- 최소 교집합은 `paired_decision_quality_eligible ∩ mature_outcome_eligible ∩ ask_depletion_sidecar_source_quality_valid ∩ economic_eligible`이며, 계약상 full-notional 평가에는 exact allocator/execution quantity provenance도 추가한다.
+- paired eligible, mature outcome, source-quality-valid 또는 allocator join이 각각 1건 이상이어도 서로 다른 row이면 materialized request를 만들 수 없다. exact intersection이 0이면 `materialization_eligible|pass` 판정을 금지하고 기존 schema의 `warning|blocked` 상태와 구조결함 또는 증거결손 reason을 사용한다. 새 canonical status를 문서만으로 발명하지 않는다.
+- bridge exact-intersection count와 source bundle source-eligible parent count는 같은 canonical key와 hash로 일치해야 한다. materialized request parent와 R0 admission은 provider 실행 여부, bounded selection/budget, checkpoint·receipt 상태에 따라 source-eligible 이하일 수 있으므로 `source_eligible = materialized_or_selected + deterministically_deferred_or_excluded`, `materialized = R0_admitted_or_completed + provider/checkpoint_failure_or_pending` 보존식으로 차이를 전수 설명한다. 설명되지 않은 차이는 P1 machine-input/aggregation contract defect다.
+- 0D source는 파일·bytes·row 존재와 usable depth를 분리한다. `combined`, KRX, NXT route totals와 retained level 합계는 producer write 전과 consumer read 때 같은 계약으로 검증한다. 특정 venue/session의 source row가 전량 contract-invalid이면 자연 표본 부족이 아니라 producer/parser contract의 구조적 고갈 후보다.
+- top-1, top-3, top-5 depth availability와 각 metric denominator를 분리한다. top-5 미보존을 top-1/top-3 값으로 보간하지 않으며, top-5가 계약상 필수라면 해당 scope를 명시적 exclusion/shortage로 남긴다. top-5 부재가 모든 저차 depth 연구까지 묵시적으로 제거되지 않았는지 검토한다.
+- allocator provenance는 `missing_expected_submitted_trace`, `not_applicable_non_submitted_trace`, `joined_valid`로 나눈다. 미제출 observation-only row를 구조적 allocator 결함이나 full-notional 0수익으로 오인하지 않는다.
+- 위 결함이나 교집합 0이 반복되면 bridge·source bundle·R0→R3만 재실행하지 않는다. 최초 producer/contract를 보완하고 workorder/verifier handoff와 review finding 0을 닫은 뒤 영향 범위만 재생성한다.
 
 ## 7. 계산·입력소비·프로세스 유효성 감사
 
@@ -440,6 +487,8 @@ dead/no-op/orphan 판정만으로 process를 즉시 kill·disable·restart하거
 
 `최초 잘못된 row/stage 확인 → 단일 owner와 producer/consumer 분리 → 최소 코드·schema·instrumentation 보완 → regression/경계 테스트 → review finding 0 → immutable source 재계산 → 관련 downstream 순차 재생성 → old/new diff → verifier/controller 재판정`
 
+대상일 main wrapper 또는 follower가 `current_generation_in_progress`이면 이 loop를 시작하지 않는다. §3.2의 terminal과 pre-repair snapshot을 먼저 닫는다. 진행 중 run의 repository 파일을 고쳤다는 이유로 해당 snapshot을 새 generation으로 재분류하거나, current run 도중 구조 보완용 force refresh를 실행하지 않는다.
+
 보완 후에는 단순히 status가 pass로 바뀌었는지뿐 아니라 다음을 확인한다.
 
 - 결함 표본의 기대값이 정확해졌고 정상 표본이 비훼손됐는지
@@ -467,6 +516,8 @@ dead/no-op/orphan 판정만으로 process를 즉시 kill·disable·restart하거
 §9 Pass 1을 시작할 때는 수정 전 authoritative final workorder를 intake한다. 위 ordered regeneration의 중간 workorder는 lineage diff로만 추적하고, step 9의 final workorder가 terminal이 된 뒤 Pass 2 전수 재점검을 수행한다. Pass 2 수정으로 영향 producer가 바뀐 경우에는 관련 부분만 이 순서로 다시 재생성하고, eligible `new|decision_changed implement_now=0`인 fixed-point를 확인한 뒤에만 verifier/controller 최종 판정을 최신으로 인정한다.
 
 각 step은 exact command, input/output hash, 시작·종료시각, exit code, reused checkpoint와 skipped reason을 기록한다. 중간 step이 실패하면 뒤 결과를 최신으로 표시하지 않는다. 결함 영향 밖으로 검증된 마지막 유효 generation만 authoritative하게 유지하고, known-bad generation은 audit bytes로만 보존하며 consumer reference를 0건 또는 명시적 blocked receipt로 닫는다. full wrapper 재실행이 필요하면 현재 동일 날짜 process가 없고 controller의 `allow_wrapper_rerun` 사유가 맞는지 먼저 확인한다.
+
+change-triggered step의 구조 보완 후 재생성은 새 source/config/code fingerprint 또는 명시적 bounded force를 정확히 한 번 사용한다. `upstream_drift_signal_present`만으로 같은 known-bad output을 반복 생성하지 않으며, 반대로 `fresh_outputs_no_trigger`였다는 이유로 보완 후 필요한 재생성을 생략하지 않는다. 재생성 acceptance는 파일 크기 감소나 실행시간 단축이 아니라 exact-intersection 증가 또는 정당한 valid-empty, source bundle/R0 admission reconciliation, workorder/verifier closure와 mixed-generation 0이다.
 
 이 순서는 해당 날짜 execution profile에서 enabled된 producer에만 적용한다. OFF/disabled/retired stage를 freshness 충족 목적으로 임의 실행하거나 빈 artifact로 합성하지 않는다.
 
@@ -681,13 +732,15 @@ wrapper·cron·threshold/postclose 체인을 변경했다면 관련 shell syntax
 10. runtime/bridge 후보의 실제 sim 적용과 real 반영 blocker가 구분됐다.
 11. authoritative workorder의 `implement_now` 전수 intake와 2-pass ledger가 존재한다. `implement_now_total=0`이 아니면 Pass 1→ordered regeneration→Pass 2 fixed-point가 필수로 실행됐고, pre/post `order_id` diff·generation/source hash/lineage 보존식·review finding 0·targeted validation이 닫혔으며 `final_eligible_actionable_open_count=0`, `implement_now_unaccounted_count=0`이다. `not_yet_due|in_progress`, 미생성 workorder, 코드로 닫을 수 없는 P0~P2 blocker는 2-pass skip 사유가 아니며 튜닝 판정 완료를 차단한다.
 12. tuning monitoring, 20:10 widget evaluation, 21:15 machine final refresh와 paired replay가 due인 경우 각 owner의 terminal 상태와 authority가 확인됐다.
-13. 20:50 archive, 21:00 log rotation/cleanup과 21:55 detector final window가 terminal이며 미검증 원본을 손상하지 않았다.
+13. 20:50 archive와 21:55 terminal-aware cleanup/final detector가 terminal이며 미검증 원본을 손상하지 않았다.
 14. authoritative expected set의 process 전체가 근거 있는 liveness/meaningfulness 분류를 가졌고 unexplained dead·hung·duplicate·no-op·orphan·unconsumed process가 없다.
 15. 미해결 항목마다 owner, 직접 원인, 영향, 다음 보완과 acceptance test가 있다.
 16. 무단 runtime·주문·provider·bot·cap·safety 변경이나 불필요한 재기동이 없었다.
 17. “오류 없음”은 위 sample manifest·전수 보존식·targeted test가 검증한 coverage 안에서만 선언했고, 미표본 strata·결손 source·외부 broker/provider 불확실성과 다음 거래일 acceptance를 잔여 위험으로 명시했다.
 18. multi-artifact를 재생성했다면 pre/post snapshot, transaction manifest/pointer의 atomic publish 또는 동등한 consumer quiescence/lock, consumer pinned-generation receipt와 mixed-generation census 0이 확인됐다. 실패 시 결함 영향 밖의 이전 generation만 유지됐고, known-bad generation은 consumer reference 0건 또는 명시적 blocked receipt와 함께 audit-only로 격리됐다.
 19. 모든 표본·모집단 부족 후보가 deterministic stable `shortage_id`로 전수 집계됐고 `classified_shortage_total = time_resolvable_shortage_count + structural_population_exhaustion_count`, `shortage_candidate_total = classified_shortage_total + blocked_missing_evidence_count + pending_declared_window_count` 두 보존식이 실제 ledger row와 일치한다. `N/A_by_contract` census는 부족 후보 합계 밖에 별도로 보존됐다. 시간 해결형은 exact floor denominator와 rolling expiry를 반영한 conservative reachable N·finite ETA·다음 due·재분류 trigger, 구조적 고갈형은 first depleted stage·보완 owner·acceptance test를 가지며 blind wait 상태가 없다.
+20. 각 enabled 또는 change-triggered producer의 applicable `input→source-valid→join→mature→economic→consumer` funnel과 exact intersection이 기록됐고, 대용량 artifact·`pass|DONE|skip` 상태 뒤에 설명되지 않은 0-conversion이나 unconsumed output이 없다. 구조형 0건은 `repair_blocked`와 stable workorder/verifier handoff로 닫혔다.
+21. 점검 시작 시 대상 run이 진행 중이었다면 기존 immutable snapshot의 terminal과 pre-repair generation freeze가 먼저 확인됐다. 코드 보완·재생성은 그 이후 review finding 0 상태에서 영향 producer만 수행됐고, 기존 run과 수정 generation을 같은 실행으로 혼합하지 않았다.
 
 ## 12. 최종 보고 형식
 
@@ -707,6 +760,8 @@ shortage class 하나만으로 색을 자동 결정하지 않는다. 수집 경�
 
 - Tuning Chain Control State: `GREEN|YELLOW|RED`, 막힌 단계, 영향, 조치
 - 자동화체인: EOD, postclose wrapper, verifier, controller JSON/wrapper, 후행 작업 terminal 상태
+- 진행 중 run 전환: 시작 snapshot PID/hash, terminal 이전 변경 비반영, pre-repair generation freeze, 보완·재생성 시작 gate
+- 장후 작업 효용성: step별 `core_daily|change_triggered|repair_blocked|manual_or_weekly|disabled_by_contract|retired_absent`, run/skip reason, artifact bytes와 source→valid→join→mature→economic→consumer funnel, first depleted stage, 비용 대비 유지·축소·수리·폐기 판정
 - source quality: pass/block/warning, clean-baseline·venue·owner·lineage 결손
 - 부족 분류 ledger: `시간이 해결하는 부족` 표와 `구조적으로 모집단이 고갈되는 부족` 표를 분리하고, stable `shortage_id`별 shortage metric/floor denominator·required/current/deficit·intended last consumer·first depleted stage·funnel count, floor-qualified arrival·expiry rate·conservative reachable N·ETA 또는 대기로 해소 불가능한 이유, 보완 owner·due·재분류 trigger·acceptance test를 기록한다. `blocked_missing_evidence|pending_declared_window|N/A_by_contract`는 두 표의 합계에 섞지 않고 별도 예외 표로 제시한다.
 - 계산 정확성: raw→parser→join→label→cost→aggregation→candidate 재계산, deterministic strata sample manifest, 전수 보존식, rounding/tolerance, golden/metamorphic test와 count/hash/JSON·Markdown parity
@@ -714,8 +769,8 @@ shortage class 하나만으로 색을 자동 결정하지 않는다. 수집 경�
 - 메인 봇: lifecycle별 기회·차단·제출·체결·보유·청산과 비용 차감 EV
 - 위젯: exact input/policy/process 소비, signal/episode/fill/target/terminal, completed EV와 custody
 - 에피소드: exact profile/process 소비, profile/leg별 submit/fill/target/COMPLETE/HELD/BLOCKED와 실현비용
-- micro-reversion: sequence/epoch·executable BBO·0B/0D join, fill feasibility, target/adverse first-hit, 비용·tail loss와 source-only authority
-- AI: exact payload/prompt/label lineage, 호출·입력·판단 품질, provider/parse/schema/receipt, R0→R3·paired replay 상태
+- micro-reversion: sequence/epoch·executable BBO·0B/0D join, combined/KRX/NXT route-total 보존식, top-1/3/5 denominator, fill feasibility, target/adverse first-hit, 비용·tail loss와 source-only authority
+- AI: exact payload/prompt/label lineage, 호출·입력·판단 품질, provider/parse/schema/receipt, same-parent paired∩mature∩sidecar∩economic exact intersection과 source-eligible→materialized→R0 admission 보존식, R0→R3·paired replay 상태
 - smoothing: whipsaw 감소와 진입·청산 지연·이익반납 trade-off
 - runtime/handoff: 대상일 applied input 실제 소비와 장후 생성 next-session artifact의 authority별 intended last consumer를 분리하고, R0→R6 sim 경로와 main/widget/episode 독립 handoff, 다음 거래일 OPEN acceptance, real runtime remaining blocker와 post-apply attribution
 - workorder 2-pass: intake/final generation ID·source hash, `implement_now_total`, eligible/user-authority/invalid 전수, stable `order_id` pre/post diff, `already_implemented_verified|implemented_pass1|implemented_pass2|blocked|removed` disposition, Pass 1/Pass 2 validation, fixed-point 근거, `final_eligible_actionable_open_count`, `implement_now_unaccounted_count`, non-implement 재판정

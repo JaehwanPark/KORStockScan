@@ -501,6 +501,7 @@ def test_ai_review_annotations_are_source_only(tmp_path, monkeypatch):
         "window": {},
         "summary": {},
         "metric_contract": {},
+        "source_coverage_manifest": {"status": "pass"},
         "threshold_opportunities": [],
         "code_improvement_orders": [
             {
@@ -669,7 +670,9 @@ def test_build_report_reads_gzip_pipeline_and_filters_clean_baseline(tmp_path):
     assert report["window"]["clean_baseline_ts_kst"] == "2026-06-05T00:00:00+09:00"
 
 
-def test_source_coverage_gap_fails_closed_for_code_orders(tmp_path):
+def test_post_sell_maturity_date_does_not_require_same_day_pipeline_partition(
+    tmp_path,
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
     post_sell_path = tmp_path / "post_sell_candidates_2026-07-02.jsonl"
     pipeline_path.write_text(
@@ -707,6 +710,50 @@ def test_source_coverage_gap_fails_closed_for_code_orders(tmp_path):
         ai_provider="none",
     )
 
+    assert report["summary"]["source_coverage_status"] == "pass"
+    assert report["source_coverage_manifest"]["post_sell_only_dates"] == ["2026-07-02"]
+    assert (
+        report["source_coverage_manifest"]["post_sell_only_dates_are_informational"]
+        is True
+    )
+
+
+def test_source_coverage_gap_skips_ai_provider_call(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    _event(
+                        1,
+                        "rising_missed_one_share_entry",
+                        {"rising_missed_one_share_entry_forced": True},
+                    )
+                ),
+                json.dumps(
+                    _event(
+                        1, "order_bundle_submitted", {"actual_order_submitted": True}
+                    )
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def unexpected_call(*args, **kwargs):
+        raise AssertionError("source coverage failure must not call the AI provider")
+
+    monkeypatch.setattr(mod, "_call_ai_review", unexpected_call)
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[],
+        generated_at="fixed",
+        ai_provider="openai",
+    )
+
     assert report["summary"]["source_coverage_status"] == "source_coverage_gap"
-    assert report["summary"]["code_improvement_order_count"] == 0
-    assert report["code_improvement_orders"] == []
+    assert report["ai_review"]["status"] == "blocked_source_coverage"
+    assert report["ai_review"]["provider_status"]["new_provider_call"] is False
+    assert report["summary"]["ai_reviewed_candidate_count"] == 0

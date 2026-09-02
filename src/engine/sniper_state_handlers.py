@@ -6607,21 +6607,40 @@ def _build_scalp_sim_ai_feature_signature(
 ) -> str:
     drawdown = _safe_float(peak_profit, 0.0) - _safe_float(profit_rate, 0.0)
     score_bucket = int(_safe_float(current_ai_score, 0.0) // 5)
-    market_hash = str(abs(hash(str(market_signature))) % 100000)
-    return "|".join(
-        [
-            f"p:{_scalp_sim_ai_bucket(profit_rate)}",
-            f"pk:{_scalp_sim_ai_bucket(peak_profit)}",
-            f"dd:{_scalp_sim_ai_bucket(drawdown)}",
-            f"score5:{score_bucket}",
-            f"critical:{int(bool(is_critical_zone))}",
-            f"near_exit:{int(bool(near_ai_exit_band))}",
-            f"near_safe:{int(bool(near_safe_profit_band))}",
-            f"ra:{stock.get('reversal_add_state') or '-'}",
-            f"ofi:{stock.get('holding_flow_ofi_regime') or stock.get('ofi_regime') or '-'}",
-            f"m:{market_hash}",
-        ]
-    )
+    # The fast snapshot's current-price and depth/volume buckets churn on most
+    # ticks.  Hashing the entire snapshot therefore defeated this sim-only call
+    # budget.  Retain the bounded market regimes that can materially alter a
+    # holding review, while excluding current price and noisy volume balances.
+    if isinstance(market_signature, dict):
+        semantic_market = {
+            key: market_signature.get(key)
+            for key in ("fluctuation", "v_pw", "buy_ratio", "spread")
+        }
+    else:
+        values = list(market_signature or ())
+        semantic_market = {
+            key: values[index] if len(values) > index else None
+            for key, index in (
+                ("fluctuation", 1),
+                ("v_pw", 2),
+                ("buy_ratio", 3),
+                ("spread", 4),
+            )
+        }
+    parts = [
+        "sig_v:2",
+        f"p:{_scalp_sim_ai_bucket(profit_rate)}",
+        f"pk:{_scalp_sim_ai_bucket(peak_profit)}",
+        f"dd:{_scalp_sim_ai_bucket(drawdown)}",
+        f"score5:{score_bucket}",
+        f"critical:{int(bool(is_critical_zone))}",
+        f"near_exit:{int(bool(near_ai_exit_band))}",
+        f"near_safe:{int(bool(near_safe_profit_band))}",
+        f"ra:{stock.get('reversal_add_state') or '-'}",
+        f"ofi:{stock.get('holding_flow_ofi_regime') or stock.get('ofi_regime') or '-'}",
+    ]
+    parts.extend(f"m_{key}:{semantic_market[key]}" for key in semantic_market)
+    return "|".join(parts)
 
 
 def _scalp_sim_ai_budget_usage(now_ts: float | None = None) -> int:
@@ -83308,7 +83327,7 @@ def handle_holding_state(
                         peak_profit=peak_profit,
                         held_sec=held_sec,
                         current_ai_score=current_ai_score,
-                        market_signature=market_signature,
+                        market_signature=market_snapshot,
                         is_critical_zone=is_critical_zone,
                         near_ai_exit_band=near_ai_exit_band,
                         near_safe_profit_band=near_safe_profit_band,

@@ -468,7 +468,9 @@ def test_scanner_funnel_exact_bbo_join_computes_cost_adjusted_first_hit(
         == "scanner_funnel_executable_bbo_source_only"
     )
     assert attribution["first_hit_observation_contract"] == (
-        "sampled_scanner_stage_bbo_event_order_not_continuous_market_path"
+        "sampled_scanner_stage_bbo_event_order_with_prune_offset_zero_"
+        "anchor_to_schedule_and_schedule_lag_le_2s_"
+        "not_continuous_market_path"
     )
     assert attribution["rows"][0]["entry_best_ask"] == 101.0
     assert attribution["rows"][0]["exit_best_bid"] == 103.0
@@ -779,6 +781,481 @@ def test_scanner_funnel_missing_quote_age_stays_blocked_not_zero_ev(
     assert order["decision_authority"] == ("scanner_funnel_executable_bbo_source_only")
     assert "EV" not in order["forbidden_uses"]
     assert "live_auto_promotion" in order["forbidden_uses"]
+
+
+def test_prune_bbo_episode_coalesces_scan_churn_and_produces_exact_economics(
+    tmp_path, monkeypatch
+):
+    _install_verified_symbol_master(monkeypatch)
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    common = {
+        "scanner_scan_rank": 1,
+        "scanner_ranked_candidate_count": 1,
+        "scanner_prune_reason": "general_slot_limit",
+        "source_signature": "MARKET_GAINER",
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+    }
+    schedule = {
+        "scanner_prune_observer_episode_id": "PRUNEBBO-EXACT-1",
+        "scanner_prune_observer_schedule_status": "new_episode_scheduled",
+        "scanner_prune_observer_anchor_epoch": 1788307799.0,
+        "scanner_prune_observer_schedule_started_epoch": 1788307799.1,
+        "scanner_prune_observer_anchor_to_schedule_delay_sec": 0.1,
+        "scanner_prune_observer_budget_kst_date": "2026-09-02",
+        "scanner_prune_observer_active_episode_count": 1,
+        "scanner_prune_observer_pending_sample_count": 10,
+        "scanner_prune_observer_process_daily_scheduled_request_count": 10,
+        "scanner_prune_observer_process_daily_remaining_request_count": 1190,
+        "scanner_prune_observer_worker_alive": True,
+        "scanner_prune_observer_worker_error_count": 0,
+        "scanner_prune_observer_receipt_emit_failure_count": 0,
+        "scanner_prune_observer_request_gap_count": 0,
+        "scanner_prune_observer_captured_sample_count": 0,
+    }
+    observations = [
+        _event(
+            "scalping_scanner_prune_bbo_observation",
+            {
+                **common,
+                "scanner_scan_generation_id": "SCANGEN-PRUNE-1",
+                "scanner_prune_observer_episode_id": "PRUNEBBO-EXACT-1",
+                "scanner_prune_observer_sample_index": 0,
+                "scanner_prune_observer_scheduled_offset_sec": 0,
+                "scanner_prune_observer_schedule_lag_sec": 0.1,
+                "scanner_prune_observer_anchor_to_schedule_delay_sec": 0.1,
+                "scanner_prune_observer_request_code": "005930",
+                "scanner_prune_observer_response_request_code": "005930",
+                "scanner_prune_observer_expected_observed_venue": "KRX",
+                "scanner_prune_observer_route_match": True,
+                "scanner_prune_observer_status": "captured",
+                "scanner_prune_observer_terminal_sample": False,
+                "scanner_prune_observer_source_quality_pass": True,
+                "scanner_prune_observer_best_bid": 99,
+                "scanner_prune_observer_best_ask": 100,
+                "scanner_prune_observer_quote_age_ms": 5,
+                "scanner_prune_observer_price_source": (
+                    "ka10004_rest_orderbook_exact_request_code"
+                ),
+                "scanner_prune_observer_observed_at": ("2026-09-02T09:10:00+09:00"),
+            },
+            code="005930",
+            emitted_at="2026-09-02T09:10:00+09:00",
+        ),
+        _event(
+            "scalping_scanner_prune_bbo_observation",
+            {
+                **common,
+                "scanner_scan_generation_id": "SCANGEN-PRUNE-1",
+                "scanner_prune_observer_episode_id": "PRUNEBBO-EXACT-1",
+                "scanner_prune_observer_sample_index": 1,
+                "scanner_prune_observer_scheduled_offset_sec": 3,
+                "scanner_prune_observer_schedule_lag_sec": 0.2,
+                "scanner_prune_observer_anchor_to_schedule_delay_sec": 0.1,
+                "scanner_prune_observer_request_code": "005930",
+                "scanner_prune_observer_response_request_code": "005930",
+                "scanner_prune_observer_expected_observed_venue": "KRX",
+                "scanner_prune_observer_route_match": True,
+                "scanner_prune_observer_status": "captured",
+                "scanner_prune_observer_terminal_sample": True,
+                "scanner_prune_observer_source_quality_pass": True,
+                "scanner_prune_observer_best_bid": 102,
+                "scanner_prune_observer_best_ask": 103,
+                "scanner_prune_observer_quote_age_ms": 7,
+                "scanner_prune_observer_price_source": (
+                    "ka10004_rest_orderbook_exact_request_code"
+                ),
+                "scanner_prune_observer_observed_at": ("2026-09-02T09:10:03+09:00"),
+            },
+            code="005930",
+            emitted_at="2026-09-02T09:10:03+09:00",
+        ),
+    ]
+    rows = [
+        _event(
+            "scalping_scanner_candidate_pruned",
+            {**common, "scanner_scan_generation_id": "SCANGEN-PRUNE-1"},
+            code="005930",
+            emitted_at="2026-09-02T09:09:59+09:00",
+        ),
+        _event(
+            "scalping_scanner_prune_bbo_schedule",
+            {
+                **common,
+                **schedule,
+                "scanner_scan_generation_id": "SCANGEN-PRUNE-1",
+            },
+            code="005930",
+            emitted_at="2026-09-02T09:09:59.100000+09:00",
+        ),
+        *observations,
+        _event(
+            "scalping_scanner_candidate_pruned",
+            {**common, "scanner_scan_generation_id": "SCANGEN-PRUNE-2"},
+            code="005930",
+            emitted_at="2026-09-02T09:11:00+09:00",
+        ),
+        _event(
+            "scalping_scanner_prune_bbo_schedule",
+            {
+                **common,
+                **schedule,
+                "scanner_scan_generation_id": "SCANGEN-PRUNE-2",
+                "scanner_prune_observer_schedule_status": ("completed_episode_reused"),
+            },
+            code="005930",
+            emitted_at="2026-09-02T09:11:00.100000+09:00",
+        ),
+    ]
+    _write_jsonl(pipeline_path, rows)
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-09-02",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    funnel = report["scanner_unique_funnel"]
+    observer = funnel["prune_observer_summary"]
+    attribution = funnel["economic_cohorts"]["executable_bbo_attribution"]
+    assert funnel["unique_pruned_candidate_count"] == 2
+    assert funnel["economic_cohorts"]["general_slot_limit"] == 1
+    assert observer["eligible_episode_census_count"] == 1
+    assert observer["scheduled_stable_episode_count"] == 1
+    assert observer["schedule_coverage_pct"] == 100.0
+    assert observer["exact_bbo_observed_episode_count"] == 1
+    assert observer["exact_bbo_episode_coverage_pct"] == 100.0
+    assert observer["sample_event_count"] == 2
+    assert observer["schedule_lag_sample_count"] == 2
+    assert observer["schedule_lag_p95_sec"] == 0.2
+    assert observer["schedule_lag_exceeded_sample_count"] == 0
+    assert observer["anchor_to_schedule_delay_sample_count"] == 2
+    assert observer["anchor_to_schedule_delay_max_sec"] == 0.1
+    assert observer["anchor_to_schedule_delay_exceeded_sample_count"] == 0
+    assert observer["budget_snapshot_count"] == 2
+    assert observer["max_active_episode_count"] == 1
+    assert observer["max_pending_sample_count"] == 10
+    assert observer["max_process_daily_scheduled_request_count"] == 10
+    assert observer["worker_unhealthy_receipt_count"] == 0
+    assert observer["max_worker_error_count"] == 0
+    assert observer["max_receipt_emit_failure_count"] == 0
+    assert observer["terminal_sample_observed_episode_count"] == 1
+    assert observer["acceptance"]["status"] == (
+        "sample_or_source_quality_floor_not_met"
+    )
+    assert observer["acceptance"]["acceptance_ready"] is False
+    assert observer["acceptance"]["resolved_outcome_floor_per_group"] == 20
+    assert attribution["economic_candidate_count"] == 1
+    assert attribution["exact_bbo_joined_count"] == 1
+    assert attribution["resolved_outcome_count"] == 1
+    assert attribution["source_quality_adjusted_ev_pct"] == 1.77
+    assert attribution["source_capture_implementation_state"] == (
+        "bounded_prune_rest_bbo_collector_runtime_receipts_observed"
+    )
+    assert attribution["rows"][0]["first_hit_label"] == ("sampled_gross_target_first")
+    workorder = next(
+        item
+        for item in report["workorder_directives"]
+        if item["order_id"] == "order_scanner_funnel_executable_bbo_join"
+    )
+    assert workorder["decision"] == "defer_evidence"
+
+
+def test_prune_bbo_late_offset_zero_is_source_quality_gap(tmp_path, monkeypatch):
+    _install_verified_symbol_master(monkeypatch)
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    common = {
+        "scanner_scan_generation_id": "SCANGEN-LATE",
+        "scanner_scan_rank": 1,
+        "scanner_ranked_candidate_count": 1,
+        "scanner_prune_reason": "general_slot_limit",
+        "source_signature": "MARKET_GAINER",
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+    }
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_pruned",
+                common,
+                code="005930",
+                emitted_at="2026-09-02T09:10:00+09:00",
+            ),
+            _event(
+                "scalping_scanner_prune_bbo_schedule",
+                {
+                    **common,
+                    "scanner_prune_observer_episode_id": "PRUNEBBO-LATE",
+                    "scanner_prune_observer_schedule_status": ("new_episode_scheduled"),
+                },
+                code="005930",
+                emitted_at="2026-09-02T09:10:00.100000+09:00",
+            ),
+            _event(
+                "scalping_scanner_prune_bbo_observation",
+                {
+                    **common,
+                    "scanner_prune_observer_episode_id": "PRUNEBBO-LATE",
+                    "scanner_prune_observer_sample_index": 0,
+                    "scanner_prune_observer_scheduled_offset_sec": 0,
+                    "scanner_prune_observer_schedule_lag_sec": 2.1,
+                    "scanner_prune_observer_anchor_to_schedule_delay_sec": 0.1,
+                    "scanner_prune_observer_request_code": "005930",
+                    "scanner_prune_observer_response_request_code": "005930",
+                    "scanner_prune_observer_expected_observed_venue": "KRX",
+                    "scanner_prune_observer_route_match": True,
+                    "scanner_prune_observer_status": "captured",
+                    "scanner_prune_observer_source_quality_pass": True,
+                    "scanner_prune_observer_best_bid": 99,
+                    "scanner_prune_observer_best_ask": 100,
+                    "scanner_prune_observer_quote_age_ms": 5,
+                    "scanner_prune_observer_price_source": (
+                        "ka10004_rest_orderbook_exact_request_code"
+                    ),
+                    "scanner_prune_observer_observed_at": (
+                        "2026-09-02T09:10:02.100000+09:00"
+                    ),
+                },
+                code="005930",
+                emitted_at="2026-09-02T09:10:02.100000+09:00",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-09-02",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    attribution = report["scanner_unique_funnel"]["economic_cohorts"][
+        "executable_bbo_attribution"
+    ]
+    assert attribution["exact_bbo_joined_count"] == 0
+    assert attribution["source_quality_adjusted_ev_pct"] is None
+    assert attribution["missing_reason_counts"] == {
+        "fresh_executable_bbo_missing": 1,
+        "scanner_prune_observer_rest_bbo:schedule_lag_exceeded": 1,
+    }
+
+
+def test_prune_bbo_delayed_deferred_schedule_cannot_replace_prune_anchor():
+    observation, gap_reason = mod._scanner_executable_bbo_observation(
+        {
+            "effective_venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+            "scanner_prune_observer_best_bid": 99,
+            "scanner_prune_observer_best_ask": 100,
+            "scanner_prune_observer_quote_age_ms": 5,
+            "scanner_prune_observer_price_source": (
+                "ka10004_rest_orderbook_exact_request_code"
+            ),
+            "scanner_prune_observer_source_quality_pass": True,
+            "scanner_prune_observer_observed_at": "2026-09-02T09:10:03+09:00",
+            "scanner_prune_observer_schedule_lag_sec": 0.1,
+            "scanner_prune_observer_anchor_to_schedule_delay_sec": 3.0,
+            "scanner_prune_observer_scheduled_offset_sec": 0,
+            "scanner_prune_observer_request_code": "005930",
+            "scanner_prune_observer_response_request_code": "005930",
+            "scanner_prune_observer_expected_observed_venue": "KRX",
+            "scanner_prune_observer_route_match": True,
+            "stock_code": "005930",
+        }
+    )
+
+    assert observation is None
+    assert gap_reason == (
+        "scanner_prune_observer_rest_bbo:anchor_to_schedule_delay_exceeded"
+    )
+
+
+def test_prune_bbo_consumer_revalidates_exact_route_provenance():
+    observation, gap_reason = mod._scanner_executable_bbo_observation(
+        {
+            "effective_venue": "NXT",
+            "market_session_bucket": "NXT",
+            "stock_code": "005930",
+            "scanner_prune_observer_best_bid": 99,
+            "scanner_prune_observer_best_ask": 100,
+            "scanner_prune_observer_quote_age_ms": 5,
+            "scanner_prune_observer_price_source": (
+                "ka10004_rest_orderbook_exact_request_code"
+            ),
+            "scanner_prune_observer_source_quality_pass": True,
+            "scanner_prune_observer_observed_at": "2026-09-02T16:10:00+09:00",
+            "scanner_prune_observer_schedule_lag_sec": 0.1,
+            "scanner_prune_observer_anchor_to_schedule_delay_sec": 0.1,
+            "scanner_prune_observer_scheduled_offset_sec": 0,
+            "scanner_prune_observer_request_code": "005930_NX",
+            "scanner_prune_observer_response_request_code": "005930_NX",
+            "scanner_prune_observer_expected_observed_venue": "NXT",
+            "scanner_prune_observer_route_match": False,
+        }
+    )
+
+    assert observation is None
+    assert gap_reason == (
+        "scanner_prune_observer_rest_bbo:exact_request_route_mismatch"
+    )
+
+
+def test_prune_bbo_1200_second_sample_is_executable_timeout(monkeypatch) -> None:
+    symbol_master, binding = _install_verified_symbol_master(monkeypatch)
+    prune = {
+        "scan_generation_id": "SCANGEN-TIMEOUT",
+        "code": "005930",
+        "venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+        "reason": "general_slot_limit",
+        "source_signature": "MARKET_GAINER",
+        "prune_observer_episode_id": "PRUNEBBO-TIMEOUT",
+        "metadata_conflicts": [],
+        "bbo_observations": [
+            {
+                "observed_at": "2026-09-02T09:10:00+09:00",
+                "best_bid": 99.0,
+                "best_ask": 100.0,
+                "quote_age_ms": 5.0,
+                "source": "scanner_prune_observer_rest_bbo",
+                "source_provenance": ("ka10004_rest_orderbook_exact_request_code"),
+                "venue": "KRX",
+                "market_session_bucket": "KRX_REGULAR",
+                "scheduled_offset_sec": 0,
+                "schedule_lag_sec": 0.1,
+            },
+            {
+                "observed_at": "2026-09-02T09:30:01+09:00",
+                "best_bid": 100.0,
+                "best_ask": 101.0,
+                "quote_age_ms": 5.0,
+                "source": "scanner_prune_observer_rest_bbo",
+                "source_provenance": ("ka10004_rest_orderbook_exact_request_code"),
+                "venue": "KRX",
+                "market_session_bucket": "KRX_REGULAR",
+                "scheduled_offset_sec": 1200,
+                "schedule_lag_sec": 1.0,
+            },
+        ],
+    }
+
+    attribution = mod._scanner_bbo_economic_attribution(
+        [],
+        [prune],
+        target_date="2026-09-02",
+        symbol_master=symbol_master,
+        symbol_master_binding=binding,
+    )
+
+    assert attribution["resolved_outcome_count"] == 1
+    assert attribution["first_hit_counts"] == {"sampled_timeout_exit": 1}
+    assert attribution["rows"][0]["cost_adjusted_return_pct"] == -0.23
+
+    blocked = mod._scanner_bbo_economic_attribution(
+        [],
+        [
+            {
+                **prune,
+                "prune_observer_budget_snapshots": [
+                    {
+                        "worker_alive": True,
+                        "worker_error_count": 0,
+                        "receipt_emit_failure_count": 1,
+                    }
+                ],
+            }
+        ],
+        target_date="2026-09-02",
+        symbol_master=symbol_master,
+        symbol_master_binding=binding,
+    )
+    assert blocked["exact_bbo_joined_count"] == 0
+    assert blocked["source_quality_adjusted_ev_pct"] is None
+    assert blocked["rows"][0]["bbo_join_block_reason"] == (
+        "prune_observer_receipt_emit_failure_observed"
+    )
+
+
+def test_prune_bbo_acceptance_passes_twenty_resolved_per_group(monkeypatch) -> None:
+    symbol_master, binding = _install_verified_symbol_master(monkeypatch)
+    prunes = [
+        {
+            "scan_generation_id": f"SCANGEN-READY-{index}",
+            "code": "005930",
+            "venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+            "reason": "general_slot_limit",
+            "source_signature": "MARKET_GAINER",
+            "prune_observer_episode_id": f"PRUNEBBO-READY-{index}",
+            "metadata_conflicts": [],
+            "bbo_observations": [
+                {
+                    "observed_at": "2026-09-02T09:10:00+09:00",
+                    "best_bid": 99.0,
+                    "best_ask": 100.0,
+                    "quote_age_ms": 5.0,
+                    "source": "scanner_prune_observer_rest_bbo",
+                    "source_provenance": ("ka10004_rest_orderbook_exact_request_code"),
+                    "venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                    "scheduled_offset_sec": 0,
+                },
+                {
+                    "observed_at": "2026-09-02T09:10:03+09:00",
+                    "best_bid": 102.0,
+                    "best_ask": 103.0,
+                    "quote_age_ms": 5.0,
+                    "source": "scanner_prune_observer_rest_bbo",
+                    "source_provenance": ("ka10004_rest_orderbook_exact_request_code"),
+                    "venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                    "scheduled_offset_sec": 3,
+                },
+            ],
+        }
+        for index in range(20)
+    ]
+    prunes.extend(
+        {
+            "scan_generation_id": f"SCANGEN-CENSUS-ONLY-{index}",
+            "code": "005930",
+            "venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+            "reason": "general_slot_limit",
+            "source_signature": "MARKET_GAINER",
+            "metadata_conflicts": [],
+            "bbo_observations": [],
+        }
+        for index in range(100)
+    )
+
+    attribution = mod._scanner_bbo_economic_attribution(
+        [],
+        prunes,
+        target_date="2026-09-02",
+        symbol_master=symbol_master,
+        symbol_master_binding=binding,
+    )
+
+    acceptance = attribution["prune_observer_acceptance"]
+    assert acceptance["acceptance_ready"] is True
+    assert acceptance["status"] == "acceptance_ready_source_only"
+    assert acceptance["population_role"] == "bounded_observer_selected_episode"
+    assert acceptance["full_funnel_population_ev_extrapolation_allowed"] is False
+    assert acceptance["group_count"] == 1
+    assert acceptance["groups"][0]["source_census_count"] == 20
+    assert acceptance["groups"][0]["resolved_outcome_count"] == 20
+    assert acceptance["groups"][0]["right_censored_rate_pct_of_joined"] == 0.0
+    assert attribution["status"] == (
+        "source_quality_blocked_executable_bbo_join_coverage_below_floor"
+    )
+    assert attribution["source_capture_repair_required"] is False
 
 
 def test_scanner_funnel_does_not_borrow_lineage_venue_for_bbo_observation(

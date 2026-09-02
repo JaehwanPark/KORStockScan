@@ -88,6 +88,7 @@ from src.engine.scalping.entry_setup_evidence import (
 from src.engine.scalping.micro_reversion.replay_ablation_contract import (
     CURRENT_DESIGN_ACTIVATION_DATE,
     CURRENT_DESIGN_VERSION,
+    CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE,
     LEGACY_DESIGN_VERSION,
     PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE,
     PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS,
@@ -10680,8 +10681,11 @@ def _micro_reversion_outcome_source_commitment(
     """Canonically validate and anchor the outcome raw pool before replay."""
 
     from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+        BRIDGE_PRODUCER_VERSION,
+        LEGACY_BRIDGE_PRODUCER_VERSION,
         REPORT_SCHEMA,
         TACTICAL_EVIDENCE_SCHEMA,
+        _bridge_config_from_contract,
         rebuild_future_outcome_from_source,
         validate_future_outcome_source_pool,
         validate_future_outcome_source_pool_reference_census,
@@ -10705,6 +10709,27 @@ def _micro_reversion_outcome_source_commitment(
         or not isinstance(source_pool, Mapping)
     ):
         raise ValueError("micro_reversion_outcome_source_bridge_contract_invalid")
+    try:
+        expected_target_day = date.fromisoformat(expected_target_date)
+    except ValueError as exc:
+        raise ValueError(
+            "micro_reversion_outcome_source_bridge_contract_invalid"
+        ) from exc
+    bridge_contract = bridge_report.get("bridge_contract")
+    if not isinstance(bridge_contract, Mapping):
+        raise ValueError("micro_reversion_outcome_source_bridge_contract_invalid")
+    bridge_producer_version = bridge_contract.get("producer_version")
+    accepted_bridge_versions = {
+        LEGACY_BRIDGE_PRODUCER_VERSION,
+        BRIDGE_PRODUCER_VERSION,
+    }
+    if expected_target_day >= date.fromisoformat(
+        CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE
+    ):
+        accepted_bridge_versions = {BRIDGE_PRODUCER_VERSION}
+    if bridge_producer_version not in accepted_bridge_versions:
+        raise ValueError("micro_reversion_outcome_source_bridge_contract_invalid")
+    _bridge_config_from_contract(bridge_contract)
     if expected_target_date >= CURRENT_DESIGN_ACTIVATION_DATE:
         try:
             validate_source_only_authority(bridge_report)
@@ -10749,6 +10774,9 @@ def _micro_reversion_outcome_source_commitment(
             or not isinstance(evidence, Mapping)
             or not isinstance(outcome, Mapping)
             or not isinstance(rebuild_source, Mapping)
+            or evidence.get("bridge_producer_version") != bridge_producer_version
+            or evidence.get("bridge_config_sha256")
+            != bridge_contract.get("config_sha256")
             or _sha256(
                 rebuild_future_outcome_from_source(
                     evidence=evidence,
@@ -11033,7 +11061,7 @@ def _micro_reversion_label_ready_bridge_rows(
 def _micro_reversion_current_ablation_ready_bridge_rows(
     label_ready_rows: Mapping[str, Mapping[str, Any]],
 ) -> tuple[dict[str, Mapping[str, Any]], dict[str, str]]:
-    """Independently require the current ask-depletion ablation input."""
+    """Require the exact current paired, mature, and economic intersection."""
 
     from src.engine.scalping.micro_reversion.ai_quality_bridge import (
         TACTICAL_EVIDENCE_SCHEMA,
@@ -11047,6 +11075,8 @@ def _micro_reversion_current_ablation_ready_bridge_rows(
         try:
             evidence = row.get(TACTICAL_EVIDENCE_SCHEMA)
             sidecar = row.get("ask_depletion_sidecar")
+            manifest = row.get("three_arm_manifest")
+            outcome = row.get("future_outcome")
             if not isinstance(evidence, Mapping):
                 raise ValueError("ask_depletion_sidecar_evidence_missing")
             if not isinstance(sidecar, Mapping):
@@ -11054,13 +11084,40 @@ def _micro_reversion_current_ablation_ready_bridge_rows(
                     raise ValueError("ask_depletion_sidecar_status_mismatch")
                 raise ValueError(declared_status)
             _validated_ask_depletion_feature_view(sidecar, evidence=evidence)
+            if not isinstance(manifest, Mapping):
+                raise ValueError("current_ablation_manifest_missing")
+            if manifest.get("current_exact_contract_active") is not True:
+                raise ValueError("current_ablation_exact_contract_inactive")
+            if manifest.get("paired_decision_quality_eligible") is not True:
+                raise ValueError("current_ablation_paired_decision_ineligible")
+            if manifest.get("net_economic_evaluation_eligible") is not True:
+                raise ValueError("current_ablation_net_economic_ineligible")
+            if manifest.get("primary_outcome_mature_eligible") is not True:
+                raise ValueError("current_ablation_primary_outcome_not_mature")
+            if manifest.get("current_ablation_source_eligible") is not True:
+                raise ValueError("current_ablation_exact_source_ineligible")
+            if (
+                row.get("primary_current_ablation_source_parent_wave_stage_row")
+                is not True
+            ):
+                raise ValueError("current_ablation_not_primary_parent_wave_stage")
+            if manifest.get("paired_replay_materialization_eligible") is not True:
+                raise ValueError("current_ablation_materialization_ineligible")
+            if manifest.get("materialization_blockers") not in ([], ()):
+                raise ValueError("current_ablation_materialization_blocked")
+            if (
+                not isinstance(outcome, Mapping)
+                or outcome.get("notional_net_profit_eligible") is not True
+                or outcome.get("economic_promotion_evidence_eligible") is not True
+                or outcome.get("economic_promotion_authority") is not False
+            ):
+                raise ValueError("current_ablation_outcome_economic_ineligible")
         except (TypeError, ValueError) as exc:
             reason = str(exc).split(":", 1)[0]
-            rejected[trace_id] = (
-                reason
-                if declared_status == reason
-                else "ask_depletion_sidecar_status_mismatch"
-            )
+            if reason.startswith("ask_depletion_") and declared_status != reason:
+                rejected[trace_id] = "ask_depletion_sidecar_status_mismatch"
+            else:
+                rejected[trace_id] = reason
         else:
             if declared_status != "eligible_source_only_feature_ablation":
                 rejected[trace_id] = "ask_depletion_sidecar_status_mismatch"
@@ -11199,6 +11256,9 @@ def build_micro_reversion_source_bundle(
     strict_outcome_commitment = date.fromisoformat(target_date) >= date.fromisoformat(
         CURRENT_DESIGN_ACTIVATION_DATE
     )
+    strict_current_exact_eligibility = date.fromisoformat(
+        target_date
+    ) >= date.fromisoformat(CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE)
     outcome_source_commitment = (
         _micro_reversion_outcome_source_commitment(
             outcome_source_bridge_report,
@@ -11211,6 +11271,8 @@ def build_micro_reversion_source_bundle(
         raise ValueError("micro_reversion_current_outcome_source_commitment_required")
     label_ready_bridge_rows: dict[str, Mapping[str, Any]] = {}
     label_rejected_bridge_rows: dict[str, str] = {}
+    current_ablation_ready_bridge_rows: dict[str, Mapping[str, Any]] = {}
+    current_ablation_rejected_bridge_rows: dict[str, str] = {}
     if outcome_source_bridge_report is not None:
         label_ready_bridge_rows, label_rejected_bridge_rows = (
             _micro_reversion_label_ready_bridge_rows(
@@ -11219,6 +11281,37 @@ def build_micro_reversion_source_bundle(
                 _outcome_commitment_already_validated=True,
             )
         )
+        if strict_current_exact_eligibility:
+            (
+                current_ablation_ready_bridge_rows,
+                current_ablation_rejected_bridge_rows,
+            ) = _micro_reversion_current_ablation_ready_bridge_rows(
+                label_ready_bridge_rows
+            )
+            bridge_summary = outcome_source_bridge_report.get("summary")
+            declared_trace_ids = (
+                bridge_summary.get("current_ablation_source_eligible_trace_ids")
+                if isinstance(bridge_summary, Mapping)
+                else None
+            )
+            if (
+                not isinstance(declared_trace_ids, list)
+                or any(
+                    not isinstance(value, str) or not value
+                    for value in declared_trace_ids
+                )
+                or declared_trace_ids != sorted(set(declared_trace_ids))
+                or (bridge_summary or {}).get(
+                    "current_ablation_source_eligible_primary_episode_count"
+                )
+                != len(declared_trace_ids)
+                or (bridge_summary or {}).get(
+                    "current_ablation_source_eligible_trace_ids_sha256"
+                )
+                != _sha256(declared_trace_ids)
+                or declared_trace_ids != sorted(current_ablation_ready_bridge_rows)
+            ):
+                raise ValueError("micro_reversion_bridge_current_exact_census_invalid")
     if not isinstance(prepared_requests, list) or not prepared_requests:
         raise ValueError("micro_reversion_prepared_requests_missing")
     if not isinstance(control_prompt_contracts, list):
@@ -11290,6 +11383,15 @@ def build_micro_reversion_source_bundle(
                 trace_id not in label_ready_bridge_rows
             ):
                 raise ValueError("micro_reversion_outcome_source_trace_missing")
+            if strict_current_exact_eligibility and (
+                trace_id not in current_ablation_ready_bridge_rows
+            ):
+                raise ValueError(
+                    current_ablation_rejected_bridge_rows.get(
+                        trace_id,
+                        "micro_reversion_current_ablation_source_ineligible",
+                    )
+                )
             trace_candidates = trace_by_id.get(trace_id, [])
             if len(trace_candidates) != 1:
                 raise ValueError("micro_reversion_source_trace_missing_or_ambiguous")
@@ -11761,6 +11863,14 @@ def build_micro_reversion_source_bundle(
                 },
             }
         )
+    bundle_trace_ids = sorted(
+        str(row.get("decision_trace_id") or "") for row in bundle_rows
+    )
+    current_exact_trace_ids = sorted(current_ablation_ready_bridge_rows)
+    if strict_current_exact_eligibility and (
+        bundle_trace_ids != current_exact_trace_ids
+    ):
+        raise ValueError("micro_reversion_current_source_exact_reconciliation_invalid")
     bundle_without_hash = {
         "schema": MICRO_REVERSION_SOURCE_BUNDLE_SCHEMA,
         "target_date": target_date,
@@ -11774,6 +11884,11 @@ def build_micro_reversion_source_bundle(
         "eligible_row_count": len(bundle_rows),
         "excluded_row_count": len(bundle_exclusions),
         "row_count": len(bundle_rows),
+        "bridge_current_ablation_source_eligible_count": len(current_exact_trace_ids),
+        "bridge_current_ablation_source_eligible_trace_ids": (current_exact_trace_ids),
+        "bridge_current_ablation_source_eligible_trace_ids_sha256": _sha256(
+            current_exact_trace_ids
+        ),
         "rows": bundle_rows,
         "exclusions": bundle_exclusions,
         "source_row_pool": source_row_pool,
@@ -11888,6 +12003,30 @@ def _validate_micro_reversion_source_bundle_artifact(
     ):
         raise ValueError("micro_reversion_current_outcome_source_commitment_required")
     if design_version == CURRENT_DESIGN_VERSION:
+        if parsed_target_date >= date.fromisoformat(
+            CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE
+        ):
+            exact_trace_ids = bridge_source_bundle.get(
+                "bridge_current_ablation_source_eligible_trace_ids"
+            )
+            if (
+                not isinstance(exact_trace_ids, list)
+                or any(
+                    not isinstance(value, str) or not value for value in exact_trace_ids
+                )
+                or exact_trace_ids != sorted(set(exact_trace_ids))
+                or bridge_source_bundle.get(
+                    "bridge_current_ablation_source_eligible_count"
+                )
+                != len(exact_trace_ids)
+                or bridge_source_bundle.get(
+                    "bridge_current_ablation_source_eligible_trace_ids_sha256"
+                )
+                != _sha256(exact_trace_ids)
+                or exact_trace_ids
+                != sorted(str(row.get("decision_trace_id") or "") for row in rows)
+            ):
+                raise ValueError("micro_reversion_source_bundle_exact_census_invalid")
         _validate_current_ablation_semantic_authority(
             bridge_source_bundle,
             allowed_decision_authorities=frozenset(
@@ -12111,6 +12250,7 @@ def _validate_micro_reversion_source_bundle_artifact(
                     row.get("excluded_scopes")
                 ),
                 verified_symbol_metadata=row.get("verified_symbol_metadata"),
+                producer_version=str(evidence.get("bridge_producer_version") or ""),
             )
             if _sha256(rebuilt_evidence) != _sha256(evidence):
                 raise ValueError("micro_reversion_tactical_evidence_rebuild_mismatch")
@@ -12843,6 +12983,9 @@ def materialize_micro_reversion_offline_requests(
     strict_outcome_commitment = date.fromisoformat(
         bundle_target_date
     ) >= date.fromisoformat(CURRENT_DESIGN_ACTIVATION_DATE)
+    strict_current_exact_eligibility = date.fromisoformat(
+        bundle_target_date
+    ) >= date.fromisoformat(CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE)
     if strict_outcome_commitment and outcome_source_bridge_report is None:
         raise ValueError("micro_reversion_current_outcome_source_bridge_required")
     if outcome_source_bridge_report is not None:
@@ -12965,7 +13108,7 @@ def materialize_micro_reversion_offline_requests(
         raise ValueError("micro_reversion_request_source_bundle_census_mismatch")
     if set(bundle_by_trace) & excluded_trace_ids:
         raise ValueError("micro_reversion_source_bundle_census_overlap")
-    if strict_outcome_commitment:
+    if strict_current_exact_eligibility:
         # A current source bundle cannot self-assert that a prepared parent is
         # excluded after the independent outcome bridge proved the trace and
         # its raw future-source reconstruction label-ready.  Requiring that

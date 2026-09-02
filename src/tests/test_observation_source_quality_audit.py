@@ -14,6 +14,152 @@ from src.engine.scalping.smoothing_source_only_path_journal import (
 )
 
 
+def _prune_observer_contract_fields() -> dict:
+    return {
+        "metric_role": "source_quality_instrumentation",
+        "decision_authority": "scanner_prune_bbo_observation_only",
+        "window_policy": "stable_episode_sparse_offsets",
+        "sample_floor": "exact_route_rest_bbo_episode_coverage_pct>=95",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "exact_request_route_and_response_receipt",
+        "forbidden_uses": "broker_order_submit|threshold_change",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "scanner_scan_generation_id": "SCANGEN-1",
+        "scanner_scan_rank": 1,
+        "scanner_ranked_candidate_count": 2,
+        "scanner_prune_reason": "general_slot_limit",
+        "scanner_prune_observer_market_data_request_effect": True,
+        "scanner_prune_observer_budget_kst_date": "2026-09-02",
+        "scanner_prune_observer_active_episode_count": 1,
+        "scanner_prune_observer_pending_sample_count": 10,
+        "scanner_prune_observer_process_daily_scheduled_request_count": 10,
+        "scanner_prune_observer_process_daily_remaining_request_count": 1190,
+        "scanner_prune_observer_worker_alive": True,
+        "scanner_prune_observer_worker_error_count": 0,
+        "scanner_prune_observer_receipt_emit_failure_count": 0,
+        "scanner_prune_observer_request_gap_count": 0,
+        "scanner_prune_observer_captured_sample_count": 0,
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+    }
+
+
+def test_prune_bbo_schedule_contract_allows_explicit_capacity_rejection() -> None:
+    stage = "scalping_scanner_prune_bbo_schedule"
+    fields = {
+        **_prune_observer_contract_fields(),
+        "scanner_prune_observer_schedule_status": ("active_episode_capacity_rejected"),
+        "scanner_prune_observer_episode_id": "PRUNEBBO-1",
+        "scanner_prune_observer_request_code": "005930",
+        "scanner_prune_observer_expected_observed_venue": "KRX",
+        "scanner_prune_observer_scheduled_sample_count": 0,
+        "scanner_prune_observer_anchor_epoch": 1.0,
+        "scanner_prune_observer_anchor_to_schedule_delay_sec": 0.0,
+    }
+
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+
+    assert violations == {
+        "missing_fields": [],
+        "zero_fields": [],
+        "invalid_fields": [],
+    }
+
+
+def test_prune_bbo_schedule_contract_requires_exact_anchor_timing() -> None:
+    stage = "scalping_scanner_prune_bbo_schedule"
+    fields = {
+        **_prune_observer_contract_fields(),
+        "scanner_prune_observer_schedule_status": "new_episode_scheduled",
+        "scanner_prune_observer_episode_id": "PRUNEBBO-1",
+        "scanner_prune_observer_request_code": "005930",
+        "scanner_prune_observer_expected_observed_venue": "KRX",
+        "scanner_prune_observer_scheduled_sample_count": 10,
+        "scanner_prune_observer_anchor_epoch": 1.0,
+        "scanner_prune_observer_schedule_started_epoch": 1.1,
+        "scanner_prune_observer_anchor_to_schedule_delay_sec": 0.1,
+    }
+
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+
+    assert violations == {
+        "missing_fields": [],
+        "zero_fields": [],
+        "invalid_fields": [],
+    }
+
+
+def test_prune_bbo_observation_contract_requires_captured_bbo_provenance() -> None:
+    stage = "scalping_scanner_prune_bbo_observation"
+    fields = {
+        **_prune_observer_contract_fields(),
+        "scanner_prune_observer_episode_id": "PRUNEBBO-1",
+        "scanner_prune_observer_anchor_generation_id": "SCANGEN-1",
+        "scanner_prune_observer_anchor_epoch": 1.0,
+        "scanner_prune_observer_schedule_started_epoch": 1.0,
+        "scanner_prune_observer_anchor_to_schedule_delay_sec": 0.0,
+        "scanner_prune_observer_sample_index": 0,
+        "scanner_prune_observer_scheduled_offset_sec": 0,
+        "scanner_prune_observer_due_epoch": 1.0,
+        "scanner_prune_observer_request_started_epoch": 1.0,
+        "scanner_prune_observer_observed_epoch": 1.1,
+        "scanner_prune_observer_observed_at": "2026-09-02T09:10:00+09:00",
+        "scanner_prune_observer_request_completed_epoch": 1.1,
+        "scanner_prune_observer_schedule_lag_sec": 0.1,
+        "scanner_prune_observer_request_code": "005930",
+        "scanner_prune_observer_response_request_code": "005930",
+        "scanner_prune_observer_expected_observed_venue": "KRX",
+        "scanner_prune_observer_route_match": True,
+        "scanner_prune_observer_status": "captured",
+        "scanner_prune_observer_gap_reason": "not_applicable_capture_pass",
+        "scanner_prune_observer_terminal_sample": False,
+        "scanner_prune_observer_source_quality_pass": True,
+        "scanner_prune_observer_price_source": (
+            "ka10004_rest_orderbook_exact_request_code"
+        ),
+        "scanner_prune_observer_best_bid": 70000,
+        "scanner_prune_observer_best_ask": 70100,
+        "scanner_prune_observer_quote_age_ms": 1.0,
+    }
+
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+
+    assert violations == {
+        "missing_fields": [],
+        "zero_fields": [],
+        "invalid_fields": [],
+    }
+
+    invalid_route = audit._row_contract_violations(
+        stage,
+        {
+            "fields": {
+                **fields,
+                "scanner_prune_observer_route_match": False,
+            }
+        },
+        audit.STAGE_CONTRACTS[stage],
+    )
+    assert invalid_route["invalid_fields"] == [
+        "scanner_prune_observer_exact_route_contract"
+    ]
+
+
 def test_main_fails_closed_when_heavy_analysis_lock_is_busy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -2329,9 +2475,7 @@ def test_observation_source_quality_audit_reviews_20260713_unknown_provenance_ga
         == "reviewed_entry_order_flow_not_available"
     )
     assert (
-        reviewed["order_bundle_failed"]["entry_order_flow_status"][
-            "reviewed_reason"
-        ]
+        reviewed["order_bundle_failed"]["entry_order_flow_status"]["reviewed_reason"]
         == "reviewed_entry_order_flow_not_available"
     )
     assert (

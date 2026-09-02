@@ -4443,6 +4443,131 @@ def test_scalp_sim_ai_budget_reuses_unchanged_signature(monkeypatch):
     assert decision["reuse_reason"] == "unchanged_feature_signature"
 
 
+def test_scalp_sim_ai_budget_ignores_fast_market_snapshot_churn(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules())
+    stock = _sim_holding_stock()
+    stock["scalp_sim_ai_last_feature_signature"] = (
+        state_handlers._build_scalp_sim_ai_feature_signature(
+            stock,
+            profit_rate=0.12,
+            peak_profit=0.2,
+            current_ai_score=62,
+            market_signature={
+                "curr": 10000,
+                "fluctuation": 0.0,
+                "v_pw": 100.0,
+                "buy_ratio": 48.0,
+                "spread": 1,
+                "ask_bid_balance": 0,
+            },
+            is_critical_zone=False,
+            near_ai_exit_band=False,
+            near_safe_profit_band=False,
+        )
+    )
+
+    decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
+        stock,
+        strategy="SCALPING",
+        now_ts=1030.0,
+        profit_rate=0.12,
+        peak_profit=0.2,
+        held_sec=45,
+        current_ai_score=62,
+        market_signature={
+            "curr": 10010,
+            "fluctuation": 0.0,
+            "v_pw": 100.0,
+            "buy_ratio": 48.0,
+            "spread": 1,
+            "ask_bid_balance": 50000,
+        },
+        is_critical_zone=False,
+        near_ai_exit_band=False,
+        near_safe_profit_band=False,
+    )
+
+    assert decision["state_changed"] is False
+    assert decision["action"] == "reuse"
+
+
+def test_scalp_sim_ai_budget_keeps_material_market_regime_transition(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules())
+    stock = _sim_holding_stock()
+    initial_market = {
+        "curr": 10000,
+        "fluctuation": 0.0,
+        "v_pw": 100.0,
+        "buy_ratio": 48.0,
+        "spread": 1,
+    }
+    stock["scalp_sim_ai_last_feature_signature"] = (
+        state_handlers._build_scalp_sim_ai_feature_signature(
+            stock,
+            profit_rate=0.12,
+            peak_profit=0.2,
+            current_ai_score=62,
+            market_signature=initial_market,
+            is_critical_zone=False,
+            near_ai_exit_band=False,
+            near_safe_profit_band=False,
+        )
+    )
+
+    decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
+        stock,
+        strategy="SCALPING",
+        now_ts=1030.0,
+        profit_rate=0.12,
+        peak_profit=0.2,
+        held_sec=45,
+        current_ai_score=62,
+        market_signature={**initial_market, "v_pw": 110.0},
+        is_critical_zone=False,
+        near_ai_exit_band=False,
+        near_safe_profit_band=False,
+    )
+
+    assert decision["state_changed"] is True
+    assert decision["action"] == "call"
+    assert decision["call_reason"] == "soft_critical"
+
+
+def test_scalp_sim_ai_budget_keeps_material_profit_transition(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules())
+    stock = _sim_holding_stock()
+    stock["scalp_sim_ai_last_feature_signature"] = (
+        state_handlers._build_scalp_sim_ai_feature_signature(
+            stock,
+            profit_rate=0.12,
+            peak_profit=0.2,
+            current_ai_score=62,
+            market_signature=(10000,),
+            is_critical_zone=False,
+            near_ai_exit_band=False,
+            near_safe_profit_band=False,
+        )
+    )
+
+    decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
+        stock,
+        strategy="SCALPING",
+        now_ts=1030.0,
+        profit_rate=0.32,
+        peak_profit=0.32,
+        held_sec=45,
+        current_ai_score=62,
+        market_signature=(10000,),
+        is_critical_zone=False,
+        near_ai_exit_band=False,
+        near_safe_profit_band=False,
+    )
+
+    assert decision["state_changed"] is True
+    assert decision["action"] == "call"
+    assert decision["call_reason"] == "soft_critical"
+
+
 def test_scalp_sim_ai_budget_defers_when_cap_exhausted(monkeypatch):
     monkeypatch.setattr(
         state_handlers,

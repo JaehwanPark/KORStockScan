@@ -741,7 +741,8 @@ def test_normal_scanner_handoff_keeps_ws_and_clears_observation_registry(
         "COMMAND_WS_REG",
     ]
     assert bus.events[-1][1]["reason"] == "first_market_data_pending"
-    assert bus.events[-1][1]["required_realtime_types"] == ("0D",)
+    assert bus.events[-1][1]["required_realtime_types"] == ("0B", "0D")
+    assert bus.events[-1][1]["realtime_types"] == ("0B", "0D")
 
     assert manager.relinquish_for_trading("000001") is True
     assert LIMIT_DOWN_OBSERVATION_REGISTRY.active_code() == ""
@@ -784,7 +785,8 @@ def test_preopen_wait_persists_idle_heartbeat_and_starts_at_krx_open(
 
     assert manager.active is not None
     assert bus.events[0][0] == "COMMAND_WS_REG"
-    assert bus.events[0][1]["required_realtime_types"] == ("0D",)
+    assert bus.events[0][1]["required_realtime_types"] == ("0B", "0D")
+    assert bus.events[0][1]["realtime_types"] == ("0B", "0D")
 
 
 def test_scanner_promotion_handoff_blocks_signal_until_attach_event(

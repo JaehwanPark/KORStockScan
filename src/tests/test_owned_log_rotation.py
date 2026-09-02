@@ -149,7 +149,16 @@ def test_owned_log_writer_deduplicates_same_content_generation(tmp_path):
         ("deploy/install_panic_sell_defense_cron.sh", "panic_sell_defense_cron"),
         ("deploy/install_threshold_cycle_cron.sh", "threshold_cycle_preopen_cron"),
         ("deploy/install_threshold_cycle_cron.sh", "threshold_cycle_postclose_cron"),
-        ("deploy/install_eod_data_chain_cron.sh", "log_rotation_cleanup_cron"),
+        (
+            "deploy/install_postclose_done_controller_cron.sh",
+            "postclose_done_controller_cron",
+        ),
+        (
+            "deploy/install_tuning_monitoring_postclose_cron.sh",
+            "tuning_monitoring_postclose_cron",
+        ),
+        ("deploy/install_error_detection_cron.sh", "postclose_finalization_cron"),
+        ("deploy/run_postclose_finalization.sh", "log_rotation_cleanup_cron"),
     ],
 )
 def test_installed_log_writers_use_owner_wrapper(installer: str, owner: str):

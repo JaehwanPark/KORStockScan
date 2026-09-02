@@ -5,6 +5,7 @@ import pytest
 from src.engine.scalping.micro_reversion.depth_join import (
     join_latest_past_depth,
     read_depth_rows,
+    validate_depth_row,
 )
 from src.engine.scalping.micro_reversion.path_journal import (
     MarketDepthPoint,
@@ -179,6 +180,91 @@ def test_join_rejects_duplicate_depth_sequence_and_prejoined_market_row() -> Non
     market["bid_depth"] = 1
     with pytest.raises(ValueError, match="prejoined"):
         join_latest_past_depth((market,), (depth,))
+
+
+@pytest.mark.parametrize("venue", ("KRX", "NXT"))
+def test_plain_route_accepts_combined_totals_with_zero_component_fids(venue) -> None:
+    row = _depth_row(
+        received="2026-09-02T09:00:00.000+09:00",
+        venue=venue,
+    )
+    row["route_depth_totals"] = {
+        "combined": {"ask": 300, "bid": 400},
+        "KRX": {"ask": 0, "bid": 0},
+        "NXT": {"ask": 0, "bid": 0},
+    }
+
+    validate_depth_row(row)
+
+
+def test_sor_route_still_requires_complete_reconciled_component_totals() -> None:
+    row = _depth_row(
+        received="2026-09-02T09:00:00.000+09:00",
+        venue="SOR",
+    )
+    row["route_depth_totals"] = {
+        "combined": {"ask": 300, "bid": 400},
+        "KRX": {"ask": 100, "bid": 150},
+        "NXT": {"ask": 200, "bid": 250},
+    }
+    validate_depth_row(row)
+
+    missing_component = dict(row)
+    missing_component["route_depth_totals"] = {
+        "combined": {"ask": 300, "bid": 400},
+        "KRX": {"ask": 100, "bid": 150},
+    }
+    with pytest.raises(ValueError, match="components are missing"):
+        validate_depth_row(missing_component)
+
+    mismatch = dict(row)
+    mismatch["route_depth_totals"] = {
+        **row["route_depth_totals"],
+        "NXT": {"ask": 199, "bid": 250},
+    }
+    with pytest.raises(ValueError, match="do not reconcile"):
+        validate_depth_row(mismatch)
+
+
+def test_depth_writer_enforces_sor_components_but_accepts_plain_route_zeros() -> None:
+    plain_row = _depth_row(
+        received="2026-09-02T09:00:00.000+09:00",
+        venue="KRX",
+    )
+    plain_row["route_depth_totals"] = {
+        "combined": {"ask": 300, "bid": 400},
+        "KRX": {"ask": 0, "bid": 0},
+        "NXT": {"ask": 0, "bid": 0},
+    }
+    writer_fields = MarketDepthPoint.__dataclass_fields__
+    MarketDepthPoint(**{name: plain_row[name] for name in writer_fields})
+
+    sor_row = _depth_row(
+        received="2026-09-02T09:00:00.000+09:00",
+        venue="SOR",
+    )
+    missing_component = {
+        **sor_row,
+        "route_depth_totals": {
+            "combined": {"ask": 300, "bid": 400},
+            "KRX": {"ask": 100, "bid": 150},
+        },
+    }
+    with pytest.raises(ValueError, match="components are required"):
+        MarketDepthPoint(
+            **{name: missing_component[name] for name in writer_fields}
+        )
+
+    mismatch = {
+        **sor_row,
+        "route_depth_totals": {
+            "combined": {"ask": 300, "bid": 400},
+            "KRX": {"ask": 100, "bid": 150},
+            "NXT": {"ask": 199, "bid": 250},
+        },
+    }
+    with pytest.raises(ValueError, match="components do not reconcile"):
+        MarketDepthPoint(**{name: mismatch[name] for name in writer_fields})
 
 
 def test_read_depth_rows_rejects_authority_drift(tmp_path) -> None:

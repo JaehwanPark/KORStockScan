@@ -289,6 +289,48 @@ def test_builds_fixed_price_depletion_trade_backing_refill_and_clear() -> None:
     assert "runtime_or_preopen_env_mutation" in payload["forbidden_uses"]
 
 
+def test_top3_path_is_eligible_when_optional_top5_is_unavailable() -> None:
+    anchor = _depth_row(
+        offset_ms=-100,
+        sequence=10,
+        ask_prices=(10_010, 10_020, 10_030),
+        ask_quantities=(100, 200, 300),
+    )
+    path = []
+    for row in _complete_depth_path()[:4]:
+        candidate = dict(row)
+        candidate["ask_levels"] = candidate["ask_levels"][:3]
+        candidate["ask_depth"] = sum(level[2] for level in candidate["ask_levels"])
+        candidate["route_depth_totals"] = {
+            "combined": {"ask": candidate["ask_depth"], "bid": 1_500},
+            "KRX": {"ask": candidate["ask_depth"], "bid": 1_500},
+        }
+        path.append(candidate)
+
+    report = build_ask_depletion_report(
+        context=_context(),
+        anchor_depth=anchor,
+        depth_rows=(anchor, *path),
+        market_rows=(
+            _market_row(offset_ms=200, sequence=51, trade_qty=30),
+            _market_row(offset_ms=400, sequence=52, trade_qty=5),
+        ),
+        horizons_ms=(500, 1_000),
+    )
+
+    assert all(
+        horizon.source_quality_status == "eligible_source_only_feature_ablation"
+        for horizon in report.horizons
+    )
+    for horizon in report.horizons:
+        top3, top5 = horizon.top_depth
+        assert top3.retained_level_count == 3
+        assert top3.initial_qty is not None
+        assert top5.retained_level_count == 5
+        assert top5.anchor_price_count == 3
+        assert top5.initial_qty is None
+
+
 def test_ignores_cross_scope_rows_and_never_uses_their_depletion() -> None:
     anchor = _depth_row(offset_ms=-100, sequence=10)
     same_scope = _depth_row(offset_ms=499, sequence=11)

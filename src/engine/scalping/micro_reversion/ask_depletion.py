@@ -39,7 +39,8 @@ ASK_DEPLETION_METRIC_CONTRACT = {
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
         "latest_nonfuture_anchor_and_fresh_continuous_0d_and_complete_0b_"
-        "within_exact_scope_without_fixed_price_imputation"
+        "within_exact_scope_with_top3_required_top5_optional_without_fixed_"
+        "price_imputation"
     ),
     "forbidden_uses": (
         "standalone_buy_wait_drop_or_exit_decision",
@@ -457,9 +458,11 @@ def _build_horizon(
         (float(raw[1]), int(raw[2])) for raw in anchor["ask_levels"]
     )
     top_depth_metrics: list[FixedTopDepthDepletion] = []
+    required_level_count = min(top_depth_levels)
     for level_count in top_depth_levels:
         if len(anchor_ask_levels) < level_count:
-            reasons.append(f"anchor_top{level_count}_depth_not_retained")
+            if level_count == required_level_count:
+                reasons.append(f"anchor_top{level_count}_depth_not_retained")
             top_depth_metrics.append(
                 FixedTopDepthDepletion(
                     retained_level_count=level_count,
@@ -477,7 +480,8 @@ def _build_horizon(
         for row in samples:
             fixed_quantity = _quantity_at_fixed_ask_prices(row, anchor_prices)
             if fixed_quantity is None:
-                reasons.append(f"anchor_top{level_count}_prices_not_retained")
+                if level_count == required_level_count:
+                    reasons.append(f"anchor_top{level_count}_prices_not_retained")
                 quantities = []
                 break
             quantities.append(fixed_quantity)

@@ -4785,6 +4785,8 @@ class KiwoomWSManager:
             required_realtime_types = ("0B",)
         if required_realtime_types is not None:
             kwargs["required_realtime_types"] = required_realtime_types
+        if "realtime_types" in payload:
+            kwargs["realtime_types"] = payload.get("realtime_types")
         if "remove_before_reg" in payload:
             kwargs["remove_before_reg"] = payload.get("remove_before_reg")
         self.execute_subscribe(codes, **kwargs)

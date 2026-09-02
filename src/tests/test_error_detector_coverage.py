@@ -38,6 +38,7 @@ def test_new_operational_feature_must_declare_detector_coverage():
     assert "swing_improvement_automation_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_live_dry_run_status" in REQUIRED_ARTIFACT_IDS
     assert "postclose_done_controller" in REQUIRED_CRON_JOB_IDS
+    assert "postclose_finalization" in REQUIRED_CRON_JOB_IDS
     assert "postclose_done_controller_report" in REQUIRED_ARTIFACT_IDS
     assert "codex_workorder_runner_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_daily_simulation_status" in REQUIRED_ARTIFACT_IDS

@@ -2501,6 +2501,30 @@ fi
 if [[ "$RUN_DEEPSEEK_SWING_LAB" != "true" && "$RUN_DEEPSEEK_SWING_LAB" != "1" ]]; then
   VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage deepseek_swing_lab)
 fi
+if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "1" ]; then
+  # Re-evaluate the propagation contract after the conversion-lane workorder,
+  # EV, and runtime-summary refreshes.  The first audit intentionally exposes
+  # the bootstrap links; this pass prevents those transient pending states from
+  # leaking into the final EV/workorder generation.
+  wait_for_postclose_resources "pattern_lab_propagation_audit_final_refresh"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_propagation_audit \
+    --date "$TARGET_DATE" "${PATTERN_LAB_SWING_ARGS[@]}"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md" \
+    "pattern_lab_propagation_audit_final_refresh"
+  if [ "$RUN_PATTERN_LAB_AI_REVIEW" = "true" ] || [ "$RUN_PATTERN_LAB_AI_REVIEW" = "1" ]; then
+    wait_for_postclose_resources "pattern_lab_ai_review_final_source_provenance_refresh"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_ai_review \
+      --date "$TARGET_DATE" \
+      --refresh-source-provenance \
+      "${PATTERN_LAB_SWING_ARGS[@]}"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.md" \
+      "pattern_lab_ai_review_final_source_provenance_refresh"
+  fi
+fi
 run_threshold_cycle_ev_and_wait "final_consumer_refresh"   "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json"   "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md"   "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"
 if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
   wait_for_postclose_resources "code_improvement_workorder_final_source_refresh"

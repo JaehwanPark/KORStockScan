@@ -57,7 +57,8 @@ CRON_INSTALL_MARKERS: dict[str, list[str]] = {
     "tuning_monitoring_postclose": ["TUNING_MONITORING_POSTCLOSE"],
     "update_kospi": ["UPDATE_KOSPI_EOD_"],
     "dashboard_db_archive": ["DASHBOARD_DB_ARCHIVE_"],
-    "log_rotation_cleanup": ["LOG_ROTATION_CLEANUP_"],
+    "log_rotation_cleanup": ["POSTCLOSE_FINALIZATION_"],
+    "postclose_finalization": ["POSTCLOSE_FINALIZATION_"],
     "system_metric_sampler": ["SYSTEM_METRIC_SAMPLER_"],
     "error_detection_full": ["ERROR_DETECTION_FULL"],
 }
@@ -219,10 +220,20 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "log_rotation_cleanup",
         "log": "logs/log_rotation_cleanup_cron.log",
-        "window_start": (21, 0),
-        "window_end": (21, 10),
+        "window_start": (21, 55),
+        "window_end": (23, 55),
         "mode": "once",
         "critical": False,
+    },
+    {
+        "id": "postclose_finalization",
+        "log": "logs/postclose_finalization_cron.log",
+        "window_start": (21, 55),
+        "window_end": (23, 55),
+        "mode": "once",
+        "critical": True,
+        "trading_day_only": True,
+        "terminal_error_immediate": True,
     },
     {
         "id": "system_metric_sampler",
@@ -353,6 +364,16 @@ class CronCompletionDetector(BaseDetector):
                 elif artifact_status == "failed":
                     issues.append(f"{jid}: status artifact failed")
                     details[f"{jid}_status"] = "fail"
+                elif job.get("terminal_error_immediate") and has_error:
+                    last_marker = self._last_terminal_marker(today_lines)
+                    if last_marker == "done":
+                        details[f"{jid}_status"] = "pass"
+                        details[f"{jid}_pass_note"] = (
+                            "done over error (last terminal was DONE)"
+                        )
+                    else:
+                        issues.append(f"{jid}: terminal failure marker observed")
+                        details[f"{jid}_status"] = "fail"
                 elif not has_matching_date:
                     if past_window_end:
                         issues.append(f"{jid}: no today marker found after window end")

@@ -54,7 +54,7 @@ MICROSTRUCTURE_REACTION_CONTEXT_DIR = REPORT_DIR / "microstructure_reaction_cont
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 2
-WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v2"
+WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v3"
 IMPLEMENTED_STATUSES = {
     "implemented",
     "implemented_but_hold_sample",
@@ -680,10 +680,22 @@ def _intraday_ws_freshness_followup_orders(
         "scanner_candidate_prune_receipts_implemented_waiting_natural_generation": (
             "implemented_but_waiting_sample"
         ),
+        "bounded_prune_rest_bbo_collector_implemented_waiting_next_pid_natural_episode_receipts": (
+            "implemented_but_waiting_sample"
+        ),
+        "bounded_prune_rest_bbo_collector_schedule_receipts_observed": (
+            "implemented_but_waiting_sample"
+        ),
+        "bounded_prune_rest_bbo_collector_runtime_receipts_observed": (
+            "implemented_but_waiting_sample"
+        ),
         "handoff_provenance_implemented_not_runtime_reflected": (
             "implemented_but_waiting_sample"
         ),
         "implemented_in_source_report": (
+            "implemented_source_quality_contract_waiting_sample"
+        ),
+        "implemented_pending_new_dashboard_snapshot": (
             "implemented_source_quality_contract_waiting_sample"
         ),
     }

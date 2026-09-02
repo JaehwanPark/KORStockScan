@@ -471,9 +471,6 @@ def _contains_drift_signal(value: Any) -> bool:
                 return True
     elif isinstance(value, list):
         return any(_contains_drift_signal(item) for item in value)
-    elif isinstance(value, str):
-        text = value.lower()
-        return any(token in text for token in DRIFT_TOKENS)
     return False
 
 
@@ -549,8 +546,11 @@ def evaluate_step(spec: StepSpec, env: dict[str, str] | None = None) -> dict[str
         reasons.append("source_missing_or_unreadable")
     if upstream_newer:
         reasons.append("upstream_artifact_newer")
-    if drift_signal:
-        reasons.append("upstream_drift_signal")
+    # A persistent candidate/gap in an already-consumed source is evidence, not
+    # a new dependency generation.  Re-running a fresh output for that same
+    # signal caused recovery wrappers to repeat expensive audits indefinitely.
+    # Missing/non-reusable outputs and source freshness remain the execution
+    # triggers; keep the drift signal as audit metadata only.
     decision = "run" if reasons else "skip"
     if not reasons:
         reasons.append("fresh_outputs_no_trigger")
@@ -561,6 +561,7 @@ def evaluate_step(spec: StepSpec, env: dict[str, str] | None = None) -> dict[str
         "decision": decision,
         "trigger_reasons": reasons,
         "source_missing": source_missing,
+        "upstream_drift_signal_present": drift_signal,
         "force_override": force,
         "enabled": True,
         "enable_env": spec.enable_env,

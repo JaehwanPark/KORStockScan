@@ -14,7 +14,7 @@ mv "$TMP_CRON.filtered" "$TMP_CRON"
 cat >> "$TMP_CRON" <<EOF
 # postclose DONE controller and Codex workorder runner
 # Start with the 20:10 postclose chain; the controller waits for its predecessor internally.
-10 20 * * 1-5 $RUNNER \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/postclose_done_controller_cron.log 2>&1 # POSTCLOSE_DONE_CONTROLLER
+10 20 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner postclose_done_controller_cron --log $PROJECT_DIR/logs/postclose_done_controller_cron.log $RUNNER \$(TZ=Asia/Seoul date +\\%F) # POSTCLOSE_DONE_CONTROLLER
 EOF
 
 crontab "$TMP_CRON"

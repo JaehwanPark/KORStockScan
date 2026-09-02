@@ -55,6 +55,10 @@ from src.engine.scalping.opening_rotation import (
 from src.engine.risk.manual_control_exclusion import (
     evaluate_manual_control_exclusion,
 )
+from src.engine.monitoring.pruned_candidate_bbo_collector import (  # noqa: E402
+    configure_global_collector as configure_pruned_candidate_bbo_collector,
+    offer_global_prune_observation,
+)
 from src.engine.sniper_time import (
     SCALPING_BUY_WINDOWS,
     describe_scalping_buy_windows,
@@ -4193,24 +4197,33 @@ def _log_scanner_candidate_pruned(
     """Emit one explicit first-blocker receipt for a ranked candidate."""
 
     context = dict(context or {})
+    prune_observed_epoch = round(time.time(), 6)
+    common_fields = {
+        **_scanner_event_fields(
+            target,
+            {
+                "blocked": True,
+                "reason": str(reason or "unknown_scanner_prune"),
+                "candidate_role": _scanner_candidate_role(target),
+                "source_signature": ",".join(_source_signature(target)),
+                **context,
+            },
+        ),
+        **dict(venue_fields or {}),
+        **context,
+        "scanner_prune_reason": str(reason or "unknown_scanner_prune"),
+        "scanner_scan_generation_id": str(scan_generation_id),
+        "scanner_scan_rank": int(scan_rank),
+        "scanner_ranked_candidate_count": int(ranked_candidate_count),
+        "scanner_prune_observed_epoch": prune_observed_epoch,
+    }
     emit_pipeline_event(
         "ENTRY_PIPELINE",
         str(target.get("Name") or "-"),
         str(target.get("Code") or "").strip()[:6],
         "scalping_scanner_candidate_pruned",
         fields={
-            **_scanner_event_fields(
-                target,
-                {
-                    "blocked": True,
-                    "reason": str(reason or "unknown_scanner_prune"),
-                    "candidate_role": _scanner_candidate_role(target),
-                    "source_signature": ",".join(_source_signature(target)),
-                    **context,
-                },
-            ),
-            **dict(venue_fields or {}),
-            **context,
+            **common_fields,
             "metric_role": "funnel_count",
             "decision_authority": (
                 "real_scalping_scanner_existing_promotion_guard_observation"
@@ -4228,13 +4241,29 @@ def _log_scanner_candidate_pruned(
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
-            "scanner_prune_reason": str(reason or "unknown_scanner_prune"),
             "scanner_prune_first_blocker": True,
-            "scanner_scan_generation_id": str(scan_generation_id),
-            "scanner_scan_rank": int(scan_rank),
-            "scanner_ranked_candidate_count": int(ranked_candidate_count),
         },
     )
+    observer_fields = offer_global_prune_observation(
+        target,
+        reason=str(reason or "unknown_scanner_prune"),
+        scan_generation_id=str(scan_generation_id),
+        scan_rank=int(scan_rank),
+        ranked_candidate_count=int(ranked_candidate_count),
+        venue_fields=dict(venue_fields or {}),
+        observed_epoch=prune_observed_epoch,
+    )
+    if observer_fields.get("eligible"):
+        emit_pipeline_event(
+            "ENTRY_PIPELINE",
+            str(target.get("Name") or "-"),
+            str(target.get("Code") or "").strip()[:6],
+            "scalping_scanner_prune_bbo_schedule",
+            fields={
+                **common_fields,
+                **observer_fields,
+            },
+        )
 
 
 def _log_scanner_real_source_guard_block(
@@ -6417,6 +6446,8 @@ def run_scalper(is_test_mode=False):
     if not token:
         log_error("❌ 키움 토큰 발급 실패. 스캐너를 종료합니다.")
         return
+
+    configure_pruned_candidate_bbo_collector(token)
 
     radar = SniperRadar(token)
     limit_down_manager = LimitDownWatchManager(token, db, event_bus)

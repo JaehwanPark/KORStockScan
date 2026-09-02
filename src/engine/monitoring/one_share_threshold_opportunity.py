@@ -421,9 +421,14 @@ def _source_coverage_manifest(
         {_date_from_path(path) for path in post_sell_paths if _date_from_path(path)}
     )
     observed_dates = sorted(set(pipeline_dates) | set(post_sell_dates))
-    missing_pipeline_dates = [
-        value for value in observed_dates if value not in set(pipeline_dates)
-    ]
+    # A post-sell partition date is the evaluation/maturity date, not the
+    # originating entry date.  It may legitimately be a non-trading day, so it
+    # cannot establish that a same-date pipeline partition is missing.  Pipeline
+    # completeness has no independent expected-date calendar in this report;
+    # only the actual submitted entry dates below can establish an expected
+    # post-sell partition.
+    post_sell_only_dates = sorted(set(post_sell_dates) - set(pipeline_dates))
+    missing_pipeline_dates: list[str] = []
     expected_post_sell = sorted(
         {
             str(value)
@@ -443,6 +448,8 @@ def _source_coverage_manifest(
         "observed_dates": observed_dates,
         "pipeline_event_dates": pipeline_dates,
         "post_sell_dates": post_sell_dates,
+        "post_sell_only_dates": post_sell_only_dates,
+        "post_sell_only_dates_are_informational": True,
         "expected_post_sell_dates": expected_post_sell,
         "post_sell_not_expected_pipeline_dates": sorted(
             set(pipeline_dates) - set(expected_post_sell)
@@ -755,8 +762,24 @@ def _call_ai_review(
 
 
 def _apply_ai_review(report: dict[str, Any], *, provider: str) -> dict[str, Any]:
-    raw, provider_status = _call_ai_review(report, provider=provider)
-    status, payload, warnings = _parse_ai_review(raw)
+    coverage = (
+        report.get("source_coverage_manifest")
+        if isinstance(report.get("source_coverage_manifest"), dict)
+        else {}
+    )
+    if str(coverage.get("status") or "") != "pass":
+        status = "blocked_source_coverage"
+        payload: dict[str, Any] = {}
+        warnings = ["ai_review_skipped_source_coverage_gap"]
+        provider_status = {
+            "provider": provider or "none",
+            "status": "blocked_source_coverage",
+            "reason": "source_coverage_gate_not_passed",
+            "new_provider_call": False,
+        }
+    else:
+        raw, provider_status = _call_ai_review(report, provider=provider)
+        status, payload, warnings = _parse_ai_review(raw)
     review_by_candidate = {
         str(item.get("candidate_id")): item
         for item in (payload.get("candidate_reviews") or [])

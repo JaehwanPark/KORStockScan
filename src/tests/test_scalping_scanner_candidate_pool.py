@@ -149,6 +149,64 @@ def test_promote_candidates_prunes_manual_exclusion_before_db_and_ws(
     assert emitted[0]["fields"]["actual_order_submitted"] is False
 
 
+def test_prune_receipt_schedules_source_only_bbo_for_eligible_reason(monkeypatch):
+    emitted = []
+    offered = []
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "code": code, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "offer_global_prune_observation",
+        lambda target, **kwargs: offered.append((target, kwargs))
+        or {
+            "eligible": True,
+            "scanner_prune_observer_schedule_status": "new_episode_scheduled",
+            "scanner_prune_observer_episode_id": "PRUNEBBO-1",
+            "decision_authority": "scanner_prune_bbo_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    )
+
+    scalping_scanner._log_scanner_candidate_pruned(
+        {
+            "Code": "005930",
+            "Name": "삼성전자",
+            "Source": "MARKET_GAINER",
+            "Price": 70000,
+        },
+        reason="market_gainer_reserved_full",
+        scan_generation_id="SCANGEN-1",
+        scan_rank=2,
+        ranked_candidate_count=10,
+        venue_fields={
+            "effective_venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+        },
+    )
+
+    assert [row["stage"] for row in emitted] == [
+        "scalping_scanner_candidate_pruned",
+        "scalping_scanner_prune_bbo_schedule",
+    ]
+    assert offered[0][1]["reason"] == "market_gainer_reserved_full"
+    assert offered[0][1]["observed_epoch"] == (
+        emitted[0]["fields"]["scanner_prune_observed_epoch"]
+    )
+    schedule = emitted[1]["fields"]
+    assert schedule["scanner_prune_observer_episode_id"] == "PRUNEBBO-1"
+    assert schedule["decision_authority"] == "scanner_prune_bbo_observation_only"
+    assert schedule["runtime_effect"] is False
+    assert schedule["actual_order_submitted"] is False
+    assert schedule["broker_order_forbidden"] is True
+
+
 def test_market_gainer_source_filters_prev_close_gain_at_or_above_25_pct(
     monkeypatch,
 ):

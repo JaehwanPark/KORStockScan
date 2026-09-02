@@ -291,14 +291,21 @@ def validate_depth_row(payload: object) -> None:
                 or quantity < 0
             ):
                 raise ValueError("depth route total is invalid")
-    components = [
-        totals
-        for route, totals in route_totals.items()
-        if route != "combined" and isinstance(totals, dict)
-    ]
-    for side in ("bid", "ask"):
-        component_values = [totals.get(side) for totals in components]
-        if component_values and all(value is not None for value in component_values):
+    # Kiwoom 0D FID 121/125 are the combined sell/buy depth totals.  The
+    # venue-component fields (KRX 6064/6065 and NXT 6086/6087) are meaningful
+    # as a decomposition only for an integrated SOR registration item.  Plain
+    # KRX/NXT packets legitimately carry zero component fields while their
+    # combined totals are non-zero, so applying the SOR conservation equation
+    # to every venue would discard valid native-route depth.
+    if item_venue == "SOR":
+        krx = route_totals.get("KRX")
+        nxt = route_totals.get("NXT")
+        if not isinstance(krx, dict) or not isinstance(nxt, dict):
+            raise ValueError("depth integrated route components are missing")
+        for side in ("bid", "ask"):
+            component_values = (krx.get(side), nxt.get(side))
+            if any(value is None for value in component_values):
+                raise ValueError("depth integrated route components are missing")
             if sum(component_values) != combined.get(side):
                 raise ValueError("depth component route totals do not reconcile")
 

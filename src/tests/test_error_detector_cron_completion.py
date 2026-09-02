@@ -98,6 +98,44 @@ class TestCronCompletionDetector:
         assert "[FAIL]" in filtered
         assert filtered.count("[DONE]") == 1
 
+    def test_terminal_error_immediate_job_fails_inside_open_window(
+        self, monkeypatch, tmp_path
+    ):
+        import src.engine.error_detectors.cron_completion as cc
+
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "postclose_finalization_cron.log").write_text(
+            "[START] postclose_finalization target_date=2026-09-03\n"
+            "[FAIL] postclose_finalization target_date=2026-09-03 reason=cleanup_failed\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-03")
+        monkeypatch.setattr(cc, "CRON_INSTALL_MARKERS", {})
+        monkeypatch.setattr(
+            cc,
+            "CRON_JOB_REGISTRY",
+            [
+                {
+                    "id": "postclose_finalization",
+                    "log": "logs/postclose_finalization_cron.log",
+                    "window_start": (21, 55),
+                    "window_end": (23, 55),
+                    "mode": "once",
+                    "critical": True,
+                    "terminal_error_immediate": True,
+                }
+            ],
+        )
+
+        with _mock_time(22, 5):
+            result = CronCompletionDetector().check()
+
+        assert result.severity == "fail"
+        assert result.details["postclose_finalization_status"] == "fail"
+        assert "terminal failure marker observed" in result.summary
+
     def test_update_kospi_start_only_before_extended_window_end_is_not_fail(
         self, monkeypatch, tmp_path
     ):

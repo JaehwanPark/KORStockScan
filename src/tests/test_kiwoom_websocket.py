@@ -2868,6 +2868,29 @@ def test_command_ws_reg_preserves_explicit_required_realtime_types(monkeypatch):
     assert captured["required_realtime_types"] == ["0B", "0D"]
 
 
+def test_command_ws_reg_preserves_explicit_wire_realtime_types(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    captured = {}
+
+    monkeypatch.setattr(
+        manager,
+        "execute_subscribe",
+        lambda codes, **kwargs: captured.update(codes=list(codes), **kwargs),
+    )
+
+    manager._handle_reg_event(
+        {
+            "codes": ["000001"],
+            "source": "limit_down_watch_observation",
+            "required_realtime_types": ["0B", "0D"],
+            "realtime_types": ["0B", "0D"],
+        }
+    )
+
+    assert captured["required_realtime_types"] == ["0B", "0D"]
+    assert captured["realtime_types"] == ["0B", "0D"]
+
+
 def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes.add("039490")

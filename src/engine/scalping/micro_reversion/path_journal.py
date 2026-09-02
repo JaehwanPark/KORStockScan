@@ -447,6 +447,21 @@ class MarketDepthPoint:
             for quantity in totals.values():
                 if quantity is not None and quantity < 0:
                     raise ValueError("route depth total must not be negative")
+        # Kiwoom's combined 0D totals are authoritative for plain KRX/NXT
+        # items.  Only an integrated SOR item promises a KRX/NXT component
+        # decomposition, so enforce the component conservation equation at
+        # write time for that route without rejecting native-route zero FIDs.
+        if venue == "SOR":
+            krx_totals = self.route_depth_totals.get("KRX")
+            nxt_totals = self.route_depth_totals.get("NXT")
+            if not isinstance(krx_totals, dict) or not isinstance(nxt_totals, dict):
+                raise ValueError("integrated route depth components are required")
+            for side in ("bid", "ask"):
+                component_values = (krx_totals.get(side), nxt_totals.get(side))
+                if any(value is None for value in component_values):
+                    raise ValueError("integrated route depth components are required")
+                if sum(component_values) != combined_totals.get(side):
+                    raise ValueError("integrated route depth components do not reconcile")
         object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "venue", venue)
 

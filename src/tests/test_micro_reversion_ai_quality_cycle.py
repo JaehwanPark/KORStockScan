@@ -6069,6 +6069,96 @@ def test_source_gap_diagnostics_reject_self_inconsistent_artifact_census():
     ]
 
 
+def test_source_gap_diagnostics_emits_exact_intersection_workorder() -> None:
+    target_date = "2026-09-02"
+    bridge_report = {
+        "target_date": target_date,
+        "summary": {
+            "micro_context_eligible_primary_episode_count": 4,
+            "paired_decision_quality_eligible_primary_episode_count": 3,
+            "net_economic_eligible_primary_episode_count": 1,
+            "current_ablation_source_eligible_primary_episode_count": 0,
+            "exclusion_counts": {},
+            "depth_route_rejection_counts": {},
+            "entry_pipeline_allocator_classification_counts": {
+                "joined_valid": 1,
+                "not_applicable_non_submitted_trace": 3,
+                "missing_expected_submitted_trace": 0,
+                "blocked_missing_evidence": 0,
+            },
+            "ask_depletion_depth_availability": {
+                "top1": {"available": 2, "unavailable": 0, "denominator": 2},
+                "top3": {"available": 2, "unavailable": 0, "denominator": 2},
+                "top5": {"available": 0, "unavailable": 2, "denominator": 2},
+            },
+        },
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    bridge_report["report_content_sha256"] = cycle._content_hash(
+        bridge_report, "report_content_sha256"
+    )
+
+    diagnostics = cycle._source_only_gap_diagnostics(
+        target_date=target_date,
+        observer_canary={"status": "pass"},
+        bridge_report=bridge_report,
+        lifecycle_report=None,
+    )
+
+    assert diagnostics["blocker_codes"] == [
+        "micro_current_ablation_exact_intersection_empty:paired=3:economic=1"
+    ]
+    assert [row["owner"] for row in diagnostics["workorders"]] == [
+        "MainAIMicroExactEconomicIntersectionRepair"
+    ]
+    assert diagnostics["ask_depletion_depth_availability"]["top5"] == {
+        "available": 0,
+        "unavailable": 2,
+        "denominator": 2,
+    }
+    assert diagnostics["contract_findings"] == []
+
+
+def test_source_gap_diagnostics_separates_allocator_not_applicable_from_missing() -> (
+    None
+):
+    target_date = "2026-09-02"
+    bridge_report = {
+        "target_date": target_date,
+        "summary": {
+            "micro_context_eligible_primary_episode_count": 1,
+            "paired_decision_quality_eligible_primary_episode_count": 1,
+            "net_economic_eligible_primary_episode_count": 1,
+            "current_ablation_source_eligible_primary_episode_count": 1,
+            "exclusion_counts": {},
+            "entry_pipeline_allocator_classification_counts": {
+                "joined_valid": 1,
+                "not_applicable_non_submitted_trace": 9,
+                "missing_expected_submitted_trace": 2,
+                "blocked_missing_evidence": 0,
+            },
+        },
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    bridge_report["report_content_sha256"] = cycle._content_hash(
+        bridge_report, "report_content_sha256"
+    )
+
+    diagnostics = cycle._source_only_gap_diagnostics(
+        target_date=target_date,
+        observer_canary={"status": "pass"},
+        bridge_report=bridge_report,
+        lifecycle_report=None,
+    )
+
+    assert diagnostics["blocker_codes"] == [
+        "micro_allocator_missing_expected_submitted_trace:2"
+    ]
+    assert [row["owner"] for row in diagnostics["workorders"]] == [
+        "MainAIAllocatorSubmittedTraceCustodyRepair"
+    ]
+
+
 def test_current_run_excludes_stale_same_date_lifecycle_after_producer_failure():
     target_date = "2026-08-14"
     current_execution = _execution_report(

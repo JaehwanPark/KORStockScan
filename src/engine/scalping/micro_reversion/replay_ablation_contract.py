@@ -22,6 +22,12 @@ DESIGN_VERSION_FIELD = "ablation_design_version"
 LEGACY_DESIGN_VERSION = "exact_no_micro_vs_micro_prompt_v1"
 CURRENT_DESIGN_VERSION = "current_micro_vs_ask_depletion_prompt_v1"
 CURRENT_DESIGN_ACTIVATION_DATE = "2026-08-25"
+# The current A/B/C design predates the source-quality repair that made
+# materialization depend on one exact paired+mature+economic bridge census.
+# Keep that stricter eligibility contract effective-dated so immutable
+# 2026-08-25..2026-09-01 generations remain valid under their original
+# paired-source contract.
+CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE = "2026-09-02"
 
 LEGACY_PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA = (
     "micro_reversion_provider_ablation_sample_floor_v1"
@@ -511,6 +517,7 @@ __all__ = (
     "LEGACY_DESIGN_VERSION",
     "CURRENT_DESIGN_VERSION",
     "CURRENT_DESIGN_ACTIVATION_DATE",
+    "CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE",
     "LEGACY_PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA",
     "PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA",
     "PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE",

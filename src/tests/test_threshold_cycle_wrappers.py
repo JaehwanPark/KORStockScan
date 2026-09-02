@@ -1124,6 +1124,29 @@ def test_postclose_done_controller_cron_installs_2010_once():
     assert "10 20 * * 1-5" in script
     assert "40 21 * * 1-5" not in script
     assert "deploy/run_postclose_done_controller.sh" in script
+    assert "deploy/run_with_owned_log.sh" in script
+    assert "--owner postclose_done_controller_cron" in script
+
+
+def test_error_detection_cron_reserves_2155_for_postclose_finalization():
+    script = Path("deploy/install_error_detection_cron.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "*/5 7-20 * * 1-5" in script
+    assert "0-50/5 21 * * 1-5" in script
+    assert "55 21 * * 1-5" in script
+    assert "run_postclose_finalization.sh" in script
+    assert "*/5 7-21 * * 1-5" not in script
+
+
+def test_eod_installer_leaves_cleanup_to_postclose_finalization():
+    script = Path("deploy/install_eod_data_chain_cron.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "LOG_ROTATION_CLEANUP_2100" not in script
+    assert "21:55 postclose finalization gate" in script
 
 
 def test_postclose_wrapper_keeps_swing_postclose_off_until_operator_override():
@@ -1385,6 +1408,16 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         pending_verify_idx + 1,
     )
     final_next_checklist_idx = script.rindex(checklist_command)
+    final_propagation_idx = script.rindex(
+        "src.engine.pattern_lab_propagation_audit"
+    )
+    final_ai_source_refresh_idx = script.rindex("--refresh-source-provenance")
+    final_ev_idx = script.index(
+        'run_threshold_cycle_ev_and_wait "final_consumer_refresh"'
+    )
+    final_workorder_idx = script.index(
+        "code_improvement_workorder_final_source_refresh"
+    )
     tuning_control_idx = script.index(
         "src.engine.automation.tuning_performance_control_tower"
     )
@@ -1427,11 +1460,17 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < scalp_sim_prior_refresh_idx
         < post_conversion_workorder_idx
         < next_checklist_idx
+        < final_propagation_idx
+        < final_ai_source_refresh_idx
+        < final_ev_idx
+        < final_workorder_idx
         < final_next_checklist_idx
         < pending_verify_idx
         < final_verify_idx
         < tuning_control_idx
     )
+    assert script.count("src.engine.pattern_lab_propagation_audit") == 2
+    assert script.count("--refresh-source-provenance") == 2
     assert (
         'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"'
         in script

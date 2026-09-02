@@ -68,6 +68,25 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-09-03 Limit-Down Ordered 0B/0D Observation Gate
+
+- Re-verified at `2026-09-03T01:16:11+09:00` against current upstream commit
+  `234560d213acd8871ae344b5481aecd2f30287fa`; inspected
+  `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/realtime/packets.py`,
+  `kiwoom/realtime/{events,decoders,schemas,stream}.py`, `kiwoom/core/ws_client.py`,
+  the Postman collection, and the 0B trade/0D order-book examples. The current
+  checkout does not contain the previously documented `kiwoom_docs` tree, so
+  no missing document semantics were inferred from examples.
+- Official `0B` is the domestic-stock trade stream and `0D` is the domestic-
+  stock order-book-depth stream. `REG` accepts explicit item and type arrays
+  with `refresh=1` retaining existing registration.
+- The limit-down observer's ordered-path contract requires both streams. Its
+  source-only registration therefore explicitly requests and verifies
+  `("0B", "0D")`; a 0D quote receipt alone no longer marks the two-stream
+  contract complete. Bounded repair/cooldown remains in force, and this change
+  grants no order, price, quantity, threshold, provider, cap, bot, or safety
+  authority.
+
 ### 2026-09-02 ka00198 Lookup-Attention And ka10032 Value-Rank Namespace Gate
 
 - Re-verified at `2026-09-02T09:29:05+09:00` against current upstream commit
@@ -874,6 +893,26 @@ reactivate it.
   `000000_AL` request codes must be preserved when the caller supplies them.
   DB-derived NXT detection may choose `_AL`, but it must not strip an explicit
   `_NX` route request.
+- The scanner pre-promotion prune observer uses the same read-only `ka10004`
+  contract without adding WebSocket registrations. It sends an explicit plain
+  six-digit code for KRX and an explicit `_NX` code for NXT and
+  `PREMARKET_KRX_LIKE`; DB-derived `_AL` routing is deliberately bypassed for
+  this exact observation lineage. The source-only worker is bounded to one
+  process-local request at a time, at least 0.25 seconds between starts, 8
+  active episodes, 80 pending samples, and 1,200 scheduled reads per process
+  and KST date. It uses one common-wrapper request attempt per scheduled
+  sample, with no second transport retry, and records all capacity, route,
+  response-time, invalid-BBO,
+  and session-boundary failures as source-quality gaps. A captured response is
+  an economic anchor only when the offset-0 request starts within 2 seconds of
+  the prune receipt; later samples remain diagnostic and cannot stand in for
+  the missed prune-time executable BBO.
+- The full prune funnel census and the bounded observation denominator are
+  separate. Coverage, resolved-outcome, right-censor, and cost-adjusted EV
+  acceptance apply only to explicitly scheduled
+  `bounded_observer_selected_episode` rows. Unselected prune rows remain in the
+  funnel census, and sampled EV must never be extrapolated to that full
+  population.
 
 ## Realtime Freshness And Snapshot Backfill
 
@@ -950,6 +989,16 @@ reactivate it.
   micro-reversion row retains the best five levels plus these totals; this is an
   explicit storage projection, not a claim that the official feed has only five
   levels.
+- 2026-09-02 재검증은 공식 upstream `main`
+  `234560d213acd8871ae344b5481aecd2f30287fa`의
+  `kiwoom_docs/실시간시세.md`와 `kiwoom/_data/kiwoom_api_spec.json`을
+  `2026-09-02T22:20:00+09:00`에 대조했다. Plain KRX/NXT item에서는
+  combined `121/125`가 유효한데 component `6064/6065/6086/6087`가 모두
+  `0`인 공식 표본이 있으므로 component 합산식을 강제하지 않는다. KRX+NXT
+  component 합=`combined` 보존식은 `_AL` integrated SOR item에만 적용하며,
+  이때는 두 component map 모두 존재해야 한다. Plain route의 component `0`을
+  결손·불일치로 처리하거나 SOR component 결손을 combined 값으로 보간하지
+  않는다.
 - Item suffix remains authoritative for the subscription route: plain item is
   KRX, `_NX` is NXT, and `_AL` remains the integrated SOR cohort. `_AL` must not
   be guessed as the underlying execution venue even when KRX/NXT component

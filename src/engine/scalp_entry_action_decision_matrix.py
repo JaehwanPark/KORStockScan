@@ -1499,10 +1499,20 @@ def _outcome_join_diagnostic(
         for value in (row.get("candidate_id"), row.get("sim_record_id"))
         if str(value or "").strip()
     }
-    matched_evaluation_object_ids = {
+    relevant_evaluation_object_ids = {
         id(evaluation)
         for key, evaluation in evaluations.items()
         if key in evaluation_join_candidate_keys
+    }
+    joined_evaluation_object_ids = {
+        id(evaluations[key])
+        for row in aggregate_rows
+        if row.get("outcome_joined")
+        for key in (
+            str(row.get("candidate_id") or "").strip(),
+            str(row.get("sim_record_id") or "").strip(),
+        )
+        if key and key in evaluations
     }
     aggregate_joined_sample = sum(
         1 for row in aggregate_rows if row.get("outcome_joined")
@@ -1513,19 +1523,30 @@ def _outcome_join_diagnostic(
     joined_sample_all_rows = sum(1 for row in rows if row.get("outcome_joined"))
     post_sell_rows = _safe_int(eval_summary.get("rows"), 0)
     join_keys = _safe_int(eval_summary.get("join_keys"), len(evaluation_keys))
-    matched_evaluation_rows = len(matched_evaluation_object_ids)
+    relevant_evaluation_rows = len(relevant_evaluation_object_ids)
+    matched_evaluation_rows = len(
+        relevant_evaluation_object_ids & joined_evaluation_object_ids
+    )
+    unmatched_relevant_evaluation_rows = len(
+        relevant_evaluation_object_ids - joined_evaluation_object_ids
+    )
+    non_entry_or_unmatched_evaluation_rows = max(
+        0, post_sell_rows - relevant_evaluation_rows
+    )
     if not sim_eligible_rows:
         coverage_state = "no_sim_outcome_eligible_candidates"
         coverage_reason = "entry_adm_rows_have_no_sim_record_id"
     elif post_sell_rows <= 0:
         coverage_state = "post_sell_source_missing"
         coverage_reason = "no_sim_post_sell_evaluation_rows_for_target_date"
-    elif matched_evaluation_rows < post_sell_rows:
+    elif unmatched_relevant_evaluation_rows > 0:
         coverage_state = "join_contract_gap"
-        coverage_reason = "some_sim_post_sell_evaluations_do_not_match_eligible_rows"
-    elif post_sell_rows < SAMPLE_FLOOR:
+        coverage_reason = (
+            "some_entry_adm_relevant_post_sell_evaluations_did_not_join_eligible_rows"
+        )
+    elif relevant_evaluation_rows < SAMPLE_FLOOR:
         coverage_state = "source_outcome_underproduction"
-        coverage_reason = "sim_post_sell_evaluation_underproduction"
+        coverage_reason = "entry_adm_relevant_sim_post_sell_evaluation_underproduction"
     elif sim_eligible_joined_sample < SAMPLE_FLOOR:
         coverage_state = "eligible_outcome_coverage_below_sample_floor"
         coverage_reason = "sim_eligible_rows_outnumber_mature_post_sell_outcomes"
@@ -1559,6 +1580,13 @@ def _outcome_join_diagnostic(
         },
         "post_sell_evaluation_rows": post_sell_rows,
         "post_sell_evaluation_join_keys": join_keys,
+        "entry_adm_relevant_post_sell_evaluation_rows": relevant_evaluation_rows,
+        "non_entry_or_unmatched_post_sell_evaluation_rows": (
+            non_entry_or_unmatched_evaluation_rows
+        ),
+        "unmatched_entry_adm_relevant_post_sell_evaluation_rows": (
+            unmatched_relevant_evaluation_rows
+        ),
         "sim_outcome_eligible_rows": len(sim_eligible_rows),
         "sim_outcome_eligible_key_count": len(sim_eligible_keys),
         "sim_eligible_joined_sample": sim_eligible_joined_sample,
@@ -1569,7 +1597,12 @@ def _outcome_join_diagnostic(
         ),
         "matched_post_sell_evaluation_rows": matched_evaluation_rows,
         "post_sell_evaluation_match_rate": (
-            round(matched_evaluation_rows / post_sell_rows, 4)
+            round(matched_evaluation_rows / relevant_evaluation_rows, 4)
+            if relevant_evaluation_rows > 0
+            else None
+        ),
+        "entry_adm_relevant_rate_of_all_post_sell_evaluations": (
+            round(relevant_evaluation_rows / post_sell_rows, 4)
             if post_sell_rows > 0
             else None
         ),

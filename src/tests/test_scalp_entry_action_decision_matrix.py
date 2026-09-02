@@ -464,6 +464,49 @@ def test_scalp_entry_adm_loads_gzip_sim_evaluations(tmp_path, monkeypatch):
     assert rows["SIM1"]["profit_rate"] == 1.25
 
 
+def test_outcome_join_diagnostic_excludes_non_entry_terminal_evaluations():
+    entry_evaluation = {
+        "candidate_id": "ADM-ENTRY-1",
+        "_post_sell_evaluation_id": "POST-ENTRY-1",
+    }
+    non_entry_evaluation = {
+        "sim_record_id": "SCALPSIM-TERMINAL-ONLY",
+        "_post_sell_evaluation_id": "POST-TERMINAL-ONLY",
+    }
+    aggregate_row = {
+        "candidate_id": "ADM-ENTRY-1",
+        "sim_record_id": "SCALPSIM-ENTRY-1",
+        "outcome_joined": True,
+        "post_sell_evaluation_id": "POST-ENTRY-1",
+    }
+
+    diagnostic = mod._outcome_join_diagnostic(
+        rows=[
+            aggregate_row,
+            {
+                "stage": "scalp_sim_sell_order_assumed_filled",
+                "sim_record_id": "SCALPSIM-TERMINAL-ONLY",
+                "outcome_joined": True,
+                "post_sell_evaluation_id": "POST-TERMINAL-ONLY",
+            },
+        ],
+        aggregate_rows=[aggregate_row],
+        evaluations={
+            "ADM-ENTRY-1": entry_evaluation,
+            "SCALPSIM-ENTRY-1": entry_evaluation,
+            "SCALPSIM-TERMINAL-ONLY": non_entry_evaluation,
+        },
+        eval_summary={"rows": 2, "join_keys": 3},
+    )
+
+    assert diagnostic["coverage_state"] == "source_outcome_underproduction"
+    assert diagnostic["entry_adm_relevant_post_sell_evaluation_rows"] == 1
+    assert diagnostic["non_entry_or_unmatched_post_sell_evaluation_rows"] == 1
+    assert diagnostic["unmatched_entry_adm_relevant_post_sell_evaluation_rows"] == 0
+    assert diagnostic["matched_post_sell_evaluation_rows"] == 1
+    assert diagnostic["post_sell_evaluation_match_rate"] == 1.0
+
+
 def test_scalp_entry_adm_event_paths_include_gzip_threshold_events(
     tmp_path, monkeypatch
 ):

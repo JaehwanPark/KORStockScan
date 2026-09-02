@@ -180,13 +180,13 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
     assert report["generation_id"].startswith("2026-05-08-")
     assert report["schema_version"] == 2
     assert report["producer_contract_version"] == (
-        "code_improvement_workorder_producer_v2"
+        "code_improvement_workorder_producer_v3"
     )
     assert len(report["generation_hash"]) == 64
     assert report["generation_inputs"] == {
         "source_hash": report["source_hash"],
         "schema_version": 2,
-        "producer_contract_version": "code_improvement_workorder_producer_v2",
+        "producer_contract_version": "code_improvement_workorder_producer_v3",
         "max_orders": 5,
         "include_swing": True,
     }
@@ -483,8 +483,12 @@ def test_intraday_ws_directive_state_mapping_does_not_close_pending_code_gap():
         "closed_loop_instrumentation_active",
         "scanner_prefilter_and_exact_terminalization_implemented",
         "scanner_candidate_prune_receipts_implemented_waiting_natural_generation",
+        "bounded_prune_rest_bbo_collector_implemented_waiting_next_pid_natural_episode_receipts",
+        "bounded_prune_rest_bbo_collector_schedule_receipts_observed",
+        "bounded_prune_rest_bbo_collector_runtime_receipts_observed",
         "handoff_provenance_implemented_not_runtime_reflected",
         "implemented_in_source_report",
+        "implemented_pending_new_dashboard_snapshot",
     }
     directives = [
         {

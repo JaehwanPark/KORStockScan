@@ -3269,7 +3269,13 @@ def get_value_top_ka10032(token, mrkt_tp="000", limit=60):
     return cleaned_list
 
 
-def get_stock_orderbook_ka10004(token, code):
+def get_stock_orderbook_ka10004(
+    token,
+    code,
+    *,
+    explicit_request_code=False,
+    max_retries=3,
+):
     """
     [ka10004] 주식호가요청.
 
@@ -3280,7 +3286,13 @@ def get_stock_orderbook_ka10004(token, code):
     if not token or not code:
         return {}
     url = get_api_url("/api/dostk/mrkcond")
-    payload = {"stk_cd": get_effective_kiwoom_code(str(code))}
+    raw_code, explicit_suffix = _split_kiwoom_market_suffix(str(code))
+    request_code = (
+        f"{normalize_stock_code(raw_code)}{explicit_suffix}"
+        if explicit_request_code
+        else get_effective_kiwoom_code(str(code))
+    )
+    payload = {"stk_cd": request_code}
     received_ts = time.time()
 
     try:
@@ -3289,6 +3301,7 @@ def get_stock_orderbook_ka10004(token, code):
             token=token,
             api_id="ka10004",
             payload=payload,
+            max_retries=max(1, int(max_retries)),
             use_continuous=False,
         )
         received_ts = time.time()
@@ -3333,6 +3346,7 @@ def get_stock_orderbook_ka10004(token, code):
         "source": "ka10004_rest_orderbook",
         "stock_code": normalize_stock_code(code),
         "request_code": payload["stk_cd"],
+        "explicit_request_code": bool(explicit_request_code),
         "bid_req_base_tm": str(row.get("bid_req_base_tm") or "").strip(),
         "bid_req_base_tm_authority": "raw_not_freshness_input",
         "source_time_basis": "response_received_epoch_ms",

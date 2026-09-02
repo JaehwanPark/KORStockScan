@@ -59,6 +59,7 @@ THRESHOLD_CYCLE_SCHEMA_VERSION = 3
 THRESHOLD_AI_CORRECTION_SCHEMA_VERSION = 1
 RUNTIME_HANDOFF_CONTRACT_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
+THRESHOLD_APPLY_PLAN_DIR = THRESHOLD_CYCLE_DIR / "apply_plans"
 ENTRY_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "entry_split_order_policy"
 SCALE_IN_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "scale_in_split_order_policy"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
@@ -12838,8 +12839,142 @@ def _calibration_state_for_family(
     return ("hold", "현행값과 추천값이 같아 다음 장전 값 유지")
 
 
+def _load_same_day_runtime_apply_observation(target_date: str) -> dict[str, Any]:
+    path = THRESHOLD_APPLY_PLAN_DIR / f"threshold_apply_{target_date}.json"
+    base: dict[str, Any] = {
+        "status": "not_observed",
+        "target_date": target_date,
+        "source_path": str(path),
+        "source_sha256": None,
+        "runtime_verify_status": "not_observed",
+        "families": {},
+    }
+    try:
+        raw = path.read_bytes()
+        payload = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return base
+    if not isinstance(payload, dict) or str(payload.get("target_date") or "") != str(
+        target_date
+    ):
+        return {**base, "status": "invalid_or_target_date_mismatch"}
+
+    verification = (
+        payload.get("runtime_env_handoff_verification")
+        if isinstance(payload.get("runtime_env_handoff_verification"), dict)
+        else {}
+    )
+    verification_status = str(verification.get("status") or "").strip().lower()
+    verification_target_date = str(verification.get("target_date") or "").strip()
+    verification_passed = (
+        verification.get("passed") is True
+        and verification_status in {"pass", "passed"}
+        and verification_target_date == target_date
+    )
+    verified_selected_families = {
+        str(value).strip()
+        for value in (verification.get("selected_families") or [])
+        if str(value).strip()
+    }
+    unverified_selected_families = {
+        str(value).strip()
+        for value in (verification.get("unverified_selected_families") or [])
+        if str(value).strip()
+    }
+    families: dict[str, dict[str, Any]] = {}
+    selected_family_verification_gaps: list[str] = []
+    decisions = (
+        payload.get("auto_apply_decisions")
+        if isinstance(payload.get("auto_apply_decisions"), list)
+        else []
+    )
+    for item in decisions:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or "").strip()
+        if not family:
+            continue
+        selected = item.get("selected") is True
+        family_handoff_verified = verification_passed and (
+            not selected
+            or (
+                family in verified_selected_families
+                and family not in unverified_selected_families
+            )
+        )
+        if selected and not family_handoff_verified:
+            selected_family_verification_gaps.append(family)
+        families[family] = {
+            "selected": selected,
+            "verified": family_handoff_verified,
+            "state": (
+                "selected_verified_preopen_handoff"
+                if selected and family_handoff_verified
+                else (
+                    "selected_unverified_preopen_handoff"
+                    if selected
+                    else "not_selected"
+                )
+            ),
+            "selection_change_class": item.get("selection_change_class"),
+            "decision_reason": item.get("decision_reason"),
+            "previous_selected": item.get("previous_selected"),
+        }
+    return {
+        **base,
+        "status": (
+            "observed_verified"
+            if verification_passed and not selected_family_verification_gaps
+            else "observed_unverified"
+        ),
+        "source_sha256": hashlib.sha256(raw).hexdigest(),
+        "source_date": payload.get("source_date"),
+        "runtime_verify_status": verification_status or "missing",
+        "runtime_verify_target_date": verification_target_date or None,
+        "runtime_verify_passed": verification_passed,
+        "selected_family_verification_gaps": sorted(
+            set(selected_family_verification_gaps)
+        ),
+        "evidence_scope": "preopen_apply_plan_and_runtime_env_handoff_only",
+        "runtime_process_consumption_observed": False,
+        "families": families,
+    }
+
+
+def _recommendation_delta_class(
+    *,
+    recommended: dict[str, Any],
+    current: dict[str, Any],
+    allowed_runtime_apply: bool,
+    runtime_observation: dict[str, Any],
+) -> str:
+    if not allowed_runtime_apply:
+        return "report_only_no_runtime_apply"
+    if not runtime_observation:
+        return "runtime_state_not_observed"
+    if runtime_observation.get("verified") is not True:
+        return "preopen_handoff_unverified"
+    selected = runtime_observation.get("selected")
+    recommended_enabled = recommended.get("enabled")
+    if selected is True and recommended_enabled is not False and recommended == current:
+        return "already_selected_preopen_handoff_no_value_delta"
+    if selected is True and recommended_enabled is True:
+        return "already_selected_preopen_handoff_policy_refresh_or_value_review"
+    if selected is True and recommended_enabled is False:
+        return "selected_by_other_authority_recommendation_conflict"
+    if selected is False and recommended_enabled is True:
+        return "new_enable_candidate"
+    if selected is False and recommended_enabled is False:
+        return "already_not_selected_no_enable_delta"
+    if recommended == current:
+        return "no_value_delta"
+    return "value_change_candidate"
+
+
 def _build_calibration_candidates(
-    families: list[dict], report_source_context: dict | None = None
+    families: list[dict],
+    report_source_context: dict | None = None,
+    runtime_apply_observation: dict[str, Any] | None = None,
 ) -> list[dict]:
     source_only_smoothing_families = {
         "holding_flow_ofi_smoothing",
@@ -13521,6 +13656,24 @@ def _build_calibration_candidates(
                 "source_quality_blocked",
             }
         )
+        observed_families = (
+            runtime_apply_observation.get("families")
+            if isinstance(runtime_apply_observation, dict)
+            and isinstance(runtime_apply_observation.get("families"), dict)
+            else {}
+        )
+        observed_runtime_family = (
+            observed_families.get(output_family)
+            if isinstance(observed_families.get(output_family), dict)
+            else {}
+        )
+        recommendation_delta_class = _recommendation_delta_class(
+            recommended=recommended,
+            current=current,
+            allowed_runtime_apply=bool(metadata.get("allowed_runtime_apply"))
+            and output_family not in source_only_smoothing_families,
+            runtime_observation=observed_runtime_family,
+        )
         candidate = {
             "family": output_family,
             "source_family": source_family,
@@ -13607,6 +13760,32 @@ def _build_calibration_candidates(
                 "operator_lock_resolution": "deferred_to_preopen_with_explicit_provenance",
                 "preopen_selection_state": "pending_not_applied",
                 "actual_runtime_state": "not_observed_by_postclose_calibration",
+                "actual_runtime_state_source": None,
+                "same_day_preopen_handoff_source": (
+                    runtime_apply_observation.get("source_path")
+                    if isinstance(runtime_apply_observation, dict)
+                    else None
+                ),
+                "same_day_preopen_handoff_source_sha256": (
+                    runtime_apply_observation.get("source_sha256")
+                    if isinstance(runtime_apply_observation, dict)
+                    else None
+                ),
+                "same_day_preopen_handoff_state": observed_runtime_family.get("state"),
+                "same_day_preopen_handoff_selected": observed_runtime_family.get(
+                    "selected"
+                ),
+                "same_day_preopen_handoff_verified": observed_runtime_family.get(
+                    "verified"
+                ),
+                "runtime_process_consumption_observed": False,
+                "same_day_selection_change_class": observed_runtime_family.get(
+                    "selection_change_class"
+                ),
+                "same_day_selection_reason": observed_runtime_family.get(
+                    "decision_reason"
+                ),
+                "recommendation_delta_class": recommendation_delta_class,
                 "same_stage_max_selected": 1,
                 "post_apply_attribution_required": True,
                 "quantity_change_authority": "forbidden_in_postclose_calibration",
@@ -14918,6 +15097,12 @@ def _build_ai_correction_input_context(
             "bounds": candidate.get("bounds"),
             "max_step_per_day": candidate.get("max_step_per_day"),
             "safety_revert_required": candidate.get("safety_revert_required"),
+            "runtime_handoff_contract": _compact_json_value(
+                candidate.get("runtime_handoff_contract") or {},
+                max_chars=2_000,
+                max_dict_keys=24,
+                max_list_items=4,
+            ),
             "source_metrics_summary": _candidate_source_metrics_summary(
                 candidate.get("source_metrics")
             ),
@@ -17290,6 +17475,7 @@ def build_daily_threshold_cycle_report(
     completed_rows_loader: Callable[[str, str], list[dict]] | None = None,
     skip_completed_rows: bool = False,
     calibration_run_phase: str = "postclose",
+    runtime_apply_observation: dict[str, Any] | None = None,
 ) -> dict:
     target_date = str(target_date).strip()
     ctx = ThresholdCycleContext(warnings=[])
@@ -17498,8 +17684,14 @@ def build_daily_threshold_cycle_report(
     trade_lifecycle_attribution = _build_trade_lifecycle_attribution(
         same_day_events, target_date
     )
+    if runtime_apply_observation is None:
+        runtime_apply_observation = _load_same_day_runtime_apply_observation(
+            target_date
+        )
     calibration_candidates = _build_calibration_candidates(
-        families, report_source_context
+        families,
+        report_source_context,
+        runtime_apply_observation=runtime_apply_observation,
     )
     report = {
         "date": target_date,
@@ -17527,7 +17719,11 @@ def build_daily_threshold_cycle_report(
                 _valid_profit_rows(sim_completed_rows)
             ),
             "event_count_same_day": len(same_day_events),
+            "same_day_runtime_apply_observation_status": runtime_apply_observation.get(
+                "status"
+            ),
         },
+        "same_day_runtime_apply_observation": runtime_apply_observation,
         # Compatibility alias preserves the legacy loader fallback for older
         # fixtures/artifacts. Decision consumers must use the strict window map.
         "completed_by_source": _completed_by_source_summary(

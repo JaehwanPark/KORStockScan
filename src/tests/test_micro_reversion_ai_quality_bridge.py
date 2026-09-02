@@ -502,7 +502,7 @@ def _reseal_ask_depletion_feature(evidence: dict, feature: dict) -> None:
         "horizons": deepcopy(feature["eligible_horizons"]),
         "schema": bridge_module.ASK_DEPLETION_SCHEMA,
         **bridge_module.ASK_DEPLETION_SIDECAR_AUTHORITY,
-        **bridge_module.ASK_DEPLETION_METRIC_CONTRACT,
+        **bridge_module._ask_depletion_metric_contract_for_evidence(evidence),
         "tactical_micro_reversion_evidence_sha256": evidence["evidence_sha256"],
         "ask_depletion_contract_sha256": feature["ask_depletion_contract_sha256"],
     }
@@ -3325,6 +3325,181 @@ def test_valid_ask_depletion_producer_edge_shapes_revalidate(path_case) -> None:
             row["minimum_anchor_ask_qty"] == 0 and row["price_level_cleared"] is False
             for row in feature["eligible_horizons"]
         )
+
+
+def test_feature_validator_accepts_explicitly_unavailable_optional_top5() -> None:
+    evidence, _sidecar, feature = _complete_ask_depletion_feature_fixture()
+    evidence["trace_decision_ts"] = "2026-09-02T09:00:17.000+09:00"
+    feature["ask_depletion_contract_sha256"] = _sha256(
+        {
+            "schema": bridge_module.ASK_DEPLETION_SCHEMA,
+            **bridge_module.ASK_DEPLETION_METRIC_CONTRACT,
+        }
+    )
+    for horizon in feature["eligible_horizons"]:
+        top5 = next(
+            row for row in horizon["top_depth"] if row["retained_level_count"] == 5
+        )
+        top5.update(
+            {
+                "anchor_price_count": 3,
+                "initial_qty": None,
+                "endpoint_qty": None,
+                "minimum_qty": None,
+                "max_depletion_qty": None,
+                "max_depletion_ratio": None,
+            }
+        )
+    _reseal_ask_depletion_feature(evidence, feature)
+
+    bridge_module.validate_ask_depletion_feature_view(feature, evidence=evidence)
+
+
+def test_bridge_producer_version_is_effective_dated_for_immutable_history() -> None:
+    evidence, _sidecar, _feature = _complete_ask_depletion_feature_fixture()
+    historical = deepcopy(evidence)
+    historical["trace_decision_ts"] = "2026-08-27T09:00:17.000+09:00"
+    historical["bridge_producer_version"] = (
+        bridge_module.LEGACY_BRIDGE_PRODUCER_VERSION
+    )
+    bridge_module._validate_tactical_evidence_shape(historical)
+
+    current = deepcopy(historical)
+    current["trace_decision_ts"] = "2026-09-02T09:00:17.000+09:00"
+    with pytest.raises(ValueError, match="micro_context_bridge_contract_invalid"):
+        bridge_module._validate_tactical_evidence_shape(current)
+
+
+def test_current_manifest_requires_same_trace_paired_and_economic_intersection(
+    monkeypatch,
+) -> None:
+    evidence = {
+        "decision_trace_id": "trace-current-exact",
+        "trace_decision_ts": "2026-09-02T09:00:00+09:00",
+        "source_exact_payload_sha256": "a" * 64,
+        "evidence_sha256": "b" * 64,
+        "state": "eligible",
+        "source_quality": {
+            "status": "pass",
+            "liquidity_capacity_status": "pass",
+        },
+        "economics": {
+            "cost_profile_verified": True,
+            "minimum_gross_target_bps": 23.0,
+            "cost_profile_artifact_sha256": "c" * 64,
+        },
+        "liquidity_capacity": {"target_liquidation_sec": 10},
+        "exact_replay_source_semantic_status": "stored_semantic_hash_verified",
+    }
+    monkeypatch.setattr(
+        bridge_module,
+        "_validated_ask_depletion_feature_view",
+        lambda *_args, **_kwargs: {
+            "ask_depletion_contract_sha256": "d" * 64,
+            "ask_depletion_context_sha256": "e" * 64,
+        },
+    )
+    control_trace = _trace()
+    control_trace.update(
+        {
+            "decision_trace_id": "trace-current-exact",
+            "decision_ts": "2026-09-02T09:00:00+09:00",
+        }
+    )
+    outcome_body = {
+        "schema": bridge_module.OUTCOME_SCHEMA,
+        "evidence_sha256": evidence["evidence_sha256"],
+        "decision_trace_id": evidence["decision_trace_id"],
+        "notional_net_profit_eligible": True,
+        "economic_promotion_evidence_eligible": True,
+        "economic_promotion_authority": False,
+        "horizons": [
+            {
+                "horizon_sec": 10,
+                "mature": True,
+                "source_quality_blockers": [],
+            }
+        ],
+        **AUTHORITY_CONTRACT,
+    }
+    outcome = {**outcome_body, "outcome_sha256": _sha256(outcome_body)}
+    control_contract = {
+        "prompt_sha256": control_trace["prompt_sha256"],
+        "provider": control_trace["provider_actual"],
+        "model": control_trace["model"],
+        "temperature": control_trace["request_temperature"],
+        "reasoning_effort": control_trace["request_reasoning_effort"],
+        "transport": control_trace["transport"],
+        "schema_name": "entry_decision_v2",
+        "require_json": True,
+        "response_schema_mode": control_trace["openai_response_schema_mode"],
+        "response_schema_registry_used": True,
+        "max_output_tokens": control_trace["request_max_output_tokens"],
+        "response_schema_sha256": control_trace["response_schema_sha256"],
+        "semantic_validator_version": control_trace["semantic_validator_version"],
+    }
+
+    eligible = build_three_arm_manifest(
+        evidence=evidence,
+        ablation_design_version=CURRENT_DESIGN_VERSION,
+        control_prompt_version="decision_quality_v2_14",
+        control_contract=control_contract,
+        control_trace=control_trace,
+        outcome=outcome,
+        ask_depletion_sidecar={},
+    )
+    assert eligible["paired_decision_quality_eligible"] is True
+    assert eligible["net_economic_evaluation_eligible"] is True
+    assert eligible["current_ablation_source_eligible"] is True
+    assert eligible["paired_replay_materialization_eligible"] is True
+
+    non_economic_outcome_body = {
+        **outcome_body,
+        "notional_net_profit_eligible": False,
+        "economic_promotion_evidence_eligible": False,
+    }
+    non_economic = build_three_arm_manifest(
+        evidence=evidence,
+        ablation_design_version=CURRENT_DESIGN_VERSION,
+        control_prompt_version="decision_quality_v2_14",
+        control_contract=control_contract,
+        control_trace=control_trace,
+        outcome={
+            **non_economic_outcome_body,
+            "outcome_sha256": _sha256(non_economic_outcome_body),
+        },
+        ask_depletion_sidecar={},
+    )
+    assert non_economic["paired_decision_quality_eligible"] is True
+    assert non_economic["net_economic_evaluation_eligible"] is False
+    assert non_economic["current_ablation_source_eligible"] is False
+    assert non_economic["paired_replay_materialization_eligible"] is False
+    assert (
+        "net_economic_evaluation_ineligible" in non_economic["materialization_blockers"]
+    )
+
+    historical_evidence = deepcopy(evidence)
+    historical_evidence["trace_decision_ts"] = "2026-08-27T09:00:00+09:00"
+    historical_control_trace = deepcopy(control_trace)
+    historical_control_trace["decision_ts"] = "2026-08-27T09:00:00+09:00"
+    historical = build_three_arm_manifest(
+        evidence=historical_evidence,
+        ablation_design_version=CURRENT_DESIGN_VERSION,
+        control_prompt_version="decision_quality_v2_14",
+        control_contract=control_contract,
+        control_trace=historical_control_trace,
+        outcome={
+            **non_economic_outcome_body,
+            "outcome_sha256": _sha256(non_economic_outcome_body),
+        },
+        ask_depletion_sidecar={},
+    )
+    assert historical["current_exact_contract_active"] is False
+    assert historical["current_ablation_source_eligible"] is False
+    assert historical["paired_replay_materialization_eligible"] is True
+    assert "net_economic_evaluation_ineligible" not in historical[
+        "materialization_blockers"
+    ]
 
 
 def test_current_manifest_rejects_partial_ask_depletion_horizon_census() -> None:

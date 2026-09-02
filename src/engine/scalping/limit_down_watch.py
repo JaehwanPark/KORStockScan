@@ -1122,7 +1122,7 @@ class LimitDownWatchManager:
             "requested_ws_route": "krx_regular_or_effective_integrated",
             "requested_ws_code_count": 1,
             "requested_ws_item_count_max": 1,
-            "required_realtime_types": ["0D"],
+            "required_realtime_types": ["0B", "0D"],
             "last_reg_request_epoch": 0.0,
             "reg_request_count": 0,
             "selection_policy": "coverage_first_then_evidence_weighted_v2",
@@ -1168,7 +1168,11 @@ class LimitDownWatchManager:
                 "codes": [self.active.code],
                 "source": "limit_down_watch_observation",
                 "reason": reason,
-                "required_realtime_types": ("0D",),
+                # The ordered-path evidence contract needs both trade ticks and
+                # depth. Keep the wire request explicit so a quiet 0D stream
+                # cannot silently satisfy the missing-0B readiness check.
+                "required_realtime_types": ("0B", "0D"),
+                "realtime_types": ("0B", "0D"),
             },
         )
         self.state["last_reg_request_epoch"] = now_epoch

@@ -20,6 +20,7 @@ REQUIRED_CRON_JOB_IDS: set[str] = {
     "update_kospi",
     "dashboard_db_archive",
     "log_rotation_cleanup",
+    "postclose_finalization",
     "system_metric_sampler",
     "error_detection_full",
 }

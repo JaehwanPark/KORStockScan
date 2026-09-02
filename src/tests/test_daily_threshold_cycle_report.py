@@ -57,6 +57,112 @@ def test_save_threshold_calibration_report_declares_runtime_handoff_contract_ver
     assert payload["completed_by_source_by_window"]["same_day"]["real"]["sample"] == 3
 
 
+def test_same_day_runtime_apply_observation_requires_exact_verified_target(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(report_mod, "THRESHOLD_APPLY_PLAN_DIR", tmp_path)
+    path = tmp_path / "threshold_apply_2026-09-01.json"
+    path.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-09-01",
+                "source_date": "2026-08-31",
+                "auto_apply_decisions": [
+                    {
+                        "family": "entry_split_order_plan",
+                        "selected": True,
+                        "selection_change_class": "policy_refreshed",
+                        "decision_reason": "deterministic_policy_handoff",
+                        "previous_selected": True,
+                    },
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "selected": False,
+                        "selection_change_class": "not_selected",
+                        "decision_reason": "runtime_apply_not_allowed",
+                    },
+                ],
+                "runtime_env_handoff_verification": {
+                    "passed": True,
+                    "status": "pass",
+                    "target_date": "2026-09-01",
+                    "selected_families": ["entry_split_order_plan"],
+                    "unverified_selected_families": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    observation = report_mod._load_same_day_runtime_apply_observation("2026-09-01")
+
+    assert observation["status"] == "observed_verified"
+    assert len(observation["source_sha256"]) == 64
+    assert observation["families"]["entry_split_order_plan"] == {
+        "selected": True,
+        "verified": True,
+        "state": "selected_verified_preopen_handoff",
+        "selection_change_class": "policy_refreshed",
+        "decision_reason": "deterministic_policy_handoff",
+        "previous_selected": True,
+    }
+    assert (
+        observation["families"]["soft_stop_whipsaw_confirmation"]["state"]
+        == "not_selected"
+    )
+    assert observation["families"]["soft_stop_whipsaw_confirmation"]["verified"] is True
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["runtime_env_handoff_verification"]["passed"] = "true"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    observation = report_mod._load_same_day_runtime_apply_observation("2026-09-01")
+    assert observation["status"] == "observed_unverified"
+    assert observation["runtime_verify_passed"] is False
+    assert observation["families"]["entry_split_order_plan"]["verified"] is False
+    assert observation["runtime_process_consumption_observed"] is False
+
+    payload["runtime_env_handoff_verification"].update(
+        {"passed": True, "target_date": "2026-09-02"}
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    observation = report_mod._load_same_day_runtime_apply_observation("2026-09-01")
+    assert observation["status"] == "observed_unverified"
+    assert observation["runtime_verify_passed"] is False
+
+    payload["runtime_env_handoff_verification"].update(
+        {"target_date": "2026-09-01", "selected_families": []}
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    observation = report_mod._load_same_day_runtime_apply_observation("2026-09-01")
+    assert observation["status"] == "observed_unverified"
+    assert observation["runtime_verify_passed"] is True
+    assert observation["selected_family_verification_gaps"] == [
+        "entry_split_order_plan"
+    ]
+    assert observation["families"]["entry_split_order_plan"]["verified"] is False
+
+
+def test_recommendation_delta_class_separates_verified_no_value_and_unverified():
+    assert (
+        report_mod._recommendation_delta_class(
+            recommended={"enabled": True, "score": 70},
+            current={"enabled": True, "score": 70},
+            allowed_runtime_apply=True,
+            runtime_observation={"selected": True, "verified": True},
+        )
+        == "already_selected_preopen_handoff_no_value_delta"
+    )
+    assert (
+        report_mod._recommendation_delta_class(
+            recommended={"enabled": True, "score": 70},
+            current={"enabled": True, "score": 69},
+            allowed_runtime_apply=True,
+            runtime_observation={"selected": True, "verified": False},
+        )
+        == "preopen_handoff_unverified"
+    )
+
+
 def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     pipeline_rows = {
         "2026-04-28": [],
@@ -2771,6 +2877,20 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
         pipeline_loader=lambda target_date: [],
         report_source_loader=lambda target_date: report_sources,
         completed_rows_loader=lambda start_date, end_date: [],
+        runtime_apply_observation={
+            "status": "observed_verified",
+            "source_path": "threshold_apply_2026-05-18.json",
+            "source_sha256": "a" * 64,
+            "families": {
+                "score65_74_recovery_probe": {
+                    "selected": True,
+                    "verified": True,
+                    "state": "selected_verified_preopen_handoff",
+                    "selection_change_class": "operator_lock_preserved",
+                    "decision_reason": "operator_runtime_env_lock_preserved:test",
+                }
+            },
+        },
     )
 
     candidate = {item["family"]: item for item in report["calibration_candidates"]}[
@@ -2787,6 +2907,29 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
         == "pending_not_applied"
     )
     assert candidate["runtime_handoff_contract"]["runtime_effect"] is False
+    assert (
+        candidate["runtime_handoff_contract"]["actual_runtime_state"]
+        == "not_observed_by_postclose_calibration"
+    )
+    assert (
+        candidate["runtime_handoff_contract"]["recommendation_delta_class"]
+        == "already_selected_preopen_handoff_policy_refresh_or_value_review"
+    )
+    assert (
+        candidate["runtime_handoff_contract"]["same_day_preopen_handoff_state"]
+        == "selected_verified_preopen_handoff"
+    )
+    assert (
+        candidate["runtime_handoff_contract"]["runtime_process_consumption_observed"]
+        is False
+    )
+    assert (
+        candidate["runtime_handoff_contract"]["same_day_selection_change_class"]
+        == "operator_lock_preserved"
+    )
+    assert report["summary"]["same_day_runtime_apply_observation_status"] == (
+        "observed_verified"
+    )
     assert (
         candidate["runtime_handoff_contract"]["post_apply_attribution_required"] is True
     )

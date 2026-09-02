@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.engine.monitoring.pruned_candidate_bbo_collector import (
+    METRIC_CONTRACT as SCANNER_PRUNE_BBO_COLLECTOR_METRIC_CONTRACT,
+)
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import (
@@ -36,13 +39,23 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v7"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v8"
 SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 SCANNER_BBO_GROSS_TARGET_PCT = 1.30
 SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
 SCANNER_BBO_HORIZON_SEC = 20 * 60
 SCANNER_BBO_TIMEOUT_MAX_LAG_SEC = 5.0
 SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT = 95.0
+SCANNER_PRUNE_BBO_MAX_SCHEDULE_LAG_SEC = 2.0
+SCANNER_PRUNE_BBO_RESOLVED_FLOOR = 20
+SCANNER_PRUNE_BBO_RIGHT_CENSORED_MAX_PCT = 20.0
+SCANNER_PRUNE_BBO_SCHEDULED_STATUSES = frozenset(
+    {
+        "new_episode_scheduled",
+        "existing_episode_reused",
+        "completed_episode_reused",
+    }
+)
 SCANNER_HOTSET_CAPACITY_VALUES = (1, 2, 4, 6, 8, 12, 16)
 SCANNER_HOTSET_GROSS_TARGET_VALUES = (0.30, 0.40, 0.50, 0.70, 1.30)
 SCANNER_HOTSET_ADVERSE_STOP_VALUES = (-0.30, -0.50, -0.70)
@@ -531,6 +544,13 @@ def _positive_integer_metadata(value: Any) -> int | None:
     return int(parsed)
 
 
+def _nonnegative_integer_metadata(value: Any) -> int | None:
+    parsed = _to_float(value)
+    if parsed is None or parsed < 0 or not parsed.is_integer():
+        return None
+    return int(parsed)
+
+
 def _scanner_venue_metadata(row: Mapping[str, Any]) -> str | None:
     venue = str(row.get("effective_venue") or row.get("venue") or "").strip().upper()
     return venue if venue in {"KRX", "PREMARKET_KRX_LIKE", "NXT"} else None
@@ -557,6 +577,7 @@ def _scanner_executable_bbo_observation(
             "market_data_effective_quote_age_ms",
             "market_data_effective_price_source",
             None,
+            None,
         ),
         (
             "scanner_promotion_reanchor_bbo",
@@ -565,6 +586,16 @@ def _scanner_executable_bbo_observation(
             "scanner_promotion_reanchor_effective_quote_age_ms",
             "scanner_promotion_reanchor_source",
             "scanner_promotion_reanchor_source_fresh",
+            None,
+        ),
+        (
+            "scanner_prune_observer_rest_bbo",
+            "scanner_prune_observer_best_bid",
+            "scanner_prune_observer_best_ask",
+            "scanner_prune_observer_quote_age_ms",
+            "scanner_prune_observer_price_source",
+            "scanner_prune_observer_source_quality_pass",
+            "scanner_prune_observer_observed_at",
         ),
     )
     gap_reasons: list[str] = []
@@ -575,6 +606,7 @@ def _scanner_executable_bbo_observation(
         age_key,
         provenance_key,
         fresh_key,
+        observed_at_key,
     ) in candidates:
         bid = _to_float(row.get(bid_key))
         ask = _to_float(row.get(ask_key))
@@ -614,24 +646,113 @@ def _scanner_executable_bbo_observation(
         if not source_provenance:
             gap_reasons.append(f"{source}:price_source_missing")
             continue
-        observed_at = _event_time(dict(row))
+        observed_at = None
+        if observed_at_key:
+            try:
+                observed_at = datetime.fromisoformat(
+                    str(row.get(observed_at_key) or "").replace("Z", "+00:00")
+                )
+                if observed_at.tzinfo is None:
+                    raise ValueError("observation timestamp must be timezone-aware")
+                observed_at = observed_at.astimezone(KST)
+            except ValueError:
+                observed_at = None
+        else:
+            observed_at = _event_time(dict(row))
         if observed_at is None:
             gap_reasons.append(f"{source}:event_time_missing")
             continue
-        return (
-            {
-                "observed_at": observed_at.isoformat(),
-                "observed_epoch": observed_at.timestamp(),
-                "best_bid": bid,
-                "best_ask": ask,
-                "quote_age_ms": quote_age_ms,
-                "source": source,
-                "source_provenance": source_provenance,
-                "venue": venue,
-                "market_session_bucket": market_session_bucket,
-            },
-            "pass",
-        )
+        observation = {
+            "observed_at": observed_at.isoformat(),
+            "observed_epoch": observed_at.timestamp(),
+            "best_bid": bid,
+            "best_ask": ask,
+            "quote_age_ms": quote_age_ms,
+            "source": source,
+            "source_provenance": source_provenance,
+            "venue": venue,
+            "market_session_bucket": market_session_bucket,
+        }
+        if source == "scanner_prune_observer_rest_bbo":
+            stock_code = str(row.get("stock_code") or row.get("code") or "").strip()[:6]
+            expected_request_code = (
+                stock_code
+                if venue == "KRX"
+                else (
+                    f"{stock_code}_NX" if venue in {"NXT", "PREMARKET_KRX_LIKE"} else ""
+                )
+            )
+            request_code = (
+                str(row.get("scanner_prune_observer_request_code") or "")
+                .strip()
+                .upper()
+            )
+            response_request_code = (
+                str(row.get("scanner_prune_observer_response_request_code") or "")
+                .strip()
+                .upper()
+            )
+            expected_observed_venue = (
+                str(row.get("scanner_prune_observer_expected_observed_venue") or "")
+                .strip()
+                .upper()
+            )
+            route_observed_venue = "KRX" if venue == "KRX" else "NXT"
+            if not _boolish(row.get("scanner_prune_observer_route_match")):
+                gap_reasons.append(f"{source}:exact_request_route_mismatch")
+                continue
+            if (
+                not expected_request_code
+                or request_code != expected_request_code
+                or response_request_code != expected_request_code
+            ):
+                gap_reasons.append(f"{source}:request_code_provenance_mismatch")
+                continue
+            if expected_observed_venue != route_observed_venue:
+                gap_reasons.append(f"{source}:observed_venue_provenance_mismatch")
+                continue
+            if source_provenance != "ka10004_rest_orderbook_exact_request_code":
+                gap_reasons.append(f"{source}:price_source_provenance_invalid")
+                continue
+            schedule_lag_sec = _to_float(
+                row.get("scanner_prune_observer_schedule_lag_sec")
+            )
+            anchor_to_schedule_delay_sec = _to_float(
+                row.get("scanner_prune_observer_anchor_to_schedule_delay_sec")
+            )
+            scheduled_offset_sec = _nonnegative_integer_metadata(
+                row.get("scanner_prune_observer_scheduled_offset_sec")
+            )
+            if (
+                schedule_lag_sec is None
+                or not math.isfinite(schedule_lag_sec)
+                or schedule_lag_sec < 0
+            ):
+                gap_reasons.append(f"{source}:schedule_lag_missing")
+                continue
+            if schedule_lag_sec > SCANNER_PRUNE_BBO_MAX_SCHEDULE_LAG_SEC:
+                gap_reasons.append(f"{source}:schedule_lag_exceeded")
+                continue
+            if (
+                anchor_to_schedule_delay_sec is None
+                or not math.isfinite(anchor_to_schedule_delay_sec)
+                or anchor_to_schedule_delay_sec < 0
+            ):
+                gap_reasons.append(f"{source}:anchor_to_schedule_delay_missing")
+                continue
+            if anchor_to_schedule_delay_sec > SCANNER_PRUNE_BBO_MAX_SCHEDULE_LAG_SEC:
+                gap_reasons.append(f"{source}:anchor_to_schedule_delay_exceeded")
+                continue
+            if scheduled_offset_sec is None:
+                gap_reasons.append(f"{source}:scheduled_offset_missing")
+                continue
+            observation["schedule_lag_sec"] = schedule_lag_sec
+            observation["anchor_to_schedule_delay_sec"] = anchor_to_schedule_delay_sec
+            observation["scheduled_offset_sec"] = scheduled_offset_sec
+            observation["observer_anchor_generation_id"] = _valid_lineage_token(
+                row.get("scanner_prune_observer_anchor_generation_id")
+            )
+        return observation, "pass"
     if gap_reasons:
         return None, "|".join(sorted(set(gap_reasons)))
     return None, "executable_bbo_missing"
@@ -713,7 +834,12 @@ def _scanner_funnel_state_from_mapping(value: Any) -> dict[str, Any]:
             if isinstance(item, dict)
         },
         "prunes": {
-            str(key): dict(item)
+            str(key): {
+                **dict(item),
+                "terminal_prune_observed": bool(
+                    item.get("terminal_prune_observed", True)
+                ),
+            }
             for key, item in prunes.items()
             if isinstance(item, dict)
         },
@@ -742,6 +868,8 @@ def _scanner_funnel_event_relevant(row: dict[str, Any]) -> bool:
     stage = str(row.get("stage") or row.get("event_type") or "")
     if stage in {
         "scalping_scanner_candidate_pruned",
+        "scalping_scanner_prune_bbo_schedule",
+        "scalping_scanner_prune_bbo_observation",
         "scalping_scanner_candidate_promoted",
         "scalping_scanner_runtime_target_attach",
         "scalping_scanner_fast_precheck",
@@ -789,6 +917,15 @@ def _scanner_funnel_event_fingerprint(row: dict[str, Any]) -> str:
         ),
         "attach_outcome": str(row.get("runtime_target_attach_outcome") or ""),
         "prune_reason": str(row.get("scanner_prune_reason") or ""),
+        "prune_observer_episode_id": _valid_lineage_token(
+            row.get("scanner_prune_observer_episode_id")
+        ),
+        "prune_observer_sample_index": _nonnegative_integer_metadata(
+            row.get("scanner_prune_observer_sample_index")
+        ),
+        "prune_observer_scheduled_offset_sec": _to_float(
+            row.get("scanner_prune_observer_scheduled_offset_sec")
+        ),
         "eviction_reason": str(row.get("eviction_reason") or ""),
         "fast_precheck_result": str(row.get("fast_precheck_result") or ""),
     }
@@ -823,7 +960,11 @@ def _update_scanner_funnel_state(
     )
     venue = _scanner_venue_metadata(row)
     market_session_bucket = _scanner_session_metadata(row)
-    if stage == "scalping_scanner_candidate_pruned":
+    if stage in {
+        "scalping_scanner_candidate_pruned",
+        "scalping_scanner_prune_bbo_schedule",
+        "scalping_scanner_prune_bbo_observation",
+    }:
         if not generation_id or not code:
             state["missing_lineage_event_count"] += 1
             return
@@ -844,6 +985,15 @@ def _update_scanner_funnel_state(
                 "bbo_observations": [],
                 "bbo_gap_reason_counts": {},
                 "metadata_conflicts": [],
+                "terminal_prune_observed": False,
+                "prune_observer_episode_id": "",
+                "prune_observer_schedule_statuses": [],
+                "prune_observer_sample_event_count": 0,
+                "prune_observer_terminal_sample_observed": False,
+                "prune_observer_gap_reason_counts": {},
+                "prune_observer_schedule_lag_values_sec": [],
+                "prune_observer_anchor_to_schedule_delay_values_sec": [],
+                "prune_observer_budget_snapshots": [],
             },
         )
         _merge_immutable_scanner_metadata(
@@ -863,7 +1013,128 @@ def _update_scanner_funnel_state(
             authoritative=True,
         )
         prune["reasons"] = _append_unique(prune.get("reasons"), reason)
-        _append_scanner_bbo_observation(prune, row)
+        if stage == "scalping_scanner_candidate_pruned":
+            prune["terminal_prune_observed"] = True
+            prune["reason"] = reason
+            prune["source_signature"] = str(row.get("source_signature") or "")
+        observer_episode_id = _valid_lineage_token(
+            row.get("scanner_prune_observer_episode_id")
+        )
+        _merge_immutable_scanner_metadata(
+            prune,
+            "prune_observer_episode_id",
+            observer_episode_id,
+            authoritative=stage == "scalping_scanner_prune_bbo_schedule",
+        )
+        schedule_status = _valid_lineage_token(
+            row.get("scanner_prune_observer_schedule_status")
+        )
+        prune["prune_observer_schedule_statuses"] = _append_unique(
+            prune.get("prune_observer_schedule_statuses"), schedule_status
+        )
+        if stage == "scalping_scanner_prune_bbo_schedule":
+            anchor_to_schedule_delay_sec = _to_float(
+                row.get("scanner_prune_observer_anchor_to_schedule_delay_sec")
+            )
+            if (
+                anchor_to_schedule_delay_sec is not None
+                and math.isfinite(anchor_to_schedule_delay_sec)
+                and anchor_to_schedule_delay_sec >= 0
+            ):
+                prune["prune_observer_anchor_to_schedule_delay_values_sec"] = (
+                    list(
+                        prune.get("prune_observer_anchor_to_schedule_delay_values_sec")
+                        or []
+                    )
+                    + [anchor_to_schedule_delay_sec]
+                )[-64:]
+            budget_snapshot = {
+                "kst_date": str(
+                    row.get("scanner_prune_observer_budget_kst_date") or ""
+                ),
+                "active_episode_count": _nonnegative_integer_metadata(
+                    row.get("scanner_prune_observer_active_episode_count")
+                ),
+                "pending_sample_count": _nonnegative_integer_metadata(
+                    row.get("scanner_prune_observer_pending_sample_count")
+                ),
+                "process_daily_scheduled_request_count": (
+                    _nonnegative_integer_metadata(
+                        row.get(
+                            "scanner_prune_observer_process_daily_scheduled_request_count"
+                        )
+                    )
+                ),
+                "process_daily_remaining_request_count": (
+                    _nonnegative_integer_metadata(
+                        row.get(
+                            "scanner_prune_observer_process_daily_remaining_request_count"
+                        )
+                    )
+                ),
+                "worker_alive": (
+                    _boolish(row.get("scanner_prune_observer_worker_alive"))
+                    if row.get("scanner_prune_observer_worker_alive") is not None
+                    else None
+                ),
+                "worker_error_count": _nonnegative_integer_metadata(
+                    row.get("scanner_prune_observer_worker_error_count")
+                ),
+                "receipt_emit_failure_count": _nonnegative_integer_metadata(
+                    row.get("scanner_prune_observer_receipt_emit_failure_count")
+                ),
+                "request_gap_count": _nonnegative_integer_metadata(
+                    row.get("scanner_prune_observer_request_gap_count")
+                ),
+                "captured_sample_count": _nonnegative_integer_metadata(
+                    row.get("scanner_prune_observer_captured_sample_count")
+                ),
+            }
+            if budget_snapshot["kst_date"] or any(
+                budget_snapshot[key] is not None
+                for key in (
+                    "active_episode_count",
+                    "pending_sample_count",
+                    "process_daily_scheduled_request_count",
+                    "process_daily_remaining_request_count",
+                )
+            ):
+                prune["prune_observer_budget_snapshots"] = (
+                    list(prune.get("prune_observer_budget_snapshots") or [])
+                    + [budget_snapshot]
+                )[-64:]
+        if stage == "scalping_scanner_prune_bbo_observation":
+            prune["prune_observer_sample_event_count"] = (
+                int(prune.get("prune_observer_sample_event_count") or 0) + 1
+            )
+            prune["prune_observer_terminal_sample_observed"] = bool(
+                prune.get("prune_observer_terminal_sample_observed")
+                or _boolish(row.get("scanner_prune_observer_terminal_sample"))
+            )
+            observer_status = str(row.get("scanner_prune_observer_status") or "unknown")
+            observer_schedule_lag_sec = _to_float(
+                row.get("scanner_prune_observer_schedule_lag_sec")
+            )
+            if (
+                observer_schedule_lag_sec is not None
+                and math.isfinite(observer_schedule_lag_sec)
+                and observer_schedule_lag_sec >= 0
+            ):
+                prune["prune_observer_schedule_lag_values_sec"] = (
+                    list(prune.get("prune_observer_schedule_lag_values_sec") or [])
+                    + [observer_schedule_lag_sec]
+                )[-64:]
+            if observer_status != "captured":
+                observer_gap_reason = str(
+                    row.get("scanner_prune_observer_gap_reason")
+                    or "unknown_prune_observer_gap"
+                )
+                gap_counts = prune.setdefault("prune_observer_gap_reason_counts", {})
+                gap_counts[observer_gap_reason] = (
+                    int(gap_counts.get(observer_gap_reason) or 0) + 1
+                )
+        if stage == "scalping_scanner_prune_bbo_observation":
+            _append_scanner_bbo_observation(prune, row)
         return
     if not promotion_id:
         state["missing_lineage_event_count"] += 1
@@ -1082,13 +1353,126 @@ def _scanner_lineage_economic_cohort(lineage: Mapping[str, Any]) -> str | None:
 
 
 def _scanner_prune_economic_cohort(prune: Mapping[str, Any]) -> str | None:
-    if prune.get(
-        "reason"
-    ) == "reentry_cooldown_no_material_upgrade" and "MARKET_GAINER" not in str(
+    reason = str(prune.get("reason") or "")
+    if reason == "reentry_cooldown_no_material_upgrade" and "MARKET_GAINER" not in str(
         prune.get("source_signature") or ""
     ):
         return "non_gainer_not_rising_repeat"
+    if reason == "reentry_cooldown_no_material_upgrade":
+        return "market_gainer_reentry_cooldown"
+    if reason == "market_gainer_reserved_full":
+        return "market_gainer_reserved_full"
+    if reason == "general_slot_limit":
+        return "general_slot_limit"
     return None
+
+
+def _coalesce_prune_observation_episodes(
+    prunes: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collapse repeated scan generations onto one stable observation episode."""
+
+    groups: dict[str, dict[str, Any]] = {}
+    for prune in prunes:
+        episode_id = _valid_lineage_token(prune.get("prune_observer_episode_id"))
+        fallback_key = (
+            f"unobserved:{prune.get('scan_generation_id') or ''}:"
+            f"{prune.get('code') or ''}"
+        )
+        key = episode_id or fallback_key
+        current = groups.get(key)
+        if current is None:
+            current = {
+                **dict(prune),
+                "prune_observer_episode_id": episode_id,
+                "scan_generation_ids": [str(prune.get("scan_generation_id") or "")],
+                "bbo_observations": [],
+                "bbo_gap_reason_counts": {},
+                "prune_observer_schedule_statuses": [],
+                "prune_observer_gap_reason_counts": {},
+                "prune_observer_sample_event_count": 0,
+                "prune_observer_terminal_sample_observed": False,
+                "prune_observer_schedule_lag_values_sec": [],
+                "prune_observer_anchor_to_schedule_delay_values_sec": [],
+                "prune_observer_budget_snapshots": [],
+                "metadata_conflicts": list(prune.get("metadata_conflicts") or []),
+            }
+            groups[key] = current
+        else:
+            for field in ("code", "venue", "market_session_bucket"):
+                value = prune.get(field)
+                existing = current.get(field)
+                if value not in (None, "", "UNKNOWN") and existing not in (
+                    None,
+                    "",
+                    "UNKNOWN",
+                    value,
+                ):
+                    current["metadata_conflicts"] = _append_unique(
+                        current.get("metadata_conflicts"),
+                        f"{field}:{existing}!={value}",
+                    )
+        generation_id = str(prune.get("scan_generation_id") or "")
+        if generation_id and generation_id not in current["scan_generation_ids"]:
+            current["scan_generation_ids"].append(generation_id)
+        current["reasons"] = sorted(
+            set(current.get("reasons") or []) | set(prune.get("reasons") or [])
+        )
+        current["prune_observer_schedule_statuses"] = sorted(
+            set(current.get("prune_observer_schedule_statuses") or [])
+            | set(prune.get("prune_observer_schedule_statuses") or [])
+        )
+        for observation in prune.get("bbo_observations") or []:
+            if not isinstance(observation, dict):
+                continue
+            observation_key = (
+                observation.get("observed_at"),
+                observation.get("best_bid"),
+                observation.get("best_ask"),
+                observation.get("source"),
+            )
+            if not any(
+                (
+                    item.get("observed_at"),
+                    item.get("best_bid"),
+                    item.get("best_ask"),
+                    item.get("source"),
+                )
+                == observation_key
+                for item in current["bbo_observations"]
+                if isinstance(item, dict)
+            ):
+                current["bbo_observations"].append(dict(observation))
+        for field in ("bbo_gap_reason_counts", "prune_observer_gap_reason_counts"):
+            target_counts = current[field]
+            for reason, count in (prune.get(field) or {}).items():
+                target_counts[str(reason)] = int(
+                    target_counts.get(str(reason)) or 0
+                ) + int(count or 0)
+        current["prune_observer_sample_event_count"] = int(
+            current.get("prune_observer_sample_event_count") or 0
+        ) + int(prune.get("prune_observer_sample_event_count") or 0)
+        current["prune_observer_terminal_sample_observed"] = bool(
+            current.get("prune_observer_terminal_sample_observed")
+            or prune.get("prune_observer_terminal_sample_observed")
+        )
+        current["prune_observer_schedule_lag_values_sec"] = (
+            list(current.get("prune_observer_schedule_lag_values_sec") or [])
+            + list(prune.get("prune_observer_schedule_lag_values_sec") or [])
+        )[-640:]
+        current["prune_observer_anchor_to_schedule_delay_values_sec"] = (
+            list(
+                current.get("prune_observer_anchor_to_schedule_delay_values_sec") or []
+            )
+            + list(
+                prune.get("prune_observer_anchor_to_schedule_delay_values_sec") or []
+            )
+        )[-640:]
+        current["prune_observer_budget_snapshots"] = (
+            list(current.get("prune_observer_budget_snapshots") or [])
+            + list(prune.get("prune_observer_budget_snapshots") or [])
+        )[-640:]
+    return list(groups.values())
 
 
 def _nearest_rank_percentile(
@@ -1725,13 +2109,14 @@ def _scanner_bbo_economic_attribution(
         cohort = _scanner_lineage_economic_cohort(lineage)
         if cohort:
             candidates.append((cohort, str(lineage.get("promotion_id") or ""), lineage))
-    for prune in prunes:
+    for prune in _coalesce_prune_observation_episodes(prunes):
         cohort = _scanner_prune_economic_cohort(prune)
         if cohort:
             candidates.append(
                 (
                     cohort,
-                    f"{prune.get('scan_generation_id') or ''}:{prune.get('code') or ''}",
+                    str(prune.get("prune_observer_episode_id") or "")
+                    or f"{prune.get('scan_generation_id') or ''}:{prune.get('code') or ''}",
                     prune,
                 )
             )
@@ -1802,6 +2187,32 @@ def _scanner_bbo_economic_attribution(
                 str(item.get("source") or ""),
             )
         )
+        prune_episode = bool(
+            _valid_lineage_token(container.get("prune_observer_episode_id"))
+        )
+        prune_observer_selected = bool(
+            prune_episode
+            and (
+                set(container.get("prune_observer_schedule_statuses") or [])
+                & SCANNER_PRUNE_BBO_SCHEDULED_STATUSES
+                or container.get("bbo_observations")
+            )
+        )
+        if prune_episode:
+            anchor_observations = [
+                observation
+                for observation in observations
+                if observation.get("scheduled_offset_sec") == 0
+            ]
+            if anchor_observations:
+                anchor = anchor_observations[0]
+                observations = [anchor] + [
+                    observation
+                    for observation in observations
+                    if observation is not anchor
+                    and float(observation.get("observed_epoch") or 0.0)
+                    > float(anchor.get("observed_epoch") or 0.0)
+                ]
         symbol_master_block_reason = None
         if symbol_master_binding.get("status") != "verified":
             symbol_master_block_reason = (
@@ -1812,18 +2223,49 @@ def _scanner_bbo_economic_attribution(
                 f"official_symbol_master_{symbol_master_status}"
             )
         bbo_join_block_reason = None
+        prune_observer_health_gap_reason = None
+        if prune_episode:
+            budget_snapshots = [
+                snapshot
+                for snapshot in container.get("prune_observer_budget_snapshots") or []
+                if isinstance(snapshot, dict)
+            ]
+            if any(
+                (_to_float(snapshot.get("worker_error_count"), 0.0) or 0.0) > 0
+                for snapshot in budget_snapshots
+            ):
+                prune_observer_health_gap_reason = (
+                    "prune_observer_worker_error_observed"
+                )
+            elif any(
+                (_to_float(snapshot.get("receipt_emit_failure_count"), 0.0) or 0.0) > 0
+                for snapshot in budget_snapshots
+            ):
+                prune_observer_health_gap_reason = (
+                    "prune_observer_receipt_emit_failure_observed"
+                )
+            elif any(
+                snapshot.get("worker_alive") is False for snapshot in budget_snapshots
+            ):
+                prune_observer_health_gap_reason = (
+                    "prune_observer_worker_unhealthy_observed"
+                )
         if venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
             bbo_join_block_reason = "authoritative_venue_missing"
         elif session in {"", "UNKNOWN"}:
             bbo_join_block_reason = "authoritative_session_missing"
         elif metadata_conflicts:
             bbo_join_block_reason = "immutable_lineage_metadata_conflict"
+        elif prune_observer_health_gap_reason:
+            bbo_join_block_reason = prune_observer_health_gap_reason
         elif not observations:
             bbo_join_block_reason = (
                 observation_filter_reasons.most_common(1)[0][0]
                 if observation_filter_reasons
                 else "fresh_executable_bbo_missing"
             )
+        elif prune_episode and observations[0].get("scheduled_offset_sec") != 0:
+            bbo_join_block_reason = "prune_offset_zero_executable_bbo_missing"
         if bbo_join_block_reason or symbol_master_block_reason:
             if bbo_join_block_reason:
                 missing_reason_counts[bbo_join_block_reason] += 1
@@ -1840,6 +2282,12 @@ def _scanner_bbo_economic_attribution(
                     "stock_code": stock_code,
                     "venue": venue,
                     "market_session_bucket": session,
+                    "prune_observer_selected": prune_observer_selected,
+                    "observation_population_role": (
+                        "bounded_observer_selected_episode"
+                        if prune_observer_selected
+                        else "full_funnel_census_not_observer_selected"
+                    ),
                     "symbol_master_status": symbol_master_status,
                     "bbo_join_status": (
                         "source_quality_blocked"
@@ -1872,7 +2320,13 @@ def _scanner_bbo_economic_attribution(
         exit_observation: dict[str, Any] | None = None
         for observation in observations[1:]:
             observed_epoch = float(observation["observed_epoch"])
-            if observed_epoch <= entry_epoch or observed_epoch > horizon_epoch:
+            outside_horizon = (
+                int(observation.get("scheduled_offset_sec") or -1)
+                > SCANNER_BBO_HORIZON_SEC
+                if prune_episode
+                else observed_epoch > horizon_epoch
+            )
+            if observed_epoch <= entry_epoch or outside_horizon:
                 continue
             move_pct = (float(observation["best_bid"]) - entry_ask) / entry_ask * 100.0
             if move_pct >= SCANNER_BBO_GROSS_TARGET_PCT:
@@ -1884,13 +2338,21 @@ def _scanner_bbo_economic_attribution(
                 exit_observation = observation
                 break
         if exit_observation is None:
-            timeout_candidates = [
-                observation
-                for observation in observations[1:]
-                if horizon_epoch
-                <= float(observation["observed_epoch"])
-                <= horizon_epoch + SCANNER_BBO_TIMEOUT_MAX_LAG_SEC
-            ]
+            if prune_episode:
+                timeout_candidates = [
+                    observation
+                    for observation in observations[1:]
+                    if int(observation.get("scheduled_offset_sec") or -1)
+                    >= SCANNER_BBO_HORIZON_SEC
+                ]
+            else:
+                timeout_candidates = [
+                    observation
+                    for observation in observations[1:]
+                    if horizon_epoch
+                    <= float(observation["observed_epoch"])
+                    <= horizon_epoch + SCANNER_BBO_TIMEOUT_MAX_LAG_SEC
+                ]
             if timeout_candidates:
                 first_hit_label = "sampled_timeout_exit"
                 exit_observation = timeout_candidates[0]
@@ -1913,6 +2375,12 @@ def _scanner_bbo_economic_attribution(
                 "stock_code": stock_code,
                 "venue": venue,
                 "market_session_bucket": session,
+                "prune_observer_selected": prune_observer_selected,
+                "observation_population_role": (
+                    "bounded_observer_selected_episode"
+                    if prune_observer_selected
+                    else "full_funnel_census_not_observer_selected"
+                ),
                 "symbol_master_status": symbol_master_status,
                 "bbo_join_status": "joined",
                 "bbo_join_block_reason": None,
@@ -1923,6 +2391,9 @@ def _scanner_bbo_economic_attribution(
                 "entry_best_ask": entry.get("best_ask"),
                 "entry_quote_age_ms": entry.get("quote_age_ms"),
                 "entry_bbo_source": entry.get("source"),
+                "entry_observer_anchor_generation_id": entry.get(
+                    "observer_anchor_generation_id"
+                ),
                 "observed_bbo_count": len(observations),
                 "first_hit_label": first_hit_label,
                 "exit_observed_at": (
@@ -1976,6 +2447,13 @@ def _scanner_bbo_economic_attribution(
             if row.get("cost_adjusted_return_pct") is not None
         ]
         group_coverage_pct = _rate_pct(len(group_joined_rows), len(group_eligible_rows))
+        group_right_censored_count = sum(
+            row.get("first_hit_label") == "sampled_path_right_censored_no_timeout_bbo"
+            for row in group_joined_rows
+        )
+        group_right_censored_rate_pct = _rate_pct(
+            group_right_censored_count, len(group_joined_rows)
+        )
         group_source_quality_ready = bool(
             group_eligible_rows
             and cost_contract_status == "verified"
@@ -2018,6 +2496,8 @@ def _scanner_bbo_economic_attribution(
             "exact_bbo_joined_count": len(group_joined_rows),
             "exact_bbo_join_coverage_pct": group_coverage_pct,
             "resolved_outcome_count": len(group_resolved_rows),
+            "right_censored_count": group_right_censored_count,
+            "right_censored_rate_pct_of_joined": group_right_censored_rate_pct,
             "right_censored_or_blocked_count": len(group_eligible_rows)
             - len(group_resolved_rows),
             "first_hit_counts": dict(
@@ -2198,15 +2678,122 @@ def _scanner_bbo_economic_attribution(
                 "missing_reason_counts": dict(sorted(cohort_missing_reasons.items())),
             }
         )
-    source_capture_design_required = any(
-        row["source_capture_gap"]
-        and row["cohort"] == "non_gainer_not_rising_repeat"
-        and row["exact_bbo_joined_count"] == 0
-        for row in cohort_source_quality
+    prune_cohort_names = {
+        "non_gainer_not_rising_repeat",
+        "market_gainer_reentry_cooldown",
+        "market_gainer_reserved_full",
+        "general_slot_limit",
+    }
+    prune_observer_selected_rows = [
+        row
+        for row in rows
+        if row.get("cohort") in prune_cohort_names
+        and bool(row.get("prune_observer_selected"))
+    ]
+    prune_acceptance_groups = []
+    prune_acceptance_keys = sorted(
+        {
+            (
+                str(row.get("cohort") or "unknown"),
+                str(row.get("venue") or "UNKNOWN"),
+                str(row.get("market_session_bucket") or "UNKNOWN"),
+            )
+            for row in prune_observer_selected_rows
+        }
     )
-    source_capture_repair_required = any(
-        row["source_capture_gap"] for row in cohort_source_quality
+    for cohort, venue, session in prune_acceptance_keys:
+        selected_group_rows = [
+            row
+            for row in prune_observer_selected_rows
+            if row.get("cohort") == cohort
+            and row.get("venue") == venue
+            and row.get("market_session_bucket") == session
+        ]
+        selected_group = _economic_group_summary(
+            selected_group_rows,
+            dimensions={
+                "cohort": cohort,
+                "venue": venue,
+                "market_session_bucket": session,
+                "population_role": "bounded_observer_selected_episode",
+            },
+        )
+        if int(
+            selected_group.get("eligible_verified_common_stock_candidate_count")
+            or 0
+        ) > 0:
+            prune_acceptance_groups.append(selected_group)
+    prune_acceptance_ready = bool(
+        prune_acceptance_groups
+        and all(
+            float(group.get("exact_bbo_join_coverage_pct") or 0.0)
+            >= SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT
+            and int(group.get("resolved_outcome_count") or 0)
+            >= SCANNER_PRUNE_BBO_RESOLVED_FLOOR
+            and float(group.get("right_censored_rate_pct_of_joined") or 0.0)
+            <= SCANNER_PRUNE_BBO_RIGHT_CENSORED_MAX_PCT
+            for group in prune_acceptance_groups
+        )
     )
+    prune_observer_acceptance = {
+        "status": (
+            "acceptance_ready_source_only"
+            if prune_acceptance_ready
+            else (
+                "sample_or_source_quality_floor_not_met"
+                if prune_acceptance_groups
+                else "not_applicable_no_verified_prune_cohort"
+            )
+        ),
+        "acceptance_ready": prune_acceptance_ready,
+        "group_count": len(prune_acceptance_groups),
+        "population_role": "bounded_observer_selected_episode",
+        "full_funnel_population_ev_extrapolation_allowed": False,
+        "exact_bbo_join_coverage_floor_pct": SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT,
+        "resolved_outcome_floor_per_group": SCANNER_PRUNE_BBO_RESOLVED_FLOOR,
+        "right_censored_max_pct_per_group": (SCANNER_PRUNE_BBO_RIGHT_CENSORED_MAX_PCT),
+        "groups": prune_acceptance_groups,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    source_capture_design_required = False
+    source_capture_repair_required = bool(
+        any(
+            row["source_capture_gap"]
+            and row.get("cohort") not in prune_cohort_names
+            for row in cohort_source_quality
+        )
+        or any(
+            str(group.get("status") or "").startswith("source_quality_blocked")
+            for group in prune_acceptance_groups
+        )
+    )
+    economic_prunes = [
+        prune for prune in prunes if _scanner_prune_economic_cohort(prune) is not None
+    ]
+    if any(prune.get("bbo_observations") for prune in economic_prunes):
+        source_capture_implementation_state = (
+            "bounded_prune_rest_bbo_collector_runtime_receipts_observed"
+        )
+    elif any(
+        prune.get("prune_observer_schedule_statuses")
+        or _valid_lineage_token(prune.get("prune_observer_episode_id"))
+        for prune in economic_prunes
+    ):
+        source_capture_implementation_state = (
+            "bounded_prune_rest_bbo_collector_schedule_receipts_observed"
+        )
+    elif economic_prunes:
+        source_capture_implementation_state = (
+            "bounded_prune_rest_bbo_collector_implemented_"
+            "waiting_next_pid_natural_episode_receipts"
+        )
+    else:
+        source_capture_implementation_state = (
+            "executable_bbo_join_implemented_waiting_source_quality"
+        )
     return {
         "metric_contract": SCANNER_EXECUTABLE_BBO_METRIC_CONTRACT,
         "status": status,
@@ -2253,10 +2840,17 @@ def _scanner_bbo_economic_attribution(
         ],
         "cohort_source_quality": cohort_source_quality,
         "cohort_venue_session_economics": cohort_venue_session_economics,
+        "prune_observer_selected_venue_session_economics": (
+            prune_acceptance_groups
+        ),
+        "prune_observer_acceptance": prune_observer_acceptance,
         "source_capture_design_required": source_capture_design_required,
+        "source_capture_implementation_state": source_capture_implementation_state,
         "source_capture_repair_required": source_capture_repair_required,
         "first_hit_observation_contract": (
-            "sampled_scanner_stage_bbo_event_order_not_continuous_market_path"
+            "sampled_scanner_stage_bbo_event_order_with_prune_offset_zero_"
+            "anchor_to_schedule_and_schedule_lag_le_2s_"
+            "not_continuous_market_path"
         ),
         "rows": rows[:200],
         "row_export_limit": 200,
@@ -2275,7 +2869,12 @@ def _scanner_unique_funnel_summary(
     symbol_master_binding: Mapping[str, Any],
 ) -> dict[str, Any]:
     lineages = list((state.get("lineages") or {}).values())
-    prunes = list((state.get("prunes") or {}).values())
+    prunes = [
+        prune
+        for prune in (state.get("prunes") or {}).values()
+        if bool(prune.get("terminal_prune_observed", True))
+    ]
+    prune_observation_episodes = _coalesce_prune_observation_episodes(prunes)
     bbo_attribution = _scanner_bbo_economic_attribution(
         lineages,
         prunes,
@@ -2289,6 +2888,181 @@ def _scanner_unique_funnel_summary(
         symbol_master=symbol_master,
         symbol_master_binding=symbol_master_binding,
     )
+    prune_observer_schedule_status_counts = Counter(
+        status
+        for episode in prune_observation_episodes
+        for status in episode.get("prune_observer_schedule_statuses") or []
+    )
+    eligible_prune_observation_episodes = [
+        episode
+        for episode in prune_observation_episodes
+        if _scanner_prune_economic_cohort(episode) is not None
+    ]
+    scheduled_prune_observation_episodes = [
+        episode
+        for episode in eligible_prune_observation_episodes
+        if set(episode.get("prune_observer_schedule_statuses") or [])
+        & {
+            "new_episode_scheduled",
+            "existing_episode_reused",
+            "completed_episode_reused",
+        }
+    ]
+    exact_bbo_prune_observation_episodes = [
+        episode
+        for episode in eligible_prune_observation_episodes
+        if bool(episode.get("bbo_observations"))
+    ]
+    prune_observer_schedule_lag_values_sec: list[float] = []
+    prune_observer_anchor_to_schedule_delay_values_sec: list[float] = []
+    for episode in eligible_prune_observation_episodes:
+        for value in episode.get("prune_observer_schedule_lag_values_sec") or []:
+            parsed_value = _to_float(value)
+            if parsed_value is not None and math.isfinite(parsed_value):
+                prune_observer_schedule_lag_values_sec.append(parsed_value)
+        for value in (
+            episode.get("prune_observer_anchor_to_schedule_delay_values_sec") or []
+        ):
+            parsed_value = _to_float(value)
+            if parsed_value is not None and math.isfinite(parsed_value):
+                prune_observer_anchor_to_schedule_delay_values_sec.append(parsed_value)
+    prune_observer_budget_snapshots = [
+        snapshot
+        for episode in eligible_prune_observation_episodes
+        for snapshot in episode.get("prune_observer_budget_snapshots") or []
+        if isinstance(snapshot, dict)
+    ]
+    prune_observer_summary = {
+        "metric_contract": SCANNER_PRUNE_BBO_COLLECTOR_METRIC_CONTRACT,
+        "acceptance": dict(bbo_attribution.get("prune_observer_acceptance") or {}),
+        "eligible_episode_census_count": len(eligible_prune_observation_episodes),
+        "scheduled_stable_episode_count": len(scheduled_prune_observation_episodes),
+        "schedule_coverage_pct": _rate_pct(
+            len(scheduled_prune_observation_episodes),
+            len(eligible_prune_observation_episodes),
+        ),
+        "exact_bbo_observed_episode_count": len(exact_bbo_prune_observation_episodes),
+        "exact_bbo_episode_coverage_pct": _rate_pct(
+            len(exact_bbo_prune_observation_episodes),
+            len(eligible_prune_observation_episodes),
+        ),
+        "sample_event_count": sum(
+            int(episode.get("prune_observer_sample_event_count") or 0)
+            for episode in eligible_prune_observation_episodes
+        ),
+        "schedule_lag_sample_count": len(prune_observer_schedule_lag_values_sec),
+        "schedule_lag_p50_sec": _nearest_rank_percentile(
+            prune_observer_schedule_lag_values_sec, 0.50
+        ),
+        "schedule_lag_p95_sec": _nearest_rank_percentile(
+            prune_observer_schedule_lag_values_sec, 0.95
+        ),
+        "schedule_lag_max_sec": (
+            max(prune_observer_schedule_lag_values_sec)
+            if prune_observer_schedule_lag_values_sec
+            else None
+        ),
+        "schedule_lag_exceeded_sample_count": sum(
+            value > SCANNER_PRUNE_BBO_MAX_SCHEDULE_LAG_SEC
+            for value in prune_observer_schedule_lag_values_sec
+        ),
+        "max_economic_schedule_lag_sec": SCANNER_PRUNE_BBO_MAX_SCHEDULE_LAG_SEC,
+        "anchor_to_schedule_delay_sample_count": len(
+            prune_observer_anchor_to_schedule_delay_values_sec
+        ),
+        "anchor_to_schedule_delay_p95_sec": _nearest_rank_percentile(
+            prune_observer_anchor_to_schedule_delay_values_sec, 0.95
+        ),
+        "anchor_to_schedule_delay_max_sec": (
+            max(prune_observer_anchor_to_schedule_delay_values_sec)
+            if prune_observer_anchor_to_schedule_delay_values_sec
+            else None
+        ),
+        "anchor_to_schedule_delay_exceeded_sample_count": sum(
+            value > SCANNER_PRUNE_BBO_MAX_SCHEDULE_LAG_SEC
+            for value in prune_observer_anchor_to_schedule_delay_values_sec
+        ),
+        "terminal_sample_observed_episode_count": sum(
+            bool(episode.get("prune_observer_terminal_sample_observed"))
+            for episode in eligible_prune_observation_episodes
+        ),
+        "schedule_status_counts": dict(
+            sorted(prune_observer_schedule_status_counts.items())
+        ),
+        "budget_snapshot_count": len(prune_observer_budget_snapshots),
+        "max_active_episode_count": max(
+            (
+                int(snapshot["active_episode_count"])
+                for snapshot in prune_observer_budget_snapshots
+                if snapshot.get("active_episode_count") is not None
+            ),
+            default=None,
+        ),
+        "max_pending_sample_count": max(
+            (
+                int(snapshot["pending_sample_count"])
+                for snapshot in prune_observer_budget_snapshots
+                if snapshot.get("pending_sample_count") is not None
+            ),
+            default=None,
+        ),
+        "max_process_daily_scheduled_request_count": max(
+            (
+                int(snapshot["process_daily_scheduled_request_count"])
+                for snapshot in prune_observer_budget_snapshots
+                if snapshot.get("process_daily_scheduled_request_count") is not None
+            ),
+            default=None,
+        ),
+        "min_process_daily_remaining_request_count": min(
+            (
+                int(snapshot["process_daily_remaining_request_count"])
+                for snapshot in prune_observer_budget_snapshots
+                if snapshot.get("process_daily_remaining_request_count") is not None
+            ),
+            default=None,
+        ),
+        "worker_unhealthy_receipt_count": sum(
+            snapshot.get("worker_alive") is False
+            for snapshot in prune_observer_budget_snapshots
+        ),
+        "max_worker_error_count": max(
+            (
+                int(snapshot["worker_error_count"])
+                for snapshot in prune_observer_budget_snapshots
+                if snapshot.get("worker_error_count") is not None
+            ),
+            default=None,
+        ),
+        "max_receipt_emit_failure_count": max(
+            (
+                int(snapshot["receipt_emit_failure_count"])
+                for snapshot in prune_observer_budget_snapshots
+                if snapshot.get("receipt_emit_failure_count") is not None
+            ),
+            default=None,
+        ),
+        "max_request_gap_count": max(
+            (
+                int(snapshot["request_gap_count"])
+                for snapshot in prune_observer_budget_snapshots
+                if snapshot.get("request_gap_count") is not None
+            ),
+            default=None,
+        ),
+        "max_captured_sample_count": max(
+            (
+                int(snapshot["captured_sample_count"])
+                for snapshot in prune_observer_budget_snapshots
+                if snapshot.get("captured_sample_count") is not None
+            ),
+            default=None,
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
     final_outcomes: Counter = Counter()
     prune_reasons: Counter = Counter()
     venues: Counter = Counter()
@@ -2533,6 +3307,7 @@ def _scanner_unique_funnel_summary(
         "manual_control_exclusion_attach_skip_count": manual_attach_skip_count,
         "manual_control_exclusion_terminalized_count": manual_terminalized_count,
         "unique_pruned_candidate_count": len(prunes),
+        "prune_observer_summary": prune_observer_summary,
         "prune_reason_counts": dict(sorted(prune_reasons.items())),
         "immutable_metadata_conflict_count": immutable_metadata_conflict_count,
         "immutable_metadata_conflict_rows_sample": (
@@ -2585,9 +3360,26 @@ def _scanner_unique_funnel_summary(
             ),
             "non_gainer_not_rising_repeat": sum(
                 1
-                for prune in prunes
-                if prune.get("reason") == "reentry_cooldown_no_material_upgrade"
-                and "MARKET_GAINER" not in str(prune.get("source_signature") or "")
+                for prune in prune_observation_episodes
+                if _scanner_prune_economic_cohort(prune)
+                == "non_gainer_not_rising_repeat"
+            ),
+            "market_gainer_reentry_cooldown": sum(
+                1
+                for prune in prune_observation_episodes
+                if _scanner_prune_economic_cohort(prune)
+                == "market_gainer_reentry_cooldown"
+            ),
+            "market_gainer_reserved_full": sum(
+                1
+                for prune in prune_observation_episodes
+                if _scanner_prune_economic_cohort(prune)
+                == "market_gainer_reserved_full"
+            ),
+            "general_slot_limit": sum(
+                1
+                for prune in prune_observation_episodes
+                if _scanner_prune_economic_cohort(prune) == "general_slot_limit"
             ),
             "executable_bbo_ev_status": bbo_attribution["status"],
             "executable_bbo_attribution": bbo_attribution,
@@ -3087,6 +3879,13 @@ def _scanner_economic_cohorts_evidence(
         "non_gainer_not_rising_repeat": int(
             economic_cohorts.get("non_gainer_not_rising_repeat") or 0
         ),
+        "market_gainer_reentry_cooldown": int(
+            economic_cohorts.get("market_gainer_reentry_cooldown") or 0
+        ),
+        "market_gainer_reserved_full": int(
+            economic_cohorts.get("market_gainer_reserved_full") or 0
+        ),
+        "general_slot_limit": int(economic_cohorts.get("general_slot_limit") or 0),
         "executable_bbo_ev_status": economic_cohorts.get("executable_bbo_ev_status"),
         "exact_bbo_joined_count": int(attribution.get("exact_bbo_joined_count") or 0),
         "exact_promotion_venue_session_bbo_join_coverage_pct": attribution.get(
@@ -3125,6 +3924,9 @@ def _scanner_economic_cohorts_evidence(
         "source_capture_design_required": bool(
             attribution.get("source_capture_design_required")
         ),
+        "source_capture_implementation_state": attribution.get(
+            "source_capture_implementation_state"
+        ),
         "source_capture_repair_required": bool(
             attribution.get("source_capture_repair_required")
         ),
@@ -3138,6 +3940,7 @@ def _build_workorders(
     snapshot = summary["snapshot_summary"]
     scanner_funnel = summary.get("scanner_unique_funnel") or {}
     economic_cohorts = scanner_funnel.get("economic_cohorts") or {}
+    prune_observer_summary = scanner_funnel.get("prune_observer_summary") or {}
     economic_cohorts_evidence = _scanner_economic_cohorts_evidence(economic_cohorts)
     causal = summary.get("causal_attribution") or {}
     quiet_volume_counts = (causal.get("trade_tick_quiet") or {}).get(
@@ -3349,17 +4152,26 @@ def _build_workorders(
             "eligible_no_heavy",
             "heavy_then_stale_queue_evict",
             "non_gainer_not_rising_repeat",
+            "market_gainer_reentry_cooldown",
+            "market_gainer_reserved_full",
+            "general_slot_limit",
         )
     )
-    if (
-        economic_candidate_count
-        and economic_cohorts.get("executable_bbo_ev_status")
+    prune_observer_acceptance = prune_observer_summary.get("acceptance") or {}
+    prune_observer_acceptance_pending = bool(
+        int(prune_observer_summary.get("eligible_episode_census_count") or 0) > 0
+        and not bool(prune_observer_acceptance.get("acceptance_ready"))
+    )
+    if economic_candidate_count and (
+        economic_cohorts.get("executable_bbo_ev_status")
         != "source_only_economics_available"
+        or prune_observer_acceptance_pending
     ):
-        source_capture_design_required = bool(
+        source_capture_implementation_state = str(
             (economic_cohorts.get("executable_bbo_attribution") or {}).get(
-                "source_capture_design_required"
+                "source_capture_implementation_state"
             )
+            or "unknown"
         )
         orders.append(
             {
@@ -3370,44 +4182,41 @@ def _build_workorders(
                 "forbidden_uses": SCANNER_EXECUTABLE_BBO_METRIC_CONTRACT[
                     "forbidden_uses"
                 ],
-                "decision": (
-                    "design_family_candidate"
-                    if source_capture_design_required
-                    else "defer_evidence"
-                ),
+                "decision": "defer_evidence",
                 "next_action": (
-                    "design_capacity_bounded_source_only_bbo_capture_for_depleted_scanner_cohorts"
-                    if source_capture_design_required
-                    else "recheck_exact_bbo_coverage_and_resolved_outcomes_after_next_natural_session"
+                    "recheck_prune_observer_receipts_exact_bbo_coverage_and_"
+                    "resolved_outcomes_after_next_natural_session"
                 ),
-                "implementation_state": (
-                    "executable_bbo_consumer_implemented_source_capture_design_required"
-                    if source_capture_design_required
-                    else "executable_bbo_join_implemented_waiting_source_quality"
-                ),
+                "implementation_state": source_capture_implementation_state,
                 "order_id": "order_scanner_funnel_executable_bbo_join",
                 "title": "Scanner funnel executable-BBO economic attribution",
                 "priority": 2,
                 "intent": (
-                    "Join each unique lost scanner generation to fresh executable bid/ask, quote age, "
-                    "venue/session, fixed effective-dated costs, sampled target/adverse first-hit, and "
-                    "sampled timeout exit without claiming a continuous market path."
+                    "Preserve the full lost-scanner census while joining each explicitly selected "
+                    "bounded observer episode to fresh executable bid/ask, quote age, venue/session, "
+                    "fixed effective-dated costs, sampled target/adverse first-hit, and sampled timeout "
+                    "exit without claiming a continuous market path or extrapolating sampled EV to the "
+                    "full prune population."
                 ),
                 "evidence": [
                     f"economic_candidate_count={economic_candidate_count}",
                     f"economic_cohorts={economic_cohorts_evidence}",
+                    f"prune_observer_summary={prune_observer_summary}",
                 ],
                 "files_likely_touched": [
-                    "src/engine/scalping/micro_reversion/collection_targets.py",
-                    "src/engine/monitoring/rising_missed_intraday_feedback.py",
+                    "src/engine/monitoring/pruned_candidate_bbo_collector.py",
+                    "src/scanners/scalping_scanner.py",
                     "src/engine/monitoring/intraday_ws_freshness_monitor.py",
-                    "src/tests/test_micro_reversion_collection_targets.py",
-                    "src/tests/test_rising_missed_intraday_feedback.py",
+                    "src/tests/test_pruned_candidate_bbo_collector.py",
                     "src/tests/test_intraday_ws_freshness_monitor.py",
                 ],
                 "acceptance_tests": [
-                    "source_capture_design_preserves_active_owner_targets_and_reviewed_ws_item_budget",
-                    "exact_promotion_venue_session_bbo_join_coverage_pct>=95",
+                    "source_capture_preserves_active_owner_targets_and_adds_zero_ws_registrations",
+                    "ka10004_requests_remain_within_process_daily_and_interval_budget",
+                    "bounded_observer_selected_episode_bbo_join_coverage_pct>=95",
+                    "each_selected_prune_cohort_venue_session_resolved_outcome_count>=20",
+                    "each_selected_prune_cohort_venue_session_right_censored_pct<=20",
+                    "full_prune_population_ev_extrapolation_allowed=false",
                     "missing_bbo_is_source_quality_blocked_not_zero_profit",
                     "KRX_PREMARKET_KRX_LIKE_NXT_results_are_separate",
                     "fixed_cost_contract_effective_date_and_source_hash_match",

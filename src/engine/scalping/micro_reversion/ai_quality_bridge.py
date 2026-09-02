@@ -75,6 +75,7 @@ from .replay_ablation_contract import (
     CURRENT_BASE_CONTROL_ARM,
     CURRENT_DESIGN_ACTIVATION_DATE,
     CURRENT_DESIGN_VERSION,
+    CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE,
     LEGACY_ARMS,
     LEGACY_DESIGN_VERSION,
     SOURCE_ONLY_AUTHORITY_CONTRACT as ABLATION_SOURCE_ONLY_AUTHORITY,
@@ -97,7 +98,15 @@ THREE_ARM_SCHEMA = "micro_reversion_ai_quality_three_arm_manifest_v1"
 THREE_ARM_REQUEST_SCHEMA = "micro_reversion_ai_quality_three_arm_requests_v1"
 REPORT_SCHEMA = "micro_reversion_ai_quality_bridge_v1"
 BRIDGE_CONFIG_SCHEMA = "micro_reversion_ai_quality_bridge_config_v1"
-BRIDGE_PRODUCER_VERSION = "micro_reversion_ai_quality_bridge_v1_5"
+LEGACY_BRIDGE_PRODUCER_VERSION = "micro_reversion_ai_quality_bridge_v1_5"
+BRIDGE_PRODUCER_VERSION = "micro_reversion_ai_quality_bridge_v1_6"
+LEGACY_ASK_DEPLETION_METRIC_CONTRACT = {
+    **ASK_DEPLETION_METRIC_CONTRACT,
+    "source_quality_gate": (
+        "latest_nonfuture_anchor_and_fresh_continuous_0d_and_complete_0b_"
+        "within_exact_scope_without_fixed_price_imputation"
+    ),
+}
 RELEVANT_SOURCE_CACHE_SCHEMA = "micro_reversion_relevant_source_cache_v1"
 RELEVANT_SOURCE_CACHE_INDEX_VERSION = "relevant_source_sqlite_v1"
 DEFAULT_RELEVANT_SOURCE_CACHE_ROOT = (
@@ -829,10 +838,14 @@ class BridgeConfig:
             raise ValueError("reversion confirmation fraction must be in (0, 1]")
 
 
-def _bridge_config_contract(config: BridgeConfig) -> dict[str, Any]:
+def _bridge_config_contract(
+    config: BridgeConfig,
+    *,
+    producer_version: str = BRIDGE_PRODUCER_VERSION,
+) -> dict[str, Any]:
     body = {
         "schema": BRIDGE_CONFIG_SCHEMA,
-        "producer_version": BRIDGE_PRODUCER_VERSION,
+        "producer_version": producer_version,
         "values": asdict(config),
     }
     return {**body, "config_sha256": _sha256(body)}
@@ -852,7 +865,8 @@ def _bridge_config_from_contract(contract: Mapping[str, Any]) -> BridgeConfig:
     body = {key: value for key, value in contract.items() if key != "config_sha256"}
     if (
         contract.get("schema") != BRIDGE_CONFIG_SCHEMA
-        or contract.get("producer_version") != BRIDGE_PRODUCER_VERSION
+        or contract.get("producer_version")
+        not in {LEGACY_BRIDGE_PRODUCER_VERSION, BRIDGE_PRODUCER_VERSION}
         or contract.get("config_sha256") != _sha256(body)
     ):
         raise ValueError("micro_context_bridge_contract_invalid")
@@ -1386,6 +1400,24 @@ def _parse_timestamp(value: Any) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError("timestamp must include timezone")
     return parsed
+
+
+def _exact_source_contract_active_for_evidence(
+    evidence: Mapping[str, Any],
+) -> bool:
+    return _parse_timestamp(evidence.get("trace_decision_ts")).astimezone(
+        KST
+    ).date() >= date.fromisoformat(CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE)
+
+
+def _ask_depletion_metric_contract_for_evidence(
+    evidence: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    return (
+        ASK_DEPLETION_METRIC_CONTRACT
+        if _exact_source_contract_active_for_evidence(evidence)
+        else LEGACY_ASK_DEPLETION_METRIC_CONTRACT
+    )
 
 
 def _timestamp_ms(value: Any) -> int:
@@ -2022,11 +2054,45 @@ def _valid_market_row(row: Mapping[str, Any]) -> tuple[bool, str | None]:
     return True, None
 
 
-def _valid_depth_row(row: Mapping[str, Any]) -> tuple[bool, str | None]:
+def _valid_depth_row(
+    row: Mapping[str, Any],
+    *,
+    legacy_route_conservation: bool = False,
+) -> tuple[bool, str | None]:
     try:
         validate_depth_row(dict(row))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        reason = str(exc)
+        if reason == "depth component route totals do not reconcile":
+            return False, "depth_component_route_totals_do_not_reconcile"
+        if reason == "depth integrated route components are missing":
+            return False, "depth_integrated_route_components_missing"
         return False, "depth_contract_invalid"
+    if legacy_route_conservation:
+        route_totals = row.get("route_totals")
+        combined = (
+            route_totals.get("combined")
+            if isinstance(route_totals, Mapping)
+            else None
+        )
+        components = (
+            [
+                totals
+                for route, totals in route_totals.items()
+                if route != "combined" and isinstance(totals, Mapping)
+            ]
+            if isinstance(route_totals, Mapping)
+            else []
+        )
+        if isinstance(combined, Mapping):
+            for side in ("bid", "ask"):
+                component_values = [totals.get(side) for totals in components]
+                if (
+                    component_values
+                    and all(value is not None for value in component_values)
+                    and sum(component_values) != combined.get(side)
+                ):
+                    return False, "depth_component_route_totals_do_not_reconcile"
     return True, None
 
 
@@ -4763,10 +4829,28 @@ def build_tactical_evidence(
     config: BridgeConfig | None = None,
     excluded_scopes: set[tuple[str, str, str, int]] | None = None,
     verified_symbol_metadata: Mapping[str, Any] | None = None,
+    producer_version: str = BRIDGE_PRODUCER_VERSION,
 ) -> dict[str, Any]:
     """Build one nonfuture sidecar without changing the exact provider payload."""
 
+    if producer_version not in {
+        LEGACY_BRIDGE_PRODUCER_VERSION,
+        BRIDGE_PRODUCER_VERSION,
+    }:
+        raise ValueError("micro_context_bridge_producer_version_invalid")
     selected_config = config or BridgeConfig()
+    try:
+        exact_source_contract_active = (
+            _parse_timestamp(trace.get("decision_ts")).astimezone(KST).date()
+            >= date.fromisoformat(CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE)
+        )
+    except (TypeError, ValueError):
+        exact_source_contract_active = False
+    if (
+        exact_source_contract_active
+        and producer_version != BRIDGE_PRODUCER_VERSION
+    ):
+        raise ValueError("micro_context_bridge_producer_version_invalid")
     watermark, blockers = exact_snapshot_watermark(trace, payload)
     blocker_list = list(blockers)
     capacity_blockers: list[str] = []
@@ -4895,7 +4979,10 @@ def build_tactical_evidence(
             continue
         if received_us < causal_lower_us or received_us > watermark_us:
             continue
-        valid, reason = _valid_depth_row(row)
+        valid, reason = _valid_depth_row(
+            row,
+            legacy_route_conservation=not exact_source_contract_active,
+        )
         if not valid:
             rejected_depth[reason or "depth_invalid"] += 1
             rejected_depth_receive_us.append(received_us)
@@ -5284,10 +5371,11 @@ def build_tactical_evidence(
     evidence_without_hash = {
         "schema": TACTICAL_EVIDENCE_SCHEMA,
         "evidence_version": 1,
-        "bridge_config_sha256": _bridge_config_contract(selected_config)[
-            "config_sha256"
-        ],
-        "bridge_producer_version": BRIDGE_PRODUCER_VERSION,
+        "bridge_config_sha256": _bridge_config_contract(
+            selected_config,
+            producer_version=producer_version,
+        )["config_sha256"],
+        "bridge_producer_version": producer_version,
         "decision_trace_id": trace.get("decision_trace_id"),
         "request_id": trace.get("request_id"),
         "decision_stage": trace.get("decision_stage"),
@@ -5542,7 +5630,12 @@ def build_ask_depletion_feature_sidecar(
             continue
         if not anchor_lower_us <= received_us <= observed_through_us:
             continue
-        valid, _reason = _valid_depth_row(row)
+        valid, _reason = _valid_depth_row(
+            row,
+            legacy_route_conservation=(
+                not _exact_source_contract_active_for_evidence(evidence)
+            ),
+        )
         if not valid:
             depth_source_complete = False
             continue
@@ -5562,6 +5655,7 @@ def build_ask_depletion_feature_sidecar(
     ]
     anchor_depth = anchor_candidates[-1] if anchor_candidates else None
 
+    selected_metric_contract = _ask_depletion_metric_contract_for_evidence(evidence)
     report = build_ask_depletion_report(
         context=AskDepletionContext(
             event_id=event_id,
@@ -5581,10 +5675,11 @@ def build_ask_depletion_feature_sidecar(
         market_rows=market_path,
         max_depth_age_ms=max_depth_age_ms,
     ).as_dict()
+    report.update(selected_metric_contract)
     contract_sha256 = _sha256(
         {
             "schema": ASK_DEPLETION_SCHEMA,
-            **ASK_DEPLETION_METRIC_CONTRACT,
+            **selected_metric_contract,
         }
     )
     content = {
@@ -5631,15 +5726,16 @@ def _validated_ask_depletion_feature_view(
     }
     if not declared_context_hash or declared_context_hash != _sha256(content):
         raise ValueError("ask_depletion_context_sha256_mismatch")
+    selected_metric_contract = _ask_depletion_metric_contract_for_evidence(evidence)
     expected_contract_hash = _sha256(
         {
             "schema": ASK_DEPLETION_SCHEMA,
-            **ASK_DEPLETION_METRIC_CONTRACT,
+            **selected_metric_contract,
         }
     )
     if sidecar.get("ask_depletion_contract_sha256") != expected_contract_hash:
         raise ValueError("ask_depletion_contract_sha256_mismatch")
-    for field, expected in ASK_DEPLETION_METRIC_CONTRACT.items():
+    for field, expected in selected_metric_contract.items():
         observed = sidecar.get(field)
         if field == "forbidden_uses":
             if not isinstance(observed, (list, tuple)) or tuple(observed) != tuple(
@@ -5795,6 +5891,7 @@ def validate_ask_depletion_feature_view(
     }
     if feature_view.get("feature_view_sha256") != _sha256(feature_without_hash):
         raise ValueError("ask_depletion_feature_view_hash_invalid")
+    selected_metric_contract = _ask_depletion_metric_contract_for_evidence(evidence)
     if (
         feature_view.get("schema") != ASK_DEPLETION_FEATURE_VIEW_SCHEMA
         or feature_view.get("source_schema") != ASK_DEPLETION_SCHEMA
@@ -5803,7 +5900,7 @@ def validate_ask_depletion_feature_view(
         != _sha256(
             {
                 "schema": ASK_DEPLETION_SCHEMA,
-                **ASK_DEPLETION_METRIC_CONTRACT,
+                **selected_metric_contract,
             }
         )
     ):
@@ -5857,7 +5954,7 @@ def validate_ask_depletion_feature_view(
         "horizons": deepcopy(feature_view.get("eligible_horizons")),
         "schema": ASK_DEPLETION_SCHEMA,
         **ASK_DEPLETION_SIDECAR_AUTHORITY,
-        **ASK_DEPLETION_METRIC_CONTRACT,
+        **selected_metric_contract,
         "tactical_micro_reversion_evidence_sha256": evidence_hash,
         "ask_depletion_contract_sha256": feature_view.get(
             "ask_depletion_contract_sha256"
@@ -6082,6 +6179,10 @@ def validate_ask_depletion_feature_view(
         ):
             raise ValueError("ask_depletion_feature_top_depth_census_invalid")
         observed_levels: list[int] = []
+        optional_top_depth_allowed = _exact_source_contract_active_for_evidence(
+            evidence
+        )
+        required_level_count = min(DEFAULT_ASK_DEPLETION_TOP_DEPTH_LEVELS)
         for depth in top_depth:
             if (
                 not isinstance(depth, Mapping)
@@ -6094,12 +6195,33 @@ def validate_ask_depletion_feature_view(
             depth_endpoint = nonnegative_integer(depth.get("endpoint_qty"))
             depth_minimum = nonnegative_integer(depth.get("minimum_qty"))
             depth_depletion = nonnegative_integer(depth.get("max_depletion_qty"))
+            depth_ratio = depth.get("max_depletion_ratio")
+            measurement_values = (
+                depth.get("initial_qty"),
+                depth.get("endpoint_qty"),
+                depth.get("minimum_qty"),
+                depth.get("max_depletion_qty"),
+                depth_ratio,
+            )
+            optional_unavailable = bool(
+                optional_top_depth_allowed
+                and retained != required_level_count
+                and all(value is None for value in measurement_values)
+            )
             if (
                 isinstance(retained, bool)
                 or not isinstance(retained, int)
+                or retained <= 0
                 or isinstance(anchor_price_count, bool)
                 or not isinstance(anchor_price_count, int)
-                or anchor_price_count != retained
+                or not 0 <= anchor_price_count <= retained
+            ):
+                raise ValueError("ask_depletion_feature_top_depth_semantics_invalid")
+            if optional_unavailable:
+                observed_levels.append(retained)
+                continue
+            if (
+                anchor_price_count != retained
                 or any(
                     value is None
                     for value in (
@@ -6118,7 +6240,7 @@ def validate_ask_depletion_feature_view(
                 or depth_endpoint < depth_minimum
                 or depth_depletion != depth_initial - depth_minimum
                 or not ratio_matches(
-                    depth.get("max_depletion_ratio"),
+                    depth_ratio,
                     depth_depletion,
                     depth_initial,
                 )
@@ -6162,9 +6284,14 @@ def build_future_outcome(
     selected_config = config or BridgeConfig()
     market_source_rows = tuple(market_rows)
     depth_source_rows = tuple(depth_rows)
-    selected_contract = _bridge_config_contract(selected_config)
+    evidence_producer_version = str(evidence.get("bridge_producer_version") or "")
+    selected_contract = _bridge_config_contract(
+        selected_config,
+        producer_version=evidence_producer_version,
+    )
     if (
-        evidence.get("bridge_producer_version") != BRIDGE_PRODUCER_VERSION
+        evidence_producer_version
+        not in {LEGACY_BRIDGE_PRODUCER_VERSION, BRIDGE_PRODUCER_VERSION}
         or evidence.get("bridge_config_sha256") != selected_contract["config_sha256"]
     ):
         raise ValueError("future_outcome_bridge_config_mismatch")
@@ -6384,7 +6511,12 @@ def build_future_outcome(
                 + selected_config.max_outcome_endpoint_lag_ms
             )
         ):
-            valid, _ = _valid_depth_row(row)
+            valid, _ = _valid_depth_row(
+                row,
+                legacy_route_conservation=(
+                    not _exact_source_contract_active_for_evidence(evidence)
+                ),
+            )
             if not valid:
                 rejected_depth_times_us.append(received_us)
                 continue
@@ -6886,7 +7018,7 @@ def build_future_outcome(
     outcome_without_hash = {
         "schema": OUTCOME_SCHEMA,
         "bridge_config_sha256": selected_contract["config_sha256"],
-        "bridge_producer_version": BRIDGE_PRODUCER_VERSION,
+        "bridge_producer_version": evidence_producer_version,
         "decision_trace_id": evidence.get("decision_trace_id"),
         "evidence_sha256": evidence.get("evidence_sha256"),
         "label_role": "counterfactual_outcome_only_never_prompt_input",
@@ -7561,16 +7693,6 @@ def build_three_arm_manifest(
         if normalized_source_gap_reason
         else []
     )
-    replay_arm_materialization_status = (
-        "ask_depletion_source_gap_blocked"
-        if materialization_blockers
-        else "replay_request_materialization_required"
-    )
-    candidate_arm_materialization_status = (
-        "ask_depletion_source_gap_blocked"
-        if materialization_blockers
-        else "candidate_prompt_contract_required"
-    )
     outcome_economic_eligible = False
     if isinstance(outcome, Mapping):
         outcome_without_hash = {
@@ -7602,6 +7724,72 @@ def build_three_arm_manifest(
         and outcome_economic_eligible
         and (evidence.get("economics") or {}).get("cost_profile_artifact_sha256")
         is not None
+    )
+    primary_horizon_sec = (evidence.get("liquidity_capacity") or {}).get(
+        "target_liquidation_sec"
+    )
+    primary_outcome = (
+        next(
+            (
+                horizon
+                for horizon in (outcome or {}).get("horizons") or []
+                if isinstance(horizon, Mapping)
+                and horizon.get("horizon_sec") == primary_horizon_sec
+            ),
+            None,
+        )
+        if isinstance(outcome, Mapping)
+        else None
+    )
+    primary_outcome_mature_eligible = bool(
+        isinstance(primary_horizon_sec, int)
+        and not isinstance(primary_horizon_sec, bool)
+        and primary_horizon_sec > 0
+        and isinstance(primary_outcome, Mapping)
+        and primary_outcome.get("mature") is True
+        and primary_outcome.get("source_quality_blockers") in (None, [])
+    )
+    try:
+        decision_date = (
+            _parse_timestamp(evidence.get("trace_decision_ts")).astimezone(KST).date()
+        )
+    except (TypeError, ValueError):
+        decision_date = date.min
+    current_exact_contract_active = bool(
+        design_version == CURRENT_DESIGN_VERSION
+        and decision_date
+        >= date.fromisoformat(CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE)
+    )
+    paired_eligible = bool(context_eligible and control_eligible)
+    current_ablation_source_eligible = bool(
+        current_exact_contract_active
+        and paired_eligible
+        and primary_outcome_mature_eligible
+        and economic_eligible
+    )
+    materialization_eligible = (
+        current_ablation_source_eligible
+        if current_exact_contract_active
+        else paired_eligible
+    )
+    if not context_eligible:
+        materialization_blockers.append("replay_context_ineligible")
+    if not control_eligible:
+        materialization_blockers.append("control_decision_ineligible")
+    if current_exact_contract_active and not economic_eligible:
+        materialization_blockers.append("net_economic_evaluation_ineligible")
+    if current_exact_contract_active and not primary_outcome_mature_eligible:
+        materialization_blockers.append("primary_outcome_not_mature")
+    materialization_blockers = sorted(set(materialization_blockers))
+    replay_arm_materialization_status = (
+        "source_or_economic_intersection_blocked"
+        if materialization_blockers
+        else "replay_request_materialization_required"
+    )
+    candidate_arm_materialization_status = (
+        "source_or_economic_intersection_blocked"
+        if materialization_blockers
+        else "candidate_prompt_contract_required"
     )
     return {
         "schema": THREE_ARM_SCHEMA,
@@ -7692,10 +7880,11 @@ def build_three_arm_manifest(
         "provider_input_semantic_identity_verified": semantic_identity_verified,
         "control_decision_eligible": control_eligible,
         "control_decision_exclusion_reasons": list(control_findings),
-        "paired_decision_quality_eligible": context_eligible and control_eligible,
-        "paired_replay_materialization_eligible": (
-            context_eligible and control_eligible
-        ),
+        "paired_decision_quality_eligible": paired_eligible,
+        "current_exact_contract_active": current_exact_contract_active,
+        "primary_outcome_mature_eligible": primary_outcome_mature_eligible,
+        "current_ablation_source_eligible": current_ablation_source_eligible,
+        "paired_replay_materialization_eligible": materialization_eligible,
         "materialization_blockers": materialization_blockers,
         "paired_replay_ready": False,
         "net_economic_evaluation_eligible": economic_eligible,
@@ -8046,7 +8235,17 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
                     + ":"
                     + ",".join(sorted(unknown))
                 )
-    if evidence.get("bridge_producer_version") != BRIDGE_PRODUCER_VERSION or not str(
+    producer_version = evidence.get("bridge_producer_version")
+    try:
+        exact_source_contract_active = _exact_source_contract_active_for_evidence(
+            evidence
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("micro_context_bridge_contract_invalid") from exc
+    accepted_versions = {LEGACY_BRIDGE_PRODUCER_VERSION, BRIDGE_PRODUCER_VERSION}
+    if exact_source_contract_active:
+        accepted_versions = {BRIDGE_PRODUCER_VERSION}
+    if producer_version not in accepted_versions or not str(
         evidence.get("bridge_config_sha256") or ""
     ):
         raise ValueError("micro_context_bridge_contract_invalid")
@@ -8271,9 +8470,11 @@ def attach_micro_context_to_replay_request(
         raise ValueError("micro_context_source_rebuild_required")
     if config is None:
         raise ValueError("micro_context_bridge_config_required")
-    if _bridge_config_contract(config)["config_sha256"] != evidence.get(
-        "bridge_config_sha256"
-    ):
+    evidence_producer_version = str(evidence.get("bridge_producer_version") or "")
+    if _bridge_config_contract(
+        config,
+        producer_version=evidence_producer_version,
+    )["config_sha256"] != evidence.get("bridge_config_sha256"):
         raise ValueError("micro_context_bridge_config_mismatch")
     rebuilt_evidence = build_tactical_evidence(
         trace=source_trace,
@@ -8284,6 +8485,7 @@ def attach_micro_context_to_replay_request(
         config=config,
         excluded_scopes=excluded_scopes,
         verified_symbol_metadata=verified_symbol_metadata,
+        producer_version=evidence_producer_version,
     )
     if _sha256(rebuilt_evidence) != _sha256(evidence):
         raise ValueError("micro_context_source_rebuild_mismatch")
@@ -10405,6 +10607,7 @@ def build_bridge_report(
             "primary_replay_parent_wave_stage_row": False,
             "primary_control_parent_wave_stage_row": False,
             "primary_paired_parent_wave_stage_row": False,
+            "primary_current_ablation_source_parent_wave_stage_row": False,
             "primary_economic_parent_wave_stage_row": False,
             "primary_mature_outcome_parent_wave_stage_row": False,
             "same_parent_wave_repeat": False,
@@ -10523,6 +10726,10 @@ def build_bridge_report(
                 row["three_arm_manifest"].get("paired_decision_quality_eligible")
                 is True
             ),
+            "primary_current_ablation_source_parent_wave_stage_row": lambda row: (
+                row["three_arm_manifest"].get("current_ablation_source_eligible")
+                is True
+            ),
             "primary_economic_parent_wave_stage_row": lambda row: (
                 row["three_arm_manifest"].get("net_economic_evaluation_eligible")
                 is True
@@ -10579,6 +10786,13 @@ def build_bridge_report(
         and row.get("primary_paired_parent_wave_stage_row") is True
         for row in rows
     )
+    current_ablation_source_eligible_trace_ids = sorted(
+        str(row.get("decision_trace_id") or "")
+        for row in rows
+        if row["three_arm_manifest"].get("current_ablation_source_eligible") is True
+        and row.get("primary_current_ablation_source_parent_wave_stage_row") is True
+    )
+    current_ablation_source_eligible = len(current_ablation_source_eligible_trace_ids)
     mature_outcome_eligible = sum(
         any(
             horizon.get("mature") is True
@@ -10631,6 +10845,70 @@ def build_bridge_report(
     partial_allocator_submission_count = allocator_status_counts.get(
         "allocator_provenance_partial_submission_observation_only", 0
     )
+    allocator_classification_counts: Counter[str] = Counter()
+    for row in rows:
+        outcome = row.get("future_outcome") or {}
+        status = str(outcome.get("allocator_provenance_status") or "unknown")
+        stage = str(row.get("decision_stage") or "").strip().lower()
+        action = str(outcome.get("control_action") or "").strip().upper()
+        submitted_count = int(outcome.get("allocator_submitted_semantic_count") or 0)
+        allocator_error = outcome.get("allocator_provenance_error")
+        if status == "central_allocator_provenance_joined" and not allocator_error:
+            classification = "joined_valid"
+        elif (status == "not_applicable_to_stage" and submitted_count == 0) or (
+            stage in {"entry", "entry_screen", "gatekeeper", "post_probe"}
+            and action not in {"BUY", "CONTINUE"}
+            and submitted_count == 0
+            and not allocator_error
+        ):
+            classification = "not_applicable_non_submitted_trace"
+        elif submitted_count > 0 or "partial_submission" in status:
+            classification = "missing_expected_submitted_trace"
+        else:
+            classification = "blocked_missing_evidence"
+        allocator_classification_counts[classification] += 1
+
+    route_rejection_counts: Counter[str] = Counter()
+    top_depth_availability = {
+        "top1": {"available": 0, "unavailable": 0, "denominator": 0},
+        "top3": {"available": 0, "unavailable": 0, "denominator": 0},
+        "top5": {"available": 0, "unavailable": 0, "denominator": 0},
+    }
+    for row in rows:
+        evidence = row.get(TACTICAL_EVIDENCE_SCHEMA) or {}
+        source_quality = evidence.get("source_quality") or {}
+        route_rejection_counts.update(
+            {
+                str(reason): int(count)
+                for reason, count in (
+                    source_quality.get("rejected_depth_reason_counts") or {}
+                ).items()
+            }
+        )
+        sidecar = row.get("ask_depletion_sidecar")
+        if not isinstance(sidecar, Mapping):
+            continue
+        for horizon in sidecar.get("horizons") or []:
+            if not isinstance(horizon, Mapping) or horizon.get("mature") is not True:
+                continue
+            top_depth_availability["top1"]["denominator"] += 1
+            top1_available = horizon.get("initial_anchor_ask_qty") is not None
+            top_depth_availability["top1"][
+                "available" if top1_available else "unavailable"
+            ] += 1
+            depths_by_level = {
+                depth.get("retained_level_count"): depth
+                for depth in horizon.get("top_depth") or []
+                if isinstance(depth, Mapping)
+            }
+            for level in (3, 5):
+                label = f"top{level}"
+                top_depth_availability[label]["denominator"] += 1
+                depth = depths_by_level.get(level) or {}
+                available = depth.get("initial_qty") is not None
+                top_depth_availability[label][
+                    "available" if available else "unavailable"
+                ] += 1
     if verified_pipeline_rows_by_trace_symbol:
         pipeline_source_contract["outcome_join_mode"] = (
             "central_allocator_full_submission_outcome_only"
@@ -10649,6 +10927,14 @@ def build_bridge_report(
             for row in rows
         )
     )
+    current_exact_contract_active = bool(
+        target_date >= CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE
+    )
+    bridge_primary_eligible_count = (
+        current_ablation_source_eligible
+        if current_exact_contract_active
+        else replay_context_eligible
+    )
     pipeline_source_contract["canonical_entry_pipeline_row_count"] = len(
         canonical_entry_pipeline_hashes
     )
@@ -10665,7 +10951,7 @@ def build_bridge_report(
         "generated_at": generated.isoformat(),
         "status": (
             "pass"
-            if replay_context_eligible
+            if bridge_primary_eligible_count
             and not pipeline_missing_observation_only
             and not allocator_join_contract_gap
             else "warning"
@@ -10681,12 +10967,22 @@ def build_bridge_report(
                 )
                 if allocator_join_contract_gap
                 else (
-                    "micro_three_arm_paired_replay_materialization_eligible"
-                    if paired_eligible
+                    "micro_current_ablation_exact_source_eligible"
+                    if current_exact_contract_active
+                    and current_ablation_source_eligible
                     else (
-                        "micro_replay_context_ready_control_response_excluded"
-                        if replay_context_eligible
-                        else "micro_context_keep_collecting_or_source_gap"
+                        "micro_current_ablation_exact_intersection_empty"
+                        if current_exact_contract_active
+                        and (paired_eligible or economic_eligible)
+                        else (
+                            "micro_three_arm_paired_replay_materialization_eligible"
+                            if paired_eligible
+                            else (
+                                "micro_replay_context_ready_control_response_excluded"
+                                if replay_context_eligible
+                                else "micro_context_keep_collecting_or_source_gap"
+                            )
+                        )
                     )
                 )
             )
@@ -10722,6 +11018,15 @@ def build_bridge_report(
             "micro_context_eligible_primary_episode_count": (replay_context_eligible),
             "control_decision_eligible_primary_episode_count": control_eligible,
             "paired_decision_quality_eligible_primary_episode_count": (paired_eligible),
+            "current_ablation_source_eligible_primary_episode_count": (
+                current_ablation_source_eligible
+            ),
+            "current_ablation_source_eligible_trace_ids": (
+                current_ablation_source_eligible_trace_ids
+            ),
+            "current_ablation_source_eligible_trace_ids_sha256": _sha256(
+                current_ablation_source_eligible_trace_ids
+            ),
             "net_economic_eligible_primary_episode_count": economic_eligible,
             "mature_outcome_eligible_primary_episode_count": (mature_outcome_eligible),
             "confirmation_window_primary_episode_direction_counts": {
@@ -10745,6 +11050,9 @@ def build_bridge_report(
             ),
             "entry_pipeline_allocator_status_counts": dict(allocator_status_counts),
             "entry_pipeline_allocator_error_counts": dict(allocator_error_counts),
+            "entry_pipeline_allocator_classification_counts": dict(
+                allocator_classification_counts
+            ),
             "entry_pipeline_allocator_join_contract_gap": (allocator_join_contract_gap),
             "entry_pipeline_allocator_all_rows_contract_clean": (
                 allocator_all_rows_contract_clean
@@ -10782,6 +11090,8 @@ def build_bridge_report(
             "state_counts": dict(state_counts),
             "stage_counts": dict(stage_counts),
             "exclusion_counts": dict(exclusions),
+            "depth_route_rejection_counts": dict(route_rejection_counts),
+            "ask_depletion_depth_availability": top_depth_availability,
             "noncausal_source_diagnostics": {
                 "invalid_market_timestamp_row_count": (
                     source_store.invalid_timestamp_counts["market"]

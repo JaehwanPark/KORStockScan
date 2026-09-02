@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-09-02T12:32:51.098824",
-  "vix_close": 16.34000015258789,
-  "vix_ma3": 15.256666819254557,
+  "timestamp": "2026-09-02T18:48:13.067505",
+  "vix_close": 16.739999771118164,
+  "vix_ma3": 16.0,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 90.68000030517578,
-  "wti_rsi": 64.57208198920327,
-  "wti_macd": 1.408012866781732,
-  "wti_macd_signal": 1.0657313364183023,
+  "wti_close": 90.45999908447266,
+  "wti_rsi": 64.4214967059864,
+  "wti_macd": 1.700856276497234,
+  "wti_macd_signal": 1.1733259880051097,
   "wti_dead_cross": false,
   "wti_from_recent_high_pct": 0.0,
   "oil_reversal": false,
   "oil_pullback_relief": false,
-  "fng_value": 44.5714285714286,
+  "fng_value": 31.2571428571429,
   "fng_prev": 44.5714285714286,
   "fng_description": "fear",
   "fng_extreme_fear": false,
@@ -25,11 +25,11 @@
   "swing_recovery_gate_label": "INSUFFICIENT",
   "recovery_gate_reason": "recovery_signal_insufficient",
   "oil_only_recovery_prior": false,
-  "market_regime_continuous_score": 66.4886,
-  "market_regime_continuous_label": "RISK_ON",
+  "market_regime_continuous_score": 60.7629,
+  "market_regime_continuous_label": "NEUTRAL",
   "market_regime_component_scores": {
-    "vix_level": 23.66,
-    "fear_greed_level": 7.8286,
+    "vix_level": 23.26,
+    "fear_greed_level": 2.5029,
     "domestic_breadth": 31.5,
     "oil_relief": 0.0,
     "local_model": 3.5
@@ -43,7 +43,7 @@
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 44.5714285714286,
+    "fng_curr": 31.2571428571429,
     "fng_prev": 44.5714285714286,
     "score_threshold": 70,
     "component_scores": {
@@ -68,14 +68,14 @@
         "neutral_min_score": 45.0
       },
       "component_scores": {
-        "vix_level": 23.66,
-        "fear_greed_level": 7.8286,
+        "vix_level": 23.26,
+        "fear_greed_level": 2.5029,
         "domestic_breadth": 31.5,
         "oil_relief": 0.0,
         "local_model": 3.5
       },
       "source_quality": "valid",
-      "primary_market_condition_label": "RISK_ON",
+      "primary_market_condition_label": "NEUTRAL",
       "decision_authority": "risk_context_only",
       "runtime_effect": false
     },
@@ -96,5 +96,5 @@
     "local_breadth_signal": "bullish"
   },
   "cached_session_date": "2026-09-02",
-  "cached_at": "2026-09-02T12:32:51.113848+09:00"
+  "cached_at": "2026-09-02T18:48:13.081652+09:00"
 }

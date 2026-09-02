@@ -545,6 +545,51 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="real_scalping_scanner_source_guard_only",
     ),
+    "scalping_scanner_prune_bbo_schedule": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "allowed_runtime_apply",
+            "scanner_scan_generation_id",
+            "scanner_scan_rank",
+            "scanner_ranked_candidate_count",
+            "scanner_prune_reason",
+            "scanner_prune_observer_schedule_status",
+            "scanner_prune_observer_market_data_request_effect",
+            "effective_venue",
+            "market_session_bucket",
+        ),
+        decision_authority="scanner_prune_bbo_observation_only",
+    ),
+    "scalping_scanner_prune_bbo_observation": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "allowed_runtime_apply",
+            "scanner_prune_observer_episode_id",
+            "scanner_prune_observer_anchor_generation_id",
+            "scanner_prune_observer_anchor_epoch",
+            "scanner_prune_observer_schedule_started_epoch",
+            "scanner_prune_observer_anchor_to_schedule_delay_sec",
+            "scanner_prune_observer_sample_index",
+            "scanner_prune_observer_scheduled_offset_sec",
+            "scanner_prune_observer_due_epoch",
+            "scanner_prune_observer_request_started_epoch",
+            "scanner_prune_observer_observed_epoch",
+            "scanner_prune_observer_observed_at",
+            "scanner_prune_observer_request_completed_epoch",
+            "scanner_prune_observer_schedule_lag_sec",
+            "scanner_prune_observer_request_code",
+            "scanner_prune_observer_response_request_code",
+            "scanner_prune_observer_expected_observed_venue",
+            "scanner_prune_observer_route_match",
+            "scanner_prune_observer_status",
+            "scanner_prune_observer_gap_reason",
+            "scanner_prune_observer_terminal_sample",
+            "scanner_prune_observer_source_quality_pass",
+            "effective_venue",
+            "market_session_bucket",
+        ),
+        decision_authority="scanner_prune_bbo_observation_only",
+    ),
     "scalping_scanner_runtime_target_attach": StageContract(
         required_fields=(
             *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
@@ -4472,22 +4517,25 @@ def _blocked_observation_records_fail_closed_source_gap(
             and not _contract_bool(fields.get("ai_input_preflight_allowed"), True)
             and not _contract_bool(fields.get("provider_called"), True)
         )
-        provider_transport_failed_closed = (
-            bool(str(fields.get("openai_transport_fail_closed_reason") or "").strip())
-            and str(fields.get("ai_decision_evaluation_status") or "").strip().lower()
-            in {
-                "not_evaluated_provider_or_preflight",
-                "not_evaluated_transport_timeout",
-            }
-        )
+        provider_transport_failed_closed = bool(
+            str(fields.get("openai_transport_fail_closed_reason") or "").strip()
+        ) and str(
+            fields.get("ai_decision_evaluation_status") or ""
+        ).strip().lower() in {
+            "not_evaluated_provider_or_preflight",
+            "not_evaluated_transport_timeout",
+        }
         final_source_quality_blocked = (
             _contract_bool(fields.get("entry_action_final_blocked"), True)
-            and "source_quality" in str(
+            and "source_quality"
+            in str(
                 fields.get("entry_action_final_block_reason")
                 or fields.get("entry_action_final_reason")
                 or fields.get("block_reason")
                 or ""
-            ).strip().lower()
+            )
+            .strip()
+            .lower()
         )
         return (
             (
@@ -4765,6 +4813,25 @@ def _row_contract_violations(
             ).items()
             if violated
         )
+    if (
+        stage == "scalping_scanner_prune_bbo_observation"
+        and str(fields.get("scanner_prune_observer_status") or "") == "captured"
+    ):
+        if not _contract_bool(fields.get("scanner_prune_observer_route_match"), True):
+            invalid.append("scanner_prune_observer_exact_route_contract")
+        if not _contract_bool(
+            fields.get("scanner_prune_observer_source_quality_pass"), True
+        ):
+            invalid.append("scanner_prune_observer_capture_quality_contract")
+        if str(fields.get("scanner_prune_observer_request_code") or "") != str(
+            fields.get("scanner_prune_observer_response_request_code") or ""
+        ):
+            invalid.append("scanner_prune_observer_response_route_contract")
+        if (
+            str(fields.get("scanner_prune_observer_price_source") or "")
+            != "ka10004_rest_orderbook_exact_request_code"
+        ):
+            invalid.append("scanner_prune_observer_price_source_contract")
     if _stage_requires_tick_pressure_provenance(
         stage
     ) and _pressure_provenance_unusable(fields, stage=stage):
@@ -4795,6 +4862,60 @@ def _row_contract_violations(
 
 
 def _conditional_required_fields(stage: str, fields: dict[str, Any]) -> tuple[str, ...]:
+    if stage == "scalping_scanner_prune_bbo_schedule":
+        status = str(fields.get("scanner_prune_observer_schedule_status") or "")
+        normal_statuses = {
+            "new_episode_scheduled",
+            "existing_episode_reused",
+            "completed_episode_reused",
+            "active_episode_capacity_rejected",
+            "pending_sample_capacity_rejected",
+            "daily_request_budget_rejected",
+        }
+        required = []
+        if status in normal_statuses:
+            required.extend(
+                (
+                    "scanner_prune_observer_budget_kst_date",
+                    "scanner_prune_observer_active_episode_count",
+                    "scanner_prune_observer_pending_sample_count",
+                    "scanner_prune_observer_process_daily_scheduled_request_count",
+                    "scanner_prune_observer_process_daily_remaining_request_count",
+                    "scanner_prune_observer_worker_alive",
+                    "scanner_prune_observer_worker_error_count",
+                    "scanner_prune_observer_receipt_emit_failure_count",
+                    "scanner_prune_observer_request_gap_count",
+                    "scanner_prune_observer_captured_sample_count",
+                )
+            )
+        if status in normal_statuses:
+            required.extend(
+                (
+                    "scanner_prune_observer_episode_id",
+                    "scanner_prune_observer_request_code",
+                    "scanner_prune_observer_expected_observed_venue",
+                    "scanner_prune_observer_scheduled_sample_count",
+                    "scanner_prune_observer_anchor_epoch",
+                    "scanner_prune_observer_anchor_to_schedule_delay_sec",
+                )
+            )
+        if status in {
+            "new_episode_scheduled",
+            "existing_episode_reused",
+            "completed_episode_reused",
+        }:
+            required.append("scanner_prune_observer_schedule_started_epoch")
+        return tuple(required)
+    if (
+        stage == "scalping_scanner_prune_bbo_observation"
+        and str(fields.get("scanner_prune_observer_status") or "") == "captured"
+    ):
+        return (
+            "scanner_prune_observer_price_source",
+            "scanner_prune_observer_best_bid",
+            "scanner_prune_observer_best_ask",
+            "scanner_prune_observer_quote_age_ms",
+        )
     if (
         stage
         in {
