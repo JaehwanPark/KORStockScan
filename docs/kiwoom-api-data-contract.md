@@ -68,6 +68,51 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-09-02 ka00198 Lookup-Attention And ka10032 Value-Rank Namespace Gate
+
+- Re-verified at `2026-09-02T09:29:05+09:00` against current upstream commit
+  `234560d213acd8871ae344b5481aecd2f30287fa`; inspected
+  `kiwoom/_data/kiwoom_api_spec.json` sections `ka00198` and `ka10032`, plus
+  `examples/국내주식/종목정보/get_domestic_realtime_stock_rank.py`.
+- Official `ka00198` uses `POST /api/dostk/stkinfo` with `api-id=ka00198` and
+  required body field `qry_tp` (`1=1 minute`, `2=10 minutes`, `3=1 hour`,
+  `4=daily cumulative`, `5=30 seconds`). Its response is an attention ranking:
+  `bigd_rank`, signed numeric `rank_chg`, raw `rank_chg_sign`,
+  `past_curr_prc`, `base_comp_chgr`, `prev_base_chgr`, `dt`, and `tm`. It does
+  not provide an absolute lookup count, an institutional-flow measure, an
+  executable BBO, or a request-level KRX/NXT selector.
+- The upstream description and example do not establish one unambiguous
+  neutral spelling for `rank_chg_sign`. The raw sign remains
+  `raw_unverified_not_decision_input`; only the signed numeric `rank_chg` may
+  be interpreted, with raw sign consistency retained as source-quality
+  diagnostics. Officially documented empty `rank_chg` and example-form `0/N`
+  are both valid neutral states. An absent `rank_chg` key, explicit null, or
+  non-numeric non-empty value remains a source-quality gap.
+- Official `ka10032` `now_rank` and `pred_rank` are respectively the current
+  and previous-day trade-value ranks. They are not the current and previous
+  `ka00198` lookup ranks. The normalized contract therefore preserves
+  `RealtimeLookupRankNow/RealtimeLookupRankChange` separately from
+  `ValueRankNow/ValueRankPrevDay`, while legacy `RankNow/RankPrev/RankChange`
+  aliases remain compatibility-only. New attribution or tuning consumers must
+  not join the legacy aliases across those sources.
+- The first lookup-attention prior is a source-only snapshot counterfactual:
+  `50% normalized rank level + 35% positive rank change + 15% new top-20
+  entry`. It requires the namespaced rank/change and a calendar-valid
+  `dt=YYYYMMDD` plus `tm=HHmmss`, records persistence as not yet evaluated, has
+  `runtime_effect=false` and `allowed_runtime_apply=false`, and cannot change
+  scanner sorting, slot ownership, BUY/DROP, thresholds, provider, order
+  price/quantity, cap, broker guards, bot state, or hard safety. A policy
+  candidate requires at least 20 completed outcomes across five trading dates
+  and cost-adjusted EV review; missing fields are source-quality blocked rather
+  than zero-filled.
+- The onboarding contract is `metric_role=source_quality_gate`,
+  `decision_authority=counterfactual_only`,
+  `window_policy=same_day_intraday_light`, and
+  `primary_decision_metric=source_quality_adjusted_ev_pct`. The formula itself
+  is explicitly `not_ev`; snapshot score, eligible coverage, target/adverse
+  first-hit, fill feasibility, and tail loss are secondary diagnostics until
+  the completed-outcome floor is met.
+
 ### 2026-08-31 ka20003 Request-Market Provenance Gate
 
 - Re-verified at `2026-08-31T07:50:26+09:00` against current upstream commit

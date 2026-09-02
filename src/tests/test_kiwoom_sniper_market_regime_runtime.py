@@ -743,6 +743,58 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
             "rank_change_sign_consistency": "consistent",
             "rank_change_score_input": 0,
             "rank_change_score_policy": "positive_signed_rank_delta_only_raw_rank_sign_unverified",
+            "realtime_lookup_rank_now": 7,
+            "realtime_lookup_rank_now_state": "observed",
+            "realtime_lookup_rank_change": -12,
+            "realtime_lookup_rank_change_state": "observed",
+            "realtime_lookup_rank_change_sign": "-",
+            "realtime_lookup_rank_window": "5",
+            "realtime_lookup_source_date": "20260902",
+            "realtime_lookup_source_time": "093015",
+            "realtime_lookup_source_timestamp_state": "observed_valid",
+            "value_rank_now": 2,
+            "value_rank_prev_day": 40,
+            "legacy_rank_namespace_state": ("separated_namespaces_legacy_alias_mixed"),
+            "lookup_attention_metric_role": "source_quality_gate",
+            "lookup_attention_metric_definition": (
+                "per_symbol_ka00198_snapshot_score_0_1="
+                "0.50*clip((61-rank_now)/60,0,1)+"
+                "0.35*clip(max(rank_change,0)/20,0,1)+"
+                "0.15*I(rank_now<=20_and_rank_change>0_and_"
+                "rank_now+rank_change>20);"
+                "exclude_source_quality_blocked;not_ev"
+            ),
+            "lookup_attention_decision_authority": "counterfactual_only",
+            "lookup_attention_window_policy": "same_day_intraday_light",
+            "lookup_attention_sample_floor": (
+                "completed_outcome_count>=20_and_trading_date_count>=5_"
+                "else_hold_sample"
+            ),
+            "lookup_attention_primary_decision_metric": (
+                "source_quality_adjusted_ev_pct"
+            ),
+            "lookup_attention_secondary_diagnostics": (
+                "snapshot_score,eligible_coverage,target_adverse_first_hit,"
+                "fill_feasibility,tail_loss"
+            ),
+            "lookup_attention_source_quality_gate": (
+                "namespaced_ka00198_rank_and_exact_source_dt_tm_required"
+            ),
+            "lookup_attention_forbidden_uses": "scanner_sort_or_slot_change",
+            "lookup_attention_runtime_effect": False,
+            "lookup_attention_allowed_runtime_apply": False,
+            "lookup_attention_actual_order_submitted": False,
+            "lookup_attention_broker_order_forbidden": True,
+            "lookup_attention_formula_version": ("ka00198_snapshot_v1_no_persistence"),
+            "lookup_attention_top20_persistence_state": (
+                "not_evaluated_requires_repeated_exact_source_timestamp"
+            ),
+            "lookup_attention_state": "observed_source_only",
+            "lookup_attention_source_quality_gaps": "",
+            "lookup_attention_snapshot_score": 0.39,
+            "lookup_attention_rank_level_component": 0.9,
+            "lookup_attention_positive_change_component": 0.0,
+            "lookup_attention_new_top20_component": 0.0,
         }
     )
 
@@ -766,6 +818,20 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert attached_target["late_confirmation_recheck_rollback_env"] == (
         "KORSTOCKSCAN_SCALP_SCANNER_LATE_RECHECK_ENABLED=false"
     )
+    assert attached_target["realtime_lookup_rank_now"] == 7
+    assert attached_target["realtime_lookup_rank_change"] == -12
+    assert attached_target["value_rank_now"] == 2
+    assert attached_target["value_rank_prev_day"] == 40
+    assert attached_target["lookup_attention_state"] == "observed_source_only"
+    assert attached_target["lookup_attention_snapshot_score"] == 0.39
+    assert attached_target["lookup_attention_metric_role"] == "source_quality_gate"
+    assert attached_target["lookup_attention_decision_authority"] == (
+        "counterfactual_only"
+    )
+    assert attached_target["lookup_attention_runtime_effect"] is False
+    assert attached_target["lookup_attention_allowed_runtime_apply"] is False
+    assert attached_target["lookup_attention_actual_order_submitted"] is False
+    assert attached_target["lookup_attention_broker_order_forbidden"] is True
     assert (
         attached_target["venue_resolution"]
         == "consistent_explicit:payload.effective_venue,payload.venue"
@@ -801,6 +867,27 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert (
         emitted[-1]["fields"]["rank_change_score_policy"]
         == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
+    )
+    assert emitted[-1]["fields"]["realtime_lookup_rank_now"] == 7
+    assert emitted[-1]["fields"]["realtime_lookup_rank_change"] == -12
+    assert emitted[-1]["fields"]["value_rank_now"] == 2
+    assert emitted[-1]["fields"]["value_rank_prev_day"] == 40
+    assert emitted[-1]["fields"]["lookup_attention_state"] == ("observed_source_only")
+    assert emitted[-1]["fields"]["lookup_attention_snapshot_score"] == 0.39
+    assert emitted[-1]["fields"]["lookup_attention_runtime_effect"] is False
+    assert emitted[-1]["fields"]["lookup_attention_allowed_runtime_apply"] is False
+    assert (
+        emitted[-1]["fields"]["lookup_attention_decision_authority"]
+        == "counterfactual_only"
+    )
+    assert emitted[-1]["fields"]["lookup_attention_metric_role"] == (
+        "source_quality_gate"
+    )
+    assert emitted[-1]["fields"]["lookup_attention_metric_definition"].endswith(
+        ";not_ev"
+    )
+    assert (
+        "tail_loss" in emitted[-1]["fields"]["lookup_attention_secondary_diagnostics"]
     )
 
 
@@ -1805,6 +1892,73 @@ def test_scanner_runtime_target_event_fields_preserve_explicit_venue_provenance(
         "consistent_explicit:payload.effective_venue,"
         "target.tp1_context.rising_missed_effective_venue"
     )
+
+
+def test_scanner_runtime_context_clears_stale_lookup_attention_generation():
+    existing = {
+        "realtime_lookup_source_date": "20260902",
+        "realtime_lookup_source_time": "093015",
+        "lookup_attention_state": "observed_source_only",
+        "lookup_attention_source_quality_gaps": "",
+        "lookup_attention_snapshot_score": 0.66,
+    }
+    updates = kiwoom_sniper_v2._scanner_runtime_context_updates(
+        {
+            "realtime_lookup_source_date": "",
+            "realtime_lookup_source_time": "",
+            "lookup_attention_state": "source_quality_blocked",
+            "lookup_attention_source_quality_gaps": (
+                "realtime_lookup_source_date,realtime_lookup_source_time"
+            ),
+            "lookup_attention_snapshot_score": None,
+            "lookup_attention_runtime_effect": "false",
+            "lookup_attention_allowed_runtime_apply": "false",
+            "lookup_attention_actual_order_submitted": "false",
+            "lookup_attention_broker_order_forbidden": "true",
+        }
+    )
+
+    assert updates["realtime_lookup_source_date"] == ""
+    assert updates["realtime_lookup_source_time"] == ""
+    assert updates["lookup_attention_snapshot_score"] is None
+    assert updates["lookup_attention_runtime_effect"] is False
+    assert updates["lookup_attention_allowed_runtime_apply"] is False
+    assert updates["lookup_attention_actual_order_submitted"] is False
+    assert updates["lookup_attention_broker_order_forbidden"] is True
+
+    merged_updates, _fields = (
+        kiwoom_sniper_v2._scanner_merge_context_preserving_positive_delta(
+            existing, updates, incoming_promotion_id="SCANPROM-new"
+        )
+    )
+    existing.update(merged_updates)
+
+    assert existing["realtime_lookup_source_date"] == ""
+    assert existing["realtime_lookup_source_time"] == ""
+    assert existing["lookup_attention_state"] == "source_quality_blocked"
+    assert existing["lookup_attention_source_quality_gaps"] == (
+        "realtime_lookup_source_date,realtime_lookup_source_time"
+    )
+    assert existing["lookup_attention_snapshot_score"] is None
+
+
+def test_scanner_runtime_target_event_normalizes_lookup_attention_bool_strings():
+    fields = kiwoom_sniper_v2._scanner_runtime_target_event_fields(
+        {
+            "code": "005930",
+            "lookup_attention_runtime_effect": "false",
+            "lookup_attention_allowed_runtime_apply": "false",
+            "lookup_attention_actual_order_submitted": "false",
+            "lookup_attention_broker_order_forbidden": "true",
+        },
+        outcome="attached",
+        reason="scanner_runtime_target_attach",
+    )
+
+    assert fields["lookup_attention_runtime_effect"] is False
+    assert fields["lookup_attention_allowed_runtime_apply"] is False
+    assert fields["lookup_attention_actual_order_submitted"] is False
+    assert fields["lookup_attention_broker_order_forbidden"] is True
 
 
 def test_scanner_runtime_target_event_fields_fail_closed_on_venue_conflict():

@@ -234,6 +234,41 @@ except ImportError:
 bind_condition_dependencies(escape_markdown_fn=escape_markdown)
 
 SCANNER_UNDER_10000_PRIORITY_PRICE_CEILING = 10000
+SCANNER_LOOKUP_ATTENTION_CONTEXT_KEYS = (
+    "realtime_lookup_rank_now",
+    "realtime_lookup_rank_now_state",
+    "realtime_lookup_rank_change",
+    "realtime_lookup_rank_change_state",
+    "realtime_lookup_rank_change_sign",
+    "realtime_lookup_rank_window",
+    "realtime_lookup_source_date",
+    "realtime_lookup_source_time",
+    "realtime_lookup_source_timestamp_state",
+    "value_rank_now",
+    "value_rank_prev_day",
+    "legacy_rank_namespace_state",
+    "lookup_attention_metric_role",
+    "lookup_attention_metric_definition",
+    "lookup_attention_decision_authority",
+    "lookup_attention_window_policy",
+    "lookup_attention_sample_floor",
+    "lookup_attention_primary_decision_metric",
+    "lookup_attention_secondary_diagnostics",
+    "lookup_attention_source_quality_gate",
+    "lookup_attention_forbidden_uses",
+    "lookup_attention_runtime_effect",
+    "lookup_attention_allowed_runtime_apply",
+    "lookup_attention_actual_order_submitted",
+    "lookup_attention_broker_order_forbidden",
+    "lookup_attention_formula_version",
+    "lookup_attention_top20_persistence_state",
+    "lookup_attention_state",
+    "lookup_attention_source_quality_gaps",
+    "lookup_attention_snapshot_score",
+    "lookup_attention_rank_level_component",
+    "lookup_attention_positive_change_component",
+    "lookup_attention_new_top20_component",
+)
 
 
 def resolve_runtime_role() -> str:
@@ -2433,6 +2468,97 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         "rank_change_score_policy": payload.get(
             "rank_change_score_policy",
             "positive_signed_rank_delta_only_raw_rank_sign_unverified",
+        ),
+        "realtime_lookup_rank_now": payload.get("realtime_lookup_rank_now"),
+        "realtime_lookup_rank_now_state": payload.get(
+            "realtime_lookup_rank_now_state", "not_applicable"
+        ),
+        "realtime_lookup_rank_change": payload.get("realtime_lookup_rank_change"),
+        "realtime_lookup_rank_change_state": payload.get(
+            "realtime_lookup_rank_change_state", "not_applicable"
+        ),
+        "realtime_lookup_rank_change_sign": payload.get(
+            "realtime_lookup_rank_change_sign", "not_applicable"
+        ),
+        "realtime_lookup_rank_window": payload.get(
+            "realtime_lookup_rank_window", "not_applicable"
+        ),
+        "realtime_lookup_source_date": payload.get(
+            "realtime_lookup_source_date", "not_applicable"
+        ),
+        "realtime_lookup_source_time": payload.get(
+            "realtime_lookup_source_time", "not_applicable"
+        ),
+        "realtime_lookup_source_timestamp_state": payload.get(
+            "realtime_lookup_source_timestamp_state", "not_applicable"
+        ),
+        "value_rank_now": payload.get("value_rank_now"),
+        "value_rank_prev_day": payload.get("value_rank_prev_day"),
+        "legacy_rank_namespace_state": payload.get(
+            "legacy_rank_namespace_state", "not_applicable"
+        ),
+        "lookup_attention_metric_role": payload.get(
+            "lookup_attention_metric_role", "not_applicable"
+        ),
+        "lookup_attention_metric_definition": payload.get(
+            "lookup_attention_metric_definition", "not_applicable"
+        ),
+        "lookup_attention_decision_authority": payload.get(
+            "lookup_attention_decision_authority", "not_applicable"
+        ),
+        "lookup_attention_window_policy": payload.get(
+            "lookup_attention_window_policy", "not_applicable"
+        ),
+        "lookup_attention_sample_floor": payload.get(
+            "lookup_attention_sample_floor", "not_applicable"
+        ),
+        "lookup_attention_primary_decision_metric": payload.get(
+            "lookup_attention_primary_decision_metric", "not_applicable"
+        ),
+        "lookup_attention_secondary_diagnostics": payload.get(
+            "lookup_attention_secondary_diagnostics", "not_applicable"
+        ),
+        "lookup_attention_source_quality_gate": payload.get(
+            "lookup_attention_source_quality_gate", "not_applicable"
+        ),
+        "lookup_attention_forbidden_uses": payload.get(
+            "lookup_attention_forbidden_uses", "not_applicable"
+        ),
+        "lookup_attention_runtime_effect": _env_bool_from_value(
+            payload.get("lookup_attention_runtime_effect"), False
+        ),
+        "lookup_attention_allowed_runtime_apply": _env_bool_from_value(
+            payload.get("lookup_attention_allowed_runtime_apply"), False
+        ),
+        "lookup_attention_actual_order_submitted": _env_bool_from_value(
+            payload.get("lookup_attention_actual_order_submitted"), False
+        ),
+        "lookup_attention_broker_order_forbidden": _env_bool_from_value(
+            payload.get("lookup_attention_broker_order_forbidden"), True
+        ),
+        "lookup_attention_formula_version": payload.get(
+            "lookup_attention_formula_version", "not_applicable"
+        ),
+        "lookup_attention_top20_persistence_state": payload.get(
+            "lookup_attention_top20_persistence_state", "not_applicable"
+        ),
+        "lookup_attention_state": payload.get(
+            "lookup_attention_state", "not_applicable"
+        ),
+        "lookup_attention_source_quality_gaps": payload.get(
+            "lookup_attention_source_quality_gaps", ""
+        ),
+        "lookup_attention_snapshot_score": payload.get(
+            "lookup_attention_snapshot_score"
+        ),
+        "lookup_attention_rank_level_component": payload.get(
+            "lookup_attention_rank_level_component"
+        ),
+        "lookup_attention_positive_change_component": payload.get(
+            "lookup_attention_positive_change_component"
+        ),
+        "lookup_attention_new_top20_component": payload.get(
+            "lookup_attention_new_top20_component"
         ),
         "current_price_observed": payload.get("current_price_observed")
         or payload.get("buy_price")
@@ -7939,6 +8065,7 @@ def _scanner_runtime_context_updates(payload):
         "intraday_high_price",
         "distance_from_intraday_high_pct",
         "negative_display_rebound",
+        *SCANNER_LOOKUP_ATTENTION_CONTEXT_KEYS,
         "scanner_watch_budget_owner",
         "scanner_watch_budget_owner_source",
         "scanner_scan_generation_id",
@@ -7978,6 +8105,22 @@ def _scanner_runtime_context_updates(payload):
         "limit_down_overnight_allowed",
         "limit_down_normal_scalping_guards_required",
     ):
+        if key in SCANNER_LOOKUP_ATTENTION_CONTEXT_KEYS:
+            if key in payload:
+                # These fields are generation-scoped provenance. Preserve an
+                # explicit None/empty value so a later promotion cannot retain
+                # a previous generation's score, timestamp, or gap state.
+                if key in {
+                    "lookup_attention_runtime_effect",
+                    "lookup_attention_allowed_runtime_apply",
+                    "lookup_attention_actual_order_submitted",
+                }:
+                    updates[key] = _env_bool_from_value(payload.get(key), False)
+                elif key == "lookup_attention_broker_order_forbidden":
+                    updates[key] = _env_bool_from_value(payload.get(key), True)
+                else:
+                    updates[key] = payload.get(key)
+            continue
         value = payload.get(key)
         if value not in (None, ""):
             updates[key] = value

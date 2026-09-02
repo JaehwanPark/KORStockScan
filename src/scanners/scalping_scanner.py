@@ -83,6 +83,13 @@ BREAKOUT_CONFIRMATION_SOURCES = {
     NEW_HIGH_CONFIRMATION_SOURCE,
 }
 RANK_CHANGE_SIGN_AUTHORITY_DEFAULT = "raw_unverified_not_decision_input"
+LOOKUP_ATTENTION_PRIOR_FORMULA_VERSION = "ka00198_snapshot_v1_no_persistence"
+LOOKUP_ATTENTION_PRIOR_FORBIDDEN_USES = (
+    "scanner_sort_or_slot_change,buy_or_drop_decision,threshold_mutation,"
+    "provider_route_change,order_price_or_quantity_change,cap_release,"
+    "broker_guard_bypass,stale_or_conflict_bypass,hard_safety_bypass,"
+    "live_or_sim_auto_promotion_without_completed_ev_review"
+)
 SCANNER_PROMOTION_POLICY_VERSION = (
     "scanner_priority_v7_20260730_market_gainer_reservation"
 )
@@ -1230,6 +1237,77 @@ def _rank_change_sign_event_diagnostics(target, source_signature):
     )
 
 
+def _lookup_attention_prior_observation(target):
+    """Build a source-only ka00198 attention prior without changing ranking."""
+    target = target or {}
+    source_set = set(_source_signature(target))
+    if "REALTIME_RANK_START" not in source_set:
+        return {
+            "lookup_attention_state": "not_applicable",
+            "lookup_attention_source_quality_gaps": "",
+            "lookup_attention_snapshot_score": None,
+            "lookup_attention_rank_level_component": None,
+            "lookup_attention_positive_change_component": None,
+            "lookup_attention_new_top20_component": None,
+        }
+
+    rank_now_raw = target.get("RealtimeLookupRankNow")
+    rank_change_raw = target.get("RealtimeLookupRankChange")
+    rank_now_state = str(
+        target.get("RealtimeLookupRankNowState")
+        or ("observed" if rank_now_raw not in (None, "") else "missing")
+    ).strip()
+    rank_change_state = str(
+        target.get("RealtimeLookupRankChangeState")
+        or ("observed" if rank_change_raw not in (None, "") else "missing")
+    ).strip()
+    source_date = str(target.get("RealtimeLookupSourceDate") or "").strip()
+    source_time = str(target.get("RealtimeLookupSourceTime") or "").strip()
+    source_timestamp_state = str(
+        target.get("RealtimeLookupSourceTimestampState") or "missing"
+    ).strip()
+    rank_now = _safe_int(rank_now_raw)
+    rank_change = _safe_int(rank_change_raw)
+    missing = []
+    if rank_now_state != "observed" or not 1 <= rank_now <= 60:
+        missing.append("realtime_lookup_rank_now")
+    if rank_change_state not in {"observed", "observed_neutral_empty"}:
+        missing.append("realtime_lookup_rank_change")
+    if not source_date:
+        missing.append("realtime_lookup_source_date")
+    if not source_time:
+        missing.append("realtime_lookup_source_time")
+    if source_date and source_time and source_timestamp_state != "observed_valid":
+        missing.append("realtime_lookup_source_timestamp_invalid")
+    if missing:
+        return {
+            "lookup_attention_state": "source_quality_blocked",
+            "lookup_attention_source_quality_gaps": ",".join(missing),
+            "lookup_attention_snapshot_score": None,
+            "lookup_attention_rank_level_component": None,
+            "lookup_attention_positive_change_component": None,
+            "lookup_attention_new_top20_component": None,
+        }
+
+    rank_level = _bounded((61.0 - rank_now) / 60.0, 0.0, 1.0)
+    positive_change = _bounded(max(0, rank_change) / 20.0, 0.0, 1.0)
+    derived_previous_rank = rank_now + rank_change
+    new_top20 = (
+        1.0
+        if rank_now <= 20 and rank_change > 0 and derived_previous_rank > 20
+        else 0.0
+    )
+    snapshot_score = (0.50 * rank_level) + (0.35 * positive_change) + (0.15 * new_top20)
+    return {
+        "lookup_attention_state": "observed_source_only",
+        "lookup_attention_source_quality_gaps": "",
+        "lookup_attention_snapshot_score": round(snapshot_score, 6),
+        "lookup_attention_rank_level_component": round(rank_level, 6),
+        "lookup_attention_positive_change_component": round(positive_change, 6),
+        "lookup_attention_new_top20_component": new_top20,
+    }
+
+
 ZERO_CONTEXT_FORBIDDEN_USES = (
     "threshold_mutation,provider_route_change,order_price_relaxation,"
     "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
@@ -2190,6 +2268,12 @@ def _merge_candidate(candidate_pool, raw_target, source):
         if raw_flu_present:
             current["ValueFluRate"] = raw_flu_rate
             current.setdefault("DayFluRate", raw_flu_rate)
+        current["ValueRankNow"] = _safe_positive_int(
+            raw_target.get("ValueRankNow", raw_target.get("RankNow"))
+        )
+        current["ValueRankPrevDay"] = _safe_positive_int(
+            raw_target.get("ValueRankPrevDay", raw_target.get("RankPrev"))
+        )
     elif source == "REALTIME_RANK_START":
         if raw_target.get("RealtimeRankFluRate") not in (None, ""):
             current["RealtimeRankFluRate"] = _safe_float(
@@ -2199,6 +2283,74 @@ def _merge_candidate(candidate_pool, raw_target, source):
             current["RealtimeRankFluRate"] = raw_flu_rate
         current["RealtimePrevBaseChange"] = _safe_float(
             raw_target.get("RealtimePrevBaseChange")
+        )
+        current["RealtimeLookupRankNow"] = _safe_positive_int(
+            raw_target.get("RealtimeLookupRankNow", raw_target.get("RankNow"))
+        )
+        current["RealtimeLookupRankNowState"] = str(
+            raw_target.get("RealtimeLookupRankNowState")
+            or (
+                "observed"
+                if raw_target.get("RealtimeLookupRankNow", raw_target.get("RankNow"))
+                not in (None, "")
+                else "missing"
+            )
+        ).strip()
+        current["RealtimeLookupRankChange"] = _safe_int(
+            raw_target.get("RealtimeLookupRankChange", raw_target.get("RankChange"))
+        )
+        current["RealtimeLookupRankChangeState"] = str(
+            raw_target.get("RealtimeLookupRankChangeState")
+            or (
+                "observed"
+                if raw_target.get(
+                    "RealtimeLookupRankChange", raw_target.get("RankChange")
+                )
+                not in (None, "")
+                else "missing"
+            )
+        ).strip()
+        current["RealtimeLookupRankChangeSign"] = str(
+            raw_target.get(
+                "RealtimeLookupRankChangeSign", raw_target.get("RankChangeSign")
+            )
+            or ""
+        ).strip()
+        current["RealtimeLookupRankChangeSignAuthority"] = (
+            str(
+                raw_target.get("RealtimeLookupRankChangeSignAuthority")
+                or raw_target.get("RankChangeSignAuthority")
+                or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT
+            ).strip()
+            or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT
+        )
+        current["RealtimeLookupRankChangeSignState"] = str(
+            raw_target.get("RealtimeLookupRankChangeSignState")
+            or raw_target.get("RankChangeSignState")
+            or ""
+        ).strip()
+        current["RealtimeLookupRankChangeSignConsistency"] = str(
+            raw_target.get("RealtimeLookupRankChangeSignConsistency")
+            or raw_target.get("RankChangeSignConsistency")
+            or ""
+        ).strip()
+        current["RealtimeLookupRankWindow"] = str(
+            raw_target.get(
+                "RealtimeLookupRankWindow", raw_target.get("RealtimeRankWindow")
+            )
+            or ""
+        ).strip()
+        current["RealtimeLookupSourceDate"] = str(
+            raw_target.get("RealtimeLookupSourceDate") or ""
+        ).strip()
+        current["RealtimeLookupSourceTime"] = str(
+            raw_target.get("RealtimeLookupSourceTime") or ""
+        ).strip()
+        current["RealtimeLookupSourceTimestampState"] = str(
+            raw_target.get("RealtimeLookupSourceTimestampState") or "missing"
+        ).strip()
+        current["RealtimeLookupPastPrice"] = _safe_positive_int(
+            raw_target.get("RealtimeLookupPastPrice", raw_target.get("Price"))
         )
         current["RankChange"] = _safe_int(raw_target.get("RankChange"))
         current["RankChangeSign"] = str(raw_target.get("RankChangeSign") or "").strip()
@@ -3453,6 +3605,15 @@ def _scanner_event_fields(target, source_guard=None):
     is_low_rebound_source = LOW_REBOUND_RISING_MISSED_SOURCE in set(
         _source_signature(target)
     )
+    lookup_attention = _lookup_attention_prior_observation(target)
+    source_set = set(_source_signature(target))
+    legacy_rank_namespace_state = "not_applicable"
+    if "REALTIME_RANK_START" in source_set and "VALUE_TOP" in source_set:
+        legacy_rank_namespace_state = "separated_namespaces_legacy_alias_mixed"
+    elif "REALTIME_RANK_START" in source_set:
+        legacy_rank_namespace_state = "lookup_rank_only"
+    elif "VALUE_TOP" in source_set:
+        legacy_rank_namespace_state = "value_rank_only"
     return {
         "metric_role": "source_quality_gate",
         "decision_authority": "real_scalping_scanner_source_guard_only",
@@ -3491,6 +3652,70 @@ def _scanner_event_fields(target, source_guard=None):
         or rank_sign_diagnostics["RankChangeSignConsistency"],
         "rank_change_score_input": max(0, _safe_int(target.get("RankChange"))),
         "rank_change_score_policy": "positive_signed_rank_delta_only_raw_rank_sign_unverified",
+        "realtime_lookup_rank_now": (
+            _safe_positive_int(target.get("RealtimeLookupRankNow"))
+            if "REALTIME_RANK_START" in source_set
+            else None
+        ),
+        "realtime_lookup_rank_now_state": target.get("RealtimeLookupRankNowState")
+        or ("missing" if "REALTIME_RANK_START" in source_set else "not_applicable"),
+        "realtime_lookup_rank_change": (
+            _safe_int(target.get("RealtimeLookupRankChange"))
+            if "REALTIME_RANK_START" in source_set
+            else None
+        ),
+        "realtime_lookup_rank_change_state": target.get("RealtimeLookupRankChangeState")
+        or ("missing" if "REALTIME_RANK_START" in source_set else "not_applicable"),
+        "realtime_lookup_rank_change_sign": target.get("RealtimeLookupRankChangeSign"),
+        "realtime_lookup_rank_window": target.get("RealtimeLookupRankWindow") or "",
+        "realtime_lookup_source_date": target.get("RealtimeLookupSourceDate") or "",
+        "realtime_lookup_source_time": target.get("RealtimeLookupSourceTime") or "",
+        "realtime_lookup_source_timestamp_state": target.get(
+            "RealtimeLookupSourceTimestampState"
+        )
+        or ("missing" if "REALTIME_RANK_START" in source_set else "not_applicable"),
+        "value_rank_now": (
+            _safe_positive_int(target.get("ValueRankNow"))
+            if "VALUE_TOP" in source_set
+            else None
+        ),
+        "value_rank_prev_day": (
+            _safe_positive_int(target.get("ValueRankPrevDay"))
+            if "VALUE_TOP" in source_set
+            else None
+        ),
+        "legacy_rank_namespace_state": legacy_rank_namespace_state,
+        "lookup_attention_metric_role": "source_quality_gate",
+        "lookup_attention_metric_definition": (
+            "per_symbol_ka00198_snapshot_score_0_1="
+            "0.50*clip((61-rank_now)/60,0,1)+"
+            "0.35*clip(max(rank_change,0)/20,0,1)+"
+            "0.15*I(rank_now<=20_and_rank_change>0_and_"
+            "rank_now+rank_change>20);exclude_source_quality_blocked;not_ev"
+        ),
+        "lookup_attention_decision_authority": "counterfactual_only",
+        "lookup_attention_window_policy": "same_day_intraday_light",
+        "lookup_attention_sample_floor": (
+            "completed_outcome_count>=20_and_trading_date_count>=5_else_hold_sample"
+        ),
+        "lookup_attention_primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "lookup_attention_secondary_diagnostics": (
+            "snapshot_score,eligible_coverage,target_adverse_first_hit,"
+            "fill_feasibility,tail_loss"
+        ),
+        "lookup_attention_source_quality_gate": (
+            "namespaced_ka00198_rank_and_exact_source_dt_tm_required"
+        ),
+        "lookup_attention_forbidden_uses": LOOKUP_ATTENTION_PRIOR_FORBIDDEN_USES,
+        "lookup_attention_runtime_effect": False,
+        "lookup_attention_allowed_runtime_apply": False,
+        "lookup_attention_actual_order_submitted": False,
+        "lookup_attention_broker_order_forbidden": True,
+        "lookup_attention_formula_version": LOOKUP_ATTENTION_PRIOR_FORMULA_VERSION,
+        "lookup_attention_top20_persistence_state": (
+            "not_evaluated_requires_repeated_exact_source_timestamp"
+        ),
+        **lookup_attention,
         "jump_rate": _safe_float(target.get("JumpRate")),
         "volume_surge_rate": _safe_float(
             target.get("VolumeSurgeRate", target.get("SpikeRate"))
@@ -3888,6 +4113,79 @@ def _scanner_runtime_target_payload(
         "rank_change_sign_consistency": fields.get("rank_change_sign_consistency"),
         "rank_change_score_input": fields.get("rank_change_score_input"),
         "rank_change_score_policy": fields.get("rank_change_score_policy"),
+        "realtime_lookup_rank_now": fields.get("realtime_lookup_rank_now"),
+        "realtime_lookup_rank_now_state": fields.get("realtime_lookup_rank_now_state"),
+        "realtime_lookup_rank_change": fields.get("realtime_lookup_rank_change"),
+        "realtime_lookup_rank_change_state": fields.get(
+            "realtime_lookup_rank_change_state"
+        ),
+        "realtime_lookup_rank_change_sign": fields.get(
+            "realtime_lookup_rank_change_sign"
+        ),
+        "realtime_lookup_rank_window": fields.get("realtime_lookup_rank_window"),
+        "realtime_lookup_source_date": fields.get("realtime_lookup_source_date"),
+        "realtime_lookup_source_time": fields.get("realtime_lookup_source_time"),
+        "realtime_lookup_source_timestamp_state": fields.get(
+            "realtime_lookup_source_timestamp_state"
+        ),
+        "value_rank_now": fields.get("value_rank_now"),
+        "value_rank_prev_day": fields.get("value_rank_prev_day"),
+        "legacy_rank_namespace_state": fields.get("legacy_rank_namespace_state"),
+        "lookup_attention_metric_role": fields.get("lookup_attention_metric_role"),
+        "lookup_attention_metric_definition": fields.get(
+            "lookup_attention_metric_definition"
+        ),
+        "lookup_attention_decision_authority": fields.get(
+            "lookup_attention_decision_authority"
+        ),
+        "lookup_attention_window_policy": fields.get("lookup_attention_window_policy"),
+        "lookup_attention_sample_floor": fields.get("lookup_attention_sample_floor"),
+        "lookup_attention_primary_decision_metric": fields.get(
+            "lookup_attention_primary_decision_metric"
+        ),
+        "lookup_attention_secondary_diagnostics": fields.get(
+            "lookup_attention_secondary_diagnostics"
+        ),
+        "lookup_attention_source_quality_gate": fields.get(
+            "lookup_attention_source_quality_gate"
+        ),
+        "lookup_attention_forbidden_uses": fields.get(
+            "lookup_attention_forbidden_uses"
+        ),
+        "lookup_attention_runtime_effect": fields.get(
+            "lookup_attention_runtime_effect"
+        ),
+        "lookup_attention_allowed_runtime_apply": fields.get(
+            "lookup_attention_allowed_runtime_apply"
+        ),
+        "lookup_attention_actual_order_submitted": fields.get(
+            "lookup_attention_actual_order_submitted"
+        ),
+        "lookup_attention_broker_order_forbidden": fields.get(
+            "lookup_attention_broker_order_forbidden"
+        ),
+        "lookup_attention_formula_version": fields.get(
+            "lookup_attention_formula_version"
+        ),
+        "lookup_attention_top20_persistence_state": fields.get(
+            "lookup_attention_top20_persistence_state"
+        ),
+        "lookup_attention_state": fields.get("lookup_attention_state"),
+        "lookup_attention_source_quality_gaps": fields.get(
+            "lookup_attention_source_quality_gaps"
+        ),
+        "lookup_attention_snapshot_score": fields.get(
+            "lookup_attention_snapshot_score"
+        ),
+        "lookup_attention_rank_level_component": fields.get(
+            "lookup_attention_rank_level_component"
+        ),
+        "lookup_attention_positive_change_component": fields.get(
+            "lookup_attention_positive_change_component"
+        ),
+        "lookup_attention_new_top20_component": fields.get(
+            "lookup_attention_new_top20_component"
+        ),
         "rising_missed_lineage": fields.get("rising_missed_lineage") or "",
         "scanner_watch_budget_owner": fields.get("scanner_watch_budget_owner")
         or GENERAL_SCALPING,

@@ -3264,6 +3264,8 @@ def test_ka00198_realtime_rank_start_is_normalized(monkeypatch):
                         "bigd_rank": "7",
                         "rank_chg": "12",
                         "rank_chg_sign": "+",
+                        "dt": "20260902",
+                        "tm": "093015",
                     }
                 ]
             }
@@ -3282,6 +3284,21 @@ def test_ka00198_realtime_rank_start_is_normalized(monkeypatch):
             "FluRate": 1.25,
             "RealtimeRankFluRate": 1.25,
             "RealtimePrevBaseChange": 0.35,
+            "RealtimeLookupRankNow": 7,
+            "RealtimeLookupRankNowState": "observed",
+            "RealtimeLookupRankChange": 12,
+            "RealtimeLookupRankChangeState": "observed",
+            "RealtimeLookupRankChangeSign": "+",
+            "RealtimeLookupRankChangeSignAuthority": (
+                "raw_unverified_not_decision_input"
+            ),
+            "RealtimeLookupRankChangeSignState": "positive",
+            "RealtimeLookupRankChangeSignConsistency": "consistent",
+            "RealtimeLookupRankWindow": "5",
+            "RealtimeLookupSourceDate": "20260902",
+            "RealtimeLookupSourceTime": "093015",
+            "RealtimeLookupSourceTimestampState": "observed_valid",
+            "RealtimeLookupPastPrice": 72000,
             "RankNow": 7,
             "RankChange": 12,
             "RankChangeSign": "+",
@@ -3302,6 +3319,15 @@ def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch
         "FluRate": 1.25,
         "RealtimeRankFluRate": 1.25,
         "RealtimePrevBaseChange": 0.35,
+        "RealtimeLookupRankNow": 7,
+        "RealtimeLookupRankChange": 12,
+        "RealtimeLookupRankChangeSign": "+",
+        "RealtimeLookupRankChangeSignAuthority": ("raw_unverified_not_decision_input"),
+        "RealtimeLookupRankWindow": "5",
+        "RealtimeLookupSourceDate": "20260902",
+        "RealtimeLookupSourceTime": "093015",
+        "RealtimeLookupSourceTimestampState": "observed_valid",
+        "RealtimeLookupPastPrice": 72000,
         "RankNow": 7,
         "RankChange": 12,
         "RankChangeSign": "+",
@@ -3330,6 +3356,23 @@ def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch
     assert fields["rank_change_sign_authority"] == "raw_unverified_not_decision_input"
     assert fields["rank_change_sign_state"] == "positive"
     assert fields["rank_change_sign_consistency"] == "consistent"
+    assert fields["realtime_lookup_rank_now"] == 7
+    assert fields["realtime_lookup_rank_now_state"] == "observed"
+    assert fields["realtime_lookup_rank_change"] == 12
+    assert fields["realtime_lookup_rank_change_state"] == "observed"
+    assert fields["realtime_lookup_source_date"] == "20260902"
+    assert fields["realtime_lookup_source_time"] == "093015"
+    assert fields["lookup_attention_state"] == "observed_source_only"
+    assert fields["lookup_attention_snapshot_score"] == 0.66
+    assert fields["lookup_attention_new_top20_component"] == 0.0
+    assert fields["lookup_attention_runtime_effect"] is False
+    assert fields["lookup_attention_metric_role"] == "source_quality_gate"
+    assert fields["lookup_attention_metric_definition"].endswith(
+        "exclude_source_quality_blocked;not_ev"
+    )
+    assert fields["lookup_attention_decision_authority"] == "counterfactual_only"
+    assert fields["lookup_attention_window_policy"] == "same_day_intraday_light"
+    assert "snapshot_score" in fields["lookup_attention_secondary_diagnostics"]
 
     payload = scalping_scanner._scanner_runtime_target_payload(
         merged,
@@ -3347,6 +3390,19 @@ def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch
     assert payload["rank_change_sign_state"] == "positive"
     assert payload["rank_change_sign_consistency"] == "consistent"
     assert payload["rank_change_score_input"] == 12
+    assert payload["realtime_lookup_rank_now"] == 7
+    assert payload["realtime_lookup_rank_now_state"] == "observed"
+    assert payload["realtime_lookup_rank_change"] == 12
+    assert payload["realtime_lookup_rank_change_state"] == "observed"
+    assert payload["lookup_attention_snapshot_score"] == 0.66
+    assert payload["lookup_attention_metric_role"] == "source_quality_gate"
+    assert payload["lookup_attention_decision_authority"] == "counterfactual_only"
+    assert payload["lookup_attention_metric_definition"].endswith(";not_ev")
+    assert "tail_loss" in payload["lookup_attention_secondary_diagnostics"]
+    assert payload["lookup_attention_runtime_effect"] is False
+    assert payload["lookup_attention_allowed_runtime_apply"] is False
+    assert payload["lookup_attention_actual_order_submitted"] is False
+    assert payload["lookup_attention_broker_order_forbidden"] is True
     assert (
         payload["rank_change_score_policy"]
         == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
@@ -3354,6 +3410,251 @@ def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch
     assert payload["effective_venue"] == "KRX"
     assert payload["venue_resolution"] == "scanner_session_clock:krx_regular"
     assert payload["market_session_bucket"] == "krx_regular"
+
+
+def test_rank_sources_keep_namespaces_separate_without_changing_legacy_ranking():
+    candidate_pool = {}
+    realtime_row = {
+        "Code": "005930",
+        "Name": "삼성전자",
+        "Price": 72000,
+        "FluRate": 1.25,
+        "RealtimeLookupRankNow": 7,
+        "RealtimeLookupRankChange": 12,
+        "RealtimeLookupRankChangeSign": "+",
+        "RealtimeLookupRankWindow": "5",
+        "RealtimeLookupSourceDate": "20260902",
+        "RealtimeLookupSourceTime": "093015",
+        "RealtimeLookupSourceTimestampState": "observed_valid",
+        "RankNow": 7,
+        "RankChange": 12,
+        "RankChangeSign": "+",
+    }
+    value_row = {
+        "Code": "005930",
+        "Name": "삼성전자",
+        "Price": 72000,
+        "FluRate": 1.25,
+        "ValueRankNow": 2,
+        "ValueRankPrevDay": 40,
+        "RankNow": 2,
+        "RankPrev": 40,
+    }
+
+    scalping_scanner._merge_candidate(
+        candidate_pool, realtime_row, "REALTIME_RANK_START"
+    )
+    score_before_value_merge = candidate_pool["005930"]["RisingStartScore"]
+    scalping_scanner._merge_candidate(candidate_pool, value_row, "VALUE_TOP")
+
+    merged = candidate_pool["005930"]
+    assert merged["RealtimeLookupRankNow"] == 7
+    assert merged["RealtimeLookupRankChange"] == 12
+    assert merged["ValueRankNow"] == 2
+    assert merged["ValueRankPrevDay"] == 40
+    assert merged["RankNow"] == 2
+    assert merged["RankPrev"] == 40
+    assert merged["RisingStartScore"] > score_before_value_merge
+
+    fields = scalping_scanner._scanner_event_fields(merged)
+    assert fields["legacy_rank_namespace_state"] == (
+        "separated_namespaces_legacy_alias_mixed"
+    )
+    assert fields["realtime_lookup_rank_now"] == 7
+    assert fields["value_rank_now"] == 2
+    assert fields["value_rank_prev_day"] == 40
+    assert fields["lookup_attention_snapshot_score"] == 0.66
+
+    without_source_only_fields = {
+        key: value
+        for key, value in merged.items()
+        if not key.startswith("RealtimeLookup") and not key.startswith("ValueRank")
+    }
+    assert scalping_scanner._rising_start_score(merged) == (
+        scalping_scanner._rising_start_score(without_source_only_fields)
+    )
+    assert scalping_scanner._scanner_priority_profile(merged) == (
+        scalping_scanner._scanner_priority_profile(without_source_only_fields)
+    )
+
+
+def test_lookup_attention_new_top20_requires_derived_previous_rank_outside_top20():
+    observed = scalping_scanner._lookup_attention_prior_observation(
+        {
+            "SourceSet": {"REALTIME_RANK_START"},
+            "RealtimeLookupRankNow": 15,
+            "RealtimeLookupRankNowState": "observed",
+            "RealtimeLookupRankChange": 10,
+            "RealtimeLookupRankChangeState": "observed",
+            "RealtimeLookupSourceDate": "20260902",
+            "RealtimeLookupSourceTime": "093015",
+            "RealtimeLookupSourceTimestampState": "observed_valid",
+        }
+    )
+
+    assert observed["lookup_attention_state"] == "observed_source_only"
+    assert observed["lookup_attention_new_top20_component"] == 1.0
+    assert observed["lookup_attention_snapshot_score"] == 0.708333
+
+
+def test_lookup_attention_prior_is_blocked_when_exact_source_time_is_missing():
+    candidate_pool = {}
+    scalping_scanner._merge_candidate(
+        candidate_pool,
+        {
+            "Code": "005930",
+            "Name": "삼성전자",
+            "Price": 72000,
+            "RankNow": 7,
+            "RankChange": 12,
+            "RankChangeSign": "+",
+        },
+        "REALTIME_RANK_START",
+    )
+
+    fields = scalping_scanner._scanner_event_fields(candidate_pool["005930"])
+
+    assert fields["lookup_attention_state"] == "source_quality_blocked"
+    assert fields["lookup_attention_snapshot_score"] is None
+    assert fields["lookup_attention_source_quality_gaps"] == (
+        "realtime_lookup_source_date,realtime_lookup_source_time"
+    )
+    assert fields["lookup_attention_top20_persistence_state"] == (
+        "not_evaluated_requires_repeated_exact_source_timestamp"
+    )
+
+
+def test_lookup_attention_official_empty_rank_change_is_valid_neutral(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "item_inq_rank": [
+                    {
+                        "stk_cd": "005930",
+                        "stk_nm": "삼성전자",
+                        "past_curr_prc": "+72000",
+                        "bigd_rank": "7",
+                        "rank_chg": "",
+                        "dt": "20260902",
+                        "tm": "093015",
+                    }
+                ]
+            }
+        ],
+    )
+
+    rows = kiwoom_utils.get_realtime_item_rank_ka00198("TOKEN", limit=10)
+    candidate_pool = {}
+    scalping_scanner._merge_candidate(candidate_pool, rows[0], "REALTIME_RANK_START")
+    fields = scalping_scanner._scanner_event_fields(candidate_pool["005930"])
+
+    assert rows[0]["RealtimeLookupRankChange"] == 0
+    assert rows[0]["RealtimeLookupRankChangeState"] == "observed_neutral_empty"
+    assert fields["realtime_lookup_rank_change_state"] == "observed_neutral_empty"
+    assert fields["lookup_attention_state"] == "observed_source_only"
+    assert fields["lookup_attention_snapshot_score"] == 0.45
+    assert fields["lookup_attention_source_quality_gaps"] == ""
+
+
+def test_lookup_attention_missing_rank_change_key_is_not_zero_filled(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "item_inq_rank": [
+                    {
+                        "stk_cd": "005930",
+                        "stk_nm": "삼성전자",
+                        "past_curr_prc": "+72000",
+                        "bigd_rank": "7",
+                        "dt": "20260902",
+                        "tm": "093015",
+                    }
+                ]
+            }
+        ],
+    )
+
+    rows = kiwoom_utils.get_realtime_item_rank_ka00198("TOKEN", limit=10)
+    candidate_pool = {}
+    scalping_scanner._merge_candidate(candidate_pool, rows[0], "REALTIME_RANK_START")
+    fields = scalping_scanner._scanner_event_fields(candidate_pool["005930"])
+
+    assert rows[0]["RealtimeLookupRankChange"] == 0
+    assert rows[0]["RealtimeLookupRankChangeState"] == "missing"
+    assert fields["realtime_lookup_rank_change_state"] == "missing"
+    assert fields["lookup_attention_state"] == "source_quality_blocked"
+    assert fields["lookup_attention_snapshot_score"] is None
+    assert fields["lookup_attention_source_quality_gaps"] == (
+        "realtime_lookup_rank_change"
+    )
+
+
+def test_lookup_attention_invalid_official_source_timestamp_is_blocked(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "item_inq_rank": [
+                    {
+                        "stk_cd": "005930",
+                        "stk_nm": "삼성전자",
+                        "past_curr_prc": "+72000",
+                        "bigd_rank": "7",
+                        "rank_chg": "12",
+                        "rank_chg_sign": "+",
+                        "dt": "20260230",
+                        "tm": "250000",
+                    }
+                ]
+            }
+        ],
+    )
+
+    rows = kiwoom_utils.get_realtime_item_rank_ka00198("TOKEN", limit=10)
+    candidate_pool = {}
+    scalping_scanner._merge_candidate(candidate_pool, rows[0], "REALTIME_RANK_START")
+    fields = scalping_scanner._scanner_event_fields(candidate_pool["005930"])
+
+    assert rows[0]["RealtimeLookupSourceTimestampState"] == "invalid"
+    assert fields["lookup_attention_state"] == "source_quality_blocked"
+    assert fields["lookup_attention_snapshot_score"] is None
+    assert fields["lookup_attention_source_quality_gaps"] == (
+        "realtime_lookup_source_timestamp_invalid"
+    )
+
+
+def test_ka10032_value_rank_is_namespaced_and_legacy_compatible(monkeypatch):
+    def fake_fetch(**kwargs):
+        assert kwargs["api_id"] == "ka10032"
+        return [
+            {
+                "trde_prica_upper": [
+                    {
+                        "stk_cd": "005930",
+                        "stk_nm": "삼성전자",
+                        "cur_prc": "+72000",
+                        "flu_rt": "+1.25",
+                        "trde_prica": "123456789",
+                        "now_rank": "2",
+                        "pred_rank": "40",
+                    }
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows = kiwoom_utils.get_value_top_ka10032("TOKEN", limit=10)
+
+    assert rows[0]["ValueRankNow"] == 2
+    assert rows[0]["ValueRankPrevDay"] == 40
+    assert rows[0]["RankNow"] == 2
+    assert rows[0]["RankPrev"] == 40
 
 
 def test_scanner_runtime_target_payload_keeps_session_cohorts_separate():

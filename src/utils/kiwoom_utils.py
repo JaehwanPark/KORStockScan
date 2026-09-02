@@ -2837,20 +2837,85 @@ def get_realtime_item_rank_ka00198(token, qry_tp="5", limit=60):
             item.get("base_comp_chgr", item.get("flu_rt"))
         )
         prev_change = _scanner_to_signed_float(item.get("prev_base_chgr"))
-        rank_change = _scanner_to_signed_int(item.get("rank_chg"))
+        rank_now_raw = item.get("bigd_rank", item.get("rank"))
+        rank_change_raw = item.get("rank_chg")
+        rank_change = _scanner_to_signed_int(rank_change_raw)
         rank_change_sign = str(item.get("rank_chg_sign") or "").strip()
         sign_diagnostics = rank_change_sign_diagnostics(rank_change_sign, rank_change)
+        realtime_lookup_rank_now = _scanner_to_int(rank_now_raw)
+        rank_now_text = str(rank_now_raw or "").replace(",", "").strip()
+        rank_change_text = str(rank_change_raw or "").replace(",", "").strip()
+        realtime_lookup_rank_now_state = (
+            "missing"
+            if rank_now_raw in (None, "")
+            else (
+                "observed"
+                if re.fullmatch(r"[+]?\d+(?:\.0+)?", rank_now_text)
+                and realtime_lookup_rank_now > 0
+                else "invalid"
+            )
+        )
+        if "rank_chg" not in item or rank_change_raw is None:
+            realtime_lookup_rank_change_state = "missing"
+        elif rank_change_text == "":
+            # Official ka00198 documents an empty rank_chg as unchanged;
+            # the response example also uses 0/N for the same neutral state.
+            realtime_lookup_rank_change_state = "observed_neutral_empty"
+        elif re.fullmatch(r"[+-]?\d+(?:\.0+)?", rank_change_text):
+            realtime_lookup_rank_change_state = "observed"
+        else:
+            realtime_lookup_rank_change_state = "invalid"
+        realtime_lookup_source_date = str(item.get("dt") or "").strip()
+        realtime_lookup_source_time = str(item.get("tm") or "").strip()
+        if not realtime_lookup_source_date or not realtime_lookup_source_time:
+            realtime_lookup_source_timestamp_state = "missing"
+        else:
+            try:
+                datetime.strptime(
+                    f"{realtime_lookup_source_date}{realtime_lookup_source_time}",
+                    "%Y%m%d%H%M%S",
+                )
+                realtime_lookup_source_timestamp_state = "observed_valid"
+            except ValueError:
+                realtime_lookup_source_timestamp_state = "invalid"
+        realtime_lookup_past_price = _scanner_to_int(
+            item.get("past_curr_prc", item.get("cur_prc", item.get("price")))
+        )
         cleaned_list.append(
             {
                 **code_fields,
                 "Name": item.get("stk_nm", item.get("name", "")),
-                "Price": _scanner_to_int(
-                    item.get("past_curr_prc", item.get("cur_prc", item.get("price")))
-                ),
+                "Price": realtime_lookup_past_price,
                 "FluRate": base_change,
                 "RealtimeRankFluRate": base_change,
                 "RealtimePrevBaseChange": prev_change,
-                "RankNow": _scanner_to_int(item.get("bigd_rank", item.get("rank"))),
+                # Source-specific fields prevent ka00198 lookup rank from being
+                # confused with ka10032 trade-value rank after candidate merge.
+                "RealtimeLookupRankNow": realtime_lookup_rank_now,
+                "RealtimeLookupRankNowState": realtime_lookup_rank_now_state,
+                "RealtimeLookupRankChange": rank_change,
+                "RealtimeLookupRankChangeState": (realtime_lookup_rank_change_state),
+                "RealtimeLookupRankChangeSign": rank_change_sign,
+                "RealtimeLookupRankChangeSignAuthority": (
+                    "raw_unverified_not_decision_input"
+                ),
+                "RealtimeLookupRankChangeSignState": sign_diagnostics[
+                    "RankChangeSignState"
+                ],
+                "RealtimeLookupRankChangeSignConsistency": sign_diagnostics[
+                    "RankChangeSignConsistency"
+                ],
+                "RealtimeLookupRankWindow": str(qry_tp),
+                "RealtimeLookupSourceDate": realtime_lookup_source_date,
+                "RealtimeLookupSourceTime": realtime_lookup_source_time,
+                "RealtimeLookupSourceTimestampState": (
+                    realtime_lookup_source_timestamp_state
+                ),
+                "RealtimeLookupPastPrice": realtime_lookup_past_price,
+                # Legacy fields remain for existing runtime compatibility. New
+                # attribution and counterfactual consumers must use the
+                # RealtimeLookup* namespace above.
+                "RankNow": realtime_lookup_rank_now,
                 "RankChange": rank_change,
                 "RankChangeSign": rank_change_sign,
                 "RankChangeSignAuthority": "raw_unverified_not_decision_input",
@@ -3096,6 +3161,10 @@ def get_value_top_ka10032(token, mrkt_tp="000", limit=60):
         )
         if not code_fields:
             continue
+        value_rank_now = _scanner_to_int(item.get("now_rank", item.get("rank")))
+        value_rank_prev_day = _scanner_to_int(
+            item.get("pred_rank", item.get("prev_rank"))
+        )
         cleaned_list.append(
             {
                 **code_fields,
@@ -3113,10 +3182,12 @@ def get_value_top_ka10032(token, mrkt_tp="000", limit=60):
                         "trde_prica", item.get("acc_trde_prica", item.get("trde_amt"))
                     )
                 ),
-                "RankNow": _scanner_to_int(item.get("now_rank", item.get("rank"))),
-                "RankPrev": _scanner_to_int(
-                    item.get("pred_rank", item.get("prev_rank"))
-                ),
+                "ValueRankNow": value_rank_now,
+                "ValueRankPrevDay": value_rank_prev_day,
+                # Legacy aliases remain until every existing consumer has
+                # migrated. They are not valid ka00198 lookup-rank inputs.
+                "RankNow": value_rank_now,
+                "RankPrev": value_rank_prev_day,
                 "Source": "VALUE_TOP",
             }
         )
