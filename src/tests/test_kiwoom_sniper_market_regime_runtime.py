@@ -798,7 +798,7 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
             "lookup_attention_weight_policy_state": "applied_same_priority_tier",
             "lookup_attention_weight_policy_reason": "bounded_linear_bonus",
             "lookup_attention_weight_policy_version": (
-                "scanner_lookup_attention_weight_v1"
+                "scanner_lookup_attention_weight_v2"
             ),
             "lookup_attention_weight_policy_source_date": "2026-09-01",
             "lookup_attention_weight_policy_artifact_sha256": "a" * 64,

@@ -3550,7 +3550,7 @@ def test_promoted_lookup_attention_weight_is_bounded_inside_existing_tier(monkey
         "active": False,
         "state": "inactive",
         "reason": "prior_policy_missing",
-        "policy_version": "scanner_lookup_attention_weight_v1",
+        "policy_version": scalping_scanner.LOOKUP_ATTENTION_WEIGHT_POLICY_VERSION,
         "policy_source_date": "",
         "policy_artifact_sha256": "",
         "allowed_runtime_apply": False,
@@ -3559,7 +3559,7 @@ def test_promoted_lookup_attention_weight_is_bounded_inside_existing_tier(monkey
         "active": True,
         "state": "live_auto_applied",
         "reason": "latest_prior_trading_date_policy_valid",
-        "policy_version": "scanner_lookup_attention_weight_v1",
+        "policy_version": scalping_scanner.LOOKUP_ATTENTION_WEIGHT_POLICY_VERSION,
         "policy_source_date": "2026-09-01",
         "policy_artifact_sha256": "a" * 64,
         "min_score": 0.60,
@@ -3618,6 +3618,94 @@ def test_promoted_lookup_attention_weight_is_bounded_inside_existing_tier(monkey
     assert stale["lookup_attention_weight_policy_reason"] == (
         "lookup_attention_source_stale_or_invalid"
     )
+
+
+def test_rank_candidates_evaluates_priority_profile_once_per_candidate(monkeypatch):
+    original_rules = scalping_scanner.TRADING_RULES
+
+    class _RulesProxy:
+        SCALP_SCANNER_PRIORITY_TIERING_ENABLED = True
+
+        def __getattr__(self, name):
+            return getattr(original_rules, name)
+
+    calls = []
+
+    def _profile(item):
+        calls.append(item["Code"])
+        return {
+            "scanner_priority_tier": "tier_a_acceleration_confirmed",
+            "scanner_priority_score": float(item["Priority"]),
+        }
+
+    monkeypatch.setattr(scalping_scanner, "TRADING_RULES", _RulesProxy())
+    monkeypatch.setattr(scalping_scanner, "_scanner_priority_profile", _profile)
+    pool = {
+        "005930": {"Code": "005930", "Priority": 1, "Price": 70_000},
+        "000660": {"Code": "000660", "Priority": 2, "Price": 170_000},
+    }
+
+    ranked = scalping_scanner.rank_candidates(pool)
+
+    assert [row["Code"] for row in ranked] == ["000660", "005930"]
+    assert calls == ["005930", "000660"]
+
+
+def test_scanner_event_preserves_guard_time_lookup_policy_provenance(monkeypatch):
+    recomputed = {
+        "scanner_priority_tier": "tier_a_acceleration_confirmed",
+        "scanner_priority_score": 4000.0,
+        "scanner_priority_reason": "general_acceleration_confirmed",
+        "scanner_demoted_reason": "",
+        "scanner_promotion_policy_version": "test",
+        "lookup_attention_weight_policy_state": "source_quality_blocked",
+        "lookup_attention_weight_policy_reason": "recomputed_later",
+        "lookup_attention_weight_policy_version": (
+            scalping_scanner.LOOKUP_ATTENTION_WEIGHT_POLICY_VERSION
+        ),
+        "lookup_attention_weight_policy_source_date": "2026-09-01",
+        "lookup_attention_weight_policy_artifact_sha256": "a" * 64,
+        "lookup_attention_weight_decision_authority": "test",
+        "lookup_attention_weight_same_priority_tier_only": True,
+        "lookup_attention_weight_eligible_venues": "KRX",
+        "lookup_attention_weight_eligible_session_buckets": "krx_regular",
+        "lookup_attention_weight_effective_venue": "KRX",
+        "lookup_attention_weight_market_session_bucket": "krx_regular",
+        "lookup_attention_weight_source_age_sec": 121.0,
+        "lookup_attention_weight_source_fresh": False,
+        "lookup_attention_weight_max_source_age_sec": 120.0,
+        "lookup_attention_weight_bonus_points": 0.0,
+        "lookup_attention_weight_policy_applied": False,
+        "lookup_attention_weight_runtime_effect": False,
+        "lookup_attention_weight_allowed_runtime_apply": False,
+        "lookup_attention_weight_rollback_bonus_points": 0.0,
+        "lookup_attention_weight_forbidden_uses": "test",
+    }
+    monkeypatch.setattr(
+        scalping_scanner, "_scanner_priority_profile", lambda *_args: recomputed
+    )
+    guard = {
+        **recomputed,
+        "lookup_attention_weight_policy_state": "applied_same_priority_tier",
+        "lookup_attention_weight_policy_reason": "bounded_linear_bonus",
+        "lookup_attention_weight_source_age_sec": 30.0,
+        "lookup_attention_weight_source_fresh": True,
+        "lookup_attention_weight_bonus_points": 100.0,
+        "lookup_attention_weight_policy_applied": True,
+        "lookup_attention_weight_runtime_effect": True,
+        "lookup_attention_weight_allowed_runtime_apply": True,
+    }
+
+    fields = scalping_scanner._scanner_event_fields(
+        {"Code": "005930", "Price": 70_000}, guard
+    )
+
+    assert fields["lookup_attention_weight_policy_state"] == (
+        "applied_same_priority_tier"
+    )
+    assert fields["lookup_attention_weight_source_age_sec"] == 30.0
+    assert fields["lookup_attention_weight_bonus_points"] == 100.0
+    assert fields["lookup_attention_weight_runtime_effect"] is True
 
 
 def test_lookup_attention_prior_is_blocked_when_exact_source_time_is_missing():

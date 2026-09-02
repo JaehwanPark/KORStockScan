@@ -39,6 +39,7 @@ from src.engine.scalping.scanner_lookup_attention_policy import (
     ELIGIBLE_VENUES as LOOKUP_ATTENTION_WEIGHT_ELIGIBLE_VENUES,
     MAX_FUTURE_SKEW_SEC as LOOKUP_ATTENTION_WEIGHT_MAX_FUTURE_SKEW_SEC,
     MAX_SOURCE_AGE_SEC as LOOKUP_ATTENTION_WEIGHT_MAX_SOURCE_AGE_SEC,
+    POLICY_VERSION as LOOKUP_ATTENTION_WEIGHT_POLICY_VERSION,
     bounded_bonus as lookup_attention_bounded_bonus,
     load_active_policy as load_lookup_attention_weight_policy,
 )
@@ -2059,7 +2060,7 @@ def _scanner_priority_profile(target, previous=None):
             "active": False,
             "state": "inactive",
             "reason": "scanner_priority_tiering_disabled",
-            "policy_version": "scanner_lookup_attention_weight_v1",
+            "policy_version": LOOKUP_ATTENTION_WEIGHT_POLICY_VERSION,
             "policy_source_date": "",
             "policy_artifact_sha256": "",
             "allowed_runtime_apply": False,
@@ -2847,18 +2848,18 @@ def rank_candidates(candidate_pool):
             "tier_d_late_rank_only": 3,
             "tier_z_source_only": 9,
         }
-        return sorted(
-            candidate_pool.values(),
-            key=lambda item: (
+
+        def _rank_key(item):
+            priority_profile = _scanner_priority_profile(item)
+            return (
                 _under_10000_runtime_priority_rank(item),
-                tier_rank.get(
-                    _scanner_priority_profile(item).get("scanner_priority_tier"), 8
-                ),
-                -_scanner_priority_profile(item).get("scanner_priority_score", 0.0),
+                tier_rank.get(priority_profile.get("scanner_priority_tier"), 8),
+                -priority_profile.get("scanner_priority_score", 0.0),
                 _source_priority(item.get("Source")),
                 -_safe_float(item.get("FluRate")),
-            ),
-        )
+            )
+
+        return sorted(candidate_pool.values(), key=_rank_key)
     return sorted(
         candidate_pool.values(),
         key=lambda item: (
@@ -3727,6 +3728,12 @@ def _scanner_event_fields(target, source_guard=None):
     )
     current_flu = source_guard.get("current_flu_rate") or f"{current_flu_value:.2f}"
     priority_profile = _scanner_priority_profile(target)
+
+    def priority_value(key):
+        return (
+            source_guard.get(key) if key in source_guard else priority_profile.get(key)
+        )
+
     guard_reason = str(source_guard.get("reason") or "")
     last_promoted_at = source_guard.get("last_promoted_at")
     first_seen_missing = first_flu in (None, "", "-")
@@ -4022,66 +4029,66 @@ def _scanner_event_fields(target, source_guard=None):
             "scanner_promotion_policy_version"
         )
         or priority_profile.get("scanner_promotion_policy_version"),
-        "lookup_attention_weight_policy_state": priority_profile.get(
+        "lookup_attention_weight_policy_state": priority_value(
             "lookup_attention_weight_policy_state"
         ),
-        "lookup_attention_weight_policy_reason": priority_profile.get(
+        "lookup_attention_weight_policy_reason": priority_value(
             "lookup_attention_weight_policy_reason"
         ),
-        "lookup_attention_weight_policy_version": priority_profile.get(
+        "lookup_attention_weight_policy_version": priority_value(
             "lookup_attention_weight_policy_version"
         ),
-        "lookup_attention_weight_policy_source_date": priority_profile.get(
+        "lookup_attention_weight_policy_source_date": priority_value(
             "lookup_attention_weight_policy_source_date"
         ),
-        "lookup_attention_weight_policy_artifact_sha256": priority_profile.get(
+        "lookup_attention_weight_policy_artifact_sha256": priority_value(
             "lookup_attention_weight_policy_artifact_sha256"
         ),
-        "lookup_attention_weight_decision_authority": priority_profile.get(
+        "lookup_attention_weight_decision_authority": priority_value(
             "lookup_attention_weight_decision_authority"
         ),
-        "lookup_attention_weight_same_priority_tier_only": priority_profile.get(
+        "lookup_attention_weight_same_priority_tier_only": priority_value(
             "lookup_attention_weight_same_priority_tier_only"
         ),
-        "lookup_attention_weight_eligible_venues": priority_profile.get(
+        "lookup_attention_weight_eligible_venues": priority_value(
             "lookup_attention_weight_eligible_venues"
         ),
-        "lookup_attention_weight_eligible_session_buckets": priority_profile.get(
+        "lookup_attention_weight_eligible_session_buckets": priority_value(
             "lookup_attention_weight_eligible_session_buckets"
         ),
-        "lookup_attention_weight_effective_venue": priority_profile.get(
+        "lookup_attention_weight_effective_venue": priority_value(
             "lookup_attention_weight_effective_venue"
         ),
-        "lookup_attention_weight_market_session_bucket": priority_profile.get(
+        "lookup_attention_weight_market_session_bucket": priority_value(
             "lookup_attention_weight_market_session_bucket"
         ),
-        "lookup_attention_weight_source_age_sec": priority_profile.get(
+        "lookup_attention_weight_source_age_sec": priority_value(
             "lookup_attention_weight_source_age_sec"
         ),
-        "lookup_attention_weight_source_fresh": priority_profile.get(
+        "lookup_attention_weight_source_fresh": priority_value(
             "lookup_attention_weight_source_fresh"
         ),
-        "lookup_attention_weight_max_source_age_sec": priority_profile.get(
+        "lookup_attention_weight_max_source_age_sec": priority_value(
             "lookup_attention_weight_max_source_age_sec"
         ),
-        "lookup_attention_weight_bonus_points": priority_profile.get(
+        "lookup_attention_weight_bonus_points": priority_value(
             "lookup_attention_weight_bonus_points"
         ),
-        "lookup_attention_weight_policy_applied": priority_profile.get(
+        "lookup_attention_weight_policy_applied": priority_value(
             "lookup_attention_weight_policy_applied"
         ),
-        "lookup_attention_weight_runtime_effect": priority_profile.get(
+        "lookup_attention_weight_runtime_effect": priority_value(
             "lookup_attention_weight_runtime_effect"
         ),
-        "lookup_attention_weight_allowed_runtime_apply": priority_profile.get(
+        "lookup_attention_weight_allowed_runtime_apply": priority_value(
             "lookup_attention_weight_allowed_runtime_apply"
         ),
         "lookup_attention_weight_actual_order_submitted": False,
         "lookup_attention_weight_broker_order_forbidden": True,
-        "lookup_attention_weight_rollback_bonus_points": priority_profile.get(
+        "lookup_attention_weight_rollback_bonus_points": priority_value(
             "lookup_attention_weight_rollback_bonus_points"
         ),
-        "lookup_attention_weight_forbidden_uses": priority_profile.get(
+        "lookup_attention_weight_forbidden_uses": priority_value(
             "lookup_attention_weight_forbidden_uses"
         ),
         "first_seen_price": first_price,

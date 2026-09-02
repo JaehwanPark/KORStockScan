@@ -1622,6 +1622,26 @@ def test_artifact_paths_and_rollout_include_scanner_lookup_attention():
     assert mod._scanner_lookup_attention_required("2026-09-02") is True
 
 
+def test_scanner_lookup_attention_done_flag_must_be_true_after_rollout():
+    required = ("daily_ev", "scanner_lookup_attention_tuning")
+
+    assert mod._missing_required_execution_flags(
+        required,
+        {"daily_ev": True, "scanner_lookup_attention_tuning": False},
+        done_line_present=True,
+        recovery_done=False,
+    ) == ["scanner_lookup_attention_tuning"]
+    assert (
+        mod._missing_required_execution_flags(
+            required,
+            {"daily_ev": True, "scanner_lookup_attention_tuning": True},
+            done_line_present=True,
+            recovery_done=False,
+        )
+        == []
+    )
+
+
 def test_limit_down_watch_report_flag_required_from_rollout_date():
     assert mod._limit_down_watch_report_required("2026-07-29") is False
     assert mod._limit_down_watch_report_required("2026-07-30") is True

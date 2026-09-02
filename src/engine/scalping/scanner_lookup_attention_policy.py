@@ -25,8 +25,9 @@ POLICY_DIR = (
 )
 SOURCE_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "scanner_lookup_attention_tuning"
 REPORT_TYPE = "scanner_lookup_attention_auto_promotion_policy"
-SCHEMA_VERSION = 1
-POLICY_VERSION = "scanner_lookup_attention_weight_v1"
+SCHEMA_VERSION = 2
+TUNING_REPORT_SCHEMA_VERSION = 2
+POLICY_VERSION = "scanner_lookup_attention_weight_v2"
 DECISION_AUTHORITY = "user_directed_bounded_scanner_weight_auto_apply"
 ACTIVATION_MODE = "latest_valid_prior_trading_date_policy_auto_loaded"
 USER_AUTHORITY = "user_directed_lookup_attention_auto_promotion_2026_09_02"
@@ -102,7 +103,7 @@ def _latest_prior_path(target: date, policy_dir: Path) -> tuple[date, Path] | No
             source_date = date.fromisoformat(suffix)
         except ValueError:
             continue
-        if source_date < target:
+        if source_date < target and is_krx_trading_day(source_date):
             candidates.append((source_date, path))
     return max(candidates, default=None, key=lambda item: item[0])
 
@@ -406,8 +407,8 @@ def _source_report_valid(
         policy_evidence_hash = canonical_sha256(payload.get("evidence"))
     except (TypeError, ValueError):
         return False
-    return bool(
-        report.get("schema_version") == 1
+    shallow_contract_valid = bool(
+        report.get("schema_version") == TUNING_REPORT_SCHEMA_VERSION
         and report.get("report_type") == "scanner_lookup_attention_tuning"
         and report.get("target_date") == source_date.isoformat()
         and report.get("status") == "live_auto_apply_ready"
@@ -424,12 +425,30 @@ def _source_report_valid(
         and report.get("artifact_sha256") == expected_hash
         and payload.get("source_report_artifact_sha256") == expected_hash
     )
+    if not shallow_contract_valid:
+        return False
+    try:
+        # Import lazily so the live policy module keeps a small import surface.
+        # The shared validator is intentionally repeated here: a producer can
+        # write its pair before its subsequent --verify-only step fails, and
+        # that partially written pair must never gain next-session authority.
+        from src.engine.monitoring.scanner_lookup_attention_tuning import (
+            validate_artifact_pair,
+        )
+
+        return not validate_artifact_pair(report, payload, target=source_date)
+    except Exception:
+        return False
 
 
 @lru_cache(maxsize=16)
 def _load_active_cached(
-    target_iso: str, policy_dir_text: str, report_dir_text: str
+    target_iso: str,
+    policy_dir_text: str,
+    report_dir_text: str,
+    artifact_cache_token: str,
 ) -> dict[str, Any]:
+    del artifact_cache_token
     try:
         target = date.fromisoformat(target_iso)
     except ValueError:
@@ -507,11 +526,35 @@ def load_active_policy(
     target_iso = (
         target_date.isoformat() if isinstance(target_date, date) else str(target_date)
     )
+    policy_root = policy_dir.resolve()
+    report_root = report_dir.resolve()
+    cache_parts: list[str] = []
+    try:
+        parsed_target = date.fromisoformat(target_iso)
+    except ValueError:
+        parsed_target = None
+    latest = _latest_prior_path(parsed_target, policy_root) if parsed_target else None
+    if latest is None:
+        cache_parts.append("prior_policy_missing")
+    else:
+        source_date, policy_path = latest
+        report_path = (
+            report_root
+            / f"scanner_lookup_attention_tuning_{source_date.isoformat()}.json"
+        )
+        for path in (policy_path, report_path):
+            try:
+                stat = path.stat()
+            except OSError:
+                cache_parts.append(f"{path}:missing")
+            else:
+                cache_parts.append(f"{path}:{stat.st_mtime_ns}:{stat.st_size}")
     return dict(
         _load_active_cached(
             target_iso,
-            str(policy_dir.resolve()),
-            str(report_dir.resolve()),
+            str(policy_root),
+            str(report_root),
+            "|".join(cache_parts),
         )
     )
 
@@ -576,6 +619,7 @@ __all__ = [
     "REPORT_TYPE",
     "SCHEMA_VERSION",
     "SOURCE_REPORT_DIR",
+    "TUNING_REPORT_SCHEMA_VERSION",
     "USER_AUTHORITY",
     "bounded_bonus",
     "canonical_sha256",

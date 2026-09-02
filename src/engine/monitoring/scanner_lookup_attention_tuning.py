@@ -46,6 +46,7 @@ from src.engine.scalping.scanner_lookup_attention_policy import (
     REPORT_TYPE as POLICY_REPORT_TYPE,
     SCHEMA_VERSION as POLICY_SCHEMA_VERSION,
     USER_AUTHORITY,
+    TUNING_REPORT_SCHEMA_VERSION,
     canonical_sha256,
     validate_policy_payload,
 )
@@ -59,7 +60,7 @@ SYMBOL_MASTER_DIR = (
     PROJECT_ROOT / "data" / "report" / "micro_reversion_economic_reference"
 )
 REPORT_TYPE = "scanner_lookup_attention_tuning"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = TUNING_REPORT_SCHEMA_VERSION
 ROLLOUT_DATE = date(2026, 9, 2)
 ROLLING_CALENDAR_DAYS = 90
 COST_EFFECTIVE_FROM = date(2026, 8, 18)
@@ -92,6 +93,24 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _strict_int(value: Any) -> int | None:
+    """Parse an integer without silently truncating a fractional quantity/id."""
+
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if math.isfinite(value) and value.is_integer() else None
+    text = str(value).strip()
+    if not re.fullmatch(r"[+-]?\d+", text):
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
 
 
 def _finite(value: Any) -> float | None:
@@ -154,7 +173,9 @@ def _event_path(day: date) -> Path | None:
     return compressed if compressed.exists() else None
 
 
-def _iter_events(path: Path) -> Iterable[dict[str, Any]]:
+def _iter_events(
+    path: Path, *, parse_stats: dict[str, int] | None = None
+) -> Iterable[dict[str, Any]]:
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8") as handle:
         for line in handle:
@@ -163,16 +184,21 @@ def _iter_events(path: Path) -> Iterable[dict[str, Any]]:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
+                if parse_stats is not None:
+                    parse_stats["malformed_json_line_count"] += 1
                 continue
             if isinstance(row, dict):
                 yield row
+            elif parse_stats is not None:
+                parse_stats["non_object_json_line_count"] += 1
 
 
 def _observation_key(fields: dict[str, Any], stock_code: Any) -> tuple[int, str, str]:
     return (
-        _safe_int(
+        _strict_int(
             fields.get("runtime_record_id") or fields.get("main_lifecycle_record_id")
-        ),
+        )
+        or 0,
         str(
             fields.get("scanner_promotion_id")
             or fields.get("main_lifecycle_attempt_id")
@@ -198,7 +224,10 @@ def _source_age_sec(event: dict[str, Any], fields: dict[str, Any]) -> float | No
         emitted_at = emitted_at.replace(tzinfo=KST)
     else:
         emitted_at = emitted_at.astimezone(KST)
-    if source_date != emitted_date.replace("-", ""):
+    if (
+        source_date != emitted_date.replace("-", "")
+        or emitted_at.date().isoformat() != emitted_date
+    ):
         return None
     return (emitted_at - source_at).total_seconds()
 
@@ -210,10 +239,96 @@ def _source_timestamp_valid(event: dict[str, Any], fields: dict[str, Any]) -> bo
     )
 
 
-def _receipt_is_buy(fields: dict[str, Any]) -> bool:
+def _receipt_side(fields: dict[str, Any]) -> str:
     side_text = str(fields.get("905") or fields.get("order_side") or "").strip()
     side_code = str(fields.get("907") or fields.get("buy_sell_type") or "").strip()
-    return "매수" in side_text or side_code == "2"
+    text_side = "buy" if "매수" in side_text else "sell" if "매도" in side_text else ""
+    code_side = "buy" if side_code == "2" else "sell" if side_code == "1" else ""
+    if text_side and code_side and text_side != code_side:
+        return "conflict"
+    return text_side or code_side or "missing"
+
+
+def _receipt_is_buy(fields: dict[str, Any]) -> bool:
+    return _receipt_side(fields) == "buy"
+
+
+def _runtime_policy_artifact_matches(
+    observation_date: date,
+    source_date: date,
+    artifact_sha256: str,
+) -> bool:
+    """Rebind active runtime provenance to the exact immutable policy/report pair."""
+
+    policy_payload = _load_json(
+        POLICY_DIR / f"scanner_lookup_attention_policy_{source_date.isoformat()}.json"
+    )
+    report_payload = _load_json(
+        REPORT_DIR / f"scanner_lookup_attention_tuning_{source_date.isoformat()}.json"
+    )
+    return bool(
+        is_krx_trading_day(observation_date)
+        and is_krx_trading_day(source_date)
+        and count_krx_trading_days(source_date, observation_date) == 1
+        and policy_payload.get("artifact_sha256") == artifact_sha256
+        and policy_payload.get("status") == "live_auto_apply_ready"
+        and not validate_artifact_pair(
+            report_payload,
+            policy_payload,
+            target=source_date,
+        )
+    )
+
+
+def _previous_krx_trading_date(value: date) -> date:
+    candidate = value - timedelta(days=1)
+    for _ in range(14):
+        if is_krx_trading_day(candidate):
+            return candidate
+        candidate -= timedelta(days=1)
+    raise ValueError("previous_krx_trading_date_unresolved")
+
+
+def _runtime_policy_expectation(observation_date: date) -> dict[str, Any]:
+    """Resolve whether the exact previous trading-day artifact required live use."""
+
+    try:
+        source_date = _previous_krx_trading_date(observation_date)
+    except ValueError:
+        return {"state": "invalid", "reason": "prior_trading_date_unresolved"}
+    policy_path = (
+        POLICY_DIR / f"scanner_lookup_attention_policy_{source_date.isoformat()}.json"
+    )
+    report_path = REPORT_DIR / (
+        f"scanner_lookup_attention_tuning_{source_date.isoformat()}.json"
+    )
+    if not policy_path.exists() and not report_path.exists():
+        return {
+            "state": "inactive",
+            "source_date": source_date.isoformat(),
+            "reason": "prior_artifact_pair_absent",
+        }
+    policy_payload = _load_json(policy_path)
+    report_payload = _load_json(report_path)
+    issues = validate_artifact_pair(report_payload, policy_payload, target=source_date)
+    if issues:
+        return {
+            "state": "invalid",
+            "source_date": source_date.isoformat(),
+            "reason": "prior_artifact_pair_invalid",
+            "issues": issues,
+        }
+    if policy_payload.get("status") != "live_auto_apply_ready":
+        return {
+            "state": "inactive",
+            "source_date": source_date.isoformat(),
+            "reason": "prior_policy_not_live",
+        }
+    return {
+        "state": "active",
+        "source_date": source_date.isoformat(),
+        "artifact_sha256": str(policy_payload.get("artifact_sha256") or ""),
+    }
 
 
 def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -227,6 +342,12 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
     )
     invalid_observation_count = 0
     invalid_runtime_policy_provenance_count = 0
+    parse_stats = {
+        "malformed_json_line_count": 0,
+        "non_object_json_line_count": 0,
+    }
+    runtime_policy_artifact_cache: dict[tuple[date, date, str], bool] = {}
+    runtime_policy_expectation_cache: dict[date, dict[str, Any]] = {}
     event_file_count = 0
     cursor = start
     while cursor <= target:
@@ -235,7 +356,7 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
         if path is None:
             continue
         event_file_count += 1
-        for event in _iter_events(path):
+        for event in _iter_events(path, parse_stats=parse_stats):
             fields = (
                 event.get("fields") if isinstance(event.get("fields"), dict) else {}
             )
@@ -245,6 +366,12 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
                     continue
                 key = _observation_key(fields, event.get("stock_code"))
                 score = _finite(fields.get("lookup_attention_snapshot_score"))
+                try:
+                    event_date = date.fromisoformat(
+                        str(event.get("emitted_date") or "")
+                    )
+                except ValueError:
+                    event_date = None
                 valid = bool(
                     key[0] > 0
                     and key[1].startswith("SCANPROM-")
@@ -252,6 +379,8 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
                     and score is not None
                     and 0.0 <= score <= 1.0
                     and _source_timestamp_valid(event, fields)
+                    and event_date is not None
+                    and is_krx_trading_day(event_date)
                     and _bool(fields.get("lookup_attention_runtime_effect")) is False
                     and _bool(fields.get("lookup_attention_allowed_runtime_apply"))
                     is False
@@ -281,8 +410,34 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
                 policy_artifact_sha256 = str(
                     fields.get("lookup_attention_weight_policy_artifact_sha256") or ""
                 ).strip()
+                event_effective_venue = (
+                    str(fields.get("effective_venue") or fields.get("venue") or "")
+                    .strip()
+                    .upper()
+                )
+                event_session = str(fields.get("market_session_bucket") or "").strip()
+                event_in_policy_scope = bool(
+                    event_effective_venue in ELIGIBLE_VENUES
+                    and event_session in ELIGIBLE_SESSION_BUCKETS
+                )
                 runtime_policy_eligible = False
                 runtime_policy_provenance_invalid = False
+                expectation = runtime_policy_expectation_cache.get(event_date)
+                if expectation is None:
+                    expectation = _runtime_policy_expectation(event_date)
+                    runtime_policy_expectation_cache[event_date] = expectation
+                if expectation.get("state") == "invalid":
+                    runtime_policy_provenance_invalid = True
+                elif (
+                    expectation.get("state") == "active"
+                    and event_in_policy_scope
+                    and policy_allowed is not True
+                ):
+                    runtime_policy_provenance_invalid = True
+                elif (
+                    expectation.get("state") != "active" or not event_in_policy_scope
+                ) and policy_allowed is True:
+                    runtime_policy_provenance_invalid = True
                 if policy_allowed is True:
                     try:
                         parsed_policy_source_date = date.fromisoformat(
@@ -294,21 +449,153 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
                     except ValueError:
                         runtime_policy_provenance_invalid = True
                     else:
+                        artifact_key = (
+                            observation_date,
+                            parsed_policy_source_date,
+                            policy_artifact_sha256,
+                        )
+                        artifact_valid = runtime_policy_artifact_cache.get(artifact_key)
+                        if artifact_valid is None:
+                            artifact_valid = _runtime_policy_artifact_matches(
+                                observation_date,
+                                parsed_policy_source_date,
+                                policy_artifact_sha256,
+                            )
+                            runtime_policy_artifact_cache[artifact_key] = artifact_valid
+                        policy_same_tier_only = _bool(
+                            fields.get(
+                                "lookup_attention_weight_same_priority_tier_only"
+                            )
+                        )
+                        policy_source_fresh = _bool(
+                            fields.get("lookup_attention_weight_source_fresh")
+                        )
+                        weight_source_age_sec = _finite(
+                            fields.get("lookup_attention_weight_source_age_sec")
+                        )
+                        weight_effective_venue = (
+                            str(
+                                fields.get("lookup_attention_weight_effective_venue")
+                                or ""
+                            )
+                            .strip()
+                            .upper()
+                        )
+                        weight_session = str(
+                            fields.get("lookup_attention_weight_market_session_bucket")
+                            or ""
+                        ).strip()
+                        expected_bonus = round(
+                            max(
+                                0.0,
+                                MAX_BONUS_POINTS
+                                * (float(score) - MIN_SCORE)
+                                / max(1e-9, 1.0 - MIN_SCORE),
+                            ),
+                            6,
+                        )
+                        expected_bonus = min(MAX_BONUS_POINTS, expected_bonus)
+                        expected_policy_state = (
+                            "applied_same_priority_tier"
+                            if expected_bonus > 0.0
+                            else (
+                                "loaded_at_floor"
+                                if float(score) == MIN_SCORE
+                                else "loaded_below_threshold"
+                            )
+                        )
+                        expected_policy_reason = (
+                            "bounded_linear_bonus"
+                            if expected_bonus > 0.0
+                            else (
+                                "policy_floor_zero_bonus"
+                                if float(score) == MIN_SCORE
+                                else "lookup_attention_score_below_policy_minimum"
+                            )
+                        )
+                        runtime_forbidden_uses = {
+                            item.strip()
+                            for item in str(
+                                fields.get("lookup_attention_weight_forbidden_uses")
+                                or ""
+                            ).split(",")
+                            if item.strip()
+                        }
                         runtime_policy_eligible = bool(
-                            count_krx_trading_days(
+                            is_krx_trading_day(parsed_policy_source_date)
+                            and is_krx_trading_day(observation_date)
+                            and count_krx_trading_days(
                                 parsed_policy_source_date, observation_date
                             )
                             == 1
+                            and artifact_valid
+                            and expectation.get("state") == "active"
+                            and expectation.get("source_date") == policy_source_date
+                            and expectation.get("artifact_sha256")
+                            == policy_artifact_sha256
                             and fields.get("lookup_attention_weight_policy_version")
                             == POLICY_VERSION
+                            and fields.get("lookup_attention_weight_decision_authority")
+                            == DECISION_AUTHORITY
+                            and policy_same_tier_only is True
+                            and str(
+                                fields.get("lookup_attention_weight_eligible_venues")
+                                or ""
+                            )
+                            == ",".join(ELIGIBLE_VENUES)
+                            and str(
+                                fields.get(
+                                    "lookup_attention_weight_eligible_session_buckets"
+                                )
+                                or ""
+                            )
+                            == ",".join(ELIGIBLE_SESSION_BUCKETS)
+                            and weight_effective_venue == event_effective_venue == "KRX"
+                            and weight_session == event_session == "krx_regular"
+                            and policy_source_fresh is True
+                            and weight_source_age_sec is not None
+                            and -MAX_FUTURE_SKEW_SEC
+                            <= weight_source_age_sec
+                            <= MAX_SOURCE_AGE_SEC
+                            and _finite(
+                                fields.get("lookup_attention_weight_max_source_age_sec")
+                            )
+                            == MAX_SOURCE_AGE_SEC
+                            and _bool(
+                                fields.get(
+                                    "lookup_attention_weight_actual_order_submitted"
+                                )
+                            )
+                            is False
+                            and _bool(
+                                fields.get(
+                                    "lookup_attention_weight_broker_order_forbidden"
+                                )
+                            )
+                            is True
                             and re.fullmatch(r"[0-9a-f]{64}", policy_artifact_sha256)
                             is not None
                             and policy_bonus is not None
                             and 0.0 <= policy_bonus <= MAX_BONUS_POINTS
+                            and abs(policy_bonus - expected_bonus) <= 1e-6
+                            and fields.get("lookup_attention_weight_policy_state")
+                            == expected_policy_state
+                            and fields.get("lookup_attention_weight_policy_reason")
+                            == expected_policy_reason
+                            and _finite(
+                                fields.get(
+                                    "lookup_attention_weight_rollback_bonus_points"
+                                )
+                            )
+                            == 0.0
+                            and set(FORBIDDEN_USES).issubset(runtime_forbidden_uses)
                             and policy_applied is (policy_bonus > 0.0)
                             and policy_runtime_effect is policy_applied
                         )
-                        runtime_policy_provenance_invalid = not runtime_policy_eligible
+                        runtime_policy_provenance_invalid = bool(
+                            runtime_policy_provenance_invalid
+                            or not runtime_policy_eligible
+                        )
                 elif policy_applied is True or policy_runtime_effect is True:
                     runtime_policy_provenance_invalid = True
                 if runtime_policy_provenance_invalid:
@@ -383,24 +670,31 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
             if stage != "position_rebased_after_fill":
                 continue
             key = _observation_key(fields, event.get("stock_code"))
+            receipt_side = _receipt_side(fields)
             if (
                 key[0] <= 0
                 or not key[1].startswith("SCANPROM-")
                 or re.fullmatch(r"\d{6}", key[2]) is None
-                or not _receipt_is_buy(fields)
             ):
                 continue
-            requested = _safe_int(fields.get("order_requested_qty"))
-            filled = _safe_int(fields.get("order_filled_qty"))
-            remaining = _safe_int(fields.get("order_remaining_qty"), -1)
+            if receipt_side == "sell":
+                continue
+            requested = _strict_int(fields.get("order_requested_qty"))
+            filled = _strict_int(fields.get("order_filled_qty"))
+            remaining = _strict_int(fields.get("order_remaining_qty"))
             full = bool(
-                str(fields.get("fill_quality") or "") == "FULL_FILL"
+                receipt_side == "buy"
+                and str(fields.get("fill_quality") or "") == "FULL_FILL"
+                and requested is not None
                 and requested > 0
                 and filled == requested
                 and remaining == 0
                 and _bool(fields.get("receipt_quantity_contract_complete")) is True
             )
-            partial = str(fields.get("fill_quality") or "") == "PARTIAL_FILL"
+            partial = bool(
+                receipt_side == "buy"
+                and str(fields.get("fill_quality") or "") == "PARTIAL_FILL"
+            )
             fill_receipts[key].append(
                 {
                     "classification": (
@@ -472,6 +766,10 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
         "invalid_runtime_policy_provenance_count": (
             invalid_runtime_policy_provenance_count
         ),
+        "malformed_json_line_count": parse_stats["malformed_json_line_count"],
+        "non_object_json_line_count": parse_stats["non_object_json_line_count"],
+        "runtime_policy_artifact_check_count": len(runtime_policy_artifact_cache),
+        "runtime_policy_expectation_date_count": len(runtime_policy_expectation_cache),
         "full_fill_observation_count": sum(
             row["fill_class"] == "full_fill" for row in rows
         ),
@@ -517,12 +815,12 @@ def load_completed_facts(start: date, target: date) -> list[dict[str, Any]]:
             "strategy": str(fact.strategy or ""),
             "position_tag": str(fact.position_tag or ""),
             "buy_price": _finite(fact.buy_price),
-            "buy_qty": _safe_int(fact.buy_qty),
+            "buy_qty": _strict_int(fact.buy_qty),
             "sell_price": _finite(fact.sell_price),
             "profit_rate": _finite(fact.profit_rate),
-            "add_count": _safe_int(fact.add_count),
-            "avg_down_count": _safe_int(fact.avg_down_count),
-            "pyramid_count": _safe_int(fact.pyramid_count),
+            "add_count": _strict_int(fact.add_count),
+            "avg_down_count": _strict_int(fact.avg_down_count),
+            "pyramid_count": _strict_int(fact.pyramid_count),
         }
         for fact, history in rows
     ]
@@ -541,7 +839,17 @@ def _latest_symbol_master(target: date) -> tuple[set[str], dict[str, Any]]:
             candidates.append((source_date, path))
     if not candidates:
         return set(), {"status": "missing"}
-    source_date, path = max(candidates, key=lambda item: item[0])
+    source_date = max(item[0] for item in candidates)
+    latest_paths = sorted(
+        path for item_date, path in candidates if item_date == source_date
+    )
+    if len(latest_paths) != 1:
+        return set(), {
+            "status": "ambiguous_latest_artifact",
+            "source_date": source_date.isoformat(),
+            "paths": [str(path) for path in latest_paths],
+        }
+    path = latest_paths[0]
     try:
         opener = gzip.open if path.suffix == ".gz" else open
         with opener(path, "rt", encoding="utf-8") as handle:
@@ -554,12 +862,13 @@ def _latest_symbol_master(target: date) -> tuple[set[str], dict[str, Any]]:
         if isinstance(payload.get("source_artifacts"), list)
         else []
     )
-    source = (
-        source_artifacts[0]
-        if source_artifacts and isinstance(source_artifacts[0], dict)
-        else {}
-    )
+    source = source_artifacts[0] if len(source_artifacts) == 1 else {}
     census = payload.get("census") if isinstance(payload.get("census"), dict) else {}
+    census_record_count = _strict_int(census.get("record_count"))
+    census_symbol_count = _strict_int(census.get("symbol_count"))
+    source_record_count = _strict_int(source.get("record_count"))
+    expected_size_bytes = _strict_int(source.get("expected_size_bytes"))
+    observed_size_bytes = _strict_int(source.get("observed_size_bytes"))
     try:
         expected_content_hash = canonical_sha256(
             {key: value for key, value in payload.items() if key != "content_sha256"}
@@ -568,6 +877,8 @@ def _latest_symbol_master(target: date) -> tuple[set[str], dict[str, Any]]:
         expected_content_hash = ""
     valid = bool(
         payload.get("schema") == "scalp_micro_reversion_symbol_master_v1"
+        and is_krx_trading_day(source_date)
+        and count_krx_trading_days(source_date, target) <= 1
         and expected_content_hash
         and payload.get("content_sha256") == expected_content_hash
         and payload.get("verified") is True
@@ -579,11 +890,22 @@ def _latest_symbol_master(target: date) -> tuple[set[str], dict[str, Any]]:
         and re.fullmatch(r"[0-9a-f]{64}", str(source.get("expected_sha256") or ""))
         is not None
         and source.get("expected_sha256") == source.get("observed_sha256")
-        and len(records) == _safe_int(census.get("record_count"))
+        and source.get("kind") == "symbol_product_master"
+        and source.get("payload_schema")
+        == "micro_reversion_raw_symbol_product_master_v3"
+        and source.get("effective_from") == source_date.isoformat()
+        and source_record_count == len(records)
+        and census_record_count == len(records)
+        and census_symbol_count == len(records)
+        and expected_size_bytes is not None
+        and expected_size_bytes > 0
+        and observed_size_bytes == expected_size_bytes
     )
     symbols: set[str] = set()
+    invalid_record_count = 0
     for row in records:
         if not isinstance(row, dict):
+            invalid_record_count += 1
             continue
         symbol = str(row.get("symbol") or "")
         try:
@@ -594,6 +916,7 @@ def _latest_symbol_master(target: date) -> tuple[set[str], dict[str, Any]]:
                 else None
             )
         except ValueError:
+            invalid_record_count += 1
             continue
         if (
             re.fullmatch(r"\d{6}", symbol) is not None
@@ -605,6 +928,14 @@ def _latest_symbol_master(target: date) -> tuple[set[str], dict[str, Any]]:
             and (effective_to is None or effective_to >= target)
         ):
             symbols.add(symbol)
+        else:
+            invalid_record_count += 1
+    valid = bool(
+        valid
+        and invalid_record_count == 0
+        and len(symbols) == len(records)
+        and len(source_artifacts) == 1
+    )
     return symbols if valid else set(), {
         "status": "pass" if valid else "contract_invalid",
         "path": str(path),
@@ -612,6 +943,8 @@ def _latest_symbol_master(target: date) -> tuple[set[str], dict[str, Any]]:
         "content_sha256": str(payload.get("content_sha256") or ""),
         "upstream_sha256": str(source.get("observed_sha256") or ""),
         "eligible_common_stock_count": len(symbols) if valid else 0,
+        "invalid_record_count": invalid_record_count,
+        "source_artifact_count": len(source_artifacts),
     }
 
 
@@ -629,12 +962,20 @@ def _source_quality(
             payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
         )
         audit_status = str(payload.get("status") or "missing")
+        hard_gap_count = _strict_int(summary.get("hard_blocking_contract_gap_count"))
+        excluded_row_count = _strict_int(
+            summary.get("hard_blocking_excluded_row_count")
+        )
+        review_warning_count = _strict_int(summary.get("review_warning_count"))
         valid = bool(
-            payload.get("target_date") == audit_date.isoformat()
+            payload.get("report_type") == "observation_source_quality_audit"
+            and payload.get("target_date") == audit_date.isoformat()
             and audit_status not in {"fail", "missing", "invalid"}
             and summary.get("tuning_input_allowed") is True
-            and _safe_int(summary.get("hard_blocking_contract_gap_count")) == 0
-            and _safe_int(summary.get("hard_blocking_excluded_row_count")) == 0
+            and hard_gap_count == 0
+            and excluded_row_count == 0
+            and review_warning_count is not None
+            and review_warning_count >= 0
             and not summary.get("blocked_reason")
         )
         audits.append(
@@ -644,13 +985,9 @@ def _source_quality(
                 "status": "pass" if valid else "source_quality_blocked",
                 "audit_status": audit_status,
                 "tuning_input_allowed": summary.get("tuning_input_allowed"),
-                "hard_blocking_contract_gap_count": _safe_int(
-                    summary.get("hard_blocking_contract_gap_count")
-                ),
-                "hard_blocking_excluded_row_count": _safe_int(
-                    summary.get("hard_blocking_excluded_row_count")
-                ),
-                "review_warning_count": _safe_int(summary.get("review_warning_count")),
+                "hard_blocking_contract_gap_count": hard_gap_count,
+                "hard_blocking_excluded_row_count": excluded_row_count,
+                "review_warning_count": review_warning_count,
             }
         )
     return {
@@ -718,16 +1055,25 @@ def join_completed_outcomes(
         if fact.get("stock_code") not in eligible_symbols:
             exclusions["official_common_stock_master_excluded"] += 1
             continue
-        if any(
-            _safe_int(fact.get(key)) > 0
-            for key in ("add_count", "avg_down_count", "pyramid_count")
-        ):
+        scale_counts: list[int] = []
+        scale_count_invalid = False
+        for key in ("add_count", "avg_down_count", "pyramid_count"):
+            raw_count = fact.get(key)
+            parsed_count = 0 if raw_count in (None, "") else _strict_int(raw_count)
+            if parsed_count is None or parsed_count < 0:
+                scale_count_invalid = True
+                break
+            scale_counts.append(parsed_count)
+        if scale_count_invalid:
+            exclusions["scale_in_count_contract_invalid"] += 1
+            continue
+        if any(count > 0 for count in scale_counts):
             exclusions["scale_in_or_average_down_confounded"] += 1
             continue
         buy_price = _finite(fact.get("buy_price"))
         sell_price = _finite(fact.get("sell_price"))
         profit_rate = _finite(fact.get("profit_rate"))
-        qty = _safe_int(fact.get("buy_qty"))
+        qty = _strict_int(fact.get("buy_qty"))
         try:
             rec_date = date.fromisoformat(str(fact.get("rec_date") or ""))
         except ValueError:
@@ -739,6 +1085,7 @@ def join_completed_outcomes(
             or profit_rate is None
             or buy_price <= 0
             or sell_price <= 0
+            or qty is None
             or qty <= 0
         ):
             exclusions["economics_input_invalid"] += 1
@@ -759,7 +1106,7 @@ def join_completed_outcomes(
             {
                 **observation,
                 "rec_date": rec_date.isoformat(),
-                "cohort": "candidate" if score >= MIN_SCORE else "control",
+                "cohort": "candidate" if score > MIN_SCORE else "control",
                 "buy_notional_krw": round(buy_notional, 6),
                 "sell_notional_krw": round(sell_notional, 6),
                 "comparison_cost_krw": round(costs, 6),
@@ -905,7 +1252,7 @@ def _latest_prior_policy(target: date) -> dict[str, Any]:
             source_date = date.fromisoformat(path.stem.rsplit("_", 1)[-1])
         except ValueError:
             continue
-        if source_date < target:
+        if source_date < target and is_krx_trading_day(source_date):
             candidates.append((source_date, path))
     if not candidates:
         return {}
@@ -1181,6 +1528,8 @@ def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
         lineage["invalid_observation_count"] == 0
         and lineage["invalid_fill_contract_count"] == 0
         and lineage["invalid_runtime_policy_provenance_count"] == 0
+        and lineage["malformed_json_line_count"] == 0
+        and lineage["non_object_json_line_count"] == 0
     )
     decision = decide_promotion(
         target,
@@ -1304,13 +1653,43 @@ def validate_artifact_pair(
     report: dict[str, Any], policy: dict[str, Any], *, target: date
 ) -> list[str]:
     issues: list[str] = []
-    if (
-        report.get("schema_version") != SCHEMA_VERSION
-        or report.get("report_type") != REPORT_TYPE
-    ):
-        issues.append("report_contract_invalid")
-    if report.get("target_date") != target.isoformat():
-        issues.append("report_target_date_mismatch")
+    expected_report_scalar = {
+        "schema_version": SCHEMA_VERSION,
+        "report_type": REPORT_TYPE,
+        "target_date": target.isoformat(),
+        "metric_role": "primary_ev",
+        "decision_authority": DECISION_AUTHORITY,
+        "window_policy": (
+            f"rolling_{ROLLING_CALENDAR_DAYS}_calendar_days_clean_post_rollout"
+        ),
+        "sample_floor": "base_and_independent_forward_holdout_each_total20_dates5_candidate10_control10_cohort_dates3",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "daily_audit_exact_lineage_full_fill_official_common_stock_and_effective_cost",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "operator_approval_required": False,
+        "user_authority": USER_AUTHORITY,
+        "full_fill_contract": FULL_FILL_CONTRACT,
+    }
+    for key, expected in expected_report_scalar.items():
+        if report.get(key) != expected:
+            issues.append(f"report_contract_mismatch:{key}")
+    try:
+        report_forbidden_uses = set(report.get("forbidden_uses") or [])
+    except TypeError:
+        report_forbidden_uses = set()
+    if not set(FORBIDDEN_USES).issubset(report_forbidden_uses):
+        issues.append("report_forbidden_uses_incomplete")
+    cost_contract = (
+        report.get("cost_contract")
+        if isinstance(report.get("cost_contract"), dict)
+        else {}
+    )
+    if any(cost_contract.get(key) != value for key, value in COST_CONTRACT.items()):
+        issues.append("report_cost_contract_invalid")
+    if cost_contract.get("contract_sha256") != canonical_sha256(COST_CONTRACT):
+        issues.append("report_cost_contract_sha256_invalid")
     try:
         report_hash = canonical_sha256(
             {key: value for key, value in report.items() if key != "artifact_sha256"}
@@ -1330,6 +1709,27 @@ def validate_artifact_pair(
         or report.get("policy_evidence_sha256") != policy_evidence_hash
     ):
         issues.append("policy_report_evidence_hash_mismatch")
+    base_book = report.get("base_book")
+    holdout_book = report.get("forward_holdout_book")
+    post_apply = report.get("post_apply_attribution")
+    post_apply_payload = post_apply if isinstance(post_apply, dict) else {}
+    post_apply_mature_value = post_apply_payload.get("mature")
+    if not isinstance(post_apply_mature_value, bool):
+        issues.append("post_apply_mature_not_boolean")
+    if not isinstance(post_apply_payload.get("rollback_triggered"), bool):
+        issues.append("post_apply_rollback_not_boolean")
+    try:
+        expected_evidence = _evidence(
+            base_book,
+            holdout_book,
+            post_apply_payload["book"],
+            post_apply_mature=post_apply_mature_value,
+        )
+    except (KeyError, TypeError, ValueError):
+        expected_evidence = None
+        issues.append("report_evidence_source_books_invalid")
+    if expected_evidence is not None and policy.get("evidence") != expected_evidence:
+        issues.append("policy_evidence_not_derived_from_report_books")
     try:
         policy_hash = canonical_sha256(
             {key: value for key, value in policy.items() if key != "artifact_sha256"}
@@ -1356,15 +1756,6 @@ def validate_artifact_pair(
         or report.get("allowed_runtime_apply") is not expected_allowed
     ):
         issues.append("allowed_runtime_apply_mismatch")
-    if any(
-        report.get(key) is not expected
-        for key, expected in (
-            ("runtime_effect", False),
-            ("actual_order_submitted", False),
-            ("broker_order_forbidden", True),
-        )
-    ):
-        issues.append("report_authority_contract_invalid")
     expected_policy_scalar = {
         "schema_version": POLICY_SCHEMA_VERSION,
         "report_type": POLICY_REPORT_TYPE,
@@ -1436,6 +1827,39 @@ def validate_artifact_pair(
     )
     if policy.get("source_quality_status") != expected_source_quality:
         issues.append("policy_source_quality_status_mismatch")
+    base_gate = (
+        report.get("base_gate") if isinstance(report.get("base_gate"), dict) else {}
+    )
+    holdout_gate = (
+        report.get("forward_holdout_gate")
+        if isinstance(report.get("forward_holdout_gate"), dict)
+        else {}
+    )
+    try:
+        calculated_base_pass, _ = _book_passes(base_book)
+        calculated_holdout_pass, _ = _book_passes(holdout_book)
+    except (KeyError, TypeError, ValueError):
+        calculated_base_pass = False
+        calculated_holdout_pass = False
+        issues.append("report_gate_source_books_invalid")
+    if status in {"forward_holdout_armed", "live_auto_apply_ready"}:
+        if expected_source_quality != "pass":
+            issues.append("promotion_policy_source_quality_not_pass")
+        if base_gate.get("pass") is not True or not calculated_base_pass:
+            issues.append("promotion_policy_base_gate_not_pass")
+        if holdout_gate.get("pass") is not calculated_holdout_pass:
+            issues.append("promotion_policy_holdout_gate_inconsistent")
+    if status == "forward_holdout_armed" and calculated_holdout_pass:
+        issues.append("forward_holdout_status_stale_after_gate_pass")
+    if expected_allowed:
+        if expected_source_quality != "pass":
+            issues.append("live_policy_source_quality_not_pass")
+        if base_gate.get("pass") is not True:
+            issues.append("live_policy_base_gate_not_pass")
+        if holdout_gate.get("pass") is not True:
+            issues.append("live_policy_forward_holdout_gate_not_pass")
+        if post_apply_payload.get("rollback_triggered") is True:
+            issues.append("live_policy_post_apply_rollback_triggered")
     if expected_allowed:
         issues.extend(validate_policy_payload(policy, source_date=target))
     return issues

@@ -63,7 +63,12 @@ def test_postclose_wrapper_closes_lookup_attention_auto_promotion_after_fact_syn
     assert "--verify-only" in block
     assert "scanner_lookup_attention_policy_${TARGET_DATE}.json" in block
     assert (
-        "scanner_lookup_attention_tuning=$RUN_SCANNER_LOOKUP_ATTENTION_TUNING" in script
+        "scanner_lookup_attention_tuning=$SCANNER_LOOKUP_ATTENTION_TUNING_EXECUTED"
+        in script
+    )
+    assert "SCANNER_LOOKUP_ATTENTION_TUNING_EXECUTED=false" in script
+    assert block.index("--verify-only") < block.index(
+        "SCANNER_LOOKUP_ATTENTION_TUNING_EXECUTED=true"
     )
 
 

@@ -118,14 +118,19 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   `+0.10%p` EV uplift, and tail guards creates `live_auto_apply_ready`. The
   next trading-day loader accepts only a
   hash-valid immediately prior policy and adds at most 200 points linearly for
-  score `>=0.60` when the exact `dt/tm` snapshot age is within 120 seconds,
+  score `>0.60` when the exact `dt/tm` snapshot age is within 120 seconds
+  (`0.60` itself has a zero-point bonus and remains control),
   inside the existing priority tier for the separately evaluated
   `KRX/krx_regular` cohort only; stale snapshots, PREMARKET, and NXT remain
   zero-bonus. It cannot
   alter the tier, candidate pool, watch slot, BUY/DROP threshold, provider,
   order price, quantity/cap, broker guard, or safety owner. Missing, stale,
   malformed, or non-live policy state deterministically restores a zero-point
-  bonus. Exact
+  bonus. Postclose revalidates the exact prior-trading-day policy/report hash,
+  trading date, venue/session, source age, side, integer full-fill quantities,
+  official-master census, and source-audit counts under the schema/policy v2 contract;
+  malformed/non-object JSONL rows and contradictory buy/sell FIDs block the
+  promotion input instead of being silently discarded. Exact
   policy date/version/hash/bonus provenance is carried into the attach and
   completed lifecycle; after application, a candidate loss below `-5%` rolls
   back immediately at the next postclose, while a mature `20/5` applied cohort

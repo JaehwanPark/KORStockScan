@@ -983,6 +983,26 @@ def _parse_bool_flags(line: str) -> dict[str, bool]:
     return flags
 
 
+def _missing_required_execution_flags(
+    required_flags: tuple[str, ...],
+    execution_flags: dict[str, bool],
+    *,
+    done_line_present: bool,
+    recovery_done: bool,
+) -> list[str]:
+    mandatory_true = {"scanner_lookup_attention_tuning"}
+    return [
+        key
+        for key in required_flags
+        if done_line_present
+        and not recovery_done
+        and (
+            key not in execution_flags
+            or (key in mandatory_true and execution_flags.get(key) is not True)
+        )
+    ]
+
+
 def _parse_marker_values(line: str) -> dict[str, str]:
     return {
         key: value for key, value in re.findall(r"([A-Za-z0-9_]+)=(\S+)", line or "")
@@ -6949,11 +6969,12 @@ def build_threshold_cycle_postclose_verification(
             *required_execution_flags,
             "scanner_lookup_attention_tuning",
         )
-    missing_execution_flags = [
-        key
-        for key in required_execution_flags
-        if done_line and not recovery_done and key not in execution_flags
-    ]
+    missing_execution_flags = _missing_required_execution_flags(
+        required_execution_flags,
+        execution_flags,
+        done_line_present=bool(done_line),
+        recovery_done=recovery_done,
+    )
     for key in (
         "swing_strategy_discovery",
         "swing_lifecycle_matrix",
