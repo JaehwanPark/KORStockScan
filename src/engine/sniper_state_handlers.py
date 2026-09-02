@@ -5716,7 +5716,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
             },
             admin_id=admin_id,
         )
-        if add_result and not _is_scale_in_qty_or_budget_guard_block(add_result):
+        if _scale_in_order_submitted(add_result):
             _log_holding_pipeline(
                 stock,
                 code,
@@ -5740,14 +5740,8 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                 stock, pop_fields=_FIRST_TOUCH_AVGDOWN_BLOCK_STATE_FIELDS
             )
             return {"attempted": True, "submitted": True, "add_result": add_result}
-        if _is_scale_in_qty_or_budget_guard_block(
-            add_result
-        ) and _can_auto_exclude_after_scale_in_qty_guard(
-            strategy=strategy,
-            sell_reason_type=sell_reason_type,
-            exit_rule=exit_rule,
-        ):
-            return _auto_exclude_after_scale_in_qty_guard_block(
+        if _is_scale_in_qty_or_budget_guard_block(add_result):
+            return _record_scale_in_qty_guard_loss_exit_fallthrough(
                 stock,
                 code,
                 add_result=add_result,
@@ -6276,7 +6270,7 @@ def _attempt_late_loss_avg_down_retry_before_sell(
             action=late_loss_avg_down_retry.get("action") or {},
             admin_id=admin_id,
         )
-        if add_result and not _is_scale_in_qty_or_budget_guard_block(add_result):
+        if _scale_in_order_submitted(add_result):
             _log_holding_pipeline(
                 stock,
                 code,
@@ -6300,17 +6294,11 @@ def _attempt_late_loss_avg_down_retry_before_sell(
                 stock, pop_fields=_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_FIELDS
             )
             return {"attempted": True, "submitted": True, "add_result": add_result}
-        if _is_scale_in_qty_or_budget_guard_block(
-            add_result
-        ) and _can_auto_exclude_after_scale_in_qty_guard(
-            strategy=strategy,
-            sell_reason_type=sell_reason_type,
-            exit_rule=exit_rule,
-        ):
+        if _is_scale_in_qty_or_budget_guard_block(add_result):
             _mutate_stock_state(
                 stock, pop_fields=_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_FIELDS
             )
-            return _auto_exclude_after_scale_in_qty_guard_block(
+            return _record_scale_in_qty_guard_loss_exit_fallthrough(
                 stock,
                 code,
                 add_result=add_result,
@@ -6397,11 +6385,7 @@ def _attempt_late_loss_avg_down_retry_before_sell(
 
 def _loss_recovery_intercepts_sell(result: dict | None) -> bool:
     result = result if isinstance(result, dict) else {}
-    return bool(
-        result.get("submitted")
-        or result.get("deferred")
-        or result.get("manual_control_excluded")
-    )
+    return bool(result.get("submitted") or result.get("deferred"))
 
 
 def _boolish_true(value) -> bool:
@@ -79243,20 +79227,128 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
 # =====================================================================
 
 
+def _retire_unowned_scale_in_qty_manual_control_handoff(
+    stock,
+    code,
+    *,
+    pipeline: str,
+    now_ts: float,
+) -> ManualControlExclusionDecision:
+    """Remove legacy scale-in guard handoffs that never acquired an operator owner."""
+
+    decision = evaluate_manual_control_exclusion(code)
+    stale_in_memory = bool(
+        (stock or {}).get("manual_control_auto_scale_in_qty_blocked")
+    )
+    retirement_check_signature = f"{int(bool(decision.excluded))}:{decision.source}"
+    checked_signature = str(
+        (stock or {}).get("_legacy_scale_in_qty_handoff_retirement_check_signature")
+        or ""
+    )
+    if checked_signature == retirement_check_signature or (
+        not stale_in_memory and not decision.excluded
+    ):
+        return decision
+    auto_source = manual_control_auto_exclusion_source(code)
+    if auto_source != "auto_scale_in_qty_guard_block" and not (
+        stale_in_memory and not decision.excluded
+    ):
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "_legacy_scale_in_qty_handoff_retirement_check_signature": (
+                    retirement_check_signature
+                )
+            },
+        )
+        return decision
+
+    removal = None
+    if auto_source == "auto_scale_in_qty_guard_block":
+        removal = remove_auto_manual_control_exclusion_code(
+            code,
+            reason="legacy_unowned_scale_in_qty_guard_handoff_retired",
+        )
+        decision = evaluate_manual_control_exclusion(code)
+        if not removal.removed and str(removal.reason).startswith(
+            "manual_control_exclusion_remove_failed:"
+        ):
+            return ManualControlExclusionDecision(
+                True,
+                str(decision.code or code or ""),
+                f"legacy_scale_in_qty_handoff_retirement_blocked:{removal.reason}",
+                str(removal.source or "manual_control_exclusion_storage"),
+            )
+    if decision.excluded:
+        return decision
+
+    _mutate_stock_state(
+        stock,
+        pop_fields=(
+            "manual_control_exclusion_blocked",
+            "manual_control_exclusion_reason",
+            "manual_control_exclusion_source",
+            "manual_control_auto_scale_in_qty_blocked",
+            "manual_control_auto_exclusion_source_stage",
+            "last_manual_control_exclusion_holding_log_ts",
+            "last_manual_control_exclusion_entry_log_ts",
+            "_legacy_scale_in_qty_handoff_retirement_check_signature",
+        ),
+    )
+    logger = _log_holding_pipeline if pipeline == "holding" else _log_entry_pipeline
+    logger(
+        stock or {},
+        code,
+        "manual_control_legacy_scale_in_qty_handoff_retired",
+        legacy_auto_source=auto_source or "stale_in_memory_only",
+        stale_in_memory=stale_in_memory,
+        file_row_removed=bool(removal and removal.removed),
+        removal_reason=(
+            removal.reason if removal is not None else "not_applicable_stale_state"
+        ),
+        target_status=(stock or {}).get("status")
+        or "not_applicable_target_status",
+        target_strategy=normalize_strategy((stock or {}).get("strategy")),
+        runtime_record_id=(stock or {}).get("id")
+        or "not_applicable_runtime_record_id",
+        observed_epoch=f"{float(now_ts):.3f}",
+        metric_role="runtime_owner_reconciliation",
+        decision_authority="legacy_unowned_auto_handoff_retirement",
+        window_policy="same_holding_runtime_state",
+        sample_floor="not_applicable_runtime_owner_reconciliation",
+        primary_decision_metric="explicit_manual_owner_or_automated_holding_owner",
+        source_quality_gate="legacy_auto_source_or_stale_in_memory_flag_exact_match",
+        runtime_effect=True,
+        allowed_runtime_apply=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        automated_holding_monitor_restored=True,
+        subsequent_sell_requires_existing_safety_guards=True,
+        forbidden_uses=(
+            "explicit_manual_operator_release|hard_stop_handoff_release|"
+            "scale_in_guard_bypass|quantity_or_cap_change|sell_safety_bypass|"
+            "provider_route_change|bot_restart"
+        ),
+    )
+    return decision
+
+
 def _manual_control_exclusion_blocked(
     stock, code, *, pipeline: str, stage: str, now_ts=None
 ) -> bool:
-    decision = evaluate_manual_control_exclusion(code)
+    now_value = time.time() if now_ts is None else float(now_ts)
+    decision = _retire_unowned_scale_in_qty_manual_control_handoff(
+        stock,
+        code,
+        pipeline=pipeline,
+        now_ts=now_value,
+    )
     if not decision.excluded and (
         bool((stock or {}).get("manual_control_auto_open_loss_blocked"))
-        or bool((stock or {}).get("manual_control_auto_scale_in_qty_blocked"))
         or bool((stock or {}).get("manual_control_auto_hard_stop_blocked"))
     ):
         hard_stop_blocked = bool(
             (stock or {}).get("manual_control_auto_hard_stop_blocked")
-        )
-        scale_in_blocked = bool(
-            (stock or {}).get("manual_control_auto_scale_in_qty_blocked")
         )
         decision = ManualControlExclusionDecision(
             True,
@@ -79266,11 +79358,7 @@ def _manual_control_exclusion_blocked(
                 or (
                     "operator_manual_control_hard_stop_auto_excluded"
                     if hard_stop_blocked
-                    else (
-                        "operator_manual_control_scale_in_qty_guard_auto_excluded"
-                        if scale_in_blocked
-                        else "operator_manual_control_open_loss_auto_excluded"
-                    )
+                    else "operator_manual_control_open_loss_auto_excluded"
                 )
             ),
             str(
@@ -79278,17 +79366,12 @@ def _manual_control_exclusion_blocked(
                 or (
                     "in_memory_hard_stop_auto_exclusion"
                     if hard_stop_blocked
-                    else (
-                        "in_memory_scale_in_qty_guard_auto_exclusion"
-                        if scale_in_blocked
-                        else "in_memory_open_loss_auto_exclusion"
-                    )
+                    else "in_memory_open_loss_auto_exclusion"
                 )
             ),
         )
     if not decision.excluded:
         return False
-    now_value = time.time() if now_ts is None else float(now_ts)
     last_key = f"last_manual_control_exclusion_{pipeline}_log_ts"
     last_log_ts = _safe_float((stock or {}).get(last_key), 0.0)
     should_log = now_value - last_log_ts >= 60.0
@@ -79316,9 +79399,6 @@ def _manual_control_exclusion_blocked(
             "manual_control_exclusion_source": decision.source,
             "manual_control_auto_open_loss_blocked": bool(
                 (stock or {}).get("manual_control_auto_open_loss_blocked")
-            ),
-            "manual_control_auto_scale_in_qty_blocked": bool(
-                (stock or {}).get("manual_control_auto_scale_in_qty_blocked")
             ),
             "manual_control_auto_hard_stop_blocked": bool(
                 (stock or {}).get("manual_control_auto_hard_stop_blocked")
@@ -79660,19 +79740,23 @@ def _is_scale_in_qty_or_budget_guard_block(add_result) -> bool:
     )
 
 
-def _can_auto_exclude_after_scale_in_qty_guard(
-    *, strategy: str | None, sell_reason_type: str | None, exit_rule: str | None
-) -> bool:
-    if normalize_strategy(strategy) != "SCALPING":
+def _scale_in_order_submitted(add_result) -> bool:
+    if not add_result:
         return False
-    if str(sell_reason_type or "").upper() != "LOSS":
+    if not isinstance(add_result, dict):
+        return bool(add_result)
+    if str(add_result.get("status") or "").strip().lower() == "blocked":
         return False
-    exit_key = str(exit_rule or "").strip().lower()
-    hard_tokens = ("hard", "protect", "emergency", "daily_limit_up")
-    return not any(token in exit_key for token in hard_tokens)
+    raw_return_code = add_result.get("return_code")
+    if raw_return_code is not None:
+        return str(raw_return_code).strip() == "0"
+    order_no = str(
+        add_result.get("ord_no") or add_result.get("odno") or ""
+    ).strip()
+    return bool(order_no)
 
 
-def _auto_exclude_after_scale_in_qty_guard_block(
+def _record_scale_in_qty_guard_loss_exit_fallthrough(
     stock,
     code,
     *,
@@ -79684,17 +79768,26 @@ def _auto_exclude_after_scale_in_qty_guard_block(
     now_ts: float,
     source_stage: str,
 ) -> dict:
-    comment = (
-        f"auto_scale_in_qty_guard_block source={source_stage} "
-        f"exit={exit_rule or '-'} profit={float(profit_rate):+.2f}% "
-        f"peak={float(peak_profit):+.2f}%"
-    )
-    decision = add_manual_control_exclusion_code(code, comment=comment)
     fields = {
-        **decision.as_log_fields(),
-        "manual_control_auto_exclusion_triggered": bool(decision.excluded),
-        "manual_control_auto_exclusion_policy": "scale_in_qty_guard_block_before_loss_exit_v1",
-        "manual_control_auto_exclusion_source_stage": source_stage,
+        "metric_role": "hard_safety_guard_fallthrough",
+        "decision_authority": "scale_in_position_cap_guard_preserved_loss_exit_fallthrough",
+        "source_quality_gate": "exact_scale_in_qty_guard_block_receipt",
+        "sample_floor": "not_applicable_runtime_guard",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "scale_in_actual_order_submitted": False,
+        "scale_in_broker_order_forbidden": True,
+        "loss_exit_broker_order_forbidden": False,
+        "subsequent_sell_requires_existing_safety_guards": True,
+        "loss_exit_fallthrough": True,
+        "manual_control_exclusion_created": False,
+        "manual_control_owner_required": False,
+        "manual_control_handoff_retired_reason": (
+            "position_or_budget_cap_is_not_manual_control_authority"
+        ),
+        "source_stage": source_stage,
         "target_status": (stock or {}).get("status") or "not_applicable_target_status",
         "target_strategy": normalize_strategy((stock or {}).get("strategy")),
         "runtime_record_id": (stock or {}).get("id")
@@ -79718,36 +79811,31 @@ def _auto_exclude_after_scale_in_qty_guard_block(
             "scale_in_cash_orderable_qty_cap", "-"
         ),
         "observed_epoch": f"{float(now_ts):.3f}",
-        "primary_decision_metric": "scale_in_qty_guard_block_before_loss_exit",
-        "window_policy": "same_loop_loss_exit_intercept",
+        "primary_decision_metric": "scale_in_guard_block_with_loss_exit_fallthrough",
+        "window_policy": "same_loop_loss_exit_guard_fallthrough",
+        "forbidden_uses": (
+            "scale_in_guard_bypass|position_cap_release|budget_cap_release|"
+            "quantity_increase|sell_safety_bypass|manual_control_owner_inference|"
+            "provider_route_change|bot_restart"
+        ),
     }
     _log_holding_pipeline(
         stock or {},
         code,
-        "manual_control_scale_in_qty_guard_auto_excluded",
+        "scale_in_qty_guard_block_loss_exit_fallthrough",
         **fields,
     )
-    _mutate_stock_state(
-        stock,
-        set_fields={
-            "manual_control_exclusion_blocked": bool(decision.excluded),
-            "manual_control_exclusion_reason": decision.reason,
-            "manual_control_exclusion_source": decision.source,
-            "manual_control_auto_scale_in_qty_blocked": bool(decision.excluded),
-            "manual_control_auto_exclusion_source_stage": source_stage,
-            "last_manual_control_exclusion_holding_log_ts": float(now_ts),
-        },
-    )
     log_info(
-        f"[MANUAL_CONTROL_SCALE_IN_QTY_GUARD] {(stock or {}).get('name') or code}({decision.code or code}) "
-        f"auto-excluded after {source_stage}: reason={(add_result or {}).get('reason', '-')}"
+        f"[SCALE_IN_QTY_GUARD_FALLTHROUGH] {(stock or {}).get('name') or code}({code}) "
+        f"additional buy blocked at {source_stage}; original loss exit remains eligible"
     )
     return {
         "attempted": True,
         "submitted": False,
-        "manual_control_excluded": bool(decision.excluded),
-        "reason": "manual_control_excluded_after_scale_in_qty_guard_block",
-        "decision": decision,
+        "deferred": False,
+        "manual_control_excluded": False,
+        "loss_exit_fallthrough": True,
+        "reason": "scale_in_qty_guard_block_loss_exit_fallthrough",
     }
 
 
@@ -85850,22 +85938,14 @@ def handle_holding_state(
                         action=fallback_action,
                         admin_id=admin_id,
                     )
-                    if add_result and not _is_scale_in_qty_or_budget_guard_block(
-                        add_result
-                    ):
+                    if _scale_in_order_submitted(add_result):
                         log_info(
                             f"[LOSS_FALLBACK] {stock.get('name')}({code}) "
                             "fallback 추가매수 체결 경로로 전환, 손절 전송을 건너뜁니다."
                         )
                         return
-                    if _is_scale_in_qty_or_budget_guard_block(
-                        add_result
-                    ) and _can_auto_exclude_after_scale_in_qty_guard(
-                        strategy=strategy,
-                        sell_reason_type=sell_reason_type,
-                        exit_rule=exit_rule,
-                    ):
-                        _auto_exclude_after_scale_in_qty_guard_block(
+                    if _is_scale_in_qty_or_budget_guard_block(add_result):
+                        _record_scale_in_qty_guard_loss_exit_fallthrough(
                             stock,
                             code,
                             add_result=add_result,
@@ -85876,7 +85956,6 @@ def handle_holding_state(
                             now_ts=now_ts,
                             source_stage="loss_fallback_scale_in",
                         )
-                        return
                 elif enabled and not observe_only and not execution_gate_allowed:
                     _log_holding_pipeline(
                         stock,

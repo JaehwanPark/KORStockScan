@@ -795,6 +795,25 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
             "lookup_attention_rank_level_component": 0.9,
             "lookup_attention_positive_change_component": 0.0,
             "lookup_attention_new_top20_component": 0.0,
+            "lookup_attention_weight_policy_state": "applied_same_priority_tier",
+            "lookup_attention_weight_policy_reason": "bounded_linear_bonus",
+            "lookup_attention_weight_policy_version": (
+                "scanner_lookup_attention_weight_v1"
+            ),
+            "lookup_attention_weight_policy_source_date": "2026-09-01",
+            "lookup_attention_weight_policy_artifact_sha256": "a" * 64,
+            "lookup_attention_weight_same_priority_tier_only": True,
+            "lookup_attention_weight_effective_venue": "KRX",
+            "lookup_attention_weight_market_session_bucket": "krx_regular",
+            "lookup_attention_weight_source_age_sec": 30.0,
+            "lookup_attention_weight_source_fresh": True,
+            "lookup_attention_weight_max_source_age_sec": 120.0,
+            "lookup_attention_weight_bonus_points": 100.0,
+            "lookup_attention_weight_policy_applied": True,
+            "lookup_attention_weight_runtime_effect": True,
+            "lookup_attention_weight_allowed_runtime_apply": True,
+            "lookup_attention_weight_actual_order_submitted": False,
+            "lookup_attention_weight_broker_order_forbidden": True,
         }
     )
 
@@ -832,6 +851,14 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert attached_target["lookup_attention_allowed_runtime_apply"] is False
     assert attached_target["lookup_attention_actual_order_submitted"] is False
     assert attached_target["lookup_attention_broker_order_forbidden"] is True
+    assert attached_target["lookup_attention_weight_policy_applied"] is True
+    assert attached_target["lookup_attention_weight_runtime_effect"] is True
+    assert attached_target["lookup_attention_weight_bonus_points"] == 100.0
+    assert attached_target["lookup_attention_weight_source_fresh"] is True
+    assert attached_target["lookup_attention_weight_source_age_sec"] == 30.0
+    assert attached_target["lookup_attention_weight_policy_source_date"] == (
+        "2026-09-01"
+    )
     assert (
         attached_target["venue_resolution"]
         == "consistent_explicit:payload.effective_venue,payload.venue"
@@ -889,6 +916,10 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert (
         "tail_loss" in emitted[-1]["fields"]["lookup_attention_secondary_diagnostics"]
     )
+    assert emitted[-1]["fields"]["lookup_attention_weight_policy_applied"] is True
+    assert emitted[-1]["fields"]["lookup_attention_weight_runtime_effect"] is True
+    assert emitted[-1]["fields"]["lookup_attention_weight_bonus_points"] == 100.0
+    assert emitted[-1]["fields"]["lookup_attention_weight_source_fresh"] is True
 
 
 def test_scanner_runtime_target_venue_fields_fail_closed_on_session_conflict():
@@ -1915,6 +1946,12 @@ def test_scanner_runtime_context_clears_stale_lookup_attention_generation():
             "lookup_attention_allowed_runtime_apply": "false",
             "lookup_attention_actual_order_submitted": "false",
             "lookup_attention_broker_order_forbidden": "true",
+            "lookup_attention_weight_policy_applied": "false",
+            "lookup_attention_weight_runtime_effect": "false",
+            "lookup_attention_weight_allowed_runtime_apply": "false",
+            "lookup_attention_weight_actual_order_submitted": "false",
+            "lookup_attention_weight_broker_order_forbidden": "true",
+            "lookup_attention_weight_source_fresh": "false",
         }
     )
 
@@ -1925,6 +1962,12 @@ def test_scanner_runtime_context_clears_stale_lookup_attention_generation():
     assert updates["lookup_attention_allowed_runtime_apply"] is False
     assert updates["lookup_attention_actual_order_submitted"] is False
     assert updates["lookup_attention_broker_order_forbidden"] is True
+    assert updates["lookup_attention_weight_policy_applied"] is False
+    assert updates["lookup_attention_weight_runtime_effect"] is False
+    assert updates["lookup_attention_weight_allowed_runtime_apply"] is False
+    assert updates["lookup_attention_weight_actual_order_submitted"] is False
+    assert updates["lookup_attention_weight_broker_order_forbidden"] is True
+    assert updates["lookup_attention_weight_source_fresh"] is False
 
     merged_updates, _fields = (
         kiwoom_sniper_v2._scanner_merge_context_preserving_positive_delta(
@@ -1950,6 +1993,12 @@ def test_scanner_runtime_target_event_normalizes_lookup_attention_bool_strings()
             "lookup_attention_allowed_runtime_apply": "false",
             "lookup_attention_actual_order_submitted": "false",
             "lookup_attention_broker_order_forbidden": "true",
+            "lookup_attention_weight_policy_applied": "false",
+            "lookup_attention_weight_runtime_effect": "false",
+            "lookup_attention_weight_allowed_runtime_apply": "false",
+            "lookup_attention_weight_actual_order_submitted": "false",
+            "lookup_attention_weight_broker_order_forbidden": "true",
+            "lookup_attention_weight_source_fresh": "false",
         },
         outcome="attached",
         reason="scanner_runtime_target_attach",
@@ -1959,6 +2008,12 @@ def test_scanner_runtime_target_event_normalizes_lookup_attention_bool_strings()
     assert fields["lookup_attention_allowed_runtime_apply"] is False
     assert fields["lookup_attention_actual_order_submitted"] is False
     assert fields["lookup_attention_broker_order_forbidden"] is True
+    assert fields["lookup_attention_weight_policy_applied"] is False
+    assert fields["lookup_attention_weight_runtime_effect"] is False
+    assert fields["lookup_attention_weight_allowed_runtime_apply"] is False
+    assert fields["lookup_attention_weight_actual_order_submitted"] is False
+    assert fields["lookup_attention_weight_broker_order_forbidden"] is True
+    assert fields["lookup_attention_weight_source_fresh"] is False
 
 
 def test_scanner_runtime_target_event_fields_fail_closed_on_venue_conflict():

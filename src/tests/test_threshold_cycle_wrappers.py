@@ -47,6 +47,26 @@ def test_postclose_wrapper_syncs_exact_trade_facts_before_daily_calibration():
     assert "src.engine.strategy_position_performance_report" in sync_block
 
 
+def test_postclose_wrapper_closes_lookup_attention_auto_promotion_after_fact_sync():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    sync_idx = script.index("src.engine.strategy_position_performance_report")
+    producer_idx = script.index(
+        "src.engine.monitoring.scanner_lookup_attention_tuning", sync_idx
+    )
+    calibration_idx = script.index("src.engine.daily_threshold_cycle_report", sync_idx)
+
+    assert sync_idx < producer_idx < calibration_idx
+    block = script[producer_idx:calibration_idx]
+    assert '--target-date "$TARGET_DATE"' in block
+    assert "--write" in block
+    assert "--verify-only" in block
+    assert "scanner_lookup_attention_policy_${TARGET_DATE}.json" in block
+    assert (
+        "scanner_lookup_attention_tuning=$RUN_SCANNER_LOOKUP_ATTENTION_TUNING" in script
+    )
+
+
 def test_postclose_wrapper_snapshot_is_removed_when_child_fails(tmp_path):
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     preamble = script[: script.index('PROJECT_DIR="${PROJECT_DIR:-')]
@@ -2043,8 +2063,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '--symbol-master-path "$intraday_ws_symbol_master"' in script
     assert (
         'wait_for_json_artifact "$intraday_ws_symbol_master" '
-        '"intraday_ws_freshness_symbol_master"'
-        not in script
+        '"intraday_ws_freshness_symbol_master"' not in script
     )
     assert script.index("intraday_ws_freshness_finalize") < script.index(
         'run_threshold_cycle_ev_and_wait "pre_workorder"'

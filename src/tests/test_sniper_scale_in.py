@@ -40310,6 +40310,106 @@ def test_late_loss_avg_down_quote_recovery_defer_ignores_non_quote_block(monkeyp
     assert "late_loss_avg_down_quote_recovery_until" not in stock
 
 
+def test_late_loss_avg_down_qty_guard_block_does_not_intercept_loss_exit(
+    monkeypatch, tmp_path
+):
+    from src.engine.risk import manual_control_exclusion
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_LATE_LOSS_AVG_DOWN_ENABLED=True,
+    )
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    stock = {
+        "id": 38741,
+        "code": "249420",
+        "name": "ILDONG",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 17_450,
+        "buy_qty": 1,
+        "rt_ai_prob": 0.71,
+    }
+    logs = []
+    block_result = {
+        "status": "blocked",
+        "block_stage": "scale_in_qty_block",
+        "reason": "position_cap_or_budget",
+        "qty": 1,
+        "effective_qty": 0,
+        "scale_in_budget_source": "position_sizing_dynamic_formula",
+        "scale_in_account_deposit": 1_402_600,
+        "scale_in_cash_orderable_amount": 140_260,
+        "scale_in_cash_orderable_qty_cap": 8,
+    }
+
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_late_loss_avg_down_retry",
+        lambda *args, **kwargs: {
+            "should_retry": True,
+            "reason": "late_loss_avg_down_retry",
+            "used_count": 0,
+            "giveback_pct": 3.09,
+            "action": {
+                "should_add": True,
+                "add_type": "AVG_DOWN",
+                "reason": "late_loss_avg_down_retry",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers, "_process_scale_in_action", lambda **kwargs: block_result
+    )
+
+    result = state_handlers._attempt_late_loss_avg_down_retry_before_sell(
+        stock=stock,
+        code="249420",
+        ws_data={"curr": 16_810},
+        strategy="SCALPING",
+        market_regime="BULL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-4.77,
+        peak_profit=-0.23,
+        current_ai_score=71,
+        held_sec=4_377,
+        now_ts=1_000.0,
+        context_fields={"sell_intercept_context": "standard_exit_before_submit"},
+    )
+
+    assert result == {
+        "attempted": True,
+        "submitted": False,
+        "deferred": False,
+        "manual_control_excluded": False,
+        "loss_exit_fallthrough": True,
+        "reason": "scale_in_qty_guard_block_loss_exit_fallthrough",
+    }
+    assert state_handlers._loss_recovery_intercepts_sell(result) is False
+    assert not path.exists()
+    assert "manual_control_auto_scale_in_qty_blocked" not in stock
+    fallthrough = dict(logs)["scale_in_qty_guard_block_loss_exit_fallthrough"]
+    assert fallthrough["scale_in_cash_orderable_qty_cap"] == 8
+    assert fallthrough["scale_in_effective_qty"] == 0
+    assert fallthrough["loss_exit_fallthrough"] is True
+    assert fallthrough["manual_control_exclusion_created"] is False
+
+
 def test_sell_reject_with_positive_sellable_qty_requires_exact_receipt(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -48709,10 +48809,38 @@ def test_stop_line_touch_overnight_position_uses_current_active_session_elapsed(
     assert result["deep_recovery_composite_micro_support"] is True
 
 
-@pytest.mark.parametrize("key", ["submitted", "deferred", "manual_control_excluded"])
+@pytest.mark.parametrize("key", ["submitted", "deferred"])
 def test_loss_recovery_result_intercepts_same_loop_sell(key):
     assert state_handlers._loss_recovery_intercepts_sell({key: True}) is True
     assert state_handlers._loss_recovery_intercepts_sell({"attempted": True}) is False
+    assert (
+        state_handlers._loss_recovery_intercepts_sell(
+            {"manual_control_excluded": True}
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({"return_code": "0", "ord_no": "A1"}, True),
+        ({"return_code": 0, "ord_no": "A2"}, True),
+        ({"ord_no": "A3"}, True),
+        ({"return_code": "1", "ord_no": "REJECTED"}, False),
+        (
+            {
+                "status": "blocked",
+                "block_stage": "scale_in_margin_authority_block",
+                "reason": "general_entry_margin_one_share_position",
+            },
+            False,
+        ),
+        (None, False),
+    ],
+)
+def test_scale_in_order_submitted_requires_success_receipt(result, expected):
+    assert state_handlers._scale_in_order_submitted(result) is expected
 
 
 def test_first_touch_avgdown_decision_gate_blocks_repeated_blockers_without_recovery(
@@ -50249,7 +50377,7 @@ def test_stop_line_touch_first_touch_avgdown_logs_missing_runtime_prior(
     assert candidate["first_touch_runtime_prior_signal"] == "neutral"
 
 
-def test_stop_line_touch_qty_budget_block_auto_excludes_manual_control(
+def test_stop_line_touch_qty_budget_block_preserves_guard_and_falls_through_to_exit(
     monkeypatch, tmp_path
 ):
     path = tmp_path / "manual_control_excluded_codes.txt"
@@ -50324,18 +50452,20 @@ def test_stop_line_touch_qty_budget_block_auto_excludes_manual_control(
         now_ts=1000.0,
     )
 
-    assert result["manual_control_excluded"] is True
-    assert result["reason"] == "manual_control_excluded_after_scale_in_qty_guard_block"
-    assert "005930" in path.read_text(encoding="utf-8")
-    assert stock["manual_control_auto_scale_in_qty_blocked"] is True
+    assert result["manual_control_excluded"] is False
+    assert result["loss_exit_fallthrough"] is True
+    assert result["reason"] == "scale_in_qty_guard_block_loss_exit_fallthrough"
+    assert not path.exists()
+    assert "manual_control_auto_scale_in_qty_blocked" not in stock
     by_stage = {stage: fields for stage, fields in logs}
-    auto = by_stage["manual_control_scale_in_qty_guard_auto_excluded"]
-    assert (
-        auto["manual_control_auto_exclusion_policy"]
-        == "scale_in_qty_guard_block_before_loss_exit_v1"
-    )
-    assert auto["actual_order_submitted"] is False
-    assert auto["broker_order_forbidden"] is True
+    fallthrough = by_stage["scale_in_qty_guard_block_loss_exit_fallthrough"]
+    assert fallthrough["scale_in_effective_qty"] == 0
+    assert fallthrough["scale_in_actual_order_submitted"] is False
+    assert fallthrough["scale_in_broker_order_forbidden"] is True
+    assert fallthrough["loss_exit_fallthrough"] is True
+    assert fallthrough["manual_control_exclusion_created"] is False
+    assert fallthrough["broker_order_forbidden"] is True
+    assert fallthrough["loss_exit_broker_order_forbidden"] is False
 
 
 def test_hard_stop_qty_budget_block_does_not_auto_exclude_manual_control(

@@ -135,9 +135,7 @@ def _threshold_ev_reconciliation_issues(ev_report: dict[str, Any]) -> list[str]:
         daily.get("source_split") if isinstance(daily.get("source_split"), dict) else {}
     )
     real_split = (
-        source_split.get("real")
-        if isinstance(source_split.get("real"), dict)
-        else {}
+        source_split.get("real") if isinstance(source_split.get("real"), dict) else {}
     )
     authoritative_source_split = bool(
         daily.get("headline_authority") == "completed_by_source_same_day_real"
@@ -148,8 +146,7 @@ def _threshold_ev_reconciliation_issues(ev_report: dict[str, Any]) -> list[str]:
     )
     return (
         ["threshold_cycle_ev_trade_review_calibration_count_mismatch"]
-        if reconciliation.get("count_match") is False
-        and not authoritative_source_split
+        if reconciliation.get("count_match") is False and not authoritative_source_split
         else []
     )
 
@@ -1991,6 +1988,14 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "observation_source_quality_audit": REPORT_DIR
         / "observation_source_quality_audit"
         / f"observation_source_quality_audit_{target_date}.json",
+        "scanner_lookup_attention_tuning": REPORT_DIR
+        / "scanner_lookup_attention_tuning"
+        / f"scanner_lookup_attention_tuning_{target_date}.json",
+        "scanner_lookup_attention_policy": PROJECT_ROOT
+        / "data"
+        / "threshold_cycle"
+        / "scanner_lookup_attention_policy"
+        / f"scanner_lookup_attention_policy_{target_date}.json",
         "ai_decision_action_outcome_calibration": REPORT_DIR
         / "ai_decision_action_outcome_calibration"
         / f"ai_decision_action_outcome_calibration_{target_date}.json",
@@ -6087,6 +6092,53 @@ def _limit_down_watch_report_required(target_date: str) -> bool:
         return False
 
 
+def _scanner_lookup_attention_required(target_date: str) -> bool:
+    try:
+        return date.fromisoformat(target_date) >= date(2026, 9, 2)
+    except ValueError:
+        return False
+
+
+def _scanner_lookup_attention_status(
+    report: dict[str, Any], policy: dict[str, Any], *, target_date: str
+) -> dict[str, Any]:
+    from src.engine.monitoring.scanner_lookup_attention_tuning import (
+        validate_artifact_pair,
+    )
+    from src.engine.scalping.scanner_lookup_attention_policy import (
+        validate_policy_payload as validate_live_policy,
+    )
+
+    try:
+        parsed = date.fromisoformat(target_date)
+    except ValueError:
+        return {"status": "fail", "issues": ["target_date_invalid"]}
+    issues = validate_artifact_pair(report, policy, target=parsed)
+    state = str(report.get("status") or "")
+    if state not in {
+        "hold_sample",
+        "hold_no_edge",
+        "source_quality_blocked",
+        "forward_holdout_armed",
+        "live_auto_apply_ready",
+    }:
+        issues.append("promotion_state_invalid")
+    if state == "live_auto_apply_ready":
+        issues.extend(validate_live_policy(policy, source_date=parsed))
+    elif policy.get("allowed_runtime_apply") is not False:
+        issues.append("non_live_policy_runtime_apply_allowed")
+    return {
+        "status": "fail" if issues else "pass",
+        "issues": sorted(set(issues)),
+        "promotion_state": state or "missing",
+        "holdout_armed_since": report.get("holdout_armed_since"),
+        "allowed_runtime_apply": policy.get("allowed_runtime_apply"),
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _limit_down_watch_verification_enabled(
     target_date: str,
     *,
@@ -6181,6 +6233,33 @@ def build_threshold_cycle_postclose_verification(
 
     paths = _artifact_paths(target_date)
     ev_report = _load_json(paths["threshold_cycle_ev"])
+    scanner_lookup_attention_tuning = _load_json(
+        paths["scanner_lookup_attention_tuning"]
+    )
+    scanner_lookup_attention_policy = _load_json(
+        paths["scanner_lookup_attention_policy"]
+    )
+    scanner_lookup_attention = (
+        _scanner_lookup_attention_status(
+            scanner_lookup_attention_tuning,
+            scanner_lookup_attention_policy,
+            target_date=target_date,
+        )
+        if _scanner_lookup_attention_required(target_date)
+        else {
+            "status": "not_required_before_rollout",
+            "issues": [],
+            "allowed_runtime_apply": False,
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+    )
+    if scanner_lookup_attention["status"] == "fail":
+        log_issues.extend(
+            f"scanner_lookup_attention_{issue}"
+            for issue in scanner_lookup_attention["issues"]
+        )
     low_price_two_leg_tuning = _load_json(paths["low_price_two_leg_tuning"])
     low_price_two_leg_policy_candidate = _load_json(
         paths["low_price_two_leg_policy_candidate"]
@@ -6865,6 +6944,11 @@ def build_threshold_cycle_postclose_verification(
             *required_execution_flags,
             "limit_down_watch_report",
         )
+    if _scanner_lookup_attention_required(target_date):
+        required_execution_flags = (
+            *required_execution_flags,
+            "scanner_lookup_attention_tuning",
+        )
     missing_execution_flags = [
         key
         for key in required_execution_flags
@@ -7148,6 +7232,9 @@ def build_threshold_cycle_postclose_verification(
     if not limit_down_watch_verification_enabled:
         disabled_artifact_labels.add("limit_down_watch")
         disabled_artifact_labels.add("limit_down_watch_markdown")
+    if not _scanner_lookup_attention_required(target_date):
+        disabled_artifact_labels.add("scanner_lookup_attention_tuning")
+        disabled_artifact_labels.add("scanner_lookup_attention_policy")
     if execution_flags.get("stage_hook_workorder_discovery") is not True:
         disabled_artifact_labels.add("stage_hook_workorder_discovery")
     if execution_flags.get("stage_hook_runtime_scaffold") is not True:
@@ -7933,6 +8020,7 @@ def build_threshold_cycle_postclose_verification(
         },
         "artifact_status": artifact_status,
         "missing_required_artifacts": missing_required_artifacts,
+        "scanner_lookup_attention": scanner_lookup_attention,
         "low_price_two_leg_postclose": low_price_two_leg_postclose,
         "samsung_machine_entry_postclose": samsung_machine_entry_postclose,
         "machine_entry_timing_postclose": machine_entry_timing_postclose,
@@ -8163,6 +8251,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("smoothing_source_only_path_journal"), dict)
         else {}
     )
+    scanner_lookup_attention = (
+        report.get("scanner_lookup_attention")
+        if isinstance(report.get("scanner_lookup_attention"), dict)
+        else {}
+    )
     lines = [
         f"# Threshold Cycle Postclose Verification - {report.get('date')}",
         "",
@@ -8186,6 +8279,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- smoothing_source_only_path_journal: `{smoothing_journal.get('status') or '-'}`",
         f"- smoothing_source_only_path_journal_issues: `{smoothing_journal.get('issues') or []}`",
         f"- smoothing_source_only_rolling_decision: `{smoothing_journal.get('rolling_decision_status') or '-'}`",
+        f"- scanner_lookup_attention_status: `{scanner_lookup_attention.get('status') or '-'}`",
+        f"- scanner_lookup_attention_promotion_state: `{scanner_lookup_attention.get('promotion_state') or '-'}`",
+        f"- scanner_lookup_attention_allowed_runtime_apply: `{scanner_lookup_attention.get('allowed_runtime_apply')}`",
         "",
         "## Warning Follow-Up Summary",
         f"- status: `{warning_followup.get('status') or '-'}`",

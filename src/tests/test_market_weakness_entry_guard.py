@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -212,6 +213,17 @@ def test_blocked_entry_counterfactual_anchor_is_immutable_and_idempotent(tmp_pat
             "now": _now() + timedelta(seconds=2),
         },
     )
+    refreshed_guard_observation = record_market_weakness_blocked_entry(
+        replace(
+            decision,
+            observation_id="weakness-3",
+            observation_as_of="2026-08-31T09:59:30+09:00",
+        ),
+        **{
+            **arguments,
+            "now": _now() + timedelta(seconds=3),
+        },
+    )
     conflict = record_market_weakness_blocked_entry(
         decision,
         **{**arguments, "target_price": 100_300},
@@ -221,6 +233,14 @@ def test_blocked_entry_counterfactual_anchor_is_immutable_and_idempotent(tmp_pat
     assert first["status"] == "recorded"
     assert second["status"] == "existing_immutable_observation"
     assert second["content_sha256"] == payload["content_sha256"]
+    assert refreshed_guard_observation["status"] == (
+        "existing_immutable_observation"
+    )
+    assert refreshed_guard_observation["content_sha256"] == (
+        payload["content_sha256"]
+    )
+    assert payload["guard_observation_id"] == "weakness-2"
+    assert payload["guard_observation_as_of"] == "2026-08-31T09:08:00+09:00"
     assert conflict["status"] == "existing_immutable_observation_conflict"
     assert conflict["conflict_fields"] == ["target_price"]
     assert payload["actual_order_submitted"] is False

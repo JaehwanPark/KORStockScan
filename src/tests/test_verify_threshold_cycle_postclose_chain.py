@@ -30,22 +30,25 @@ def test_threshold_ev_reconciliation_mismatch_is_a_verifier_issue():
 
 
 def test_threshold_ev_reconciliation_accepts_declared_diagnostic_source_split():
-    assert mod._threshold_ev_reconciliation_issues(
-        {
-            "daily_ev_summary": {
-                "completed_trades": 5,
-                "headline_authority": "completed_by_source_same_day_real",
-                "source_split": {"real": {"sample": 5}},
-                "trade_review_snapshot_reconciliation": {
-                    "completed_trades": 3,
-                    "count_match": False,
-                    "decision_authority": (
-                        "diagnostic_only_when_same_day_source_split_present"
-                    ),
-                },
+    assert (
+        mod._threshold_ev_reconciliation_issues(
+            {
+                "daily_ev_summary": {
+                    "completed_trades": 5,
+                    "headline_authority": "completed_by_source_same_day_real",
+                    "source_split": {"real": {"sample": 5}},
+                    "trade_review_snapshot_reconciliation": {
+                        "completed_trades": 3,
+                        "count_match": False,
+                        "decision_authority": (
+                            "diagnostic_only_when_same_day_source_split_present"
+                        ),
+                    },
+                }
             }
-        }
-    ) == []
+        )
+        == []
+    )
 
 
 def test_workorder_source_fingerprint_detects_changed_bytes(tmp_path):
@@ -1602,6 +1605,21 @@ def test_artifact_paths_include_limit_down_watch():
     assert str(paths["limit_down_watch_markdown"]).endswith(
         "data/report/limit_down_watch/limit_down_watch_2026-07-30.md"
     )
+
+
+def test_artifact_paths_and_rollout_include_scanner_lookup_attention():
+    paths = mod._artifact_paths("2026-09-02")
+
+    assert str(paths["scanner_lookup_attention_tuning"]).endswith(
+        "data/report/scanner_lookup_attention_tuning/"
+        "scanner_lookup_attention_tuning_2026-09-02.json"
+    )
+    assert str(paths["scanner_lookup_attention_policy"]).endswith(
+        "data/threshold_cycle/scanner_lookup_attention_policy/"
+        "scanner_lookup_attention_policy_2026-09-02.json"
+    )
+    assert mod._scanner_lookup_attention_required("2026-09-01") is False
+    assert mod._scanner_lookup_attention_required("2026-09-02") is True
 
 
 def test_limit_down_watch_report_flag_required_from_rollout_date():

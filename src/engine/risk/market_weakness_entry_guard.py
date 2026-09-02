@@ -380,12 +380,14 @@ def record_market_weakness_blocked_entry(
                 "reference_price",
                 "target_price",
                 "required_quantity",
-                "guard_observation_id",
-                "guard_observation_as_of",
                 "guard_policy_id",
                 "decision_authority",
                 "counterfactual_contract",
             )
+            # The anchor identity is the blocked owner signal, not the
+            # observer's rolling latch receipt.  Preserve the first causal
+            # guard receipt in the immutable payload when the same signal is
+            # rechecked against a newer weakness observation.
             conflict_fields = [
                 field
                 for field in immutable_fields

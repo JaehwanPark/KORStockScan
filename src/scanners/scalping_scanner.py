@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import time
 from datetime import datetime, timedelta
 from math import ceil, isfinite, log10
+from zoneinfo import ZoneInfo
 
 # 💡 Level 1 & 2 공통 모듈 임포트
 from src.utils import kiwoom_utils
@@ -31,6 +32,15 @@ from src.engine.scalping.watch_budget import (
     normalize_owner as normalize_watch_budget_owner,
     policy_version as watch_budget_policy_version,
     rising_source_reservation,
+)
+from src.engine.scalping.scanner_lookup_attention_policy import (
+    DECISION_AUTHORITY as LOOKUP_ATTENTION_WEIGHT_DECISION_AUTHORITY,
+    ELIGIBLE_SESSION_BUCKETS as LOOKUP_ATTENTION_WEIGHT_ELIGIBLE_SESSIONS,
+    ELIGIBLE_VENUES as LOOKUP_ATTENTION_WEIGHT_ELIGIBLE_VENUES,
+    MAX_FUTURE_SKEW_SEC as LOOKUP_ATTENTION_WEIGHT_MAX_FUTURE_SKEW_SEC,
+    MAX_SOURCE_AGE_SEC as LOOKUP_ATTENTION_WEIGHT_MAX_SOURCE_AGE_SEC,
+    bounded_bonus as lookup_attention_bounded_bonus,
+    load_active_policy as load_lookup_attention_weight_policy,
 )
 from src.engine.scalping.limit_down_watch import (  # noqa: E402
     LIMIT_DOWN_LIVE_UNLOCK_SOURCE,
@@ -56,6 +66,7 @@ from src.utils.pipeline_event_logger import emit_pipeline_event
 from sqlalchemy import func, or_
 
 SCANNER_RISING_START_SOURCE_FAMILY = "scalping_scanner_rising_start_source_v1"
+KST = ZoneInfo("Asia/Seoul")
 LOW_REBOUND_RISING_MISSED_SOURCE = "LOW_REBOUND_RISING_MISSED"
 LOW_REBOUND_RISING_MISSED_SOURCE_FAMILY = "rising_missed_low_rebound_source_v1"
 LOW_REBOUND_RISING_MISSED_ROLE = "rising_missed_low_rebound_candidate"
@@ -85,7 +96,8 @@ BREAKOUT_CONFIRMATION_SOURCES = {
 RANK_CHANGE_SIGN_AUTHORITY_DEFAULT = "raw_unverified_not_decision_input"
 LOOKUP_ATTENTION_PRIOR_FORMULA_VERSION = "ka00198_snapshot_v1_no_persistence"
 LOOKUP_ATTENTION_PRIOR_FORBIDDEN_USES = (
-    "scanner_sort_or_slot_change,buy_or_drop_decision,threshold_mutation,"
+    "direct_scanner_sort_or_slot_change_without_valid_promoted_policy,"
+    "buy_or_drop_decision,threshold_mutation,"
     "provider_route_change,order_price_or_quantity_change,cap_release,"
     "broker_guard_bypass,stale_or_conflict_bypass,hard_safety_bypass,"
     "live_or_sim_auto_promotion_without_completed_ev_review"
@@ -1308,6 +1320,24 @@ def _lookup_attention_prior_observation(target):
     }
 
 
+def _lookup_attention_source_age_sec(target, *, now=None):
+    target = target or {}
+    source_date = str(target.get("RealtimeLookupSourceDate") or "").strip()
+    source_time = str(target.get("RealtimeLookupSourceTime") or "").strip()
+    try:
+        source_at = datetime.strptime(
+            source_date + source_time, "%Y%m%d%H%M%S"
+        ).replace(tzinfo=KST)
+    except ValueError:
+        return None
+    observed_at = now or datetime.now(KST)
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=KST)
+    else:
+        observed_at = observed_at.astimezone(KST)
+    return round((observed_at - source_at).total_seconds(), 6)
+
+
 ZERO_CONTEXT_FORBIDDEN_USES = (
     "threshold_mutation,provider_route_change,order_price_relaxation,"
     "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
@@ -2018,13 +2048,126 @@ def _scanner_priority_profile(target, previous=None):
         base_score = 1000.0
         demoted_reason = "secondary_source_requires_acceleration_confirmation"
 
-    score = base_score + _freshness_score(target)
+    lookup_observation = _lookup_attention_prior_observation(target)
+    tiering_enabled = bool(
+        getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_TIERING_ENABLED", False)
+    )
+    lookup_policy = (
+        load_lookup_attention_weight_policy(datetime.now(KST).date())
+        if tiering_enabled
+        else {
+            "active": False,
+            "state": "inactive",
+            "reason": "scanner_priority_tiering_disabled",
+            "policy_version": "scanner_lookup_attention_weight_v1",
+            "policy_source_date": "",
+            "policy_artifact_sha256": "",
+            "allowed_runtime_apply": False,
+        }
+    )
+    lookup_venue = scalping_session_venue_provenance()
+    lookup_policy_for_candidate = lookup_policy
+    lookup_source_age_sec = _lookup_attention_source_age_sec(target)
+    lookup_source_fresh = bool(
+        lookup_source_age_sec is not None
+        and -LOOKUP_ATTENTION_WEIGHT_MAX_FUTURE_SKEW_SEC
+        <= lookup_source_age_sec
+        <= float(
+            lookup_policy.get(
+                "max_source_age_sec", LOOKUP_ATTENTION_WEIGHT_MAX_SOURCE_AGE_SEC
+            )
+        )
+    )
+    if lookup_policy.get("active") is True and (
+        lookup_venue.get("effective_venue")
+        not in LOOKUP_ATTENTION_WEIGHT_ELIGIBLE_VENUES
+        or lookup_venue.get("market_session_bucket")
+        not in LOOKUP_ATTENTION_WEIGHT_ELIGIBLE_SESSIONS
+    ):
+        lookup_policy_for_candidate = {
+            **lookup_policy,
+            "active": False,
+            "state": "inactive",
+            "reason": "venue_or_session_out_of_policy_scope",
+            "allowed_runtime_apply": False,
+        }
+    if lookup_policy_for_candidate.get("active") is True and not lookup_source_fresh:
+        lookup_policy_for_candidate = {
+            **lookup_policy_for_candidate,
+            "active": False,
+            "state": "source_quality_blocked",
+            "reason": "lookup_attention_source_stale_or_invalid",
+            "allowed_runtime_apply": False,
+        }
+    lookup_bonus = lookup_attention_bounded_bonus(
+        (
+            lookup_observation.get("lookup_attention_snapshot_score")
+            if lookup_observation.get("lookup_attention_state")
+            == "observed_source_only"
+            and lookup_source_fresh
+            else None
+        ),
+        lookup_policy_for_candidate,
+    )
+    score = (
+        base_score
+        + _freshness_score(target)
+        + float(lookup_bonus.get("bonus_points") or 0.0)
+    )
     return {
         "scanner_priority_tier": tier,
         "scanner_priority_score": score,
         "scanner_priority_reason": reason,
         "scanner_demoted_reason": demoted_reason,
         "scanner_promotion_policy_version": SCANNER_PROMOTION_POLICY_VERSION,
+        "lookup_attention_weight_policy_state": lookup_bonus.get("state"),
+        "lookup_attention_weight_policy_reason": lookup_bonus.get("reason"),
+        "lookup_attention_weight_policy_version": lookup_policy.get("policy_version"),
+        "lookup_attention_weight_policy_source_date": lookup_policy.get(
+            "policy_source_date"
+        ),
+        "lookup_attention_weight_policy_artifact_sha256": lookup_policy.get(
+            "policy_artifact_sha256"
+        ),
+        "lookup_attention_weight_decision_authority": (
+            LOOKUP_ATTENTION_WEIGHT_DECISION_AUTHORITY
+        ),
+        "lookup_attention_weight_same_priority_tier_only": True,
+        "lookup_attention_weight_eligible_venues": ",".join(
+            LOOKUP_ATTENTION_WEIGHT_ELIGIBLE_VENUES
+        ),
+        "lookup_attention_weight_eligible_session_buckets": ",".join(
+            LOOKUP_ATTENTION_WEIGHT_ELIGIBLE_SESSIONS
+        ),
+        "lookup_attention_weight_effective_venue": lookup_venue.get("effective_venue"),
+        "lookup_attention_weight_market_session_bucket": lookup_venue.get(
+            "market_session_bucket"
+        ),
+        "lookup_attention_weight_source_age_sec": lookup_source_age_sec,
+        "lookup_attention_weight_source_fresh": lookup_source_fresh,
+        "lookup_attention_weight_max_source_age_sec": (
+            LOOKUP_ATTENTION_WEIGHT_MAX_SOURCE_AGE_SEC
+        ),
+        "lookup_attention_weight_bonus_points": float(
+            lookup_bonus.get("bonus_points") or 0.0
+        ),
+        "lookup_attention_weight_policy_applied": bool(lookup_bonus.get("applied")),
+        "lookup_attention_weight_runtime_effect": bool(
+            lookup_bonus.get("runtime_effect")
+        ),
+        "lookup_attention_weight_allowed_runtime_apply": bool(
+            lookup_policy_for_candidate.get("allowed_runtime_apply")
+        ),
+        "lookup_attention_weight_actual_order_submitted": False,
+        "lookup_attention_weight_broker_order_forbidden": True,
+        "lookup_attention_weight_rollback_bonus_points": 0.0,
+        "lookup_attention_weight_forbidden_uses": (
+            "priority_tier_or_slot_ownership_change,"
+            "candidate_pool_or_source_eligibility_change,"
+            "buy_drop_threshold_or_provider_change,"
+            "order_price_quantity_cap_or_broker_guard_change,"
+            "stale_conflict_or_hard_safety_bypass"
+        ),
     }
 
 
@@ -3879,6 +4022,68 @@ def _scanner_event_fields(target, source_guard=None):
             "scanner_promotion_policy_version"
         )
         or priority_profile.get("scanner_promotion_policy_version"),
+        "lookup_attention_weight_policy_state": priority_profile.get(
+            "lookup_attention_weight_policy_state"
+        ),
+        "lookup_attention_weight_policy_reason": priority_profile.get(
+            "lookup_attention_weight_policy_reason"
+        ),
+        "lookup_attention_weight_policy_version": priority_profile.get(
+            "lookup_attention_weight_policy_version"
+        ),
+        "lookup_attention_weight_policy_source_date": priority_profile.get(
+            "lookup_attention_weight_policy_source_date"
+        ),
+        "lookup_attention_weight_policy_artifact_sha256": priority_profile.get(
+            "lookup_attention_weight_policy_artifact_sha256"
+        ),
+        "lookup_attention_weight_decision_authority": priority_profile.get(
+            "lookup_attention_weight_decision_authority"
+        ),
+        "lookup_attention_weight_same_priority_tier_only": priority_profile.get(
+            "lookup_attention_weight_same_priority_tier_only"
+        ),
+        "lookup_attention_weight_eligible_venues": priority_profile.get(
+            "lookup_attention_weight_eligible_venues"
+        ),
+        "lookup_attention_weight_eligible_session_buckets": priority_profile.get(
+            "lookup_attention_weight_eligible_session_buckets"
+        ),
+        "lookup_attention_weight_effective_venue": priority_profile.get(
+            "lookup_attention_weight_effective_venue"
+        ),
+        "lookup_attention_weight_market_session_bucket": priority_profile.get(
+            "lookup_attention_weight_market_session_bucket"
+        ),
+        "lookup_attention_weight_source_age_sec": priority_profile.get(
+            "lookup_attention_weight_source_age_sec"
+        ),
+        "lookup_attention_weight_source_fresh": priority_profile.get(
+            "lookup_attention_weight_source_fresh"
+        ),
+        "lookup_attention_weight_max_source_age_sec": priority_profile.get(
+            "lookup_attention_weight_max_source_age_sec"
+        ),
+        "lookup_attention_weight_bonus_points": priority_profile.get(
+            "lookup_attention_weight_bonus_points"
+        ),
+        "lookup_attention_weight_policy_applied": priority_profile.get(
+            "lookup_attention_weight_policy_applied"
+        ),
+        "lookup_attention_weight_runtime_effect": priority_profile.get(
+            "lookup_attention_weight_runtime_effect"
+        ),
+        "lookup_attention_weight_allowed_runtime_apply": priority_profile.get(
+            "lookup_attention_weight_allowed_runtime_apply"
+        ),
+        "lookup_attention_weight_actual_order_submitted": False,
+        "lookup_attention_weight_broker_order_forbidden": True,
+        "lookup_attention_weight_rollback_bonus_points": priority_profile.get(
+            "lookup_attention_weight_rollback_bonus_points"
+        ),
+        "lookup_attention_weight_forbidden_uses": priority_profile.get(
+            "lookup_attention_weight_forbidden_uses"
+        ),
         "first_seen_price": first_price,
         "current_price": current_price,
         "price_delta_since_first_seen_pct": source_guard.get(
@@ -4185,6 +4390,68 @@ def _scanner_runtime_target_payload(
         ),
         "lookup_attention_new_top20_component": fields.get(
             "lookup_attention_new_top20_component"
+        ),
+        "lookup_attention_weight_policy_state": fields.get(
+            "lookup_attention_weight_policy_state"
+        ),
+        "lookup_attention_weight_policy_reason": fields.get(
+            "lookup_attention_weight_policy_reason"
+        ),
+        "lookup_attention_weight_policy_version": fields.get(
+            "lookup_attention_weight_policy_version"
+        ),
+        "lookup_attention_weight_policy_source_date": fields.get(
+            "lookup_attention_weight_policy_source_date"
+        ),
+        "lookup_attention_weight_policy_artifact_sha256": fields.get(
+            "lookup_attention_weight_policy_artifact_sha256"
+        ),
+        "lookup_attention_weight_decision_authority": fields.get(
+            "lookup_attention_weight_decision_authority"
+        ),
+        "lookup_attention_weight_same_priority_tier_only": bool(
+            fields.get("lookup_attention_weight_same_priority_tier_only")
+        ),
+        "lookup_attention_weight_eligible_venues": fields.get(
+            "lookup_attention_weight_eligible_venues"
+        ),
+        "lookup_attention_weight_eligible_session_buckets": fields.get(
+            "lookup_attention_weight_eligible_session_buckets"
+        ),
+        "lookup_attention_weight_effective_venue": fields.get(
+            "lookup_attention_weight_effective_venue"
+        ),
+        "lookup_attention_weight_market_session_bucket": fields.get(
+            "lookup_attention_weight_market_session_bucket"
+        ),
+        "lookup_attention_weight_source_age_sec": fields.get(
+            "lookup_attention_weight_source_age_sec"
+        ),
+        "lookup_attention_weight_source_fresh": bool(
+            fields.get("lookup_attention_weight_source_fresh")
+        ),
+        "lookup_attention_weight_max_source_age_sec": fields.get(
+            "lookup_attention_weight_max_source_age_sec"
+        ),
+        "lookup_attention_weight_bonus_points": fields.get(
+            "lookup_attention_weight_bonus_points"
+        ),
+        "lookup_attention_weight_policy_applied": bool(
+            fields.get("lookup_attention_weight_policy_applied")
+        ),
+        "lookup_attention_weight_runtime_effect": bool(
+            fields.get("lookup_attention_weight_runtime_effect")
+        ),
+        "lookup_attention_weight_allowed_runtime_apply": bool(
+            fields.get("lookup_attention_weight_allowed_runtime_apply")
+        ),
+        "lookup_attention_weight_actual_order_submitted": False,
+        "lookup_attention_weight_broker_order_forbidden": True,
+        "lookup_attention_weight_rollback_bonus_points": fields.get(
+            "lookup_attention_weight_rollback_bonus_points"
+        ),
+        "lookup_attention_weight_forbidden_uses": fields.get(
+            "lookup_attention_weight_forbidden_uses"
         ),
         "rising_missed_lineage": fields.get("rising_missed_lineage") or "",
         "scanner_watch_budget_owner": fields.get("scanner_watch_budget_owner")

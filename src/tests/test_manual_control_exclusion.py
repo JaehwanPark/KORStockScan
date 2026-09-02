@@ -51,6 +51,204 @@ def test_manual_control_exclusion_loads_file_and_reloads_on_mtime_change(
     )
 
 
+def test_legacy_scale_in_qty_auto_handoff_is_retired_without_operator_owner(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "249420 # auto_scale_in_qty_guard_block source=late_loss_avg_down_retry\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    logs = []
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "id": 38741,
+        "code": "249420",
+        "name": "ILDONG",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "manual_control_exclusion_blocked": True,
+        "manual_control_exclusion_reason": "operator_manual_control_excluded_symbol",
+        "manual_control_exclusion_source": str(path),
+        "manual_control_auto_scale_in_qty_blocked": True,
+        "manual_control_auto_exclusion_source_stage": "late_loss_avg_down_retry",
+    }
+
+    blocked = sniper_state_handlers._manual_control_exclusion_blocked(
+        stock,
+        "249420",
+        pipeline="holding",
+        stage="manual_control_excluded_symbol_blocked",
+        now_ts=1_000.0,
+    )
+
+    assert blocked is False
+    assert "249420" not in path.read_text(encoding="utf-8")
+    assert "manual_control_exclusion_blocked" not in stock
+    assert "manual_control_auto_scale_in_qty_blocked" not in stock
+    stage, fields = logs[-1]
+    assert stage == "manual_control_legacy_scale_in_qty_handoff_retired"
+    assert fields["legacy_auto_source"] == "auto_scale_in_qty_guard_block"
+    assert fields["file_row_removed"] is True
+    assert fields["broker_order_forbidden"] is True
+    assert fields["automated_holding_monitor_restored"] is True
+
+
+def test_legacy_scale_in_qty_flag_cannot_override_explicit_manual_operator(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "249420 # manual_operator operator_owned_holding\n", encoding="utf-8"
+    )
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    logs = []
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "id": 38741,
+        "code": "249420",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "manual_control_auto_scale_in_qty_blocked": True,
+    }
+
+    blocked = sniper_state_handlers._manual_control_exclusion_blocked(
+        stock,
+        "249420",
+        pipeline="holding",
+        stage="manual_control_excluded_symbol_blocked",
+        now_ts=1_000.0,
+    )
+
+    assert blocked is True
+    assert "249420" in path.read_text(encoding="utf-8")
+    assert stock["manual_control_auto_scale_in_qty_blocked"] is True
+    assert logs[-1][0] == "manual_control_excluded_symbol_blocked"
+
+    path.write_text("", encoding="utf-8")
+    assert (
+        sniper_state_handlers._manual_control_exclusion_blocked(
+            stock,
+            "249420",
+            pipeline="holding",
+            stage="manual_control_excluded_symbol_blocked",
+            now_ts=1_001.0,
+        )
+        is False
+    )
+    assert "manual_control_auto_scale_in_qty_blocked" not in stock
+    assert logs[-1][0] == "manual_control_legacy_scale_in_qty_handoff_retired"
+
+
+def test_stale_in_memory_scale_in_qty_handoff_does_not_recreate_exclusion(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text("", encoding="utf-8")
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    logs = []
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "id": 38741,
+        "code": "249420",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "manual_control_exclusion_blocked": True,
+        "manual_control_exclusion_source": "in_memory_scale_in_qty_guard_auto_exclusion",
+        "manual_control_auto_scale_in_qty_blocked": True,
+    }
+
+    blocked = sniper_state_handlers._manual_control_exclusion_blocked(
+        stock,
+        "249420",
+        pipeline="holding",
+        stage="manual_control_excluded_symbol_blocked",
+        now_ts=1_000.0,
+    )
+
+    assert blocked is False
+    assert "manual_control_exclusion_blocked" not in stock
+    assert "manual_control_auto_scale_in_qty_blocked" not in stock
+    stage, fields = logs[-1]
+    assert stage == "manual_control_legacy_scale_in_qty_handoff_retired"
+    assert fields["legacy_auto_source"] == "stale_in_memory_only"
+    assert fields["file_row_removed"] is False
+
+
+def test_legacy_scale_in_qty_handoff_retirement_fails_closed_on_storage_error(
+    monkeypatch,
+):
+    decisions = iter(
+        [
+            manual_control_exclusion.ManualControlExclusionDecision(
+                True,
+                "249420",
+                "operator_manual_control_excluded_symbol",
+                "/tmp/manual_control.txt",
+            ),
+            manual_control_exclusion.ManualControlExclusionDecision(
+                False, "249420", "", ""
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "evaluate_manual_control_exclusion",
+        lambda code: next(decisions),
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "manual_control_auto_exclusion_source",
+        lambda code: "auto_scale_in_qty_guard_block",
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "remove_auto_manual_control_exclusion_code",
+        lambda code, reason: manual_control_exclusion.ManualControlExclusionRemoval(
+            False,
+            "249420",
+            "manual_control_exclusion_remove_failed:PermissionError",
+            "/tmp/manual_control.txt",
+        ),
+    )
+    stock = {
+        "code": "249420",
+        "status": "HOLDING",
+        "manual_control_auto_scale_in_qty_blocked": True,
+    }
+
+    decision = (
+        sniper_state_handlers._retire_unowned_scale_in_qty_manual_control_handoff(
+            stock,
+            "249420",
+            pipeline="holding",
+            now_ts=1_000.0,
+        )
+    )
+
+    assert decision.excluded is True
+    assert decision.reason.startswith(
+        "legacy_scale_in_qty_handoff_retirement_blocked:"
+    )
+    assert stock["manual_control_auto_scale_in_qty_blocked"] is True
+
+
 def test_manual_control_exclusion_append_adds_code_once(monkeypatch, tmp_path):
     path = tmp_path / "manual_control_excluded_codes.txt"
     monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)

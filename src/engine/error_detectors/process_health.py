@@ -15,12 +15,17 @@ from src.engine.error_detectors.base import (
     DetectionResult,
     register_detector,
 )
+from src.engine.risk.manual_control_exclusion import (
+    manual_control_auto_exclusion_source,
+    manual_control_operator_exclusion_source,
+)
 
 HEARTBEAT_PATH = PROJECT_ROOT / "tmp" / "error_detector_heartbeat.json"
 POSTCLOSE_BOT_ISOLATION_PATH = PROJECT_ROOT / "tmp" / "postclose_bot_isolation.json"
 SAMSUNG_MORNING_AUTHORITY_PATH = (
     PROJECT_ROOT / "data" / "runtime" / "samsung_morning_one_share_authority.json"
 )
+PIPELINE_EVENTS_DIR = PROJECT_ROOT / "data" / "pipeline_events"
 _HEARTBEAT_LOCK = threading.Lock()
 _SNIPER_NORMAL_MARKET_CLOSE_MINUTE = 20 * 60
 _SAMSUNG_MORNING_START_MINUTE = 7 * 60 + 57
@@ -147,6 +152,33 @@ class ProcessHealthDetector(BaseDetector):
             result.recommended_action = (
                 f"{result.recommended_action} Recheck the same systemd transaction "
                 "at the 08:05 KST acceptance deadline; do not start a duplicate owner."
+            ).strip()
+        manual_control_holding = _recent_unowned_manual_control_holding_blocks(
+            now_ts=now_ts
+        )
+        result.details["manual_control_holding_guard"] = manual_control_holding
+        active_blocks = manual_control_holding.get("active_blocks") or []
+        if active_blocks:
+            block_summary = (
+                "Active real holdings are excluded from automated exit monitoring "
+                "without current explicit operator ownership: "
+                + ", ".join(
+                    f"{row.get('stock_name') or row.get('stock_code')}"
+                    f"({row.get('stock_code')})"
+                    for row in active_blocks
+                )
+                + "."
+            )
+            result.summary = (
+                block_summary
+                if result.severity == "pass"
+                else f"{result.summary} {block_summary}"
+            )
+            result.severity = "fail"
+            result.recommended_action = (
+                f"{result.recommended_action} Reconcile the exact holding and manual-control "
+                "owner before changing the exclusion; do not bypass quantity, broker, or "
+                "hard-safety guards."
             ).strip()
         return result
 
@@ -500,6 +532,130 @@ def _parse_iso(iso_str: str) -> float | None:
         return dt.timestamp()
     except (ValueError, TypeError):
         return None
+
+
+def _recent_unowned_manual_control_holding_blocks(
+    *,
+    now_ts: float,
+    max_age_sec: int = 180,
+    max_tail_bytes: int = 16 * 1024 * 1024,
+) -> dict:
+    """Find fresh real-holding exit blocks without explicit operator ownership.
+
+    The runtime can preserve an automatic manual-control flag in the in-memory
+    holding record after its file row has disappeared.  The recurring holding
+    pipeline receipt is therefore the authoritative liveness signal; current
+    explicit ``manual_operator`` provenance is the only accepted owner veto.
+    This detector is read-only and never releases an exclusion or submits an
+    order.
+    """
+
+    target_date = datetime.fromtimestamp(now_ts).astimezone().date().isoformat()
+    path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    details: dict[str, object] = {
+        "status": "no_recent_unowned_block",
+        "path": str(path),
+        "max_age_sec": int(max_age_sec),
+        "max_tail_bytes": int(max_tail_bytes),
+        "active_blocks": [],
+    }
+    try:
+        size = path.stat().st_size
+        start = max(0, size - max(1, int(max_tail_bytes)))
+        with path.open("rb") as fp:
+            fp.seek(start)
+            raw = fp.read()
+    except FileNotFoundError:
+        details["status"] = "pipeline_events_missing"
+        return details
+    except OSError as exc:
+        details["status"] = "pipeline_events_unreadable"
+        details["error"] = f"{exc.__class__.__name__}:{exc}"
+        return details
+
+    if start > 0:
+        first_newline = raw.find(b"\n")
+        raw = raw[first_newline + 1 :] if first_newline >= 0 else b""
+    details["source_size_bytes"] = int(size)
+    details["tail_start_bytes"] = int(start)
+    details["tail_read_bytes"] = len(raw)
+
+    latest_by_holding: dict[tuple[str, str], dict] = {}
+    relevant_stages = {
+        "manual_control_fast_exit_monitor_blocked",
+        "manual_control_excluded_symbol_blocked",
+        "manual_control_legacy_scale_in_qty_handoff_retired",
+    }
+    malformed_rows = 0
+    for raw_line in raw.splitlines():
+        try:
+            row = json.loads(raw_line)
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+            malformed_rows += 1
+            continue
+        if str(row.get("stage") or "") not in relevant_stages:
+            continue
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        if str(fields.get("target_status") or "").upper() != "HOLDING":
+            continue
+        if str(fields.get("target_strategy") or "").upper() != "SCALPING":
+            continue
+        emitted_ts = _parse_iso(str(row.get("emitted_at") or ""))
+        if emitted_ts is None:
+            continue
+        age_sec = float(now_ts) - float(emitted_ts)
+        if age_sec < 0 or age_sec > max(0, int(max_age_sec)):
+            continue
+        code = str(row.get("stock_code") or "").strip()
+        record_id = str(row.get("record_id") or fields.get("runtime_record_id") or "")
+        if not code or not record_id:
+            continue
+        key = (code, record_id)
+        current = latest_by_holding.get(key)
+        if current is None or emitted_ts > current["emitted_ts"]:
+            latest_by_holding[key] = {
+                "stock_code": code,
+                "stock_name": str(row.get("stock_name") or "").strip(),
+                "record_id": record_id,
+                "stage": str(row.get("stage") or ""),
+                "emitted_at": str(row.get("emitted_at") or ""),
+                "emitted_ts": emitted_ts,
+                "age_sec": round(age_sec, 3),
+                "manual_control_exclusion_source": str(
+                    fields.get("manual_control_exclusion_source") or ""
+                ),
+            }
+
+    active_blocks: list[dict] = []
+    for row in latest_by_holding.values():
+        if row["stage"] == "manual_control_legacy_scale_in_qty_handoff_retired":
+            continue
+        code = row["stock_code"]
+        operator_source = manual_control_operator_exclusion_source(code)
+        auto_source = manual_control_auto_exclusion_source(code)
+        if operator_source:
+            continue
+        row["current_operator_source"] = ""
+        row["current_auto_source"] = auto_source
+        row["classification"] = (
+            "active_file_auto_exclusion"
+            if auto_source
+            else "stale_in_memory_or_unowned_exclusion"
+        )
+        active_blocks.append(row)
+
+    active_blocks.sort(key=lambda row: (row["stock_code"], row["record_id"]))
+    details["malformed_tail_rows"] = malformed_rows
+    details["recent_holding_event_count"] = len(latest_by_holding)
+    details["recent_blocked_holding_count"] = sum(
+        row["stage"] != "manual_control_legacy_scale_in_qty_handoff_retired"
+        for row in latest_by_holding.values()
+    )
+    details["active_block_count"] = len(active_blocks)
+    details["active_blocks"] = active_blocks
+    if active_blocks:
+        details["status"] = "active_unowned_manual_control_holding_block"
+    return details
 
 
 def _is_expected_thread_terminal(

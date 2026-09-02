@@ -27,9 +27,13 @@ def _force_trading_day(monkeypatch, tmp_path):
     )
     heartbeat_path = tmp_path / "error_detector_heartbeat.json"
     isolation_path = tmp_path / "postclose_bot_isolation.json"
+    pipeline_events_dir = tmp_path / "pipeline_events"
     monkeypatch.setattr(process_health_module, "HEARTBEAT_PATH", heartbeat_path)
     monkeypatch.setattr(
         process_health_module, "POSTCLOSE_BOT_ISOLATION_PATH", isolation_path
+    )
+    monkeypatch.setattr(
+        process_health_module, "PIPELINE_EVENTS_DIR", pipeline_events_dir
     )
     monkeypatch.setitem(globals(), "HEARTBEAT_PATH", heartbeat_path)
     monkeypatch.setitem(globals(), "POSTCLOSE_BOT_ISOLATION_PATH", isolation_path)
@@ -100,6 +104,159 @@ class TestProcessHealthDetector:
         detector = ProcessHealthDetector()
         result = detector.check()
         assert result.severity == "pass"
+
+    def test_detector_fails_for_recent_unowned_manual_control_holding_block(
+        self, monkeypatch
+    ):
+        now = datetime.now().astimezone().replace(microsecond=0)
+        monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
+        monkeypatch.setattr(
+            process_health_module,
+            "manual_control_operator_exclusion_source",
+            lambda code: "",
+        )
+        monkeypatch.setattr(
+            process_health_module,
+            "manual_control_auto_exclusion_source",
+            lambda code: "",
+        )
+        pipeline_dir = process_health_module.PIPELINE_EVENTS_DIR
+        pipeline_dir.mkdir(parents=True, exist_ok=True)
+        pipeline_path = pipeline_dir / f"pipeline_events_{now.date().isoformat()}.jsonl"
+        pipeline_path.write_text(
+            json.dumps(
+                {
+                    "stage": "manual_control_fast_exit_monitor_blocked",
+                    "stock_name": "Sample Holding",
+                    "stock_code": "249420",
+                    "record_id": 38741,
+                    "emitted_at": now.isoformat(),
+                    "fields": {
+                        "target_status": "HOLDING",
+                        "target_strategy": "SCALPING",
+                        "manual_control_exclusion_source": "test_config.txt",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        write_heartbeat("main_loop")
+        write_heartbeat("telegram")
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "fail"
+        guard = result.details["manual_control_holding_guard"]
+        assert guard["status"] == "active_unowned_manual_control_holding_block"
+        assert guard["active_block_count"] == 1
+        assert guard["active_blocks"][0]["classification"] == (
+            "stale_in_memory_or_unowned_exclusion"
+        )
+        assert "Sample Holding(249420)" in result.summary
+        assert "do not bypass quantity" in result.recommended_action
+
+    def test_detector_accepts_recent_explicit_operator_holding_exclusion(
+        self, monkeypatch
+    ):
+        now = datetime.now().astimezone().replace(microsecond=0)
+        monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
+        monkeypatch.setattr(
+            process_health_module,
+            "manual_control_operator_exclusion_source",
+            lambda code: "manual_operator",
+        )
+        monkeypatch.setattr(
+            process_health_module,
+            "manual_control_auto_exclusion_source",
+            lambda code: "",
+        )
+        pipeline_dir = process_health_module.PIPELINE_EVENTS_DIR
+        pipeline_dir.mkdir(parents=True, exist_ok=True)
+        pipeline_path = pipeline_dir / f"pipeline_events_{now.date().isoformat()}.jsonl"
+        pipeline_path.write_text(
+            json.dumps(
+                {
+                    "stage": "manual_control_fast_exit_monitor_blocked",
+                    "stock_name": "Operator Holding",
+                    "stock_code": "005930",
+                    "record_id": 101,
+                    "emitted_at": now.isoformat(),
+                    "fields": {
+                        "target_status": "HOLDING",
+                        "target_strategy": "SCALPING",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        write_heartbeat("main_loop")
+        write_heartbeat("telegram")
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "pass"
+        guard = result.details["manual_control_holding_guard"]
+        assert guard["recent_holding_event_count"] == 1
+        assert guard["recent_blocked_holding_count"] == 1
+        assert guard["active_block_count"] == 0
+
+    def test_detector_accepts_latest_legacy_handoff_retirement(self, monkeypatch):
+        now = datetime.now().astimezone().replace(microsecond=0)
+        monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
+        monkeypatch.setattr(
+            process_health_module,
+            "manual_control_operator_exclusion_source",
+            lambda code: "",
+        )
+        monkeypatch.setattr(
+            process_health_module,
+            "manual_control_auto_exclusion_source",
+            lambda code: "",
+        )
+        pipeline_dir = process_health_module.PIPELINE_EVENTS_DIR
+        pipeline_dir.mkdir(parents=True, exist_ok=True)
+        pipeline_path = pipeline_dir / f"pipeline_events_{now.date().isoformat()}.jsonl"
+        rows = [
+            {
+                "stage": "manual_control_fast_exit_monitor_blocked",
+                "stock_name": "Recovered Holding",
+                "stock_code": "249420",
+                "record_id": 38741,
+                "emitted_at": datetime.fromtimestamp(
+                    now.timestamp() - 1, tz=now.tzinfo
+                ).isoformat(),
+                "fields": {
+                    "target_status": "HOLDING",
+                    "target_strategy": "SCALPING",
+                },
+            },
+            {
+                "stage": "manual_control_legacy_scale_in_qty_handoff_retired",
+                "stock_name": "Recovered Holding",
+                "stock_code": "249420",
+                "record_id": 38741,
+                "emitted_at": now.isoformat(),
+                "fields": {
+                    "target_status": "HOLDING",
+                    "target_strategy": "SCALPING",
+                },
+            },
+        ]
+        pipeline_path.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+        write_heartbeat("main_loop")
+        write_heartbeat("telegram")
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "pass"
+        guard = result.details["manual_control_holding_guard"]
+        assert guard["recent_holding_event_count"] == 1
+        assert guard["recent_blocked_holding_count"] == 0
+        assert guard["active_block_count"] == 0
 
     def test_detector_fails_when_samsung_expected_runtime_fails(self, monkeypatch):
         monkeypatch.setattr(

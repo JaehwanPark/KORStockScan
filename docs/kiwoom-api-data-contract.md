@@ -99,12 +99,37 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   `50% normalized rank level + 35% positive rank change + 15% new top-20
   entry`. It requires the namespaced rank/change and a calendar-valid
   `dt=YYYYMMDD` plus `tm=HHmmss`, records persistence as not yet evaluated, has
-  `runtime_effect=false` and `allowed_runtime_apply=false`, and cannot change
-  scanner sorting, slot ownership, BUY/DROP, thresholds, provider, order
+  `runtime_effect=false` and `allowed_runtime_apply=false`, and cannot directly
+  change scanner sorting, slot ownership, BUY/DROP, thresholds, provider, order
   price/quantity, cap, broker guards, bot state, or hard safety. A policy
   candidate requires at least 20 completed outcomes across five trading dates
   and cost-adjusted EV review; missing fields are source-quality blocked rather
   than zero-filled.
+- The scheduled promotion path is a separate reviewed consumer. Postclose
+  `scanner_lookup_attention_tuning` binds the exact scanner promotion and DB
+  record to a same-date KRX-regular buy-side `position_rebased_after_fill`
+  full-fill receipt and a completed no-scale-in lifecycle, excludes
+  partial/right-censored/master-invalid rows, verifies the source-quality audit
+  for every included outcome date, and applies the effective `1.5/1.5/20 bps`
+  comparison-cost contract. The pre-arm base window is frozen at the arm date;
+  the first independent `20 outcomes / 5 trading dates` candidate-control pass
+  arms `forward_holdout_armed` without runtime effect; a second independent
+  future holdout pass with the same floor, positive candidate EV, at least
+  `+0.10%p` EV uplift, and tail guards creates `live_auto_apply_ready`. The
+  next trading-day loader accepts only a
+  hash-valid immediately prior policy and adds at most 200 points linearly for
+  score `>=0.60` when the exact `dt/tm` snapshot age is within 120 seconds,
+  inside the existing priority tier for the separately evaluated
+  `KRX/krx_regular` cohort only; stale snapshots, PREMARKET, and NXT remain
+  zero-bonus. It cannot
+  alter the tier, candidate pool, watch slot, BUY/DROP threshold, provider,
+  order price, quantity/cap, broker guard, or safety owner. Missing, stale,
+  malformed, or non-live policy state deterministically restores a zero-point
+  bonus. Exact
+  policy date/version/hash/bonus provenance is carried into the attach and
+  completed lifecycle; after application, a candidate loss below `-5%` rolls
+  back immediately at the next postclose, while a mature `20/5` applied cohort
+  that loses the EV or tail gates also emits a zero-bonus next-day policy.
 - The onboarding contract is `metric_role=source_quality_gate`,
   `decision_authority=counterfactual_only`,
   `window_policy=same_day_intraday_light`, and

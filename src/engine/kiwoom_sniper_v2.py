@@ -268,6 +268,28 @@ SCANNER_LOOKUP_ATTENTION_CONTEXT_KEYS = (
     "lookup_attention_rank_level_component",
     "lookup_attention_positive_change_component",
     "lookup_attention_new_top20_component",
+    "lookup_attention_weight_policy_state",
+    "lookup_attention_weight_policy_reason",
+    "lookup_attention_weight_policy_version",
+    "lookup_attention_weight_policy_source_date",
+    "lookup_attention_weight_policy_artifact_sha256",
+    "lookup_attention_weight_decision_authority",
+    "lookup_attention_weight_same_priority_tier_only",
+    "lookup_attention_weight_eligible_venues",
+    "lookup_attention_weight_eligible_session_buckets",
+    "lookup_attention_weight_effective_venue",
+    "lookup_attention_weight_market_session_bucket",
+    "lookup_attention_weight_source_age_sec",
+    "lookup_attention_weight_source_fresh",
+    "lookup_attention_weight_max_source_age_sec",
+    "lookup_attention_weight_bonus_points",
+    "lookup_attention_weight_policy_applied",
+    "lookup_attention_weight_runtime_effect",
+    "lookup_attention_weight_allowed_runtime_apply",
+    "lookup_attention_weight_actual_order_submitted",
+    "lookup_attention_weight_broker_order_forbidden",
+    "lookup_attention_weight_rollback_bonus_points",
+    "lookup_attention_weight_forbidden_uses",
 )
 
 
@@ -2559,6 +2581,72 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         ),
         "lookup_attention_new_top20_component": payload.get(
             "lookup_attention_new_top20_component"
+        ),
+        "lookup_attention_weight_policy_state": payload.get(
+            "lookup_attention_weight_policy_state", "not_applicable"
+        ),
+        "lookup_attention_weight_policy_reason": payload.get(
+            "lookup_attention_weight_policy_reason", "not_applicable"
+        ),
+        "lookup_attention_weight_policy_version": payload.get(
+            "lookup_attention_weight_policy_version", "not_applicable"
+        ),
+        "lookup_attention_weight_policy_source_date": payload.get(
+            "lookup_attention_weight_policy_source_date", ""
+        ),
+        "lookup_attention_weight_policy_artifact_sha256": payload.get(
+            "lookup_attention_weight_policy_artifact_sha256", ""
+        ),
+        "lookup_attention_weight_decision_authority": payload.get(
+            "lookup_attention_weight_decision_authority", "not_applicable"
+        ),
+        "lookup_attention_weight_same_priority_tier_only": _env_bool_from_value(
+            payload.get("lookup_attention_weight_same_priority_tier_only"), True
+        ),
+        "lookup_attention_weight_eligible_venues": payload.get(
+            "lookup_attention_weight_eligible_venues", "KRX"
+        ),
+        "lookup_attention_weight_eligible_session_buckets": payload.get(
+            "lookup_attention_weight_eligible_session_buckets", "krx_regular"
+        ),
+        "lookup_attention_weight_effective_venue": payload.get(
+            "lookup_attention_weight_effective_venue", "not_applicable"
+        ),
+        "lookup_attention_weight_market_session_bucket": payload.get(
+            "lookup_attention_weight_market_session_bucket", "not_applicable"
+        ),
+        "lookup_attention_weight_source_age_sec": payload.get(
+            "lookup_attention_weight_source_age_sec"
+        ),
+        "lookup_attention_weight_source_fresh": _env_bool_from_value(
+            payload.get("lookup_attention_weight_source_fresh"), False
+        ),
+        "lookup_attention_weight_max_source_age_sec": payload.get(
+            "lookup_attention_weight_max_source_age_sec", 120.0
+        ),
+        "lookup_attention_weight_bonus_points": payload.get(
+            "lookup_attention_weight_bonus_points", 0.0
+        ),
+        "lookup_attention_weight_policy_applied": _env_bool_from_value(
+            payload.get("lookup_attention_weight_policy_applied"), False
+        ),
+        "lookup_attention_weight_runtime_effect": _env_bool_from_value(
+            payload.get("lookup_attention_weight_runtime_effect"), False
+        ),
+        "lookup_attention_weight_allowed_runtime_apply": _env_bool_from_value(
+            payload.get("lookup_attention_weight_allowed_runtime_apply"), False
+        ),
+        "lookup_attention_weight_actual_order_submitted": _env_bool_from_value(
+            payload.get("lookup_attention_weight_actual_order_submitted"), False
+        ),
+        "lookup_attention_weight_broker_order_forbidden": _env_bool_from_value(
+            payload.get("lookup_attention_weight_broker_order_forbidden"), True
+        ),
+        "lookup_attention_weight_rollback_bonus_points": payload.get(
+            "lookup_attention_weight_rollback_bonus_points", 0.0
+        ),
+        "lookup_attention_weight_forbidden_uses": payload.get(
+            "lookup_attention_weight_forbidden_uses", "not_applicable"
         ),
         "current_price_observed": payload.get("current_price_observed")
         or payload.get("buy_price")
@@ -8114,9 +8202,18 @@ def _scanner_runtime_context_updates(payload):
                     "lookup_attention_runtime_effect",
                     "lookup_attention_allowed_runtime_apply",
                     "lookup_attention_actual_order_submitted",
+                    "lookup_attention_weight_same_priority_tier_only",
+                    "lookup_attention_weight_source_fresh",
+                    "lookup_attention_weight_policy_applied",
+                    "lookup_attention_weight_runtime_effect",
+                    "lookup_attention_weight_allowed_runtime_apply",
+                    "lookup_attention_weight_actual_order_submitted",
                 }:
                     updates[key] = _env_bool_from_value(payload.get(key), False)
-                elif key == "lookup_attention_broker_order_forbidden":
+                elif key in {
+                    "lookup_attention_broker_order_forbidden",
+                    "lookup_attention_weight_broker_order_forbidden",
+                }:
                     updates[key] = _env_bool_from_value(payload.get(key), True)
                 else:
                     updates[key] = payload.get(key)

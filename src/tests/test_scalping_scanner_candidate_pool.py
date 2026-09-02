@@ -3473,9 +3473,20 @@ def test_rank_sources_keep_namespaces_separate_without_changing_legacy_ranking()
     assert scalping_scanner._rising_start_score(merged) == (
         scalping_scanner._rising_start_score(without_source_only_fields)
     )
-    assert scalping_scanner._scanner_priority_profile(merged) == (
-        scalping_scanner._scanner_priority_profile(without_source_only_fields)
+    with_lookup_profile = scalping_scanner._scanner_priority_profile(merged)
+    without_lookup_profile = scalping_scanner._scanner_priority_profile(
+        without_source_only_fields
     )
+    for key in (
+        "scanner_priority_tier",
+        "scanner_priority_score",
+        "scanner_priority_reason",
+        "scanner_demoted_reason",
+        "scanner_promotion_policy_version",
+        "lookup_attention_weight_bonus_points",
+        "lookup_attention_weight_runtime_effect",
+    ):
+        assert with_lookup_profile[key] == without_lookup_profile[key]
 
 
 def test_lookup_attention_new_top20_requires_derived_previous_rank_outside_top20():
@@ -3495,6 +3506,118 @@ def test_lookup_attention_new_top20_requires_derived_previous_rank_outside_top20
     assert observed["lookup_attention_state"] == "observed_source_only"
     assert observed["lookup_attention_new_top20_component"] == 1.0
     assert observed["lookup_attention_snapshot_score"] == 0.708333
+
+
+def test_promoted_lookup_attention_weight_is_bounded_inside_existing_tier(monkeypatch):
+    original_rules = scalping_scanner.TRADING_RULES
+
+    class _RulesProxy:
+        SCALP_SCANNER_PRIORITY_TIERING_ENABLED = True
+
+        def __getattr__(self, name):
+            return getattr(original_rules, name)
+
+    monkeypatch.setattr(scalping_scanner, "TRADING_RULES", _RulesProxy())
+    monkeypatch.setattr(
+        scalping_scanner,
+        "scalping_session_venue_provenance",
+        lambda *_args, **_kwargs: {
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_lookup_attention_source_age_sec", lambda _target: 30.0
+    )
+    target = {
+        "Code": "005930",
+        "Name": "삼성전자",
+        "Price": 72_000,
+        "FluRate": 1.25,
+        "RealtimeLookupRankNow": 7,
+        "RealtimeLookupRankChange": 12,
+        "RealtimeLookupRankChangeSign": "+",
+        "RealtimeLookupRankNowState": "observed",
+        "RealtimeLookupRankChangeState": "observed",
+        "RealtimeLookupSourceDate": "20260902",
+        "RealtimeLookupSourceTime": "093015",
+        "RealtimeLookupSourceTimestampState": "observed_valid",
+        "RankChange": 12,
+        "SourceSet": {"REALTIME_RANK_START", "PRICE_JUMP_START"},
+        "Source": "REALTIME_RANK_START",
+    }
+    inactive = {
+        "active": False,
+        "state": "inactive",
+        "reason": "prior_policy_missing",
+        "policy_version": "scanner_lookup_attention_weight_v1",
+        "policy_source_date": "",
+        "policy_artifact_sha256": "",
+        "allowed_runtime_apply": False,
+    }
+    active = {
+        "active": True,
+        "state": "live_auto_applied",
+        "reason": "latest_prior_trading_date_policy_valid",
+        "policy_version": "scanner_lookup_attention_weight_v1",
+        "policy_source_date": "2026-09-01",
+        "policy_artifact_sha256": "a" * 64,
+        "min_score": 0.60,
+        "max_bonus_points": 200.0,
+        "max_source_age_sec": 120.0,
+        "same_priority_tier_only": True,
+        "allowed_runtime_apply": True,
+    }
+    monkeypatch.setattr(
+        scalping_scanner, "load_lookup_attention_weight_policy", lambda _date: inactive
+    )
+    baseline = scalping_scanner._scanner_priority_profile(target)
+    monkeypatch.setattr(
+        scalping_scanner, "load_lookup_attention_weight_policy", lambda _date: active
+    )
+    promoted = scalping_scanner._scanner_priority_profile(target)
+
+    assert promoted["scanner_priority_tier"] == baseline["scanner_priority_tier"]
+    assert promoted["lookup_attention_weight_bonus_points"] == 30.0
+    assert (
+        promoted["scanner_priority_score"] == baseline["scanner_priority_score"] + 30.0
+    )
+    assert promoted["lookup_attention_weight_policy_applied"] is True
+    assert promoted["lookup_attention_weight_runtime_effect"] is True
+    assert promoted["lookup_attention_weight_same_priority_tier_only"] is True
+
+    monkeypatch.setattr(
+        scalping_scanner,
+        "scalping_session_venue_provenance",
+        lambda *_args, **_kwargs: {
+            "effective_venue": "NXT",
+            "market_session_bucket": "nxt",
+        },
+    )
+    out_of_scope = scalping_scanner._scanner_priority_profile(target)
+    assert out_of_scope["lookup_attention_weight_bonus_points"] == 0.0
+    assert out_of_scope["lookup_attention_weight_runtime_effect"] is False
+    assert out_of_scope["lookup_attention_weight_policy_reason"] == (
+        "venue_or_session_out_of_policy_scope"
+    )
+
+    monkeypatch.setattr(
+        scalping_scanner,
+        "scalping_session_venue_provenance",
+        lambda *_args, **_kwargs: {
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+    )
+    monkeypatch.setattr(
+        scalping_scanner, "_lookup_attention_source_age_sec", lambda _target: 121.0
+    )
+    stale = scalping_scanner._scanner_priority_profile(target)
+    assert stale["lookup_attention_weight_bonus_points"] == 0.0
+    assert stale["lookup_attention_weight_runtime_effect"] is False
+    assert stale["lookup_attention_weight_policy_reason"] == (
+        "lookup_attention_source_stale_or_invalid"
+    )
 
 
 def test_lookup_attention_prior_is_blocked_when_exact_source_time_is_missing():
