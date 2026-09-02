@@ -692,17 +692,22 @@ def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_o
         "code_improvement_orders": [
             {
                 "order_id": "order_one_share_threshold_ai_score_near_buy_entry_hook_review",
-                "title": "one-share threshold opportunity entry hook review: ai_score_near_buy",
+                "title": "one-share threshold opportunity existing-family evidence: ai_score_near_buy",
                 "target_subsystem": "scalping_entry_ai_score_recheck",
-                "route": "instrumentation_order",
+                "route": "existing_family",
                 "mapped_family": "entry_opportunity_recheck_runtime",
                 "threshold_family": "entry_opportunity_recheck_runtime",
                 "priority": 1,
                 "runtime_effect": True,
                 "allowed_runtime_apply": True,
-                "implementation_status": "implemented",
+                "implementation_status": "source_evidence_candidate",
                 "implementation_provenance": {
                     "implementation_type": "one_share_threshold_opportunity_audit",
+                    "source_audit_implementation_status": "implemented",
+                    "target_hook_implementation_status": (
+                        "requires_independent_verification"
+                    ),
+                    "workorder_intake_role": "attach_existing_family_evidence",
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                 },
@@ -739,7 +744,13 @@ def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_o
     assert orders[0]["allowed_runtime_apply"] is False
     assert orders[0]["actual_order_submitted"] is False
     assert orders[0]["broker_order_forbidden"] is True
-    assert orders[0]["implementation_status"] == "implemented"
+    assert orders[0]["decision"] == "attach_existing_family"
+    assert orders[0]["route"] == "existing_family"
+    assert orders[0]["implementation_status"] == "source_evidence_candidate"
+    assert (
+        orders[0]["implementation_provenance"]["target_hook_implementation_status"]
+        == "requires_independent_verification"
+    )
     assert "broker_guard_bypass" in orders[0]["forbidden_uses"]
     assert report["source"]["one_share_threshold_opportunity"] == str(
         source_dir / "one_share_threshold_opportunity_2026-07-01.json"

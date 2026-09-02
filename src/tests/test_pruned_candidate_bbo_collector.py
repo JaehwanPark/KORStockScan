@@ -30,6 +30,76 @@ def _venue(venue: str = "KRX", session: str = "KRX_REGULAR") -> dict[str, str]:
     return {"effective_venue": venue, "market_session_bucket": session}
 
 
+def test_global_collector_emits_secret_free_pid_configuration_receipt(
+    monkeypatch,
+) -> None:
+    emitted: list[dict] = []
+    monkeypatch.setattr(collector_mod, "_GLOBAL_COLLECTOR", None)
+    monkeypatch.setattr(collector_mod.time, "time", lambda: _epoch(9, 5))
+    monkeypatch.setattr(
+        collector_mod,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, fields: emitted.append(
+            {
+                "pipeline": pipeline,
+                "name": name,
+                "code": code,
+                "stage": stage,
+                "fields": fields,
+            }
+        ),
+    )
+
+    collector = collector_mod.configure_global_collector("SECRET-TOKEN")
+
+    assert collector is not None
+    assert len(emitted) == 1
+    receipt = emitted[0]
+    assert receipt["stage"] == "scalping_scanner_prune_bbo_source_loaded"
+    fields = receipt["fields"]
+    assert fields["scanner_prune_observer_configuration_status"] == (
+        "collector_created"
+    )
+    assert fields["scanner_prune_observer_configuration_receipt_status"] == (
+        "emitted"
+    )
+    assert fields["scanner_prune_observer_process_pid"] > 0
+    assert fields["scanner_prune_observer_token_present"] is True
+    assert fields["scanner_prune_observer_sample_offsets_sec"] == list(
+        collector_mod.SAMPLE_OFFSETS_SEC
+    )
+    assert fields["scanner_prune_observer_episode_reset_gap_sec"] == 300.0
+    assert fields["scanner_prune_observer_max_anchor_to_schedule_delay_sec"] == 2.0
+    assert fields["scanner_prune_observer_market_data_request_effect"] is True
+    assert "SECRET-TOKEN" not in str(receipt)
+    assert fields["runtime_effect"] is False
+    assert fields["allowed_runtime_apply"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+
+def test_missing_global_collector_keeps_eligible_prune_visible(monkeypatch) -> None:
+    monkeypatch.setattr(collector_mod, "_GLOBAL_COLLECTOR", None)
+
+    result = collector_mod.offer_global_prune_observation(
+        _target(),
+        reason="general_slot_limit",
+        scan_generation_id="SCANGEN-MISSING-HOOK",
+        scan_rank=1,
+        ranked_candidate_count=1,
+        venue_fields=_venue(),
+        observed_epoch=_epoch(9, 10),
+    )
+
+    assert result["eligible"] is True
+    assert result["scanner_prune_observer_schedule_status"] == (
+        "collector_not_configured"
+    )
+    assert result["scanner_prune_observer_configured"] is False
+    assert result["runtime_effect"] is False
+    assert result["actual_order_submitted"] is False
+
+
 def test_collector_uses_exact_route_and_emits_source_only_bbo_receipt() -> None:
     clock = _Clock(_epoch(9, 10))
     fetch_calls: list[tuple[str, str, dict]] = []

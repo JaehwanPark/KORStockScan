@@ -481,7 +481,21 @@ def test_postclose_failed_run_reuses_only_valid_same_target_heavy_artifacts():
     assert "one_share_threshold_opportunity" in script
     assert "one_share_ai_review_reusable" in script
     assert 'review.get("status") == "parsed"' in script
+    assert 'review.get("status") == "not_required_no_actionable_candidate"' in script
+    assert 'review.get("reviewed_candidate_count") or 0) == len(orders)' in script
+    assert 'provider_status.get("new_provider_call") is False' in script
     assert 'review.get("provider") == expected_provider' in script
+    assert 'review_contract.get("requested_provider") == expected_provider' in script
+    assert "current_actionable_digest = _actionable_semantic_digest(payload)" in script
+    assert "current_ai_contract_digest = _ai_review_contract(expected_provider)" in script
+    assert (
+        'candidate_change.get("semantic_digest") == current_actionable_digest'
+        in script
+    )
+    assert (
+        'review_contract.get("semantic_digest") == current_ai_contract_digest'
+        in script
+    )
 
 
 def test_claude_pattern_lab_wrapper_requires_explicit_target_date():
@@ -1311,7 +1325,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         "src.engine.monitoring.scalping_avg_down_recovery_calibration"
     )
     one_share_threshold_idx = script.index(
-        "src.engine.monitoring.one_share_threshold_opportunity"
+        "-m src.engine.monitoring.one_share_threshold_opportunity"
     )
     entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
     entry_ai_gate_idx = script.index("src.engine.scalping.entry_ai_gate_backtest")

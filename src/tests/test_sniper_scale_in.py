@@ -1905,6 +1905,16 @@ def test_rising_missed_tp1_selector_passes_low_rebound_with_trusted_micro():
     assert decision.lane == "low_rebound"
     assert (
         decision.log_fields["rising_missed_tp1_actual_fee_tax_required_for_net_label"]
+        is False
+    )
+    assert (
+        decision.log_fields["rising_missed_tp1_primary_net_label_cost_basis"]
+        == "effective_dated_comparison_cost_contract"
+    )
+    assert (
+        decision.log_fields[
+            "rising_missed_tp1_actual_fee_tax_retained_for_reconciliation"
+        ]
         is True
     )
 
@@ -6433,7 +6443,7 @@ def test_scanner_entry_realtime_latency_excludes_external_first_trade_wait():
         == "first_post_attach_entry_realtime"
     )
     assert fields["scanner_external_wait_owner"] == (
-        "external_or_subscription_state_first_post_attach_entry_realtime"
+        "external_or_subscription_state_first_post_anchor_entry_realtime"
     )
     assert (
         fields["scanner_external_wait_causal_attribution"]
@@ -6451,7 +6461,7 @@ def test_scanner_entry_realtime_latency_is_not_comparable_without_first_trade():
     assert fields["scanner_post_source_ready_latency_comparable"] is False
     assert (
         fields["scanner_post_source_ready_not_comparable_reason"]
-        == "first_post_attach_entry_realtime_missing"
+        == "first_post_entry_realtime_anchor_input_missing"
     )
     assert fields["first_entry_realtime_to_ai_response_sec"].startswith(
         "not_available_"

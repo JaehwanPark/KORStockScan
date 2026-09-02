@@ -490,7 +490,11 @@ def evaluate_rising_missed_tp1_candidate(
         "rising_missed_tp1_cost_reserve_pct": TP1_SELECTOR_COST_RESERVE_PCT,
         "rising_missed_tp1_net_target_pct": TP1_SELECTOR_NET_TARGET_PCT,
         "rising_missed_tp1_horizon_sec": TP1_SELECTOR_HORIZON_SEC,
-        "rising_missed_tp1_actual_fee_tax_required_for_net_label": True,
+        "rising_missed_tp1_actual_fee_tax_required_for_net_label": False,
+        "rising_missed_tp1_primary_net_label_cost_basis": (
+            "effective_dated_comparison_cost_contract"
+        ),
+        "rising_missed_tp1_actual_fee_tax_retained_for_reconciliation": True,
         "metric_role": "bounded_tunable_candidate_gate",
         "decision_authority": (
             "operator_runtime_override_rising_missed_nxt_price_jump_recovery"

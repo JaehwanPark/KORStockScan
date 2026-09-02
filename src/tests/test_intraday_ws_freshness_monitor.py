@@ -783,6 +783,157 @@ def test_scanner_funnel_missing_quote_age_stays_blocked_not_zero_ev(
     assert "live_auto_promotion" in order["forbidden_uses"]
 
 
+def test_scanner_runtime_receipts_close_config_and_timing_instrumentation(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_prune_bbo_source_loaded",
+                {
+                    "scanner_prune_observer_configuration_status": "collector_created",
+                    "scanner_prune_observer_configuration_receipt_status": "emitted",
+                    "scanner_prune_observer_configured": True,
+                    "scanner_prune_observer_configured_epoch": 1788307500.0,
+                    "scanner_prune_observer_configured_at": (
+                        "2026-09-02T09:05:00+09:00"
+                    ),
+                    "scanner_prune_observer_process_pid": 1234,
+                    "scanner_prune_observer_token_present": True,
+                    "scanner_prune_observer_sample_offsets_sec": (
+                        "[0, 3, 10, 20, 30, 60, 180, 300, 600, 1200]"
+                    ),
+                    "scanner_prune_observer_episode_reset_gap_sec": 300.0,
+                    "scanner_prune_observer_max_anchor_to_schedule_delay_sec": 2.0,
+                    "scanner_prune_observer_max_active_episode_count": 8,
+                    "scanner_prune_observer_max_pending_sample_count": 80,
+                    "scanner_prune_observer_max_process_daily_scheduled_request_count": 1200,
+                    "scanner_prune_observer_min_request_interval_sec": 0.25,
+                    "scanner_prune_observer_market_data_request_effect": True,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                code="-",
+                emitted_at="2026-09-02T09:05:00+09:00",
+            ),
+            _event(
+                "scalping_scanner_low_rebound_source_observed",
+                {
+                    "low_rebound_sampled_codes": "005930",
+                    "low_rebound_passed_codes": "",
+                    "low_rebound_stage_elapsed_ms": 12000.0,
+                    "low_rebound_candle_fetch_attempted_count": 20,
+                    "low_rebound_candle_fetch_elapsed_total_ms": 11500.0,
+                    "low_rebound_candle_fetch_elapsed_mean_ms": 575.0,
+                    "low_rebound_candle_fetch_elapsed_max_ms": 800.0,
+                    "low_rebound_universe_count": 45,
+                    "low_rebound_passed_count": 0,
+                },
+                code="",
+                emitted_at="2026-09-02T09:10:12+09:00",
+            ),
+            _event(
+                "scalping_scanner_iteration_timing",
+                {
+                    "scanner_iteration_id": "SCANTIME-1",
+                    "scanner_iteration_started_epoch": 1788307800.0,
+                    "scanner_iteration_completed_epoch": 1788307815.0,
+                    "scanner_iteration_elapsed_sec": 15.0,
+                    "scanner_iteration_configured_post_sleep_sec": 60.0,
+                    "scanner_iteration_projected_start_to_start_sec": 75.0,
+                    "scanner_iteration_observed_start_to_start_sec": 76.0,
+                    "scanner_iteration_promoted_count": 0,
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+                code="",
+                emitted_at="2026-09-02T09:10:15+09:00",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-09-02",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    funnel = report["scanner_unique_funnel"]
+    observer = funnel["prune_observer_summary"]
+    timing = funnel["scanner_timing_summary"]
+    assert observer["runtime_configuration_receipt_count"] == 1
+    assert observer["runtime_configuration_valid_receipt_count"] == 1
+    assert observer["runtime_hook_state"] == (
+        "bounded_prune_rest_bbo_collector_loaded_healthy_no_natural_sample"
+    )
+    assert timing["timing_source_quality_state"] == "pass"
+    assert timing["iteration_elapsed_p50_sec"] == 15.0
+    assert timing["projected_start_to_start_p50_sec"] == 75.0
+    assert timing["observed_start_to_start_p50_sec"] == 76.0
+    assert timing["low_rebound_stage_elapsed_p50_ms"] == 12000.0
+    assert timing["low_rebound_candle_fetch_attempted_count"] == 20
+
+
+def test_prune_bbo_missing_collector_is_explicit_runtime_hook_gap(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    common = {
+        "scanner_scan_generation_id": "SCANGEN-MISSING-COLLECTOR",
+        "scanner_scan_rank": 1,
+        "scanner_ranked_candidate_count": 1,
+        "scanner_prune_reason": "general_slot_limit",
+        "source_signature": "PRICE_JUMP_START",
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+    }
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_pruned",
+                common,
+                code="005930",
+            ),
+            _event(
+                "scalping_scanner_prune_bbo_schedule",
+                {
+                    **common,
+                    "scanner_prune_observer_schedule_status": (
+                        "collector_not_configured"
+                    ),
+                    "scanner_prune_observer_configured": False,
+                },
+                code="005930",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-09-02",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    funnel = report["scanner_unique_funnel"]
+    observer = funnel["prune_observer_summary"]
+    attribution = funnel["economic_cohorts"]["executable_bbo_attribution"]
+    assert observer["schedule_status_counts"] == {"collector_not_configured": 1}
+    assert observer["runtime_hook_state"] == (
+        "bounded_prune_rest_bbo_collector_not_configured"
+    )
+    assert attribution["source_capture_repair_required"] is True
+    assert attribution["source_capture_implementation_state"] == (
+        "bounded_prune_rest_bbo_collector_not_configured"
+    )
+
+
 def test_prune_bbo_episode_coalesces_scan_churn_and_produces_exact_economics(
     tmp_path, monkeypatch
 ):

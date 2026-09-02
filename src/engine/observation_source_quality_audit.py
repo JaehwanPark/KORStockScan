@@ -545,6 +545,62 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="real_scalping_scanner_source_guard_only",
     ),
+    "scalping_scanner_prune_bbo_source_loaded": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "allowed_runtime_apply",
+            "scanner_prune_observer_configuration_status",
+            "scanner_prune_observer_configuration_receipt_status",
+            "scanner_prune_observer_configured",
+            "scanner_prune_observer_configured_epoch",
+            "scanner_prune_observer_configured_at",
+            "scanner_prune_observer_process_pid",
+            "scanner_prune_observer_token_present",
+            "scanner_prune_observer_sample_offsets_sec",
+            "scanner_prune_observer_episode_reset_gap_sec",
+            "scanner_prune_observer_max_anchor_to_schedule_delay_sec",
+            "scanner_prune_observer_max_active_episode_count",
+            "scanner_prune_observer_max_pending_sample_count",
+            "scanner_prune_observer_max_process_daily_scheduled_request_count",
+            "scanner_prune_observer_min_request_interval_sec",
+            "scanner_prune_observer_market_data_request_effect",
+        ),
+        decision_authority="scanner_prune_bbo_observation_only",
+    ),
+    "scalping_scanner_iteration_timing": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "allowed_runtime_apply",
+            "scanner_iteration_id",
+            "scanner_iteration_started_epoch",
+            "scanner_iteration_completed_epoch",
+            "scanner_iteration_elapsed_sec",
+            "scanner_iteration_configured_post_sleep_sec",
+            "scanner_iteration_projected_start_to_start_sec",
+            "scanner_iteration_observed_start_to_start_sec",
+            "scanner_iteration_promoted_count",
+            "scanner_iteration_sleep_is_post_work",
+            "effective_venue",
+            "market_session_bucket",
+        ),
+        decision_authority="scalping_scanner_timing_observation_only",
+    ),
+    "scalping_scanner_low_rebound_source_observed": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "allowed_runtime_apply",
+            "low_rebound_universe_count",
+            "low_rebound_candle_fetch_attempted_count",
+            "low_rebound_candle_fetch_elapsed_total_ms",
+            "low_rebound_candle_fetch_elapsed_mean_ms",
+            "low_rebound_candle_fetch_elapsed_max_ms",
+            "low_rebound_stage_elapsed_ms",
+            "low_rebound_passed_count",
+            "effective_venue",
+            "market_session_bucket",
+        ),
+        decision_authority="scalping_scanner_source_only_low_rebound_observation",
+    ),
     "scalping_scanner_prune_bbo_schedule": StageContract(
         required_fields=(
             *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
@@ -2524,6 +2580,20 @@ def _safe_float(value: Any) -> float | None:
         return float(value)
     except Exception:
         return None
+
+
+def _safe_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
 
 
 def _is_present(value: Any) -> bool:
@@ -4813,6 +4883,140 @@ def _row_contract_violations(
             ).items()
             if violated
         )
+    if stage in {
+        "scalping_scanner_prune_bbo_source_loaded",
+        "scalping_scanner_iteration_timing",
+        "scalping_scanner_low_rebound_source_observed",
+    } and (
+        str(fields.get("decision_authority") or "") != contract.decision_authority
+        or not _contract_bool(fields.get("runtime_effect"), False)
+        or not _contract_bool(fields.get("allowed_runtime_apply"), False)
+        or not _contract_bool(fields.get("actual_order_submitted"), False)
+        or not _contract_bool(fields.get("broker_order_forbidden"), True)
+    ):
+        invalid.append("scanner_source_only_observation_authority_contract")
+    if stage == "scalping_scanner_prune_bbo_source_loaded":
+        configured_epoch = _safe_float(
+            fields.get("scanner_prune_observer_configured_epoch")
+        )
+        process_pid = _safe_float(fields.get("scanner_prune_observer_process_pid"))
+        sample_offsets = _safe_list(
+            fields.get("scanner_prune_observer_sample_offsets_sec")
+        )
+        if (
+            not _contract_bool(fields.get("scanner_prune_observer_configured"), True)
+            or not _contract_bool(
+                fields.get("scanner_prune_observer_token_present"), True
+            )
+            or not _contract_bool(
+                fields.get("scanner_prune_observer_market_data_request_effect"),
+                True,
+            )
+            or str(fields.get("scanner_prune_observer_configuration_status") or "")
+            not in {"collector_created", "collector_token_refreshed"}
+            or str(
+                fields.get("scanner_prune_observer_configuration_receipt_status") or ""
+            )
+            != "emitted"
+            or configured_epoch is None
+            or configured_epoch <= 0
+            or process_pid is None
+            or process_pid <= 0
+            or sample_offsets != [0, 3, 10, 20, 30, 60, 180, 300, 600, 1200]
+            or _safe_float(fields.get("scanner_prune_observer_episode_reset_gap_sec"))
+            != 300.0
+            or _safe_float(
+                fields.get("scanner_prune_observer_max_anchor_to_schedule_delay_sec")
+            )
+            != 2.0
+            or _safe_float(
+                fields.get("scanner_prune_observer_max_active_episode_count")
+            )
+            != 8.0
+            or _safe_float(
+                fields.get("scanner_prune_observer_max_pending_sample_count")
+            )
+            != 80.0
+            or _safe_float(
+                fields.get(
+                    "scanner_prune_observer_max_process_daily_scheduled_request_count"
+                )
+            )
+            != 1200.0
+            or (
+                _safe_float(
+                    fields.get("scanner_prune_observer_min_request_interval_sec")
+                )
+                or 0.0
+            )
+            < 0.25
+        ):
+            invalid.append("scanner_prune_observer_source_loaded_contract")
+    if stage == "scalping_scanner_iteration_timing":
+        started = _safe_float(fields.get("scanner_iteration_started_epoch"))
+        completed = _safe_float(fields.get("scanner_iteration_completed_epoch"))
+        elapsed = _safe_float(fields.get("scanner_iteration_elapsed_sec"))
+        post_sleep = _safe_float(
+            fields.get("scanner_iteration_configured_post_sleep_sec")
+        )
+        projected = _safe_float(
+            fields.get("scanner_iteration_projected_start_to_start_sec")
+        )
+        observed_start_to_start_raw = str(
+            fields.get("scanner_iteration_observed_start_to_start_sec") or ""
+        ).strip()
+        observed_start_to_start = _safe_float(observed_start_to_start_raw)
+        if (
+            started is None
+            or completed is None
+            or completed < started
+            or elapsed is None
+            or elapsed < 0
+            or post_sleep is None
+            or post_sleep < 0
+            or projected is None
+            or abs(projected - (elapsed + post_sleep)) > 0.00001
+            or (
+                observed_start_to_start is None
+                and observed_start_to_start_raw
+                != "not_available_first_iteration_in_buy_window"
+            )
+            or (
+                observed_start_to_start is not None
+                and observed_start_to_start < 0
+            )
+            or not _contract_bool(
+                fields.get("scanner_iteration_sleep_is_post_work"), True
+            )
+        ):
+            invalid.append("scanner_iteration_timing_contract")
+    if stage == "scalping_scanner_low_rebound_source_observed":
+        attempted = _safe_float(fields.get("low_rebound_candle_fetch_attempted_count"))
+        fetch_total = _safe_float(
+            fields.get("low_rebound_candle_fetch_elapsed_total_ms")
+        )
+        fetch_mean = _safe_float(fields.get("low_rebound_candle_fetch_elapsed_mean_ms"))
+        fetch_max = _safe_float(fields.get("low_rebound_candle_fetch_elapsed_max_ms"))
+        stage_elapsed = _safe_float(fields.get("low_rebound_stage_elapsed_ms"))
+        if (
+            attempted is None
+            or attempted < 0
+            or fetch_total is None
+            or fetch_total < 0
+            or fetch_mean is None
+            or fetch_mean < 0
+            or fetch_max is None
+            or fetch_max < 0
+            or stage_elapsed is None
+            or stage_elapsed < 0
+            or fetch_total > stage_elapsed + 0.01
+            or (
+                attempted == 0
+                and (fetch_total != 0 or fetch_mean != 0 or fetch_max != 0)
+            )
+            or (attempted > 0 and abs(fetch_mean - (fetch_total / attempted)) > 0.01)
+        ):
+            invalid.append("scanner_low_rebound_timing_contract")
     if (
         stage == "scalping_scanner_prune_bbo_observation"
         and str(fields.get("scanner_prune_observer_status") or "") == "captured"

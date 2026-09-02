@@ -702,13 +702,58 @@ import json
 import sys
 from pathlib import Path
 
+from src.engine.monitoring.one_share_threshold_opportunity import (
+    _actionable_semantic_digest,
+    _ai_review_contract,
+)
+
 payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected_provider = sys.argv[2]
 review = payload.get("ai_review") if isinstance(payload.get("ai_review"), dict) else {}
-valid = (
+review_contract = (
+    payload.get("ai_review_contract")
+    if isinstance(payload.get("ai_review_contract"), dict)
+    else {}
+)
+orders = [
+    item
+    for item in payload.get("code_improvement_orders") or []
+    if isinstance(item, dict)
+]
+provider_status = (
+    review.get("provider_status")
+    if isinstance(review.get("provider_status"), dict)
+    else {}
+)
+candidate_change = (
+    payload.get("candidate_change")
+    if isinstance(payload.get("candidate_change"), dict)
+    else {}
+)
+current_actionable_digest = _actionable_semantic_digest(payload)
+current_ai_contract_digest = _ai_review_contract(expected_provider).get(
+    "semantic_digest"
+)
+parsed_complete = bool(
+    review.get("status") == "parsed"
+    and bool(orders)
+    and int(review.get("reviewed_candidate_count") or 0) == len(orders)
+    and all(item.get("ai_review_status") == "parsed" for item in orders)
+)
+no_action_required = bool(
+    review.get("status") == "not_required_no_actionable_candidate"
+    and not orders
+    and int((payload.get("summary") or {}).get("actionable_candidate_count") or 0)
+    == 0
+    and provider_status.get("new_provider_call") is False
+)
+valid = bool(
     expected_provider != "none"
     and review.get("provider") == expected_provider
-    and review.get("status") == "parsed"
+    and review_contract.get("requested_provider") == expected_provider
+    and candidate_change.get("semantic_digest") == current_actionable_digest
+    and review_contract.get("semantic_digest") == current_ai_contract_digest
+    and (parsed_complete or no_action_required)
 )
 raise SystemExit(0 if valid else 1)
 PY

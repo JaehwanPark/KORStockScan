@@ -107,6 +107,8 @@ def test_build_report_aggregates_threshold_opportunity_and_orders(tmp_path):
     assert report["summary"]["forced_record_count"] == 3
     assert report["summary"]["post_sell_joined_count"] == 3
     assert report["summary"]["code_improvement_order_count"] == 1
+    assert report["summary"]["source_only_existing_family_evidence_count"] == 1
+    assert report["summary"]["automatic_implementation_candidate_count"] == 0
     opportunity = report["threshold_opportunities"][0]
     assert opportunity["threshold_group"] == "ai_score_near_buy"
     assert opportunity["valid_profit_sample"] == 3
@@ -115,7 +117,18 @@ def test_build_report_aggregates_threshold_opportunity_and_orders(tmp_path):
     assert order["source_report_type"] == "one_share_threshold_opportunity"
     assert order["runtime_effect"] is False
     assert order["allowed_runtime_apply"] is False
-    assert order["implementation_status"] == "implemented"
+    assert order["route"] == "existing_family"
+    assert order["implementation_status"] == "source_evidence_candidate"
+    assert (
+        order["implementation_provenance"]["source_audit_implementation_status"]
+        == "implemented"
+    )
+    assert order["implementation_provenance"]["target_hook_implementation_status"] == (
+        "requires_independent_verification"
+    )
+    assert order["implementation_provenance"]["workorder_intake_role"] == (
+        "attach_existing_family_evidence"
+    )
     assert (
         order["implementation_provenance"]["requires_separate_runtime_apply_candidate"]
         is True
@@ -172,6 +185,54 @@ def test_forced_reason_on_ineligible_skip_does_not_create_probe_intent(tmp_path)
     assert report["source_coverage_manifest"]["missing_post_sell_dates"] == []
 
 
+def test_downstream_forced_flag_does_not_replace_primary_forced_entry_identity(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                    emitted_at="2026-07-01T09:00:00+09:00",
+                ),
+                _event(
+                    1,
+                    "order_bundle_submitted",
+                    {
+                        "rising_missed_one_share_entry_forced": True,
+                        "actual_order_submitted": True,
+                    },
+                    emitted_at="2026-07-01T09:01:00+09:00",
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps({"recommendation_id": 1, "stock_code": "000001", "profit_rate": 0.1})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+    )
+    row = report["joined_examples"][0]
+
+    assert row["entry_time"] == "2026-07-01T09:00:00+09:00"
+    assert row["source_stage"] == "rising_missed_one_share_entry"
+    assert row["actual_order_submitted_observed"] is True
+    assert row["forced_event_count"] == 2
+
+
 def test_probe_split_attribution_flags_submitted_row_without_variant(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
     post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
@@ -210,9 +271,10 @@ def test_probe_split_attribution_flags_submitted_row_without_variant(tmp_path):
     assert attribution["submitted_split_provenance_gap_count"] == 1
     assert attribution["status"] == "instrumentation_gap"
     assert attribution["probe_to_residual_status"] == "instrumentation_gap"
-    assert report["source_coverage_manifest"]["expected_post_sell_dates"] == [
-        "2026-07-01"
-    ]
+    coverage = report["source_coverage_manifest"]
+    assert coverage["expected_post_sell_dates"] == []
+    assert coverage["entry_date_partition_match_required"] is False
+    assert coverage["pending_or_right_censored_submit_count"] == 1
 
 
 def test_non_split_submit_is_not_a_probe_provenance_gap(tmp_path):
@@ -521,6 +583,340 @@ def test_ai_review_annotations_are_source_only(tmp_path, monkeypatch):
     assert order["runtime_effect"] is False
 
 
+def test_ai_review_reuses_parsed_result_when_actionable_digest_is_unchanged(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    def fake_ai_review(report, *, provider):
+        calls.append(report["target_date"])
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "reviewer": "one_share_threshold_opportunity_ai_review",
+                "candidate_reviews": [
+                    {
+                        "candidate_id": "one_share_threshold_ai_score_near_buy",
+                        "recommended_disposition": "attach_existing_entry_hook",
+                        "confidence": "medium",
+                        "reason": "bounded entry hook already exists",
+                        "required_followup": ["verify post-apply attribution"],
+                    }
+                ],
+                "audit": {"status": "pass", "issues": [], "reason": "source-only"},
+                "codex_directives": [],
+            }
+        ), {"provider": provider, "status": "success"}
+
+    monkeypatch.setattr(mod, "_call_ai_review", fake_ai_review)
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    rows = []
+    for idx in range(1, 4):
+        rows.extend(
+            [
+                _event(idx, "blocked_ai_score", {"block_reason": "blocked_ai_score"}),
+                _event(
+                    idx,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                ),
+            ]
+        )
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+    post_sell_path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "recommendation_id": idx,
+                    "stock_code": "000001",
+                    "profit_rate": 0.5,
+                }
+            )
+            for idx in range(1, 4)
+        ),
+        encoding="utf-8",
+    )
+
+    first = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        generated_at="fixed",
+        ai_provider="openai",
+    )
+    second = mod.build_report(
+        "2026-07-02",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        generated_at="fixed",
+        ai_provider="openai",
+        previous_report=first,
+    )
+
+    assert calls == ["2026-07-01"]
+    assert second["candidate_change"]["status"] == "unchanged"
+    assert second["ai_review"]["status"] == "parsed"
+    assert second["ai_review"]["provider_status"]["status"] == "reused"
+    assert second["ai_review"]["provider_status"]["new_provider_call"] is False
+    assert second["code_improvement_orders"][0]["ai_recommended_disposition"] == (
+        "attach_existing_entry_hook"
+    )
+
+
+def test_ai_review_does_not_reuse_incomplete_prior_candidate_census(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    def fake_ai_review(report, *, provider):
+        calls.append(report["target_date"])
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "reviewer": "one_share_threshold_opportunity_ai_review",
+                "candidate_reviews": [
+                    {
+                        "candidate_id": "one_share_threshold_ai_score_near_buy",
+                        "recommended_disposition": "keep_collecting",
+                        "confidence": "medium",
+                        "reason": "source-only sample",
+                        "required_followup": [],
+                    }
+                ],
+                "audit": {"status": "pass", "issues": [], "reason": "ok"},
+                "codex_directives": [],
+            }
+        ), {"provider": provider, "status": "success"}
+
+    monkeypatch.setattr(mod, "_call_ai_review", fake_ai_review)
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for idx in range(1, 4)
+            for row in (
+                _event(idx, "blocked_ai_score", {"block_reason": "blocked_ai_score"}),
+                _event(
+                    idx,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                ),
+            )
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "recommendation_id": idx,
+                    "stock_code": "000001",
+                    "profit_rate": 0.5,
+                }
+            )
+            for idx in range(1, 4)
+        ),
+        encoding="utf-8",
+    )
+    first = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        ai_provider="openai",
+    )
+    del first["code_improvement_orders"][0]["ai_review_reason"]
+
+    second = mod.build_report(
+        "2026-07-02",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        ai_provider="openai",
+        previous_report=first,
+    )
+
+    assert calls == ["2026-07-01", "2026-07-02"]
+    assert second["ai_review"]["provider_status"]["status"] == "success"
+
+
+def test_ai_review_contract_change_forces_fresh_review(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_ai_review(report, *, provider):
+        calls.append(report["target_date"])
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "reviewer": "one_share_threshold_opportunity_ai_review",
+                "candidate_reviews": [
+                    {
+                        "candidate_id": "one_share_threshold_ai_score_near_buy",
+                        "recommended_disposition": "keep_collecting",
+                        "confidence": "medium",
+                        "reason": "source-only sample",
+                        "required_followup": [],
+                    }
+                ],
+                "audit": {"status": "pass", "issues": [], "reason": "ok"},
+                "codex_directives": [],
+            }
+        ), {"provider": provider, "status": "success"}
+
+    monkeypatch.setattr(mod, "_call_ai_review", fake_ai_review)
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for idx in range(1, 4)
+            for row in (
+                _event(idx, "blocked_ai_score", {"block_reason": "blocked_ai_score"}),
+                _event(
+                    idx,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                ),
+            )
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "recommendation_id": idx,
+                    "stock_code": "000001",
+                    "profit_rate": 0.5,
+                }
+            )
+            for idx in range(1, 4)
+        ),
+        encoding="utf-8",
+    )
+    first = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        ai_provider="openai",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_REASONING_EFFORT", "high"
+    )
+
+    second = mod.build_report(
+        "2026-07-02",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        ai_provider="openai",
+        previous_report=first,
+    )
+
+    assert calls == ["2026-07-01", "2026-07-02"]
+    assert second["candidate_change"]["status"] == "unchanged"
+    assert second["candidate_change"]["ai_review_contract_change_status"] == ("changed")
+
+
+def test_actionable_digest_changes_when_workorder_intake_role_changes():
+    report = {
+        "code_improvement_orders": [
+            {
+                "order_id": "order-1",
+                "candidate_id": "candidate-1",
+                "route": "existing_family",
+                "improvement_type": "source_only_existing_family_evidence",
+                "implementation_status": "source_evidence_candidate",
+                "target_subsystem": "entry",
+                "implementation_provenance": {
+                    "threshold_group": "ai_score_near_buy",
+                    "workorder_intake_role": "attach_existing_family_evidence",
+                    "sample": 3,
+                    "valid_profit_sample": 3,
+                    "equal_weight_avg_profit_pct": 0.1,
+                    "primary_blocker_attribution_status": "pass",
+                },
+            }
+        ]
+    }
+    before = mod._actionable_semantic_digest(report)
+    report["code_improvement_orders"][0]["route"] = "instrumentation_order"
+
+    assert mod._actionable_semantic_digest(report) != before
+
+
+def test_actionable_digest_covers_order_contract_but_ignores_review_annotations():
+    report = {
+        "code_improvement_orders": [
+            {
+                "order_id": "order-1",
+                "candidate_id": "candidate-1",
+                "forbidden_uses": ["runtime_mutation"],
+                "ai_review_status": "parsed",
+            }
+        ]
+    }
+    before = mod._actionable_semantic_digest(report)
+    report["code_improvement_orders"][0]["ai_review_status"] = "unreviewed"
+    assert mod._actionable_semantic_digest(report) == before
+
+    report["code_improvement_orders"][0]["forbidden_uses"].append("broker_guard_bypass")
+    assert mod._actionable_semantic_digest(report) != before
+
+
+def test_ai_review_rejects_partial_current_candidate_census(monkeypatch):
+    report = {
+        "source_coverage_manifest": {"status": "pass"},
+        "candidate_change": {"status": "changed"},
+        "summary": {},
+        "code_improvement_orders": [
+            {"candidate_id": "candidate-a"},
+            {"candidate_id": "candidate-b"},
+        ],
+    }
+
+    monkeypatch.setattr(
+        mod,
+        "_call_ai_review",
+        lambda report, *, provider: (
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "reviewer": "one_share_threshold_opportunity_ai_review",
+                    "candidate_reviews": [
+                        {
+                            "candidate_id": "candidate-a",
+                            "recommended_disposition": "keep_collecting",
+                            "confidence": "low",
+                            "reason": "partial",
+                            "required_followup": [],
+                        }
+                    ],
+                    "audit": {"status": "pass", "issues": [], "reason": "partial"},
+                    "codex_directives": [],
+                }
+            ),
+            {"provider": provider, "status": "success"},
+        ),
+    )
+
+    reviewed = mod._apply_ai_review(report, provider="openai")
+
+    assert reviewed["ai_review"]["status"] == "parse_rejected"
+    assert "ai_review_candidate_census_mismatch" in reviewed["ai_review"]["warnings"][0]
+    assert all(
+        order["ai_review_status"] == "parse_rejected"
+        for order in reviewed["code_improvement_orders"]
+    )
+
+
 def test_ai_review_malformed_schema_version_is_parse_rejected():
     status, payload, warnings = mod._parse_ai_review(
         json.dumps(
@@ -551,6 +947,8 @@ def test_hard_safety_group_does_not_create_code_order():
             "profitable_count": 3,
             "loss_or_flat_count": 0,
             "equal_weight_avg_profit_pct": 0.6,
+            "candidate_status": "eligible_for_existing_family_evidence",
+            "primary_blocker_attribution_status": "pass",
         }
     ]
 
@@ -648,8 +1046,20 @@ def test_build_report_reads_gzip_pipeline_and_filters_clean_baseline(tmp_path):
     post_sell_path.write_text(
         "\n".join(
             [
-                json.dumps({"recommendation_id": "old", "profit_rate": 9.9}),
-                json.dumps({"recommendation_id": "new", "profit_rate": 0.3}),
+                json.dumps(
+                    {
+                        "recommendation_id": "old",
+                        "stock_code": "000001",
+                        "profit_rate": 9.9,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "recommendation_id": "new",
+                        "stock_code": "000001",
+                        "profit_rate": 0.3,
+                    }
+                ),
             ]
         ),
         encoding="utf-8",
@@ -692,12 +1102,20 @@ def test_post_sell_maturity_date_does_not_require_same_day_pipeline_partition(
                         {"forced_entry_reason": "rising_missed_one_share_entry"},
                     )
                 ),
+                json.dumps(
+                    _event(
+                        1,
+                        "order_bundle_submitted",
+                        {"actual_order_submitted": True},
+                    )
+                ),
             ]
         ),
         encoding="utf-8",
     )
     post_sell_path.write_text(
-        json.dumps({"recommendation_id": 1, "profit_rate": 1.0}) + "\n",
+        json.dumps({"recommendation_id": 1, "stock_code": "000001", "profit_rate": 1.0})
+        + "\n",
         encoding="utf-8",
     )
 
@@ -716,9 +1134,77 @@ def test_post_sell_maturity_date_does_not_require_same_day_pipeline_partition(
         report["source_coverage_manifest"]["post_sell_only_dates_are_informational"]
         is True
     )
+    assert (
+        report["source_coverage_manifest"]["entry_date_partition_match_required"]
+        is False
+    )
+    assert (
+        report["source_coverage_manifest"]["pending_or_right_censored_submit_count"]
+        == 0
+    )
 
 
-def test_source_coverage_gap_skips_ai_provider_call(tmp_path, monkeypatch):
+def test_terminal_sell_in_later_pipeline_partition_joins_by_record_id(tmp_path):
+    entry_pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    sell_pipeline_path = tmp_path / "pipeline_events_2026-07-02.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-02.jsonl"
+    cache_dir = tmp_path / "cache"
+    entry_pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(
+                    1,
+                    "blocked_ai_score",
+                    {"block_reason": "blocked_ai_score"},
+                ),
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                ),
+                _event(1, "order_bundle_submitted", {"actual_order_submitted": True}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    sell_pipeline_path.write_text(
+        json.dumps(
+            _event(
+                1,
+                "sell_completed",
+                emitted_at="2026-07-02T09:00:00+09:00",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps({"recommendation_id": 1, "stock_code": "000001", "profit_rate": 0.5})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-02",
+        since_date="2026-07-01",
+        pipeline_paths=[entry_pipeline_path, sell_pipeline_path],
+        post_sell_paths=[post_sell_path],
+        partition_cache_dir=cache_dir,
+        use_partition_cache=True,
+    )
+
+    assert report["source_coverage_manifest"]["terminal_sell_record_count"] == 1
+    assert (
+        report["source_coverage_manifest"]["missing_terminal_post_sell_record_count"]
+        == 0
+    )
+    assert report["summary"]["source_coverage_status"] == "pass"
+
+
+def test_submitted_without_terminal_sell_is_pending_not_source_gap(
+    tmp_path, monkeypatch
+):
     pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
     pipeline_path.write_text(
         "\n".join(
@@ -741,6 +1227,52 @@ def test_source_coverage_gap_skips_ai_provider_call(tmp_path, monkeypatch):
     )
 
     def unexpected_call(*args, **kwargs):
+        raise AssertionError("no actionable candidate must not call the AI provider")
+
+    monkeypatch.setattr(mod, "_call_ai_review", unexpected_call)
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[],
+        generated_at="fixed",
+        ai_provider="openai",
+    )
+
+    assert report["summary"]["source_coverage_status"] == "pass"
+    assert (
+        report["source_coverage_manifest"]["pending_or_right_censored_submit_count"]
+        == 1
+    )
+    assert report["ai_review"]["status"] == ("not_required_no_actionable_candidate")
+    assert report["ai_review"]["provider_status"]["new_provider_call"] is False
+    assert report["summary"]["ai_reviewed_candidate_count"] == 0
+    assert report["candidate_change"]["semantic_change_requires_new_ai_review"] is False
+
+
+def test_terminal_sell_without_post_sell_row_is_coverage_gap(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                ),
+                _event(1, "order_bundle_submitted", {"actual_order_submitted": True}),
+                _event(
+                    1,
+                    "sell_completed",
+                    {"main_lifecycle_reconciled_final_exit": True},
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def unexpected_call(*args, **kwargs):
         raise AssertionError("source coverage failure must not call the AI provider")
 
     monkeypatch.setattr(mod, "_call_ai_review", unexpected_call)
@@ -753,7 +1285,640 @@ def test_source_coverage_gap_skips_ai_provider_call(tmp_path, monkeypatch):
         ai_provider="openai",
     )
 
+    coverage = report["source_coverage_manifest"]
     assert report["summary"]["source_coverage_status"] == "source_coverage_gap"
+    assert coverage["terminal_sell_record_count"] == 1
+    assert coverage["missing_terminal_post_sell_record_count"] == 1
+    assert coverage["missing_terminal_post_sell_record_ids"] == ["1"]
+    assert coverage["pending_or_right_censored_submit_count"] == 0
     assert report["ai_review"]["status"] == "blocked_source_coverage"
     assert report["ai_review"]["provider_status"]["new_provider_call"] is False
-    assert report["summary"]["ai_reviewed_candidate_count"] == 0
+
+
+def test_fixed_taxonomy_groups_are_not_all_reported_as_new_candidates(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    stages = [
+        ("blocked_ai_score", {"block_reason": "blocked_ai_score"}),
+        ("latency_block", {"block_reason": "latency"}),
+        ("blocked_strength_momentum", {"block_reason": "below_strength"}),
+        (
+            "pre_submit_liquidity_guard_block",
+            {"block_reason": "liquidity"},
+        ),
+        ("entry_cooldown_active", {"block_reason": "cooldown"}),
+        (
+            "rising_missed_one_share_entry",
+            {"rising_missed_one_share_entry_forced": True},
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(_event(1, stage, fields)) for stage, fields in stages),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps({"recommendation_id": 1, "stock_code": "000001", "profit_rate": 0.5})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        generated_at="fixed",
+    )
+
+    assert report["summary"]["configured_threshold_group_count"] == 5
+    assert report["summary"]["observed_threshold_group_evaluation_count"] == 5
+    assert report["summary"]["primary_attributed_opportunity_count"] == 1
+    assert report["summary"]["actionable_candidate_count"] == 0
+    assert all(
+        item["is_actionable_candidate"] is False
+        for item in report["threshold_group_evaluations"]
+    )
+    assert report["threshold_opportunities"][0]["threshold_group"] == (
+        "ai_score_near_buy"
+    )
+
+
+def test_partition_index_cache_reuses_unchanged_source_and_invalidates_change(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    cache_dir = tmp_path / "cache"
+    pipeline_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    _event(1, "blocked_ai_score", {"block_reason": "blocked_ai_score"})
+                ),
+                json.dumps(
+                    _event(
+                        1,
+                        "rising_missed_one_share_entry",
+                        {"rising_missed_one_share_entry_forced": True},
+                    )
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps({"recommendation_id": 1, "profit_rate": 0.5}) + "\n",
+        encoding="utf-8",
+    )
+
+    first = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        partition_cache_dir=cache_dir,
+        use_partition_cache=True,
+        generated_at="fixed",
+    )
+    second = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        partition_cache_dir=cache_dir,
+        use_partition_cache=True,
+        generated_at="fixed",
+    )
+    pipeline_path.write_text(
+        pipeline_path.read_text(encoding="utf-8") + "\n",
+        encoding="utf-8",
+    )
+    third = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        partition_cache_dir=cache_dir,
+        use_partition_cache=True,
+        generated_at="fixed",
+    )
+
+    assert first["source_processing"]["cache_miss_count"] == 1
+    assert first["source_processing"]["cache_hit_count"] == 0
+    assert second["source_processing"]["cache_hit_count"] == 1
+    assert second["source_processing"]["source_bytes_scanned"] == 0
+    assert third["source_processing"]["cache_miss_count"] == 1
+    assert first["threshold_opportunities"] == second["threshold_opportunities"]
+    assert first["threshold_opportunities"] == third["threshold_opportunities"]
+
+
+def test_partition_cache_payload_excludes_unrelated_population(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    cache_dir = tmp_path / "cache"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event("unrelated", "blocked_ai_score", {"block_reason": "ai_score"}),
+                _event("forced", "blocked_ai_score", {"block_reason": "ai_score"}),
+                _event(
+                    "forced",
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                ),
+                _event("terminal-only", "sell_completed"),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text("", encoding="utf-8")
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        partition_cache_dir=cache_dir,
+        use_partition_cache=True,
+    )
+    cache_payload = json.loads(
+        next(cache_dir.glob("*.json")).read_text(encoding="utf-8")
+    )
+
+    assert set(cache_payload["forced"]) == {"forced"}
+    assert set(cache_payload["threshold_counts"]) == {"forced"}
+    assert set(cache_payload["primary_blockers"]) == {"forced"}
+    assert set(cache_payload["cross_partition_provenance"]) == {"terminal-only"}
+    assert "unrelated" not in json.dumps(cache_payload["threshold_counts"])
+    assert report["source_processing"]["cache_payload_scope"] == (
+        "local_forced_records_plus_cross_partition_terminal_sell_provenance"
+    )
+
+
+def test_targeted_scan_verifies_top_level_record_id_after_nested_prefilter_candidate(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    forced = _event(
+        "forced",
+        "rising_missed_one_share_entry",
+        {"rising_missed_one_share_entry_forced": True},
+    )
+    nested_first_matching_wrong_top_level = {
+        "fields": {"record_id": "forced", "block_reason": "latency"},
+        "record_id": "unrelated",
+        "stage": "latency_block",
+        "emitted_at": "2026-07-01T08:59:00+09:00",
+    }
+    nested_first_nonmatching_correct_top_level = {
+        "fields": {"record_id": "unrelated", "block_reason": "latency"},
+        "record_id": "forced",
+        "stage": "latency_block",
+        "emitted_at": "2026-07-01T08:59:00+09:00",
+    }
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                nested_first_matching_wrong_top_level,
+                nested_first_nonmatching_correct_top_level,
+                forced,
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps(
+            {
+                "recommendation_id": "forced",
+                "stock_code": "000001",
+                "profit_rate": 0.5,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        generated_at="fixed",
+    )
+
+    row = report["source_identity_conflict_examples"]
+    assert row == []
+    assert report["summary"]["forced_record_count"] == 1
+    assert report["threshold_opportunities"][0]["threshold_group"] == (
+        "latency_or_freshness"
+    )
+
+
+def test_primary_blocker_uses_event_time_and_rejects_post_force_only(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(
+                    "causal",
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                    emitted_at="2026-07-01T09:00:00+09:00",
+                ),
+                _event(
+                    "causal",
+                    "latency_block",
+                    {"block_reason": "latency"},
+                    emitted_at="2026-07-01T09:01:00+09:00",
+                ),
+                _event(
+                    "causal",
+                    "blocked_ai_score",
+                    {"block_reason": "blocked_ai_score"},
+                    emitted_at="2026-07-01T08:59:00+09:00",
+                ),
+                _event(
+                    "post-only",
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                    emitted_at="2026-07-01T09:00:00+09:00",
+                ),
+                _event(
+                    "post-only",
+                    "latency_block",
+                    {"block_reason": "latency"},
+                    emitted_at="2026-07-01T09:01:00+09:00",
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "recommendation_id": record_id,
+                    "stock_code": "000001",
+                    "profit_rate": 0.5,
+                }
+            )
+            for record_id in ("causal", "post-only")
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+    )
+    examples = {row["record_id"]: row for row in report["joined_examples"]}
+
+    assert examples["causal"]["primary_threshold_group"] == "ai_score_near_buy"
+    assert examples["causal"]["primary_blocker_event"]["emitted_at"] == (
+        "2026-07-01T08:59:00+09:00"
+    )
+    assert examples["post-only"]["primary_threshold_group"] is None
+    assert examples["post-only"]["primary_blocker_attribution_status"] == (
+        "post_force_or_unordered_blocker_only"
+    )
+
+
+def test_main_explicit_partition_cache_dir_enables_cache(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_build_report(target_date, **kwargs):
+        captured.update({"target_date": target_date, **kwargs})
+        return {"summary": {}}
+
+    monkeypatch.setattr(mod, "build_report", fake_build_report)
+    monkeypatch.setattr(mod, "write_outputs", lambda *args, **kwargs: None)
+
+    assert (
+        mod.main(
+            [
+                "--target-date",
+                "2026-07-01",
+                "--pipeline-path",
+                str(tmp_path / "pipeline.jsonl"),
+                "--partition-cache-dir",
+                str(tmp_path / "cache"),
+                "--output-json",
+                str(tmp_path / "report.json"),
+                "--output-md",
+                str(tmp_path / "report.md"),
+            ]
+        )
+        == 0
+    )
+    assert captured["partition_cache_dir"] == tmp_path / "cache"
+    assert captured["use_partition_cache"] is True
+
+
+def test_conflicting_post_sell_rows_fail_closed_instead_of_last_row_wins(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(1, "blocked_ai_score", {"block_reason": "blocked_ai_score"}),
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "recommendation_id": 1,
+                        "signal_date": "2026-07-01",
+                        "stock_code": "000001",
+                        "profit_rate": 0.5,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "recommendation_id": 1,
+                        "signal_date": "2026-07-02",
+                        "stock_code": "000001",
+                        "profit_rate": -0.5,
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+    )
+
+    assert report["summary"]["post_sell_joined_count"] == 0
+    assert report["summary"]["source_identity_conflict_record_count"] == 1
+    assert report["summary"]["source_coverage_status"] == "source_coverage_gap"
+    assert report["source_coverage_manifest"]["identity_conflict_record_count"] == 1
+    assert report["post_sell_identity_diagnostics"]["ambiguous_record_id_count"] == 1
+    assert report["post_sell_identity_diagnostics"]["last_row_wins_allowed"] is False
+    assert report["code_improvement_orders"] == []
+
+
+def test_post_sell_stock_code_mismatch_blocks_join(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(1, "blocked_ai_score", {"block_reason": "blocked_ai_score"}),
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps(
+            {
+                "recommendation_id": 1,
+                "stock_code": "999999",
+                "profit_rate": 0.5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+    )
+
+    assert report["summary"]["post_sell_joined_count"] == 0
+    assert report["summary"]["source_identity_conflict_record_count"] == 1
+    assert (
+        report["source_identity_conflict_examples"][0]["source_identity_status"]
+        == "post_sell_stock_code_conflict"
+    )
+    assert report["source_coverage_manifest"]["status"] == "source_coverage_gap"
+
+
+def test_reused_forced_record_id_is_quarantined(tmp_path):
+    first_pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    second_pipeline_path = tmp_path / "pipeline_events_2026-07-02.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-02.jsonl"
+    first_pipeline_path.write_text(
+        json.dumps(
+            _event(
+                1,
+                "rising_missed_one_share_entry",
+                {"rising_missed_one_share_entry_forced": True},
+                code="000001",
+                emitted_at="2026-07-01T09:00:00+09:00",
+            )
+        ),
+        encoding="utf-8",
+    )
+    second_pipeline_path.write_text(
+        json.dumps(
+            _event(
+                1,
+                "rising_missed_one_share_entry",
+                {"rising_missed_one_share_entry_forced": True},
+                code="000002",
+                emitted_at="2026-07-02T09:00:00+09:00",
+            )
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps(
+            {
+                "recommendation_id": 1,
+                "stock_code": "000001",
+                "profit_rate": 0.5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-02",
+        since_date="2026-07-01",
+        pipeline_paths=[first_pipeline_path, second_pipeline_path],
+        post_sell_paths=[post_sell_path],
+    )
+
+    assert report["summary"]["forced_record_count"] == 1
+    assert report["summary"]["post_sell_joined_count"] == 0
+    assert report["summary"]["source_identity_conflict_record_count"] == 1
+    assert (
+        report["source_identity_conflict_examples"][0]["source_identity_status"]
+        == "forced_record_id_reused"
+    )
+    assert report["source_coverage_manifest"]["status"] == "source_coverage_gap"
+
+
+def test_post_sell_missing_stock_code_is_quarantined(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        json.dumps(
+            _event(
+                1,
+                "rising_missed_one_share_entry",
+                {"rising_missed_one_share_entry_forced": True},
+            )
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps({"recommendation_id": 1, "profit_rate": 0.5}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+    )
+
+    assert report["summary"]["post_sell_joined_count"] == 0
+    assert report["summary"]["source_identity_conflict_record_count"] == 1
+    assert (
+        report["source_identity_conflict_examples"][0]["source_identity_status"]
+        == "post_sell_stock_code_missing"
+    )
+    assert report["source_coverage_manifest"]["status"] == "source_coverage_gap"
+
+
+def test_propagated_forced_event_stock_conflict_is_quarantined(tmp_path):
+    first_pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    second_pipeline_path = tmp_path / "pipeline_events_2026-07-02.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-02.jsonl"
+    first_pipeline_path.write_text(
+        json.dumps(
+            _event(
+                1,
+                "rising_missed_one_share_entry",
+                {"rising_missed_one_share_entry_forced": True},
+                code="000001",
+                emitted_at="2026-07-01T09:00:00+09:00",
+            )
+        ),
+        encoding="utf-8",
+    )
+    second_pipeline_path.write_text(
+        json.dumps(
+            _event(
+                1,
+                "order_bundle_submitted",
+                {
+                    "rising_missed_one_share_entry_forced": True,
+                    "actual_order_submitted": True,
+                },
+                code="000002",
+                emitted_at="2026-07-01T09:00:01+09:00",
+            )
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps(
+            {
+                "recommendation_id": 1,
+                "stock_code": "000001",
+                "profit_rate": 0.5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-02",
+        since_date="2026-07-01",
+        pipeline_paths=[first_pipeline_path, second_pipeline_path],
+        post_sell_paths=[post_sell_path],
+    )
+
+    assert report["summary"]["post_sell_joined_count"] == 0
+    assert report["summary"]["source_identity_conflict_record_count"] == 1
+    assert (
+        report["source_identity_conflict_examples"][0]["source_identity_status"]
+        == "forced_record_id_reused"
+    )
+    assert report["source_coverage_manifest"]["status"] == "source_coverage_gap"
+
+
+def test_conflicting_terminal_sell_identity_is_quarantined(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                    emitted_at="2026-07-01T09:00:00+09:00",
+                ),
+                _event(
+                    1,
+                    "sell_completed",
+                    emitted_at="2026-07-01T09:10:00+09:00",
+                ),
+                _event(
+                    1,
+                    "sell_completed",
+                    emitted_at="2026-07-01T09:11:00+09:00",
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps(
+            {
+                "recommendation_id": 1,
+                "signal_date": "2026-07-01",
+                "stock_code": "000001",
+                "profit_rate": 0.5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+    )
+
+    assert report["summary"]["post_sell_joined_count"] == 0
+    assert report["summary"]["source_identity_conflict_record_count"] == 1
+    assert (
+        report["source_identity_conflict_examples"][0]["source_identity_status"]
+        == "terminal_sell_identity_conflict"
+    )

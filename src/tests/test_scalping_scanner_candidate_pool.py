@@ -1064,6 +1064,56 @@ def test_promote_candidates_emits_rising_replacement_probe_at_full_cap(monkeypat
     )
 
 
+def test_pruned_candidate_emits_explicit_schedule_gap_when_collector_missing(
+    monkeypatch,
+):
+    emitted = []
+    monkeypatch.setattr(
+        scalping_scanner,
+        "offer_global_prune_observation",
+        lambda *args, **kwargs: {
+            "eligible": True,
+            "scanner_prune_observer_schedule_status": "collector_not_configured",
+            "scanner_prune_observer_configured": False,
+            "decision_authority": "scanner_prune_bbo_observation_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, fields=None, **kwargs: emitted.append(
+            {"stage": stage, "code": code, "fields": fields or {}}
+        ),
+    )
+
+    scalping_scanner._log_scanner_candidate_pruned(
+        {"Code": "005930", "Name": "SAMSUNG", "Price": 70_000},
+        reason="general_slot_limit",
+        scan_generation_id="SCANGEN-MISSING-COLLECTOR",
+        scan_rank=1,
+        ranked_candidate_count=1,
+        venue_fields={
+            "effective_venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+        },
+    )
+
+    schedule = next(
+        event
+        for event in emitted
+        if event["stage"] == "scalping_scanner_prune_bbo_schedule"
+    )
+    assert schedule["fields"]["scanner_prune_observer_schedule_status"] == (
+        "collector_not_configured"
+    )
+    assert schedule["fields"]["scanner_prune_observer_configured"] is False
+    assert schedule["fields"]["actual_order_submitted"] is False
+
+
 def test_runtime_target_payload_preserves_promotion_strength_context():
     payload = scalping_scanner._scanner_runtime_target_payload(
         {
@@ -4432,6 +4482,12 @@ def test_low_rebound_source_observation_emits_cap_independent_summary(monkeypatc
     assert fields["low_rebound_prefilter_change_rate_filtered_count"] == 1
     assert fields["low_rebound_scanned_count"] == 2
     assert fields["low_rebound_candle_fetch_attempted_count"] == 2
+    assert fields["low_rebound_candle_fetch_elapsed_total_ms"] >= 0.0
+    assert fields["low_rebound_candle_fetch_elapsed_mean_ms"] >= 0.0
+    assert fields["low_rebound_candle_fetch_elapsed_max_ms"] >= 0.0
+    assert fields["low_rebound_stage_elapsed_ms"] >= (
+        fields["low_rebound_candle_fetch_elapsed_total_ms"] - 0.01
+    )
     assert fields["low_rebound_change_rate_filtered_count"] == 0
     assert fields["low_rebound_below_rebound_threshold_count"] == 1
     assert fields["low_rebound_passed_count"] == 1
@@ -4441,6 +4497,42 @@ def test_low_rebound_source_observation_emits_cap_independent_summary(monkeypatc
     assert fields["low_rebound_fetch_selection_reason"] == (
         "000001:negative_display+volume_raw,000002:negative_display+volume_raw"
     )
+
+
+def test_scalper_iteration_timing_receipt_exposes_post_work_cadence(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, fields=None, **kwargs: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+
+    scalping_scanner._log_scalper_iteration_timing(
+        iteration_id="SCANTIME-TEST",
+        started_epoch=100.0,
+        completed_epoch=112.5,
+        elapsed_sec=12.5,
+        configured_post_iteration_sleep_sec=60.0,
+        observed_start_to_start_sec=74.0,
+        promoted_count=2,
+        venue_fields={
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+        },
+    )
+
+    fields = emitted[0]["fields"]
+    assert emitted[0]["stage"] == "scalping_scanner_iteration_timing"
+    assert fields["scanner_iteration_elapsed_sec"] == 12.5
+    assert fields["scanner_iteration_configured_post_sleep_sec"] == 60.0
+    assert fields["scanner_iteration_projected_start_to_start_sec"] == 72.5
+    assert fields["scanner_iteration_observed_start_to_start_sec"] == 74.0
+    assert fields["scanner_iteration_sleep_is_post_work"] is True
+    assert fields["runtime_effect"] is False
+    assert fields["allowed_runtime_apply"] is False
+    assert fields["actual_order_submitted"] is False
 
 
 def test_low_rebound_excludes_below_threshold(monkeypatch):

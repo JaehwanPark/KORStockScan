@@ -5948,6 +5948,7 @@ def _build_low_rebound_rising_missed_targets(
     new_high_targets=None,
     emit_observation=False,
 ):
+    stage_started_monotonic = time.monotonic()
     candidates = []
     min_rebound_pct = _low_rebound_min_pct()
     chase_distance_pct = _low_rebound_max_distance_from_high_pct()
@@ -5972,6 +5973,8 @@ def _build_low_rebound_rising_missed_targets(
         "change_rate_filtered_count": 0,
         "candle_fetch_attempted_count": 0,
         "candle_fetch_failed_count": 0,
+        "candle_fetch_elapsed_total_ms": 0.0,
+        "candle_fetch_elapsed_max_ms": 0.0,
         "missing_candle_count": 0,
         "invalid_candle_price_count": 0,
         "invalid_intraday_price_count": 0,
@@ -6001,6 +6004,7 @@ def _build_low_rebound_rising_missed_targets(
             stats["change_rate_filtered_count"] += 1
             continue
         stats["candle_fetch_attempted_count"] += 1
+        fetch_started_monotonic = time.monotonic()
         try:
             candles = (
                 kiwoom_utils.get_minute_candles_ka10080(token, code, limit=candle_limit)
@@ -6012,6 +6016,18 @@ def _build_low_rebound_rising_missed_targets(
                 f"🚨 [SCALPING 스캐너] ka10080 저가반등 조회 실패 [{code}]: {exc}"
             )
             continue
+        finally:
+            fetch_elapsed_ms = max(
+                0.0, (time.monotonic() - fetch_started_monotonic) * 1000.0
+            )
+            stats["candle_fetch_elapsed_total_ms"] = round(
+                float(stats["candle_fetch_elapsed_total_ms"]) + fetch_elapsed_ms,
+                3,
+            )
+            stats["candle_fetch_elapsed_max_ms"] = round(
+                max(float(stats["candle_fetch_elapsed_max_ms"]), fetch_elapsed_ms),
+                3,
+            )
         if not candles:
             stats["missing_candle_count"] += 1
             continue
@@ -6139,6 +6155,14 @@ def _build_low_rebound_rising_missed_targets(
                 ),
             }
         )
+    stats["candle_fetch_elapsed_mean_ms"] = round(
+        float(stats["candle_fetch_elapsed_total_ms"])
+        / max(1, int(stats["candle_fetch_attempted_count"])),
+        3,
+    )
+    stats["stage_elapsed_ms"] = round(
+        max(0.0, (time.monotonic() - stage_started_monotonic) * 1000.0), 3
+    )
     if emit_observation:
         _log_low_rebound_source_observation(
             stats,
@@ -6151,6 +6175,64 @@ def _build_low_rebound_rising_missed_targets(
             venue_fields=scalping_session_venue_provenance(),
         )
     return candidates
+
+
+def _log_scalper_iteration_timing(
+    *,
+    iteration_id,
+    started_epoch,
+    completed_epoch,
+    elapsed_sec,
+    configured_post_iteration_sleep_sec,
+    observed_start_to_start_sec,
+    promoted_count,
+    venue_fields=None,
+):
+    """Persist the effective start-to-start cadence without changing it."""
+
+    emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "scalping_scanner",
+        "",
+        "scalping_scanner_iteration_timing",
+        fields={
+            **dict(venue_fields or {}),
+            "metric_role": "source_quality_instrumentation",
+            "decision_authority": "scalping_scanner_timing_observation_only",
+            "window_policy": "each_live_buy_window_scanner_iteration",
+            "sample_floor": "two_complete_scanner_iterations_in_same_buy_window",
+            "primary_decision_metric": "scanner_iteration_observed_start_to_start_sec",
+            "source_quality_gate": "monotonic_elapsed_and_wall_clock_receipt_present",
+            "forbidden_uses": (
+                "scanner_interval_hot_mutation,scanner_slot_change,threshold_change,"
+                "provider_route_change,order_price_or_quantity_change,broker_guard_change,"
+                "stale_quote_bypass,hard_safety_bypass,bot_restart_authority"
+            ),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "scanner_iteration_id": str(iteration_id),
+            "scanner_iteration_started_epoch": round(float(started_epoch), 6),
+            "scanner_iteration_completed_epoch": round(float(completed_epoch), 6),
+            "scanner_iteration_elapsed_sec": round(max(0.0, float(elapsed_sec)), 6),
+            "scanner_iteration_configured_post_sleep_sec": round(
+                max(0.0, float(configured_post_iteration_sleep_sec)), 6
+            ),
+            "scanner_iteration_projected_start_to_start_sec": round(
+                max(0.0, float(elapsed_sec))
+                + max(0.0, float(configured_post_iteration_sleep_sec)),
+                6,
+            ),
+            "scanner_iteration_observed_start_to_start_sec": (
+                round(max(0.0, float(observed_start_to_start_sec)), 6)
+                if observed_start_to_start_sec is not None
+                else "not_available_first_iteration_in_buy_window"
+            ),
+            "scanner_iteration_promoted_count": max(0, int(promoted_count)),
+            "scanner_iteration_sleep_is_post_work": True,
+        },
+    )
 
 
 def _log_low_rebound_source_observation(
@@ -6183,6 +6265,7 @@ def _log_low_rebound_source_observation(
                 "real_execution_quality_approval"
             ),
             "runtime_effect": False,
+            "allowed_runtime_apply": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "source_signature": LOW_REBOUND_RISING_MISSED_SOURCE,
@@ -6451,6 +6534,7 @@ def run_scalper(is_test_mode=False):
 
     radar = SniperRadar(token)
     limit_down_manager = LimitDownWatchManager(token, db, event_bus)
+    previous_iteration_started_monotonic = None
 
     while True:
         now = datetime.now()
@@ -6478,6 +6562,7 @@ def run_scalper(is_test_mode=False):
                 last_active_window_key = window_key
                 last_outside_reset_key = None
                 last_prewarm_window_key = None
+                previous_iteration_started_monotonic = None
 
         if not is_test_mode and active_window is None and prewarm_window is not None:
             prewarm_key = (
@@ -6548,6 +6633,21 @@ def run_scalper(is_test_mode=False):
             continue
 
         scan_interval_sec = _resolve_scan_interval_sec(now_time)
+        iteration_started_epoch = time.time()
+        iteration_started_monotonic = time.monotonic()
+        observed_start_to_start_sec = (
+            max(
+                0.0,
+                iteration_started_monotonic - previous_iteration_started_monotonic,
+            )
+            if previous_iteration_started_monotonic is not None
+            else None
+        )
+        previous_iteration_started_monotonic = iteration_started_monotonic
+        iteration_id = (
+            f"SCANTIME-{os.getpid()}-{int(iteration_started_epoch * 1000)}-"
+            f"{time.monotonic_ns()}"
+        )
         promoted_codes, recent_picks = run_scalper_iteration(
             token=token,
             radar=radar,
@@ -6581,6 +6681,17 @@ def run_scalper(is_test_mode=False):
                     f"released={','.join(released_codes) or '-'}"
                 )
 
+        iteration_completed_epoch = time.time()
+        _log_scalper_iteration_timing(
+            iteration_id=iteration_id,
+            started_epoch=iteration_started_epoch,
+            completed_epoch=iteration_completed_epoch,
+            elapsed_sec=time.monotonic() - iteration_started_monotonic,
+            configured_post_iteration_sleep_sec=scan_interval_sec,
+            observed_start_to_start_sec=observed_start_to_start_sec,
+            promoted_count=len(promoted_codes),
+            venue_fields=scalping_session_venue_provenance(iteration_completed_epoch),
+        )
         time.sleep(scan_interval_sec)
 
 

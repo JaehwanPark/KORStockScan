@@ -12,6 +12,7 @@ from src.engine.monitoring.entry_turn_point_replay import (
     build_entry_turn_point_replay,
     load_verified_symbol_master as load_entry_turn_verified_symbol_master,
 )
+from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
 from src.engine.scalping.risky_micro_episode import (
     POLICY_VERSION as RISKY_MICRO_POLICY_VERSION,
     PRIMARY_ENTRY_PROFILE as RISKY_MICRO_PRIMARY_ENTRY_PROFILE,
@@ -3016,6 +3017,61 @@ def _tp1_actual_costs(fields: dict[str, Any]) -> tuple[float | None, float | Non
     return fee, tax
 
 
+def _tp1_same_cost_lineage(
+    candidate: dict[str, Any], subsequent: dict[str, Any]
+) -> bool:
+    """Prevent exact broker costs from leaking across same-symbol episodes."""
+
+    candidate_fields = _fields(candidate)
+    subsequent_fields = _fields(subsequent)
+    candidate_evaluation_id = str(
+        candidate_fields.get("rising_missed_tp1_evaluation_id") or ""
+    ).strip()
+    subsequent_evaluation_id = str(
+        subsequent_fields.get("rising_missed_tp1_evaluation_id") or ""
+    ).strip()
+    if candidate_evaluation_id and subsequent_evaluation_id:
+        return candidate_evaluation_id == subsequent_evaluation_id
+    candidate_record_id = str(candidate.get("record_id") or "").strip()
+    subsequent_record_id = str(subsequent.get("record_id") or "").strip()
+    return bool(candidate_record_id and candidate_record_id == subsequent_record_id)
+
+
+def _tp1_comparison_cost_binding(
+    candidate_ts: datetime | None,
+) -> tuple[str, dict[str, Any], float | None]:
+    if candidate_ts is None:
+        return "blocked_candidate_timestamp_missing", {}, None
+    try:
+        contract = comparison_cost_contract(candidate_ts)
+        cost_pct = float(contract["round_trip_cost_pct"])
+    except (KeyError, TypeError, ValueError):
+        return "blocked_effective_dated_contract_unavailable", {}, None
+    return "verified", contract, cost_pct
+
+
+def _tp1_cost_adjusted_label(
+    gross_label: str,
+    first_hit_move_pct: float | None,
+    cost_pct: float | None,
+    *,
+    unavailable_label: str,
+) -> str:
+    if cost_pct is None:
+        return unavailable_label
+    if gross_label == "gross_target_first" and first_hit_move_pct is not None:
+        return (
+            "net_target_confirmed"
+            if first_hit_move_pct - cost_pct >= TP1_NET_TARGET_PCT
+            else "net_target_not_met"
+        )
+    if gross_label == "pending_horizon":
+        return "pending_horizon"
+    if gross_label == "input_unavailable" or gross_label.startswith("source_gap_"):
+        return "input_unavailable"
+    return "net_target_not_met"
+
+
 def _tp1_effective_venue(fields: dict[str, Any]) -> str:
     """Retain only explicit venue provenance; never infer a venue from session."""
 
@@ -3586,6 +3642,11 @@ def _build_tp1_first_hit_labels(
         observed_event_count = 0
         latest_ts = candidate_ts
         actual_fee_krw, actual_tax_krw = _tp1_actual_costs(fields)
+        (
+            comparison_cost_contract_status,
+            comparison_cost_binding,
+            comparison_cost_pct,
+        ) = _tp1_comparison_cost_binding(candidate_ts)
         if candidate_ts is not None and entry_price is not None and entry_price > 0:
             label = "pending_horizon"
             horizon_end = candidate_ts + timedelta(seconds=TP1_LABEL_HORIZON_SEC)
@@ -3599,11 +3660,12 @@ def _build_tp1_first_hit_labels(
                     or event_ts > horizon_end
                 ):
                     continue
-                later_fee, later_tax = _tp1_actual_costs(_fields(subsequent))
-                if later_fee is not None:
-                    actual_fee_krw = later_fee
-                if later_tax is not None:
-                    actual_tax_krw = later_tax
+                if _tp1_same_cost_lineage(candidate, subsequent):
+                    later_fee, later_tax = _tp1_actual_costs(_fields(subsequent))
+                    if later_fee is not None:
+                        actual_fee_krw = later_fee
+                    if later_tax is not None:
+                        actual_tax_krw = later_tax
                 price, _price_source = _tp1_observation_price(subsequent)
                 if price is None or price <= 0:
                     continue
@@ -3657,28 +3719,33 @@ def _build_tp1_first_hit_labels(
             actual_fee_krw is not None and actual_tax_krw is not None
         )
         actual_cost_pct = None
-        net_label = "unavailable_fee_tax_missing"
-        if actual_costs_available and entry_price is not None and entry_price > 0:
-            quantity = max(
-                1,
-                _safe_int(
-                    fields.get("forced_entry_qty") or fields.get("quantity") or 1
-                ),
-            )
-            notional = entry_price * quantity
-            actual_cost_pct = ((actual_fee_krw + actual_tax_krw) / notional) * 100.0
-            if label == "gross_target_first" and first_hit_move_pct is not None:
-                net_label = (
-                    "net_target_confirmed"
-                    if first_hit_move_pct - actual_cost_pct >= TP1_NET_TARGET_PCT
-                    else "net_target_not_met"
+        actual_cost_net_label = "unavailable_fee_tax_missing"
+        if actual_costs_available:
+            if entry_price is not None and entry_price > 0:
+                quantity = max(
+                    1,
+                    _safe_int(
+                        fields.get("forced_entry_qty") or fields.get("quantity") or 1
+                    ),
                 )
-            elif label == "pending_horizon":
-                net_label = "pending_horizon"
-            elif label == "input_unavailable":
-                net_label = "input_unavailable"
+                notional = entry_price * quantity
+                actual_cost_pct = (
+                    (actual_fee_krw + actual_tax_krw) / notional
+                ) * 100.0
+                actual_cost_net_label = _tp1_cost_adjusted_label(
+                    label,
+                    first_hit_move_pct,
+                    actual_cost_pct,
+                    unavailable_label="unavailable_fee_tax_missing",
+                )
             else:
-                net_label = "net_target_not_met"
+                actual_cost_net_label = "unavailable_entry_notional_missing"
+        net_label = _tp1_cost_adjusted_label(
+            label,
+            first_hit_move_pct,
+            comparison_cost_pct,
+            unavailable_label="unavailable_comparison_cost_contract",
+        )
         labels.append(
             {
                 "record_id": record_id,
@@ -3738,6 +3805,26 @@ def _build_tp1_first_hit_labels(
                 "actual_cost_pct": (
                     round(actual_cost_pct, 6) if actual_cost_pct is not None else None
                 ),
+                "actual_costs_available": actual_costs_available,
+                "actual_cost_net_label": actual_cost_net_label,
+                "actual_cost_basis": (
+                    "exact_broker_receipt"
+                    if actual_costs_available
+                    else "not_available_unsubmitted_or_receipt_missing"
+                ),
+                "comparison_cost_contract_status": (comparison_cost_contract_status),
+                "comparison_cost_policy_id": comparison_cost_binding.get("policy_id"),
+                "comparison_cost_contract_sha256": comparison_cost_binding.get(
+                    "contract_sha256"
+                ),
+                "comparison_cost_source": comparison_cost_binding.get("source"),
+                "comparison_cost_pct": (
+                    round(comparison_cost_pct, 8)
+                    if comparison_cost_pct is not None
+                    else None
+                ),
+                "comparison_cost_broker_receipt_exact": False,
+                "net_label_cost_basis": "effective_dated_comparison_cost_contract",
                 "net_label": net_label,
                 "decision_authority": "source_only_tp1_outcome_label",
                 "runtime_effect": False,
@@ -3749,6 +3836,12 @@ def _build_tp1_first_hit_labels(
         str(item.get("gross_first_hit_label") or "unknown") for item in labels
     )
     net_counts = Counter(str(item.get("net_label") or "unknown") for item in labels)
+    actual_net_counts = Counter(
+        str(item.get("actual_cost_net_label") or "unknown") for item in labels
+    )
+    comparison_cost_status_counts = Counter(
+        str(item.get("comparison_cost_contract_status") or "unknown") for item in labels
+    )
     return {
         "rising_missed_tp1_labeled_candidate_count": len(labels),
         "rising_missed_tp1_gross_label_counts": [
@@ -3761,6 +3854,16 @@ def _build_tp1_first_hit_labels(
         ],
         "rising_missed_tp1_net_confirmed_count": net_counts.get(
             "net_target_confirmed", 0
+        ),
+        "rising_missed_tp1_net_label_cost_basis": (
+            "effective_dated_comparison_cost_contract"
+        ),
+        "rising_missed_tp1_actual_cost_net_label_counts": [
+            {"actual_cost_net_label": key, "count": value}
+            for key, value in actual_net_counts.most_common()
+        ],
+        "rising_missed_tp1_comparison_cost_contract_status_counts": dict(
+            sorted(comparison_cost_status_counts.items())
         ),
     }, labels
 
@@ -7694,6 +7797,20 @@ def write_outputs(
         f"{summary.get('dynamic_age_post_apply_first_hit_counts')}",
         f"- dynamic_age_post_apply_venue_counts: "
         f"{summary.get('dynamic_age_post_apply_venue_counts')}",
+        f"- rising_missed_tp1_labeled_candidate_count: "
+        f"{summary.get('rising_missed_tp1_labeled_candidate_count')}",
+        f"- rising_missed_tp1_gross_label_counts: "
+        f"{summary.get('rising_missed_tp1_gross_label_counts')}",
+        f"- rising_missed_tp1_net_label_counts: "
+        f"{summary.get('rising_missed_tp1_net_label_counts')}",
+        f"- rising_missed_tp1_net_confirmed_count: "
+        f"{summary.get('rising_missed_tp1_net_confirmed_count')}",
+        f"- rising_missed_tp1_net_label_cost_basis: "
+        f"{summary.get('rising_missed_tp1_net_label_cost_basis')}",
+        f"- rising_missed_tp1_actual_cost_net_label_counts: "
+        f"{summary.get('rising_missed_tp1_actual_cost_net_label_counts')}",
+        f"- rising_missed_tp1_comparison_cost_contract_status_counts: "
+        f"{summary.get('rising_missed_tp1_comparison_cost_contract_status_counts')}",
         f"- rising_missed_tp1_counterfactual_submit_safety_count: "
         f"{summary.get('rising_missed_tp1_counterfactual_submit_safety_count')}",
         f"- rising_missed_tp1_counterfactual_unique_symbol_count: "

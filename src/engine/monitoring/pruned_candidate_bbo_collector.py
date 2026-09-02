@@ -178,6 +178,9 @@ class PrunedCandidateBBOCollector:
         self._receipt_emit_failure_count = 0
         self._request_gap_count = 0
         self._captured_sample_count = 0
+        self._configured_epoch: float | None = None
+        self._configuration_receipt_status = "not_emitted"
+        self._configuration_receipt_emit_failure_count = 0
         self._stop_requested = False
         self._worker: threading.Thread | None = None
 
@@ -234,7 +237,70 @@ class PrunedCandidateBBOCollector:
             "scanner_prune_observer_captured_sample_count": (
                 self._captured_sample_count
             ),
+            "scanner_prune_observer_configured": self._configured_epoch is not None,
+            "scanner_prune_observer_configured_epoch": self._configured_epoch,
+            "scanner_prune_observer_configuration_receipt_status": (
+                self._configuration_receipt_status
+            ),
+            "scanner_prune_observer_configuration_receipt_emit_failure_count": (
+                self._configuration_receipt_emit_failure_count
+            ),
         }
+
+    def configuration_receipt_fields(
+        self, *, configuration_status: str, configured_epoch: float
+    ) -> dict[str, Any]:
+        """Return a secret-free receipt proving this PID configured the observer."""
+
+        with self._condition:
+            self._configured_epoch = float(configured_epoch)
+            self._roll_daily_budget_locked(self._configured_epoch)
+            self._configuration_receipt_status = "emit_pending"
+            fields = {
+                **METRIC_CONTRACT,
+                "scanner_prune_observer_configuration_status": str(
+                    configuration_status or "configured"
+                ),
+                "scanner_prune_observer_configured": True,
+                "scanner_prune_observer_configured_epoch": round(
+                    self._configured_epoch, 6
+                ),
+                "scanner_prune_observer_configured_at": datetime.fromtimestamp(
+                    self._configured_epoch, tz=KST
+                ).isoformat(),
+                "scanner_prune_observer_process_pid": os.getpid(),
+                "scanner_prune_observer_token_present": bool(self._token),
+                "scanner_prune_observer_sample_offsets_sec": list(SAMPLE_OFFSETS_SEC),
+                "scanner_prune_observer_episode_reset_gap_sec": (EPISODE_RESET_GAP_SEC),
+                "scanner_prune_observer_max_anchor_to_schedule_delay_sec": (
+                    MAX_ANCHOR_TO_SCHEDULE_DELAY_SEC
+                ),
+                "scanner_prune_observer_max_active_episode_count": (
+                    self._max_active_episodes
+                ),
+                "scanner_prune_observer_max_pending_sample_count": (
+                    self._max_pending_samples
+                ),
+                "scanner_prune_observer_max_process_daily_scheduled_request_count": (
+                    self._max_daily_requests
+                ),
+                "scanner_prune_observer_min_request_interval_sec": (
+                    self._min_request_interval_sec
+                ),
+                "scanner_prune_observer_market_data_request_effect": True,
+                **self._budget_fields_locked(),
+            }
+            # The event itself is the proof of a successful append.  Internal
+            # state remains ``emit_pending`` until the logger call returns and
+            # is then exposed on later schedule receipts.
+            fields["scanner_prune_observer_configuration_receipt_status"] = "emitted"
+            return fields
+
+    def record_configuration_receipt_result(self, *, emitted: bool) -> None:
+        with self._condition:
+            self._configuration_receipt_status = "emitted" if emitted else "emit_failed"
+            if not emitted:
+                self._configuration_receipt_emit_failure_count += 1
 
     def _trim_retained_locked(self) -> None:
         if len(self._episodes) <= MAX_RETAINED_EPISODES:
@@ -958,9 +1024,39 @@ def configure_global_collector(token: str) -> PrunedCandidateBBOCollector | None
     with _GLOBAL_LOCK:
         if _GLOBAL_COLLECTOR is None:
             _GLOBAL_COLLECTOR = PrunedCandidateBBOCollector(normalized)
+            configuration_status = "collector_created"
         else:
             _GLOBAL_COLLECTOR.update_token(normalized)
-        return _GLOBAL_COLLECTOR
+            configuration_status = "collector_token_refreshed"
+        collector = _GLOBAL_COLLECTOR
+    configured_epoch = time.time()
+    receipt_fields = collector.configuration_receipt_fields(
+        configuration_status=configuration_status,
+        configured_epoch=configured_epoch,
+    )
+    emitted = False
+    failure_type = "structured_append_not_succeeded"
+    try:
+        emit_result = emit_pipeline_event(
+            "ENTRY_PIPELINE",
+            "scanner_prune_bbo_observer",
+            "-",
+            "scalping_scanner_prune_bbo_source_loaded",
+            fields=receipt_fields,
+        )
+        emitted = not (
+            isinstance(emit_result, Mapping)
+            and emit_result.get("structured_append_succeeded") is False
+        )
+    except Exception as exc:
+        failure_type = type(exc).__name__
+    collector.record_configuration_receipt_result(emitted=emitted)
+    if not emitted:
+        log_error(
+            "[SCANNER_PRUNE_BBO_OBSERVER] configuration receipt emit failed "
+            f"pid={os.getpid()} error={failure_type}"
+        )
+    return collector
 
 
 def offer_global_prune_observation(
@@ -976,7 +1072,20 @@ def offer_global_prune_observation(
     with _GLOBAL_LOCK:
         collector = _GLOBAL_COLLECTOR
     if collector is None:
-        return {"eligible": False, "schedule_status": "collector_not_configured"}
+        normalized_reason = str(reason or "").strip()
+        eligible = normalized_reason in ELIGIBLE_PRUNE_REASONS
+        if not eligible:
+            return {"eligible": False, "schedule_status": "ineligible_prune_reason"}
+        return {
+            "eligible": True,
+            "scanner_prune_observer_schedule_status": "collector_not_configured",
+            "scanner_prune_observer_reason": normalized_reason,
+            "scanner_prune_observer_episode_id": "",
+            "scanner_prune_observer_configured": False,
+            "scanner_prune_observer_configuration_receipt_status": "not_emitted",
+            "scanner_prune_observer_market_data_request_effect": True,
+            **METRIC_CONTRACT,
+        }
     try:
         return collector.offer(
             target,

@@ -15,7 +15,14 @@ from typing import Any, Iterable, Mapping
 
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
 from src.engine.monitoring.pruned_candidate_bbo_collector import (
+    EPISODE_RESET_GAP_SEC as SCANNER_PRUNE_BBO_EPISODE_RESET_GAP_SEC,
+    MAX_ACTIVE_EPISODES as SCANNER_PRUNE_BBO_MAX_ACTIVE_EPISODES,
+    MAX_ANCHOR_TO_SCHEDULE_DELAY_SEC as SCANNER_PRUNE_BBO_MAX_ANCHOR_DELAY_SEC,
+    MAX_PENDING_SAMPLES as SCANNER_PRUNE_BBO_MAX_PENDING_SAMPLES,
+    MAX_SCHEDULED_REQUESTS_PER_PROCESS_KST_DATE as SCANNER_PRUNE_BBO_MAX_DAILY_REQUESTS,
     METRIC_CONTRACT as SCANNER_PRUNE_BBO_COLLECTOR_METRIC_CONTRACT,
+    MIN_REQUEST_INTERVAL_SEC as SCANNER_PRUNE_BBO_MIN_REQUEST_INTERVAL_SEC,
+    SAMPLE_OFFSETS_SEC as SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC,
 )
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
 from src.utils.constants import DATA_DIR
@@ -39,7 +46,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v8"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v9"
 SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 SCANNER_BBO_GROSS_TARGET_PCT = 1.30
 SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
@@ -826,6 +833,21 @@ def _scanner_funnel_state_from_mapping(value: Any) -> dict[str, Any]:
     value = value if isinstance(value, dict) else {}
     lineages = value.get("lineages") if isinstance(value.get("lineages"), dict) else {}
     prunes = value.get("prunes") if isinstance(value.get("prunes"), dict) else {}
+    runtime_receipts = (
+        value.get("prune_observer_runtime_receipts")
+        if isinstance(value.get("prune_observer_runtime_receipts"), dict)
+        else {}
+    )
+    iteration_timing_receipts = (
+        value.get("scanner_iteration_timing_receipts")
+        if isinstance(value.get("scanner_iteration_timing_receipts"), dict)
+        else {}
+    )
+    low_rebound_timing_receipts = (
+        value.get("scanner_low_rebound_timing_receipts")
+        if isinstance(value.get("scanner_low_rebound_timing_receipts"), dict)
+        else {}
+    )
     fingerprints = value.get("event_fingerprints")
     return {
         "lineages": {
@@ -841,6 +863,21 @@ def _scanner_funnel_state_from_mapping(value: Any) -> dict[str, Any]:
                 ),
             }
             for key, item in prunes.items()
+            if isinstance(item, dict)
+        },
+        "prune_observer_runtime_receipts": {
+            str(key): dict(item)
+            for key, item in runtime_receipts.items()
+            if isinstance(item, dict)
+        },
+        "scanner_iteration_timing_receipts": {
+            str(key): dict(item)
+            for key, item in iteration_timing_receipts.items()
+            if isinstance(item, dict)
+        },
+        "scanner_low_rebound_timing_receipts": {
+            str(key): dict(item)
+            for key, item in low_rebound_timing_receipts.items()
             if isinstance(item, dict)
         },
         "event_fingerprints": (
@@ -867,6 +904,9 @@ def _append_unique(values: Any, value: Any) -> list[str]:
 def _scanner_funnel_event_relevant(row: dict[str, Any]) -> bool:
     stage = str(row.get("stage") or row.get("event_type") or "")
     if stage in {
+        "scalping_scanner_prune_bbo_source_loaded",
+        "scalping_scanner_iteration_timing",
+        "scalping_scanner_low_rebound_source_observed",
         "scalping_scanner_candidate_pruned",
         "scalping_scanner_prune_bbo_schedule",
         "scalping_scanner_prune_bbo_observation",
@@ -926,6 +966,21 @@ def _scanner_funnel_event_fingerprint(row: dict[str, Any]) -> str:
         "prune_observer_scheduled_offset_sec": _to_float(
             row.get("scanner_prune_observer_scheduled_offset_sec")
         ),
+        "prune_observer_process_pid": _nonnegative_integer_metadata(
+            row.get("scanner_prune_observer_process_pid")
+        ),
+        "prune_observer_configured_epoch": _to_float(
+            row.get("scanner_prune_observer_configured_epoch")
+        ),
+        "prune_observer_configuration_status": str(
+            row.get("scanner_prune_observer_configuration_status") or ""
+        ),
+        "scanner_iteration_id": _valid_lineage_token(
+            row.get("scanner_iteration_id")
+        ),
+        "scanner_iteration_started_epoch": _to_float(
+            row.get("scanner_iteration_started_epoch")
+        ),
         "eviction_reason": str(row.get("eviction_reason") or ""),
         "fast_precheck_result": str(row.get("fast_precheck_result") or ""),
     }
@@ -951,6 +1006,141 @@ def _update_scanner_funnel_state(
     fingerprint_set.add(fingerprint)
 
     stage = str(row.get("stage") or row.get("event_type") or "unknown")
+    if stage == "scalping_scanner_prune_bbo_source_loaded":
+        process_pid = _nonnegative_integer_metadata(
+            row.get("scanner_prune_observer_process_pid")
+        )
+        configured_epoch = _to_float(
+            row.get("scanner_prune_observer_configured_epoch")
+        )
+        receipt_key = (
+            f"{process_pid or 0}:{configured_epoch or 0.0:.6f}:"
+            f"{row.get('scanner_prune_observer_configuration_status') or 'configured'}"
+        )
+        state.setdefault("prune_observer_runtime_receipts", {})[receipt_key] = {
+            "process_pid": process_pid,
+            "configured_epoch": configured_epoch,
+            "configured_at": str(
+                row.get("scanner_prune_observer_configured_at") or ""
+            ),
+            "configuration_status": str(
+                row.get("scanner_prune_observer_configuration_status") or "unknown"
+            ),
+            "configured": _boolish(row.get("scanner_prune_observer_configured")),
+            "configuration_receipt_status": str(
+                row.get("scanner_prune_observer_configuration_receipt_status")
+                or "unknown"
+            ),
+            "token_present": _boolish(
+                row.get("scanner_prune_observer_token_present")
+            ),
+            "sample_offsets_sec": _listish(
+                row.get("scanner_prune_observer_sample_offsets_sec")
+            ),
+            "episode_reset_gap_sec": _to_float(
+                row.get("scanner_prune_observer_episode_reset_gap_sec")
+            ),
+            "max_anchor_to_schedule_delay_sec": _to_float(
+                row.get(
+                    "scanner_prune_observer_max_anchor_to_schedule_delay_sec"
+                )
+            ),
+            "max_active_episode_count": _nonnegative_integer_metadata(
+                row.get("scanner_prune_observer_max_active_episode_count")
+            ),
+            "max_pending_sample_count": _nonnegative_integer_metadata(
+                row.get("scanner_prune_observer_max_pending_sample_count")
+            ),
+            "max_process_daily_scheduled_request_count": (
+                _nonnegative_integer_metadata(
+                    row.get(
+                        "scanner_prune_observer_max_process_daily_scheduled_request_count"
+                    )
+                )
+            ),
+            "min_request_interval_sec": _to_float(
+                row.get("scanner_prune_observer_min_request_interval_sec")
+            ),
+            "market_data_request_effect": _boolish(
+                row.get("scanner_prune_observer_market_data_request_effect")
+            ),
+            "runtime_effect": _boolish(row.get("runtime_effect")),
+            "allowed_runtime_apply": _boolish(row.get("allowed_runtime_apply")),
+            "actual_order_submitted": _boolish(
+                row.get("actual_order_submitted")
+            ),
+            "broker_order_forbidden": _boolish(
+                row.get("broker_order_forbidden")
+            ),
+        }
+        return
+    if stage == "scalping_scanner_iteration_timing":
+        iteration_id = _valid_lineage_token(row.get("scanner_iteration_id"))
+        if not iteration_id:
+            state["missing_lineage_event_count"] += 1
+            return
+        state.setdefault("scanner_iteration_timing_receipts", {})[iteration_id] = {
+            "iteration_id": iteration_id,
+            "started_epoch": _to_float(row.get("scanner_iteration_started_epoch")),
+            "completed_epoch": _to_float(
+                row.get("scanner_iteration_completed_epoch")
+            ),
+            "elapsed_sec": _to_float(row.get("scanner_iteration_elapsed_sec")),
+            "configured_post_sleep_sec": _to_float(
+                row.get("scanner_iteration_configured_post_sleep_sec")
+            ),
+            "projected_start_to_start_sec": _to_float(
+                row.get("scanner_iteration_projected_start_to_start_sec")
+            ),
+            "observed_start_to_start_sec": _to_float(
+                row.get("scanner_iteration_observed_start_to_start_sec")
+            ),
+            "promoted_count": _nonnegative_integer_metadata(
+                row.get("scanner_iteration_promoted_count")
+            ),
+            "venue": _scanner_venue_metadata(row) or "UNKNOWN",
+            "market_session_bucket": _scanner_session_metadata(row) or "UNKNOWN",
+        }
+        return
+    if stage == "scalping_scanner_low_rebound_source_observed":
+        observed_at = str(
+            row.get("emitted_at") or row.get("timestamp") or ""
+        ).strip()
+        receipt_key = hashlib.sha256(
+            json.dumps(
+                {
+                    "observed_at": observed_at,
+                    "sampled_codes": row.get("low_rebound_sampled_codes"),
+                    "passed_codes": row.get("low_rebound_passed_codes"),
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        state.setdefault("scanner_low_rebound_timing_receipts", {})[receipt_key] = {
+            "observed_at": observed_at,
+            "stage_elapsed_ms": _to_float(row.get("low_rebound_stage_elapsed_ms")),
+            "candle_fetch_attempted_count": _nonnegative_integer_metadata(
+                row.get("low_rebound_candle_fetch_attempted_count")
+            ),
+            "candle_fetch_elapsed_total_ms": _to_float(
+                row.get("low_rebound_candle_fetch_elapsed_total_ms")
+            ),
+            "candle_fetch_elapsed_mean_ms": _to_float(
+                row.get("low_rebound_candle_fetch_elapsed_mean_ms")
+            ),
+            "candle_fetch_elapsed_max_ms": _to_float(
+                row.get("low_rebound_candle_fetch_elapsed_max_ms")
+            ),
+            "universe_count": _nonnegative_integer_metadata(
+                row.get("low_rebound_universe_count")
+            ),
+            "passed_count": _nonnegative_integer_metadata(
+                row.get("low_rebound_passed_count")
+            ),
+        }
+        return
     code = str(row.get("stock_code") or row.get("code") or "").strip()[:6]
     promotion_id = _valid_lineage_token(row.get("scanner_promotion_id"))
     generation_id = _valid_lineage_token(row.get("scanner_scan_generation_id"))
@@ -2869,6 +3059,15 @@ def _scanner_unique_funnel_summary(
     symbol_master_binding: Mapping[str, Any],
 ) -> dict[str, Any]:
     lineages = list((state.get("lineages") or {}).values())
+    prune_observer_runtime_receipts = list(
+        (state.get("prune_observer_runtime_receipts") or {}).values()
+    )
+    scanner_iteration_timing_receipts = list(
+        (state.get("scanner_iteration_timing_receipts") or {}).values()
+    )
+    scanner_low_rebound_timing_receipts = list(
+        (state.get("scanner_low_rebound_timing_receipts") or {}).values()
+    )
     prunes = [
         prune
         for prune in (state.get("prunes") or {}).values()
@@ -2932,8 +3131,98 @@ def _scanner_unique_funnel_summary(
         for snapshot in episode.get("prune_observer_budget_snapshots") or []
         if isinstance(snapshot, dict)
     ]
+    valid_runtime_configuration_receipts = [
+        row
+        for row in prune_observer_runtime_receipts
+        if int(row.get("process_pid") or 0) > 0
+        and float(row.get("configured_epoch") or 0.0) > 0.0
+        and row.get("configuration_status")
+        in {"collector_created", "collector_token_refreshed"}
+        and row.get("configured") is True
+        and row.get("configuration_receipt_status") == "emitted"
+        and row.get("token_present") is True
+        and list(row.get("sample_offsets_sec") or [])
+        == list(SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC)
+        and float(row.get("episode_reset_gap_sec") or 0.0)
+        == SCANNER_PRUNE_BBO_EPISODE_RESET_GAP_SEC
+        and float(row.get("max_anchor_to_schedule_delay_sec") or 0.0)
+        == SCANNER_PRUNE_BBO_MAX_ANCHOR_DELAY_SEC
+        and int(row.get("max_active_episode_count") or 0)
+        == SCANNER_PRUNE_BBO_MAX_ACTIVE_EPISODES
+        and int(row.get("max_pending_sample_count") or 0)
+        == SCANNER_PRUNE_BBO_MAX_PENDING_SAMPLES
+        and int(row.get("max_process_daily_scheduled_request_count") or 0)
+        == SCANNER_PRUNE_BBO_MAX_DAILY_REQUESTS
+        and float(row.get("min_request_interval_sec") or 0.0)
+        >= SCANNER_PRUNE_BBO_MIN_REQUEST_INTERVAL_SEC
+        and row.get("market_data_request_effect") is True
+        and row.get("runtime_effect") is False
+        and row.get("allowed_runtime_apply") is False
+        and row.get("actual_order_submitted") is False
+        and row.get("broker_order_forbidden") is True
+    ]
+    collector_not_configured_count = int(
+        prune_observer_schedule_status_counts.get("collector_not_configured") or 0
+    )
+    schedule_receipt_count = sum(prune_observer_schedule_status_counts.values())
+    if exact_bbo_prune_observation_episodes:
+        runtime_hook_state = (
+            "bounded_prune_rest_bbo_collector_runtime_receipts_observed"
+        )
+    elif scheduled_prune_observation_episodes:
+        runtime_hook_state = (
+            "bounded_prune_rest_bbo_collector_schedule_receipts_observed"
+        )
+    elif collector_not_configured_count:
+        runtime_hook_state = "bounded_prune_rest_bbo_collector_not_configured"
+    elif eligible_prune_observation_episodes and not schedule_receipt_count:
+        runtime_hook_state = (
+            "bounded_prune_rest_bbo_collector_loaded_but_schedule_receipt_missing"
+            if valid_runtime_configuration_receipts
+            else "bounded_prune_rest_bbo_collector_load_and_schedule_receipt_missing"
+        )
+    elif valid_runtime_configuration_receipts:
+        runtime_hook_state = (
+            "bounded_prune_rest_bbo_collector_loaded_healthy_no_natural_sample"
+        )
+    else:
+        runtime_hook_state = (
+            "bounded_prune_rest_bbo_collector_process_reflection_missing"
+        )
+    if (
+        eligible_prune_observation_episodes
+        or prune_observer_runtime_receipts
+        or schedule_receipt_count
+    ):
+        bbo_attribution["source_capture_implementation_state"] = runtime_hook_state
+    if collector_not_configured_count or (
+        eligible_prune_observation_episodes and not schedule_receipt_count
+    ):
+        bbo_attribution["source_capture_repair_required"] = True
     prune_observer_summary = {
         "metric_contract": SCANNER_PRUNE_BBO_COLLECTOR_METRIC_CONTRACT,
+        "runtime_configuration_receipt_count": len(
+            prune_observer_runtime_receipts
+        ),
+        "runtime_configuration_valid_receipt_count": len(
+            valid_runtime_configuration_receipts
+        ),
+        "runtime_hook_state": runtime_hook_state,
+        "runtime_configuration_status_counts": dict(
+            sorted(
+                Counter(
+                    str(row.get("configuration_status") or "unknown")
+                    for row in prune_observer_runtime_receipts
+                ).items()
+            )
+        ),
+        "runtime_configuration_receipts": sorted(
+            prune_observer_runtime_receipts,
+            key=lambda row: (
+                float(row.get("configured_epoch") or 0.0),
+                int(row.get("process_pid") or 0),
+            ),
+        )[-20:],
         "acceptance": dict(bbo_attribution.get("prune_observer_acceptance") or {}),
         "eligible_episode_census_count": len(eligible_prune_observation_episodes),
         "scheduled_stable_episode_count": len(scheduled_prune_observation_episodes),
@@ -3062,6 +3351,117 @@ def _scanner_unique_funnel_summary(
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+    }
+    iteration_elapsed_values = [
+        float(row["elapsed_sec"])
+        for row in scanner_iteration_timing_receipts
+        if row.get("elapsed_sec") is not None
+        and math.isfinite(float(row["elapsed_sec"]))
+        and float(row["elapsed_sec"]) >= 0.0
+    ]
+    projected_start_to_start_values = [
+        float(row["projected_start_to_start_sec"])
+        for row in scanner_iteration_timing_receipts
+        if row.get("projected_start_to_start_sec") is not None
+        and math.isfinite(float(row["projected_start_to_start_sec"]))
+        and float(row["projected_start_to_start_sec"]) >= 0.0
+    ]
+    observed_start_to_start_values = [
+        float(row["observed_start_to_start_sec"])
+        for row in scanner_iteration_timing_receipts
+        if row.get("observed_start_to_start_sec") is not None
+        and math.isfinite(float(row["observed_start_to_start_sec"]))
+        and float(row["observed_start_to_start_sec"]) >= 0.0
+    ]
+    low_rebound_stage_elapsed_values_ms = [
+        float(row["stage_elapsed_ms"])
+        for row in scanner_low_rebound_timing_receipts
+        if row.get("stage_elapsed_ms") is not None
+        and math.isfinite(float(row["stage_elapsed_ms"]))
+        and float(row["stage_elapsed_ms"]) >= 0.0
+    ]
+    low_rebound_fetch_elapsed_values_ms = [
+        float(row["candle_fetch_elapsed_total_ms"])
+        for row in scanner_low_rebound_timing_receipts
+        if row.get("candle_fetch_elapsed_total_ms") is not None
+        and math.isfinite(float(row["candle_fetch_elapsed_total_ms"]))
+        and float(row["candle_fetch_elapsed_total_ms"]) >= 0.0
+    ]
+    scanner_timing_summary = {
+        "metric_role": "source_quality_instrumentation",
+        "decision_authority": "scalping_scanner_timing_observation_only",
+        "window_policy": "target_date_complete_live_buy_window_iterations",
+        "sample_floor": (
+            "two_complete_iterations_in_same_buy_window_and_one_low_rebound_stage_receipt"
+        ),
+        "primary_decision_metric": "scanner_iteration_observed_start_to_start_sec",
+        "source_quality_gate": "monotonic_elapsed_receipts_present_without_imputation",
+        "iteration_receipt_count": len(scanner_iteration_timing_receipts),
+        "iteration_elapsed_sample_count": len(iteration_elapsed_values),
+        "iteration_elapsed_p50_sec": _nearest_rank_percentile(
+            iteration_elapsed_values, 0.50
+        ),
+        "iteration_elapsed_p95_sec": _nearest_rank_percentile(
+            iteration_elapsed_values, 0.95
+        ),
+        "iteration_elapsed_max_sec": (
+            max(iteration_elapsed_values) if iteration_elapsed_values else None
+        ),
+        "projected_start_to_start_p50_sec": _nearest_rank_percentile(
+            projected_start_to_start_values, 0.50
+        ),
+        "projected_start_to_start_p95_sec": _nearest_rank_percentile(
+            projected_start_to_start_values, 0.95
+        ),
+        "observed_start_to_start_sample_count": len(
+            observed_start_to_start_values
+        ),
+        "observed_start_to_start_p50_sec": _nearest_rank_percentile(
+            observed_start_to_start_values, 0.50
+        ),
+        "observed_start_to_start_p95_sec": _nearest_rank_percentile(
+            observed_start_to_start_values, 0.95
+        ),
+        "low_rebound_stage_receipt_count": len(
+            scanner_low_rebound_timing_receipts
+        ),
+        "low_rebound_stage_elapsed_sample_count": len(
+            low_rebound_stage_elapsed_values_ms
+        ),
+        "low_rebound_stage_elapsed_p50_ms": _nearest_rank_percentile(
+            low_rebound_stage_elapsed_values_ms, 0.50
+        ),
+        "low_rebound_stage_elapsed_p95_ms": _nearest_rank_percentile(
+            low_rebound_stage_elapsed_values_ms, 0.95
+        ),
+        "low_rebound_candle_fetch_attempted_count": sum(
+            int(row.get("candle_fetch_attempted_count") or 0)
+            for row in scanner_low_rebound_timing_receipts
+        ),
+        "low_rebound_candle_fetch_elapsed_total_ms": round(
+            sum(low_rebound_fetch_elapsed_values_ms), 3
+        ),
+        "timing_source_quality_state": (
+            "pass"
+            if observed_start_to_start_values and low_rebound_stage_elapsed_values_ms
+            else (
+                "partial_missing_iteration_or_low_rebound_receipt"
+                if scanner_iteration_timing_receipts
+                or scanner_low_rebound_timing_receipts
+                else "not_observed_pre_instrumentation_or_no_natural_iteration"
+            )
+        ),
+        "scanner_sleep_placement": "post_iteration_work",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": [
+            "scanner_interval_hot_mutation",
+            "scanner_slot_or_threshold_change",
+            "provider_or_bot_change",
+            "broker_or_hard_safety_bypass",
+        ],
     }
     final_outcomes: Counter = Counter()
     prune_reasons: Counter = Counter()
@@ -3307,6 +3707,7 @@ def _scanner_unique_funnel_summary(
         "manual_control_exclusion_attach_skip_count": manual_attach_skip_count,
         "manual_control_exclusion_terminalized_count": manual_terminalized_count,
         "unique_pruned_candidate_count": len(prunes),
+        "scanner_timing_summary": scanner_timing_summary,
         "prune_observer_summary": prune_observer_summary,
         "prune_reason_counts": dict(sorted(prune_reasons.items())),
         "immutable_metadata_conflict_count": immutable_metadata_conflict_count,
@@ -4630,6 +5031,7 @@ def build_report(
             "retained_state_scope": "daily_unique_scanner_lineages_and_relevant_event_hashes",
             "memory_growth_bound": (
                 "O(daily_unique_scanner_promotions+daily_unique_prunes+"
+                "daily_scanner_timing_and_runtime_receipts+"
                 "daily_relevant_event_fingerprints)"
             ),
             "full_event_list_materialized": False,

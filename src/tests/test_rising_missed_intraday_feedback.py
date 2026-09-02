@@ -981,7 +981,7 @@ def test_tp1_label_projection_preserves_plain_counterfactual_provenance():
     }
 
 
-def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_net(
+def test_tp1_first_hit_label_uses_comparison_cost_when_broker_cost_is_unavailable(
     tmp_path,
 ):
     pipeline_path = tmp_path / "pipeline_events_2026-07-14.jsonl"
@@ -1029,10 +1029,14 @@ def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_
     label = report["rising_missed_tp1_first_hit_label_rows"][0]
     assert label["gross_first_hit_label"] == "gross_target_first"
     assert label["first_hit_move_pct"] == 1.4
-    assert label["net_label"] == "unavailable_fee_tax_missing"
+    assert label["net_label"] == "net_target_confirmed"
+    assert label["comparison_cost_pct"] == 0.2
+    assert label["comparison_cost_contract_status"] == "verified"
+    assert label["comparison_cost_broker_receipt_exact"] is False
+    assert label["actual_cost_net_label"] == "unavailable_fee_tax_missing"
     assert label["effective_venue"] == "PREMARKET_KRX_LIKE"
     assert label["venue_resolution"] == "canonicalized:rising_missed_effective_venue"
-    assert report["summary"]["rising_missed_tp1_net_confirmed_count"] == 0
+    assert report["summary"]["rising_missed_tp1_net_confirmed_count"] == 1
 
 
 def test_tp1_counterfactual_preserves_explicit_premarket_venue_provenance(
@@ -1081,6 +1085,161 @@ def test_tp1_counterfactual_preserves_explicit_premarket_venue_provenance(
     for row in (observation, label):
         assert row["effective_venue"] == "PREMARKET_KRX_LIKE"
         assert row["venue_resolution"] == "canonicalized:rising_missed_effective_venue"
+
+
+def test_tp1_net_label_keeps_fixed_comparison_cost_separate_from_broker_receipt(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-09-02.jsonl"
+    rows = [
+        _event(
+            720,
+            "000720",
+            "comparison",
+            "rising_missed_one_share_entry",
+            {
+                "rising_missed_tp1_evaluation_id": "eval-comparison",
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
+                "actual_fee_krw": 20,
+                "actual_tax_krw": 20,
+                "quantity": 1,
+            },
+            emitted_at="2026-09-02T09:00:00+09:00",
+        ),
+        _event(
+            720,
+            "000720",
+            "comparison",
+            "holding_observation",
+            {
+                "market_data_effective_best_bid": 10130,
+                "market_data_effective_best_ask": 10140,
+            },
+            emitted_at="2026-09-02T09:05:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-09-02", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    label = report["rising_missed_tp1_first_hit_label_rows"][0]
+    assert label["comparison_cost_pct"] == 0.23
+    assert label["comparison_cost_policy_id"] == (
+        "widget_effective_dated_comparison_cost_23bps_v1"
+    )
+    assert label["net_label"] == "net_target_confirmed"
+    assert label["actual_cost_pct"] == 0.4
+    assert label["actual_cost_net_label"] == "net_target_not_met"
+    assert label["net_label_cost_basis"] == (
+        "effective_dated_comparison_cost_contract"
+    )
+    assert report["summary"]["rising_missed_tp1_net_label_cost_basis"] == (
+        "effective_dated_comparison_cost_contract"
+    )
+
+
+def test_tp1_exact_cost_does_not_leak_from_another_same_symbol_episode(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-09-02.jsonl"
+    rows = [
+        _event(
+            721,
+            "000721",
+            "first",
+            "rising_missed_one_share_entry",
+            {
+                "rising_missed_tp1_evaluation_id": "eval-first",
+                "rising_missed_tp1_selector_active": True,
+                "rising_missed_tp1_candidate_allowed": True,
+                "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+                "market_data_effective_best_bid": 9990,
+                "market_data_effective_best_ask": 10000,
+            },
+            emitted_at="2026-09-02T09:00:00+09:00",
+        ),
+        _event(
+            721,
+            "000721",
+            "first",
+            "holding_observation",
+            {
+                "market_data_effective_best_bid": 10130,
+                "market_data_effective_best_ask": 10140,
+            },
+            emitted_at="2026-09-02T09:05:00+09:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            722,
+            "000721",
+            "second",
+            "execution_cost_observation",
+            {
+                "rising_missed_tp1_evaluation_id": "eval-second",
+                "actual_fee_krw": 100,
+                "actual_tax_krw": 100,
+            },
+            emitted_at="2026-09-02T09:06:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-09-02", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    label = report["rising_missed_tp1_first_hit_label_rows"][0]
+    assert label["actual_costs_available"] is False
+    assert label["actual_cost_net_label"] == "unavailable_fee_tax_missing"
+    assert label["comparison_cost_pct"] == 0.23
+    assert label["net_label"] == "net_target_confirmed"
+
+
+def test_tp1_exact_cost_requires_entry_notional_for_actual_cost_label(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-09-02.jsonl"
+    pipeline_path.write_text(
+        json.dumps(
+            _event(
+                723,
+                "000723",
+                "missing-entry-bbo",
+                "rising_missed_one_share_entry",
+                {
+                    "rising_missed_tp1_evaluation_id": "eval-missing-entry-bbo",
+                    "rising_missed_tp1_selector_active": True,
+                    "rising_missed_tp1_candidate_allowed": True,
+                    "rising_missed_tp1_candidate_reason": (
+                        "rising_missed_tp1_candidate_pass"
+                    ),
+                    "actual_fee_krw": 10,
+                    "actual_tax_krw": 20,
+                    "quantity": 1,
+                },
+                emitted_at="2026-09-02T09:00:00+09:00",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-09-02", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    label = report["rising_missed_tp1_first_hit_label_rows"][0]
+    assert label["actual_costs_available"] is True
+    assert label["actual_cost_pct"] is None
+    assert label["actual_cost_net_label"] == "unavailable_entry_notional_missing"
+    assert label["net_label"] == "input_unavailable"
 
 
 def test_nxt_session_observation_separates_micro_state_and_effective_order_type(
@@ -1545,9 +1704,13 @@ def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(
     }
 
     assert labels["000702"]["gross_first_hit_label"] == "adverse_stop_first"
-    assert labels["000702"]["net_label"] == "unavailable_fee_tax_missing"
+    assert labels["000702"]["net_label"] == "net_target_not_met"
+    assert labels["000702"]["actual_cost_net_label"] == (
+        "unavailable_fee_tax_missing"
+    )
     assert labels["000703"]["gross_first_hit_label"] == "gross_target_first"
     assert labels["000703"]["actual_cost_pct"] == 0.2
+    assert labels["000703"]["actual_cost_net_label"] == "net_target_confirmed"
     assert labels["000703"]["net_label"] == "net_target_confirmed"
 
 
@@ -2851,6 +3014,11 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
             "submit_safety_source_quality_unknown_missing_field_counts": [
                 {"missing_field": "buy_pressure_10t", "count": 1}
             ],
+            "rising_missed_tp1_labeled_candidate_count": 1,
+            "rising_missed_tp1_net_confirmed_count": 1,
+            "rising_missed_tp1_net_label_cost_basis": (
+                "effective_dated_comparison_cost_contract"
+            ),
         },
         "records": [
             {
@@ -2959,6 +3127,11 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
     assert "shadow_cap1=-" in markdown
     assert "rising_missed_initial_quality_fail" in markdown
     assert "submit_safety_source_quality_unknown_missing_field_counts" in markdown
+    assert "rising_missed_tp1_net_confirmed_count: 1" in markdown
+    assert (
+        "rising_missed_tp1_net_label_cost_basis: "
+        "effective_dated_comparison_cost_contract" in markdown
+    )
     assert "## TP1 Counterfactual First-hit Labels" in markdown
     assert "ws_age_ms=50.0" in markdown
     assert "## TP1 Direct Target-first Attribution" in markdown

@@ -47,6 +47,118 @@ def _prune_observer_contract_fields() -> dict:
     }
 
 
+def test_prune_bbo_source_loaded_contract_requires_exact_bounded_receipt() -> None:
+    stage = "scalping_scanner_prune_bbo_source_loaded"
+    fields = {
+        "metric_role": "source_quality_instrumentation",
+        "decision_authority": "scanner_prune_bbo_observation_only",
+        "window_policy": "stable_episode_sparse_offsets",
+        "sample_floor": "one_pid_configuration_receipt",
+        "primary_decision_metric": "runtime_configuration_receipt_count",
+        "source_quality_gate": "secret_free_pid_and_exact_bounds",
+        "forbidden_uses": "broker_order_submit|threshold_change",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "scanner_prune_observer_configuration_status": "collector_created",
+        "scanner_prune_observer_configuration_receipt_status": "emitted",
+        "scanner_prune_observer_configured": True,
+        "scanner_prune_observer_configured_epoch": 1.0,
+        "scanner_prune_observer_configured_at": "2026-09-02T09:00:00+09:00",
+        "scanner_prune_observer_process_pid": 123,
+        "scanner_prune_observer_token_present": True,
+        "scanner_prune_observer_sample_offsets_sec": (
+            "[0, 3, 10, 20, 30, 60, 180, 300, 600, 1200]"
+        ),
+        "scanner_prune_observer_episode_reset_gap_sec": 300.0,
+        "scanner_prune_observer_max_anchor_to_schedule_delay_sec": 2.0,
+        "scanner_prune_observer_max_active_episode_count": 8,
+        "scanner_prune_observer_max_pending_sample_count": 80,
+        "scanner_prune_observer_max_process_daily_scheduled_request_count": 1200,
+        "scanner_prune_observer_min_request_interval_sec": 0.25,
+        "scanner_prune_observer_market_data_request_effect": True,
+    }
+
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+    assert violations == {
+        "missing_fields": [],
+        "zero_fields": [],
+        "invalid_fields": [],
+    }
+
+    fields["scanner_prune_observer_sample_offsets_sec"] = "[0, 3, 10]"
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+    assert violations["invalid_fields"] == [
+        "scanner_prune_observer_source_loaded_contract"
+    ]
+
+
+def test_scanner_timing_contracts_reconcile_elapsed_values() -> None:
+    stage = "scalping_scanner_iteration_timing"
+    fields = {
+        "metric_role": "source_quality_instrumentation",
+        "decision_authority": "scalping_scanner_timing_observation_only",
+        "window_policy": "each_iteration",
+        "sample_floor": "two_complete_iterations_in_same_buy_window",
+        "primary_decision_metric": "scanner_iteration_observed_start_to_start_sec",
+        "source_quality_gate": "elapsed_receipt",
+        "forbidden_uses": "runtime_mutation",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "scanner_iteration_id": "SCANTIME-1",
+        "scanner_iteration_started_epoch": 100.0,
+        "scanner_iteration_completed_epoch": 112.5,
+        "scanner_iteration_elapsed_sec": 12.5,
+        "scanner_iteration_configured_post_sleep_sec": 60.0,
+        "scanner_iteration_projected_start_to_start_sec": 72.5,
+        "scanner_iteration_observed_start_to_start_sec": 74.0,
+        "scanner_iteration_promoted_count": 1,
+        "scanner_iteration_sleep_is_post_work": True,
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+    }
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+    assert violations == {
+        "missing_fields": [],
+        "zero_fields": [],
+        "invalid_fields": [],
+    }
+
+    fields["scanner_iteration_observed_start_to_start_sec"] = (
+        "not_available_first_iteration_in_buy_window"
+    )
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+    assert violations["invalid_fields"] == []
+
+    fields["scanner_iteration_observed_start_to_start_sec"] = 74.0
+    fields["scanner_iteration_projected_start_to_start_sec"] = 60.0
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+    assert violations["invalid_fields"] == ["scanner_iteration_timing_contract"]
+
+
 def test_prune_bbo_schedule_contract_allows_explicit_capacity_rejection() -> None:
     stage = "scalping_scanner_prune_bbo_schedule"
     fields = {
