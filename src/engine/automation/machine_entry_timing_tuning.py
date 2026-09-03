@@ -550,6 +550,8 @@ def _dynamic_baseline_observation(
     baseline_notional = _finite(outcome.get("entry_notional_krw"))
     holding_duration_ms = _finite(outcome.get("holding_duration_ms"))
     realized_quantity = _finite(outcome.get("quantity"))
+    baseline_fill_price = _finite(row.get("anchor_price"))
+    exit_price = _finite(outcome.get("exit_price"))
     try:
         cost_contract = comparison_cost_contract(source_date)
     except ValueError:
@@ -692,8 +694,23 @@ def _dynamic_baseline_observation(
         isinstance(first_hit_outcome, dict)
         and first_hit_outcome.get("timeout_mature_5min") is True
     )
+    timeout_at = (
+        _aware(first_hit_outcome.get("timeout_at"))
+        if isinstance(first_hit_outcome, dict)
+        else None
+    )
     timeout_bid = (
         _finite(first_hit_outcome.get("timeout_executable_bid"))
+        if isinstance(first_hit_outcome, dict)
+        else None
+    )
+    timeout_quantity = (
+        _finite(first_hit_outcome.get("timeout_available_bid_quantity"))
+        if isinstance(first_hit_outcome, dict)
+        else None
+    )
+    timeout_quote_age_ms = (
+        _finite(first_hit_outcome.get("timeout_quote_age_ms"))
         if isinstance(first_hit_outcome, dict)
         else None
     )
@@ -716,11 +733,32 @@ def _dynamic_baseline_observation(
             timeout_mature
             and timeout_bid is not None
             and timeout_bid > 0
+            and timeout_at is not None
+            and label_deadline is not None
+            and timeout_at <= label_deadline
+            and timeout_quote_age_ms is not None
+            and 0 <= timeout_quote_age_ms <= 5_000
+            and math.isclose(
+                timeout_quote_age_ms,
+                (label_deadline - timeout_at).total_seconds() * 1_000.0,
+                abs_tol=1e-8,
+            )
+            and timeout_quantity is not None
+            and timeout_quantity.is_integer()
+            and required_quantity is not None
+            and timeout_quantity >= required_quantity
             and timeout_net is not None
             and expected_timeout_net is not None
             and math.isclose(timeout_net, expected_timeout_net, abs_tol=1e-8)
         )
-        or (not timeout_mature and timeout_bid is None and timeout_net is None)
+        or (
+            not timeout_mature
+            and timeout_at is None
+            and timeout_bid is None
+            and timeout_quantity is None
+            and timeout_quote_age_ms is None
+            and timeout_net is None
+        )
     )
     hit_times_within_label_window = bool(
         first_hit_entry_at is not None
@@ -763,8 +801,12 @@ def _dynamic_baseline_observation(
         and first_hit_report.get("schema")
         == "machine_dynamic_confirmation_first_hit_outcomes_v1"
         and first_hit_report.get("label_horizon_sec") == 300
+        and first_hit_report.get("counterfactual_only") is True
         and first_hit_report.get("runtime_effect") is False
+        and first_hit_report.get("trading_runtime_effect") is False
+        and first_hit_report.get("trading_decision_effect") is False
         and first_hit_report.get("allowed_runtime_apply") is False
+        and first_hit_report.get("actual_order_submitted") is False
         and first_hit_report.get("broker_order_forbidden") is True
         and isinstance(first_hit_outcome, dict)
         and first_hit_outcome.get("checkpoint_sec") == terminal_checkpoint_sec
@@ -811,6 +853,13 @@ def _dynamic_baseline_observation(
         or not str(row.get("lifecycle_id") or "")
         or outcome.get("realized") is not True
         or baseline_gross is None
+        or reported_net is None
+        or cost_pct is None
+        or not math.isclose(
+            reported_net,
+            baseline_gross - cost_pct,
+            abs_tol=1e-6,
+        )
         or baseline_notional is None
         or baseline_notional <= 0
         or holding_duration_ms is None
@@ -818,7 +867,22 @@ def _dynamic_baseline_observation(
         or realized_quantity is None
         or realized_quantity <= 0
         or not realized_quantity.is_integer()
-        or cost_pct is None
+        or required_quantity is None
+        or realized_quantity != required_quantity
+        or baseline_fill_price is None
+        or baseline_fill_price <= 0
+        or exit_price is None
+        or exit_price <= 0
+        or not math.isclose(
+            baseline_notional,
+            baseline_fill_price * realized_quantity,
+            abs_tol=1e-6,
+        )
+        or not math.isclose(
+            baseline_gross,
+            (exit_price / baseline_fill_price - 1.0) * 100.0,
+            abs_tol=1e-6,
+        )
         or _finite(row.get("owner_round_trip_cost_pct")) != cost_pct
         or not first_hit_valid
     ):
@@ -1081,6 +1145,8 @@ def _evaluate_dynamic_cohort(
     *,
     cohort_rows: list[tuple[date, dict[str, Any]]],
     target_date: date,
+    source_report_dates: set[date] | None = None,
+    global_duplicate_anchor_keys: set[tuple[date, str]] | None = None,
 ) -> dict[str, Any]:
     source_owner_rows = [
         (source_date, row)
@@ -1093,9 +1159,11 @@ def _evaluate_dynamic_cohort(
         anchor_id = str(row.get("anchor_id") or "")
         if anchor_id:
             anchor_counts[(source_date, anchor_id)] += 1
-    duplicate_anchor_keys = {key for key, count in anchor_counts.items() if count > 1}
+    duplicate_anchor_keys = {
+        key for key, count in anchor_counts.items() if count > 1
+    } | set(global_duplicate_anchor_keys or ())
     duplicate_anchor_row_count = sum(
-        anchor_counts[key] for key in duplicate_anchor_keys
+        anchor_counts.get(key, 0) for key in duplicate_anchor_keys
     )
     invalid_anchor_identity_count = sum(
         not str(row.get("anchor_id") or "") for _, row in source_owner_rows
@@ -1123,6 +1191,18 @@ def _evaluate_dynamic_cohort(
         is not None
     ]
     observed_dates = sorted({item["source_date"] for item in observations})
+    first_scope_date = min(
+        (source_date for source_date, _ in source_owner_rows), default=target_date
+    )
+    rolling_calendar_dates = sorted(
+        source_date
+        for source_date in (
+            source_report_dates
+            if source_report_dates is not None
+            else {source_date for source_date, _ in cohort_rows}
+        )
+        if first_scope_date <= source_date <= target_date
+    )
     lifecycles = {item["lifecycle_id"] for item in observations}
     denominator = len(eligible_owner_rows)
     right_censored_count = denominator - realized_eligible_count
@@ -1191,7 +1271,7 @@ def _evaluate_dynamic_cohort(
     rolling: dict[str, Any] = {}
     rolling_ready = True
     for window_days in ROLLING_WINDOWS_DAYS:
-        window_dates = observed_dates[-window_days:]
+        window_dates = rolling_calendar_dates[-window_days:]
         allowed_dates = set(window_dates)
         window_rows = [
             item for item in observations if item["source_date"] in allowed_dates
@@ -1307,6 +1387,7 @@ def _evaluate_dynamic_cohort(
             observed_dates[-1].isoformat() if observed_dates else None
         ),
         "target_date_in_completed_observations": target_date in observed_dates,
+        "source_available_trading_days_since_scope_start": len(rolling_calendar_dates),
         "unique_decision_lifecycles": len(lifecycles),
         "source_owner_signal_row_count": len(source_owner_rows),
         "duplicate_anchor_row_count": duplicate_anchor_row_count,
@@ -1823,6 +1904,7 @@ def build_report(
     grouped: dict[tuple[str, str, str, str, str], list[tuple[date, dict[str, Any]]]] = (
         defaultdict(list)
     )
+    all_confirmation_rows: list[tuple[date, dict[str, Any]]] = []
     source_artifacts: list[dict[str, Any]] = []
     for source_date, path, payload in reports:
         raw = path.read_bytes()
@@ -1842,14 +1924,27 @@ def build_report(
                 or not row.get("entry_timing_scope_id")
             ):
                 continue
-            key = (
-                str(row["owner"]),
-                str(row["entry_timing_scope_id"]),
-                str(row.get("symbol") or ""),
-                str(row.get("session") or ""),
-                str(row.get("entry_state") or "*"),
-            )
-            grouped[key].append((source_date, row))
+            all_confirmation_rows.append((source_date, row))
+    global_anchor_counts: dict[tuple[date, str], int] = defaultdict(int)
+    for source_date, row in all_confirmation_rows:
+        if (
+            row.get("owner_policy_tuning_eligible") is True
+            and row.get("actual_order_submitted") is True
+            and (anchor_id := str(row.get("anchor_id") or ""))
+        ):
+            global_anchor_counts[(source_date, anchor_id)] += 1
+    global_duplicate_anchor_keys = {
+        key for key, count in global_anchor_counts.items() if count > 1
+    }
+    for source_date, row in all_confirmation_rows:
+        key = (
+            str(row["owner"]),
+            str(row["entry_timing_scope_id"]),
+            str(row.get("symbol") or ""),
+            str(row.get("session") or ""),
+            str(row.get("entry_state") or "*"),
+        )
+        grouped[key].append((source_date, row))
     cohorts: list[dict[str, Any]] = []
     ready: list[dict[str, Any]] = []
     dynamic_ready: list[dict[str, Any]] = []
@@ -1875,6 +1970,8 @@ def build_report(
         dynamic_confirmation = _evaluate_dynamic_cohort(
             cohort_rows=rows,
             target_date=target_date,
+            source_report_dates=source_report_dates,
+            global_duplicate_anchor_keys=global_duplicate_anchor_keys,
         )
         cohort = {
             "owner": owner,
@@ -1988,6 +2085,10 @@ def build_report(
                 else "source_only_evidence_accumulating"
             ),
             "evaluated_cohort_count": len(cohorts),
+            "global_duplicate_anchor_key_count": len(global_duplicate_anchor_keys),
+            "global_duplicate_anchor_row_count": sum(
+                global_anchor_counts[key] for key in global_duplicate_anchor_keys
+            ),
             "ready_cohort_count": len(dynamic_ready),
             "selected_source_only_candidate": dynamic_source_only_candidate,
             "metric_contract": DYNAMIC_CONFIRMATION_METRIC_CONTRACT,

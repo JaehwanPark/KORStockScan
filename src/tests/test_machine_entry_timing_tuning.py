@@ -146,6 +146,15 @@ def _entry_row(source_date: date, index: int) -> dict:
                     "venue": "KRX",
                     "session_bucket": "KRX_REGULAR",
                     "sequence_epoch": 7,
+                    "anchor_event_local_receive_timestamp_ms": int(
+                        (
+                            anchor_at + timedelta(seconds=checkpoint, milliseconds=-900)
+                        ).timestamp()
+                        * 1_000
+                    ),
+                    "observed_through_local_receive_timestamp_ms": int(
+                        (anchor_at + timedelta(seconds=checkpoint)).timestamp() * 1_000
+                    ),
                 },
                 "decision_anchor_binding": {
                     "decision_anchor_id": row["anchor_id"],
@@ -154,7 +163,13 @@ def _entry_row(source_date: date, index: int) -> dict:
                     "checkpoint_at": (
                         anchor_at + timedelta(seconds=checkpoint)
                     ).isoformat(),
+                    "window_started_at": (
+                        anchor_at + timedelta(seconds=checkpoint, milliseconds=-900)
+                    ).isoformat(),
                     "window_horizon_ms": 900,
+                    "binding_policy": (
+                        "past_only_0b_0d_window_ending_at_exact_checkpoint"
+                    ),
                     "future_outcome_input_used": False,
                 },
                 "horizons": [
@@ -179,7 +194,10 @@ def _entry_row(source_date: date, index: int) -> dict:
         "causal_past_only": True,
         "future_outcome_input_used": False,
         "runtime_effect": False,
+        "trading_runtime_effect": False,
+        "trading_decision_effect": False,
         "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
     checkpoints = {
@@ -271,7 +289,12 @@ def _entry_row(source_date: date, index: int) -> dict:
                 },
                 "outcome_mature_5min": True,
                 "timeout_mature_5min": True,
+                "timeout_at": (
+                    anchor_at + timedelta(seconds=checkpoint + 299)
+                ).isoformat(),
                 "timeout_executable_bid": 100.0 if checkpoint == 0 else 99.0,
+                "timeout_available_bid_quantity": row["owner_requested_quantity"],
+                "timeout_quote_age_ms": 1_000,
                 "timeout_cost_aware_net_return_pct": -round_trip_cost_pct,
                 "round_trip_cost_pct": row["owner_round_trip_cost_pct"],
                 "future_label_only": True,
@@ -279,8 +302,12 @@ def _entry_row(source_date: date, index: int) -> dict:
             }
             for checkpoint in (0, 1, 3, 5)
         },
+        "counterfactual_only": True,
         "runtime_effect": False,
+        "trading_runtime_effect": False,
+        "trading_decision_effect": False,
         "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
     return row
@@ -439,6 +466,7 @@ def test_adverse_or_recheck_micro_classification_cannot_select_entry_delay() -> 
 def test_dynamic_reject_counts_zero_exposure_without_dropping_loss() -> None:
     source_date = date(2026, 8, 27)
     row = _entry_row(source_date, 1)
+    row["owner_outcome"]["exit_price"] = 99.0
     row["owner_outcome"]["gross_no_slippage_return_pct"] = -1.0
     row["owner_outcome"]["cost_aware_net_return_pct"] = -1.23
     adverse = {
@@ -568,6 +596,22 @@ def test_dynamic_confirmation_rejects_raw_ask_depletion_drift() -> None:
     assert result["source_only_candidate_ready"] is False
 
 
+def test_dynamic_confirmation_rejects_checkpoint_cutoff_timestamp_drift() -> None:
+    source_date = date(2026, 8, 27)
+    row = _entry_row(source_date, 1)
+    row["entry_confirmation_checkpoint_ask_depletion"]["checkpoint_reports"]["1"][
+        "context"
+    ]["observed_through_local_receive_timestamp_ms"] += 1
+
+    result = _evaluate_dynamic_cohort(
+        cohort_rows=[(source_date, row)], target_date=source_date
+    )
+
+    assert result["dynamic_replay_source_quality_eligible_count"] == 0
+    assert result["completed_outcome_count"] == 0
+    assert result["source_only_candidate_ready"] is False
+
+
 def test_dynamic_confirmation_rejects_tampered_timeout_economics() -> None:
     source_date = date(2026, 8, 27)
     row = _entry_row(source_date, 1)
@@ -579,6 +623,35 @@ def test_dynamic_confirmation_rejects_tampered_timeout_economics() -> None:
         cohort_rows=[(source_date, row)], target_date=source_date
     )
 
+    assert result["completed_outcome_count"] == 0
+    assert result["source_only_candidate_ready"] is False
+
+
+def test_dynamic_confirmation_rejects_unfillable_timeout_evidence() -> None:
+    source_date = date(2026, 8, 27)
+    row = _entry_row(source_date, 1)
+    row["dynamic_confirmation_first_hit_outcomes"]["checkpoint_outcomes"]["1"][
+        "timeout_available_bid_quantity"
+    ] = (row["owner_requested_quantity"] - 1)
+
+    result = _evaluate_dynamic_cohort(
+        cohort_rows=[(source_date, row)], target_date=source_date
+    )
+
+    assert result["completed_outcome_count"] == 0
+    assert result["source_only_candidate_ready"] is False
+
+
+def test_dynamic_confirmation_rejects_inconsistent_realized_economics() -> None:
+    source_date = date(2026, 8, 27)
+    row = _entry_row(source_date, 1)
+    row["owner_outcome"]["cost_aware_net_return_pct"] = 999.0
+
+    result = _evaluate_dynamic_cohort(
+        cohort_rows=[(source_date, row)], target_date=source_date
+    )
+
+    assert result["realized_pairing_gap_count"] == 1
     assert result["completed_outcome_count"] == 0
     assert result["source_only_candidate_ready"] is False
 
@@ -599,6 +672,54 @@ def test_dynamic_confirmation_duplicate_anchor_does_not_inflate_ev_denominator()
     assert result["source_quality_eligible_anchor_count"] == 0
     assert result["completed_outcome_count"] == 0
     assert result["source_only_candidate_ready"] is False
+
+
+def test_dynamic_confirmation_cross_scope_duplicate_is_globally_blocked(
+    tmp_path: Path,
+) -> None:
+    source_date = date(2026, 8, 27)
+    first = _entry_row(source_date, 1)
+    second = json.loads(json.dumps(first))
+    second["entry_timing_scope_id"] = "other-scope"
+    second["scope_id"] = "other-scope"
+    payload = {
+        "schema": "machine_microstructure_attribution_v1",
+        "target_date": source_date.isoformat(),
+        "clean_tuning_baseline_date": "2026-06-05",
+        "clean_baseline_allowed": True,
+        "authority": {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+        "micro_entry_confirmation": {"entry_anchors": [first, second]},
+    }
+    source_path = (
+        tmp_path / "source" / f"machine_microstructure_attribution_{source_date}.json"
+    )
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = build_report(
+        target_date=source_date,
+        source_dir=source_path.parent,
+        low_price_candidate_dir=tmp_path / "low-price-candidates",
+        samsung_candidate_dir=tmp_path / "samsung-candidates",
+        widget_policy_dir=tmp_path / "widget-policies",
+    )
+    dynamic = report["per_signal_dynamic_confirmation_source_only"]
+
+    assert dynamic["global_duplicate_anchor_key_count"] == 1
+    assert dynamic["global_duplicate_anchor_row_count"] == 2
+    assert all(
+        cohort["per_signal_dynamic_confirmation_source_only"][
+            "duplicate_anchor_row_count"
+        ]
+        == 1
+        for cohort in report["cohorts"]
+    )
+    assert dynamic["selected_source_only_candidate"] is None
 
 
 def test_dynamic_ready_cannot_emit_applied_policy_without_fixed_delay_winner(
@@ -640,6 +761,26 @@ def test_dynamic_ready_cannot_emit_applied_policy_without_fixed_delay_winner(
         "source_only_candidate_ready"
     )
     assert applied["scopes"] == {}
+
+
+def test_dynamic_confirmation_rolling_window_uses_source_available_dates() -> None:
+    target_date = date(2026, 8, 27)
+    trading_dates = _trading_dates(target_date, 20)
+    cohort_rows = [
+        (source_date, _entry_row(source_date, index))
+        for index, source_date in enumerate(trading_dates, start=1)
+    ]
+
+    result = _evaluate_dynamic_cohort(
+        cohort_rows=cohort_rows,
+        target_date=target_date,
+        source_report_dates=set(trading_dates[:-1]),
+    )
+
+    assert result["observed_trading_days"] == 20
+    assert result["source_available_trading_days_since_scope_start"] == 19
+    assert result["rolling_windows"]["20"]["complete"] is False
+    assert result["source_only_candidate_ready"] is False
 
 
 def test_policy_rejects_multiple_same_stage_selected_scopes() -> None:

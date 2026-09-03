@@ -515,8 +515,14 @@ def test_dynamic_confirmation_first_hit_starts_at_exact_checkpoint_bbo() -> None
         checkpoint["target_adverse_first_hit"]["target_at"]
         == (anchor_at + timedelta(seconds=2)).isoformat()
     )
+    assert checkpoint["timeout_at"] == (anchor_at + timedelta(seconds=300)).isoformat()
+    assert checkpoint["timeout_available_bid_quantity"] == 100
+    assert checkpoint["timeout_quote_age_ms"] == 0
     assert checkpoint["future_outcome_input_used_by_confirmation_action"] is False
+    assert first_hit["counterfactual_only"] is True
     assert first_hit["runtime_effect"] is False
+    assert first_hit["trading_decision_effect"] is False
+    assert first_hit["actual_order_submitted"] is False
 
 
 def test_dynamic_confirmation_first_hit_does_not_cross_sequence_epoch() -> None:
@@ -1071,13 +1077,34 @@ def test_dynamic_confirmation_uses_causal_anchor_bid_not_eventual_fill_price():
                         "venue": "KRX",
                         "session_bucket": "KRX_REGULAR",
                         "sequence_epoch": sequence_epoch,
+                        "anchor_event_local_receive_timestamp_ms": int(
+                            (
+                                datetime.fromisoformat("2026-08-27T10:00:00+09:00")
+                                + timedelta(seconds=checkpoint, milliseconds=-900)
+                            ).timestamp()
+                            * 1_000
+                        ),
+                        "observed_through_local_receive_timestamp_ms": int(
+                            (
+                                datetime.fromisoformat("2026-08-27T10:00:00+09:00")
+                                + timedelta(seconds=checkpoint)
+                            ).timestamp()
+                            * 1_000
+                        ),
                     },
                     "decision_anchor_binding": {
                         "decision_anchor_id": "widget:test:signal",
                         "decision_anchor_at": "2026-08-27T10:00:00+09:00",
                         "checkpoint_sec": checkpoint,
                         "checkpoint_at": (f"2026-08-27T10:00:0{checkpoint}+09:00"),
+                        "window_started_at": (
+                            datetime.fromisoformat("2026-08-27T10:00:00+09:00")
+                            + timedelta(seconds=checkpoint, milliseconds=-900)
+                        ).isoformat(),
                         "window_horizon_ms": 900,
+                        "binding_policy": (
+                            "past_only_0b_0d_window_ending_at_exact_checkpoint"
+                        ),
                         "future_outcome_input_used": False,
                     },
                     "horizons": [
@@ -1100,7 +1127,10 @@ def test_dynamic_confirmation_uses_causal_anchor_bid_not_eventual_fill_price():
             "causal_past_only": True,
             "future_outcome_input_used": False,
             "runtime_effect": False,
+            "trading_runtime_effect": False,
+            "trading_decision_effect": False,
             "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
             "broker_order_forbidden": True,
         }
 

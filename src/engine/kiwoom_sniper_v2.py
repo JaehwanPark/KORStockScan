@@ -10916,7 +10916,12 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
     code = normalize_manual_control_exclusion_code(dt.get("code"))
     if not code:
         return False
-    control_exclusion = evaluate_main_bot_control_exclusion(code)
+    lifecycle_status = str(dt.get("status") or "").strip().upper()
+    control_exclusion = (
+        evaluate_main_bot_control_exclusion(code, new_entry=False)
+        if lifecycle_status in {"BUY_ORDERED", "HOLDING", "SELL_ORDERED"}
+        else evaluate_main_bot_control_exclusion(code)
+    )
     if control_exclusion.excluded:
         if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
             terminalized = _expire_manual_control_excluded_scanner_record(dt, code)

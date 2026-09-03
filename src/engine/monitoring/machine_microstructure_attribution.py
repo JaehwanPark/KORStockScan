@@ -6341,7 +6341,20 @@ def _anchor_result(
                 },
                 "outcome_mature_5min": outcome_mature_5min,
                 "timeout_mature_5min": timeout_mature_5min,
+                "timeout_at": (
+                    timeout_row[0]["timestamp"].isoformat()
+                    if timeout_mature_5min and timeout_row is not None
+                    else None
+                ),
                 "timeout_executable_bid": timeout_bid,
+                "timeout_available_bid_quantity": (
+                    int(timeout_row[1]["best_bid_qty"])
+                    if timeout_mature_5min and timeout_row is not None
+                    else None
+                ),
+                "timeout_quote_age_ms": (
+                    timeout_quote_age_ms if timeout_mature_5min else None
+                ),
                 "timeout_cost_aware_net_return_pct": (
                     round(timeout_net_pct, 8) if timeout_net_pct is not None else None
                 ),
@@ -6353,8 +6366,12 @@ def _anchor_result(
             "schema": "machine_dynamic_confirmation_first_hit_outcomes_v1",
             "label_horizon_sec": 300,
             "checkpoint_outcomes": dynamic_first_hit_checkpoints,
+            "counterfactual_only": True,
             "runtime_effect": False,
+            "trading_runtime_effect": False,
+            "trading_decision_effect": False,
             "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
             "broker_order_forbidden": True,
         }
 
@@ -6374,7 +6391,10 @@ def _anchor_result(
         "causal_past_only": True,
         "future_outcome_input_used": False,
         "runtime_effect": False,
+        "trading_runtime_effect": False,
+        "trading_decision_effect": False,
         "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
     metrics["entry_ask_depletion"] = _entry_ask_depletion_feature(

@@ -24,6 +24,7 @@ from src.trading.order.owner_custody_registry import (
     OwnerOrderContext,
     OwnerRegistryBusy,
     OwnerRegistryConflict,
+    OwnerRegistryError,
 )
 
 TARGET_DATE = date(2026, 9, 3)
@@ -76,10 +77,13 @@ def _write_policy(
 
 
 def _context(owner_type: str, suffix: str) -> OwnerOrderContext:
+    owner_id = f"{owner_type}:{suffix}"
     return OwnerOrderContext(
         owner_type=owner_type,
-        owner_id=f"{owner_type}:{suffix}",
-        position_id=f"{owner_type}:{suffix}:position",
+        owner_id=owner_id,
+        position_id=(
+            owner_id if owner_type == "main_scalping" else f"{owner_id}:position"
+        ),
         client_intent_id=f"{owner_type}:{suffix}:intent",
     )
 
@@ -111,6 +115,52 @@ def test_exact_date_policy_allows_main_and_machine_without_removing_manual_marke
     assert machine_source.startswith("symbol_owner_policy:same_symbol_owner_")
 
 
+def test_coexistence_never_bypasses_automatic_safety_exclusion(tmp_path, monkeypatch):
+    policy_path = tmp_path / "policy.json"
+    exclusion_path = tmp_path / "excluded.txt"
+    _write_policy(policy_path)
+    exclusion_path.write_text(
+        f"{SYMBOL} # manual_operator widget_episode\n"
+        f"{SYMBOL} # auto_hard_stop_handoff\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
+    )
+    manual_control_exclusion._invalidate_file_cache()
+
+    decision = manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        SYMBOL, target_date=TARGET_DATE
+    )
+
+    assert decision.excluded is True
+
+
+def test_coexistence_never_bypasses_file_auto_safety_when_operator_env_matches(
+    tmp_path, monkeypatch
+):
+    policy_path = tmp_path / "policy.json"
+    exclusion_path = tmp_path / "excluded.txt"
+    _write_policy(policy_path)
+    exclusion_path.write_text(
+        f"{SYMBOL} # auto_hard_stop_handoff\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", SYMBOL)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
+    )
+    manual_control_exclusion._invalidate_file_cache()
+
+    decision = manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        SYMBOL, target_date=TARGET_DATE
+    )
+
+    assert decision.excluded is True
+
+
 def test_policy_requires_migration_and_exact_hash(tmp_path, monkeypatch):
     path = tmp_path / "policy.json"
     _write_policy(path, migration_completed=False)
@@ -123,6 +173,107 @@ def test_policy_requires_migration_and_exact_hash(tmp_path, monkeypatch):
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(SymbolOwnerPolicyError, match="hash_mismatch"):
         resolve_symbol_owner_policy(SYMBOL, target_date=TARGET_DATE)
+
+
+@pytest.mark.parametrize(
+    "symbol", ["1234567", "X005930", "005930_BAD", "005930_NX7", "ABC"]
+)
+def test_policy_rejects_malformed_symbol_without_truncation(
+    tmp_path, monkeypatch, symbol
+):
+    path = tmp_path / "policy.json"
+    _write_policy(path)
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(path))
+
+    with pytest.raises(SymbolOwnerPolicyError, match="symbol_invalid"):
+        resolve_symbol_owner_policy(symbol, target_date=TARGET_DATE)
+
+
+@pytest.mark.parametrize("symbol", ["A005930", "005930_NX", "005930_AL"])
+def test_policy_accepts_declared_kiwoom_symbol_wrappers(tmp_path, monkeypatch, symbol):
+    path = tmp_path / "policy.json"
+    _write_policy(path)
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(path))
+
+    decision = resolve_symbol_owner_policy(symbol, target_date=TARGET_DATE)
+
+    assert decision.symbol == SYMBOL
+
+
+def test_registry_rejects_malformed_symbol_and_order_date(tmp_path):
+    registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
+    context = _context("main_scalping", "strict-input")
+
+    with pytest.raises(OwnerRegistryError, match="symbol_invalid"):
+        registry.reserve(
+            context=context,
+            symbol="1234567",
+            side="BUY",
+            quantity=1,
+            route="KRX",
+            order_date=TARGET_DATE,
+        )
+    with pytest.raises(OwnerRegistryError, match="order_date_invalid"):
+        registry.reserve(
+            context=context,
+            symbol=SYMBOL,
+            side="BUY",
+            quantity=1,
+            route="KRX",
+            order_date="2026-09-03T09:00:00+09:00",
+        )
+
+
+def test_registry_rejects_incoherent_main_owner_position_identity(tmp_path):
+    registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
+
+    with pytest.raises(
+        OwnerRegistryError, match="main_owner_position_identity_invalid"
+    ):
+        registry.reserve(
+            context=OwnerOrderContext(
+                owner_type="main_scalping",
+                owner_id="main_scalping:101",
+                position_id="main_scalping:202",
+                client_intent_id="main-owner-mismatch",
+            ),
+            symbol=SYMBOL,
+            side="BUY",
+            quantity=1,
+            route="KRX",
+            order_date=TARGET_DATE,
+        )
+
+
+def test_preflight_ownership_sources_require_reachable_registry_tail(
+    tmp_path, monkeypatch
+):
+    policy_path = tmp_path / "policy.json"
+    payload = _write_policy(policy_path)
+    payload["symbols"][SYMBOL]["migration_receipt"]["registry_tail_hash"] = "f" * 64
+    payload["policy_hash"] = policy_content_hash(payload)
+    policy_path.write_text(json.dumps(payload), encoding="utf-8")
+    exclusion_path = tmp_path / "excluded.txt"
+    exclusion_path.write_text(f"{SYMBOL} # manual_operator widget_episode\n")
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "registry.jsonl")
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
+    )
+    manual_control_exclusion._invalidate_file_cache()
+
+    main = manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        SYMBOL, target_date=TARGET_DATE
+    )
+    episode_source = manual_control_exclusion.independent_machine_ownership_source(
+        SYMBOL, owner="episode", target_date=TARGET_DATE
+    )
+
+    assert main.excluded is True
+    assert main.reason == "coexistence_migration_registry_generation_missing"
+    assert episode_source == ""
 
 
 @pytest.mark.parametrize(
@@ -164,13 +315,69 @@ def test_exit_only_policy_cannot_fall_back_to_legacy_entry_authority(
     main = manual_control_exclusion.evaluate_main_bot_control_exclusion(
         SYMBOL, target_date=TARGET_DATE
     )
+    main_custody = manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        SYMBOL, target_date=TARGET_DATE, new_entry=False
+    )
     machine_source = manual_control_exclusion.independent_machine_ownership_source(
         SYMBOL, owner="episode", target_date=TARGET_DATE
+    )
+    custody_source = manual_control_exclusion.independent_machine_ownership_source(
+        SYMBOL, owner="episode", target_date=TARGET_DATE, new_entry=False
     )
 
     assert main.excluded is True
     assert main.reason == "exact_date_owner_policy_blocks_main_bot_entry"
+    assert main_custody.excluded is False
+    assert main_custody.reason == "exact_date_coexistence_policy_allows_main_bot"
     assert machine_source == ""
+    assert custody_source.startswith("symbol_owner_policy:same_symbol_owner_")
+
+
+def test_exit_only_main_state_guard_blocks_entry_but_allows_existing_custody(
+    tmp_path, monkeypatch
+):
+    policy_path = tmp_path / "policy.json"
+    exclusion_path = tmp_path / "excluded.txt"
+    _write_policy(policy_path, mode=COEXIST_EXIT_ONLY)
+    exclusion_path.write_text(f"{SYMBOL} # manual_operator widget_episode\n")
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "registry.jsonl")
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
+    )
+    manual_control_exclusion._invalidate_file_cache()
+    stock = {"code": SYMBOL, "status": "HOLDING", "strategy": "SCALPING"}
+
+    entry_blocked = sniper_state_handlers._manual_control_exclusion_blocked(
+        stock,
+        SYMBOL,
+        pipeline="entry",
+        stage="test_exit_only_entry",
+        now_ts=1.0,
+    )
+    custody_blocked = sniper_state_handlers._manual_control_exclusion_blocked(
+        stock,
+        SYMBOL,
+        pipeline="holding",
+        stage="test_exit_only_custody",
+        now_ts=2.0,
+    )
+    pending_buy_management_blocked = (
+        sniper_state_handlers._manual_control_exclusion_blocked(
+            stock,
+            SYMBOL,
+            pipeline="entry",
+            stage="test_exit_only_pending_buy_management",
+            now_ts=3.0,
+            new_entry=False,
+        )
+    )
+
+    assert entry_blocked is True
+    assert custody_blocked is False
+    assert pending_buy_management_blocked is False
 
 
 def test_exclusive_manual_policy_allows_only_manual_owner(tmp_path, monkeypatch):

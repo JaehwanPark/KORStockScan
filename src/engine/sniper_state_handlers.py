@@ -80240,7 +80240,13 @@ def _retire_unowned_scale_in_qty_manual_control_handoff(
 
 
 def _manual_control_exclusion_blocked(
-    stock, code, *, pipeline: str, stage: str, now_ts=None
+    stock,
+    code,
+    *,
+    pipeline: str,
+    stage: str,
+    now_ts=None,
+    new_entry: bool | None = None,
 ) -> bool:
     now_value = time.time() if now_ts is None else float(now_ts)
     decision = _retire_unowned_scale_in_qty_manual_control_handoff(
@@ -80249,7 +80255,10 @@ def _manual_control_exclusion_blocked(
         pipeline=pipeline,
         now_ts=now_value,
     )
-    owner_decision = evaluate_main_bot_control_exclusion(code)
+    owner_decision = evaluate_main_bot_control_exclusion(
+        code,
+        new_entry=(pipeline != "holding" if new_entry is None else bool(new_entry)),
+    )
     if not decision.excluded or manual_control_operator_exclusion_source(code):
         # Exact-date owner policy may replace only the explicit operator
         # symbol handoff. Synthetic storage failures and hard/automatic vetoes
@@ -93040,6 +93049,7 @@ def handle_buy_ordered_state(stock, code):
         code,
         pipeline="entry",
         stage="manual_control_excluded_buy_ordered_blocked",
+        new_entry=False,
     ):
         return
 
@@ -94806,6 +94816,7 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
         code,
         pipeline="entry",
         stage="manual_control_excluded_buy_cancel_blocked",
+        new_entry=False,
     ):
         return False
 

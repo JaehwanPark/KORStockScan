@@ -43,7 +43,7 @@ AUTHORITY_SCHEMA = "low_price_two_leg_authority_v2"
 
 def _episode_ownership_source(symbol: str, *, target_date: date) -> str:
     return independent_machine_ownership_source(
-        symbol, owner="episode", target_date=target_date
+        symbol, owner="episode", target_date=target_date, new_entry=False
     )
 
 

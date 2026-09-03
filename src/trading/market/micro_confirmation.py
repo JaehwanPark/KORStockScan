@@ -27,7 +27,8 @@ DYNAMIC_CONFIRMATION_METRIC_CONTRACT = {
     "window_policy": "past_only_at_each_0_1_3_5_second_checkpoint",
     "sample_floor": (
         "five_observed_dates_20_unique_lifecycles_20_completed_outcomes_"
-        "95pct_paired_coverage_before_any_separate_preopen_review"
+        "95pct_paired_coverage_complete_5_10_20_day_windows_before_any_"
+        "separate_preopen_review"
     ),
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "secondary_economic_guards": [
@@ -212,7 +213,10 @@ def build_dynamic_micro_confirmation_checkpoints(
         and checkpoint_bundle.get("causal_past_only") is True
         and checkpoint_bundle.get("future_outcome_input_used") is False
         and checkpoint_bundle.get("runtime_effect") is False
+        and checkpoint_bundle.get("trading_runtime_effect") is False
+        and checkpoint_bundle.get("trading_decision_effect") is False
         and checkpoint_bundle.get("allowed_runtime_apply") is False
+        and checkpoint_bundle.get("actual_order_submitted") is False
         and checkpoint_bundle.get("broker_order_forbidden") is True
     )
     anchor_id_text = str(anchor_id or "")
@@ -263,6 +267,30 @@ def build_dynamic_micro_confirmation_checkpoints(
             and isinstance(ask_report.get("decision_anchor_binding"), Mapping)
             else {}
         )
+        checkpoint_at = (
+            signal_at + timedelta(seconds=checkpoint_sec)
+            if signal_at is not None
+            else None
+        )
+        ask_horizon_ms = ask.get("horizon_ms") if isinstance(ask, Mapping) else None
+        checkpoint_at_ms = (
+            int(checkpoint_at.timestamp() * 1_000)
+            if checkpoint_at is not None
+            else None
+        )
+        try:
+            window_started_at = datetime.fromisoformat(
+                str(binding.get("window_started_at") or "")
+            )
+        except ValueError:
+            window_started_at = None
+        if window_started_at is not None and window_started_at.utcoffset() is None:
+            window_started_at = None
+        expected_ask_horizon_ms = (
+            int((checkpoint_at - window_started_at).total_seconds() * 1_000)
+            if checkpoint_at is not None and window_started_at is not None
+            else None
+        )
         checkpoint_report_contract_valid = bool(
             bundle_contract_valid
             and isinstance(ask_report, Mapping)
@@ -280,15 +308,28 @@ def build_dynamic_micro_confirmation_checkpoints(
             and binding.get("decision_anchor_id") == anchor_id_text
             and binding.get("decision_anchor_at") == signal_at_text
             and binding.get("checkpoint_sec") == checkpoint_sec
-            and signal_at is not None
-            and binding.get("checkpoint_at")
-            == (signal_at + timedelta(seconds=checkpoint_sec)).isoformat()
+            and checkpoint_at is not None
+            and binding.get("checkpoint_at") == checkpoint_at.isoformat()
             and isinstance(ask, Mapping)
-            and binding.get("window_horizon_ms") == ask.get("horizon_ms")
+            and isinstance(ask_horizon_ms, int)
+            and not isinstance(ask_horizon_ms, bool)
+            and 0 < ask_horizon_ms <= 1_000
+            and binding.get("window_horizon_ms") == ask_horizon_ms
+            and binding.get("binding_policy")
+            == "past_only_0b_0d_window_ending_at_exact_checkpoint"
             and binding.get("future_outcome_input_used") is False
+            and window_started_at is not None
+            and checkpoint_at - timedelta(seconds=1)
+            <= window_started_at
+            < checkpoint_at
+            and ask_horizon_ms == expected_ask_horizon_ms
             and ask_context.get("symbol") == symbol_text
             and ask_context.get("venue") in venues
             and ask_context.get("session_bucket") in sessions
+            and ask_context.get("observed_through_local_receive_timestamp_ms")
+            == checkpoint_at_ms
+            and ask_context.get("anchor_event_local_receive_timestamp_ms")
+            == int(window_started_at.timestamp() * 1_000)
         )
         same_causal_epoch = bool(
             isinstance(causal_anchor_epoch, int)

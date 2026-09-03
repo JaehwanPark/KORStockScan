@@ -72,8 +72,18 @@ class OwnerOrderContext:
             ("position_id", self.position_id),
             ("client_intent_id", self.client_intent_id),
         ):
-            if not str(value or "").strip() or len(str(value)) > 240:
+            normalized = str(value or "").strip()
+            if (
+                not normalized
+                or len(normalized) > 240
+                or any(ch in normalized for ch in "\r\n\t")
+            ):
                 raise OwnerRegistryError(f"{name}_invalid")
+        if self.owner_type == "main_scalping" and (
+            not self.owner_id.startswith("main_scalping:")
+            or self.position_id != self.owner_id
+        ):
+            raise OwnerRegistryError("main_owner_position_identity_invalid")
 
 
 def broker_account_key() -> str:
@@ -81,6 +91,24 @@ def broker_account_key() -> str:
     if not value or len(value) > 80 or any(ch in value for ch in "\r\n\t"):
         raise OwnerRegistryError("broker_account_key_invalid")
     return value
+
+
+def _registry_symbol(value: object) -> str:
+    clean = normalize_symbol(value)
+    if not (clean.isdigit() and len(clean) == 6):
+        raise OwnerRegistryError("owner_registry_symbol_invalid")
+    return clean
+
+
+def _registry_order_date(value: date | str) -> str:
+    clean = value.isoformat() if isinstance(value, date) else str(value or "").strip()
+    try:
+        parsed = date.fromisoformat(clean)
+    except ValueError as exc:
+        raise OwnerRegistryError("owner_registry_order_date_invalid") from exc
+    if parsed.isoformat() != clean:
+        raise OwnerRegistryError("owner_registry_order_date_invalid")
+    return clean
 
 
 def registry_path() -> Path:
@@ -105,8 +133,7 @@ def main_owner_context(
         owner_id=f"main_scalping:{target_id}",
         position_id=position_id,
         client_intent_id=(
-            f"{position_id}:{cycle_id}:{action_token}:{str(ordinal)}:"
-            f"{uuid.uuid4().hex}"
+            f"{position_id}:{cycle_id}:{action_token}:{str(ordinal)}:{uuid.uuid4().hex}"
         ),
     )
 
@@ -226,13 +253,11 @@ class OrderOwnerRegistry:
         authority_policy_hash: str = "",
     ) -> str:
         context.validate()
-        clean_symbol = normalize_symbol(symbol)
+        clean_symbol = _registry_symbol(symbol)
         clean_side = str(side or "").strip().upper()
         clean_action = str(action or "NEW").strip().upper()
         clean_route = str(route or "").strip().upper()
-        clean_date = (
-            order_date.isoformat() if isinstance(order_date, date) else str(order_date)
-        )
+        clean_date = _registry_order_date(order_date)
         clean_policy_id = str(authority_policy_id or "").strip()
         clean_policy_hash = str(authority_policy_hash or "").strip().lower()
         if not clean_symbol or clean_side not in {"BUY", "SELL"}:
@@ -500,10 +525,8 @@ class OrderOwnerRegistry:
         """
 
         context.validate()
-        clean_symbol = normalize_symbol(symbol)
-        clean_date = (
-            order_date.isoformat() if isinstance(order_date, date) else str(order_date)
-        )
+        clean_symbol = _registry_symbol(symbol)
+        clean_date = _registry_order_date(order_date)
         clean_route = str(route or "").strip().upper()
         order_no = str(broker_order_no or "").strip()
         evidence_hash = str(evidence_sha256 or "").strip().lower()
@@ -587,10 +610,8 @@ class OrderOwnerRegistry:
         """
 
         custody_context.validate()
-        clean_symbol = normalize_symbol(symbol)
-        clean_date = (
-            order_date.isoformat() if isinstance(order_date, date) else str(order_date)
-        )
+        clean_symbol = _registry_symbol(symbol)
+        clean_date = _registry_order_date(order_date)
         clean_route = str(route or "").strip().upper()
         order_no = str(broker_order_no or "").strip()
         evidence_hash = str(evidence_sha256 or "").strip().lower()
@@ -721,9 +742,7 @@ class OrderOwnerRegistry:
         broker_order_no: str,
     ) -> dict[str, Any]:
         context.validate()
-        clean_date = (
-            order_date.isoformat() if isinstance(order_date, date) else str(order_date)
-        )
+        clean_date = _registry_order_date(order_date)
         lock = self._locked()
         try:
             return dict(
@@ -741,9 +760,7 @@ class OrderOwnerRegistry:
     def order_owner(
         self, *, order_date: date | str, broker_order_no: str
     ) -> dict[str, Any] | None:
-        clean_date = (
-            order_date.isoformat() if isinstance(order_date, date) else str(order_date)
-        )
+        clean_date = _registry_order_date(order_date)
         lock = self._locked()
         try:
             matches = [
@@ -771,11 +788,9 @@ class OrderOwnerRegistry:
     ) -> dict[str, Any] | None:
         """Bind a fill-before-submit receipt only to one exact pending lane."""
 
-        clean_symbol = normalize_symbol(symbol)
+        clean_symbol = _registry_symbol(symbol)
         clean_side = str(side or "").strip().upper()
-        clean_date = (
-            order_date.isoformat() if isinstance(order_date, date) else str(order_date)
-        )
+        clean_date = _registry_order_date(order_date)
         order_no = str(broker_order_no or "").strip()
         if not (order_no.isdigit() and len(order_no) == 7):
             raise OwnerRegistryConflict("owner_registry_broker_order_no_invalid")
@@ -863,12 +878,10 @@ class OrderOwnerRegistry:
         execution_no: str = "",
     ) -> None:
         context.validate()
-        clean_symbol = normalize_symbol(symbol)
+        clean_symbol = _registry_symbol(symbol)
         clean_side = str(side or "").strip().upper()
         requested = int(order_quantity)
-        clean_date = (
-            order_date.isoformat() if isinstance(order_date, date) else str(order_date)
-        )
+        clean_date = _registry_order_date(order_date)
         filled = int(cumulative_filled_qty)
         supplied_amount = (
             None if cumulative_fill_amount is None else int(cumulative_fill_amount)
@@ -945,7 +958,7 @@ class OrderOwnerRegistry:
             lock.close()
 
     def owner_position_qty(self, position_id: str, *, symbol: object) -> int:
-        clean_symbol = normalize_symbol(symbol)
+        clean_symbol = _registry_symbol(symbol)
         lock = self._locked()
         try:
             rows = self._state(self._read_locked()).values()
@@ -976,7 +989,7 @@ class OrderOwnerRegistry:
         restore aggregate symbol ownership inference.
         """
 
-        clean_symbol = normalize_symbol(symbol)
+        clean_symbol = _registry_symbol(symbol)
         lock = self._locked()
         try:
             return any(
@@ -1026,7 +1039,7 @@ class OrderOwnerRegistry:
     def reconcile_symbol_quantity(
         self, *, symbol: object, broker_quantity: int
     ) -> dict[str, Any]:
-        clean_symbol = normalize_symbol(symbol)
+        clean_symbol = _registry_symbol(symbol)
         lock = self._locked()
         try:
             return self._reconcile_symbol_quantity_from_state(
@@ -1049,7 +1062,7 @@ class OrderOwnerRegistry:
         broker_open_order_nos: set[str] | frozenset[str] | tuple[str, ...],
         broker_snapshot_sha256: str,
     ) -> dict[str, Any]:
-        clean_symbol = normalize_symbol(symbol)
+        clean_symbol = _registry_symbol(symbol)
         lock = self._locked()
         try:
             events = self._read_locked()
@@ -1062,11 +1075,7 @@ class OrderOwnerRegistry:
                 broker_quantity=int(broker_quantity),
             )
             tail_hash = str(events[-1].get("event_hash")) if events else "0" * 64
-            clean_date = (
-                active_date.isoformat()
-                if isinstance(active_date, date)
-                else str(active_date)
-            )
+            clean_date = _registry_order_date(active_date)
             registered_open_order_nos = sorted(
                 {
                     str(row.get("broker_order_no") or "").strip()

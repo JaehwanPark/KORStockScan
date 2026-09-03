@@ -108,6 +108,15 @@ def _widget_order_ownership_source(code: str, *, target_date: date) -> str:
         return ""
     if owner_policy.symbol_selected:
         if owner_policy.owner_allowed("widget_auto_trade", new_entry=True):
+            try:
+                if owner_policy.coexistence_enabled and not (
+                    default_order_owner_registry().contains_event_hash(
+                        owner_policy.migration_registry_tail_hash
+                    )
+                ):
+                    return ""
+            except OwnerRegistryError:
+                return ""
             return (
                 f"symbol_owner_policy:{owner_policy.policy_id}:"
                 f"{owner_policy.policy_hash}"

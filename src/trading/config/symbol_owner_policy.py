@@ -51,8 +51,16 @@ class SymbolOwnerPolicyError(RuntimeError):
 
 def normalize_symbol(value: object) -> str:
     raw = str(value or "").strip().upper()
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    return digits[-6:].zfill(6) if digits else raw
+    base = raw
+    if base.endswith(("_NX", "_AL")):
+        base = base[:-3]
+    if base.startswith("A"):
+        base = base[1:]
+    if base.isdigit() and 1 <= len(base) <= 6:
+        return base.zfill(6)
+    # Preserve malformed input so the strict six-digit caller check can fail
+    # closed. Never truncate a longer identifier into another listed symbol.
+    return raw
 
 
 def _canonical_hash(payload: dict[str, Any]) -> str:
@@ -281,6 +289,8 @@ def resolve_symbol_owner_policy(
     target_date: date | datetime | str | None = None,
 ) -> SymbolOwnerDecision:
     normalized_symbol = normalize_symbol(symbol)
+    if not (normalized_symbol.isdigit() and len(normalized_symbol) == 6):
+        raise SymbolOwnerPolicyError("symbol_owner_policy_symbol_invalid")
     day = _target_date(target_date)
     path = policy_path(day)
     if not path.exists():

@@ -189,7 +189,7 @@ def configured_manual_control_exclusion_codes() -> frozenset[str]:
 def manual_control_auto_exclusion_source(code: object) -> str:
     """Return the file-backed auto registration source for a symbol, if any."""
     norm_code = normalize_manual_control_exclusion_code(code)
-    if not norm_code or norm_code in _env_codes():
+    if not norm_code:
         return ""
     path = _file_path()
     with _WRITE_LOCK:
@@ -263,6 +263,7 @@ def evaluate_main_bot_control_exclusion(
     code: object,
     *,
     target_date: object = None,
+    new_entry: bool = True,
 ) -> ManualControlExclusionDecision:
     """Resolve the main-bot veto without weakening manual ownership by default.
 
@@ -272,7 +273,13 @@ def evaluate_main_bot_control_exclusion(
     """
 
     decision = evaluate_manual_control_exclusion(code)
+    auto_source = manual_control_auto_exclusion_source(code)
     operator_source = manual_control_operator_exclusion_source(code)
+    if decision.excluded and auto_source:
+        # A coexistence policy changes ownership only. It never overrides an
+        # automatic open-loss, quantity, or hard-stop safety handoff, even if
+        # a separate operator marker for the same symbol is also present.
+        return decision
     if decision.excluded and not operator_source:
         # Automatic open-loss/hard-stop/quantity guards are not ownership
         # handoffs and can never be bypassed by a coexistence policy.
@@ -292,7 +299,31 @@ def evaluate_main_bot_control_exclusion(
             decision.source,
         )
     if owner_policy.symbol_selected:
-        if owner_policy.owner_allowed("main_scalping", new_entry=True):
+        if owner_policy.owner_allowed("main_scalping", new_entry=new_entry):
+            try:
+                if owner_policy.coexistence_enabled:
+                    from src.trading.order.owner_custody_registry import (
+                        OwnerRegistryError,
+                        default_order_owner_registry,
+                    )
+
+                    registry = default_order_owner_registry()
+                    if not registry.contains_event_hash(
+                        owner_policy.migration_registry_tail_hash
+                    ):
+                        return ManualControlExclusionDecision(
+                            True,
+                            decision.code,
+                            "coexistence_migration_registry_generation_missing",
+                            owner_policy.source_path,
+                        )
+            except OwnerRegistryError as exc:
+                return ManualControlExclusionDecision(
+                    True,
+                    decision.code,
+                    f"owner_registry_fail_closed:{type(exc).__name__}",
+                    owner_policy.source_path,
+                )
             return ManualControlExclusionDecision(
                 False,
                 decision.code,
@@ -306,7 +337,11 @@ def evaluate_main_bot_control_exclusion(
         return ManualControlExclusionDecision(
             True,
             decision.code,
-            "exact_date_owner_policy_blocks_main_bot_entry",
+            (
+                "exact_date_owner_policy_blocks_main_bot_entry"
+                if new_entry
+                else "exact_date_owner_policy_blocks_main_bot_custody"
+            ),
             owner_policy.source_path,
         )
     return decision
@@ -317,12 +352,16 @@ def independent_machine_ownership_source(
     *,
     owner: str,
     target_date: object = None,
+    new_entry: bool = True,
 ) -> str:
     """Return the exact ownership authority for an independent machine.
 
     Legacy deployments keep using the protected ``manual_operator`` marker.
     A coexistence deployment may replace that marker only when the exact-date
     policy authorizes the requested machine owner and confirms migration.
+    PREOPEN custody preflight passes ``new_entry=False`` so an exit-only
+    rollback can keep reconciling and closing already-owned positions while
+    the runtime entry gate still rejects every new BUY.
     """
 
     legacy = manual_control_operator_exclusion_source(code)
@@ -337,7 +376,21 @@ def independent_machine_ownership_source(
         return ""
     normalized_owner = str(owner or "").strip().lower()
     if owner_policy.symbol_selected:
-        if owner_policy.owner_allowed(normalized_owner, new_entry=True):
+        if owner_policy.owner_allowed(normalized_owner, new_entry=new_entry):
+            try:
+                if owner_policy.coexistence_enabled:
+                    from src.trading.order.owner_custody_registry import (
+                        OwnerRegistryError,
+                        default_order_owner_registry,
+                    )
+
+                    registry = default_order_owner_registry()
+                    if not registry.contains_event_hash(
+                        owner_policy.migration_registry_tail_hash
+                    ):
+                        return ""
+            except OwnerRegistryError:
+                return ""
             return (
                 f"symbol_owner_policy:{owner_policy.policy_id}:"
                 f"{owner_policy.policy_hash}"

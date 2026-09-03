@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta
 
 from src.trading.market.micro_confirmation import (
     DYNAMIC_CONFIRMATION_METRIC_CONTRACT,
@@ -199,13 +200,34 @@ def test_checkpoint_builder_rejects_cross_epoch_confirmation() -> None:
                         "venue": "KRX",
                         "session_bucket": "KRX_REGULAR",
                         "sequence_epoch": 7 if checkpoint == 0 else 8,
+                        "anchor_event_local_receive_timestamp_ms": int(
+                            (
+                                datetime.fromisoformat("2026-08-27T10:00:00+09:00")
+                                + timedelta(seconds=checkpoint, milliseconds=-900.5)
+                            ).timestamp()
+                            * 1_000
+                        ),
+                        "observed_through_local_receive_timestamp_ms": int(
+                            (
+                                datetime.fromisoformat("2026-08-27T10:00:00+09:00")
+                                + timedelta(seconds=checkpoint)
+                            ).timestamp()
+                            * 1_000
+                        ),
                     },
                     "decision_anchor_binding": {
                         "decision_anchor_id": "episode:test",
                         "decision_anchor_at": "2026-08-27T10:00:00+09:00",
                         "checkpoint_sec": checkpoint,
                         "checkpoint_at": (f"2026-08-27T10:00:0{checkpoint}+09:00"),
+                        "window_started_at": (
+                            datetime.fromisoformat("2026-08-27T10:00:00+09:00")
+                            + timedelta(seconds=checkpoint, milliseconds=-900.5)
+                        ).isoformat(),
                         "window_horizon_ms": 900,
+                        "binding_policy": (
+                            "past_only_0b_0d_window_ending_at_exact_checkpoint"
+                        ),
                         "future_outcome_input_used": False,
                     },
                     "horizons": [
@@ -230,7 +252,10 @@ def test_checkpoint_builder_rejects_cross_epoch_confirmation() -> None:
             "causal_past_only": True,
             "future_outcome_input_used": False,
             "runtime_effect": False,
+            "trading_runtime_effect": False,
+            "trading_decision_effect": False,
             "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
             "broker_order_forbidden": True,
         },
         anchor_id="episode:test",
