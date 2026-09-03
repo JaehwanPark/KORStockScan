@@ -487,14 +487,14 @@ def test_postclose_failed_run_reuses_only_valid_same_target_heavy_artifacts():
     assert 'review.get("provider") == expected_provider' in script
     assert 'review_contract.get("requested_provider") == expected_provider' in script
     assert "current_actionable_digest = _actionable_semantic_digest(payload)" in script
-    assert "current_ai_contract_digest = _ai_review_contract(expected_provider)" in script
     assert (
-        'candidate_change.get("semantic_digest") == current_actionable_digest'
-        in script
+        "current_ai_contract_digest = _ai_review_contract(expected_provider)" in script
     )
     assert (
-        'review_contract.get("semantic_digest") == current_ai_contract_digest'
-        in script
+        'candidate_change.get("semantic_digest") == current_actionable_digest' in script
+    )
+    assert (
+        'review_contract.get("semantic_digest") == current_ai_contract_digest' in script
     )
 
 
@@ -1143,9 +1143,7 @@ def test_postclose_done_controller_cron_installs_2010_once():
 
 
 def test_error_detection_cron_reserves_2155_for_postclose_finalization():
-    script = Path("deploy/install_error_detection_cron.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/install_error_detection_cron.sh").read_text(encoding="utf-8")
 
     assert "*/5 7-20 * * 1-5" in script
     assert "0-50/5 21 * * 1-5" in script
@@ -1155,9 +1153,7 @@ def test_error_detection_cron_reserves_2155_for_postclose_finalization():
 
 
 def test_eod_installer_leaves_cleanup_to_postclose_finalization():
-    script = Path("deploy/install_eod_data_chain_cron.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/install_eod_data_chain_cron.sh").read_text(encoding="utf-8")
 
     assert "LOG_ROTATION_CLEANUP_2100" not in script
     assert "21:55 postclose finalization gate" in script
@@ -1422,9 +1418,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         pending_verify_idx + 1,
     )
     final_next_checklist_idx = script.rindex(checklist_command)
-    final_propagation_idx = script.rindex(
-        "src.engine.pattern_lab_propagation_audit"
-    )
+    final_propagation_idx = script.rindex("src.engine.pattern_lab_propagation_audit")
     final_ai_source_refresh_idx = script.rindex("--refresh-source-provenance")
     final_ev_idx = script.index(
         'run_threshold_cycle_ev_and_wait "final_consumer_refresh"'

@@ -529,10 +529,11 @@ def test_valid_profit_sample_floor_blocks_incomplete_pnl_order(tmp_path):
         ai_provider="none",
     )
 
-    opportunity = report["threshold_opportunities"][0]
-    assert opportunity["sample"] == 3
-    assert opportunity["valid_profit_sample"] == 1
-    assert opportunity["equal_weight_avg_profit_pct"] == 0.7
+    evaluation = report["primary_blocker_evaluations"][0]
+    assert evaluation["sample"] == 3
+    assert evaluation["valid_profit_sample"] == 1
+    assert evaluation["equal_weight_avg_profit_pct"] == 0.7
+    assert report["threshold_opportunities"] == []
     assert report["summary"]["code_improvement_order_count"] == 0
     assert report["code_improvement_orders"] == []
 
@@ -859,12 +860,14 @@ def test_actionable_digest_covers_order_contract_but_ignores_review_annotations(
                 "order_id": "order-1",
                 "candidate_id": "candidate-1",
                 "forbidden_uses": ["runtime_mutation"],
+                "source_paths": ["day-1.jsonl"],
                 "ai_review_status": "parsed",
             }
         ]
     }
     before = mod._actionable_semantic_digest(report)
     report["code_improvement_orders"][0]["ai_review_status"] = "unreviewed"
+    report["code_improvement_orders"][0]["source_paths"].append("day-2.jsonl")
     assert mod._actionable_semantic_digest(report) == before
 
     report["code_improvement_orders"][0]["forbidden_uses"].append("broker_guard_bypass")
@@ -1332,15 +1335,17 @@ def test_fixed_taxonomy_groups_are_not_all_reported_as_new_candidates(tmp_path):
 
     assert report["summary"]["configured_threshold_group_count"] == 5
     assert report["summary"]["observed_threshold_group_evaluation_count"] == 5
-    assert report["summary"]["primary_attributed_opportunity_count"] == 1
+    assert report["summary"]["primary_blocker_evaluation_count"] == 1
+    assert report["summary"]["primary_attributed_opportunity_count"] == 0
     assert report["summary"]["actionable_candidate_count"] == 0
     assert all(
         item["is_actionable_candidate"] is False
         for item in report["threshold_group_evaluations"]
     )
-    assert report["threshold_opportunities"][0]["threshold_group"] == (
+    assert report["primary_blocker_evaluations"][0]["threshold_group"] == (
         "ai_score_near_buy"
     )
+    assert report["threshold_opportunities"] == []
 
 
 def test_partition_index_cache_reuses_unchanged_source_and_invalidates_change(
@@ -1512,9 +1517,10 @@ def test_targeted_scan_verifies_top_level_record_id_after_nested_prefilter_candi
     row = report["source_identity_conflict_examples"]
     assert row == []
     assert report["summary"]["forced_record_count"] == 1
-    assert report["threshold_opportunities"][0]["threshold_group"] == (
+    assert report["primary_blocker_evaluations"][0]["threshold_group"] == (
         "latency_or_freshness"
     )
+    assert report["threshold_opportunities"] == []
 
 
 def test_primary_blocker_uses_event_time_and_rejects_post_force_only(tmp_path):
@@ -1810,6 +1816,71 @@ def test_post_sell_missing_stock_code_is_quarantined(tmp_path):
         == "post_sell_stock_code_missing"
     )
     assert report["source_coverage_manifest"]["status"] == "source_coverage_gap"
+
+
+def test_relevant_malformed_source_rows_block_candidate_and_ai_review(
+    tmp_path, monkeypatch
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    valid_pipeline_rows = [
+        row
+        for idx in range(1, 4)
+        for row in (
+            _event(idx, "blocked_ai_score", {"block_reason": "blocked_ai_score"}),
+            _event(
+                idx,
+                "rising_missed_one_share_entry",
+                {"rising_missed_one_share_entry_forced": True},
+            ),
+        )
+    ]
+    pipeline_path.write_text(
+        "\n".join(
+            [
+                *(json.dumps(row) for row in valid_pipeline_rows),
+                '{"record_id": 1, "stage": "rising_missed_one_share_entry"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        "\n".join(
+            [
+                *(
+                    json.dumps(
+                        {
+                            "recommendation_id": idx,
+                            "stock_code": "000001",
+                            "profit_rate": 0.5,
+                        }
+                    )
+                    for idx in range(1, 4)
+                ),
+                '{"recommendation_id": 4, "stock_code": "000001"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def unexpected_call(*args, **kwargs):
+        raise AssertionError("malformed source coverage must block the AI provider")
+
+    monkeypatch.setattr(mod, "_call_ai_review", unexpected_call)
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        ai_provider="openai",
+    )
+
+    assert report["source_processing"]["invalid_json_row_count"] == 1
+    assert report["post_sell_identity_diagnostics"]["invalid_json_row_count"] == 1
+    assert report["source_coverage_manifest"]["invalid_source_json_row_count"] == 2
+    assert report["source_coverage_manifest"]["status"] == "source_coverage_gap"
+    assert report["code_improvement_orders"] == []
+    assert report["ai_review"]["status"] == "blocked_source_coverage"
 
 
 def test_propagated_forced_event_stock_conflict_is_quarantined(tmp_path):

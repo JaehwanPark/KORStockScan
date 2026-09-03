@@ -633,7 +633,7 @@ def _scan_pipeline_partition(
     cross_partition_provenance: dict[str, dict[str, Any]] = {}
     discovery_line_count = 0
     discovery_parsed_row_count = 0
-    invalid_json_row_count = 0
+    invalid_json_line_numbers: set[int] = set()
 
     # The discovery pass parses only forced-entry or terminal-sell lines.  In
     # particular, it must not retain per-record maps for the full multi-GiB
@@ -647,7 +647,7 @@ def _scan_pipeline_partition(
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
-            invalid_json_row_count += 1
+            invalid_json_line_numbers.add(line_number)
             continue
         if not isinstance(row, dict):
             continue
@@ -689,7 +689,7 @@ def _scan_pipeline_partition(
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
-                invalid_json_row_count += 1
+                invalid_json_line_numbers.add(line_number)
                 continue
             if not isinstance(row, dict) or not _clean_baseline_allowed(
                 row, clean_baseline_ts_kst=clean_baseline_ts_kst
@@ -734,7 +734,7 @@ def _scan_pipeline_partition(
         "discovery_line_count": discovery_line_count,
         "discovery_parsed_row_count": discovery_parsed_row_count,
         "targeted_record_row_count": targeted_record_row_count,
-        "invalid_json_row_count": invalid_json_row_count,
+        "invalid_json_row_count": len(invalid_json_line_numbers),
         "forced": forced,
         "threshold_counts": {
             record_id: dict(counts) for record_id, counts in threshold_counts.items()
@@ -932,6 +932,7 @@ def _source_coverage_manifest(
     post_sell_record_ids: Iterable[str] | None = None,
     submitted_unjoined_record_ids: Iterable[str] | None = None,
     identity_conflict_record_ids: Iterable[str] | None = None,
+    invalid_source_json_row_count: int = 0,
 ) -> dict[str, Any]:
     pipeline_dates = sorted(
         {_date_from_path(path) for path in pipeline_paths if _date_from_path(path)}
@@ -975,6 +976,7 @@ def _source_coverage_manifest(
         len(missing_pipeline_dates)
         + len(missing_terminal_record_ids)
         + len(identity_conflict_ids)
+        + max(0, int(invalid_source_json_row_count))
     )
 
     def _id_digest(values: list[str]) -> str:
@@ -1003,6 +1005,7 @@ def _source_coverage_manifest(
         "identity_conflict_record_count": len(identity_conflict_ids),
         "identity_conflict_record_ids_sha256": _id_digest(identity_conflict_ids),
         "identity_conflict_record_examples": identity_conflict_ids[:50],
+        "invalid_source_json_row_count": max(0, int(invalid_source_json_row_count)),
         "pending_or_right_censored_submit_count": len(
             pending_or_right_censored_record_ids
         ),
@@ -1039,6 +1042,7 @@ def _load_post_sell(
     source_paths: list[str] = []
     duplicate_row_count = 0
     compatible_duplicate_row_count = 0
+    invalid_json_row_count = 0
 
     def _merge_if_compatible(
         prior: dict[str, Any], incoming: dict[str, Any]
@@ -1072,7 +1076,17 @@ def _load_post_sell(
 
     for path in paths:
         source_paths.append(str(path))
-        for row in _iter_jsonl(path):
+        for line in _iter_jsonl_lines(path):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                invalid_json_row_count += 1
+                continue
+            if not isinstance(row, dict):
+                invalid_json_row_count += 1
+                continue
             record_id = str(
                 row.get("recommendation_id") or row.get("record_id") or ""
             ).strip()
@@ -1113,6 +1127,7 @@ def _load_post_sell(
         "compatible_duplicate_row_count": compatible_duplicate_row_count,
         "ambiguous_record_id_count": len(ambiguous_record_ids),
         "ambiguous_record_ids": sorted(ambiguous_record_ids),
+        "invalid_json_row_count": invalid_json_row_count,
         "last_row_wins_allowed": False,
     }
     return by_record, source_paths, diagnostics
@@ -1316,8 +1331,10 @@ def _threshold_group_evaluations(rows: list[dict[str, Any]]) -> list[dict[str, A
     )
 
 
-def _threshold_opportunities(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Build source-only candidates from mutually exclusive first blockers."""
+def _primary_blocker_evaluations(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build mutually exclusive first-blocker evaluations before candidate gates."""
 
     opportunities: list[dict[str, Any]] = []
     joined = [row for row in rows if row.get("post_sell_joined")]
@@ -1347,8 +1364,9 @@ def _threshold_opportunities(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "loss_or_flat_count": summary["loss_or_flat_count"],
                 "equal_weight_avg_profit_pct": avg,
                 "primary_decision_metric": "equal_weight_avg_profit_pct",
-                "classification_role": "exclusive_first_observed_blocker_candidate",
+                "classification_role": "exclusive_first_observed_blocker_evaluation",
                 "primary_blocker_attribution_status": "pass",
+                "is_actionable_candidate": eligible,
                 "candidate_status": (
                     "eligible_for_existing_family_evidence"
                     if eligible
@@ -1381,6 +1399,22 @@ def _threshold_opportunities(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         ),
         reverse=True,
     )
+
+
+def _threshold_opportunities(
+    primary_blocker_evaluations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return only floor-qualified positive-EV existing-family candidates."""
+
+    return [
+        {
+            **item,
+            "classification_role": "eligible_existing_family_evidence_candidate",
+            "is_actionable_candidate": True,
+        }
+        for item in primary_blocker_evaluations
+        if item.get("candidate_status") == "eligible_for_existing_family_evidence"
+    ]
 
 
 def _build_code_orders(
@@ -1492,7 +1526,11 @@ def _build_code_orders(
 
 def _actionable_semantic_digest(report: dict[str, Any]) -> str:
     payload = [
-        {key: value for key, value in item.items() if not str(key).startswith("ai_")}
+        {
+            key: value
+            for key, value in item.items()
+            if not str(key).startswith("ai_") and key != "source_paths"
+        }
         for item in report.get("code_improvement_orders") or []
         if isinstance(item, dict)
     ]
@@ -1961,9 +1999,14 @@ def build_report(
         post_sell_record_ids=post_sell_by_record,
         submitted_unjoined_record_ids=submitted_unjoined_record_ids,
         identity_conflict_record_ids=source_identity_conflict_record_ids,
+        invalid_source_json_row_count=(
+            int(source_processing.get("invalid_json_row_count") or 0)
+            + int(post_sell_identity_diagnostics.get("invalid_json_row_count") or 0)
+        ),
     )
     group_evaluations = _threshold_group_evaluations(rows)
-    opportunities = _threshold_opportunities(rows)
+    primary_blocker_evaluations = _primary_blocker_evaluations(rows)
+    opportunities = _threshold_opportunities(primary_blocker_evaluations)
     source_paths = {
         "pipeline_events": pipeline_sources,
         "post_sell_candidates": post_sell_sources,
@@ -2310,6 +2353,7 @@ def build_report(
             ],
             "configured_threshold_group_count": len(THRESHOLD_GROUPS),
             "observed_threshold_group_evaluation_count": len(group_evaluations),
+            "primary_blocker_evaluation_count": len(primary_blocker_evaluations),
             "primary_attributed_opportunity_count": len(opportunities),
             "ambiguous_primary_blocker_record_count": sum(
                 1
@@ -2345,6 +2389,7 @@ def build_report(
         },
         "profit_summary": _profit_summary(joined),
         "threshold_group_evaluations": group_evaluations,
+        "primary_blocker_evaluations": primary_blocker_evaluations,
         "threshold_opportunities": opportunities,
         "joined_examples": joined[:30],
         "source_identity_conflict_examples": [
@@ -2417,6 +2462,7 @@ def write_outputs(
         f"- threshold_opportunity_count: {summary.get('threshold_opportunity_count')}",
         f"- configured_threshold_group_count: {summary.get('configured_threshold_group_count')}",
         f"- observed_threshold_group_evaluation_count: {summary.get('observed_threshold_group_evaluation_count')}",
+        f"- primary_blocker_evaluation_count: {summary.get('primary_blocker_evaluation_count')}",
         f"- primary_attributed_opportunity_count: {summary.get('primary_attributed_opportunity_count')}",
         f"- actionable_candidate_count: {summary.get('actionable_candidate_count')}",
         f"- actionable_candidate_scope: {summary.get('actionable_candidate_scope')}",
@@ -2468,8 +2514,8 @@ def write_outputs(
                 "",
             ]
         )
-    lines.extend(["## Primary-blocker Opportunities", ""])
-    for item in report.get("threshold_opportunities") or []:
+    lines.extend(["## Primary-blocker Evaluations", ""])
+    for item in report.get("primary_blocker_evaluations") or []:
         lines.extend(
             [
                 f"### {item.get('threshold_group')}",
@@ -2478,11 +2524,27 @@ def write_outputs(
                 f"- mapped_family: {item.get('mapped_family')}",
                 f"- classification_role: {item.get('classification_role')}",
                 f"- candidate_status: {item.get('candidate_status')}",
+                f"- is_actionable_candidate: {str(item.get('is_actionable_candidate')).lower()}",
                 f"- sample: {item.get('sample')}",
                 f"- valid_profit_sample: {item.get('valid_profit_sample')}",
                 f"- equal_weight_avg_profit_pct: {item.get('equal_weight_avg_profit_pct')}",
                 f"- profitable_count: {item.get('profitable_count')}",
                 f"- loss_or_flat_count: {item.get('loss_or_flat_count')}",
+                "",
+            ]
+        )
+    lines.extend(["## Threshold Opportunities", ""])
+    for item in report.get("threshold_opportunities") or []:
+        lines.extend(
+            [
+                f"### {item.get('threshold_group')}",
+                "",
+                f"- candidate_id: {item.get('candidate_id')}",
+                f"- mapped_family: {item.get('mapped_family')}",
+                f"- classification_role: {item.get('classification_role')}",
+                f"- sample: {item.get('sample')}",
+                f"- valid_profit_sample: {item.get('valid_profit_sample')}",
+                f"- equal_weight_avg_profit_pct: {item.get('equal_weight_avg_profit_pct')}",
                 "",
             ]
         )
