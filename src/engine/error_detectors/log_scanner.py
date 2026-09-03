@@ -5,7 +5,6 @@ import os
 import re
 import time
 from collections import Counter
-from datetime import datetime
 from pathlib import Path
 
 from src.utils.constants import LOGS_DIR, PROJECT_ROOT, TRADING_RULES
@@ -21,6 +20,7 @@ SCAN_STATE_PATH = PROJECT_ROOT / "tmp" / "error_detector_log_scan_state.json"
 _EXCEPTION_PATTERNS: list[tuple[str, re.Pattern]] = []
 _IGNORED_LINE_PATTERNS: list[re.Pattern] = [
     re.compile(r"\[ERROR_DETECTION\]"),
+    re.compile(r"\[KIWOOM_READ_TR_DEFERRED\]"),
     re.compile(r"(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+_)*TEST(?:$|[^A-Za-z0-9])"),
     re.compile(
         r"(?:^|[^A-Za-z0-9])(?:LatencyTest|LatencyLegacyHolding|LatencyEntry|LatencyEntryPrice)(?:$|[^A-Za-z0-9])"
@@ -46,6 +46,14 @@ def _register_pattern(name: str, pattern: str):
 _register_pattern(
     "DB_ERROR",
     r"(?:db|database|sqlalchemy|psycopg|connection.*refused|query.*fail|db.*error)",
+)
+_register_pattern("READ_TR_RATE_LIMIT", r"kiwoom_read_tr_rate_limit")
+_register_pattern(
+    "READ_TR_ADMISSION_ERROR", r"kiwoom_read_tr_admission_failed"
+)
+_register_pattern(
+    "READ_TR_TRANSPORT_ERROR",
+    r"kiwoom_read_tr_(?:http_failed|timeout|connection_failed|request_failed|exception)",
 )
 _register_pattern(
     "API_ERROR",

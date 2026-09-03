@@ -118,7 +118,11 @@ def test_ka10004_http_429_is_structured_and_shares_source_only_cooldown(
     monkeypatch, tmp_path
 ):
     calls = []
+    error_logs = []
+    info_logs = []
     coordinator = KiwoomReadRequestCoordinator(state_dir=tmp_path)
+    monkeypatch.setattr(kiwoom_utils, "log_error", error_logs.append)
+    monkeypatch.setattr(kiwoom_utils, "log_info", info_logs.append)
     monkeypatch.setattr(
         kiwoom_utils.requests,
         "post",
@@ -168,10 +172,120 @@ def test_ka10004_http_429_is_structured_and_shares_source_only_cooldown(
         "shared_read_rate_server_cooldown"
     )
     assert calls == [1]
+    assert len(error_logs) == 1
+    assert "[KIWOOM_READ_TR_RATE_LIMIT]" in error_logs[0]
+    assert "api_id=ka10004" in error_logs[0]
+    assert "http_status=429" in error_logs[0]
+    assert "request_class=source_only" in error_logs[0]
+    assert len(info_logs) == 1
+    assert "[KIWOOM_READ_TR_DEFERRED]" in info_logs[0]
+    assert "shared_read_rate_server_cooldown" in info_logs[0]
+
+
+def test_shared_read_budget_defer_is_not_logged_as_request_failure(
+    monkeypatch, tmp_path
+):
+    error_logs = []
+    info_logs = []
+    coordinator = KiwoomReadRequestCoordinator(state_dir=tmp_path)
+    monkeypatch.setattr(kiwoom_utils, "log_error", error_logs.append)
+    monkeypatch.setattr(kiwoom_utils, "log_info", info_logs.append)
+    monkeypatch.setattr(
+        kiwoom_utils.requests,
+        "post",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("a deferred request must not reach Kiwoom")
+        ),
+    )
+    for index in range(4):
+        admission = coordinator.acquire(
+            token="BUDGET-TOKEN",
+            endpoint="https://api.kiwoom.com/api/dostk/mrkcond",
+            request_owner=f"budget_seed_{index}",
+            request_class="source_only",
+            api_id="ka10004",
+            request_code=f"00000{index}",
+            max_wait_sec=0.0,
+        )
+        assert admission.admitted is True
+
+    results, meta = kiwoom_utils.fetch_kiwoom_api_continuous(
+        url="https://api.kiwoom.com/api/dostk/mrkcond",
+        token="BUDGET-TOKEN",
+        api_id="ka10004",
+        payload={"stk_cd": "005930"},
+        max_retries=1,
+        return_meta=True,
+        request_owner="test_source_owner",
+        request_class="source_only",
+        read_rate_max_wait_sec=0.0,
+        read_rate_coordinator=coordinator,
+    )
+
+    assert results == []
+    assert meta["request_attempt_count"] == 0
+    assert meta["read_rate_control_status"] == "deferred"
+    assert meta["read_rate_control_reason"] == (
+        "shared_read_rate_wait_budget_exhausted"
+    )
+    assert error_logs == []
+    assert len(info_logs) == 1
+    assert "[KIWOOM_READ_TR_DEFERRED]" in info_logs[0]
+    assert "deferred_attempt_sent=false" in info_logs[0]
+    assert "prior_http_attempt_count=0" in info_logs[0]
+    assert "waited_sec=" in info_logs[0]
+    assert "scope_digest=" in info_logs[0]
+
+
+def test_malformed_shared_read_admission_remains_a_typed_error(
+    monkeypatch, tmp_path
+):
+    error_logs = []
+    info_logs = []
+    coordinator = KiwoomReadRequestCoordinator(state_dir=tmp_path)
+    state_path, _digest = coordinator._state_path(
+        token="MALFORMED-TOKEN",
+        endpoint="https://api.kiwoom.com/api/dostk/mrkcond",
+    )
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("not-json", encoding="utf-8")
+    monkeypatch.setattr(kiwoom_utils, "log_error", error_logs.append)
+    monkeypatch.setattr(kiwoom_utils, "log_info", info_logs.append)
+    monkeypatch.setattr(
+        kiwoom_utils.requests,
+        "post",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("an invalid admission must fail before HTTP")
+        ),
+    )
+
+    results, meta = kiwoom_utils.fetch_kiwoom_api_continuous(
+        url="https://api.kiwoom.com/api/dostk/mrkcond",
+        token="MALFORMED-TOKEN",
+        api_id="ka10004",
+        payload={"stk_cd": "005930"},
+        max_retries=1,
+        return_meta=True,
+        request_owner="test_runtime_owner",
+        request_class="runtime_required",
+        read_rate_coordinator=coordinator,
+    )
+
+    assert results == []
+    assert meta["request_attempt_count"] == 0
+    assert meta["read_rate_control_status"] == "deferred"
+    assert meta["read_rate_control_reason"] == "shared_read_rate_state_malformed"
+    assert info_logs == []
+    assert len(error_logs) == 1
+    assert "[KIWOOM_READ_TR_ADMISSION_FAILED]" in error_logs[0]
+    assert "request_class=runtime_required" in error_logs[0]
+    assert "shared_read_rate_state_malformed" in error_logs[0]
 
 
 def test_ka10004_body_1700_is_not_published_as_a_quote(monkeypatch, tmp_path):
+    error_logs = []
     coordinator = KiwoomReadRequestCoordinator(state_dir=tmp_path)
+    monkeypatch.setattr(kiwoom_utils, "log_error", error_logs.append)
     monkeypatch.setattr(
         kiwoom_utils.requests,
         "post",
@@ -207,6 +321,10 @@ def test_ka10004_body_1700_is_not_published_as_a_quote(monkeypatch, tmp_path):
     assert meta["rate_limit_detected"] is True
     assert meta["rate_limit_response_code"] == "1700"
     assert meta["rate_limit_retry_exhausted"] is True
+    assert len(error_logs) == 1
+    assert "[KIWOOM_READ_TR_RATE_LIMIT]" in error_logs[0]
+    assert "code=1700" in error_logs[0]
+    assert "request_class=runtime_required" in error_logs[0]
 
 
 def test_effective_kiwoom_code_preserves_explicit_market_suffix():

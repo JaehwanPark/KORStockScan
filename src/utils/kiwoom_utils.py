@@ -47,6 +47,17 @@ KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC = int(
 )
 KIWOOM_TOKEN_CACHE_SAFETY_SEC = int(os.getenv("KIWOOM_TOKEN_CACHE_SAFETY_SEC", "300"))
 
+# These are deliberate fail-closed admission outcomes, not new HTTP/API
+# failures.  Keep them visible in the info/provenance path without feeding the
+# error-burst detector.  All other admission failures indicate a malformed or
+# missing local contract and remain errors.
+_KIWOOM_READ_TR_EXPECTED_DEFER_REASONS = frozenset(
+    {
+        "shared_read_rate_server_cooldown",
+        "shared_read_rate_wait_budget_exhausted",
+    }
+)
+
 
 def _cache_clone(value):
     if isinstance(value, pd.DataFrame):
@@ -4647,9 +4658,16 @@ def fetch_kiwoom_api_continuous(
     while True:
         retry_count = 0
         response = None
+        admission_terminal_reason = ""
+        current_failure_logged = False
+        current_failure_kind = ""
+        current_failure_detail = ""
 
         # 💡 [핵심 방어] 429 에러 발생 시 백오프(Back-off) 후 재시도
         while retry_count < max_attempts:
+            current_failure_logged = False
+            current_failure_kind = ""
+            current_failure_detail = ""
             admission = coordinator.acquire(
                 token=active_token,
                 endpoint=url,
@@ -4676,11 +4694,33 @@ def fetch_kiwoom_api_continuous(
                 }
             )
             if not admission.admitted:
-                log_info(
-                    f"⚠️ [{api_id}] 조회 TR 공유 한도에서 요청 보류 "
+                admission_terminal_reason = str(admission.reason or "").strip()
+                admission_message = (
                     f"owner={normalized_owner} pid={os.getpid()} "
-                    f"request_code={normalized_request_code} reason={admission.reason}"
+                    f"api_id={api_id} request_code={normalized_request_code} "
+                    f"request_class={request_class} "
+                    f"prior_http_attempt_count={meta['request_attempt_count']} "
+                    f"waited_sec={admission.waited_sec:.6f} "
+                    f"requests_in_window_before={admission.requests_in_window_before} "
+                    f"effective_limit={admission.effective_limit} "
+                    f"max_limit={admission.max_limit} "
+                    f"scope_digest={admission.scope_digest} "
+                    f"reason={admission_terminal_reason or 'reason_missing'}"
                 )
+                if (
+                    admission_terminal_reason
+                    in _KIWOOM_READ_TR_EXPECTED_DEFER_REASONS
+                ):
+                    log_info(
+                        "[KIWOOM_READ_TR_DEFERRED] "
+                        f"deferred_attempt_sent=false {admission_message}"
+                    )
+                else:
+                    log_error(
+                        "[KIWOOM_READ_TR_ADMISSION_FAILED] "
+                        f"admission_attempt_sent=false {admission_message}"
+                    )
+                    current_failure_logged = True
                 response = None
                 break
             headers = {
@@ -4726,11 +4766,14 @@ def fetch_kiwoom_api_continuous(
                         request_code=normalized_request_code,
                         http_status_code=429,
                     )
-                    print(
-                        f"⚠️ [{api_id}] 429 요청 제한! owner={normalized_owner} "
+                    log_error(
+                        "[KIWOOM_READ_TR_RATE_LIMIT] "
+                        f"api_id={api_id} http_status=429 owner={normalized_owner} "
                         f"pid={os.getpid()} request_code={normalized_request_code} "
+                        f"request_class={request_class} "
                         f"({retry_count+1}/{max_attempts})"
                     )
+                    current_failure_logged = True
                     retry_count += 1
                     if retry_count < max_attempts:
                         time.sleep(wait_sec)
@@ -4738,6 +4781,8 @@ def fetch_kiwoom_api_continuous(
                         meta["rate_limit_retry_exhausted"] = True
                 elif 500 <= response.status_code < 600:
                     wait_sec = min(2 * (retry_count + 1), 6)
+                    current_failure_kind = "http_server"
+                    current_failure_detail = str(response.status_code)
                     log_info(
                         f"⚠️ [{api_id}] Kiwoom gateway/server HTTP {response.status_code}. "
                         f"{wait_sec}초 후 재시도... ({retry_count+1}/{max_attempts})"
@@ -4747,12 +4792,18 @@ def fetch_kiwoom_api_continuous(
                         time.sleep(wait_sec)
                 else:
                     log_error(
-                        f"❌ [{api_id}] HTTP 에러 {response.status_code}: {response.text}"
+                        "[KIWOOM_READ_TR_HTTP_FAILED] "
+                        f"api_id={api_id} http_status={response.status_code} "
+                        f"owner={normalized_owner} pid={os.getpid()} "
+                        f"request_code={normalized_request_code} "
+                        f"request_class={request_class}: {response.text}"
                     )
+                    current_failure_logged = True
                     break  # 치명적 에러는 즉시 중단
 
             except requests.exceptions.ReadTimeout:
                 wait_sec = min(2 * (retry_count + 1), 6)
+                current_failure_kind = "read_timeout"
                 log_info(
                     f"⚠️ [{api_id}] 응답 지연으로 읽기 타임아웃 "
                     f"({KIWOOM_READ_TIMEOUT_SEC:.0f}초). {wait_sec}초 후 재시도... "
@@ -4763,6 +4814,7 @@ def fetch_kiwoom_api_continuous(
                     time.sleep(wait_sec)
             except requests.exceptions.ConnectTimeout:
                 wait_sec = min(2 * (retry_count + 1), 6)
+                current_failure_kind = "connect_timeout"
                 log_info(
                     f"⚠️ [{api_id}] 연결 타임아웃 "
                     f"({KIWOOM_CONNECT_TIMEOUT_SEC:.0f}초). {wait_sec}초 후 재시도... "
@@ -4773,6 +4825,7 @@ def fetch_kiwoom_api_continuous(
                     time.sleep(wait_sec)
             except requests.exceptions.ConnectionError:
                 wait_sec = min(2 * (retry_count + 1), 6)
+                current_failure_kind = "connection"
                 log_info(
                     f"⚠️ [{api_id}] 연결 끊김. {wait_sec}초 대기 후 재접속... ({retry_count+1}/{max_attempts})"
                 )
@@ -4780,11 +4833,38 @@ def fetch_kiwoom_api_continuous(
                 if retry_count < max_attempts:
                     time.sleep(wait_sec)
             except Exception as e:
-                log_error(f"🚨 [{api_id}] 알 수 없는 예외: {e}")
+                log_error(
+                    "[KIWOOM_READ_TR_EXCEPTION] "
+                    f"api_id={api_id} owner={normalized_owner} pid={os.getpid()} "
+                    f"request_code={normalized_request_code} "
+                    f"request_class={request_class} "
+                    f"error={type(e).__name__}: {e}"
+                )
+                current_failure_logged = True
                 break
 
         if response is None or response.status_code != 200:
-            log_error(f"🚨 [{api_id}] 최대 재시도 초과 또는 실패. 조회를 중단합니다.")
+            if admission_terminal_reason:
+                break
+            if not current_failure_logged:
+                if current_failure_kind in {"read_timeout", "connect_timeout"}:
+                    marker = "KIWOOM_READ_TR_TIMEOUT"
+                    detail = current_failure_kind
+                elif current_failure_kind == "connection":
+                    marker = "KIWOOM_READ_TR_CONNECTION_FAILED"
+                    detail = current_failure_kind
+                elif current_failure_kind == "http_server":
+                    marker = "KIWOOM_READ_TR_HTTP_FAILED"
+                    detail = f"http_status={current_failure_detail or 'unknown'}"
+                else:
+                    marker = "KIWOOM_READ_TR_REQUEST_FAILED"
+                    detail = "failure_kind=unknown"
+                log_error(
+                    f"[{marker}] api_id={api_id} owner={normalized_owner} "
+                    f"pid={os.getpid()} request_code={normalized_request_code} "
+                    f"request_class={request_class} "
+                    f"attempts={retry_count}/{max_attempts} {detail}"
+                )
             break
 
         res_json = response.json()
@@ -4815,10 +4895,12 @@ def fetch_kiwoom_api_continuous(
                 http_status_code=response.status_code,
                 response_code=response_code,
             )
-            log_info(
-                f"⚠️ [{api_id}] 조회 TR 요청 제한 응답 "
+            log_error(
+                "[KIWOOM_READ_TR_RATE_LIMIT] "
+                f"api_id={api_id} http_status={response.status_code} "
                 f"owner={normalized_owner} pid={os.getpid()} "
-                f"request_code={normalized_request_code} code={response_code} "
+                f"request_code={normalized_request_code} "
+                f"request_class={request_class} code={response_code} "
                 f"({body_rate_limit_retry_count}/{max_attempts})"
             )
             if body_rate_limit_retry_count < max_attempts:
@@ -5618,18 +5700,16 @@ def build_realtime_analysis_context(
 
     vwap_price = 0
     box_high = box_low = 0
-    intraday_high = intraday_low = 0
+    intraday_high = 0
     open_price = _coerce_int(ws_data.get("open"), 0)
     if minute_candles:
         total_turnover = 0
         total_volume = 0
         highs = []
-        lows = []
         closes = []
         for candle in minute_candles:
             c_close = _coerce_int(candle.get("현재가") or candle.get("Close"), 0)
             c_high = _coerce_int(candle.get("고가") or candle.get("High"), 0)
-            c_low = _coerce_int(candle.get("저가") or candle.get("Low"), 0)
             c_open = _coerce_int(candle.get("시가") or candle.get("Open"), 0)
             c_vol = abs(_coerce_int(candle.get("거래량") or candle.get("Volume"), 0))
             if open_price <= 0 and c_open > 0:
@@ -5639,8 +5719,6 @@ def build_realtime_analysis_context(
                 total_volume += c_vol
             if c_high > 0:
                 highs.append(c_high)
-            if c_low > 0:
-                lows.append(c_low)
             if c_close > 0:
                 closes.append(c_close)
         if total_volume > 0:
@@ -5649,8 +5727,6 @@ def build_realtime_analysis_context(
             intraday_high = max(highs)
             if curr_price > 0:
                 drawdown_from_high_pct = ((curr_price / intraday_high) - 1.0) * 100.0
-        if lows:
-            intraday_low = min(lows)
         last_5 = minute_candles[-5:]
         box_high = max(
             (_coerce_int(c.get("고가") or c.get("High"), 0) for c in last_5), default=0

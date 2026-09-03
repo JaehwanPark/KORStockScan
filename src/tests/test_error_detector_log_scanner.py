@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import os
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-
-import pytest
 
 from src.engine.error_detectors.log_scanner import LogScanner
 
@@ -153,6 +150,51 @@ class TestLogScanner:
             assert errors == 0
             assert new_pos == 0
             assert counter == {}
+
+    def test_scan_file_ignores_expected_read_tr_defer_even_if_misrouted(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "kiwoom_utils_error.log"
+            log_file.write_text(
+                "[2026-09-03 13:25:12] ERROR "
+                "[KIWOOM_READ_TR_DEFERRED] deferred_attempt_sent=false "
+                "reason=shared_read_rate_wait_budget_exhausted\n",
+                encoding="utf-8",
+            )
+            counter = __import__("collections").Counter()
+
+            errors, new_pos, _ = LogScanner._scan_file(log_file, 0, counter)
+
+        assert errors == 0
+        assert new_pos == 0
+        assert counter == {}
+
+    def test_scan_file_classifies_typed_read_tr_failures(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "kiwoom_utils_error.log"
+            log_file.write_text(
+                "\n".join(
+                    [
+                        "[2026-09-03 13:03:06] ERROR "
+                        "[KIWOOM_READ_TR_RATE_LIMIT] http_status=429",
+                        "[2026-09-03 13:03:07] ERROR "
+                        "[KIWOOM_READ_TR_ADMISSION_FAILED] "
+                        "reason=shared_read_rate_state_malformed",
+                        "[2026-09-03 13:03:08] ERROR "
+                        "[KIWOOM_READ_TR_CONNECTION_FAILED] attempts=3/3",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            counter = __import__("collections").Counter()
+
+            errors, _new_pos, _ = LogScanner._scan_file(log_file, 0, counter)
+
+        assert errors == 3
+        assert counter == {
+            "READ_TR_RATE_LIMIT": 1,
+            "READ_TR_ADMISSION_ERROR": 1,
+            "READ_TR_TRANSPORT_ERROR": 1,
+        }
 
     def test_scan_file_ignores_test_fixture_noise(self):
         with tempfile.TemporaryDirectory() as tmpdir:
