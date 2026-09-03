@@ -256,8 +256,10 @@ from src.engine.lifecycle.ofi_ai_smoothing import (
 from src.engine.risk.manual_control_exclusion import (
     ManualControlExclusionDecision,
     add_manual_control_exclusion_code,
+    evaluate_main_bot_control_exclusion,
     evaluate_manual_control_exclusion,
     manual_control_auto_exclusion_source,
+    manual_control_operator_exclusion_source,
     remove_auto_manual_control_exclusion_code,
 )
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
@@ -268,6 +270,11 @@ from src.trading.market.quote_consistency import (
     quote_input_from_ws,
 )
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_down_by_bps
+from src.trading.order.owner_custody_registry import (
+    OwnerRegistryError,
+    default_order_owner_registry,
+    main_owner_context,
+)
 from src.engine.scalping.entry_cancel_wait_attribution import (
     compute_entry_cancel_wait_attribution,
 )
@@ -11702,6 +11709,7 @@ def _send_exit_best_ioc(
     reason_type=None,
     strategy=None,
     bypass_open_time_block=False,
+    owner_context=None,
 ):
     if SEND_EXIT_BEST_IOC is None:
         return {}
@@ -11710,6 +11718,7 @@ def _send_exit_best_ioc(
         and reason_type is None
         and strategy is None
         and not bypass_open_time_block
+        and owner_context is None
     ):
         return SEND_EXIT_BEST_IOC(code, qty, token)
     kwargs = {
@@ -11719,6 +11728,18 @@ def _send_exit_best_ioc(
     }
     if bypass_open_time_block:
         kwargs["bypass_open_time_block"] = True
+    if owner_context is not None:
+        try:
+            parameters = inspect.signature(SEND_EXIT_BEST_IOC).parameters.values()
+            accepts_owner_context = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                or parameter.name == "owner_context"
+                for parameter in parameters
+            )
+        except (TypeError, ValueError):
+            accepts_owner_context = False
+        if accepts_owner_context:
+            kwargs["owner_context"] = owner_context
     return SEND_EXIT_BEST_IOC(code, qty, token, **kwargs)
 
 
@@ -20752,7 +20773,7 @@ def _finish_cancel_terminal_outcome_after_db_holding(
         return False
 
 
-def _classify_sell_submit_response(response: Any) -> dict[str, str]:
+def _classify_sell_submit_response(response: Any) -> dict[str, Any]:
     """Classify only explicit Kiwoom broker acknowledgements; silence is ambiguous."""
 
     if kiwoom_orders.is_verified_local_sell_no_call_response(response):
@@ -20761,6 +20782,7 @@ def _classify_sell_submit_response(response: Any) -> dict[str, str]:
             "return_code": "SELL_TIME_BLOCKED",
             "order_no": "",
             "message": str(response.get("return_msg") or "sell_time_blocked"),
+            "broker_order_attempted": False,
         }
     if not isinstance(response, dict):
         return {
@@ -20768,7 +20790,9 @@ def _classify_sell_submit_response(response: Any) -> dict[str, str]:
             "return_code": "",
             "order_no": "",
             "message": "non_dict_or_missing_response",
+            "broker_order_attempted": False,
         }
+    broker_order_attempted = response.get("broker_order_attempted") is True
     has_return_code = "return_code" in response or "rt_cd" in response
     raw_return_code = response.get("return_code", response.get("rt_cd", ""))
     return_code = (
@@ -20785,7 +20809,9 @@ def _classify_sell_submit_response(response: Any) -> dict[str, str]:
     available_qty_ambiguous = bool(response.get("non_fatal_no_qty") is True) or (
         "매도가능수량" in message
     )
-    if not has_return_code or not return_code:
+    if broker_order_attempted and response.get("owner_registry_required") is True:
+        state = "ambiguous"
+    elif not has_return_code or not return_code:
         state = "ambiguous"
     elif return_code != "0":
         state = (
@@ -20803,7 +20829,56 @@ def _classify_sell_submit_response(response: Any) -> dict[str, str]:
         "return_code": return_code,
         "order_no": order_no,
         "message": message,
+        "broker_order_attempted": broker_order_attempted,
     }
+
+
+def _owner_registry_broker_ambiguity(response: Any) -> bool:
+    """True only when transport ran but exact owner binding did not finish."""
+
+    return bool(
+        isinstance(response, dict)
+        and response.get("owner_registry_required") is True
+        and response.get("broker_order_attempted") is True
+    )
+
+
+def _mark_owner_registry_buy_reconciliation(
+    stock: dict,
+    *,
+    response: dict,
+    qty: int,
+    price: int,
+    route: str,
+    stage: str,
+) -> None:
+    """Freeze further BUY submits until broker/registry identity is reconciled."""
+
+    order_no = str(response.get("ord_no") or response.get("odno") or "").strip()
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "entry_submit_identity_reconciliation_required": True,
+            "entry_submit_identity_reconciliation_reason": (
+                f"owner_registry_bind_ambiguous:{stage}"
+            ),
+            "entry_submit_identity_reconciliation_return_code": str(
+                response.get("return_code", response.get("rt_cd", "")) or ""
+            ),
+            "entry_submit_identity_reconciliation_requested_qty": max(0, int(qty)),
+            "entry_submit_identity_reconciliation_order_price": max(0, int(price)),
+            "entry_submit_identity_reconciliation_broker_route": str(
+                route or "UNKNOWN"
+            ).upper(),
+            "entry_submit_identity_reconciliation_order_no": order_no,
+            "entry_submit_identity_reconciliation_owner_intent_id": str(
+                response.get("owner_registry_intent_id") or ""
+            ).strip(),
+            "entry_submit_identity_reconciliation_recorded_at": time.time(),
+            "owner_registry_reconciliation_required": True,
+            "owner_registry_reconciliation_stage": stage,
+        },
+    )
 
 
 def _exit_quote_envelope_log_fields(envelope: dict | None) -> dict[str, Any]:
@@ -28203,10 +28278,28 @@ def _dispatch_scalp_preset_exit(
                     code,
                     rem_qty,
                     KIWOOM_TOKEN,
+                    owner_context=main_owner_context(
+                        stock,
+                        action="FAST_HOLDING_EXIT_SELL",
+                        ordinal=sell_submit_context_fields.get(
+                            "sell_submit_generation", "0"
+                        ),
+                    ),
                     **fast_exit_send_kwargs,
                 )
             else:
-                sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
+                sell_res = _send_exit_best_ioc(
+                    code,
+                    rem_qty,
+                    KIWOOM_TOKEN,
+                    owner_context=main_owner_context(
+                        stock,
+                        action="HOLDING_EXIT_SELL",
+                        ordinal=sell_submit_context_fields.get(
+                            "sell_submit_generation", "0"
+                        ),
+                    ),
+                )
         except Exception as exc:
             _mutate_stock_state(
                 stock,
@@ -28338,6 +28431,9 @@ def _dispatch_scalp_preset_exit(
             return
         if response_contract["state"] == "ambiguous":
             broker_error = response_contract["message"] or "ambiguous_response"
+            broker_order_attempted = bool(
+                response_contract.get("broker_order_attempted")
+            )
             _mutate_stock_state(
                 stock,
                 set_fields={
@@ -28362,10 +28458,15 @@ def _dispatch_scalp_preset_exit(
                 sell_reason_type=sell_reason_type,
                 exit_rule=exit_rule or "-",
                 error=broker_error,
-                actual_order_submitted=False,
-                broker_order_forbidden=True,
+                ord_no=response_contract.get("order_no") or "-",
+                actual_order_submitted=broker_order_attempted,
+                broker_order_forbidden=not broker_order_attempted,
                 runtime_effect=False,
-                decision_authority="broker_reconciliation_only",
+                decision_authority=(
+                    "broker_owner_registry_reconciliation_only"
+                    if broker_order_attempted
+                    else "broker_reconciliation_only"
+                ),
             )
             return
         if response_contract["state"] in {"definitive_reject", "local_no_call"}:
@@ -70138,6 +70239,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             order_type_desc="매수" if strategy == "SCALPING" else "최유리지정가",
             tif=request["tif"],
             dmst_stex_tp=submit_dmst_stex_tp,
+            owner_context=main_owner_context(
+                stock,
+                action="ENTRY_BUY",
+                ordinal=f"{request['tag']}:{broker_submit_attempt_count}",
+            ),
         )
         if not isinstance(res, dict):
             _log_entry_pipeline(
@@ -70149,6 +70255,32 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **real_pre_submit_guard_fields,
             )
             continue
+        if _owner_registry_broker_ambiguity(res):
+            response_order_no = _extract_broker_order_no(res)
+            _mark_owner_registry_buy_reconciliation(
+                stock,
+                response=res,
+                qty=qty,
+                price=broker_price,
+                route=submit_dmst_stex_tp,
+                stage="entry_buy",
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "order_leg_owner_registry_reconciliation_required",
+                tag=request["tag"],
+                qty=qty,
+                price=broker_price,
+                ord_no=response_order_no or "-",
+                owner_registry_intent_id=(res.get("owner_registry_intent_id") or "-"),
+                actual_order_submitted=True,
+                broker_order_forbidden=False,
+                runtime_effect=False,
+                decision_authority="broker_owner_registry_reconciliation_only",
+                **order_resolution_fields,
+            )
+            break
         rt_cd = str(res.get("return_code", res.get("rt_cd", "")))
         if rt_cd != "0":
             log_info(
@@ -76353,6 +76485,11 @@ def _maybe_submit_nxt_rising_missed_tp1_partial_runner(
             strategy=strategy,
             bypass_open_time_block=False,
             dmst_stex_tp="NXT",
+            owner_context=main_owner_context(
+                stock,
+                action="NXT_PARTIAL_SELL",
+                ordinal=sell_submit_generation,
+            ),
         )
     except Exception as exc:
         submit_call_exception = exc
@@ -76497,6 +76634,7 @@ def _maybe_submit_nxt_rising_missed_tp1_partial_runner(
         return False
     if response_contract["state"] == "ambiguous":
         error = response_contract["message"] or "ambiguous_response"
+        broker_order_attempted = bool(response_contract.get("broker_order_attempted"))
         _mutate_stock_state(
             stock,
             set_fields={
@@ -76515,10 +76653,15 @@ def _maybe_submit_nxt_rising_missed_tp1_partial_runner(
             "nxt_rising_missed_tp1_submit_ambiguous",
             qty=partial_qty,
             error=error,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
+            ord_no=response_contract.get("order_no") or "-",
+            actual_order_submitted=broker_order_attempted,
+            broker_order_forbidden=not broker_order_attempted,
             runtime_effect=False,
-            decision_authority="broker_reconciliation_only",
+            decision_authority=(
+                "broker_owner_registry_reconciliation_only"
+                if broker_order_attempted
+                else "broker_reconciliation_only"
+            ),
         )
         return False
     if response_contract["state"] in {"definitive_reject", "local_no_call"}:
@@ -76690,6 +76833,71 @@ def _resolve_entry_cancel_exchange_from_unfilled_snapshot(
     }
 
 
+def _registered_main_owner_inventory_qty(
+    *, stock: dict, code: str, broker_quantity: int
+) -> tuple[bool, int | None, str]:
+    """Resolve main custody without treating broker symbol balance as owner qty."""
+
+    registry = default_order_owner_registry()
+    try:
+        registered = registry.symbol_registered(code)
+    except OwnerRegistryError as exc:
+        return True, None, f"owner_registry_read_failed:{type(exc).__name__}"
+    if not registered:
+        return False, None, "legacy_symbol_inventory"
+    context = main_owner_context(stock, action="INVENTORY_RECONCILIATION")
+    if context is None:
+        return True, None, "main_owner_context_missing"
+    try:
+        reconciliation = registry.reconcile_symbol_quantity(
+            symbol=code, broker_quantity=broker_quantity
+        )
+    except OwnerRegistryError as exc:
+        return True, None, str(exc)
+    owner_qty = reconciliation.get("position_quantities", {}).get(context.position_id)
+    if owner_qty is None:
+        owner_qty = 0
+    return True, max(0, int(owner_qty)), "owner_registry_plus_all_venue_inventory"
+
+
+def _terminalize_registered_main_orders(
+    *, stock: dict, code: str, order_nos: set[str]
+) -> tuple[bool, str]:
+    """Close only exact main-owned orders after broker terminal proof."""
+
+    registry = default_order_owner_registry()
+    try:
+        if not registry.symbol_registered(code):
+            return True, "legacy_symbol_owner_registry_not_applicable"
+    except OwnerRegistryError as exc:
+        return False, f"owner_registry_read_failed:{type(exc).__name__}"
+    context = main_owner_context(stock, action="ORDER_TERMINAL_RECONCILIATION")
+    if context is None:
+        return False, "main_owner_context_missing"
+    order_date = datetime.now(tz=_KST).date()
+    try:
+        for order_no in sorted(order_nos):
+            owner = registry.order_owner(
+                order_date=order_date, broker_order_no=order_no
+            )
+            if owner is None:
+                return False, "owner_registry_terminal_order_missing"
+            registry.assert_owner(
+                context=context,
+                order_date=order_date,
+                broker_order_no=order_no,
+            )
+            registry.transition(
+                str(owner.get("intent_id") or ""),
+                state="ORDER_TERMINAL",
+                broker_order_no=order_no,
+                reason="main_broker_terminal_absence_reconciled",
+            )
+    except OwnerRegistryError as exc:
+        return False, str(exc)
+    return True, "owner_registry_orders_terminal"
+
+
 def _order_terminal_inventory_reconciliation(
     stock: dict,
     code: str,
@@ -76758,6 +76966,28 @@ def _order_terminal_inventory_reconciliation(
         for item in (inventory or [])
         if str((item or {}).get("code") or "").strip()[:6] == code
     )
+    managed, main_owner_qty, owner_reason = _registered_main_owner_inventory_qty(
+        stock=stock,
+        code=code,
+        broker_quantity=broker_qty,
+    )
+    if managed:
+        if main_owner_qty is None:
+            return False, owner_reason, broker_qty
+        if main_owner_qty != max(0, int(expected_runtime_qty or 0)):
+            return False, "main_owner_registry_quantity_mismatch", main_owner_qty
+        terminalized, terminal_reason = _terminalize_registered_main_orders(
+            stock=stock,
+            code=code,
+            order_nos=normalized_orders,
+        )
+        if not terminalized:
+            return False, terminal_reason, main_owner_qty
+        return (
+            True,
+            "terminal_absence_and_owner_inventory_exact",
+            main_owner_qty,
+        )
     if broker_qty != max(0, int(expected_runtime_qty or 0)):
         return False, "inventory_receipt_quantity_mismatch", broker_qty
     return True, "terminal_absence_and_inventory_exact", broker_qty
@@ -76902,7 +77132,45 @@ def _cancel_pending_entry_orders(
                 token=KIWOOM_TOKEN,
                 qty=0,
                 dmst_stex_tp=cancel_dmst_stex_tp,
+                owner_context=main_owner_context(
+                    stock, action="ENTRY_CANCEL", ordinal=ord_no
+                ),
             )
+            if _owner_registry_broker_ambiguity(res):
+                _mark_owner_registry_buy_reconciliation(
+                    stock,
+                    response=res,
+                    qty=max(
+                        0,
+                        _coerce_int_value(order.get("qty"))
+                        - _coerce_int_value(order.get("filled_qty")),
+                    ),
+                    price=_coerce_int_value(order.get("price")),
+                    route=cancel_dmst_stex_tp,
+                    stage="entry_cancel",
+                )
+                order["cancel_terminal_pending"] = True
+                order["owner_registry_cancel_reconciliation_required"] = True
+                had_failure = True
+                _request_broker_snapshot_refresh(
+                    code,
+                    reason="entry_cancel_owner_registry_reconciliation_required",
+                )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "entry_cancel_owner_registry_reconciliation_required",
+                    **cancel_fields,
+                    cancel_ord_no=_extract_broker_order_no(res) or "-",
+                    owner_registry_intent_id=(
+                        res.get("owner_registry_intent_id") or "-"
+                    ),
+                    actual_order_submitted=True,
+                    broker_order_forbidden=False,
+                    runtime_effect=False,
+                    decision_authority=("broker_owner_registry_reconciliation_only"),
+                )
+                continue
             is_success = False
             err_msg = str(res)
             cancel_ord_no = ""
@@ -76965,6 +77233,11 @@ def _cancel_pending_entry_orders(
                         token=KIWOOM_TOKEN,
                         qty=0,
                         dmst_stex_tp=retry_dmst_stex_tp,
+                        owner_context=main_owner_context(
+                            stock,
+                            action="ENTRY_CANCEL_RETRY",
+                            ordinal=f"{ord_no}:{retry_dmst_stex_tp}",
+                        ),
                     )
                     if isinstance(retry_res, dict):
                         res = retry_res
@@ -78486,7 +78759,46 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             token=KIWOOM_TOKEN,
             qty=0,
             dmst_stex_tp=cancel_dmst_stex_tp,
+            owner_context=main_owner_context(
+                stock,
+                action="ENTRY_REPRICE_CANCEL",
+                ordinal=f"{cancel_parent_order_no}:{idx}",
+            ),
         )
+        if _owner_registry_broker_ambiguity(cancel_res):
+            _mark_owner_registry_buy_reconciliation(
+                stock,
+                response=cancel_res,
+                qty=cancel_qty,
+                price=_coerce_int_value(cancel_order.get("price")),
+                route=cancel_dmst_stex_tp,
+                stage="entry_reprice_cancel",
+            )
+            with ENTRY_LOCK:
+                cancel_order["entry_reprice_cancel_terminal_pending"] = True
+                stock["entry_reprice_cancel_terminal_pending"] = True
+                stock["entry_reprice_cancel_terminal_reason"] = (
+                    "owner_registry_bind_ambiguous"
+                )
+            _request_broker_snapshot_refresh(
+                code,
+                reason="entry_reprice_cancel_owner_registry_reconciliation_required",
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_reprice_cancel_owner_registry_reconciliation_required",
+                **cancel_fields,
+                cancel_ord_no=_extract_broker_order_no(cancel_res) or "-",
+                owner_registry_intent_id=(
+                    cancel_res.get("owner_registry_intent_id") or "-"
+                ),
+                actual_order_submitted=True,
+                broker_order_forbidden=False,
+                runtime_effect=False,
+                decision_authority="broker_owner_registry_reconciliation_only",
+            )
+            return "pending_terminal"
         cancel_ok, cancel_msg, cancel_ord_no = _cancel_response_success(cancel_res)
         if not cancel_ok:
             failure_reason = (
@@ -78607,7 +78919,35 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         order_type_desc="매수재주문",
         tif=str(order.get("tif") or "DAY"),
         dmst_stex_tp=child_dmst_stex_tp,
+        owner_context=main_owner_context(
+            stock,
+            action="ENTRY_REPRICE_BUY",
+            ordinal=parent_order_no,
+        ),
     )
+    if _owner_registry_broker_ambiguity(buy_res):
+        _mark_owner_registry_buy_reconciliation(
+            stock,
+            response=buy_res,
+            qty=qty,
+            price=target_price,
+            route=child_dmst_stex_tp,
+            stage="entry_reprice_buy",
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_reprice_owner_registry_reconciliation_required",
+            **request_fields,
+            failure_stage="resubmit_owner_registry_bind",
+            ord_no=_extract_broker_order_no(buy_res) or "-",
+            owner_registry_intent_id=(buy_res.get("owner_registry_intent_id") or "-"),
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+            runtime_effect=False,
+            decision_authority="broker_owner_registry_reconciliation_only",
+        )
+        return "pending_terminal"
     if (
         not isinstance(buy_res, dict)
         or str(buy_res.get("return_code", buy_res.get("rt_cd", ""))) != "0"
@@ -79381,7 +79721,14 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
             partial_exit_call_exception: Exception | None = None
             try:
                 res = kiwoom_orders.send_sell_order_market(
-                    code=code, qty=buy_qty, token=KIWOOM_TOKEN
+                    code=code,
+                    qty=buy_qty,
+                    token=KIWOOM_TOKEN,
+                    owner_context=main_owner_context(
+                        stock,
+                        action="PARTIAL_ENTRY_EXIT_SELL",
+                        ordinal=partial_exit_generation,
+                    ),
                 )
             except Exception as exc:
                 partial_exit_call_exception = exc
@@ -79511,6 +79858,9 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
                 err_msg = (
                     partial_exit_response_contract["message"] or "ambiguous_response"
                 )
+                broker_order_attempted = bool(
+                    partial_exit_response_contract.get("broker_order_attempted")
+                )
                 _mutate_stock_state(
                     stock,
                     set_fields={
@@ -79529,10 +79879,15 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
                     "partial_fill_ratio_exit_submit_ambiguous",
                     qty=buy_qty,
                     error=err_msg,
-                    actual_order_submitted=False,
-                    broker_order_forbidden=True,
+                    ord_no=partial_exit_response_contract.get("order_no") or "-",
+                    actual_order_submitted=broker_order_attempted,
+                    broker_order_forbidden=not broker_order_attempted,
                     runtime_effect=False,
-                    decision_authority="broker_reconciliation_only",
+                    decision_authority=(
+                        "broker_owner_registry_reconciliation_only"
+                        if broker_order_attempted
+                        else "broker_reconciliation_only"
+                    ),
                 )
                 return
             if partial_exit_response_contract["state"] == "success":
@@ -79894,6 +80249,12 @@ def _manual_control_exclusion_blocked(
         pipeline=pipeline,
         now_ts=now_value,
     )
+    owner_decision = evaluate_main_bot_control_exclusion(code)
+    if not decision.excluded or manual_control_operator_exclusion_source(code):
+        # Exact-date owner policy may replace only the explicit operator
+        # symbol handoff. Synthetic storage failures and hard/automatic vetoes
+        # remain fail-closed even when coexistence is selected.
+        decision = owner_decision
     if not decision.excluded and (
         bool((stock or {}).get("manual_control_auto_open_loss_blocked"))
         or bool((stock or {}).get("manual_control_auto_hard_stop_blocked"))
@@ -82185,6 +82546,11 @@ def _submit_entry_split_probe_residual_locked(
                 order_type_desc="0-leg 체결기준 잔여매수",
                 tif="DAY",
                 dmst_stex_tp=dmst_stex_tp,
+                owner_context=main_owner_context(
+                    stock,
+                    action="ENTRY_RESIDUAL_BUY",
+                    ordinal=residual_order.get("tag") or len(successful_orders),
+                ),
             )
         except Exception as exc:
             failure_reason = "residual_broker_submit_exception"
@@ -82194,6 +82560,54 @@ def _submit_entry_split_probe_residual_locked(
                 f"broker submit exception: {exc}"
             )
             break
+        if _owner_registry_broker_ambiguity(response):
+            _mark_owner_registry_buy_reconciliation(
+                stock,
+                response=response,
+                qty=qty,
+                price=price,
+                route=dmst_stex_tp,
+                stage="entry_residual_buy",
+            )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "HOLDING",
+                    "entry_split_probe_phase": "residual_submit_reconciling",
+                    "entry_split_probe_abort_reason": (
+                        "residual_owner_registry_bind_ambiguous"
+                    ),
+                    "entry_split_probe_scale_in_forbidden": True,
+                },
+            )
+            update_probe_runtime_bundle(
+                bundle_id,
+                phase="residual_submit_reconciling",
+                reason="residual_owner_registry_bind_ambiguous",
+                residual_order_no=_extract_broker_order_no(response) or "",
+                owner_registry_intent_id=(
+                    response.get("owner_registry_intent_id") or ""
+                ),
+                entry_split_probe_scale_in_forbidden=True,
+            )
+            trip_probe_runtime_circuit("residual_owner_registry_bind_ambiguous")
+            _log_entry_pipeline(
+                stock,
+                code,
+                "residual_owner_registry_reconciliation_required",
+                probe_bundle_id=bundle_id,
+                qty=qty,
+                price=price,
+                ord_no=_extract_broker_order_no(response) or "-",
+                owner_registry_intent_id=(
+                    response.get("owner_registry_intent_id") or "-"
+                ),
+                actual_order_submitted=True,
+                broker_order_forbidden=False,
+                runtime_effect=False,
+                decision_authority="broker_owner_registry_reconciliation_only",
+            )
+            return False
         if (
             not isinstance(response, dict)
             or str(response.get("return_code", response.get("rt_cd", ""))) != "0"
@@ -87846,6 +88260,11 @@ def handle_holding_state(
                     sell_safety_exit or nxt_aftermarket_early_sell_passthrough
                 ),
                 dmst_stex_tp=sell_exchange_resolution.get("dmst_stex_tp", "SOR"),
+                owner_context=main_owner_context(
+                    stock,
+                    action="HOLDING_EXIT_SELL",
+                    ordinal=sell_submit_generation,
+                ),
             )
         except Exception as exc:
             sell_submit_call_exception = exc
@@ -88014,6 +88433,9 @@ def handle_holding_state(
             ambiguous_error = (
                 sell_submit_response_contract["message"] or "ambiguous_response"
             )
+            broker_order_attempted = bool(
+                sell_submit_response_contract.get("broker_order_attempted")
+            )
             _mutate_stock_state(
                 stock,
                 set_fields={
@@ -88034,10 +88456,15 @@ def handle_holding_state(
                 sell_reason_type=sell_reason_type,
                 exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
                 error=ambiguous_error,
-                actual_order_submitted=False,
-                broker_order_forbidden=True,
+                ord_no=sell_submit_response_contract.get("order_no") or "-",
+                actual_order_submitted=broker_order_attempted,
+                broker_order_forbidden=not broker_order_attempted,
                 runtime_effect=False,
-                decision_authority="broker_reconciliation_only",
+                decision_authority=(
+                    "broker_owner_registry_reconciliation_only"
+                    if broker_order_attempted
+                    else "broker_reconciliation_only"
+                ),
             )
             return
 
@@ -89329,6 +89756,9 @@ def _pending_add_blocks_sell_dispatch(stock: dict, code: str, *, now_ts: float) 
             orig_ord_no=ord_no,
             token=KIWOOM_TOKEN,
             qty=0,
+            owner_context=main_owner_context(
+                stock, action="PENDING_ADD_CANCEL", ordinal=ord_no
+            ),
         )
 
     try:
@@ -89504,6 +89934,11 @@ def _cancel_or_reconcile_pending_add(stock, reason, *, expired_only=False, now_t
             orig_ord_no=selected_ord_no,
             token=KIWOOM_TOKEN,
             qty=0,
+            owner_context=main_owner_context(
+                stock,
+                action="PENDING_ADD_CANCEL",
+                ordinal=selected_ord_no,
+            ),
         )
         if _is_ok_response(res):
             cancelled_ord_nos.append(selected_ord_no)
@@ -92140,6 +92575,11 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             allow_time_block_override=bool(buy_time_block_override_reason),
             time_block_override_reason=buy_time_block_override_reason,
             dmst_stex_tp=planned_scale_in_broker_route,
+            owner_context=main_owner_context(
+                stock,
+                action="SCALE_IN_BUY",
+                ordinal=f"{add_type}:{leg_index}:{pending_registered_at}",
+            ),
         )
 
         if res is None:
@@ -92153,6 +92593,50 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 break
             _clear_pending_add_meta(stock, reason="first_leg_none_response")
             return None
+
+        if _owner_registry_broker_ambiguity(res):
+            ambiguous_order_no = _extract_broker_order_no(res)
+            _mark_owner_registry_buy_reconciliation(
+                stock,
+                response=res,
+                qty=leg_qty,
+                price=leg_price,
+                route=planned_scale_in_broker_route,
+                stage="scale_in_buy",
+            )
+            requested_by_order = stock.get("_add_receipt_requested_by_order_no")
+            if not isinstance(requested_by_order, dict):
+                requested_by_order = {}
+            if ambiguous_order_no:
+                requested_by_order[ambiguous_order_no] = leg_qty
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "pending_add_order": True,
+                    "pending_add_qty": leg_qty,
+                    "pending_add_ord_no": ambiguous_order_no,
+                    "add_odno": ambiguous_order_no,
+                    "scale_in_locked": True,
+                    "_add_receipt_requested_by_order_no": requested_by_order,
+                    "last_scale_in_split_partial_submit_failure": (
+                        "owner_registry_bind_ambiguous"
+                    ),
+                },
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "scale_in_owner_registry_reconciliation_required",
+                add_type=add_type,
+                qty=leg_qty,
+                ord_no=ambiguous_order_no or "-",
+                owner_registry_intent_id=(res.get("owner_registry_intent_id") or "-"),
+                actual_order_submitted=True,
+                broker_order_forbidden=False,
+                runtime_effect=False,
+                decision_authority="broker_owner_registry_reconciliation_only",
+            )
+            return res
 
         if isinstance(res, dict):
             rt_cd = str(res.get("return_code", res.get("rt_cd", "")))
@@ -92906,18 +93390,25 @@ def _broker_position_qty_for_sell_reconciliation(code, target_stock=None):
     }
     if not {"KRX", "NXT"}.issubset(successful):
         return None, "kt00018_partial_venue_confirmation"
-    matching = next(
-        (
-            item
-            for item in (inventory or [])
-            if str(item.get("code") or "").strip()[:6] == str(code or "").strip()[:6]
-        ),
-        None,
-    )
-    if matching is not None:
-        matched_qty = max(0, _safe_int(matching.get("qty"), 0))
-        if matched_qty > 0:
-            return matched_qty, "kt00018_position_found"
+    matching = [
+        item
+        for item in (inventory or [])
+        if str(item.get("code") or "").strip()[:6] == str(code or "").strip()[:6]
+    ]
+    broker_qty = sum(max(0, _safe_int(item.get("qty"), 0)) for item in matching)
+    if target_stock is not None:
+        managed, main_owner_qty, owner_reason = _registered_main_owner_inventory_qty(
+            stock=target_stock,
+            code=str(code or "").strip()[:6],
+            broker_quantity=broker_qty,
+        )
+        if managed:
+            if main_owner_qty is None:
+                return None, owner_reason
+            return main_owner_qty, owner_reason
+    if matching:
+        if broker_qty > 0:
+            return broker_qty, "kt00018_position_found"
         return 0, "kt00018_all_venues_zero_row"
     return 0, "kt00018_all_venues_position_absent"
 
@@ -93819,6 +94310,11 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
             dmst_stex_tp=str(stock.get("sell_submit_intended_route") or "SOR")
             .strip()
             .upper(),
+            owner_context=main_owner_context(
+                stock,
+                action="SELL_CANCEL",
+                ordinal=normalized_order_no,
+            ),
         )
 
         is_success = False
@@ -93966,6 +94462,22 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                 broker_order_forbidden=True,
                 runtime_effect=True,
                 decision_authority="sell_cancel_receipt_inventory_reconciliation",
+            )
+            return False
+        terminalized, terminal_reason = _terminalize_registered_main_orders(
+            stock=stock,
+            code=code,
+            order_nos={str(orig_ord_no or "").strip()},
+        )
+        if not terminalized:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "SELL_ORDERED",
+                    "sell_cancel_reconciliation_required": True,
+                    "sell_cancel_reconciliation_source": terminal_reason,
+                    "sell_cancel_reconciliation_retry_at": time.time() + retry_sec,
+                },
             )
             return False
         generation = str(stock.get("sell_submit_generation") or "").strip()
@@ -94347,7 +94859,30 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
         orig_ord_no=orig_ord_no,
         token=KIWOOM_TOKEN,
         qty=0,
+        owner_context=main_owner_context(
+            stock, action="ENTRY_CANCEL", ordinal=orig_ord_no
+        ),
     )
+
+    if _owner_registry_broker_ambiguity(res):
+        _mark_owner_registry_buy_reconciliation(
+            stock,
+            response=res,
+            qty=max(0, _safe_int(stock.get("buy_qty"), 0)),
+            price=max(0, _safe_int(stock.get("order_price"), 0)),
+            route=str(stock.get("entry_execution_broker_route") or "SOR"),
+            stage="manual_entry_cancel",
+        )
+        _request_broker_snapshot_refresh(
+            code,
+            reason="manual_entry_cancel_owner_registry_reconciliation_required",
+        )
+        log_error(
+            f"[ENTRY_CANCEL_OWNER_REGISTRY_RECONCILE] {stock.get('name')}({code}) "
+            f"orig_ord_no={orig_ord_no} cancel_ord_no="
+            f"{_extract_broker_order_no(res) or '-'}"
+        )
+        return False
 
     is_success = False
     err_msg = str(res)

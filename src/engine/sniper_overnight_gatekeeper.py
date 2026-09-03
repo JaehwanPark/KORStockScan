@@ -26,6 +26,7 @@ from src.engine.scalping.holding_decision_context import (
     holding_decision_context_model_payload,
 )
 from src.engine.scalping.multi_timeframe_context import SOURCE_BAR_LIMIT
+from src.trading.order.owner_custody_registry import main_owner_context
 
 KIWOOM_TOKEN = None
 DB = None
@@ -623,7 +624,30 @@ def _execute_scalping_sell_today(record, mem_stock=None):
         return False, "pre-call durable custody failed; sell not submitted"
 
     try:
-        res = _send_market_exit_now(code, rem_qty, KIWOOM_TOKEN)
+        owner_context = main_owner_context(
+            mem_stock,
+            action="OVERNIGHT_EXIT_SELL",
+            ordinal=generation,
+        )
+        try:
+            parameters = inspect.signature(_send_market_exit_now).parameters.values()
+            accepts_owner_context = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                or parameter.name == "owner_context"
+                for parameter in parameters
+            )
+        except (TypeError, ValueError):
+            accepts_owner_context = False
+        res = (
+            _send_market_exit_now(
+                code,
+                rem_qty,
+                KIWOOM_TOKEN,
+                owner_context=owner_context,
+            )
+            if accepts_owner_context
+            else _send_market_exit_now(code, rem_qty, KIWOOM_TOKEN)
+        )
     except Exception as exc:
         res = {"return_code": "exception", "return_msg": str(exc)}
     response_contract = _state_handlers._classify_sell_submit_response(res)

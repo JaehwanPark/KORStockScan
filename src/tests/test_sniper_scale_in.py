@@ -9064,7 +9064,7 @@ def test_rising_missed_quality_guard_pre_envelope_refreshes_expired_scanner_pack
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "source": "ka10004_rest_orderbook",
             "curr": 10020,
             "best_bid": 10010,
@@ -16768,7 +16768,7 @@ def test_scale_in_signal_refreshes_stale_features_before_pyramid(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "curr": 10_000,
             "best_bid": 9_990,
             "best_ask": 10_000,
@@ -16875,7 +16875,7 @@ def test_scale_in_feature_refresh_forces_rest_when_existing_features_quote_stale
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "curr": 10_000,
             "best_bid": 9_990,
             "best_ask": 10_000,
@@ -16968,7 +16968,7 @@ def test_scale_in_feature_refresh_blocks_when_forced_rest_refresh_fails(monkeypa
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {},
+        lambda token, code, **_kwargs: {},
     )
     monkeypatch.setattr(
         state_handlers,
@@ -17063,7 +17063,7 @@ def test_scale_in_signal_refresh_preserves_unusable_tick_provenance(monkeypatch)
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "curr": 10_000,
             "best_bid": 9_990,
             "best_ask": 10_000,
@@ -21508,7 +21508,7 @@ def test_late_loss_avg_down_uses_fresh_rest_quote_after_stale_ws_refresh(monkeyp
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "current_price": 218_750,
             "best_bid": 218_500,
             "best_ask": 219_000,
@@ -21586,7 +21586,7 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_quote_missing(
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "curr": 10_000,
             "best_bid": 9_990,
             "best_ask": 10_000,
@@ -21697,7 +21697,7 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_ws_quote_stale(
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "curr": 11_820,
             "current_price": 11_820,
             "best_bid": 11_780,
@@ -28956,9 +28956,7 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     assert by_stage["order_bundle_failed"]["actual_order_submitted"] is False
     assert by_stage["order_bundle_failed"]["broker_order_forbidden"] is True
     assert by_stage["order_bundle_failed"]["broker_submit_attempt_count"] == 0
-    assert (
-        by_stage["order_bundle_failed"]["broker_submit_success_response_count"] == 0
-    )
+    assert by_stage["order_bundle_failed"]["broker_submit_success_response_count"] == 0
     assert (
         by_stage["order_bundle_failed"]["broker_submission_reconciliation_required"]
         is False
@@ -30374,18 +30372,14 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
         assert by_stage["order_leg_fail"]["broker_response_success"] is True
         assert by_stage["order_leg_fail"]["broker_order_identity_present"] is False
         assert (
-            by_stage["order_leg_fail"][
-                "broker_submission_reconciliation_required"
-            ]
+            by_stage["order_leg_fail"]["broker_submission_reconciliation_required"]
             is True
         )
         assert by_stage["order_bundle_failed"]["order_bundle_failure_mode"] == (
             "broker_acknowledged_order_identity_missing"
         )
         assert (
-            by_stage["order_bundle_failed"][
-                "broker_submission_reconciliation_required"
-            ]
+            by_stage["order_bundle_failed"]["broker_submission_reconciliation_required"]
             is True
         )
 
@@ -35042,12 +35036,14 @@ def test_retired_latency_direct_recheck_state_is_cleared_without_requeue():
         key in stock
         for key in state_handlers._LATENCY_TRUE_OFI_DIRECT_RECHECK_STATE_FIELDS
     )
-    assert state_handlers._scanner_active_rising_recheck_reason(
-        stock, now_ts=now_ts
-    ) is None
-    assert state_handlers._scanner_active_full_eval_budget_source(
-        stock, now_ts=now_ts
-    ) is None
+    assert (
+        state_handlers._scanner_active_rising_recheck_reason(stock, now_ts=now_ts)
+        is None
+    )
+    assert (
+        state_handlers._scanner_active_full_eval_budget_source(stock, now_ts=now_ts)
+        is None
+    )
 
 
 def test_real_entry_panic_gap_weight_keeps_normal_market_price(monkeypatch):
@@ -43015,9 +43011,7 @@ def test_broker_accepted_non_split_exploration_order_commits_durable_cap(monkeyp
         stock,
         "006220",
         "0026339",
-        now_ts=datetime(
-            2026, 8, 27, 9, 59, tzinfo=state_handlers._KST
-        ).timestamp(),
+        now_ts=datetime(2026, 8, 27, 9, 59, tzinfo=state_handlers._KST).timestamp(),
     )
 
     assert committed is True
@@ -43087,15 +43081,11 @@ def test_broker_accepted_exploration_order_ledger_failure_fails_closed(monkeypat
         stock,
         "488280",
         "0027440",
-        now_ts=datetime(
-            2026, 8, 27, 10, 5, tzinfo=state_handlers._KST
-        ).timestamp(),
+        now_ts=datetime(2026, 8, 27, 10, 5, tzinfo=state_handlers._KST).timestamp(),
     )
 
     assert committed is False
-    assert failures == [
-        {"trade_date": "2026-08-27", "reason": "disk unavailable"}
-    ]
+    assert failures == [{"trade_date": "2026-08-27", "reason": "disk unavailable"}]
     assert synced == [3]
     assert logs[0][0] == "entry_setup_exploration_probe_cap_fail_closed"
     assert logs[0][1]["entry_setup_exploration_cap_ledger_ok"] is False
@@ -48824,9 +48814,7 @@ def test_loss_recovery_result_intercepts_same_loop_sell(key):
     assert state_handlers._loss_recovery_intercepts_sell({key: True}) is True
     assert state_handlers._loss_recovery_intercepts_sell({"attempted": True}) is False
     assert (
-        state_handlers._loss_recovery_intercepts_sell(
-            {"manual_control_excluded": True}
-        )
+        state_handlers._loss_recovery_intercepts_sell({"manual_control_excluded": True})
         is False
     )
 

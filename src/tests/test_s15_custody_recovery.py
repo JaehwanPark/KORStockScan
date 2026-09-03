@@ -7,6 +7,10 @@ from types import SimpleNamespace
 
 import src.engine.sniper_execution_receipts as receipts
 import src.engine.sniper_s15_fast_track as s15
+from src.trading.order.owner_custody_registry import (
+    OrderOwnerRegistry,
+    OwnerOrderContext,
+)
 
 
 def _state(**overrides):
@@ -845,6 +849,128 @@ def test_s15_inventory_rejects_positive_unallocatable_blank_code_order(
     assert snapshot is None
     assert orders == ()
     assert reason == "open_order_identity_or_side_invalid"
+
+
+def test_s15_inventory_uses_only_exact_main_owner_for_registered_symbol(
+    tmp_path, monkeypatch
+):
+    code = "123456"
+    order_date = s15.datetime.now(tz=s15.KST).date()
+    registry_path = tmp_path / "owner-registry.jsonl"
+    registry = OrderOwnerRegistry(registry_path)
+    main_position = OwnerOrderContext(
+        owner_type="main_scalping",
+        owner_id="main_scalping:7",
+        position_id="main_scalping:7",
+        client_intent_id="main:migration",
+    )
+    episode_position = OwnerOrderContext(
+        owner_type="episode",
+        owner_id="episode:other",
+        position_id="episode:other",
+        client_intent_id="episode:migration",
+    )
+    for context, quantity, order_no in (
+        (main_position, 5, "1234501"),
+        (episode_position, 10, "1234502"),
+    ):
+        registry.register_migrated_position(
+            context=context,
+            symbol=code,
+            quantity=quantity,
+            average_price=10_000,
+            route="KRX",
+            order_date=order_date,
+            broker_order_no=order_no,
+            evidence_sha256="a" * 64,
+        )
+
+    open_order_nos = []
+    for context, order_no in (
+        (
+            OwnerOrderContext(
+                owner_type=main_position.owner_type,
+                owner_id=main_position.owner_id,
+                position_id=main_position.position_id,
+                client_intent_id="main:open-sell",
+            ),
+            "1234503",
+        ),
+        (
+            OwnerOrderContext(
+                owner_type=episode_position.owner_type,
+                owner_id=episode_position.owner_id,
+                position_id=episode_position.position_id,
+                client_intent_id="episode:open-sell",
+            ),
+            "1234504",
+        ),
+    ):
+        intent_id = registry.reserve(
+            context=context,
+            symbol=code,
+            side="SELL",
+            quantity=1,
+            route="SOR",
+            order_date=order_date,
+        )
+        registry.transition(intent_id, state="ORDER_BOUND", broker_order_no=order_no)
+        open_order_nos.append(order_no)
+
+    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry_path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE",
+        str(tmp_path / "missing-policy.json"),
+    )
+    monkeypatch.setattr(s15, "_s15_symbol_allocation_unambiguous", lambda _code: True)
+    monkeypatch.setitem(
+        s15.FAST_TRADE_STATE,
+        code,
+        _state(code=code, shadow_id=7, cum_buy_qty=5, avg_buy_price=10_000),
+    )
+    monkeypatch.setattr(
+        s15.kiwoom_utils,
+        "get_unfilled_order_snapshot_ka10075_with_meta",
+        lambda *_args, **_kwargs: (
+            [
+                {
+                    "code": code,
+                    "remaining_qty": 1,
+                    "qty": 1,
+                    "order_no": order_no,
+                    "side": "SELL",
+                }
+                for order_no in open_order_nos
+            ],
+            {"request_succeeded": True, "normalization_contract_complete": True},
+        ),
+    )
+    monkeypatch.setattr(
+        s15.kiwoom_utils,
+        "get_account_balance_kt00005_with_meta",
+        lambda _token: (
+            [{"code": code, "qty": 15, "buy_price": 10_000}],
+            {"KRX", "NXT"},
+            {"normalization_contract_complete": True},
+        ),
+    )
+
+    snapshot, orders, reason = s15._s15_inventory_and_orders(code)
+
+    assert snapshot == {"qty": 5, "avg_price": 10_000}
+    assert [row["order_no"] for row in orders] == ["1234503"]
+    assert reason == "exact_owner_registry"
+
+    s15.FAST_TRADE_STATE[code]["sell_ord_no"] = "1234503"
+    open_order_nos[:] = ["1234504"]
+    snapshot, orders, reason = s15._s15_inventory_and_orders(code)
+
+    assert snapshot == {"qty": 5, "avg_price": 10_000}
+    assert orders == ()
+    assert reason == "exact_owner_registry"
+    terminal = registry.order_owner(order_date=order_date, broker_order_no="1234503")
+    assert terminal is not None
+    assert terminal["state"] == "ORDER_TERMINAL"
 
 
 def test_s15_unknown_side_open_order_never_submits_residual_sell(monkeypatch):

@@ -42,6 +42,7 @@ from src.trading.order.entry_liquidity_guard import (
     EntryExecutionVelocitySnapshot,
     EntryLiquiditySnapshot,
 )
+from src.trading.order.owner_custody_registry import OrderOwnerRegistry
 from src.trading.low_price_two_leg.policy_runtime import (
     BASELINE_POLICIES,
     CANDIDATE_SCHEMA,
@@ -1497,6 +1498,106 @@ def test_machine_state_and_order_ledger_are_bound_to_one_profile(tmp_path):
     )
 
 
+def test_registry_bind_failure_preserves_accepted_broker_order_for_reconciliation(
+    tmp_path, monkeypatch
+):
+    profile = PROFILES["samsung_heavy_midday"]
+    gateway = FakeGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "registry-bind-failure-state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    monkeypatch.setattr(machine, "_bind_episode_submit", lambda **kwargs: False)
+
+    state = machine.run_once(_profile_run_at(profile.profile_id))
+
+    first_leg = state["legs"][0]
+    assert state["status"] == "BLOCKED"
+    assert state["owner_registry_reconciliation_required"] is True
+    assert first_leg["buy_order_no"] == "B1"
+    assert first_leg["buy_order_date"] == "2026-08-12"
+    assert first_leg["buy_owner_registry_reconciliation_required"] is True
+    assert "B1" in state["owned_order_nos"]
+    assert any(
+        event.get("action") == "buy_owner_registry_reconciliation_required"
+        and event.get("broker_order_no") == "B1"
+        for event in state["audit"]
+    )
+
+
+def test_exact_execution_snapshot_rebinds_episode_owner_after_submit_bind_failure(
+    tmp_path,
+):
+    profile = PROFILES["samsung_heavy_midday"]
+    gateway = FakeGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "registry-rebind-state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    machine.run_once(_profile_run_at(profile.profile_id))
+    registry = OrderOwnerRegistry(tmp_path / "registry-rebind.jsonl")
+    machine.owner_registry = registry
+    leg = machine._state["legs"][0]
+    context = machine._episode_owner_context(
+        leg=leg, action="BUY", ordinal=leg["leg_id"]
+    )
+    intent_id = registry.reserve(
+        context=context,
+        symbol=profile.symbol,
+        side="BUY",
+        quantity=int(leg["quantity"]),
+        route=profile.policy.route,
+        order_date=str(machine._state["trade_date"]),
+    )
+    registry.transition(
+        intent_id,
+        state="INTENT_AMBIGUOUS",
+        reason="simulated_post_broker_bind_failure",
+    )
+    leg.update(
+        {
+            "buy_order_no": "1234567",
+            "buy_order_date": str(machine._state["trade_date"]),
+            "buy_owner_registry_intent_id": intent_id,
+            "buy_owner_registry_reconciliation_required": True,
+        }
+    )
+    machine._state["owner_registry_reconciliation_required"] = True
+    machine._own_order("1234567")
+
+    machine._record_owner_execution(
+        leg,
+        "buy_order_no",
+        ExecutionSnapshot(
+            source_ok=True,
+            found=True,
+            filled_qty=int(leg["quantity"]),
+            remaining_qty=0,
+            order_qty=int(leg["quantity"]),
+            fill_price=int(leg["entry_price"]),
+        ),
+    )
+
+    owner = registry.order_owner(
+        order_date=str(machine._state["trade_date"]),
+        broker_order_no="1234567",
+    )
+    assert owner is not None
+    assert owner["state"] == "ORDER_TERMINAL"
+    assert owner["position_id"] == (
+        f"episode:{profile.profile_id}:{profile.symbol}:"
+        f"{machine._state['trade_date']}"
+    )
+    assert leg["buy_owner_registry_reconciliation_required"] is False
+    assert machine._state["owner_registry_reconciliation_required"] is False
+
+
 def test_market_weakness_cancels_exact_reconciled_episode_buy_orders(
     tmp_path, monkeypatch
 ):
@@ -2312,9 +2413,7 @@ def test_gateway_current_open_sell_snapshot_requires_exact_ka10075_order():
         order_no="123", order_date="2026-09-01", observed_date="2026-09-01"
     )
 
-    assert snapshot == CurrentOpenOrderSnapshot(
-        True, True, exact_order_no="0000123"
-    )
+    assert snapshot == CurrentOpenOrderSnapshot(True, True, exact_order_no="0000123")
     call = session.calls[0][1]
     assert call["headers"]["api-id"] == "ka10075"
     assert call["json"] == {
@@ -2434,15 +2533,11 @@ def test_target_absent_from_current_unfilled_ledger_becomes_held(tmp_path):
     submitted = machine.run_once(started_at)
     first_buy, second_buy = [leg["buy_order_no"] for leg in submitted["legs"]]
     first_entry = submitted["legs"][0]["entry_price"]
-    gateway.snapshots[first_buy] = ExecutionSnapshot(
-        True, True, 10, 0, 10, first_entry
-    )
+    gateway.snapshots[first_buy] = ExecutionSnapshot(True, True, 10, 0, 10, first_entry)
     gateway.snapshots[second_buy] = ExecutionSnapshot(True, True, 0, 0, 10)
     targeted = machine.run_once(started_at + timedelta(seconds=1))
     target_order_no = targeted["legs"][0]["target_order_no"]
-    gateway.snapshots[target_order_no] = ExecutionSnapshot(
-        True, True, 0, 10, 10
-    )
+    gateway.snapshots[target_order_no] = ExecutionSnapshot(True, True, 0, 10, 10)
 
     reconciled = machine.run_once(started_at + timedelta(seconds=2))
 
@@ -2476,15 +2571,11 @@ def test_target_exact_current_unfilled_order_remains_target_open(tmp_path):
     submitted = machine.run_once(started_at)
     first_buy, second_buy = [leg["buy_order_no"] for leg in submitted["legs"]]
     first_entry = submitted["legs"][0]["entry_price"]
-    gateway.snapshots[first_buy] = ExecutionSnapshot(
-        True, True, 10, 0, 10, first_entry
-    )
+    gateway.snapshots[first_buy] = ExecutionSnapshot(True, True, 10, 0, 10, first_entry)
     gateway.snapshots[second_buy] = ExecutionSnapshot(True, True, 0, 0, 10)
     targeted = machine.run_once(started_at + timedelta(seconds=1))
     target_order_no = targeted["legs"][0]["target_order_no"]
-    gateway.snapshots[target_order_no] = ExecutionSnapshot(
-        True, True, 0, 10, 10
-    )
+    gateway.snapshots[target_order_no] = ExecutionSnapshot(True, True, 0, 10, 10)
 
     reconciled = machine.run_once(started_at + timedelta(seconds=2))
 
@@ -2492,9 +2583,7 @@ def test_target_exact_current_unfilled_order_remains_target_open(tmp_path):
     assert reconciled["position_qty"] == 10
     assert reconciled["legs"][0]["status"] == "TARGET_OPEN"
     assert reconciled["last_action"] == "target_open_wait"
-    assert reconciled["audit"][-1]["current_open_source"] == (
-        "ka10075_exact_order"
-    )
+    assert reconciled["audit"][-1]["current_open_source"] == ("ka10075_exact_order")
 
 
 def test_target_successor_open_order_fails_closed_without_adopting_it(tmp_path):
@@ -2518,22 +2607,16 @@ def test_target_successor_open_order_fails_closed_without_adopting_it(tmp_path):
     submitted = machine.run_once(started_at)
     first_buy, second_buy = [leg["buy_order_no"] for leg in submitted["legs"]]
     first_entry = submitted["legs"][0]["entry_price"]
-    gateway.snapshots[first_buy] = ExecutionSnapshot(
-        True, True, 10, 0, 10, first_entry
-    )
+    gateway.snapshots[first_buy] = ExecutionSnapshot(True, True, 10, 0, 10, first_entry)
     gateway.snapshots[second_buy] = ExecutionSnapshot(True, True, 0, 0, 10)
     targeted = machine.run_once(started_at + timedelta(seconds=1))
     target_order_no = targeted["legs"][0]["target_order_no"]
-    gateway.snapshots[target_order_no] = ExecutionSnapshot(
-        True, True, 0, 10, 10
-    )
+    gateway.snapshots[target_order_no] = ExecutionSnapshot(True, True, 0, 10, 10)
 
     reconciled = machine.run_once(started_at + timedelta(seconds=2))
 
     assert reconciled["status"] == "BLOCKED"
-    assert reconciled["blocked_reason"].startswith(
-        "target_successor_order_not_owned:"
-    )
+    assert reconciled["blocked_reason"].startswith("target_successor_order_not_owned:")
     assert "SUCCESSOR-1" not in reconciled["owned_order_nos"]
 
 
@@ -2558,15 +2641,11 @@ def test_target_current_unfilled_source_failure_keeps_target_open(tmp_path):
     submitted = machine.run_once(started_at)
     first_buy, second_buy = [leg["buy_order_no"] for leg in submitted["legs"]]
     first_entry = submitted["legs"][0]["entry_price"]
-    gateway.snapshots[first_buy] = ExecutionSnapshot(
-        True, True, 10, 0, 10, first_entry
-    )
+    gateway.snapshots[first_buy] = ExecutionSnapshot(True, True, 10, 0, 10, first_entry)
     gateway.snapshots[second_buy] = ExecutionSnapshot(True, True, 0, 0, 10)
     targeted = machine.run_once(started_at + timedelta(seconds=1))
     target_order_no = targeted["legs"][0]["target_order_no"]
-    gateway.snapshots[target_order_no] = ExecutionSnapshot(
-        True, True, 0, 10, 10
-    )
+    gateway.snapshots[target_order_no] = ExecutionSnapshot(True, True, 0, 10, 10)
 
     reconciled = machine.run_once(started_at + timedelta(seconds=2))
 
@@ -3329,12 +3408,12 @@ def test_ka10073_loader_uses_official_path_headers_fields_and_normalizes(monkeyp
             "stk_cd": "017670",
             "strt_dt": "20260820",
             "end_dt": "20260820",
-            },
-            "use_continuous": True,
-            "request_owner": "low_price_two_leg_tuning.realized_pnl",
-            "request_class": "source_only",
-            "request_code": "017670",
-        }
+        },
+        "use_continuous": True,
+        "request_owner": "low_price_two_leg_tuning.realized_pnl",
+        "request_class": "source_only",
+        "request_code": "017670",
+    }
     assert rows[0]["realized_net_profit_krw"] == -73
     assert rows[0]["commission_krw"] == 100
     assert rows[0]["tax_krw"] == 773

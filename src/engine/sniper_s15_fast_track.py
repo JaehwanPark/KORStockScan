@@ -11,6 +11,17 @@ from pathlib import Path
 
 from src.engine import kiwoom_orders
 from src.engine.sniper_entry_latency import evaluate_live_buy_entry
+from src.trading.config.symbol_owner_policy import (
+    KST,
+    SymbolOwnerPolicyError,
+    policy_path,
+    resolve_symbol_owner_policy,
+)
+from src.trading.order.owner_custody_registry import (
+    OwnerRegistryError,
+    default_order_owner_registry,
+    main_owner_context,
+)
 from src.engine.trade_profit import calculate_net_profit_rate
 from src.engine.scalping.entry_ai_gate import evaluate_ai_score_prior
 from src.engine.scalping.entry_candle_context import (
@@ -419,6 +430,21 @@ def _get_fast_state(code):
         return FAST_TRADE_STATE.get(code)
 
 
+def _s15_main_owner_context(code, *, action, ordinal="0"):
+    state = _get_fast_state(code)
+    target_id = int((state or {}).get("shadow_id") or (state or {}).get("id") or 0)
+    if target_id <= 0:
+        return None
+    try:
+        return main_owner_context(
+            {"id": target_id, "position_cycle_id": f"s15:{target_id}"},
+            action=action,
+            ordinal=ordinal,
+        )
+    except OwnerRegistryError:
+        return None
+
+
 def _set_fast_state(code, state):
     with FAST_LOCK:
         FAST_TRADE_STATE[code] = state
@@ -745,7 +771,128 @@ def _s15_inventory_and_orders(code):
         quantity += row_qty
         weighted_amount += row_qty * row_price
     avg_price = int(weighted_amount / quantity) if quantity else 0
+    owner_scoped = _s15_registry_scoped_inventory_and_orders(
+        code,
+        broker_quantity=quantity,
+        matching_orders=orders,
+    )
+    if owner_scoped is not None:
+        return owner_scoped
     return {"qty": quantity, "avg_price": avg_price}, orders, "exact"
+
+
+def _s15_registry_scoped_inventory_and_orders(
+    code,
+    *,
+    broker_quantity,
+    matching_orders,
+):
+    """Replace aggregate account custody with the exact S15 owner slice.
+
+    The legacy single-owner path returns ``None``. Once a symbol is registered,
+    every same-symbol open order must have an exact registry owner and only the
+    S15 main-owner rows may participate in S15 recovery or cancellation.
+    """
+
+    registry = default_order_owner_registry()
+    try:
+        registered = registry.symbol_registered(code)
+    except OwnerRegistryError as exc:
+        if not registry.path.exists() and not policy_path().exists():
+            return None
+        return None, (), f"owner_registry_read_failed:{type(exc).__name__}"
+    try:
+        decision = resolve_symbol_owner_policy(code)
+    except (SymbolOwnerPolicyError, OSError, ValueError) as exc:
+        if not policy_path().exists() and not registered:
+            return None
+        return None, (), f"symbol_owner_policy_fail_closed:{type(exc).__name__}"
+    if not registered and not decision.coexistence_enabled:
+        return None
+    try:
+        if decision.coexistence_enabled and not registry.contains_event_hash(
+            decision.migration_registry_tail_hash
+        ):
+            raise OwnerRegistryError(
+                "coexistence_migration_registry_generation_missing"
+            )
+        registry.reconcile_symbol_quantity(
+            symbol=code, broker_quantity=int(broker_quantity)
+        )
+        context = _s15_main_owner_context(code, action="S15_INVENTORY_RECONCILIATION")
+        if context is None:
+            raise OwnerRegistryError("s15_main_owner_context_missing")
+        owner_quantity = registry.owner_position_qty(context.position_id, symbol=code)
+        owner_orders = []
+        order_date = datetime.now(tz=KST).date()
+        for row in matching_orders:
+            order_no = _s15_order_no(row)
+            owner = registry.order_owner(
+                order_date=order_date, broker_order_no=order_no
+            )
+            if owner is None:
+                raise OwnerRegistryError("same_symbol_open_order_owner_unresolved")
+            if (
+                owner.get("owner_type") == context.owner_type
+                and owner.get("owner_id") == context.owner_id
+                and owner.get("position_id") == context.position_id
+            ):
+                if owner.get("action") != "NEW":
+                    raise OwnerRegistryError("s15_open_order_action_not_new")
+                owner_orders.append(row)
+        state = _get_fast_state(code) or {}
+        runtime_owner_quantity = max(
+            0,
+            int(state.get("cum_buy_qty") or 0) - int(state.get("cum_sell_qty") or 0),
+        )
+        if owner_quantity != runtime_owner_quantity:
+            raise OwnerRegistryError(
+                "s15_owner_registry_quantity_mismatch:"
+                f"registry={owner_quantity}:runtime={runtime_owner_quantity}"
+            )
+        broker_open_owner_order_nos = {_s15_order_no(row) for row in owner_orders}
+        for known_order_no in {
+            str(state.get(field) or "").strip()
+            for field in (
+                "buy_ord_no",
+                "sell_ord_no",
+                "sell_odno",
+                "pending_cancel_ord_no",
+            )
+        }:
+            if (
+                not known_order_no
+                or known_order_no in broker_open_owner_order_nos
+                or re.fullmatch(r"[0-9]{7}", known_order_no) is None
+            ):
+                continue
+            known_owner = registry.order_owner(
+                order_date=order_date, broker_order_no=known_order_no
+            )
+            if (
+                known_owner is not None
+                and known_owner.get("state") == "ORDER_BOUND"
+                and known_owner.get("action") == "NEW"
+                and known_owner.get("owner_type") == context.owner_type
+                and known_owner.get("owner_id") == context.owner_id
+                and known_owner.get("position_id") == context.position_id
+            ):
+                registry.transition(
+                    str(known_owner.get("intent_id") or ""),
+                    state="ORDER_TERMINAL",
+                    broker_order_no=known_order_no,
+                    reason="s15_terminal_absence_all_venue_inventory_owner_exact",
+                )
+        owner_average_price = int(state.get("avg_buy_price") or 0)
+        if owner_quantity > 0 and owner_average_price <= 0:
+            raise OwnerRegistryError("s15_owner_average_price_unavailable")
+        return (
+            {"qty": owner_quantity, "avg_price": owner_average_price},
+            tuple(owner_orders),
+            "exact_owner_registry",
+        )
+    except OwnerRegistryError as exc:
+        return None, (), str(exc)
 
 
 def _strict_nonnegative_int(value):
@@ -1116,6 +1263,11 @@ def _submit_s15_stop_cancel(
         token=KIWOOM_TOKEN,
         qty=0,
         dmst_stex_tp=cancel_route,
+        owner_context=_s15_main_owner_context(
+            code,
+            action="S15_STOP_CANCEL",
+            ordinal=normalized_order_no,
+        ),
     )
     if _trade_utils.cancel_response_ack_exact(
         cancel_res,
@@ -1305,6 +1457,11 @@ def _recover_s15_custody(code, state):
                         orig_ord_no=_s15_order_no(row),
                         token=KIWOOM_TOKEN,
                         qty=0,
+                        owner_context=_s15_main_owner_context(
+                            code,
+                            action="S15_RECOVERY_CANCEL",
+                            ordinal=_s15_order_no(row),
+                        ),
                     )
                 with state["lock"]:
                     state["status"] = "BUY_CANCEL_RECONCILING"
@@ -1619,26 +1776,52 @@ def _finalize_s15_completed_state(code, state):
 
 def _send_s15_limit_buy(code, qty, price):
     return kiwoom_orders.send_buy_order_market(
-        code=code, qty=qty, token=KIWOOM_TOKEN, order_type="00", price=int(price)
+        code=code,
+        qty=qty,
+        token=KIWOOM_TOKEN,
+        order_type="00",
+        price=int(price),
+        owner_context=_s15_main_owner_context(
+            code, action="S15_ENTRY_BUY", ordinal=f"{qty}:{price}"
+        ),
     )
 
 
 def _send_s15_limit_sell(code, qty, price):
     return kiwoom_orders.send_sell_order_market(
-        code=code, qty=qty, token=KIWOOM_TOKEN, order_type="00", price=int(price)
+        code=code,
+        qty=qty,
+        token=KIWOOM_TOKEN,
+        order_type="00",
+        price=int(price),
+        owner_context=_s15_main_owner_context(
+            code, action="S15_TARGET_SELL", ordinal=f"{qty}:{price}"
+        ),
     )
 
 
 def _send_s15_market_sell(code, qty):
     return kiwoom_orders.send_sell_order_market(
-        code=code, qty=qty, token=KIWOOM_TOKEN, order_type="3"
+        code=code,
+        qty=qty,
+        token=KIWOOM_TOKEN,
+        order_type="3",
+        owner_context=_s15_main_owner_context(
+            code, action="S15_MARKET_SELL", ordinal=qty
+        ),
     )
 
 
 def _send_exit_best_ioc(code, qty, token):
     """[공통 긴급 청산 래퍼] 최유리(IOC, 16) 조건으로 즉각 청산 시도"""
     return kiwoom_orders.send_sell_order_market(
-        code=code, qty=qty, token=token, order_type="16"
+        code=code,
+        qty=qty,
+        token=token,
+        order_type="16",
+        owner_context=_s15_main_owner_context(
+            code, action="S15_EMERGENCY_SELL", ordinal=qty
+        ),
     )
 
 
@@ -2390,6 +2573,11 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                     token=KIWOOM_TOKEN,
                     qty=0,
                     dmst_stex_tp=state.get("entry_execution_broker_route"),
+                    owner_context=_s15_main_owner_context(
+                        code,
+                        action="S15_ENTRY_CANCEL",
+                        ordinal=buy_ord_no,
+                    ),
                 )
             with state["lock"]:
                 state["status"] = "BUY_CANCEL_RECONCILING"
@@ -2425,6 +2613,11 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
                 token=KIWOOM_TOKEN,
                 qty=0,
                 dmst_stex_tp=state.get("entry_execution_broker_route"),
+                owner_context=_s15_main_owner_context(
+                    code,
+                    action="S15_PARTIAL_ENTRY_CANCEL",
+                    ordinal=buy_ord_no,
+                ),
             )
             with state["lock"]:
                 state["status"] = "BUY_CANCEL_RECONCILING"

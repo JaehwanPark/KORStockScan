@@ -46,6 +46,13 @@ from src.trading.config.machine_entry_timing_policy import (
     scope_key,
     validate_applied_policy,
 )
+from src.trading.market.micro_confirmation import (
+    DYNAMIC_CONFIRMATION_METRIC_CONTRACT,
+    build_dynamic_micro_confirmation_checkpoints,
+    evaluate_dynamic_micro_confirmation,
+    modeled_dynamic_target_price,
+    validate_dynamic_micro_confirmation_replay,
+)
 from src.trading.order.tick_utils import get_tick_size, move_price_by_ticks
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
@@ -528,6 +535,857 @@ def _candidate_observation(
     }
 
 
+def _dynamic_baseline_observation(
+    *, source_date: date, row: dict[str, Any]
+) -> dict[str, Any] | None:
+    replay = row.get("dynamic_confirmation_source_only_replay")
+    outcome = row.get("owner_outcome")
+    if not isinstance(replay, dict) or not isinstance(outcome, dict):
+        return None
+    replay_valid = _dynamic_replay_contract_valid(row=row, replay=replay)
+    if not replay_valid:
+        return None
+    baseline_gross = _finite(outcome.get("gross_no_slippage_return_pct"))
+    reported_net = _finite(outcome.get("cost_aware_net_return_pct"))
+    baseline_notional = _finite(outcome.get("entry_notional_krw"))
+    holding_duration_ms = _finite(outcome.get("holding_duration_ms"))
+    realized_quantity = _finite(outcome.get("quantity"))
+    try:
+        cost_contract = comparison_cost_contract(source_date)
+    except ValueError:
+        cost_contract = None
+    cost_pct = _finite(
+        cost_contract.get("round_trip_cost_pct")
+        if isinstance(cost_contract, dict)
+        else None
+    )
+    terminal_action = str(replay.get("terminal_action") or "")
+    selected_delay = replay.get("selected_delay_sec")
+    anchor_at = _aware(row.get("anchor_at"))
+    terminal_decisions = replay.get("checkpoint_decisions") or []
+    terminal_checkpoint_sec = (
+        terminal_decisions[-1].get("checkpoint_sec")
+        if terminal_decisions and isinstance(terminal_decisions[-1], dict)
+        else None
+    )
+    first_hit_report = row.get("dynamic_confirmation_first_hit_outcomes")
+    first_hit_outcome = (
+        (first_hit_report.get("checkpoint_outcomes") or {}).get(
+            str(terminal_checkpoint_sec)
+        )
+        if isinstance(first_hit_report, dict)
+        else None
+    )
+    first_hit = (
+        first_hit_outcome.get("target_adverse_first_hit")
+        if isinstance(first_hit_outcome, dict)
+        else None
+    )
+    terminal_best_ask = (
+        _finite(terminal_decisions[-1].get("best_ask"))
+        if terminal_decisions and isinstance(terminal_decisions[-1], dict)
+        else None
+    )
+    expected_first_hit_target = (
+        _dynamic_modeled_target_price_for_row(row, terminal_best_ask)
+        if terminal_best_ask is not None
+        else None
+    )
+    first_hit_entry = (
+        first_hit_outcome.get("entry") if isinstance(first_hit_outcome, dict) else None
+    )
+    target_at = (
+        _aware(first_hit.get("target_at")) if isinstance(first_hit, dict) else None
+    )
+    adverse_at = (
+        _aware(first_hit.get("adverse_at")) if isinstance(first_hit, dict) else None
+    )
+    first_hit_entry_at = (
+        _aware(first_hit_entry.get("entry_at"))
+        if isinstance(first_hit_entry, dict)
+        else None
+    )
+    expected_first_hit_entry_at = (
+        anchor_at + timedelta(seconds=terminal_checkpoint_sec)
+        if anchor_at is not None
+        and isinstance(terminal_checkpoint_sec, int)
+        and not isinstance(terminal_checkpoint_sec, bool)
+        else None
+    )
+    label_deadline = (
+        first_hit_entry_at + timedelta(seconds=300)
+        if first_hit_entry_at is not None
+        else None
+    )
+    terminal_sequence_epoch = (
+        terminal_decisions[-1].get("sequence_epoch")
+        if terminal_decisions and isinstance(terminal_decisions[-1], dict)
+        else None
+    )
+    first_hit_entry_ask = (
+        _finite(first_hit_entry.get("ask_price"))
+        if isinstance(first_hit_entry, dict)
+        else None
+    )
+    expected_adverse_price = (
+        first_hit_entry_ask - (expected_first_hit_target - first_hit_entry_ask)
+        if first_hit_entry_ask is not None
+        and expected_first_hit_target is not None
+        and expected_first_hit_target > first_hit_entry_ask
+        else None
+    )
+    reported_adverse_price = (
+        _finite(first_hit.get("adverse_price")) if isinstance(first_hit, dict) else None
+    )
+    target_hit_bid = (
+        _finite(first_hit.get("target_executable_bid"))
+        if isinstance(first_hit, dict)
+        else None
+    )
+    target_hit_quantity = (
+        _finite(first_hit.get("target_available_bid_quantity"))
+        if isinstance(first_hit, dict)
+        else None
+    )
+    adverse_hit_bid = (
+        _finite(first_hit.get("adverse_executable_bid"))
+        if isinstance(first_hit, dict)
+        else None
+    )
+    adverse_hit_quantity = (
+        _finite(first_hit.get("adverse_available_bid_quantity"))
+        if isinstance(first_hit, dict)
+        else None
+    )
+    required_quantity = _finite(row.get("owner_requested_quantity"))
+    target_hit_evidence_valid = bool(
+        (
+            target_at is None
+            and target_hit_bid is None
+            and target_hit_quantity is None
+        )
+        or (
+            target_at is not None
+            and expected_first_hit_target is not None
+            and target_hit_bid is not None
+            and target_hit_bid >= expected_first_hit_target
+            and target_hit_quantity is not None
+            and target_hit_quantity.is_integer()
+            and required_quantity is not None
+            and target_hit_quantity >= required_quantity
+        )
+    )
+    adverse_hit_evidence_valid = bool(
+        (
+            adverse_at is None
+            and adverse_hit_bid is None
+            and adverse_hit_quantity is None
+        )
+        or (
+            adverse_at is not None
+            and expected_adverse_price is not None
+            and adverse_hit_bid is not None
+            and adverse_hit_bid <= expected_adverse_price
+            and adverse_hit_quantity is not None
+            and adverse_hit_quantity.is_integer()
+            and required_quantity is not None
+            and adverse_hit_quantity >= required_quantity
+        )
+    )
+    timeout_mature = bool(
+        isinstance(first_hit_outcome, dict)
+        and first_hit_outcome.get("timeout_mature_5min") is True
+    )
+    timeout_bid = (
+        _finite(first_hit_outcome.get("timeout_executable_bid"))
+        if isinstance(first_hit_outcome, dict)
+        else None
+    )
+    timeout_net = (
+        _finite(first_hit_outcome.get("timeout_cost_aware_net_return_pct"))
+        if isinstance(first_hit_outcome, dict)
+        else None
+    )
+    expected_timeout_net = (
+        (timeout_bid / first_hit_entry_ask - 1.0) * 100.0 - cost_pct
+        if timeout_bid is not None
+        and timeout_bid > 0
+        and first_hit_entry_ask is not None
+        and first_hit_entry_ask > 0
+        and cost_pct is not None
+        else None
+    )
+    timeout_contract_valid = bool(
+        (
+            timeout_mature
+            and timeout_bid is not None
+            and timeout_bid > 0
+            and timeout_net is not None
+            and expected_timeout_net is not None
+            and math.isclose(timeout_net, expected_timeout_net, abs_tol=1e-8)
+        )
+        or (not timeout_mature and timeout_bid is None and timeout_net is None)
+    )
+    hit_times_within_label_window = bool(
+        first_hit_entry_at is not None
+        and label_deadline is not None
+        and all(
+            value is None or first_hit_entry_at <= value <= label_deadline
+            for value in (target_at, adverse_at)
+        )
+    )
+    first_hit_state = first_hit.get("state") if isinstance(first_hit, dict) else None
+    first_hit_order_valid = (
+        bool(
+            (
+                first_hit_state == "target_first"
+                and target_at is not None
+                and (adverse_at is None or target_at < adverse_at)
+            )
+            or (
+                first_hit_state == "adverse_first"
+                and adverse_at is not None
+                and (target_at is None or adverse_at < target_at)
+            )
+            or (
+                first_hit_state == "same_timestamp_ambiguous"
+                and target_at is not None
+                and target_at == adverse_at
+            )
+            or (
+                first_hit_state == "unresolved"
+                and target_at is None
+                and adverse_at is None
+                and first_hit_outcome.get("timeout_mature_5min") is True
+            )
+        )
+        if isinstance(first_hit_outcome, dict)
+        else False
+    )
+    first_hit_valid = bool(
+        isinstance(first_hit_report, dict)
+        and first_hit_report.get("schema")
+        == "machine_dynamic_confirmation_first_hit_outcomes_v1"
+        and first_hit_report.get("label_horizon_sec") == 300
+        and first_hit_report.get("runtime_effect") is False
+        and first_hit_report.get("allowed_runtime_apply") is False
+        and first_hit_report.get("broker_order_forbidden") is True
+        and isinstance(first_hit_outcome, dict)
+        and first_hit_outcome.get("checkpoint_sec") == terminal_checkpoint_sec
+        and first_hit_outcome.get("sequence_epoch") == terminal_sequence_epoch
+        and first_hit_outcome.get("source_quality_status") == "eligible"
+        and first_hit_outcome.get("source_gap_reasons") == []
+        and first_hit_outcome.get("outcome_mature_5min") is True
+        and first_hit_outcome.get("future_label_only") is True
+        and first_hit_outcome.get("future_outcome_input_used_by_confirmation_action")
+        is False
+        and isinstance(first_hit, dict)
+        and first_hit.get("state")
+        in {"target_first", "adverse_first", "same_timestamp_ambiguous", "unresolved"}
+        and first_hit_order_valid
+        and target_hit_evidence_valid
+        and adverse_hit_evidence_valid
+        and first_hit_outcome.get("outcome_mature_5min")
+        is (first_hit_state != "unresolved" or timeout_mature)
+        and timeout_contract_valid
+        and first_hit_entry_at == expected_first_hit_entry_at
+        and hit_times_within_label_window
+        and isinstance(first_hit_entry, dict)
+        and _finite(first_hit_entry.get("ask_price")) == terminal_best_ask
+        and _finite(first_hit_entry.get("required_quantity"))
+        == _finite(row.get("owner_requested_quantity"))
+        and first_hit_entry.get("depth_backed") is True
+        and _finite(first_hit_entry.get("owner_entry_limit_price"))
+        == _finite(row.get("owner_entry_limit_price"))
+        and expected_first_hit_target is not None
+        and _finite(first_hit.get("target_price")) == expected_first_hit_target
+        and expected_adverse_price is not None
+        and reported_adverse_price is not None
+        and math.isclose(reported_adverse_price, expected_adverse_price, abs_tol=1e-8)
+        and _finite(first_hit.get("baseline_owner_target_price"))
+        == _finite(row.get("owner_target_price"))
+        and _finite(first_hit_outcome.get("round_trip_cost_pct"))
+        == _finite(row.get("owner_round_trip_cost_pct"))
+    )
+    if (
+        replay.get("source_quality_status") != "eligible"
+        or terminal_action not in {"ENTER", "REJECT"}
+        or row.get("owner_policy_tuning_eligible") is not True
+        or row.get("actual_order_submitted") is not True
+        or not str(row.get("lifecycle_id") or "")
+        or outcome.get("realized") is not True
+        or baseline_gross is None
+        or baseline_notional is None
+        or baseline_notional <= 0
+        or holding_duration_ms is None
+        or holding_duration_ms <= 0
+        or realized_quantity is None
+        or realized_quantity <= 0
+        or not realized_quantity.is_integer()
+        or cost_pct is None
+        or _finite(row.get("owner_round_trip_cost_pct")) != cost_pct
+        or not first_hit_valid
+    ):
+        return None
+    baseline_net = baseline_gross - cost_pct
+    baseline_modeled_net_profit = baseline_notional * baseline_net / 100.0
+    candidate_net = 0.0 if terminal_action == "REJECT" else baseline_net
+    return {
+        "source_date": source_date,
+        "lifecycle_id": str(row.get("lifecycle_id") or ""),
+        "terminal_action": terminal_action,
+        "selected_delay_sec": selected_delay,
+        "baseline_net_pct": baseline_net,
+        "candidate_net_pct": candidate_net,
+        "comparison_weight_notional_krw": baseline_notional,
+        "baseline_modeled_net_profit_krw": baseline_modeled_net_profit,
+        "candidate_modeled_net_profit_krw": (baseline_notional * candidate_net / 100.0),
+        "baseline_capital_krw_minutes": (
+            baseline_notional * holding_duration_ms / 60_000.0
+        ),
+        "candidate_capital_krw_minutes": (
+            0.0
+            if terminal_action == "REJECT"
+            else baseline_notional * holding_duration_ms / 60_000.0
+        ),
+        "realized_quantity": int(realized_quantity),
+        "reported_cost_aware_net_pct": reported_net,
+        "baseline_realized_loss": bool(
+            (reported_net if reported_net is not None else baseline_net) < 0.0
+        ),
+        "outcome_basis": (
+            "source_only_reject_zero_exposure"
+            if terminal_action == "REJECT"
+            else "actual_immediate_entry_control"
+        ),
+        "comparison_cost_contract_sha256": cost_contract.get("contract_sha256"),
+        "round_trip_cost_pct": cost_pct,
+        "first_hit_label_checkpoint_sec": terminal_checkpoint_sec,
+        "counterfactual_first_hit_state": first_hit.get("state"),
+        "counterfactual_timeout_net_return_pct": _finite(
+            first_hit_outcome.get("timeout_cost_aware_net_return_pct")
+        ),
+    }
+
+
+def _dynamic_modeled_target_price_for_row(
+    row: dict[str, Any], checkpoint_ask: float
+) -> float | None:
+    outcome = row.get("owner_outcome")
+    return modeled_dynamic_target_price(
+        owner=str(row.get("owner") or ""),
+        baseline_fill_price=row.get("anchor_price"),
+        owner_target_price=row.get("owner_target_price"),
+        checkpoint_ask=checkpoint_ask,
+        widget_take_profit=bool(
+            isinstance(outcome, dict)
+            and outcome.get("exit_reason") == "take_profit_fill"
+        ),
+    )
+
+
+def _dynamic_replay_contract_valid(
+    *, row: dict[str, Any], replay: dict[str, Any]
+) -> bool:
+    replay_valid, _ = validate_dynamic_micro_confirmation_replay(replay)
+    signal_binding = replay.get("signal_binding")
+    anchor_at = _aware(row.get("anchor_at"))
+    binding_at = _aware(
+        signal_binding.get("signal_decision_at")
+        if isinstance(signal_binding, dict)
+        else None
+    )
+    owner_entry_limit_price = _finite(row.get("owner_entry_limit_price"))
+    owner_target_price = _finite(row.get("owner_target_price"))
+    owner_round_trip_cost_pct = _finite(row.get("owner_round_trip_cost_pct"))
+    owner_requested_quantity = _finite(row.get("owner_requested_quantity"))
+    causal_anchor_bid = (
+        _finite(signal_binding.get("causal_anchor_bid"))
+        if isinstance(signal_binding, dict)
+        else None
+    )
+    economic_contract_valid = (
+        bool(
+            owner_entry_limit_price is not None
+            and owner_entry_limit_price > 0
+            and owner_target_price is not None
+            and owner_target_price > 0
+            and owner_round_trip_cost_pct is not None
+            and owner_round_trip_cost_pct >= 0
+            and owner_requested_quantity is not None
+            and owner_requested_quantity > 0
+            and owner_requested_quantity.is_integer()
+            and causal_anchor_bid is not None
+            and causal_anchor_bid > 0
+            and _finite(signal_binding.get("owner_entry_limit_price"))
+            == owner_entry_limit_price
+            and _finite(signal_binding.get("owner_target_price")) == owner_target_price
+            and _finite(signal_binding.get("owner_round_trip_cost_pct"))
+            == owner_round_trip_cost_pct
+            and _finite(signal_binding.get("owner_requested_quantity"))
+            == owner_requested_quantity
+        )
+        if isinstance(signal_binding, dict)
+        else False
+    )
+    checkpoint_economics_valid = bool(
+        economic_contract_valid
+        and all(
+            (
+                (best_ask := _finite(decision.get("best_ask"))) is not None
+                and best_ask > 0
+                and (
+                    modeled_target := _dynamic_modeled_target_price_for_row(
+                        row, best_ask
+                    )
+                )
+                is not None
+                and _finite(decision.get("modeled_target_price")) == modeled_target
+                and (net_edge := _finite(decision.get("net_edge_after_cost_bps")))
+                is not None
+                and math.isclose(
+                    net_edge,
+                    (modeled_target / best_ask - 1.0) * 10_000.0
+                    - owner_round_trip_cost_pct * 100.0,
+                    abs_tol=1e-4,
+                )
+                and (bid_price := _finite(decision.get("best_bid"))) is not None
+                and (bid_return := _finite(decision.get("bid_return_bps"))) is not None
+                and math.isclose(
+                    bid_return,
+                    (bid_price / causal_anchor_bid - 1.0) * 10_000.0,
+                    abs_tol=1e-4,
+                )
+                and decision.get("owner_price_feasible")
+                is (best_ask <= owner_entry_limit_price)
+            )
+            for decision in replay.get("checkpoint_decisions") or []
+            if isinstance(decision, dict)
+            and decision.get("source_quality_eligible") is True
+        )
+    )
+    outcome = row.get("owner_outcome")
+    reconstructed_from_source = evaluate_dynamic_micro_confirmation(
+        build_dynamic_micro_confirmation_checkpoints(
+            anchor_bbo=row.get("entry_confirmation_bbo_anchor"),
+            future_bbo=row.get("entry_confirmation_bbo_horizons"),
+            checkpoint_ask_depletion=row.get(
+                "entry_confirmation_checkpoint_ask_depletion"
+            ),
+            anchor_id=row.get("anchor_id"),
+            signal_decision_at=row.get("anchor_at"),
+            symbol=row.get("symbol"),
+            expected_venues=row.get("expected_venues"),
+            expected_session_buckets=row.get("expected_session_buckets"),
+            owner=str(row.get("owner") or ""),
+            baseline_fill_price=row.get("anchor_price"),
+            owner_entry_limit_price=owner_entry_limit_price,
+            owner_target_price=owner_target_price,
+            round_trip_cost_pct=owner_round_trip_cost_pct,
+            widget_take_profit=bool(
+                isinstance(outcome, dict)
+                and outcome.get("exit_reason") == "take_profit_fill"
+            ),
+        )
+    )
+    source_binding_fields = (
+        "terminal_action",
+        "terminal_reason",
+        "selected_delay_sec",
+        "evaluated_checkpoint_count",
+        "source_quality_eligible_checkpoint_count",
+        "source_quality_status",
+        "checkpoint_decisions",
+    )
+    source_checkpoint_binding_valid = all(
+        replay.get(field) == reconstructed_from_source.get(field)
+        for field in source_binding_fields
+    )
+    return bool(
+        replay_valid
+        and isinstance(signal_binding, dict)
+        and str(row.get("anchor_id") or "")
+        and signal_binding.get("anchor_id") == row.get("anchor_id")
+        and str(row.get("lifecycle_id") or "")
+        and signal_binding.get("lifecycle_id") == row.get("lifecycle_id")
+        and signal_binding.get("owner") == row.get("owner")
+        and signal_binding.get("scope_id") == row.get("scope_id")
+        and signal_binding.get("symbol") == row.get("symbol")
+        and signal_binding.get("session") == row.get("session")
+        and signal_binding.get("expected_venues") == row.get("expected_venues")
+        and signal_binding.get("expected_session_buckets")
+        == row.get("expected_session_buckets")
+        and signal_binding.get("entry_state")
+        == str(row.get("entry_state") or "UNSPECIFIED")
+        and anchor_at is not None
+        and binding_at == anchor_at
+        and economic_contract_valid
+        and checkpoint_economics_valid
+        and source_checkpoint_binding_valid
+    )
+
+
+def _dynamic_candidate_observation(
+    *, source_date: date, row: dict[str, Any]
+) -> dict[str, Any] | None:
+    baseline = _dynamic_baseline_observation(source_date=source_date, row=row)
+    if baseline is None or baseline["terminal_action"] != "ENTER":
+        return baseline
+    delay_sec = int(baseline["selected_delay_sec"])
+    if delay_sec == 0:
+        return baseline
+    selected_decision = (
+        row["dynamic_confirmation_source_only_replay"].get("checkpoint_decisions") or []
+    )[-1]
+    selected_horizon = (row.get("entry_confirmation_bbo_horizons") or {}).get(
+        str(delay_sec)
+    )
+    if (
+        not isinstance(selected_decision, dict)
+        or not isinstance(selected_horizon, dict)
+        or _finite(selected_decision.get("best_ask"))
+        != _finite(selected_horizon.get("best_ask"))
+        or selected_horizon.get("depth_backed") is not True
+    ):
+        return None
+    delayed = _candidate_observation(
+        source_date=source_date,
+        row={**row, "classification": "supportive_confirmation_candidate"},
+        delay_sec=delay_sec,
+    )
+    if delayed is None:
+        return None
+    selected_ask = _finite(selected_decision.get("best_ask"))
+    exit_at = _aware((row.get("owner_outcome") or {}).get("exit_at"))
+    anchor_at = _aware(row.get("anchor_at"))
+    if selected_ask is None or exit_at is None or anchor_at is None:
+        return None
+    candidate_holding_ms = (
+        exit_at - (anchor_at + timedelta(seconds=delay_sec))
+    ).total_seconds() * 1_000.0
+    if candidate_holding_ms <= 0:
+        return None
+    candidate_net_pct = delayed["candidate_net_pct"]
+    candidate_entry_notional = selected_ask * baseline["realized_quantity"]
+    return {
+        **baseline,
+        "candidate_net_pct": candidate_net_pct,
+        "candidate_modeled_net_profit_krw": (
+            candidate_entry_notional * candidate_net_pct / 100.0
+        ),
+        "candidate_capital_krw_minutes": (
+            candidate_entry_notional * candidate_holding_ms / 60_000.0
+        ),
+        "exit_execution_class": delayed.get("exit_execution_class"),
+        "outcome_basis": f"dynamic_{delayed['outcome_basis']}",
+    }
+
+
+def _evaluate_dynamic_cohort(
+    *,
+    cohort_rows: list[tuple[date, dict[str, Any]]],
+    target_date: date,
+) -> dict[str, Any]:
+    source_owner_rows = [
+        (source_date, row)
+        for source_date, row in cohort_rows
+        if row.get("owner_policy_tuning_eligible") is True
+        and row.get("actual_order_submitted") is True
+    ]
+    anchor_counts: dict[tuple[date, str], int] = defaultdict(int)
+    for source_date, row in source_owner_rows:
+        anchor_id = str(row.get("anchor_id") or "")
+        if anchor_id:
+            anchor_counts[(source_date, anchor_id)] += 1
+    duplicate_anchor_keys = {
+        key for key, count in anchor_counts.items() if count > 1
+    }
+    duplicate_anchor_row_count = sum(anchor_counts[key] for key in duplicate_anchor_keys)
+    invalid_anchor_identity_count = sum(
+        not str(row.get("anchor_id") or "") for _, row in source_owner_rows
+    )
+    eligible_owner_rows = [
+        (source_date, row)
+        for source_date, row in source_owner_rows
+        if str(row.get("anchor_id") or "")
+        and (source_date, str(row.get("anchor_id"))) not in duplicate_anchor_keys
+    ]
+    realized_eligible_count = sum(
+        isinstance((outcome := row.get("owner_outcome")), dict)
+        and outcome.get("realized") is True
+        for _, row in eligible_owner_rows
+    )
+    observations = [
+        observation
+        for source_date, row in eligible_owner_rows
+        if (
+            observation := _dynamic_candidate_observation(
+                source_date=source_date,
+                row=row,
+            )
+        )
+        is not None
+    ]
+    observed_dates = sorted({item["source_date"] for item in observations})
+    lifecycles = {item["lifecycle_id"] for item in observations}
+    denominator = len(eligible_owner_rows)
+    right_censored_count = denominator - realized_eligible_count
+    realized_pairing_gap_count = realized_eligible_count - len(observations)
+    replay_eligible_count = sum(
+        isinstance((replay := row.get("dynamic_confirmation_source_only_replay")), dict)
+        and replay.get("source_quality_status") == "eligible"
+        and _dynamic_replay_contract_valid(row=row, replay=replay)
+        for _, row in eligible_owner_rows
+    )
+    paired_coverage_rate = (
+        len(observations) / realized_eligible_count * 100.0
+        if realized_eligible_count
+        else 0.0
+    )
+    replay_coverage_rate = (
+        replay_eligible_count / denominator * 100.0 if denominator else 0.0
+    )
+    right_censored_rate = (
+        right_censored_count / denominator * 100.0 if denominator else 100.0
+    )
+    baseline_values = [item["baseline_net_pct"] for item in observations]
+    candidate_values = [item["candidate_net_pct"] for item in observations]
+    baseline_ev = statistics.fmean(baseline_values) if baseline_values else None
+    candidate_ev = statistics.fmean(candidate_values) if candidate_values else None
+    comparison_notional = sum(
+        item["comparison_weight_notional_krw"] for item in observations
+    )
+    baseline_modeled_net_profit = sum(
+        item["baseline_modeled_net_profit_krw"] for item in observations
+    )
+    candidate_modeled_net_profit = sum(
+        item["candidate_modeled_net_profit_krw"] for item in observations
+    )
+    baseline_notional_weighted_ev = (
+        baseline_modeled_net_profit / comparison_notional * 100.0
+        if comparison_notional > 0
+        else None
+    )
+    candidate_notional_weighted_ev = (
+        candidate_modeled_net_profit / comparison_notional * 100.0
+        if comparison_notional > 0
+        else None
+    )
+    baseline_capital_minutes = sum(
+        item["baseline_capital_krw_minutes"] for item in observations
+    )
+    candidate_capital_minutes = sum(
+        item["candidate_capital_krw_minutes"] for item in observations
+    )
+    baseline_net_profit_per_capital_minute_pct = (
+        baseline_modeled_net_profit / baseline_capital_minutes * 100.0
+        if baseline_capital_minutes > 0
+        else None
+    )
+    candidate_net_profit_per_capital_minute_pct = (
+        candidate_modeled_net_profit / candidate_capital_minutes * 100.0
+        if candidate_capital_minutes > 0
+        else None
+    )
+    uplift = (
+        candidate_ev - baseline_ev
+        if candidate_ev is not None and baseline_ev is not None
+        else None
+    )
+    rolling: dict[str, Any] = {}
+    rolling_ready = True
+    for window_days in ROLLING_WINDOWS_DAYS:
+        window_dates = observed_dates[-window_days:]
+        allowed_dates = set(window_dates)
+        window_rows = [
+            item for item in observations if item["source_date"] in allowed_dates
+        ]
+        base_values = [item["baseline_net_pct"] for item in window_rows]
+        candidate_window_values = [item["candidate_net_pct"] for item in window_rows]
+        window_comparison_notional = sum(
+            item["comparison_weight_notional_krw"] for item in window_rows
+        )
+        window_baseline_profit = sum(
+            item["baseline_modeled_net_profit_krw"] for item in window_rows
+        )
+        window_candidate_profit = sum(
+            item["candidate_modeled_net_profit_krw"] for item in window_rows
+        )
+        window_baseline_notional_ev = (
+            window_baseline_profit / window_comparison_notional * 100.0
+            if window_comparison_notional > 0
+            else None
+        )
+        window_candidate_notional_ev = (
+            window_candidate_profit / window_comparison_notional * 100.0
+            if window_comparison_notional > 0
+            else None
+        )
+        complete = len(window_dates) >= window_days
+        base_ev = statistics.fmean(base_values) if base_values else None
+        cand_ev = (
+            statistics.fmean(candidate_window_values)
+            if candidate_window_values
+            else None
+        )
+        improved = bool(
+            complete
+            and cand_ev is not None
+            and base_ev is not None
+            and cand_ev > 0
+            and cand_ev > base_ev
+            and window_candidate_notional_ev is not None
+            and window_baseline_notional_ev is not None
+            and window_candidate_notional_ev > 0
+            and window_candidate_notional_ev > window_baseline_notional_ev
+            and window_candidate_profit > window_baseline_profit
+        )
+        rolling[str(window_days)] = {
+            "complete": complete,
+            "observed_trading_days": len(window_dates),
+            "sample_count": len(window_rows),
+            "baseline_source_quality_adjusted_ev_pct": base_ev,
+            "candidate_source_quality_adjusted_ev_pct": cand_ev,
+            "baseline_notional_weighted_ev_pct": window_baseline_notional_ev,
+            "candidate_notional_weighted_ev_pct": window_candidate_notional_ev,
+            "modeled_baseline_net_profit_krw": window_baseline_profit,
+            "modeled_candidate_net_profit_krw": window_candidate_profit,
+            "positive_and_improved": improved,
+        }
+        rolling_ready = rolling_ready and improved
+    baseline_p10 = _percentile_10(baseline_values)
+    candidate_p10 = _percentile_10(candidate_values)
+    ready = bool(
+        len(observed_dates) >= MIN_OBSERVED_DAYS
+        and duplicate_anchor_row_count == 0
+        and invalid_anchor_identity_count == 0
+        and len(lifecycles) >= MIN_UNIQUE_LIFECYCLES
+        and len(observations) >= MIN_COMPLETED_OUTCOMES
+        and replay_coverage_rate >= MIN_BBO_COMPLETE_RATE_PCT
+        and paired_coverage_rate >= MIN_PAIRED_COMPLETED_COVERAGE_PCT
+        and right_censored_rate <= MAX_RIGHT_CENSORED_RATE_PCT
+        and target_date in observed_dates
+        and candidate_ev is not None
+        and candidate_ev > 0
+        and candidate_notional_weighted_ev is not None
+        and candidate_notional_weighted_ev > 0
+        and baseline_notional_weighted_ev is not None
+        and candidate_notional_weighted_ev > baseline_notional_weighted_ev
+        and candidate_modeled_net_profit > baseline_modeled_net_profit
+        and baseline_net_profit_per_capital_minute_pct is not None
+        and candidate_net_profit_per_capital_minute_pct is not None
+        and candidate_net_profit_per_capital_minute_pct > 0
+        and candidate_net_profit_per_capital_minute_pct
+        >= baseline_net_profit_per_capital_minute_pct
+        and uplift is not None
+        and uplift >= MIN_ABSOLUTE_EV_UPLIFT_PCT
+        and baseline_p10 is not None
+        and candidate_p10 is not None
+        and candidate_p10 >= baseline_p10 - MAX_P10_DETERIORATION_PCT
+        and rolling_ready
+    )
+    action_counts = {
+        action: sum(item["terminal_action"] == action for item in observations)
+        for action in ("ENTER", "REJECT")
+    }
+    first_hit_state_counts = {
+        state: sum(
+            item["counterfactual_first_hit_state"] == state for item in observations
+        )
+        for state in (
+            "target_first",
+            "adverse_first",
+            "same_timestamp_ambiguous",
+            "unresolved",
+        )
+    }
+    return {
+        "schema": "machine_per_signal_dynamic_confirmation_ev_v1",
+        "decision": (
+            "source_only_candidate_ready"
+            if ready
+            else "source_only_evidence_accumulating"
+        ),
+        "observed_trading_days": len(observed_dates),
+        "latest_completed_observation_date": (
+            observed_dates[-1].isoformat() if observed_dates else None
+        ),
+        "target_date_in_completed_observations": target_date in observed_dates,
+        "unique_decision_lifecycles": len(lifecycles),
+        "source_owner_signal_row_count": len(source_owner_rows),
+        "duplicate_anchor_row_count": duplicate_anchor_row_count,
+        "invalid_anchor_identity_count": invalid_anchor_identity_count,
+        "source_quality_eligible_anchor_count": denominator,
+        "dynamic_replay_source_quality_eligible_count": replay_eligible_count,
+        "dynamic_replay_coverage_rate_pct": round(replay_coverage_rate, 8),
+        "completed_outcome_count": len(observations),
+        "realized_pairing_gap_count": realized_pairing_gap_count,
+        "paired_completed_coverage_rate_pct": round(paired_coverage_rate, 8),
+        "right_censored_count": right_censored_count,
+        "right_censored_or_unresolved_count": denominator - len(observations),
+        "right_censored_rate_pct": round(right_censored_rate, 8),
+        "terminal_action_counts": action_counts,
+        "counterfactual_first_hit_state_counts": first_hit_state_counts,
+        "entered_adverse_first_count": sum(
+            item["terminal_action"] == "ENTER"
+            and item["counterfactual_first_hit_state"] == "adverse_first"
+            for item in observations
+        ),
+        "rejected_adverse_first_count": sum(
+            item["terminal_action"] == "REJECT"
+            and item["counterfactual_first_hit_state"] == "adverse_first"
+            for item in observations
+        ),
+        "selected_delay_counts": {
+            str(delay): sum(
+                item.get("selected_delay_sec") == delay for item in observations
+            )
+            for delay in (0, *DELAYS_SEC)
+        },
+        "baseline_source_quality_adjusted_ev_pct": (
+            round(baseline_ev, 8) if baseline_ev is not None else None
+        ),
+        "source_quality_adjusted_ev_pct": (
+            round(candidate_ev, 8) if candidate_ev is not None else None
+        ),
+        "baseline_notional_weighted_ev_pct": (
+            round(baseline_notional_weighted_ev, 8)
+            if baseline_notional_weighted_ev is not None
+            else None
+        ),
+        "notional_weighted_ev_pct": (
+            round(candidate_notional_weighted_ev, 8)
+            if candidate_notional_weighted_ev is not None
+            else None
+        ),
+        "modeled_baseline_net_profit_krw": round(baseline_modeled_net_profit, 6),
+        "modeled_candidate_net_profit_krw": round(candidate_modeled_net_profit, 6),
+        "modeled_net_profit_uplift_krw": round(
+            candidate_modeled_net_profit - baseline_modeled_net_profit, 6
+        ),
+        "baseline_net_profit_per_capital_minute_pct": (
+            round(baseline_net_profit_per_capital_minute_pct, 10)
+            if baseline_net_profit_per_capital_minute_pct is not None
+            else None
+        ),
+        "net_profit_per_capital_minute_pct": (
+            round(candidate_net_profit_per_capital_minute_pct, 10)
+            if candidate_net_profit_per_capital_minute_pct is not None
+            else None
+        ),
+        "absolute_ev_uplift_pct": round(uplift, 8) if uplift is not None else None,
+        "baseline_p10_pct": baseline_p10,
+        "candidate_p10_pct": candidate_p10,
+        "rolling_windows": rolling,
+        "source_only_candidate_ready": ready,
+        "runtime_policy_emitted": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _evaluate_cohort(
     *,
     cohort_rows: list[tuple[date, dict[str, Any]]],
@@ -998,6 +1856,7 @@ def build_report(
             grouped[key].append((source_date, row))
     cohorts: list[dict[str, Any]] = []
     ready: list[dict[str, Any]] = []
+    dynamic_ready: list[dict[str, Any]] = []
     for key, rows in sorted(grouped.items()):
         owner, scope_id, symbol, session, entry_state = key
         alternatives = [
@@ -1017,6 +1876,10 @@ def build_report(
             ),
             default=None,
         )
+        dynamic_confirmation = _evaluate_dynamic_cohort(
+            cohort_rows=rows,
+            target_date=target_date,
+        )
         cohort = {
             "owner": owner,
             "scope_id": scope_id,
@@ -1025,6 +1888,7 @@ def build_report(
             "entry_state": entry_state,
             "alternatives": alternatives,
             "selected": selected,
+            "per_signal_dynamic_confirmation_source_only": dynamic_confirmation,
             "sample_floor_assessment": _cohort_sample_floor_assessment(
                 cohort_key=key,
                 cohort_rows=rows,
@@ -1035,6 +1899,8 @@ def build_report(
         cohorts.append(cohort)
         if selected is not None:
             ready.append(cohort)
+        if dynamic_confirmation["source_only_candidate_ready"]:
+            dynamic_ready.append(cohort)
     same_stage_owner_guard = _same_stage_owner_guard(
         target_date=target_date,
         low_price_candidate_dir=low_price_candidate_dir,
@@ -1053,6 +1919,37 @@ def build_report(
             ),
             default=None,
         )
+    )
+    dynamic_source_only_winner = (
+        None
+        if not target_source_ready
+        else max(
+            dynamic_ready,
+            key=lambda item: (
+                float(
+                    item["per_signal_dynamic_confirmation_source_only"][
+                        "absolute_ev_uplift_pct"
+                    ]
+                ),
+                item["owner"],
+                item["scope_id"],
+            ),
+            default=None,
+        )
+    )
+    dynamic_source_only_candidate = (
+        {
+            "owner": dynamic_source_only_winner["owner"],
+            "scope_id": dynamic_source_only_winner["scope_id"],
+            "symbol": dynamic_source_only_winner["symbol"],
+            "session": dynamic_source_only_winner["session"],
+            "entry_state": dynamic_source_only_winner["entry_state"],
+            "evaluation": dynamic_source_only_winner[
+                "per_signal_dynamic_confirmation_source_only"
+            ],
+        }
+        if dynamic_source_only_winner is not None
+        else None
     )
     sample_floor_assessment = _report_sample_floor_assessment(
         target_date=target_date,
@@ -1087,6 +1984,28 @@ def build_report(
         "target_source_ready": target_source_ready,
         "cohorts": cohorts,
         "winner": winner,
+        "per_signal_dynamic_confirmation_source_only": {
+            "schema": "machine_per_signal_dynamic_confirmation_selection_v1",
+            "decision": (
+                "source_only_candidate_ready"
+                if dynamic_source_only_candidate is not None
+                else "source_only_evidence_accumulating"
+            ),
+            "evaluated_cohort_count": len(cohorts),
+            "ready_cohort_count": len(dynamic_ready),
+            "selected_source_only_candidate": dynamic_source_only_candidate,
+            "metric_contract": DYNAMIC_CONFIRMATION_METRIC_CONTRACT,
+            "runtime_policy_emitted": False,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "forbidden_uses": [
+                "machine_entry_timing_policy_applied_v2_generation",
+                "same_day_or_next_session_runtime_activation",
+                "order_price_quantity_target_exit_or_safety_mutation",
+            ],
+        },
         "same_stage_owner_guard": same_stage_owner_guard,
         "sample_floor_assessment": sample_floor_assessment,
         "metric_contract": METRIC_CONTRACT,
@@ -1198,6 +2117,9 @@ def render_markdown(report: dict[str, Any], applied: dict[str, Any]) -> str:
     )
     lines.extend(
         [
+            "- Per-signal dynamic confirmation: "
+            f"`{(report.get('per_signal_dynamic_confirmation_source_only') or {}).get('decision')}` "
+            "(source-only; no runtime policy emitted).",
             f"- Applied scope count: `{len(applied['scopes'])}`.",
             "",
         ]

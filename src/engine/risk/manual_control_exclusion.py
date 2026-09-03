@@ -259,6 +259,93 @@ def evaluate_manual_control_exclusion(code: object) -> ManualControlExclusionDec
     return ManualControlExclusionDecision(False, norm_code, "", "")
 
 
+def evaluate_main_bot_control_exclusion(
+    code: object,
+    *,
+    target_date: object = None,
+) -> ManualControlExclusionDecision:
+    """Resolve the main-bot veto without weakening manual ownership by default.
+
+    A protected manual exclusion remains authoritative unless the exact-date
+    owner policy explicitly enables a migrated coexistence scope for the main
+    bot.  Policy parse/hash/date errors fail closed as an exclusion.
+    """
+
+    decision = evaluate_manual_control_exclusion(code)
+    operator_source = manual_control_operator_exclusion_source(code)
+    if decision.excluded and not operator_source:
+        # Automatic open-loss/hard-stop/quantity guards are not ownership
+        # handoffs and can never be bypassed by a coexistence policy.
+        return decision
+    try:
+        from src.trading.config.symbol_owner_policy import (
+            SymbolOwnerPolicyError,
+            resolve_symbol_owner_policy,
+        )
+
+        owner_policy = resolve_symbol_owner_policy(code, target_date=target_date)
+    except (SymbolOwnerPolicyError, OSError, ValueError) as exc:
+        return ManualControlExclusionDecision(
+            True,
+            decision.code,
+            f"symbol_owner_policy_fail_closed:{type(exc).__name__}",
+            decision.source,
+        )
+    if owner_policy.symbol_selected:
+        if owner_policy.owner_allowed("main_scalping", new_entry=True):
+            return ManualControlExclusionDecision(
+                False,
+                decision.code,
+                (
+                    "exact_date_coexistence_policy_allows_main_bot"
+                    if owner_policy.coexistence_enabled
+                    else "exact_date_owner_policy_allows_main_bot"
+                ),
+                owner_policy.source_path,
+            )
+        return ManualControlExclusionDecision(
+            True,
+            decision.code,
+            "exact_date_owner_policy_blocks_main_bot_entry",
+            owner_policy.source_path,
+        )
+    return decision
+
+
+def independent_machine_ownership_source(
+    code: object,
+    *,
+    owner: str,
+    target_date: object = None,
+) -> str:
+    """Return the exact ownership authority for an independent machine.
+
+    Legacy deployments keep using the protected ``manual_operator`` marker.
+    A coexistence deployment may replace that marker only when the exact-date
+    policy authorizes the requested machine owner and confirms migration.
+    """
+
+    legacy = manual_control_operator_exclusion_source(code)
+    try:
+        from src.trading.config.symbol_owner_policy import (
+            SymbolOwnerPolicyError,
+            resolve_symbol_owner_policy,
+        )
+
+        owner_policy = resolve_symbol_owner_policy(code, target_date=target_date)
+    except (SymbolOwnerPolicyError, OSError, ValueError):
+        return ""
+    normalized_owner = str(owner or "").strip().lower()
+    if owner_policy.symbol_selected:
+        if owner_policy.owner_allowed(normalized_owner, new_entry=True):
+            return (
+                f"symbol_owner_policy:{owner_policy.policy_id}:"
+                f"{owner_policy.policy_hash}"
+            )
+        return ""
+    return legacy
+
+
 def add_manual_control_exclusion_code(
     code: object,
     *,

@@ -12,6 +12,15 @@ from src.utils.constants import TRADING_RULES
 from src.core.event_bus import EventBus
 from src.utils import kiwoom_utils
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
+from src.trading.config.symbol_owner_policy import (
+    SymbolOwnerPolicyError,
+    resolve_symbol_owner_policy,
+)
+from src.trading.order.owner_custody_registry import (
+    OwnerOrderContext,
+    OwnerRegistryError,
+    default_order_owner_registry,
+)
 
 # ==========================================
 # 1. 계좌 및 자산 조회 API
@@ -40,6 +49,189 @@ _DEFENSIVE_BUY_TIME_BLOCK_OVERRIDE_REASONS = frozenset(
         "late_loss_avg_down_retry",
     }
 )
+
+
+def _owner_registry_context(value):
+    if isinstance(value, OwnerOrderContext):
+        return value
+    if isinstance(value, dict):
+        return OwnerOrderContext(
+            owner_type=str(value.get("owner_type") or ""),
+            owner_id=str(value.get("owner_id") or ""),
+            position_id=str(value.get("position_id") or ""),
+            client_intent_id=str(value.get("client_intent_id") or ""),
+        )
+    return None
+
+
+def _owner_registry_retry_context(value, *, retry_tag):
+    context = _owner_registry_context(value)
+    if context is None:
+        return None
+    return OwnerOrderContext(
+        owner_type=context.owner_type,
+        owner_id=context.owner_id,
+        position_id=context.position_id,
+        client_intent_id=f"{context.client_intent_id}:{retry_tag}",
+    )
+
+
+def _owner_registry_block_response(
+    reason,
+    *,
+    broker_order_attempted=False,
+    broker_order_no="",
+    owner_registry_intent_id="",
+):
+    return {
+        "rt_cd": "OWNER_REGISTRY_BLOCKED",
+        "return_code": "OWNER_REGISTRY_BLOCKED",
+        "return_msg": str(reason or "owner registry blocked")[:240],
+        "ord_no": str(broker_order_no or "").strip(),
+        "broker_order_attempted": bool(broker_order_attempted),
+        "owner_registry_required": True,
+        "owner_registry_ambiguous": bool(broker_order_attempted),
+        "owner_registry_intent_id": str(owner_registry_intent_id or "").strip(),
+    }
+
+
+def _reserve_owner_registry_intent(
+    *,
+    code,
+    side,
+    qty,
+    route,
+    owner_context,
+    action="NEW",
+    original_order_no="",
+):
+    try:
+        policy = resolve_symbol_owner_policy(code)
+    except (SymbolOwnerPolicyError, OSError, ValueError) as exc:
+        return (
+            None,
+            None,
+            _owner_registry_block_response(
+                f"symbol_owner_policy_fail_closed:{type(exc).__name__}"
+            ),
+        )
+    registry = default_order_owner_registry()
+    context = _owner_registry_context(owner_context)
+    is_new_entry = str(side).upper() == "BUY" and str(action).upper() == "NEW"
+    if policy.symbol_selected:
+        if context is None:
+            return (
+                None,
+                None,
+                _owner_registry_block_response("exact_date_owner_context_required"),
+            )
+        if not policy.owner_allowed(context.owner_type, new_entry=is_new_entry):
+            return (
+                None,
+                None,
+                _owner_registry_block_response("exact_date_owner_action_forbidden"),
+            )
+    if not policy.coexistence_enabled:
+        try:
+            registered = registry.symbol_registered(code)
+        except OwnerRegistryError as exc:
+            return None, None, _owner_registry_block_response(str(exc))
+        if registered:
+            return (
+                None,
+                None,
+                _owner_registry_block_response(
+                    "registered_coexistence_symbol_requires_exact_date_policy"
+                ),
+            )
+        return None, None, None
+    if context is None:
+        return (
+            None,
+            None,
+            _owner_registry_block_response("coexistence_owner_context_required"),
+        )
+    if not policy.owner_allowed(context.owner_type, new_entry=is_new_entry):
+        return (
+            None,
+            None,
+            _owner_registry_block_response("coexistence_owner_action_forbidden"),
+        )
+    if not registry.contains_event_hash(policy.migration_registry_tail_hash):
+        return (
+            None,
+            None,
+            _owner_registry_block_response(
+                "coexistence_migration_registry_generation_missing"
+            ),
+        )
+    try:
+        intent_id = registry.reserve(
+            context=context,
+            symbol=code,
+            side=side,
+            quantity=int(qty),
+            route=str(route or "SOR").upper(),
+            order_date=datetime.now(KST).date(),
+            action=action,
+            original_order_no=original_order_no,
+            authority_policy_id=policy.policy_id,
+            authority_policy_hash=policy.policy_hash,
+        )
+    except OwnerRegistryError as exc:
+        return None, None, _owner_registry_block_response(str(exc))
+    return registry, intent_id, None
+
+
+def _finish_owner_registry_intent(
+    registry,
+    intent_id,
+    *,
+    response=None,
+    ambiguous_reason="",
+):
+    if registry is None or not intent_id:
+        return None
+    try:
+        if response is None:
+            registry.transition(
+                intent_id,
+                state="INTENT_AMBIGUOUS",
+                reason=ambiguous_reason or "broker_response_missing",
+            )
+            return None
+        success = str(response.get("return_code", response.get("rt_cd", ""))) == "0"
+        if success:
+            order_no = str(response.get("ord_no") or response.get("odno") or "").strip()
+            registry.transition(
+                intent_id, state="ORDER_BOUND", broker_order_no=order_no
+            )
+        else:
+            registry.transition(
+                intent_id,
+                state="INTENT_REJECTED",
+                reason=str(response.get("return_msg") or response.get("err_msg") or ""),
+            )
+        return None
+    except OwnerRegistryError as exc:
+        try:
+            registry.transition(
+                intent_id,
+                state="INTENT_AMBIGUOUS",
+                reason=f"registry_finalize_failed:{type(exc).__name__}",
+            )
+        except OwnerRegistryError:
+            pass
+        return _owner_registry_block_response(
+            str(exc),
+            broker_order_attempted=response is not None,
+            broker_order_no=(
+                str(response.get("ord_no") or response.get("odno") or "").strip()
+                if isinstance(response, dict)
+                else ""
+            ),
+            owner_registry_intent_id=intent_id,
+        )
 
 
 def is_verified_local_sell_no_call_response(response):
@@ -229,9 +421,7 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
             request_code=payload.get("stk_cd", "not_applicable"),
         )
         if not admission.admitted:
-            raise RuntimeError(
-                f"account_read_shared_rate_deferred:{admission.reason}"
-            )
+            raise RuntimeError(f"account_read_shared_rate_deferred:{admission.reason}")
     response = requests.post(url, headers=active_headers, json=payload, timeout=timeout)
     http_rate_limit_recorded = False
     if read_api and response.status_code == 429:
@@ -251,9 +441,13 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
         return response, {}
 
     is_success = str(data.get("rt_cd", data.get("return_code", ""))) == "0"
-    if read_api and not http_rate_limit_recorded and kiwoom_utils.is_kiwoom_read_rate_limit(
-        http_status_code=response.status_code,
-        response_body=data,
+    if (
+        read_api
+        and not http_rate_limit_recorded
+        and kiwoom_utils.is_kiwoom_read_rate_limit(
+            http_status_code=response.status_code,
+            response_body=data,
+        )
     ):
         kiwoom_utils.record_kiwoom_read_rate_limit(
             token=resolved_token or provided_token,
@@ -331,9 +525,13 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
         retry_response.status_code == 200
         and str(retry_data.get("rt_cd", retry_data.get("return_code", ""))) == "0"
     )
-    if read_api and not retry_http_rate_limit_recorded and kiwoom_utils.is_kiwoom_read_rate_limit(
-        http_status_code=retry_response.status_code,
-        response_body=retry_data,
+    if (
+        read_api
+        and not retry_http_rate_limit_recorded
+        and kiwoom_utils.is_kiwoom_read_rate_limit(
+            http_status_code=retry_response.status_code,
+            response_body=retry_data,
+        )
     ):
         kiwoom_utils.record_kiwoom_read_rate_limit(
             token=refreshed_token,
@@ -1425,6 +1623,7 @@ def send_buy_order_market(
     allow_time_block_override=False,
     time_block_override_reason=None,
     dmst_stex_tp=None,
+    owner_context=None,
 ):
     """
     [kt10000] 매수 주문 - return_code 대응 수정 및 지정가(00) 기능 추가
@@ -1510,6 +1709,16 @@ def send_buy_order_market(
         "cond_uv": "",
     }
 
+    owner_registry, owner_intent_id, owner_block = _reserve_owner_registry_intent(
+        code=clean_code,
+        side="BUY",
+        qty=qty,
+        route=resolved_dmst_stex_tp,
+        owner_context=owner_context,
+    )
+    if owner_block is not None:
+        return owner_block
+
     try:
         res, data = _post_kiwoom_with_auth_retry(
             url, headers, payload, "kt10000", timeout=5
@@ -1520,6 +1729,13 @@ def send_buy_order_market(
         )
 
         if res.status_code == 200 and is_success:
+            registry_block = _finish_owner_registry_intent(
+                owner_registry, owner_intent_id, response=data
+            )
+            if registry_block is not None:
+                return registry_block
+            if owner_intent_id:
+                data["owner_registry_intent_id"] = owner_intent_id
             return _with_order_route_provenance(
                 data,
                 route_resolution={
@@ -1535,6 +1751,24 @@ def send_buy_order_market(
             )
         else:
             if str(payload.get("trde_tp")) == "3" and _is_sor_market_time_reject(data):
+                registry_block = _finish_owner_registry_intent(
+                    owner_registry, owner_intent_id, response=data
+                )
+                if registry_block is not None:
+                    return registry_block
+                owner_registry, owner_intent_id, owner_block = (
+                    _reserve_owner_registry_intent(
+                        code=clean_code,
+                        side="BUY",
+                        qty=qty,
+                        route=resolved_dmst_stex_tp,
+                        owner_context=_owner_registry_retry_context(
+                            owner_context, retry_tag="SOR_MARKET_TO_BEST"
+                        ),
+                    )
+                )
+                if owner_block is not None:
+                    return owner_block
                 retry_payload = dict(payload)
                 retry_payload["trde_tp"] = "6"
                 retry_payload["ord_uv"] = ""
@@ -1550,6 +1784,13 @@ def send_buy_order_market(
                     or str(retry_data.get("return_code", "")) == "0"
                 )
                 if retry_res.status_code == 200 and retry_success:
+                    registry_block = _finish_owner_registry_intent(
+                        owner_registry, owner_intent_id, response=retry_data
+                    )
+                    if registry_block is not None:
+                        return registry_block
+                    if owner_intent_id:
+                        retry_data["owner_registry_intent_id"] = owner_intent_id
                     return _with_order_route_provenance(
                         retry_data,
                         route_resolution={
@@ -1564,6 +1805,11 @@ def send_buy_order_market(
                         broker_route_attempted=True,
                     )
                 data = retry_data
+            registry_block = _finish_owner_registry_intent(
+                owner_registry, owner_intent_id, response=data
+            )
+            if registry_block is not None:
+                return registry_block
             err_msg = data.get("return_msg") or data.get("err_msg") or "상세 사유 없음"
             err_code = data.get("return_code", data.get("rt_cd", ""))
 
@@ -1586,6 +1832,12 @@ def send_buy_order_market(
             )
 
     except Exception as e:
+        _finish_owner_registry_intent(
+            owner_registry,
+            owner_intent_id,
+            response=None,
+            ambiguous_reason=type(e).__name__,
+        )
         msg = f"🔥 [매수주문] 시스템 예외: {str(e)}"
         log_error(msg)
         EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
@@ -1606,6 +1858,7 @@ def send_buy_order(
     allow_time_block_override=False,
     time_block_override_reason=None,
     dmst_stex_tp=None,
+    owner_context=None,
 ):
     """
     Legacy wrapper for send_buy_order_market.
@@ -1622,6 +1875,7 @@ def send_buy_order(
         allow_time_block_override=allow_time_block_override,
         time_block_override_reason=time_block_override_reason,
         dmst_stex_tp=dmst_stex_tp,
+        owner_context=owner_context,
     )
 
 
@@ -1636,6 +1890,7 @@ def send_sell_order_market(
     strategy=None,
     bypass_open_time_block=False,
     dmst_stex_tp=None,
+    owner_context=None,
 ):
     """
     [kt10001] 주식 매도 주문 (시장가/지정가/최유리지정가 통합 지원)
@@ -1711,6 +1966,16 @@ def send_sell_order_market(
         "cond_uv": "",
     }
 
+    owner_registry, owner_intent_id, owner_block = _reserve_owner_registry_intent(
+        code=clean_code,
+        side="SELL",
+        qty=qty,
+        route=resolved_dmst_stex_tp,
+        owner_context=owner_context,
+    )
+    if owner_block is not None:
+        return owner_block
+
     try:
         res, data = _post_kiwoom_with_auth_retry(
             url, headers, payload, "kt10001", timeout=5
@@ -1721,6 +1986,13 @@ def send_sell_order_market(
         )
 
         if res.status_code == 200 and is_success:
+            registry_block = _finish_owner_registry_intent(
+                owner_registry, owner_intent_id, response=data
+            )
+            if registry_block is not None:
+                return registry_block
+            if owner_intent_id:
+                data["owner_registry_intent_id"] = owner_intent_id
             return _with_order_route_provenance(
                 data,
                 route_resolution=route_resolution,
@@ -1730,6 +2002,24 @@ def send_sell_order_market(
             if str(payload.get("trde_tp")) == "3" and _is_sor_market_sell_time_reject(
                 data
             ):
+                registry_block = _finish_owner_registry_intent(
+                    owner_registry, owner_intent_id, response=data
+                )
+                if registry_block is not None:
+                    return registry_block
+                owner_registry, owner_intent_id, owner_block = (
+                    _reserve_owner_registry_intent(
+                        code=clean_code,
+                        side="SELL",
+                        qty=qty,
+                        route=resolved_dmst_stex_tp,
+                        owner_context=_owner_registry_retry_context(
+                            owner_context, retry_tag="SOR_MARKET_TO_BEST"
+                        ),
+                    )
+                )
+                if owner_block is not None:
+                    return owner_block
                 retry_payload = dict(payload)
                 retry_payload["trde_tp"] = "6"
                 retry_payload["ord_uv"] = ""
@@ -1745,12 +2035,24 @@ def send_sell_order_market(
                     or str(retry_data.get("return_code", "")) == "0"
                 )
                 if retry_res.status_code == 200 and retry_success:
+                    registry_block = _finish_owner_registry_intent(
+                        owner_registry, owner_intent_id, response=retry_data
+                    )
+                    if registry_block is not None:
+                        return registry_block
+                    if owner_intent_id:
+                        retry_data["owner_registry_intent_id"] = owner_intent_id
                     return _with_order_route_provenance(
                         retry_data,
                         route_resolution=route_resolution,
                         broker_route_attempted=True,
                     )
                 data = retry_data
+            registry_block = _finish_owner_registry_intent(
+                owner_registry, owner_intent_id, response=data
+            )
+            if registry_block is not None:
+                return registry_block
             err_msg = data.get("return_msg") or data.get("err_msg") or "상세 사유 없음"
             err_code = data.get("return_code", data.get("rt_cd", ""))
 
@@ -1771,6 +2073,12 @@ def send_sell_order_market(
             )
 
     except Exception as e:
+        _finish_owner_registry_intent(
+            owner_registry,
+            owner_intent_id,
+            response=None,
+            ambiguous_reason=type(e).__name__,
+        )
         msg = f"🔥 [매도주문] 시스템 예외: {str(e)}"
         log_error(msg)
         EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
@@ -1784,7 +2092,14 @@ def _normalize_dmst_stex_tp(value, *, default="SOR"):
     return str(default or "SOR").strip().upper() or "SOR"
 
 
-def send_cancel_order(code, orig_ord_no, token, qty=0, dmst_stex_tp=None):
+def send_cancel_order(
+    code,
+    orig_ord_no,
+    token,
+    qty=0,
+    dmst_stex_tp=None,
+    owner_context=None,
+):
     """
     [kt10003] 주식 취소 주문 - 미체결 물량 취소
     :param qty: 취소 수량. 기본값 0 (0 입력 시 미체결 잔량 전부 취소)
@@ -1820,6 +2135,18 @@ def send_cancel_order(code, orig_ord_no, token, qty=0, dmst_stex_tp=None):
         "cncl_qty": str(qty),  # 🚀 '0'이면 남은 물량 싹 다 취소!
     }
 
+    owner_registry, owner_intent_id, owner_block = _reserve_owner_registry_intent(
+        code=clean_code,
+        side="BUY",
+        qty=qty,
+        route=route_resolution["effective_dmst_stex_tp"],
+        owner_context=owner_context,
+        action="CANCEL",
+        original_order_no=str(orig_ord_no),
+    )
+    if owner_block is not None:
+        return owner_block
+
     def response_with_request_provenance(data):
         response = _with_order_route_provenance(
             data,
@@ -1844,6 +2171,13 @@ def send_cancel_order(code, orig_ord_no, token, qty=0, dmst_stex_tp=None):
         )
 
         if res.status_code == 200 and str(data.get("return_code", "")) == "0":
+            registry_block = _finish_owner_registry_intent(
+                owner_registry, owner_intent_id, response=data
+            )
+            if registry_block is not None:
+                return registry_block
+            if owner_intent_id:
+                data["owner_registry_intent_id"] = owner_intent_id
             cncl_qty_result = data.get("cncl_qty", "전량")
             new_ord_no = data.get("ord_no", "")
             print(
@@ -1851,6 +2185,11 @@ def send_cancel_order(code, orig_ord_no, token, qty=0, dmst_stex_tp=None):
             )
             return response_with_request_provenance(data)
         else:
+            registry_block = _finish_owner_registry_intent(
+                owner_registry, owner_intent_id, response=data
+            )
+            if registry_block is not None:
+                return registry_block
             err_msg = data.get("return_msg", "상세 사유 없음")
             msg = f"❌ [취소거절] {clean_code}: {err_msg}"
             log_error(msg)
@@ -1858,6 +2197,12 @@ def send_cancel_order(code, orig_ord_no, token, qty=0, dmst_stex_tp=None):
             return response_with_request_provenance(data)
 
     except Exception as e:
+        _finish_owner_registry_intent(
+            owner_registry,
+            owner_intent_id,
+            response=None,
+            ambiguous_reason=type(e).__name__,
+        )
         msg = f"🔥 [취소주문] 시스템 예외: {str(e)}"
         log_error(msg)
         EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
@@ -1876,6 +2221,7 @@ def send_smart_sell_order(
     strategy=None,
     bypass_open_time_block=False,
     dmst_stex_tp=None,
+    owner_context=None,
 ):
     """
      [v14.0] 슬리피지 방어를 위한 스마트 매도 로직 (사유 기반 동적 시장가 전환)
@@ -1902,6 +2248,7 @@ def send_smart_sell_order(
                 strategy=strategy,
                 bypass_open_time_block=bypass_open_time_block,
                 dmst_stex_tp=dmst_stex_tp,
+                owner_context=owner_context,
             )
 
         # 매수 1호가 정보 (bids[0] 이 가장 높은 매수 호가)
@@ -1919,6 +2266,7 @@ def send_smart_sell_order(
             strategy=strategy,
             bypass_open_time_block=bypass_open_time_block,
             dmst_stex_tp=dmst_stex_tp,
+            owner_context=owner_context,
         )
 
     # 2. 매매 성격(reason_type)에 따른 주문 분기
@@ -1936,6 +2284,7 @@ def send_smart_sell_order(
             strategy=strategy,
             bypass_open_time_block=bypass_open_time_block,
             dmst_stex_tp=dmst_stex_tp,
+            owner_context=owner_context,
         )
 
     # 💰 익절(PROFIT): 슬리피지 방어 가동
@@ -1953,6 +2302,7 @@ def send_smart_sell_order(
             strategy=strategy,
             bypass_open_time_block=bypass_open_time_block,
             dmst_stex_tp=dmst_stex_tp,
+            owner_context=owner_context,
         )
 
     # 💰 일반 익절, 타임아웃 (PROFIT, TIMEOUT) : 지정가(00) 우선 시도, 안 되면 최유리지정가(6) (8:2 비율 중 2의 영역)
@@ -1973,6 +2323,7 @@ def send_smart_sell_order(
                 strategy=strategy,
                 bypass_open_time_block=bypass_open_time_block,
                 dmst_stex_tp=dmst_stex_tp,
+                owner_context=owner_context,
             )
 
         else:
@@ -1987,6 +2338,7 @@ def send_smart_sell_order(
                 strategy=strategy,
                 bypass_open_time_block=bypass_open_time_block,
                 dmst_stex_tp=dmst_stex_tp,
+                owner_context=owner_context,
             )
 
 

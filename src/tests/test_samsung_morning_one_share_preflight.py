@@ -380,8 +380,8 @@ def test_main_derives_runtime_verification_from_exact_bot_pid(monkeypatch, tmp_p
     )
     monkeypatch.setattr(
         preflight_module,
-        "manual_control_operator_exclusion_source",
-        lambda symbol: "manual_operator",
+        "independent_machine_ownership_source",
+        lambda symbol, **kwargs: "manual_operator",
     )
     monkeypatch.setattr(
         preflight_module,
@@ -431,8 +431,8 @@ def test_main_does_not_trust_active_pid_when_runtime_verification_fails(
     )
     monkeypatch.setattr(
         preflight_module,
-        "manual_control_operator_exclusion_source",
-        lambda symbol: "manual_operator",
+        "independent_machine_ownership_source",
+        lambda symbol, **kwargs: "manual_operator",
     )
     monkeypatch.setattr(
         preflight_module,

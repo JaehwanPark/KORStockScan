@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.engine.risk.manual_control_exclusion import (
-    manual_control_operator_exclusion_source,
+    independent_machine_ownership_source,
 )
 from src.trading.order.regular_two_leg_machine import KST as KST
 from src.trading.order.regular_two_leg_machine import SamsungRegularTwoLegMachine
@@ -19,6 +19,10 @@ from src.utils.constants import DATA_DIR
 DEFAULT_STATE_PATH = DATA_DIR / "runtime" / "samsung_midday_one_share_state.json"
 
 
+def _episode_ownership_source(code: object) -> str:
+    return independent_machine_ownership_source(code, owner="episode")
+
+
 class SamsungMiddayOneShareMachine(SamsungRegularTwoLegMachine):
     """Compatibility class name; runtime authority is two one-share legs."""
 
@@ -29,9 +33,7 @@ class SamsungMiddayOneShareMachine(SamsungRegularTwoLegMachine):
         state_path: Path = DEFAULT_STATE_PATH,
         policy: MiddayOneSharePolicy = DEFAULT_POLICY,
         live_enabled: bool = False,
-        ownership_source: Callable[
-            [object], str
-        ] = manual_control_operator_exclusion_source,
+        ownership_source: Callable[[object], str] = _episode_ownership_source,
     ) -> None:
         super().__init__(
             gateway=gateway,

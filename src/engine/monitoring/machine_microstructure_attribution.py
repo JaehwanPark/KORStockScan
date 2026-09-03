@@ -60,6 +60,12 @@ from src.engine.risk.market_weakness_entry_guard import (
     market_weakness_blocked_entry_contract_errors,
 )
 from src.trading.low_price_two_leg.profiles import PROFILES
+from src.trading.market.micro_confirmation import (
+    CHECKPOINTS_SEC as DYNAMIC_CONFIRMATION_CHECKPOINTS_SEC,
+    build_dynamic_micro_confirmation_checkpoints,
+    evaluate_dynamic_micro_confirmation,
+    modeled_dynamic_target_price,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import read_json_object_strict
 from src.utils.market_day import is_krx_trading_day
@@ -654,11 +660,29 @@ def _owner_ts_on_target_date(value: Any, target_date: str) -> datetime | None:
 
 
 def _finite_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _dynamic_modeled_target_price(
+    anchor: Mapping[str, Any], checkpoint_ask: float | None
+) -> float | None:
+    outcome = anchor.get("owner_outcome")
+    return modeled_dynamic_target_price(
+        owner=str(anchor.get("owner") or ""),
+        baseline_fill_price=anchor.get("anchor_price"),
+        owner_target_price=anchor.get("owner_target_price"),
+        checkpoint_ask=checkpoint_ask,
+        widget_take_profit=bool(
+            isinstance(outcome, Mapping)
+            and outcome.get("exit_reason") == "take_profit_fill"
+        ),
+    )
 
 
 def _episode_exit_outcome_provenance(
@@ -2064,6 +2088,7 @@ def _widget_actual_execution_inventory(
                     if initial_fill_price is not None
                     else "accepted_entry_limit_price_unfilled"
                 ),
+                "owner_entry_limit_price": initial_submit_price,
                 "owner_requested_quantity": int(
                     _widget_numeric(initial_orders[0].get("requested_qty")) or 0
                 ),
@@ -3406,6 +3431,18 @@ def _episode_inventory(
                                     ),
                                     "owner_entry_limit_price": _finite_float(
                                         leg.get("entry_price")
+                                    ),
+                                    "owner_requested_quantity": (
+                                        int(requested_quantity)
+                                        if (
+                                            requested_quantity := _finite_float(
+                                                leg.get("quantity")
+                                            )
+                                        )
+                                        is not None
+                                        and requested_quantity > 0
+                                        and requested_quantity.is_integer()
+                                        else 0
                                     ),
                                     "owner_target_price": target_price,
                                     "lifecycle_stage": "entry",
@@ -5127,6 +5164,167 @@ def _entry_ask_depletion_feature(
     return report
 
 
+def _entry_checkpoint_ask_depletion_feature(
+    anchor: dict[str, Any],
+    window: dict[str, Any],
+    *,
+    source_complete: bool,
+    checkpoint_sec: int,
+) -> dict[str, Any] | None:
+    """Build the causal one-second micro window ending at a checkpoint."""
+
+    if anchor.get("anchor_role") not in _ENTRY_CONFIRMATION_ANCHOR_ROLES:
+        return None
+    anchor_at = _parse_ts(anchor.get("anchor_at"))
+    if anchor_at is None:
+        return {
+            "source_quality_status": "source_gap",
+            "source_gap_reasons": ["decision_anchor_timestamp_invalid"],
+        }
+    checkpoint_at = anchor_at + timedelta(seconds=checkpoint_sec)
+    raw_market_rows = [
+        dict(row)
+        for row in window.get("raw_market_rows") or []
+        if isinstance(row, dict)
+    ]
+    raw_depth_rows = [
+        dict(row) for row in window.get("raw_depth_rows") or [] if isinstance(row, dict)
+    ]
+    window_start = checkpoint_at - timedelta(seconds=1)
+    event_candidates: list[tuple[datetime, dict[str, Any]]] = []
+    for row in raw_market_rows:
+        timestamp = _parse_owner_ts(row.get("local_receive_timestamp"))
+        if (
+            timestamp is not None
+            and window_start <= timestamp < checkpoint_at
+            and row.get("schema") == "scalp_micro_reversion_market_stream_point_v3"
+            and row.get("realtime_type") == "0B"
+            and str(row.get("symbol") or "") == str(anchor.get("symbol") or "")
+            and str(row.get("venue") or "") in set(anchor.get("expected_venues") or ())
+            and str(row.get("session_bucket") or "")
+            in set(anchor.get("expected_session_buckets") or ())
+        ):
+            event_candidates.append((timestamp, row))
+    if not event_candidates:
+        return {
+            "source_quality_status": "source_gap",
+            "source_gap_reasons": ["causal_checkpoint_0b_window_missing"],
+        }
+    event_at, event_market = min(event_candidates, key=lambda item: item[0])
+    try:
+        sequence_epoch = int(event_market["sequence_epoch"])
+        market_sequence = int(event_market["source_sequence"])
+    except (KeyError, TypeError, ValueError):
+        return {
+            "source_quality_status": "source_gap",
+            "source_gap_reasons": ["causal_checkpoint_0b_sequence_invalid"],
+        }
+    scope = (
+        str(event_market.get("symbol") or ""),
+        str(event_market.get("venue") or ""),
+        str(event_market.get("session_bucket") or ""),
+        sequence_epoch,
+    )
+
+    scoped_market: list[tuple[datetime, dict[str, Any]]] = []
+    for row in raw_market_rows:
+        timestamp = _parse_owner_ts(row.get("local_receive_timestamp"))
+        try:
+            row_epoch = int(row.get("sequence_epoch"))
+        except (TypeError, ValueError):
+            continue
+        if (
+            timestamp is not None
+            and event_at <= timestamp < checkpoint_at
+            and (
+                str(row.get("symbol") or ""),
+                str(row.get("venue") or ""),
+                str(row.get("session_bucket") or ""),
+                row_epoch,
+            )
+            == scope
+        ):
+            scoped_market.append((timestamp, row))
+
+    scoped_depth: list[tuple[datetime, dict[str, Any]]] = []
+    for row in raw_depth_rows:
+        timestamp = _parse_owner_ts(row.get("local_receive_timestamp"))
+        try:
+            row_epoch = int(row.get("sequence_epoch"))
+        except (TypeError, ValueError):
+            continue
+        if (
+            timestamp is not None
+            and timestamp < checkpoint_at
+            and (
+                str(row.get("symbol") or ""),
+                str(row.get("venue") or ""),
+                str(row.get("session_bucket") or ""),
+                row_epoch,
+            )
+            == scope
+        ):
+            scoped_depth.append((timestamp, row))
+    anchor_depth_candidates = [item for item in scoped_depth if item[0] < event_at]
+    anchor_depth = (
+        max(anchor_depth_candidates, key=lambda item: item[0])[1]
+        if anchor_depth_candidates
+        else None
+    )
+    horizon_ms = int((checkpoint_at - event_at).total_seconds() * 1_000)
+    if horizon_ms <= 0:
+        return {
+            "source_quality_status": "source_gap",
+            "source_gap_reasons": ["causal_checkpoint_window_not_positive"],
+        }
+    context = AskDepletionContext(
+        event_id=(
+            f"entry_confirmation_checkpoint:{anchor['anchor_id']}:"
+            f"{checkpoint_sec}:{market_sequence}"
+        ),
+        anchor_role="shock_event",
+        symbol=scope[0],
+        venue=scope[1],
+        session_bucket=scope[2],
+        sequence_epoch=sequence_epoch,
+        anchor_event_local_receive_timestamp_ms=int(event_at.timestamp() * 1_000),
+        event_market_source_sequence=market_sequence,
+        observed_through_local_receive_timestamp_ms=int(
+            checkpoint_at.timestamp() * 1_000
+        ),
+        depth_source_complete=source_complete,
+        market_source_complete=source_complete,
+    )
+    try:
+        report = build_ask_depletion_report(
+            context=context,
+            anchor_depth=anchor_depth,
+            depth_rows=[row for _, row in scoped_depth],
+            market_rows=[row for _, row in scoped_market],
+            horizons_ms=(horizon_ms,),
+            top_depth_levels=(3, 5),
+            max_depth_age_ms=1_000,
+        ).as_dict()
+    except (KeyError, TypeError, ValueError) as exc:
+        return {
+            "source_quality_status": "source_gap",
+            "source_gap_reasons": [
+                f"causal_checkpoint_contract_error:{type(exc).__name__}:{exc}"
+            ],
+        }
+    report["decision_anchor_binding"] = {
+        "decision_anchor_id": anchor["anchor_id"],
+        "decision_anchor_at": anchor_at.isoformat(),
+        "checkpoint_sec": checkpoint_sec,
+        "checkpoint_at": checkpoint_at.isoformat(),
+        "window_started_at": event_at.isoformat(),
+        "window_horizon_ms": horizon_ms,
+        "binding_policy": "past_only_0b_0d_window_ending_at_exact_checkpoint",
+        "future_outcome_input_used": False,
+    }
+    return report
+
+
 def _anchor_result(
     anchor: dict[str, Any],
     symbol_inventory: dict[str, Any],
@@ -5225,6 +5423,11 @@ def _anchor_result(
         and str(outcome.get("quantity_basis") or "").startswith("one_share_normalized")
     ):
         required_exit_quantity = 1.0
+    required_entry_quantity = _finite_float(anchor.get("owner_requested_quantity"))
+    if required_entry_quantity is not None and (
+        required_entry_quantity <= 0 or not required_entry_quantity.is_integer()
+    ):
+        required_entry_quantity = None
 
     depth_context_count = sum(depth_context_present(row) for row in rows)
     metrics: dict[str, Any] = {
@@ -5281,8 +5484,24 @@ def _anchor_result(
                 "spread_bps": None,
                 "observation_offset_ms": None,
                 "quote_age_from_horizon_ms": None,
+                "sequence_epoch": None,
             }
             for horizon in ENTRY_CONFIRMATION_HORIZONS_SEC
+        },
+        "entry_confirmation_bbo_anchor": {
+            "observed": None,
+            "best_bid": None,
+            "best_ask": None,
+            "bid_return_bps": None,
+            "ask_return_bps": None,
+            "spread_bps": None,
+            "quote_age_from_signal_ms": None,
+            "required_entry_quantity": required_entry_quantity,
+            "available_best_ask_quantity": None,
+            "depth_backed": None,
+            "sequence_epoch": None,
+            "causal_past_only": True,
+            "future_outcome_input_used": False,
         },
         "market_weakness_counterfactual": None,
         "gross_no_slippage_profit_touch": {
@@ -5290,6 +5509,78 @@ def _anchor_result(
             for threshold in GROSS_PROFIT_TOUCH_BPS
         },
     }
+    if (
+        anchor_at is not None
+        and anchor.get("anchor_role") in _ENTRY_CONFIRMATION_ANCHOR_ROLES
+    ):
+        pre_signal_bbo_rows = [
+            row
+            for row in rows
+            if row["timestamp"] <= anchor_at
+            and row.get("best_bid") is not None
+            and row.get("best_ask") is not None
+        ]
+        anchor_bbo_row = pre_signal_bbo_rows[-1] if pre_signal_bbo_rows else None
+        quote_age_ms = (
+            round((anchor_at - anchor_bbo_row["timestamp"]).total_seconds() * 1_000.0)
+            if anchor_bbo_row is not None
+            else None
+        )
+        anchor_bbo_observed = bool(
+            anchor_bbo_row is not None
+            and quote_age_ms is not None
+            and 0 <= quote_age_ms <= ENTRY_CONFIRMATION_MAX_QUOTE_AGE_SEC * 1_000
+        )
+        anchor_depth = (
+            fillable_depth_context(anchor_bbo_row)
+            if anchor_bbo_observed and anchor_bbo_row is not None
+            else None
+        )
+        anchor_bid = float(anchor_bbo_row["best_bid"]) if anchor_bbo_observed else None
+        anchor_ask = float(anchor_bbo_row["best_ask"]) if anchor_bbo_observed else None
+        anchor_depth_backed = bool(
+            anchor_depth is not None
+            and anchor_ask is not None
+            and anchor_depth.get("best_ask") == anchor_ask
+            and required_entry_quantity is not None
+            and int(anchor_depth.get("best_ask_qty") or 0) >= required_entry_quantity
+        )
+        metrics["entry_confirmation_bbo_anchor"] = {
+            "observed": anchor_bbo_observed,
+            "best_bid": round(anchor_bid, 6) if anchor_bid is not None else None,
+            "best_ask": round(anchor_ask, 6) if anchor_ask is not None else None,
+            "bid_return_bps": (
+                round((anchor_bid / reference - 1.0) * 10_000.0, 6)
+                if anchor_bid is not None and reference is not None and reference > 0
+                else None
+            ),
+            "ask_return_bps": (
+                round((anchor_ask / reference - 1.0) * 10_000.0, 6)
+                if anchor_ask is not None and reference is not None and reference > 0
+                else None
+            ),
+            "spread_bps": (
+                round((anchor_ask - anchor_bid) / anchor_bid * 10_000.0, 6)
+                if anchor_bid is not None and anchor_ask is not None and anchor_bid > 0
+                else None
+            ),
+            "quote_age_from_signal_ms": quote_age_ms if anchor_bbo_observed else None,
+            "required_entry_quantity": required_entry_quantity,
+            "available_best_ask_quantity": (
+                int(anchor_depth["best_ask_qty"])
+                if anchor_depth is not None
+                and anchor_depth.get("best_ask_qty") is not None
+                else None
+            ),
+            "depth_backed": anchor_depth_backed if anchor_bbo_observed else None,
+            "sequence_epoch": (
+                int(anchor_bbo_row["sequence_epoch"])
+                if anchor_bbo_observed and anchor_bbo_row is not None
+                else None
+            ),
+            "causal_past_only": True,
+            "future_outcome_input_used": False,
+        }
     if post and reference is not None and reference > 0:
         high = max(post, key=lambda row: row["price"])
         low = min(post, key=lambda row: row["price"])
@@ -5432,9 +5723,9 @@ def _anchor_result(
                 horizon_depth is not None
                 and best_ask is not None
                 and horizon_depth.get("best_ask") == best_ask
-                and required_exit_quantity is not None
+                and required_entry_quantity is not None
                 and int(horizon_depth.get("best_ask_qty") or 0)
-                >= required_exit_quantity
+                >= required_entry_quantity
             )
             entry_confirmation_bbo_horizons[str(horizon_sec)] = {
                 "observed": (
@@ -5467,7 +5758,12 @@ def _anchor_result(
                     else None
                 ),
                 "quote_age_from_horizon_ms": quote_age_ms if observed else None,
-                "required_entry_quantity": required_exit_quantity,
+                "sequence_epoch": (
+                    int(horizon_row["sequence_epoch"])
+                    if observed and horizon_row is not None
+                    else None
+                ),
+                "required_entry_quantity": required_entry_quantity,
                 "available_best_ask_quantity": (
                     int(horizon_depth["best_ask_qty"])
                     if horizon_depth is not None
@@ -5822,6 +6118,265 @@ def _anchor_result(
             "broker_order_forbidden": True,
         }
 
+        dynamic_first_hit_checkpoints: dict[str, dict[str, Any]] = {}
+        owner_entry_limit_price = _finite_float(anchor.get("owner_entry_limit_price"))
+        signal_sequence_epoch = (
+            metrics.get("entry_confirmation_bbo_anchor") or {}
+        ).get("sequence_epoch")
+        for checkpoint_sec in DYNAMIC_CONFIRMATION_CHECKPOINTS_SEC:
+            checkpoint_bbo = (
+                metrics.get("entry_confirmation_bbo_anchor") or {}
+                if checkpoint_sec == 0
+                else (metrics.get("entry_confirmation_bbo_horizons") or {}).get(
+                    str(checkpoint_sec), {}
+                )
+            )
+            checkpoint_ask = _finite_float(checkpoint_bbo.get("best_ask"))
+            checkpoint_epoch = checkpoint_bbo.get("sequence_epoch")
+            checkpoint_at = (
+                anchor_at + timedelta(seconds=checkpoint_sec)
+                if anchor_at is not None
+                else None
+            )
+            checkpoint_gaps: list[str] = []
+            if checkpoint_bbo.get("observed") is not True:
+                checkpoint_gaps.append("checkpoint_bbo_not_observed")
+            if checkpoint_bbo.get("depth_backed") is not True:
+                checkpoint_gaps.append("checkpoint_entry_depth_not_backed")
+            if checkpoint_ask is None or checkpoint_ask <= 0:
+                checkpoint_gaps.append("checkpoint_ask_missing_or_invalid")
+            if (
+                isinstance(checkpoint_epoch, bool)
+                or not isinstance(checkpoint_epoch, int)
+                or checkpoint_epoch <= 0
+            ):
+                checkpoint_gaps.append("checkpoint_sequence_epoch_invalid")
+            elif checkpoint_epoch != signal_sequence_epoch:
+                checkpoint_gaps.append("checkpoint_crosses_signal_sequence_epoch")
+            if quantity <= 0:
+                checkpoint_gaps.append("required_quantity_missing_or_invalid")
+            if cost_pct is None or cost_pct < 0:
+                checkpoint_gaps.append("round_trip_cost_contract_missing_or_invalid")
+            if (
+                owner_entry_limit_price is None
+                or owner_entry_limit_price <= 0
+                or checkpoint_ask is None
+                or checkpoint_ask > owner_entry_limit_price
+            ):
+                checkpoint_gaps.append("owner_entry_limit_not_executable")
+            if (
+                (
+                    checkpoint_target_price := _dynamic_modeled_target_price(
+                        anchor, checkpoint_ask
+                    )
+                )
+                is None
+                or checkpoint_ask is None
+                or checkpoint_target_price <= checkpoint_ask
+            ):
+                checkpoint_gaps.append("owner_target_not_above_checkpoint_ask")
+
+            maximum_at = (
+                checkpoint_at + timedelta(seconds=300)
+                if checkpoint_at is not None
+                else None
+            )
+            checkpoint_bid_path: list[tuple[dict[str, Any], dict[str, Any]]] = []
+            if (
+                not checkpoint_gaps
+                and checkpoint_at is not None
+                and maximum_at is not None
+            ):
+                for candidate in post:
+                    if candidate["timestamp"] < checkpoint_at:
+                        continue
+                    if candidate["timestamp"] > maximum_at:
+                        break
+                    if candidate.get("best_bid") is None:
+                        continue
+                    if candidate.get("sequence_epoch") != checkpoint_epoch:
+                        continue
+                    depth = fillable_depth_context(candidate)
+                    if (
+                        depth is not None
+                        and depth.get("best_bid") == candidate.get("best_bid")
+                        and int(depth.get("best_bid_qty") or 0) >= quantity
+                    ):
+                        checkpoint_bid_path.append((candidate, depth))
+            if not checkpoint_bid_path:
+                checkpoint_gaps.append("checkpoint_exit_bid_path_missing")
+
+            adverse_price = (
+                checkpoint_ask - (checkpoint_target_price - checkpoint_ask)
+                if checkpoint_ask is not None
+                and checkpoint_target_price is not None
+                and checkpoint_target_price > checkpoint_ask
+                else None
+            )
+            target_hit = next(
+                (
+                    item
+                    for item in checkpoint_bid_path
+                    if checkpoint_target_price is not None
+                    and float(item[0]["best_bid"]) >= checkpoint_target_price
+                ),
+                None,
+            )
+            adverse_hit = next(
+                (
+                    item
+                    for item in checkpoint_bid_path
+                    if adverse_price is not None
+                    and float(item[0]["best_bid"]) <= adverse_price
+                ),
+                None,
+            )
+            if target_hit is not None and adverse_hit is not None:
+                if target_hit[0]["timestamp"] < adverse_hit[0]["timestamp"]:
+                    first_hit_state = "target_first"
+                elif adverse_hit[0]["timestamp"] < target_hit[0]["timestamp"]:
+                    first_hit_state = "adverse_first"
+                else:
+                    first_hit_state = "same_timestamp_ambiguous"
+            elif target_hit is not None:
+                first_hit_state = "target_first"
+            elif adverse_hit is not None:
+                first_hit_state = "adverse_first"
+            else:
+                first_hit_state = "unresolved"
+
+            timeout_candidates = [
+                item
+                for item in checkpoint_bid_path
+                if maximum_at is not None and item[0]["timestamp"] <= maximum_at
+            ]
+            timeout_row = timeout_candidates[-1] if timeout_candidates else None
+            timeout_quote_age_ms = (
+                round(
+                    (maximum_at - timeout_row[0]["timestamp"]).total_seconds() * 1_000.0
+                )
+                if maximum_at is not None and timeout_row is not None
+                else None
+            )
+            timeout_mature_5min = bool(
+                timeout_row is not None
+                and timeout_quote_age_ms is not None
+                and 0
+                <= timeout_quote_age_ms
+                <= MARKET_WEAKNESS_COUNTERFACTUAL_MAX_QUOTE_AGE_SEC * 1_000
+            )
+            outcome_mature_5min = bool(
+                first_hit_state != "unresolved" or timeout_mature_5min
+            )
+            if not outcome_mature_5min:
+                checkpoint_gaps.append("checkpoint_5min_timeout_bbo_not_mature")
+            timeout_bid = (
+                float(timeout_row[0]["best_bid"])
+                if timeout_mature_5min and timeout_row is not None
+                else None
+            )
+            timeout_net_pct = (
+                (timeout_bid / checkpoint_ask - 1.0) * 100.0 - cost_pct
+                if timeout_bid is not None
+                and checkpoint_ask is not None
+                and cost_pct is not None
+                else None
+            )
+            dynamic_first_hit_checkpoints[str(checkpoint_sec)] = {
+                "checkpoint_sec": checkpoint_sec,
+                "sequence_epoch": checkpoint_epoch,
+                "source_quality_status": (
+                    "eligible" if not checkpoint_gaps else "blocked"
+                ),
+                "source_gap_reasons": sorted(set(checkpoint_gaps)),
+                "entry": {
+                    "ask_price": checkpoint_ask,
+                    "entry_at": (
+                        checkpoint_at.isoformat() if checkpoint_at is not None else None
+                    ),
+                    "required_quantity": quantity or None,
+                    "depth_backed": checkpoint_bbo.get("depth_backed"),
+                    "owner_entry_limit_price": owner_entry_limit_price,
+                },
+                "target_adverse_first_hit": {
+                    "state": first_hit_state,
+                    "target_price": checkpoint_target_price,
+                    "baseline_owner_target_price": target_price,
+                    "adverse_price": (
+                        round(adverse_price, 6) if adverse_price is not None else None
+                    ),
+                    "target_at": (
+                        target_hit[0]["timestamp"].isoformat()
+                        if target_hit is not None
+                        else None
+                    ),
+                    "target_executable_bid": (
+                        float(target_hit[0]["best_bid"])
+                        if target_hit is not None
+                        else None
+                    ),
+                    "target_available_bid_quantity": (
+                        int(target_hit[1]["best_bid_qty"])
+                        if target_hit is not None
+                        else None
+                    ),
+                    "adverse_at": (
+                        adverse_hit[0]["timestamp"].isoformat()
+                        if adverse_hit is not None
+                        else None
+                    ),
+                    "adverse_executable_bid": (
+                        float(adverse_hit[0]["best_bid"])
+                        if adverse_hit is not None
+                        else None
+                    ),
+                    "adverse_available_bid_quantity": (
+                        int(adverse_hit[1]["best_bid_qty"])
+                        if adverse_hit is not None
+                        else None
+                    ),
+                    "adverse_threshold_role": (
+                        "diagnostic_symmetric_distance_to_owner_target_not_stop"
+                    ),
+                },
+                "outcome_mature_5min": outcome_mature_5min,
+                "timeout_mature_5min": timeout_mature_5min,
+                "timeout_executable_bid": timeout_bid,
+                "timeout_cost_aware_net_return_pct": (
+                    round(timeout_net_pct, 8) if timeout_net_pct is not None else None
+                ),
+                "round_trip_cost_pct": cost_pct,
+                "future_label_only": True,
+                "future_outcome_input_used_by_confirmation_action": False,
+            }
+        metrics["dynamic_confirmation_first_hit_outcomes"] = {
+            "schema": "machine_dynamic_confirmation_first_hit_outcomes_v1",
+            "label_horizon_sec": 300,
+            "checkpoint_outcomes": dynamic_first_hit_checkpoints,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "broker_order_forbidden": True,
+        }
+
+    checkpoint_ask_depletion = {
+        str(checkpoint_sec): _entry_checkpoint_ask_depletion_feature(
+            anchor,
+            window,
+            source_complete=status == "matched",
+            checkpoint_sec=checkpoint_sec,
+        )
+        for checkpoint_sec in DYNAMIC_CONFIRMATION_CHECKPOINTS_SEC
+    }
+    metrics["entry_pre_signal_ask_depletion"] = checkpoint_ask_depletion["0"]
+    metrics["entry_confirmation_checkpoint_ask_depletion"] = {
+        "schema": "machine_entry_confirmation_checkpoint_ask_depletion_v1",
+        "checkpoint_reports": checkpoint_ask_depletion,
+        "causal_past_only": True,
+        "future_outcome_input_used": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "broker_order_forbidden": True,
+    }
     metrics["entry_ask_depletion"] = _entry_ask_depletion_feature(
         anchor,
         window,
@@ -5840,6 +6395,60 @@ def _anchor_result(
         }
     )
     return result
+
+
+def _dynamic_confirmation_replay(result: dict[str, Any]) -> dict[str, Any]:
+    metrics = result.get("metrics") or {}
+    future_bbo = metrics.get("entry_confirmation_bbo_horizons") or {}
+    anchor_bbo = metrics.get("entry_confirmation_bbo_anchor") or {}
+    checkpoint_ask_depletion = (
+        metrics.get("entry_confirmation_checkpoint_ask_depletion") or {}
+    )
+    causal_anchor_bid = _finite_float(
+        anchor_bbo.get("best_bid") if isinstance(anchor_bbo, dict) else None
+    )
+    owner_entry_limit_price = _finite_float(result.get("owner_entry_limit_price"))
+    owner_target_price = _finite_float(result.get("owner_target_price"))
+    round_trip_cost_pct = _finite_float(result.get("owner_round_trip_cost_pct"))
+    outcome = result.get("owner_outcome")
+    checkpoints = build_dynamic_micro_confirmation_checkpoints(
+        anchor_bbo=anchor_bbo,
+        future_bbo=future_bbo,
+        checkpoint_ask_depletion=checkpoint_ask_depletion,
+        anchor_id=result.get("anchor_id"),
+        signal_decision_at=result.get("anchor_at"),
+        symbol=result.get("symbol"),
+        expected_venues=result.get("expected_venues"),
+        expected_session_buckets=result.get("expected_session_buckets"),
+        owner=str(result.get("owner") or ""),
+        baseline_fill_price=result.get("anchor_price"),
+        owner_entry_limit_price=owner_entry_limit_price,
+        owner_target_price=owner_target_price,
+        round_trip_cost_pct=round_trip_cost_pct,
+        widget_take_profit=bool(
+            isinstance(outcome, Mapping)
+            and outcome.get("exit_reason") == "take_profit_fill"
+        ),
+    )
+    replay = evaluate_dynamic_micro_confirmation(checkpoints)
+    replay["signal_binding"] = {
+        "anchor_id": result.get("anchor_id"),
+        "lifecycle_id": result.get("lifecycle_id"),
+        "owner": result.get("owner"),
+        "scope_id": result.get("scope_id"),
+        "symbol": result.get("symbol"),
+        "session": result.get("session"),
+        "expected_venues": result.get("expected_venues"),
+        "expected_session_buckets": result.get("expected_session_buckets"),
+        "entry_state": str(result.get("entry_state") or "UNSPECIFIED"),
+        "signal_decision_at": result.get("anchor_at"),
+        "owner_entry_limit_price": owner_entry_limit_price,
+        "owner_target_price": owner_target_price,
+        "owner_round_trip_cost_pct": round_trip_cost_pct,
+        "owner_requested_quantity": result.get("owner_requested_quantity"),
+        "causal_anchor_bid": causal_anchor_bid,
+    }
+    return replay
 
 
 def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -5932,6 +6541,8 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         ),
         "symbol": result.get("symbol"),
         "session": result.get("session"),
+        "expected_venues": result.get("expected_venues"),
+        "expected_session_buckets": result.get("expected_session_buckets"),
         "anchor_at": result.get("anchor_at"),
         "entry_state": str(result.get("entry_state") or "UNSPECIFIED"),
         "source_entry_event_id": result.get("source_entry_event_id"),
@@ -5944,6 +6555,7 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         ),
         "owner_outcome": result.get("owner_outcome"),
         "owner_entry_limit_price": result.get("owner_entry_limit_price"),
+        "owner_requested_quantity": result.get("owner_requested_quantity"),
         "owner_target_price": result.get("owner_target_price"),
         "owner_round_trip_cost_pct": result.get("owner_round_trip_cost_pct"),
         "owner_policy_tuning_eligible": (
@@ -5953,8 +6565,17 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
             result.get("owner_timing_custody_observation_eligible") is True
         ),
         "anchor_price": (result.get("metrics") or {}).get("reference_price"),
+        "entry_confirmation_bbo_anchor": metrics.get("entry_confirmation_bbo_anchor"),
         "entry_confirmation_bbo_horizons": bbo_horizons,
         "entry_ask_depletion": ask_report,
+        "entry_pre_signal_ask_depletion": metrics.get("entry_pre_signal_ask_depletion"),
+        "entry_confirmation_checkpoint_ask_depletion": metrics.get(
+            "entry_confirmation_checkpoint_ask_depletion"
+        ),
+        "dynamic_confirmation_source_only_replay": _dynamic_confirmation_replay(result),
+        "dynamic_confirmation_first_hit_outcomes": metrics.get(
+            "dynamic_confirmation_first_hit_outcomes"
+        ),
         "market_weakness_counterfactual": metrics.get("market_weakness_counterfactual"),
         "runtime_effect": False,
         "broker_order_forbidden": True,
@@ -5998,6 +6619,14 @@ def _micro_entry_confirmation_summary(
             for row in cohort_rows
             if row["classification"] != "source_quality_blocked"
         ]
+        dynamic_replays = [
+            replay
+            for row in cohort_rows
+            if isinstance(
+                (replay := row.get("dynamic_confirmation_source_only_replay")),
+                dict,
+            )
+        ]
         realized_net_returns = [
             float(outcome["cost_aware_net_return_pct"])
             for row in eligible_rows
@@ -6029,6 +6658,29 @@ def _micro_entry_confirmation_summary(
                     else None
                 ),
                 "actual_realized_sample_count": len(realized_net_returns),
+                "dynamic_confirmation_source_only": {
+                    "replay_count": len(dynamic_replays),
+                    "source_quality_eligible_count": sum(
+                        replay.get("source_quality_status") == "eligible"
+                        for replay in dynamic_replays
+                    ),
+                    "terminal_action_counts": {
+                        action: sum(
+                            replay.get("terminal_action") == action
+                            for replay in dynamic_replays
+                        )
+                        for action in ("ENTER", "REJECT", "INSUFFICIENT_DATA")
+                    },
+                    "selected_delay_counts": {
+                        str(checkpoint): sum(
+                            replay.get("selected_delay_sec") == checkpoint
+                            for replay in dynamic_replays
+                        )
+                        for checkpoint in DYNAMIC_CONFIRMATION_CHECKPOINTS_SEC
+                    },
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                },
                 "policy_candidate_ready": False,
             }
         )
@@ -6185,6 +6837,18 @@ def _micro_entry_confirmation_summary(
             ),
             "owner_state_cohort_count": len(cohorts),
             "daily_cap_reallocation_observation_count": len(cap_reallocation),
+            "dynamic_confirmation_source_only_replay_count": sum(
+                isinstance(row.get("dynamic_confirmation_source_only_replay"), dict)
+                for row in rows
+            ),
+            "dynamic_confirmation_source_quality_eligible_count": sum(
+                isinstance(
+                    (replay := row.get("dynamic_confirmation_source_only_replay")),
+                    dict,
+                )
+                and replay.get("source_quality_status") == "eligible"
+                for row in rows
+            ),
         },
         "owner_state_cohorts": cohorts,
         "entry_anchors": rows,

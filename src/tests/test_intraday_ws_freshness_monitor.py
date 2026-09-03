@@ -2008,6 +2008,62 @@ def test_scanner_generation_preserves_promotion_owner_and_venue_metadata(
     assert order["runtime_effect"] is False
 
 
+def test_scanner_generation_ignores_downstream_current_venue_without_scan_identity(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    promotion_id = "SCANPROM-000520-1000000"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "scalping_scanner_candidate_promoted",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "scanner_scan_generation_id": "SCANGEN-PREMARKET-ORIGIN",
+                    "scanner_scan_rank": 1,
+                    "scanner_ranked_candidate_count": 1,
+                    "effective_venue": "PREMARKET_KRX_LIKE",
+                    "market_session_bucket": "KRX_LIKE_PREMARKET",
+                },
+                code="000520",
+            ),
+            _event(
+                "scalping_scanner_fast_precheck",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+                code="000520",
+            ),
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+
+    report = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        generated_at="fixed",
+    )
+
+    funnel = report["scanner_unique_funnel"]
+    conservation = funnel["scan_generation_conservation"]
+    assert funnel["venue_counts"] == {"PREMARKET_KRX_LIKE": 1}
+    assert funnel["immutable_metadata_conflict_count"] == 0
+    assert conservation["complete_generation_count"] == 1
+    assert conservation["incomplete_generation_count"] == 0
+    assert conservation["rows"][0]["lineage_metadata_conflict_count"] == 0
+    assert conservation["rows"][0]["metadata_conflict_count"] == 0
+    assert not any(
+        item["order_id"] == "order_scanner_scan_generation_conservation_gap"
+        for item in report["workorder_directives"]
+    )
+
+
 def test_scanner_immutable_metadata_conflict_without_generation_is_not_hidden(
     tmp_path,
 ):

@@ -30,8 +30,8 @@ from src.utils import kiwoom_utils
 
 KIWOOM_OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
-    "commit_sha": "e1b32486a2d4c055d78e62d78711133f1458401e",
-    "retrieved_at_kst": "2026-08-27T19:34:00+09:00",
+    "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
+    "retrieved_at_kst": "2026-09-03T15:52:01+09:00",
     "inspected_paths": [
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",

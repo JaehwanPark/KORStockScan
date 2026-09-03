@@ -11748,7 +11748,7 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     # rising pool so archived metadata cannot recreate protected capacity.
     monkeypatch.setattr(
         kiwoom_sniper_v2,
-        "evaluate_manual_control_exclusion",
+        "evaluate_main_bot_control_exclusion",
         lambda code: SimpleNamespace(excluded=False),
     )
     monkeypatch.setattr(

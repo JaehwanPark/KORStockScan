@@ -75,6 +75,16 @@ from src.engine.sniper_time import (
     TIME_SCALPING_NEW_BUY_CUTOFF,
 )
 from src.engine.sniper_post_sell_feedback import record_post_sell_candidate
+from src.trading.config.symbol_owner_policy import (
+    SymbolOwnerPolicyError,
+    resolve_symbol_owner_policy,
+)
+from src.trading.order.owner_custody_registry import (
+    OwnerOrderContext,
+    OwnerRegistryError,
+    default_order_owner_registry,
+    main_owner_context,
+)
 
 KIWOOM_TOKEN = None
 DB = None
@@ -4970,6 +4980,11 @@ def _cancel_replacement_sell_once(
         token=KIWOOM_TOKEN,
         qty=0,
         dmst_stex_tp=intended_route,
+        owner_context=main_owner_context(
+            target_stock,
+            action="SELL_REPLACEMENT_CANCEL",
+            ordinal=normalized_order_no,
+        ),
     )
     return persist_pending_sell_cancel_ack_custody(
         target_stock,
@@ -6803,6 +6818,11 @@ def _cancel_replacement_buys_after_late_parent_fill(
                     order.get("broker_route")
                     or order.get("effective_dmst_stex_tp")
                     or target_stock.get("entry_execution_broker_route")
+                ),
+                owner_context=main_owner_context(
+                    target_stock,
+                    action="LATE_PARENT_CHILD_CANCEL",
+                    ordinal=order_no,
                 ),
             )
             acknowledged = _is_ok_response(result)
@@ -8778,6 +8798,7 @@ def _find_execution_target(
     order_qty=None,
     remaining_qty=None,
     cumulative_exec_qty=None,
+    owner_target_id=None,
 ):
     """실제체결 대상 runtime truth 매칭.
 
@@ -8794,6 +8815,20 @@ def _find_execution_target(
     2) 단일 SELL_ORDERED candidate
     """
     normalized_order_no = str(order_no or "").strip()
+
+    if owner_target_id is not None:
+        normalized_target_id = str(owner_target_id or "").strip()
+        return next(
+            (
+                stock
+                for stock in ACTIVE_TARGETS
+                if str(stock.get("code", "")).strip()[:6] == code
+                and str(stock.get("id", "") or "").strip() == normalized_target_id
+                and str(stock.get("status", "") or "").strip().upper()
+                in {"WATCHING", "BUY_ORDERED", "HOLDING", "SELL_ORDERED"}
+            ),
+            None,
+        )
 
     if exec_type == "BUY":
         if normalized_order_no:
@@ -9404,6 +9439,11 @@ def _submit_opening_rotation_profit_order(
             reason_type="PROFIT",
             strategy="SCALPING",
             dmst_stex_tp="KRX",
+            owner_context=main_owner_context(
+                target_stock,
+                action="OPENING_TARGET_SELL",
+                ordinal=submit_generation,
+            ),
         )
     except Exception as exc:
         response = None
@@ -11630,6 +11670,108 @@ def handle_real_execution(exec_data):
         return
 
     received_at = datetime.now(_KST)
+    owner_target_id = None
+    try:
+        owner_policy = resolve_symbol_owner_policy(code, target_date=received_at.date())
+    except (SymbolOwnerPolicyError, OSError, ValueError) as exc:
+        log_error(
+            f"[OWNER_RECEIPT_BLOCKED] code={code} order_no={order_no or '-'} "
+            f"reason=symbol_owner_policy_fail_closed:{type(exc).__name__}"
+        )
+        return
+    registry = default_order_owner_registry()
+    try:
+        registry_managed_symbol = bool(
+            owner_policy.coexistence_enabled or registry.symbol_registered(code)
+        )
+    except OwnerRegistryError as exc:
+        log_error(
+            f"[OWNER_RECEIPT_BLOCKED] code={code} order_no={order_no or '-'} "
+            f"reason={exc}"
+        )
+        return
+    if registry_managed_symbol:
+        if not order_no:
+            log_error(
+                f"[OWNER_RECEIPT_BLOCKED] code={code} type={exec_type} "
+                "reason=broker_order_number_missing"
+            )
+            return
+        try:
+            if order_qty is None or remaining_qty is None or remaining_qty > order_qty:
+                raise OwnerRegistryError(
+                    "owner_registry_cumulative_fill_quantity_unavailable"
+                )
+            registry_cumulative_filled_qty = order_qty - remaining_qty
+            if registry_cumulative_filled_qty < exec_qty:
+                raise OwnerRegistryError(
+                    "owner_registry_cumulative_fill_quantity_inconsistent"
+                )
+            if owner_policy.coexistence_enabled and not registry.contains_event_hash(
+                owner_policy.migration_registry_tail_hash
+            ):
+                raise OwnerRegistryError(
+                    "coexistence_migration_registry_generation_missing"
+                )
+            owner_row = registry.order_owner(
+                order_date=received_at.date(), broker_order_no=order_no
+            )
+            if owner_row is None:
+                owner_row = registry.bind_unique_pending_receipt(
+                    symbol=code,
+                    side=exec_type,
+                    order_date=received_at.date(),
+                    broker_order_no=order_no,
+                    broker_order_qty=order_qty,
+                )
+            if owner_row is None:
+                raise OwnerRegistryError("owner_registry_receipt_owner_unresolved")
+            owner_context = OwnerOrderContext(
+                owner_type=str(owner_row.get("owner_type") or ""),
+                owner_id=str(owner_row.get("owner_id") or ""),
+                position_id=str(owner_row.get("position_id") or ""),
+                client_intent_id=str(owner_row.get("client_intent_id") or ""),
+            )
+            registry.record_fill(
+                context=owner_context,
+                symbol=code,
+                side=exec_type,
+                order_quantity=order_qty,
+                order_date=received_at.date(),
+                broker_order_no=order_no,
+                cumulative_filled_qty=registry_cumulative_filled_qty,
+                cumulative_fill_amount=cumulative_exec_amount,
+                execution_no=execution_no,
+            )
+            owner_intent_id = str(owner_row.get("intent_id") or "")
+            receipt_terminal = bool(remaining_qty == 0)
+            if owner_intent_id and receipt_terminal:
+                registry.transition(
+                    owner_intent_id,
+                    state="ORDER_TERMINAL",
+                    broker_order_no=order_no,
+                    reason="shared_ws_execution_receipt_terminal",
+                )
+        except OwnerRegistryError as exc:
+            log_error(
+                f"[OWNER_RECEIPT_BLOCKED] code={code} type={exec_type} "
+                f"order_no={order_no} reason={exc}"
+            )
+            return
+        if owner_context.owner_type != "main_scalping":
+            log_info(
+                f"[EXEC_OWNER_ROUTED_EXTERNAL] code={code} type={exec_type} "
+                f"order_no={order_no} owner={owner_context.owner_id}"
+            )
+            return
+        prefix = "main_scalping:"
+        if not owner_context.owner_id.startswith(prefix):
+            log_error(
+                f"[OWNER_RECEIPT_BLOCKED] code={code} order_no={order_no} "
+                "reason=main_owner_id_invalid"
+            )
+            return
+        owner_target_id = owner_context.owner_id[len(prefix) :]
     broker_observed_at, broker_execution_fields = _broker_execution_context(
         exec_data, received_at=received_at
     )
@@ -11845,6 +11987,7 @@ def handle_real_execution(exec_data):
             order_qty=order_qty,
             remaining_qty=remaining_qty,
             cumulative_exec_qty=exec_qty,
+            owner_target_id=owner_target_id,
         )
         if not target_stock:
             ignore_context = _execution_ignore_context(code, exec_type, order_no)

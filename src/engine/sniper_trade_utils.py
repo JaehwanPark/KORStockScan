@@ -5,6 +5,7 @@ import time
 from datetime import datetime, time as datetime_time, timedelta, timezone
 
 from src.engine import kiwoom_orders
+from src.trading.order.owner_custody_registry import OwnerOrderContext
 from src.utils import kiwoom_utils
 from src.engine.sniper_time import (
     TIME_15_30,
@@ -377,13 +378,14 @@ def resolve_pending_sell_order_no(target_stock, token, *, now_epoch=None):
     return matched[0], "kt00007_plus_ka10075_exact_unique"
 
 
-def send_market_exit_now(code, qty, token):
+def send_market_exit_now(code, qty, token, *, owner_context=None):
     """정규장 중 즉시 시장가 청산용 공통 래퍼"""
     return kiwoom_orders.send_sell_order_market(
         code=code,
         qty=qty,
         token=token,
         order_type="3",
+        owner_context=owner_context,
     )
 
 
@@ -396,6 +398,7 @@ def send_exit_best_ioc(
     reason_type=None,
     strategy=None,
     bypass_open_time_block=False,
+    owner_context=None,
 ):
     """[공통 긴급 청산 래퍼] 최유리(IOC, 16) 조건으로 즉각 청산 시도"""
     kwargs = {
@@ -407,6 +410,8 @@ def send_exit_best_ioc(
         "reason_type": reason_type,
         "strategy": strategy,
     }
+    if owner_context is not None:
+        kwargs["owner_context"] = owner_context
     if bypass_open_time_block:
         kwargs["bypass_open_time_block"] = True
     return kiwoom_orders.send_sell_order_market(**kwargs)
@@ -539,7 +544,12 @@ def _resolve_cancel_exchange_from_unfilled_snapshot(
 
 
 def send_cancel_order_with_exchange_retry(
-    code, orig_ord_no, token, qty=0, dmst_stex_tp="SOR"
+    code,
+    orig_ord_no,
+    token,
+    qty=0,
+    dmst_stex_tp="SOR",
+    owner_context=None,
 ):
     cancel_exchange = str(dmst_stex_tp or "SOR").strip().upper()
     if cancel_exchange not in {"KRX", "NXT", "SOR"}:
@@ -550,6 +560,7 @@ def send_cancel_order_with_exchange_retry(
         token=token,
         qty=qty,
         dmst_stex_tp=cancel_exchange,
+        owner_context=owner_context,
     )
     if _cancel_response_success(res) or cancel_exchange != "SOR":
         return res
@@ -563,12 +574,28 @@ def send_cancel_order_with_exchange_retry(
     )
     if resolved_exchange not in {"KRX", "NXT"}:
         return res
+    retry_owner_context = owner_context
+    if isinstance(owner_context, OwnerOrderContext):
+        retry_owner_context = OwnerOrderContext(
+            owner_type=owner_context.owner_type,
+            owner_id=owner_context.owner_id,
+            position_id=owner_context.position_id,
+            client_intent_id=f"{owner_context.client_intent_id}:EXCHANGE_RETRY",
+        )
+    elif isinstance(owner_context, dict):
+        retry_owner_context = {
+            **owner_context,
+            "client_intent_id": (
+                f"{str(owner_context.get('client_intent_id') or '')}:EXCHANGE_RETRY"
+            ),
+        }
     return kiwoom_orders.send_cancel_order(
         code=code,
         orig_ord_no=orig_ord_no,
         token=token,
         qty=qty,
         dmst_stex_tp=resolved_exchange,
+        owner_context=retry_owner_context,
     )
 
 

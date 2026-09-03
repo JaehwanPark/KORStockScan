@@ -46,7 +46,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v9"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v10"
 SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 SCANNER_BBO_GROSS_TARGET_PCT = 1.30
 SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
@@ -975,9 +975,7 @@ def _scanner_funnel_event_fingerprint(row: dict[str, Any]) -> str:
         "prune_observer_configuration_status": str(
             row.get("scanner_prune_observer_configuration_status") or ""
         ),
-        "scanner_iteration_id": _valid_lineage_token(
-            row.get("scanner_iteration_id")
-        ),
+        "scanner_iteration_id": _valid_lineage_token(row.get("scanner_iteration_id")),
         "scanner_iteration_started_epoch": _to_float(
             row.get("scanner_iteration_started_epoch")
         ),
@@ -1010,9 +1008,7 @@ def _update_scanner_funnel_state(
         process_pid = _nonnegative_integer_metadata(
             row.get("scanner_prune_observer_process_pid")
         )
-        configured_epoch = _to_float(
-            row.get("scanner_prune_observer_configured_epoch")
-        )
+        configured_epoch = _to_float(row.get("scanner_prune_observer_configured_epoch"))
         receipt_key = (
             f"{process_pid or 0}:{configured_epoch or 0.0:.6f}:"
             f"{row.get('scanner_prune_observer_configuration_status') or 'configured'}"
@@ -1020,9 +1016,7 @@ def _update_scanner_funnel_state(
         state.setdefault("prune_observer_runtime_receipts", {})[receipt_key] = {
             "process_pid": process_pid,
             "configured_epoch": configured_epoch,
-            "configured_at": str(
-                row.get("scanner_prune_observer_configured_at") or ""
-            ),
+            "configured_at": str(row.get("scanner_prune_observer_configured_at") or ""),
             "configuration_status": str(
                 row.get("scanner_prune_observer_configuration_status") or "unknown"
             ),
@@ -1031,9 +1025,7 @@ def _update_scanner_funnel_state(
                 row.get("scanner_prune_observer_configuration_receipt_status")
                 or "unknown"
             ),
-            "token_present": _boolish(
-                row.get("scanner_prune_observer_token_present")
-            ),
+            "token_present": _boolish(row.get("scanner_prune_observer_token_present")),
             "sample_offsets_sec": _listish(
                 row.get("scanner_prune_observer_sample_offsets_sec")
             ),
@@ -1041,9 +1033,7 @@ def _update_scanner_funnel_state(
                 row.get("scanner_prune_observer_episode_reset_gap_sec")
             ),
             "max_anchor_to_schedule_delay_sec": _to_float(
-                row.get(
-                    "scanner_prune_observer_max_anchor_to_schedule_delay_sec"
-                )
+                row.get("scanner_prune_observer_max_anchor_to_schedule_delay_sec")
             ),
             "max_active_episode_count": _nonnegative_integer_metadata(
                 row.get("scanner_prune_observer_max_active_episode_count")
@@ -1066,12 +1056,8 @@ def _update_scanner_funnel_state(
             ),
             "runtime_effect": _boolish(row.get("runtime_effect")),
             "allowed_runtime_apply": _boolish(row.get("allowed_runtime_apply")),
-            "actual_order_submitted": _boolish(
-                row.get("actual_order_submitted")
-            ),
-            "broker_order_forbidden": _boolish(
-                row.get("broker_order_forbidden")
-            ),
+            "actual_order_submitted": _boolish(row.get("actual_order_submitted")),
+            "broker_order_forbidden": _boolish(row.get("broker_order_forbidden")),
         }
         return
     if stage == "scalping_scanner_iteration_timing":
@@ -1082,9 +1068,7 @@ def _update_scanner_funnel_state(
         state.setdefault("scanner_iteration_timing_receipts", {})[iteration_id] = {
             "iteration_id": iteration_id,
             "started_epoch": _to_float(row.get("scanner_iteration_started_epoch")),
-            "completed_epoch": _to_float(
-                row.get("scanner_iteration_completed_epoch")
-            ),
+            "completed_epoch": _to_float(row.get("scanner_iteration_completed_epoch")),
             "elapsed_sec": _to_float(row.get("scanner_iteration_elapsed_sec")),
             "configured_post_sleep_sec": _to_float(
                 row.get("scanner_iteration_configured_post_sleep_sec")
@@ -1103,9 +1087,7 @@ def _update_scanner_funnel_state(
         }
         return
     if stage == "scalping_scanner_low_rebound_source_observed":
-        observed_at = str(
-            row.get("emitted_at") or row.get("timestamp") or ""
-        ).strip()
+        observed_at = str(row.get("emitted_at") or row.get("timestamp") or "").strip()
         receipt_key = hashlib.sha256(
             json.dumps(
                 {
@@ -1392,15 +1374,31 @@ def _update_scanner_funnel_state(
         ranked_candidate_count,
         authoritative=authoritative_metadata,
     )
-    _merge_immutable_scanner_metadata(
-        lineage, "venue", venue, authoritative=authoritative_metadata
+    # A promoted WATCHING target can legitimately remain active after the
+    # market session changes.  Those downstream events describe the current
+    # execution venue/session and, when they do not carry the immutable scan
+    # generation envelope, must not overwrite or conflict with the original
+    # promotion provenance.  Events that do carry any scan identity remain
+    # subject to the strict immutable-metadata contract.
+    has_scan_identity = any(
+        value not in (None, "")
+        for value in (generation_id, scan_rank, ranked_candidate_count)
     )
-    _merge_immutable_scanner_metadata(
-        lineage,
-        "market_session_bucket",
-        market_session_bucket,
-        authoritative=authoritative_metadata,
+    code_identity_conflict = bool(
+        code
+        and lineage.get("code") not in (None, "", "UNKNOWN")
+        and lineage.get("code") != code
     )
+    if authoritative_metadata or has_scan_identity or code_identity_conflict:
+        _merge_immutable_scanner_metadata(
+            lineage, "venue", venue, authoritative=authoritative_metadata
+        )
+        _merge_immutable_scanner_metadata(
+            lineage,
+            "market_session_bucket",
+            market_session_bucket,
+            authoritative=authoritative_metadata,
+        )
     lineage["record_ids"] = _append_unique(
         lineage.get("record_ids"), row.get("runtime_record_id") or row.get("record_id")
     )
@@ -2908,10 +2906,13 @@ def _scanner_bbo_economic_attribution(
                 "population_role": "bounded_observer_selected_episode",
             },
         )
-        if int(
-            selected_group.get("eligible_verified_common_stock_candidate_count")
-            or 0
-        ) > 0:
+        if (
+            int(
+                selected_group.get("eligible_verified_common_stock_candidate_count")
+                or 0
+            )
+            > 0
+        ):
             prune_acceptance_groups.append(selected_group)
     prune_acceptance_ready = bool(
         prune_acceptance_groups
@@ -2951,8 +2952,7 @@ def _scanner_bbo_economic_attribution(
     source_capture_design_required = False
     source_capture_repair_required = bool(
         any(
-            row["source_capture_gap"]
-            and row.get("cohort") not in prune_cohort_names
+            row["source_capture_gap"] and row.get("cohort") not in prune_cohort_names
             for row in cohort_source_quality
         )
         or any(
@@ -3030,9 +3030,7 @@ def _scanner_bbo_economic_attribution(
         ],
         "cohort_source_quality": cohort_source_quality,
         "cohort_venue_session_economics": cohort_venue_session_economics,
-        "prune_observer_selected_venue_session_economics": (
-            prune_acceptance_groups
-        ),
+        "prune_observer_selected_venue_session_economics": (prune_acceptance_groups),
         "prune_observer_acceptance": prune_observer_acceptance,
         "source_capture_design_required": source_capture_design_required,
         "source_capture_implementation_state": source_capture_implementation_state,
@@ -3201,9 +3199,7 @@ def _scanner_unique_funnel_summary(
         bbo_attribution["source_capture_repair_required"] = True
     prune_observer_summary = {
         "metric_contract": SCANNER_PRUNE_BBO_COLLECTOR_METRIC_CONTRACT,
-        "runtime_configuration_receipt_count": len(
-            prune_observer_runtime_receipts
-        ),
+        "runtime_configuration_receipt_count": len(prune_observer_runtime_receipts),
         "runtime_configuration_valid_receipt_count": len(
             valid_runtime_configuration_receipts
         ),
@@ -3413,18 +3409,14 @@ def _scanner_unique_funnel_summary(
         "projected_start_to_start_p95_sec": _nearest_rank_percentile(
             projected_start_to_start_values, 0.95
         ),
-        "observed_start_to_start_sample_count": len(
-            observed_start_to_start_values
-        ),
+        "observed_start_to_start_sample_count": len(observed_start_to_start_values),
         "observed_start_to_start_p50_sec": _nearest_rank_percentile(
             observed_start_to_start_values, 0.50
         ),
         "observed_start_to_start_p95_sec": _nearest_rank_percentile(
             observed_start_to_start_values, 0.95
         ),
-        "low_rebound_stage_receipt_count": len(
-            scanner_low_rebound_timing_receipts
-        ),
+        "low_rebound_stage_receipt_count": len(scanner_low_rebound_timing_receipts),
         "low_rebound_stage_elapsed_sample_count": len(
             low_rebound_stage_elapsed_values_ms
         ),

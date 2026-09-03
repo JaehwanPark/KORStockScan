@@ -1526,6 +1526,10 @@ def test_fast_exit_dispatch_passes_explicit_nxt_route(monkeypatch):
         fast_exit=True,
     )
 
+    assert len(sells) == 1
+    owner_context = sells[0][2].pop("owner_context")
+    assert owner_context.owner_type == "main_scalping"
+    assert owner_context.owner_id == "main_scalping:1"
     assert sells == [
         (
             "123456",
@@ -1609,6 +1613,10 @@ def test_fast_exit_dispatch_1545_uses_exact_nxt_bid_time_passthrough(monkeypatch
         fast_exit=True,
     )
 
+    assert len(sells) == 1
+    owner_context = sells[0][2].pop("owner_context")
+    assert owner_context.owner_type == "main_scalping"
+    assert owner_context.owner_id == "main_scalping:1"
     assert sells == [
         (
             "123456",

@@ -11,7 +11,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 
 from src.engine.risk.manual_control_exclusion import (
-    manual_control_operator_exclusion_source,
+    independent_machine_ownership_source,
 )
 from src.engine.threshold_cycle_preopen_apply import verify_runtime_env_handoff
 from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
@@ -32,6 +32,12 @@ AUTHORITY_SCHEMA = "samsung_morning_two_episode_authority_v7"
 DEFAULT_AUTHORITY_PATH = (
     DATA_DIR / "runtime" / "samsung_morning_one_share_authority.json"
 )
+
+
+def _episode_ownership_source(symbol: str, *, target_date: date) -> str:
+    return independent_machine_ownership_source(
+        symbol, owner="episode", target_date=target_date
+    )
 
 
 def _is_bot_main_pid(pid: int, *, proc_root: Path = Path("/proc")) -> bool:
@@ -440,7 +446,9 @@ def main(argv: list[str] | None = None) -> int:
         main_bot_pid=args.main_bot_pid,
         main_bot_runtime_env_verified=runtime_env_verified,
         shared_token_available=bool(kiwoom_utils.get_cached_kiwoom_token()),
-        operator_exclusion_source=manual_control_operator_exclusion_source("005930"),
+        operator_exclusion_source=_episode_ownership_source(
+            "005930", target_date=target_date
+        ),
         prior_reentry_state_clear=prior_reentry_clear,
     )
     output = {

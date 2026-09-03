@@ -4,13 +4,19 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from src.engine.monitoring import (
+    machine_microstructure_attribution as attribution_module,
+)
 from src.engine.monitoring.machine_microstructure_attribution import (
     FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID,
     OBJECTIVE_CANDIDATE_BINDING_SCHEMA,
     OBJECTIVE_FOLLOWUP_METRIC_CONTRACT,
     _episode_exit_outcome_provenance,
+    _finite_float,
     _fast_lifecycle_objective_followup,
     _anchor_result,
+    _dynamic_confirmation_replay,
+    _entry_checkpoint_ask_depletion_feature,
     _episode_inventory,
     _lifecycle_objective_summary,
     _micro_entry_confirmation_summary,
@@ -31,6 +37,11 @@ from src.engine.scalping.micro_reversion.collection_targets import (
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+def test_finite_float_rejects_boolean_contract_values():
+    assert _finite_float(True) is None
+    assert _finite_float(False) is None
 
 
 def test_realized_episode_exit_with_unknown_source_is_not_target_fill():
@@ -421,6 +432,171 @@ def test_market_weakness_blocked_signal_uses_depth_backed_1_to_30m_bbo():
     assert counterfactual["mfe_executable_bid_pct"] == 2.0
     assert counterfactual["mae_executable_bid_pct"] == -0.5
     assert counterfactual["target_adverse_first_hit"]["state"] == "target_first"
+
+
+def test_dynamic_confirmation_first_hit_starts_at_exact_checkpoint_bbo() -> None:
+    anchor_at = datetime(2026, 8, 31, 10, 0, tzinfo=KST)
+    points = [
+        (0, 9_990, 10_000),
+        (1, 10_000, 10_010),
+        (2, 10_020, 10_030),
+        (300, 10_010, 10_020),
+    ]
+    rows = [
+        {
+            "timestamp": anchor_at + timedelta(seconds=offset),
+            "price": ask,
+            "best_bid": bid,
+            "best_ask": ask,
+            "sequence_epoch": 3,
+        }
+        for offset, bid, ask in points
+    ]
+    depth_points = [
+        {
+            "timestamp": row["timestamp"],
+            "best_bid": row["best_bid"],
+            "best_ask": row["best_ask"],
+            "best_bid_qty": 100,
+            "best_ask_qty": 100,
+            "sequence_epoch": 3,
+        }
+        for row in rows
+    ]
+
+    result = _anchor_result(
+        {
+            "anchor_id": "episode:test:signal",
+            "lifecycle_id": "episode:test",
+            "owner": "episode",
+            "scope_id": "episode:test",
+            "symbol": "005930",
+            "session": "KRX_REGULAR",
+            "expected_venues": ["KRX"],
+            "expected_session_buckets": ["KRX_REGULAR"],
+            "anchor_at": anchor_at.isoformat(),
+            "anchor_price": 10_000,
+            "owner_entry_limit_price": 10_010,
+            "owner_target_price": 10_020,
+            "owner_requested_quantity": 20,
+            "owner_round_trip_cost_pct": 0.23,
+            "lifecycle_stage": "entry",
+            "anchor_role": "episode_signal_decision_leg",
+            "entry_state": "UNSPECIFIED",
+            "owner_lifecycle_contract_valid": True,
+            "owner_policy_tuning_eligible": True,
+            "actual_order_submitted": True,
+        },
+        {"observed_row_count": len(rows), "invalid_contract_scope_counts": {}},
+        {
+            "rows": rows,
+            "depth_points": depth_points,
+            "depth_rows": len(depth_points),
+            "shock_reference_count": 0,
+            "raw_market_rows": [],
+            "raw_depth_rows": [],
+        },
+        partition_loaded=True,
+        source_contract_gap=None,
+        clean_baseline_allowed=True,
+    )
+
+    first_hit = result["metrics"]["dynamic_confirmation_first_hit_outcomes"]
+    checkpoint = first_hit["checkpoint_outcomes"]["0"]
+    assert checkpoint["source_quality_status"] == "eligible"
+    assert checkpoint["entry"]["ask_price"] == 10_000
+    assert checkpoint["target_adverse_first_hit"]["target_price"] == 10_020
+    assert checkpoint["target_adverse_first_hit"]["state"] == "target_first"
+    assert (
+        checkpoint["target_adverse_first_hit"]["target_at"]
+        == (anchor_at + timedelta(seconds=2)).isoformat()
+    )
+    assert checkpoint["future_outcome_input_used_by_confirmation_action"] is False
+    assert first_hit["runtime_effect"] is False
+
+
+def test_dynamic_confirmation_first_hit_does_not_cross_sequence_epoch() -> None:
+    anchor_at = datetime(2026, 8, 31, 10, 0, tzinfo=KST)
+    rows = [
+        {
+            "timestamp": anchor_at,
+            "price": 10_000,
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "sequence_epoch": 3,
+        },
+        {
+            "timestamp": anchor_at + timedelta(seconds=2),
+            "price": 10_030,
+            "best_bid": 10_020,
+            "best_ask": 10_030,
+            "sequence_epoch": 4,
+        },
+        {
+            "timestamp": anchor_at + timedelta(seconds=300),
+            "price": 10_030,
+            "best_bid": 10_020,
+            "best_ask": 10_030,
+            "sequence_epoch": 4,
+        },
+    ]
+    depth_points = [
+        {
+            "timestamp": row["timestamp"],
+            "best_bid": row["best_bid"],
+            "best_ask": row["best_ask"],
+            "best_bid_qty": 100,
+            "best_ask_qty": 100,
+            "sequence_epoch": row["sequence_epoch"],
+        }
+        for row in rows
+    ]
+
+    result = _anchor_result(
+        {
+            "anchor_id": "episode:test:cross_epoch",
+            "lifecycle_id": "episode:test:cross_epoch",
+            "owner": "episode",
+            "scope_id": "episode:test",
+            "symbol": "005930",
+            "session": "KRX_REGULAR",
+            "expected_venues": ["KRX"],
+            "expected_session_buckets": ["KRX_REGULAR"],
+            "anchor_at": anchor_at.isoformat(),
+            "anchor_price": 10_000,
+            "owner_entry_limit_price": 10_010,
+            "owner_target_price": 10_020,
+            "owner_requested_quantity": 20,
+            "owner_round_trip_cost_pct": 0.23,
+            "lifecycle_stage": "entry",
+            "anchor_role": "episode_signal_decision_leg",
+            "entry_state": "UNSPECIFIED",
+            "owner_lifecycle_contract_valid": True,
+            "owner_policy_tuning_eligible": True,
+            "actual_order_submitted": True,
+        },
+        {"observed_row_count": len(rows), "invalid_contract_scope_counts": {}},
+        {
+            "rows": rows,
+            "depth_points": depth_points,
+            "depth_rows": len(depth_points),
+            "shock_reference_count": 0,
+            "raw_market_rows": [],
+            "raw_depth_rows": [],
+        },
+        partition_loaded=True,
+        source_contract_gap=None,
+        clean_baseline_allowed=True,
+    )
+
+    checkpoint = result["metrics"]["dynamic_confirmation_first_hit_outcomes"][
+        "checkpoint_outcomes"
+    ]["0"]
+    assert checkpoint["sequence_epoch"] == 3
+    assert checkpoint["target_adverse_first_hit"]["state"] == "unresolved"
+    assert checkpoint["outcome_mature_5min"] is False
+    assert checkpoint["source_quality_status"] == "blocked"
+    assert "checkpoint_5min_timeout_bbo_not_mature" in checkpoint["source_gap_reasons"]
 
 
 def test_episode_style_widget_signal_joins_advisory_exit_and_daily_cap_observation(
@@ -877,6 +1053,225 @@ def test_micro_entry_confirmation_keeps_owner_and_entry_state_cohorts_separate()
     assert {
         (row["owner"], row["entry_state"]) for row in summary["owner_state_cohorts"]
     } == {("widget", "ENTRY_READY"), ("episode", "UNSPECIFIED")}
+
+
+def test_dynamic_confirmation_uses_causal_anchor_bid_not_eventual_fill_price():
+    def checkpoint_ask_bundle(sequence_epoch: int) -> dict:
+        return {
+            "schema": "machine_entry_confirmation_checkpoint_ask_depletion_v1",
+            "checkpoint_reports": {
+                str(checkpoint): {
+                    "schema": "scalp_micro_reversion_ask_depletion_v2",
+                    "context": {
+                        "symbol": "005930",
+                        "venue": "KRX",
+                        "session_bucket": "KRX_REGULAR",
+                        "sequence_epoch": sequence_epoch,
+                    },
+                    "decision_anchor_binding": {
+                        "decision_anchor_id": "widget:test:signal",
+                        "decision_anchor_at": "2026-08-27T10:00:00+09:00",
+                        "checkpoint_sec": checkpoint,
+                        "checkpoint_at": (f"2026-08-27T10:00:0{checkpoint}+09:00"),
+                        "window_horizon_ms": 900,
+                        "future_outcome_input_used": False,
+                    },
+                    "horizons": [
+                        {
+                            "horizon_ms": 900,
+                            "eligible_for_feature_ablation": True,
+                            "aggressive_buy_trade_backed_ratio": 0.8,
+                            "refill_ratio": 0.1,
+                            "downward_reprice_observed": False,
+                        }
+                    ],
+                    "runtime_effect": False,
+                    "trading_runtime_effect": False,
+                    "trading_decision_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                }
+                for checkpoint in (0, 1, 3, 5)
+            },
+            "causal_past_only": True,
+            "future_outcome_input_used": False,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "broker_order_forbidden": True,
+        }
+
+    replay = _dynamic_confirmation_replay(
+        {
+            "anchor_id": "widget:test:signal",
+            "lifecycle_id": "widget:test",
+            "owner": "widget",
+            "scope_id": "actual:005930:KRX_REGULAR",
+            "symbol": "005930",
+            "session": "KRX_REGULAR",
+            "expected_venues": ["KRX"],
+            "expected_session_buckets": ["KRX_REGULAR"],
+            "entry_state": "ENTRY_READY",
+            "anchor_at": "2026-08-27T10:00:00+09:00",
+            "owner_entry_limit_price": 10_020,
+            "owner_target_price": 10_100,
+            "owner_round_trip_cost_pct": 0.23,
+            "anchor_price": 10_000,
+            "metrics": {
+                "entry_confirmation_bbo_anchor": {
+                    "observed": True,
+                    "best_bid": 10_000,
+                    "best_ask": 10_010,
+                    # This persisted diagnostic is deliberately misleading;
+                    # replay must recompute from the causal BBO instead.
+                    "bid_return_bps": -8_000,
+                    "spread_bps": 10.0,
+                    "depth_backed": True,
+                    "sequence_epoch": 7,
+                    "quote_age_from_signal_ms": 50,
+                },
+                "entry_pre_signal_ask_depletion": {
+                    "context": {"sequence_epoch": 7},
+                    "horizons": [
+                        {
+                            "horizon_ms": 900,
+                            "eligible_for_feature_ablation": True,
+                            "aggressive_buy_trade_backed_ratio": 0.8,
+                            "refill_ratio": 0.1,
+                            "downward_reprice_observed": False,
+                        }
+                    ],
+                },
+                "entry_confirmation_checkpoint_ask_depletion": (
+                    checkpoint_ask_bundle(7)
+                ),
+                "entry_confirmation_bbo_horizons": {
+                    str(horizon): {
+                        "observed": True,
+                        "best_bid": 10_000 + horizon,
+                        "best_ask": 10_010 + horizon,
+                        "spread_bps": round(10.0 / (10_000 + horizon) * 10_000.0, 6),
+                        "depth_backed": True,
+                        "sequence_epoch": 7,
+                        "quote_age_from_horizon_ms": 50,
+                    }
+                    for horizon in (1, 3, 5)
+                },
+                "entry_ask_depletion": {"horizons": []},
+            },
+        }
+    )
+
+    assert replay["terminal_action"] == "ENTER"
+    assert replay["selected_delay_sec"] == 0
+    assert replay["checkpoint_decisions"][0]["bid_return_bps"] == 0.0
+    assert replay["checkpoint_decisions"][0]["source_quality_eligible"] is True
+    assert replay["runtime_effect"] is False
+
+
+def test_checkpoint_ask_depletion_never_reads_after_checkpoint(monkeypatch) -> None:
+    anchor_at = datetime(2026, 8, 27, 10, 0, tzinfo=KST)
+    checkpoint_at = anchor_at + timedelta(seconds=1)
+    captured: dict = {}
+
+    class FakeReport:
+        def __init__(self, payload: dict) -> None:
+            self.payload = payload
+
+        def as_dict(self) -> dict:
+            return self.payload
+
+    def fake_build(*, context, depth_rows, market_rows, horizons_ms, **_kwargs):
+        captured["context"] = context
+        captured["depth_rows"] = list(depth_rows)
+        captured["market_rows"] = list(market_rows)
+        captured["horizon_ms"] = horizons_ms[0]
+        return FakeReport(
+            {
+                "context": {
+                    "symbol": context.symbol,
+                    "venue": context.venue,
+                    "session_bucket": context.session_bucket,
+                    "sequence_epoch": context.sequence_epoch,
+                },
+                "horizons": [
+                    {
+                        "horizon_ms": horizons_ms[0],
+                        "eligible_for_feature_ablation": True,
+                        "aggressive_buy_trade_backed_ratio": 0.8,
+                        "refill_ratio": 0.1,
+                        "downward_reprice_observed": False,
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(attribution_module, "build_ask_depletion_report", fake_build)
+    market_rows = [
+        {
+            "schema": "scalp_micro_reversion_market_stream_point_v3",
+            "realtime_type": "0B",
+            "symbol": "005930",
+            "venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "sequence_epoch": 7,
+            "source_sequence": index,
+            "local_receive_timestamp": timestamp.isoformat(),
+        }
+        for index, timestamp in enumerate(
+            (
+                anchor_at + timedelta(milliseconds=100),
+                anchor_at + timedelta(milliseconds=900),
+                anchor_at + timedelta(milliseconds=1_100),
+            ),
+            start=1,
+        )
+    ]
+    depth_rows = [
+        {
+            "symbol": "005930",
+            "venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "sequence_epoch": 7,
+            "source_sequence": index,
+            "local_receive_timestamp": timestamp.isoformat(),
+        }
+        for index, timestamp in enumerate(
+            (
+                anchor_at,
+                anchor_at + timedelta(milliseconds=500),
+                anchor_at + timedelta(milliseconds=1_100),
+            ),
+            start=1,
+        )
+    ]
+
+    report = _entry_checkpoint_ask_depletion_feature(
+        {
+            "anchor_id": "episode:test:signal",
+            "anchor_at": anchor_at.isoformat(),
+            "anchor_role": "episode_signal_decision_leg",
+            "symbol": "005930",
+            "expected_venues": ["KRX"],
+            "expected_session_buckets": ["KRX_REGULAR"],
+        },
+        {"raw_market_rows": market_rows, "raw_depth_rows": depth_rows},
+        source_complete=True,
+        checkpoint_sec=1,
+    )
+
+    assert report is not None
+    assert captured["horizon_ms"] == 900
+    assert all(
+        datetime.fromisoformat(row["local_receive_timestamp"]) < checkpoint_at
+        for row in captured["market_rows"] + captured["depth_rows"]
+    )
+    assert captured["context"].observed_through_local_receive_timestamp_ms == int(
+        checkpoint_at.timestamp() * 1_000
+    )
+    assert report["decision_anchor_binding"]["checkpoint_at"] == (
+        checkpoint_at.isoformat()
+    )
+    assert report["decision_anchor_binding"]["future_outcome_input_used"] is False
 
 
 def test_daily_cap_reallocation_requires_realized_cost_bound_prior_entry() -> None:

@@ -61,7 +61,7 @@ from src.core.event_bus import EventBus
 from src.database.models import RecommendationHistory
 from src.engine.trade_profit import calculate_net_profit_rate
 from src.engine.risk.manual_control_exclusion import (
-    evaluate_manual_control_exclusion,
+    evaluate_main_bot_control_exclusion,
     normalize_manual_control_exclusion_code,
 )
 from src.engine.scalping.rising_missed_selection_prior import (
@@ -866,9 +866,11 @@ bind_analysis_dependencies(
 # -------------------------------------------------------------------
 
 
-def _send_market_exit_now(code, qty, token):
+def _send_market_exit_now(code, qty, token, *, owner_context=None):
     """정규장 중 즉시 시장가 청산용 공통 래퍼"""
-    return sniper_trade_utils.send_market_exit_now(code, qty, token)
+    return sniper_trade_utils.send_market_exit_now(
+        code, qty, token, owner_context=owner_context
+    )
 
 
 def _publish_gatekeeper_report(stock, code, gatekeeper, allowed):
@@ -1003,17 +1005,18 @@ def _send_exit_best_ioc(
     reason_type=None,
     strategy=None,
     bypass_open_time_block=False,
+    owner_context=None,
 ):
     """[공통 긴급 청산 래퍼] 최유리(IOC, 16) 조건으로 즉각 청산 시도"""
-    return sniper_trade_utils.send_exit_best_ioc(
-        code,
-        qty,
-        token,
-        dmst_stex_tp=dmst_stex_tp,
-        reason_type=reason_type,
-        strategy=strategy,
-        bypass_open_time_block=bypass_open_time_block,
-    )
+    kwargs = {
+        "dmst_stex_tp": dmst_stex_tp,
+        "reason_type": reason_type,
+        "strategy": strategy,
+        "bypass_open_time_block": bypass_open_time_block,
+    }
+    if owner_context is not None:
+        kwargs["owner_context"] = owner_context
+    return sniper_trade_utils.send_exit_best_ioc(code, qty, token, **kwargs)
 
 
 def _confirm_cancel_or_reload_remaining(
@@ -8590,7 +8593,7 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
         )
         return False
 
-    control_exclusion = evaluate_manual_control_exclusion(code)
+    control_exclusion = evaluate_main_bot_control_exclusion(code)
     if control_exclusion.excluded:
         terminalized = _expire_manual_control_excluded_scanner_record(payload, code)
         _log_scanner_runtime_target_attach(
@@ -10913,7 +10916,7 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
     code = normalize_manual_control_exclusion_code(dt.get("code"))
     if not code:
         return False
-    control_exclusion = evaluate_manual_control_exclusion(code)
+    control_exclusion = evaluate_main_bot_control_exclusion(code)
     if control_exclusion.excluded:
         if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
             terminalized = _expire_manual_control_excluded_scanner_record(dt, code)

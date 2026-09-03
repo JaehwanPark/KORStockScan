@@ -7,12 +7,13 @@ from pathlib import Path
 from typing import Callable
 
 from src.engine.risk.manual_control_exclusion import (
-    manual_control_operator_exclusion_source,
+    independent_machine_ownership_source,
 )
 from src.trading.order.episode_quantity import (
     EPISODE_LEG_QUANTITY,
     EPISODE_TOTAL_QUANTITY,
 )
+from src.trading.order.owner_custody_registry import OwnerRegistryError
 from src.trading.order.regular_two_leg_machine import KST, SamsungRegularTwoLegMachine
 from src.trading.config.machine_entry_timing_policy import (
     ENTRY_CONFIRMATION_MAX_LATE_SEC,
@@ -28,6 +29,10 @@ from src.utils.constants import DATA_DIR
 DEFAULT_STATE_PATH = DATA_DIR / "runtime" / "samsung_morning_one_share_state.json"
 
 
+def _episode_ownership_source(code: object) -> str:
+    return independent_machine_ownership_source(code, owner="episode")
+
+
 def _morning_leg(plan: dict, route: str) -> dict:
     return {
         **plan,
@@ -36,6 +41,8 @@ def _morning_leg(plan: dict, route: str) -> dict:
         "status": "PLANNED",
         "buy_order_no": "",
         "buy_order_date": "",
+        "buy_submit_attempt_count": 0,
+        "buy_owner_registry_intent_id": "",
         "buy_cancel_requested": False,
         "fill_price": 0,
         "buy_filled_at": "",
@@ -44,6 +51,8 @@ def _morning_leg(plan: dict, route: str) -> dict:
         "target_price": 0,
         "target_order_no": "",
         "target_order_date": "",
+        "target_submit_attempt_count": 0,
+        "target_owner_registry_intent_id": "",
         "target_quantity": 0,
         "target_filled_qty": 0,
         "target_fill_price": 0,
@@ -63,9 +72,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
         state_path: Path = DEFAULT_STATE_PATH,
         policy: MorningOneSharePolicy = DEFAULT_POLICY,
         live_enabled: bool = False,
-        ownership_source: Callable[
-            [object], str
-        ] = manual_control_operator_exclusion_source,
+        ownership_source: Callable[[object], str] = _episode_ownership_source,
     ) -> None:
         super().__init__(
             gateway=gateway,
@@ -87,14 +94,14 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 return False
         return True
 
-    def _execution(self, leg: dict, order_key: str):
+    def _execution(self, now: datetime, leg: dict, order_key: str):
         order_no = str(leg.get(order_key) or "")
         if not self._owns_order(order_no):
             raise ValueError(f"{order_key}_not_owned")
         date_key = (
             "buy_order_date" if order_key == "buy_order_no" else "target_order_date"
         )
-        return self.gateway.execution_snapshot(
+        snapshot = self.gateway.execution_snapshot(
             route=str(leg["route"]),
             order_no=order_no,
             order_date=str(leg.get(date_key) or ""),
@@ -104,6 +111,23 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 else int(leg.get("target_quantity", 0) or 0)
             ),
         )
+        try:
+            self._record_owner_execution(leg, order_key, snapshot)
+        except OwnerRegistryError as exc:
+            self._state["owner_registry_reconciliation_required"] = True
+            reconciliation_key = (
+                "buy_owner_registry_reconciliation_required"
+                if order_key == "buy_order_no"
+                else "target_owner_registry_reconciliation_required"
+            )
+            leg[reconciliation_key] = True
+            self._block(
+                now,
+                "owner_registry_execution_reconciliation_required:"
+                f"{leg.get('leg_id')}:{type(exc).__name__}",
+            )
+            raise
+        return snapshot
 
     def _submit_target(self, now: datetime, leg: dict) -> None:
         if (
@@ -123,10 +147,74 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             quantity=int(leg["position_qty"]),
         )
         target_quantity = int(leg["position_qty"])
-        result = self.gateway.submit_limit_sell(
-            route=str(leg["route"]), price=target_price, quantity=target_quantity
-        )
+        target_attempt = int(leg.get("target_submit_attempt_count") or 0) + 1
+        leg["target_submit_attempt_count"] = target_attempt
+        intent_id = ""
+        try:
+            intent_id, _ = self._reserve_episode_intent(
+                leg=leg,
+                side="SELL",
+                quantity=target_quantity,
+                route=str(leg["route"]),
+                action="NEW",
+                ordinal=f"TARGET:{leg['route']}:{target_attempt}",
+            )
+            leg["target_owner_registry_intent_id"] = intent_id
+            self._save()
+        except OwnerRegistryError as exc:
+            self._block(
+                now,
+                f"target_submit_owner_registry_or_gateway_error:{leg['leg_id']}:{type(exc).__name__}",
+            )
+            return
+        try:
+            result = self.gateway.submit_limit_sell(
+                route=str(leg["route"]), price=target_price, quantity=target_quantity
+            )
+        except Exception as exc:
+            self._bind_episode_submit(
+                intent_id=intent_id, result=None, reason=type(exc).__name__
+            )
+            self._preserve_ambiguous_broker_submit(
+                now=now,
+                leg=leg,
+                result=None,
+                role="target",
+                quantity=target_quantity,
+                price=target_price,
+                reason=f"target_broker_transport_exception:{type(exc).__name__}",
+            )
+            raise
+        if not self._bind_episode_submit(intent_id=intent_id, result=result):
+            self._preserve_ambiguous_broker_submit(
+                now=now,
+                leg=leg,
+                result=result,
+                role="target",
+                quantity=target_quantity,
+                price=target_price,
+                reason="target_registry_bind_failed",
+            )
+            if not (
+                intent_id
+                and str(getattr(result, "order_no", "") or "").isdigit()
+                and len(str(getattr(result, "order_no", "") or "")) == 7
+            ):
+                self._block(
+                    now,
+                    f"target_submit_owner_registry_ambiguous:{leg['leg_id']}",
+                )
+            return
         if result.ambiguous:
+            self._preserve_ambiguous_broker_submit(
+                now=now,
+                leg=leg,
+                result=result,
+                role="target",
+                quantity=target_quantity,
+                price=target_price,
+                reason="target_broker_submit_ambiguous",
+            )
             self._block(now, f"target_submit_ambiguous:{leg['leg_id']}")
             return
         if not result.accepted:
@@ -223,19 +311,85 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
         )
         self._record(now, "nxt_leg_released_for_sor_fallback", leg_id=leg["leg_id"])
 
-    def _submit_buy_cancel(self, leg: dict):
-        return self.gateway.cancel(
-            route=str(leg["route"]), order_no=str(leg["buy_order_no"])
+    def _submit_buy_cancel(self, leg: dict, now: datetime):
+        original_intent_id = str(leg.get("buy_owner_registry_intent_id") or "")
+        if not original_intent_id:
+            return self.gateway.cancel(
+                route=str(leg["route"]), order_no=str(leg["buy_order_no"])
+            )
+        original_context = self._episode_owner_context(
+            leg=leg, action="BUY", ordinal=leg.get("leg_id")
         )
+        self.owner_registry.assert_owner(
+            context=original_context,
+            order_date=str(leg.get("buy_order_date") or ""),
+            broker_order_no=str(leg.get("buy_order_no") or ""),
+        )
+        intent_id, _ = self._reserve_episode_intent(
+            leg=leg,
+            side="BUY",
+            quantity=max(
+                0,
+                int(leg.get("last_buy_remaining_qty") or leg.get("quantity") or 0),
+            ),
+            route=str(leg["route"]),
+            action="CANCEL",
+            ordinal=int(leg.get("buy_cancel_attempt_count") or 0),
+            original_order_no=str(leg.get("buy_order_no") or ""),
+        )
+        leg["buy_cancel_owner_registry_intent_id"] = intent_id
+        self._save()
+        try:
+            result = self.gateway.cancel(
+                route=str(leg["route"]), order_no=str(leg["buy_order_no"])
+            )
+        except Exception as exc:
+            self._bind_episode_submit(
+                intent_id=intent_id, result=None, reason=type(exc).__name__
+            )
+            self._preserve_ambiguous_broker_submit(
+                now=now,
+                leg=leg,
+                result=None,
+                role="buy_cancel",
+                quantity=max(
+                    0,
+                    int(leg.get("last_buy_remaining_qty") or leg.get("quantity") or 0),
+                ),
+                reason=f"buy_cancel_transport_exception:{type(exc).__name__}",
+            )
+            raise
+        registry_bound = self._bind_episode_submit(intent_id=intent_id, result=result)
+        if not registry_bound or result.ambiguous:
+            self._preserve_ambiguous_broker_submit(
+                now=now,
+                leg=leg,
+                result=result,
+                role="buy_cancel",
+                quantity=max(
+                    0,
+                    int(leg.get("last_buy_remaining_qty") or leg.get("quantity") or 0),
+                ),
+                reason=(
+                    "buy_cancel_registry_bind_failed"
+                    if not registry_bound
+                    else "buy_cancel_broker_submit_ambiguous"
+                ),
+            )
+        if not registry_bound:
+            raise OwnerRegistryError("buy_cancel_registry_bind_failed")
+        return result
 
     def _buy_cancel_route_fields(self, leg: dict) -> dict[str, object]:
         return {"route": str(leg.get("route") or "")}
 
     def _reconcile_buy(self, now: datetime, leg: dict, elapsed: int | None) -> None:
         try:
-            snapshot = self._execution(leg, "buy_order_no")
+            snapshot = self._execution(now, leg, "buy_order_no")
         except ValueError:
             self._block(now, f"buy_order_not_owned:{leg.get('leg_id')}")
+            return
+        except OwnerRegistryError:
             return
         if not snapshot.source_ok:
             self._record(
@@ -462,12 +616,78 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 entry_price=leg["entry_price"],
                 quantity=leg["quantity"],
             )
-            result = self.gateway.submit_limit_buy(
-                route=route,
-                price=int(leg["entry_price"]),
-                quantity=int(leg["quantity"]),
-            )
+            intent_id = ""
+            buy_attempt = int(leg.get("buy_submit_attempt_count") or 0) + 1
+            leg["buy_submit_attempt_count"] = buy_attempt
+            try:
+                intent_id, _ = self._reserve_episode_intent(
+                    leg=leg,
+                    side="BUY",
+                    quantity=int(leg["quantity"]),
+                    route=route,
+                    action="NEW",
+                    ordinal=f"BUY:{route}:{buy_attempt}",
+                )
+                leg["buy_owner_registry_intent_id"] = intent_id
+                self._save()
+            except OwnerRegistryError as exc:
+                self._block(
+                    now,
+                    f"buy_submit_owner_registry_or_gateway_error:{leg['leg_id']}:{type(exc).__name__}",
+                )
+                return
+            try:
+                result = self.gateway.submit_limit_buy(
+                    route=route,
+                    price=int(leg["entry_price"]),
+                    quantity=int(leg["quantity"]),
+                )
+            except Exception as exc:
+                self._bind_episode_submit(
+                    intent_id=intent_id,
+                    result=None,
+                    reason=type(exc).__name__,
+                )
+                self._preserve_ambiguous_broker_submit(
+                    now=now,
+                    leg=leg,
+                    result=None,
+                    role="buy",
+                    quantity=int(leg["quantity"]),
+                    price=int(leg["entry_price"]),
+                    reason=f"buy_broker_transport_exception:{type(exc).__name__}",
+                )
+                raise
+            if not self._bind_episode_submit(intent_id=intent_id, result=result):
+                self._preserve_ambiguous_broker_submit(
+                    now=now,
+                    leg=leg,
+                    result=result,
+                    role="buy",
+                    quantity=int(leg["quantity"]),
+                    price=int(leg["entry_price"]),
+                    reason="buy_registry_bind_failed",
+                )
+                if not (
+                    intent_id
+                    and str(getattr(result, "order_no", "") or "").isdigit()
+                    and len(str(getattr(result, "order_no", "") or "")) == 7
+                ):
+                    self._block(
+                        now,
+                        f"buy_submit_owner_registry_ambiguous:{leg['leg_id']}",
+                    )
+                return
             if result.ambiguous:
+                self._preserve_ambiguous_broker_submit(
+                    now=now,
+                    leg=leg,
+                    result=result,
+                    role="buy",
+                    quantity=int(leg["quantity"]),
+                    price=int(leg["entry_price"]),
+                    reason="buy_broker_submit_ambiguous",
+                )
                 self._block(now, f"buy_submit_ambiguous:{leg['leg_id']}")
                 return
             if not result.accepted:

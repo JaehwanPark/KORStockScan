@@ -14,6 +14,10 @@ from src.trading.order.entry_liquidity_guard import (
     EntryExecutionVelocitySnapshot,
     EntryLiquiditySnapshot,
 )
+from src.trading.order.owner_custody_registry import (
+    OrderOwnerRegistry,
+    OwnerOrderContext,
+)
 
 from src.engine.monitoring.samsung_widget_contract import KST
 from src.engine.risk.market_weakness_entry_guard import (
@@ -500,6 +504,140 @@ def test_definitive_entry_rejection_cools_down_distinct_signal_before_retry(
     assert "entry_submit_rejected_return_code" not in accepted["symbols"]["999999"]
     assert "entry_submit_rejected_return_msg" not in accepted["symbols"]["999999"]
     assert "entry_submit_rejected_cooldown_until" not in accepted["symbols"]["999999"]
+
+
+def test_registry_bind_failure_preserves_widget_broker_acceptance_truth(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-REGISTRY-FAIL")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+
+    def fail_registry_bind(order, result, **kwargs):
+        order["owner_registry_error"] = "journal write failed"
+        return False
+
+    monkeypatch.setattr(trader, "_transition_owner_submit", fail_registry_bind)
+
+    state = trader.run_once(now)
+
+    order = state["symbols"]["999999"]["orders"][-1]
+    assert gateway.buy_calls == [("999999", 1, "SOR")]
+    assert order["status"] == "AMBIGUOUS"
+    assert order["broker_accepted"] is True
+    assert order["owner_registry_bind_confirmed"] is False
+    assert order["order_no"] == "B1"
+    assert any(
+        event.get("event_type") == "order_submit_owner_registry_ambiguous"
+        for event in recorder.events
+    )
+
+
+def test_widget_exact_snapshot_recovers_ambiguous_registry_binding(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now)}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box)
+    registry = OrderOwnerRegistry(tmp_path / "widget-owner-rebind.jsonl")
+    context = OwnerOrderContext(
+        owner_type="widget_auto_trade",
+        owner_id="widget_auto_trade:999999:2026-08-10",
+        position_id="widget_auto_trade:999999:2026-08-10:ENTRY-REBIND",
+        client_intent_id=("widget_auto_trade:999999:2026-08-10:ENTRY-REBIND:BUY:0"),
+    )
+    intent = registry.reserve(
+        context=context,
+        symbol="999999",
+        side="BUY",
+        quantity=1,
+        route="KRX",
+        order_date=now.date(),
+    )
+    trader.owner_registry = registry
+    trader._activate_date(now)
+    order = {
+        "side": "BUY",
+        "order_role": engine.ORDER_ROLE_ENTRY_BUY,
+        "requested_qty": 1,
+        "filled_qty": 0,
+        "remaining_qty": 1,
+        "route": "KRX",
+        "order_date": now.date().isoformat(),
+        "status": "AMBIGUOUS",
+        "order_no": "1234567",
+        "broker_accepted": True,
+        "owner_type": context.owner_type,
+        "owner_id": context.owner_id,
+        "owner_position_id": context.position_id,
+        "owner_client_intent_id": context.client_intent_id,
+        "owner_registry_intent_id": intent,
+        "owner_registry_bind_confirmed": False,
+        "owner_registry_error": "initial journal append failed",
+    }
+    symbol_state = trader._state["symbols"]["999999"]
+    symbol_state["orders"] = [order]
+    gateway.snapshots["1234567"] = ExecutionSnapshot(
+        True, True, 1, 0, 1, fill_price=100_100, execution_venue="KRX"
+    )
+
+    trader._reconcile(trader.specs[0], symbol_state, now)
+
+    assert order["status"] == "FILLED"
+    assert order["owner_registry_bind_confirmed"] is True
+    assert "owner_registry_error" not in order
+    assert registry.owner_position_qty(context.position_id, symbol="999999") == 1
+    owner = registry.order_owner(order_date=now.date(), broker_order_no="1234567")
+    assert owner is not None
+    assert owner["state"] == "ORDER_TERMINAL"
+
+
+def test_widget_cancel_registry_failure_preserves_broker_cancel_identifier(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-CANCEL-REGISTRY")}
+    trader, _, _ = _trader(tmp_path, monkeypatch, box)
+    registry = OrderOwnerRegistry(tmp_path / "widget-owner-registry.jsonl")
+    context = OwnerOrderContext(
+        owner_type="widget_auto_trade",
+        owner_id="widget_auto_trade:999999:2026-08-10",
+        position_id="widget_auto_trade:999999:2026-08-10:ENTRY",
+        client_intent_id="widget_auto_trade:999999:2026-08-10:ENTRY:BUY",
+    )
+    intent = registry.reserve(
+        context=context,
+        symbol="999999",
+        side="BUY",
+        quantity=1,
+        route="KRX",
+        order_date=now.date(),
+    )
+    registry.transition(intent, state="ORDER_BOUND", broker_order_no="1234567")
+    trader.owner_registry = registry
+    order = {
+        "side": "BUY",
+        "order_no": "1234567",
+        "order_date": now.date().isoformat(),
+        "route": "KRX",
+        "owner_type": context.owner_type,
+        "owner_id": context.owner_id,
+        "owner_position_id": context.position_id,
+        "owner_client_intent_id": context.client_intent_id,
+        "owner_registry_intent_id": intent,
+        "cancel_attempt_count": 1,
+    }
+
+    result = trader._cancel_with_owner_registry(
+        spec=trader.specs[0], order=order, quantity=1, now=now
+    )
+
+    assert result.accepted is True
+    assert result.ambiguous is True
+    assert result.order_no == "C1"
+    assert order["cancel_order_no"] == "C1"
+    assert order["broker_cancel_accepted"] is True
+    assert order["owner_registry_cancel_reconciliation_required"] is True
 
 
 def test_widget_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkeypatch):

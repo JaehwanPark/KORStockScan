@@ -40,6 +40,15 @@ from src.utils.constants import (
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine import kiwoom_orders
+from src.trading.config.symbol_owner_policy import (
+    SymbolOwnerPolicyError,
+    policy_path,
+    resolve_symbol_owner_policy,
+)
+from src.trading.order.owner_custody_registry import (
+    OwnerRegistryError,
+    default_order_owner_registry,
+)
 
 KIWOOM_TOKEN = None
 DB = None
@@ -754,7 +763,26 @@ def _recover_missing_broker_holdings(session, real_codes):
     for code, real_data in real_codes.items():
         if code in tracked_codes:
             continue
-        if manual_control_operator_exclusion_source(code):
+        try:
+            owner_policy = resolve_symbol_owner_policy(code)
+            owner_registry = default_order_owner_registry()
+            coexistence_external_inventory = bool(
+                owner_policy.coexistence_enabled
+                or owner_registry.symbol_registered(code)
+            )
+        except (
+            SymbolOwnerPolicyError,
+            OwnerRegistryError,
+            OSError,
+            ValueError,
+        ):
+            coexistence_external_inventory = bool(
+                policy_path().exists() or default_order_owner_registry().path.exists()
+            )
+        if (
+            manual_control_operator_exclusion_source(code)
+            or coexistence_external_inventory
+        ):
             # Operator-owned inventory (including widget auto-trade fills) must
             # never be converted into a main-bot HOLDING target.  Doing so can
             # create a second sell owner and reserve the operator-owned shares.
@@ -918,6 +946,128 @@ def _with_state_lock():
             return False
 
     return STATE_LOCK if STATE_LOCK is not None else _DummyLock()
+
+
+def _preserve_coexistence_owner_inventory(
+    *,
+    record,
+    code: str,
+    real_codes: dict,
+    broker_snapshot_at: str = "",
+    source: str,
+) -> bool:
+    """Keep exact main custody authoritative for a coexistence symbol.
+
+    ``kt00005`` is account/symbol aggregate.  It may prove a conservation
+    deficit, but it cannot overwrite one owner's quantity, average price, or
+    terminal status.
+    """
+
+    registry = default_order_owner_registry()
+    reconciliation_errors: list[str] = []
+    try:
+        registered_symbol = registry.symbol_registered(code)
+    except OwnerRegistryError as exc:
+        if not registry.path.exists() and not policy_path().exists():
+            return False
+        registered_symbol = True
+        reconciliation_errors.append(str(exc))
+    try:
+        decision = resolve_symbol_owner_policy(code)
+    except (SymbolOwnerPolicyError, OSError, ValueError) as exc:
+        if not policy_path().exists() and not registered_symbol:
+            return False
+        decision = None
+        reconciliation_errors.append(
+            f"symbol_owner_policy_fail_closed:{type(exc).__name__}"
+        )
+    else:
+        if not decision.coexistence_enabled and not registered_symbol:
+            return False
+        if not decision.coexistence_enabled:
+            reconciliation_errors.append(
+                "registered_coexistence_symbol_requires_exact_date_policy"
+            )
+
+    real_qty = _to_int((real_codes.get(code) or {}).get("qty", 0))
+    reconciliation = None
+    try:
+        if decision is not None and decision.coexistence_enabled:
+            if not registry.contains_event_hash(decision.migration_registry_tail_hash):
+                raise OwnerRegistryError(
+                    "coexistence_migration_registry_generation_missing"
+                )
+        reconciliation = registry.reconcile_symbol_quantity(
+            symbol=code, broker_quantity=real_qty
+        )
+        main_position_id = f"main_scalping:{getattr(record, 'id', '')}"
+        main_qty = sum(
+            int(value or 0)
+            for position_id, value in reconciliation["position_quantities"].items()
+            if str(position_id) == main_position_id
+        )
+        if main_qty != _to_int(getattr(record, "buy_qty", 0)):
+            reconciliation_errors.append(
+                "main_owner_registry_quantity_mismatch:"
+                f"registry={main_qty}:db={_to_int(getattr(record, 'buy_qty', 0))}"
+            )
+    except OwnerRegistryError as exc:
+        reconciliation_errors.append(str(exc))
+    reconciliation_error = "|".join(dict.fromkeys(reconciliation_errors))
+
+    target = next(
+        (
+            item
+            for item in (ACTIVE_TARGETS or [])
+            if str(item.get("code", "")).strip()[:6] == code
+            and (
+                getattr(record, "id", None) is None
+                or item.get("id") == getattr(record, "id", None)
+            )
+        ),
+        None,
+    )
+    with _with_state_lock():
+        if target is not None:
+            target.update(
+                {
+                    "broker_holding_qty": real_qty,
+                    "broker_snapshot_at": broker_snapshot_at
+                    or datetime.now().isoformat(),
+                    "broker_inventory_is_symbol_aggregate": True,
+                    "symbol_owner_reconciliation_source": source,
+                    "symbol_owner_policy_id": (
+                        decision.policy_id if decision is not None else "invalid"
+                    ),
+                    "symbol_owner_policy_hash": (
+                        decision.policy_hash if decision is not None else "invalid"
+                    ),
+                    "symbol_owner_reconciliation": reconciliation or {},
+                }
+            )
+            if reconciliation_error:
+                target.update(
+                    {
+                        "scale_in_locked": True,
+                        "broker_symbol_allocation_conflict": True,
+                        "sell_cancel_reconciliation_required": True,
+                        "sell_cancel_reconciliation_source": reconciliation_error,
+                    }
+                )
+    if reconciliation_error:
+        record.scale_in_locked = True
+        log_error(
+            f"[COEXISTENCE_INVENTORY_BLOCKED] {getattr(record, 'stock_name', code)}({code}) "
+            f"source={source} broker_qty={real_qty} reason={reconciliation_error}"
+        )
+    else:
+        log_info(
+            f"[COEXISTENCE_INVENTORY_PRESERVED] {getattr(record, 'stock_name', code)}({code}) "
+            f"source={source} main_qty={getattr(record, 'buy_qty', 0)} "
+            f"broker_aggregate_qty={real_qty} external_remainder="
+            f"{reconciliation.get('external_manual_remainder', 0)}"
+        )
+    return True
 
 
 def _active_sell_receipt_reconciliation(target_stock):
@@ -1660,6 +1810,14 @@ def sync_balance_with_db():
                     str(getattr(record, "strategy", "") or "").upper() == "S15_FAST"
                 )
 
+                if _preserve_coexistence_owner_inventory(
+                    record=record,
+                    code=code,
+                    real_codes=real_codes,
+                    source="startup_balance_sync",
+                ):
+                    continue
+
                 # Broker inventory is symbol-aggregate custody.  It cannot be
                 # copied into two episode rows without exact allocation
                 # evidence; doing so doubles both DB and runtime exposure.
@@ -1955,6 +2113,14 @@ def sync_state_with_broker():
 
             for record in pending_records:
                 code = str(record.stock_code).strip()[:6]
+
+                if _preserve_coexistence_owner_inventory(
+                    record=record,
+                    code=code,
+                    real_codes=balance_dict,
+                    source="startup_pending_buy_balance_sync",
+                ):
+                    continue
 
                 if code in balance_dict:
                     real_data = balance_dict[code]
@@ -2439,6 +2605,15 @@ def periodic_account_sync():
                 is_s15_custody = (
                     str(getattr(record, "strategy", "") or "").upper() == "S15_FAST"
                 )
+
+                if _preserve_coexistence_owner_inventory(
+                    record=record,
+                    code=code,
+                    real_codes=real_codes,
+                    broker_snapshot_at=broker_snapshot_at,
+                    source="periodic_account_sync",
+                ):
+                    continue
 
                 # kt00005 inventory is symbol-aggregate custody.  Never copy
                 # the aggregate into multiple live episode rows: that would
@@ -3042,6 +3217,15 @@ def periodic_account_sync():
 
             for record in pending_records:
                 code = str(record.stock_code).strip()[:6]
+
+                if _preserve_coexistence_owner_inventory(
+                    record=record,
+                    code=code,
+                    real_codes=real_codes,
+                    broker_snapshot_at=broker_snapshot_at,
+                    source="periodic_pending_buy_balance_sync",
+                ):
+                    continue
 
                 if active_count_by_code.get(code, 0) > 1:
                     record.scale_in_locked = True

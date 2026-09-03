@@ -41,6 +41,16 @@ from src.trading.order.entry_liquidity_guard import (
     unavailable_entry_liquidity_snapshot,
 )
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_up_by_bps
+from src.trading.config.symbol_owner_policy import (
+    SymbolOwnerPolicyError,
+    resolve_symbol_owner_policy,
+)
+from src.trading.order.owner_custody_registry import (
+    OrderOwnerRegistry,
+    OwnerOrderContext,
+    OwnerRegistryError,
+    default_order_owner_registry,
+)
 from src.trading.config.machine_entry_timing_policy import (
     ENTRY_CONFIRMATION_MAX_LATE_SEC,
     resolve_entry_confirmation_delay,
@@ -87,6 +97,25 @@ CUMULATIVE_RESEARCH_BLOCK_REASONS = frozenset(
         "cumulative_research_40_qualified_dates_incomplete",
     }
 )
+
+
+def _widget_order_ownership_source(code: str, *, target_date: date) -> str:
+    """Resolve exact coexistence first, then the legacy operator handoff."""
+
+    try:
+        owner_policy = resolve_symbol_owner_policy(code, target_date=target_date)
+    except (SymbolOwnerPolicyError, OSError, ValueError):
+        return ""
+    if owner_policy.symbol_selected:
+        if owner_policy.owner_allowed("widget_auto_trade", new_entry=True):
+            return (
+                f"symbol_owner_policy:{owner_policy.policy_id}:"
+                f"{owner_policy.policy_hash}"
+            )
+        return ""
+    return manual_control_operator_exclusion_source(code)
+
+
 SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID = "SAMSUNG_EQUAL_10_ADD0P5_ADD1P0_TP0P5_V2"
 SAMSUNG_DAILY_EQUAL_SHARE_POLICY = {
     "policy_id": SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
@@ -419,6 +448,7 @@ class WidgetSignalAutoTrader:
         dynamic_spec_catalog: tuple[WidgetSpec, ...] = (),
         entry_qty: int = WIDGET_AUTO_TRADE_LEG_QUANTITY,
         enabled: bool = False,
+        owner_registry: OrderOwnerRegistry | None = None,
     ) -> None:
         qty = int(entry_qty)
         if qty < 1 or qty > MAX_ENTRY_QTY:
@@ -437,6 +467,7 @@ class WidgetSignalAutoTrader:
         self.policy_loader = policy_loader or WidgetAutoTradePolicyLoader()
         self.entry_qty = qty
         self.enabled = bool(enabled)
+        self.owner_registry = owner_registry or default_order_owner_registry()
         self._policy_date = _now_kst().date()
         self._dated_execution_policies = self.policy_loader.resolve_all(
             observed_date=self._policy_date
@@ -771,8 +802,8 @@ class WidgetSignalAutoTrader:
             symbol_state = self._empty_symbol_state(spec)
             prior_state = prior_symbols.get(spec.code)
             if isinstance(prior_state, dict):
-                symbol_state["prior_day_unmanaged_qty"] = (
-                    self._unmanaged_overnight_qty(prior_state)
+                symbol_state["prior_day_unmanaged_qty"] = self._unmanaged_overnight_qty(
+                    prior_state
                 )
                 symbol_state["prior_day_unmanaged_qty_source"] = (
                     "previous_state_prior_carry_plus_current_day_widget_orders"
@@ -1291,6 +1322,217 @@ class WidgetSignalAutoTrader:
             "broker_accepted": False,
         }
 
+    @staticmethod
+    def _owner_context_from_order(order: dict[str, Any]) -> OwnerOrderContext:
+        return OwnerOrderContext(
+            owner_type="widget_auto_trade",
+            owner_id=str(order.get("owner_id") or ""),
+            position_id=str(order.get("owner_position_id") or ""),
+            client_intent_id=str(order.get("owner_client_intent_id") or ""),
+        )
+
+    def _reserve_owner_intent(
+        self,
+        *,
+        spec: WidgetSpec,
+        symbol_state: dict[str, Any],
+        order: dict[str, Any],
+        side: str,
+        qty: int,
+        route: str,
+        signal_id: str,
+        order_role: str,
+        parent_entry_signal_id: str | None,
+        now: datetime,
+    ) -> str:
+        policy = resolve_symbol_owner_policy(spec.code, target_date=now.date())
+        if not policy.coexistence_enabled:
+            if policy.symbol_selected and not policy.owner_allowed(
+                "widget_auto_trade", new_entry=side == "BUY"
+            ):
+                raise OwnerRegistryError("widget_owner_policy_action_forbidden")
+            if self.owner_registry.symbol_registered(spec.code):
+                raise OwnerRegistryError(
+                    "registered_coexistence_symbol_requires_exact_date_policy"
+                )
+            return ""
+        if not self.owner_registry.contains_event_hash(
+            policy.migration_registry_tail_hash
+        ):
+            raise OwnerRegistryError(
+                "coexistence_migration_registry_generation_missing"
+            )
+        is_new_entry = side == "BUY"
+        if not policy.owner_allowed("widget_auto_trade", new_entry=is_new_entry):
+            raise OwnerRegistryError("widget_owner_policy_action_forbidden")
+        entry_anchor = str(
+            parent_entry_signal_id or symbol_state.get("entry_signal_id") or signal_id
+        ).strip()
+        if not entry_anchor:
+            raise OwnerRegistryError("widget_owner_position_anchor_missing")
+        position_id = (
+            f"widget_auto_trade:{spec.code}:{now.date().isoformat()}:{entry_anchor}"
+        )
+        order_ordinal = len(symbol_state.get("orders") or [])
+        context = OwnerOrderContext(
+            owner_type="widget_auto_trade",
+            owner_id=f"widget_auto_trade:{spec.code}:{now.date().isoformat()}",
+            position_id=position_id,
+            client_intent_id=(
+                f"{position_id}:{side}:{order_role}:{signal_id}:{order_ordinal}"
+            ),
+        )
+        intent_id = self.owner_registry.reserve(
+            context=context,
+            symbol=spec.code,
+            side=side,
+            quantity=qty,
+            route=route,
+            order_date=now.date(),
+            authority_policy_id=policy.policy_id,
+            authority_policy_hash=policy.policy_hash,
+        )
+        order.update(
+            {
+                "owner_type": context.owner_type,
+                "owner_id": context.owner_id,
+                "owner_position_id": context.position_id,
+                "owner_client_intent_id": context.client_intent_id,
+                "owner_registry_intent_id": intent_id,
+                "owner_policy_id": policy.policy_id,
+                "owner_policy_hash": policy.policy_hash,
+            }
+        )
+        return intent_id
+
+    def _transition_owner_submit(
+        self, order: dict[str, Any], result: SubmitResult | None, *, error: str = ""
+    ) -> bool:
+        intent_id = str(order.get("owner_registry_intent_id") or "")
+        if not intent_id:
+            return True
+        try:
+            if result is None:
+                self.owner_registry.transition(
+                    intent_id, state="INTENT_AMBIGUOUS", reason=error
+                )
+                return False
+            if result.accepted:
+                self.owner_registry.transition(
+                    intent_id,
+                    state="ORDER_BOUND",
+                    broker_order_no=result.order_no,
+                )
+                return True
+            self.owner_registry.transition(
+                intent_id,
+                state=("INTENT_AMBIGUOUS" if result.ambiguous else "INTENT_REJECTED"),
+                reason=result.return_msg,
+            )
+            return not result.ambiguous
+        except OwnerRegistryError as exc:
+            order["owner_registry_error"] = str(exc)
+            try:
+                self.owner_registry.transition(
+                    intent_id,
+                    state="INTENT_AMBIGUOUS",
+                    reason=f"registry_transition_failed:{type(exc).__name__}",
+                )
+            except OwnerRegistryError:
+                pass
+            return False
+
+    def _cancel_with_owner_registry(
+        self,
+        *,
+        spec: WidgetSpec,
+        order: dict[str, Any],
+        quantity: int,
+        now: datetime,
+    ) -> SubmitResult:
+        original_intent_id = str(order.get("owner_registry_intent_id") or "")
+        if not original_intent_id:
+            return self.gateway.cancel(
+                code=spec.code,
+                order_no=str(order.get("order_no") or ""),
+                qty=quantity,
+                route=str(order.get("route") or ""),
+            )
+        original_context = self._owner_context_from_order(order)
+        self.owner_registry.assert_owner(
+            context=original_context,
+            order_date=str(order.get("order_date") or now.date().isoformat()),
+            broker_order_no=str(order.get("order_no") or ""),
+        )
+        cancel_context = OwnerOrderContext(
+            owner_type=original_context.owner_type,
+            owner_id=original_context.owner_id,
+            position_id=original_context.position_id,
+            client_intent_id=(
+                f"{original_context.client_intent_id}:CANCEL:"
+                f"{_positive_int(order.get('cancel_attempt_count'))}"
+            ),
+        )
+        cancel_intent_id = self.owner_registry.reserve(
+            context=cancel_context,
+            symbol=spec.code,
+            side=str(order.get("side") or "BUY"),
+            quantity=quantity,
+            route=str(order.get("route") or "SOR"),
+            order_date=str(order.get("order_date") or now.date().isoformat()),
+            action="CANCEL",
+            original_order_no=str(order.get("order_no") or ""),
+            authority_policy_id=str(order.get("owner_policy_id") or ""),
+            authority_policy_hash=str(order.get("owner_policy_hash") or ""),
+        )
+        order["owner_registry_cancel_intent_id"] = cancel_intent_id
+        try:
+            result = self.gateway.cancel(
+                code=spec.code,
+                order_no=str(order.get("order_no") or ""),
+                qty=quantity,
+                route=str(order.get("route") or ""),
+            )
+        except Exception as exc:
+            try:
+                self.owner_registry.transition(
+                    cancel_intent_id,
+                    state="INTENT_AMBIGUOUS",
+                    reason=type(exc).__name__,
+                )
+            except OwnerRegistryError as registry_exc:
+                order["owner_registry_cancel_error"] = str(registry_exc)
+                order["owner_registry_cancel_reconciliation_required"] = True
+            raise
+        try:
+            self.owner_registry.transition(
+                cancel_intent_id,
+                state=(
+                    "ORDER_BOUND"
+                    if result.accepted
+                    else "INTENT_AMBIGUOUS" if result.ambiguous else "INTENT_REJECTED"
+                ),
+                broker_order_no=result.order_no if result.accepted else "",
+                reason=result.return_msg,
+            )
+        except OwnerRegistryError as exc:
+            order.update(
+                {
+                    "owner_registry_cancel_error": str(exc),
+                    "owner_registry_cancel_reconciliation_required": True,
+                    "cancel_order_no": result.order_no,
+                    "broker_cancel_accepted": bool(result.accepted),
+                }
+            )
+            return SubmitResult(
+                accepted=bool(result.accepted),
+                order_no=result.order_no,
+                return_code="OWNER_REGISTRY_AMBIGUOUS",
+                return_msg=str(exc)[:160],
+                ambiguous=True,
+            )
+        return result
+
     def _notify_pending_buy_actions(
         self,
         spec: WidgetSpec,
@@ -1387,6 +1629,42 @@ class WidgetSignalAutoTrader:
         self._save()  # crash-before/after-submit ambiguity guard
         broker_route = str(order["broker_route"])
         try:
+            self._reserve_owner_intent(
+                spec=spec,
+                symbol_state=symbol_state,
+                order=order,
+                side=side,
+                qty=qty,
+                route=broker_route,
+                signal_id=signal_id,
+                order_role=order_role,
+                parent_entry_signal_id=parent_entry_signal_id,
+                now=now,
+            )
+        except (OwnerRegistryError, SymbolOwnerPolicyError, OSError, ValueError) as exc:
+            order.update(
+                {
+                    "status": "AMBIGUOUS",
+                    "return_code": "OWNER_REGISTRY_BLOCKED",
+                    "return_msg": str(exc)[:160],
+                    "owner_registry_error": str(exc),
+                }
+            )
+            self._save()
+            self._event(
+                "order_submit_owner_registry_blocked",
+                spec,
+                now,
+                side=side,
+                requested_qty=qty,
+                signal_id=signal_id,
+                reason=str(exc),
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+            )
+            return order
+        self._save()
+        try:
             if side == "BUY":
                 result = self.gateway.submit_buy(
                     code=spec.code, qty=qty, route=broker_route
@@ -1403,6 +1681,7 @@ class WidgetSignalAutoTrader:
                     code=spec.code, qty=qty, route=broker_route
                 )
         except Exception as exc:
+            self._transition_owner_submit(order, None, error=type(exc).__name__)
             order.update(
                 {
                     "status": "AMBIGUOUS",
@@ -1423,24 +1702,49 @@ class WidgetSignalAutoTrader:
                 broker_route=broker_route,
             )
             return order
+        registry_transition_ok = self._transition_owner_submit(order, result)
+        registry_transition_failed = bool(
+            not registry_transition_ok
+            and (result.accepted or order.get("owner_registry_intent_id"))
+        )
         order.update(
             {
                 "order_no": result.order_no,
                 "return_code": result.return_code,
                 "return_msg": result.return_msg[:160],
                 "status": (
-                    "SUBMITTED"
-                    if result.accepted
-                    else "AMBIGUOUS" if result.ambiguous else "FAILED"
+                    "AMBIGUOUS"
+                    if result.ambiguous or registry_transition_failed
+                    else (
+                        "SUBMITTED"
+                        if result.accepted and registry_transition_ok
+                        else "FAILED"
+                    )
                 ),
-                "broker_accepted": result.accepted,
+                # Broker acceptance is immutable external truth. Registry
+                # binding is tracked separately and must not rewrite it.
+                "broker_accepted": bool(result.accepted),
+                "owner_registry_bind_confirmed": bool(registry_transition_ok),
                 "submitted_at": now.isoformat(),
                 "source_advisory_state": symbol_state.get("entry_source_state"),
             }
         )
+        if registry_transition_failed:
+            order["return_code"] = "OWNER_REGISTRY_AMBIGUOUS"
+            order["return_msg"] = str(
+                order.get("owner_registry_error") or "owner registry binding failed"
+            )[:160]
         self._save()
         self._event(
-            "order_submitted" if result.accepted else "order_submit_failed",
+            (
+                "order_submit_owner_registry_ambiguous"
+                if registry_transition_failed
+                else (
+                    "order_submit_ambiguous"
+                    if result.ambiguous
+                    else "order_submitted" if result.accepted else "order_submit_failed"
+                )
+            ),
             spec,
             now,
             side=side,
@@ -1467,6 +1771,7 @@ class WidgetSignalAutoTrader:
         for order in symbol_state.get("orders") or []:
             if order.get("status") not in {
                 "SUBMITTED",
+                "AMBIGUOUS",
                 "CANCEL_REQUESTED",
                 "CANCEL_AMBIGUOUS",
                 "CANCEL_FAILED_TERMINAL",
@@ -1519,6 +1824,49 @@ class WidgetSignalAutoTrader:
             ).strip()
             filled = min(requested, max(prior_filled, snapshot.filled_qty))
             remaining = min(max(0, requested - filled), snapshot.remaining_qty)
+            intent_id = str(order.get("owner_registry_intent_id") or "")
+            if intent_id:
+                try:
+                    if order.get("owner_registry_bind_confirmed") is not True:
+                        # A broker snapshot with the exact order number is the
+                        # recovery proof for an accepted/ambiguous submit whose
+                        # initial registry append failed. Bind before applying
+                        # any fill so the order can never be inferred from the
+                        # aggregate symbol balance.
+                        self.owner_registry.transition(
+                            intent_id,
+                            state="ORDER_BOUND",
+                            broker_order_no=order_no,
+                            reason="widget_exact_broker_snapshot_rebind",
+                        )
+                        order["owner_registry_bind_confirmed"] = True
+                        order.pop("owner_registry_error", None)
+                    self.owner_registry.record_fill(
+                        context=self._owner_context_from_order(order),
+                        symbol=spec.code,
+                        side=str(order.get("side") or ""),
+                        order_quantity=requested,
+                        order_date=str(
+                            order.get("order_date") or now.date().isoformat()
+                        ),
+                        broker_order_no=order_no,
+                        cumulative_filled_qty=filled,
+                        cumulative_fill_amount=None,
+                    )
+                    if remaining == 0:
+                        self.owner_registry.transition(
+                            intent_id,
+                            state="ORDER_TERMINAL",
+                            broker_order_no=order_no,
+                            reason="widget_execution_snapshot_terminal",
+                        )
+                except OwnerRegistryError as exc:
+                    order["owner_registry_error"] = str(exc)
+                    order["owner_registry_reconciliation_required"] = True
+                    order["last_reconcile_error"] = "owner_registry_conflict"
+                    order["last_reconcile_error_at"] = now.isoformat()
+                    changed = True
+                    continue
             order["filled_qty"] = filled
             order["remaining_qty"] = remaining
             if snapshot.fill_price is not None:
@@ -1666,11 +2014,11 @@ class WidgetSignalAutoTrader:
                 continue
             order["cancel_attempt_count"] = attempts + 1
             try:
-                result = self.gateway.cancel(
-                    code=spec.code,
-                    order_no=str(order.get("order_no") or ""),
-                    qty=remaining,
-                    route=str(order.get("route") or ""),
+                result = self._cancel_with_owner_registry(
+                    spec=spec,
+                    order=order,
+                    quantity=remaining,
+                    now=now,
                 )
             except Exception as exc:
                 order["cancel_error"] = type(exc).__name__
@@ -1697,13 +2045,21 @@ class WidgetSignalAutoTrader:
             order["cancel_reason"] = cancel_reason
             if provenance:
                 order["cancel_provenance"] = provenance
-            if result.accepted:
-                order["status"] = "CANCEL_REQUESTED"
-            elif result.ambiguous:
+            if result.ambiguous:
                 order["status"] = "CANCEL_AMBIGUOUS"
+            elif result.accepted:
+                order["status"] = "CANCEL_REQUESTED"
             self._save()
             self._event(
-                "buy_cancel_requested" if result.accepted else "buy_cancel_failed",
+                (
+                    "buy_cancel_ambiguous"
+                    if result.ambiguous
+                    else (
+                        "buy_cancel_requested"
+                        if result.accepted
+                        else "buy_cancel_failed"
+                    )
+                ),
                 spec,
                 now,
                 order_no=order_no,
@@ -2126,8 +2482,10 @@ class WidgetSignalAutoTrader:
             "expected_venues": [route],
         }
         exclusion = evaluate_manual_control_exclusion(spec.code)
-        operator_source = manual_control_operator_exclusion_source(spec.code)
-        if not exclusion.excluded or not operator_source:
+        operator_source = _widget_order_ownership_source(
+            spec.code, target_date=now.date()
+        )
+        if not operator_source:
             self._record_entry_block_once(
                 spec=spec,
                 symbol_state=symbol_state,
@@ -2468,11 +2826,11 @@ class WidgetSignalAutoTrader:
                 continue
             order["cancel_attempt_count"] = attempts + 1
             try:
-                result = self.gateway.cancel(
-                    code=spec.code,
-                    order_no=str(order.get("order_no") or ""),
-                    qty=remaining,
-                    route=str(order.get("route") or ""),
+                result = self._cancel_with_owner_registry(
+                    spec=spec,
+                    order=order,
+                    quantity=remaining,
+                    now=now,
                 )
             except Exception as exc:
                 order["cancel_error"] = type(exc).__name__
@@ -2491,16 +2849,20 @@ class WidgetSignalAutoTrader:
             order["cancel_attempted_at"] = now.isoformat()
             order["cancel_return_code"] = result.return_code
             order["cancel_order_no"] = result.order_no
-            if result.accepted:
-                order["status"] = "CANCEL_REQUESTED"
-            elif result.ambiguous:
+            if result.ambiguous:
                 order["status"] = "CANCEL_AMBIGUOUS"
+            elif result.accepted:
+                order["status"] = "CANCEL_REQUESTED"
             self._save()
             self._event(
                 (
-                    "take_profit_cancel_requested"
-                    if result.accepted
-                    else "take_profit_cancel_failed"
+                    "take_profit_cancel_ambiguous"
+                    if result.ambiguous
+                    else (
+                        "take_profit_cancel_requested"
+                        if result.accepted
+                        else "take_profit_cancel_failed"
+                    )
                 ),
                 spec,
                 now,
@@ -2986,8 +3348,10 @@ class WidgetSignalAutoTrader:
                 )
             return
         exclusion = evaluate_manual_control_exclusion(spec.code)
-        operator_source = manual_control_operator_exclusion_source(spec.code)
-        if not exclusion.excluded or not operator_source:
+        operator_source = _widget_order_ownership_source(
+            spec.code, target_date=now.date()
+        )
+        if not operator_source:
             self._record_entry_block_once(
                 spec=spec,
                 symbol_state=symbol_state,

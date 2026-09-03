@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.engine.risk.manual_control_exclusion import (
-    manual_control_operator_exclusion_source,
+    independent_machine_ownership_source,
 )
 from src.trading.low_price_two_leg.profiles import MachineProfile, get_profile
 from src.trading.order.regular_two_leg_machine import KST as KST
@@ -19,6 +19,10 @@ DEFAULT_STATE_DIR = DATA_DIR / "runtime" / "low_price_two_leg"
 _SAFE_PRIOR_TERMINAL_POLICY_BLOCK_REASONS = frozenset(
     {"state_leg_target_policy_mismatch"}
 )
+
+
+def _episode_ownership_source(code: object) -> str:
+    return independent_machine_ownership_source(code, owner="episode")
 
 
 def default_state_path(profile: MachineProfile) -> Path:
@@ -35,9 +39,7 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
         gateway,
         state_path: Path | None = None,
         live_enabled: bool = False,
-        ownership_source: Callable[
-            [object], str
-        ] = manual_control_operator_exclusion_source,
+        ownership_source: Callable[[object], str] = _episode_ownership_source,
     ) -> None:
         self.profile = profile
         super().__init__(

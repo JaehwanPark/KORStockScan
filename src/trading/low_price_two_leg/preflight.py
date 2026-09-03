@@ -12,7 +12,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 
 from src.engine.risk.manual_control_exclusion import (
-    manual_control_operator_exclusion_source,
+    independent_machine_ownership_source,
 )
 from src.trading.low_price_two_leg.profiles import (
     PROFILE_REVISION_20260819_EFFECTIVE_DATE,
@@ -39,6 +39,14 @@ from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
 AUTHORITY_SCHEMA = "low_price_two_leg_authority_v2"
+
+
+def _episode_ownership_source(symbol: str, *, target_date: date) -> str:
+    return independent_machine_ownership_source(
+        symbol, owner="episode", target_date=target_date
+    )
+
+
 RESEARCH_REPORT_PATH = (
     DATA_DIR
     / "report"
@@ -1005,8 +1013,8 @@ def main(argv: list[str] | None = None) -> int:
         profile=profile,
         main_bot_active=args.main_bot_active,
         shared_token_available=bool(kiwoom_utils.get_cached_kiwoom_token()),
-        operator_exclusion_source=manual_control_operator_exclusion_source(
-            profile.symbol
+        operator_exclusion_source=_episode_ownership_source(
+            profile.symbol, target_date=target_date
         ),
         research_evidence_ready=evidence_ready,
         applied_policy_ready=applied_policy is not None,

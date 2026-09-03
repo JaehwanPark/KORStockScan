@@ -11,7 +11,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 
 from src.engine.risk.manual_control_exclusion import (
-    manual_control_operator_exclusion_source,
+    independent_machine_ownership_source,
 )
 from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.trading.order.samsung_entry_policy import (
@@ -26,6 +26,12 @@ AUTHORITY_SCHEMA = "samsung_afternoon_two_leg_authority_v4"
 DEFAULT_AUTHORITY_PATH = (
     DATA_DIR / "runtime" / "samsung_afternoon_one_share_authority.json"
 )
+
+
+def _episode_ownership_source(symbol: str, *, target_date: date) -> str:
+    return independent_machine_ownership_source(
+        symbol, owner="episode", target_date=target_date
+    )
 
 
 @dataclass(frozen=True)
@@ -228,7 +234,9 @@ def main(argv: list[str] | None = None) -> int:
         target_date=target_date,
         main_bot_active=args.main_bot_active,
         shared_token_available=bool(kiwoom_utils.get_cached_kiwoom_token()),
-        operator_exclusion_source=manual_control_operator_exclusion_source("005930"),
+        operator_exclusion_source=_episode_ownership_source(
+            "005930", target_date=target_date
+        ),
     )
     output = {"decision": asdict(decision), "authority_path": str(args.authority_path)}
     if decision.ready and args.write:
