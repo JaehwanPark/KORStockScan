@@ -83,6 +83,8 @@ def _promoted_ws_bundle_event(when: datetime) -> dict:
             "market_session_bucket": "krx_regular",
             "observed_venue": "KRX",
             "route_scope_status": "exact_0d_route_snapshot",
+            "market_route": "krx_regular",
+            "observed_item": "005930",
             "scanner_promotion_id": "PROM-1",
         }
     ]
@@ -459,6 +461,41 @@ def test_external_bbo_daily_budget_reservation_is_durable_and_fail_closed(tmp_pa
     assert persisted["market_data_request_effect"] is True
 
 
+def test_external_bbo_budget_rejects_fractional_persisted_count(tmp_path):
+    path = tmp_path / "budget.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": census.EXTERNAL_BBO_BUDGET_SCHEMA_VERSION,
+                "target_date": "2026-09-02",
+                "reserved_request_count": 1.5,
+                "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+                "market_data_request_effect": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reservation = census._reserve_external_bbo_request(
+        path,
+        target_date="2026-09-02",
+    )
+    contract = census._load_external_bbo_budget_contract(
+        path,
+        target_date="2026-09-02",
+        minimum_reserved_count=0,
+    )
+
+    assert reservation["status"] == "ledger_contract_mismatch"
+    assert reservation["reserved"] is False
+    assert contract["status"] == "invalid"
+    assert contract["reserved_request_count"] is None
+
+
 def test_external_bbo_budget_contract_binds_snapshot_ordinal(tmp_path):
     path = tmp_path / "budget.json"
     reservation = census._reserve_external_bbo_request(
@@ -482,6 +519,21 @@ def test_external_bbo_budget_contract_binds_snapshot_ordinal(tmp_path):
     assert contract["status"] == "verified"
     assert contract["reserved_request_count"] == 41
     assert ahead_of_ledger["status"] == "invalid"
+
+
+def test_external_bbo_failed_capture_still_binds_its_budget_reservation():
+    observation = {
+        "status": "source_quality_gap",
+        "request_attempted": True,
+        "daily_budget_reservation": {
+            "status": "reserved",
+            "reserved": True,
+            "attempt_ordinal": 7,
+            "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+        },
+    }
+
+    assert census._external_bbo_reservation_ordinal(observation) == 7
 
 
 def test_invalid_snapshot_reservation_cannot_reflect_budget_contract(tmp_path):
@@ -552,9 +604,94 @@ def test_invalid_snapshot_reservation_cannot_reflect_budget_contract(tmp_path):
 
     source = report["source_quality"]["ex_post_bbo_source"]
     assert source["external_census_capture_contract_reflected"] is False
+    assert source["external_census_request_attempted_count"] == 1
+    assert source["external_census_reserved_contract_row_count"] == 0
+    assert source["external_census_invalid_reservation_attempt_count"] == 1
+    assert source["external_census_reservation_accounted_count"] == 1
+    assert source["external_census_reservation_conservation_delta"] == 0
+    assert source["external_census_reservation_conservation_status"] == "pass"
     assert source["gap_reason_counts"] == {
         "external_census_daily_budget_reservation_invalid": 1
     }
+
+
+def test_duplicate_snapshot_reservation_ordinal_fails_capture_contract(tmp_path):
+    captured_at = datetime.fromisoformat("2026-09-02T10:00:00+09:00")
+    clock_values = iter([captured_at.timestamp(), captured_at.timestamp() + 0.2])
+    records = census.capture_market_snapshots(
+        "token",
+        target_date="2026-09-02",
+        captured_at=captured_at,
+        venues=("KRX",),
+        panels=("liquid_common",),
+        fetcher=lambda *_args, **_kwargs: [
+            {"Code": "005930", "Name": "삼성전자", "Price": 100000}
+        ],
+        collect_executable_bbo=True,
+        bbo_fetcher=lambda *_args, **_kwargs: {
+            "source": "ka10004_rest_orderbook",
+            "stock_code": "005930",
+            "request_code": "005930",
+            "explicit_request_code": True,
+            "rest_received_ts": captured_at.timestamp() + 0.1,
+            "best_bid": 99900,
+            "best_ask": 100000,
+            "best_bid_qty": 12,
+            "best_ask_qty": 10,
+        },
+        bbo_request_reserver=lambda: {
+            "status": "reserved",
+            "reserved": True,
+            "attempt_ordinal": 1,
+            "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+        },
+        clock=lambda: next(clock_values),
+    )
+    snapshot_path = tmp_path / "snapshots.jsonl"
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    ai_path = tmp_path / "ai.jsonl"
+    budget_path = tmp_path / "budget.json"
+    _write_jsonl(snapshot_path, [*records, *records])
+    _write_jsonl(pipeline_path, [])
+    _write_jsonl(ai_path, [])
+    budget_path.write_text(
+        json.dumps(
+            {
+                "schema_version": census.EXTERNAL_BBO_BUDGET_SCHEMA_VERSION,
+                "target_date": "2026-09-02",
+                "reserved_request_count": 1,
+                "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+                "market_data_request_effect": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = census.build_report(
+        "2026-09-02",
+        snapshot_path=snapshot_path,
+        pipeline_path=pipeline_path,
+        ai_trace_path=ai_path,
+        symbol_master_path=tmp_path / "missing-master.json",
+        trigger_receipt_path=tmp_path / "missing-trigger.json",
+        external_bbo_budget_path=budget_path,
+    )
+
+    source = report["source_quality"]["ex_post_bbo_source"]
+    assert source["external_census_request_attempted_count"] == 2
+    assert source["external_census_reserved_contract_row_count"] == 2
+    assert source["external_census_unique_reserved_ordinal_count"] == 1
+    assert source["external_census_duplicate_reserved_ordinal_count"] == 1
+    assert source["external_census_reservation_conservation_delta"] == 0
+    assert source["external_census_reservation_conservation_status"] == "fail"
+    assert source["external_census_capture_contract_reflected"] is False
+    assert source["gap_reason_counts"][
+        "external_census_daily_budget_reservation_ordinal_duplicate"
+    ] == 1
 
 
 def test_snapshot_source_hash_detects_normalized_row_tampering():
@@ -2046,6 +2183,8 @@ def test_snapshot_append_and_markdown_forbid_live_authority(tmp_path):
     assert "### Candidate Not Promoted First Reasons" in markdown
     assert "`general_slot_limit`=19" in markdown
     assert "conservation_status=`pass`" in markdown
+    assert "external BBO request reservation conservation:" in markdown
+    assert "status=`unknown`" in markdown
     assert "`standalone_buy`" in markdown
 
 

@@ -1000,6 +1000,34 @@ def append_snapshot_records(path: Path, records: Iterable[dict[str, Any]]) -> in
     return count
 
 
+def _strict_nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    numeric = _safe_float(value)
+    if numeric is None or numeric < 0 or not numeric.is_integer():
+        return None
+    return int(numeric)
+
+
+def _external_bbo_reservation_ordinal(observation: Any) -> int | None:
+    if not isinstance(observation, dict) or observation.get("request_attempted") is not True:
+        return None
+    reservation = observation.get("daily_budget_reservation")
+    if not isinstance(reservation, dict):
+        return None
+    ordinal = _strict_nonnegative_int(reservation.get("attempt_ordinal"))
+    daily_cap = _strict_nonnegative_int(reservation.get("daily_request_cap"))
+    if not (
+        reservation.get("status") == "reserved"
+        and reservation.get("reserved") is True
+        and ordinal is not None
+        and 0 < ordinal <= EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE
+        and daily_cap == EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE
+    ):
+        return None
+    return ordinal
+
+
 def _reserve_external_bbo_request(
     path: Path,
     *,
@@ -1046,7 +1074,18 @@ def _reserve_external_bbo_request(
                             "reserved": False,
                             "attempt_ordinal": None,
                         }
-                    attempted_count = int(payload.get("reserved_request_count") or 0)
+                    attempted_count = _strict_nonnegative_int(
+                        payload.get("reserved_request_count")
+                    )
+                    persisted_limit = _strict_nonnegative_int(
+                        payload.get("daily_request_cap")
+                    )
+                    if attempted_count is None or persisted_limit != int(limit):
+                        return {
+                            "status": "ledger_contract_mismatch",
+                            "reserved": False,
+                            "attempt_ordinal": None,
+                        }
                 else:
                     attempted_count = max(0, int(initial_reserved_count))
                 bounded_limit = max(0, int(limit))
@@ -1127,8 +1166,10 @@ def _load_external_bbo_budget_contract(
     try:
         receipt = read_json_object_strict_receipt(path)
         payload = receipt.payload
-        reserved_count = int(payload.get("reserved_request_count") or 0)
-        daily_cap = int(payload.get("daily_request_cap") or 0)
+        reserved_count = _strict_nonnegative_int(
+            payload.get("reserved_request_count")
+        )
+        daily_cap = _strict_nonnegative_int(payload.get("daily_request_cap"))
     except (FileNotFoundError, OSError, OverflowError, TypeError, ValueError):
         return {
             "status": "missing_or_invalid",
@@ -1145,6 +1186,7 @@ def _load_external_bbo_budget_contract(
     valid = bool(
         payload.get("schema_version") == EXTERNAL_BBO_BUDGET_SCHEMA_VERSION
         and payload.get("target_date") == target_date
+        and reserved_count is not None
         and daily_cap == EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE
         and minimum_reserved_count <= reserved_count <= daily_cap
         and authority_valid
@@ -1508,27 +1550,8 @@ def _external_snapshot_bbo_observation(
         "ka10004_external_market_census_exact_request_code"
     ):
         return None, "external_census_price_source_invalid"
-    reservation = observation.get("daily_budget_reservation")
-    reservation_ordinal = (
-        _safe_float(reservation.get("attempt_ordinal"))
-        if isinstance(reservation, dict)
-        else None
-    )
-    reservation_cap = (
-        _safe_float(reservation.get("daily_request_cap"))
-        if isinstance(reservation, dict)
-        else None
-    )
-    if (
-        not isinstance(reservation, dict)
-        or reservation.get("status") != "reserved"
-        or reservation.get("reserved") is not True
-        or reservation_ordinal is None
-        or not reservation_ordinal.is_integer()
-        or reservation_ordinal <= 0
-        or reservation_ordinal > EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE
-        or reservation_cap != EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE
-    ):
+    reservation_ordinal = _external_bbo_reservation_ordinal(observation)
+    if reservation_ordinal is None:
         return None, "external_census_daily_budget_reservation_invalid"
 
     code = _safe_code(row.get("stock_code"))
@@ -2835,7 +2858,9 @@ def build_report(
     external_bbo_contract_row_count = 0
     external_bbo_request_attempted_count = 0
     external_bbo_reserved_contract_row_count = 0
+    external_bbo_invalid_reservation_attempt_count = 0
     external_bbo_max_reserved_ordinal = 0
+    external_bbo_reservation_ordinals: list[int] = []
     for snapshot in valid_snapshots:
         if snapshot.get("panel") != "liquid_common":
             continue
@@ -2856,14 +2881,22 @@ def build_report(
                 external_bbo_request_attempted_count += int(
                     raw_observation.get("request_attempted") is True
                 )
-                reservation = raw_observation.get("daily_budget_reservation")
-                reservation_ordinal = (
-                    _safe_float(reservation.get("attempt_ordinal"))
-                    if isinstance(reservation, dict)
-                    and reservation.get("status") == "reserved"
-                    and reservation.get("reserved") is True
-                    else None
+                reservation_ordinal = _external_bbo_reservation_ordinal(
+                    raw_observation
                 )
+                if reservation_ordinal is not None:
+                    external_bbo_reserved_contract_row_count += 1
+                    external_bbo_reservation_ordinals.append(reservation_ordinal)
+                    external_bbo_max_reserved_ordinal = max(
+                        external_bbo_max_reserved_ordinal,
+                        reservation_ordinal,
+                    )
+                elif raw_observation.get("request_attempted") is True:
+                    external_bbo_invalid_reservation_attempt_count += 1
+                    if raw_observation.get("status") != "captured":
+                        executable_bbo_gap_counts[
+                            "external_census_daily_budget_reservation_invalid"
+                        ] += 1
             observation, gap_reason = _external_snapshot_bbo_observation(
                 snapshot,
                 snapshot_row,
@@ -2872,15 +2905,6 @@ def build_report(
             if observation is None:
                 executable_bbo_gap_counts[gap_reason] += 1
                 continue
-            # Count only reservations whose full observation contract passed.
-            # A malformed or out-of-range ordinal must not make the producer
-            # report that the durable daily-budget contract was reflected.
-            assert reservation_ordinal is not None
-            external_bbo_reserved_contract_row_count += 1
-            external_bbo_max_reserved_ordinal = max(
-                external_bbo_max_reserved_ordinal,
-                int(reservation_ordinal),
-            )
             executable_bbo_index.setdefault(observation["stock_code"], {}).setdefault(
                 observation["venue"], {}
             ).setdefault(observation["session"], []).append(observation)
@@ -2893,9 +2917,35 @@ def build_report(
         target_date=target_date,
         minimum_reserved_count=external_bbo_max_reserved_ordinal,
     )
+    external_bbo_unique_reserved_ordinal_count = len(
+        set(external_bbo_reservation_ordinals)
+    )
+    external_bbo_duplicate_reserved_ordinal_count = (
+        external_bbo_reserved_contract_row_count
+        - external_bbo_unique_reserved_ordinal_count
+    )
+    if external_bbo_duplicate_reserved_ordinal_count:
+        executable_bbo_gap_counts[
+            "external_census_daily_budget_reservation_ordinal_duplicate"
+        ] += external_bbo_duplicate_reserved_ordinal_count
+    external_bbo_reservation_accounted_count = (
+        external_bbo_reserved_contract_row_count
+        + external_bbo_invalid_reservation_attempt_count
+    )
+    external_bbo_reservation_conservation_delta = (
+        external_bbo_request_attempted_count
+        - external_bbo_reservation_accounted_count
+    )
+    external_bbo_reservation_conservation_status = (
+        "pass"
+        if external_bbo_reservation_conservation_delta == 0
+        and external_bbo_duplicate_reserved_ordinal_count == 0
+        else "fail"
+    )
     external_bbo_capture_contract_reflected = bool(
         external_bbo_reserved_contract_row_count
         and external_bbo_budget_contract.get("status") == "verified"
+        and external_bbo_reservation_conservation_status == "pass"
     )
     snapshot_capture_times = [
         captured_at
@@ -3386,6 +3436,24 @@ def build_report(
                 "external_census_reserved_contract_row_count": (
                     external_bbo_reserved_contract_row_count
                 ),
+                "external_census_invalid_reservation_attempt_count": (
+                    external_bbo_invalid_reservation_attempt_count
+                ),
+                "external_census_unique_reserved_ordinal_count": (
+                    external_bbo_unique_reserved_ordinal_count
+                ),
+                "external_census_duplicate_reserved_ordinal_count": (
+                    external_bbo_duplicate_reserved_ordinal_count
+                ),
+                "external_census_reservation_accounted_count": (
+                    external_bbo_reservation_accounted_count
+                ),
+                "external_census_reservation_conservation_delta": (
+                    external_bbo_reservation_conservation_delta
+                ),
+                "external_census_reservation_conservation_status": (
+                    external_bbo_reservation_conservation_status
+                ),
                 "external_census_max_reserved_ordinal": (
                     external_bbo_max_reserved_ordinal
                 ),
@@ -3467,6 +3535,9 @@ def build_report(
 
 def render_markdown(report: dict[str, Any]) -> str:
     primary = report.get("primary_decision") or {}
+    ex_post_bbo_source = (
+        (report.get("source_quality") or {}).get("ex_post_bbo_source") or {}
+    )
     lines = [
         f"# Market Opportunity Census - {report.get('target_date')}",
         "",
@@ -3564,6 +3635,16 @@ def render_markdown(report: dict[str, Any]) -> str:
                     ).get("round_trip_cost_pct")
                 )
                 + "%`"
+            ),
+            (
+                "- external BBO request reservation conservation: "
+                f"attempted={ex_post_bbo_source.get('external_census_request_attempted_count', 0)}, "
+                f"valid={ex_post_bbo_source.get('external_census_reserved_contract_row_count', 0)}, "
+                f"invalid={ex_post_bbo_source.get('external_census_invalid_reservation_attempt_count', 0)}, "
+                f"unique={ex_post_bbo_source.get('external_census_unique_reserved_ordinal_count', 0)}, "
+                f"duplicate={ex_post_bbo_source.get('external_census_duplicate_reserved_ordinal_count', 0)}, "
+                f"delta={ex_post_bbo_source.get('external_census_reservation_conservation_delta', 0)}, "
+                f"status=`{ex_post_bbo_source.get('external_census_reservation_conservation_status', 'unknown')}`"
             ),
             "",
             "| Venue | Episodes | Exact BBO joined | Coverage % | Executable entry | Resolved 20m | Right-censored % | Observed cohort net EV % | Decision EV % | Floor |",

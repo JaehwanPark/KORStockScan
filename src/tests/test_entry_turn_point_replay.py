@@ -16,6 +16,8 @@ def _observation(epoch: float, bid: float, ask: float) -> dict:
         "event_epoch": epoch,
         "best_bid": bid,
         "best_ask": ask,
+        "best_bid_qty": 100,
+        "best_ask_qty": 100,
         "spread_bps": (ask - bid) / ask * 10_000.0,
         "quote_age_ms": 0.0,
         "source": "market_data_effective_bbo",
@@ -46,6 +48,11 @@ def _event(
             {
                 "market_data_effective_best_bid": bid,
                 "market_data_effective_best_ask": ask,
+                "market_data_effective_best_bid_qty": 100,
+                "market_data_effective_best_ask_qty": 100,
+                "market_data_effective_best_bid_qty_source_valid": True,
+                "market_data_effective_best_ask_qty_source_valid": True,
+                "market_data_freshness_state": "fresh_ws",
                 "market_data_effective_quote_age_ms": 0.0,
                 "market_data_effective_quote_observed_epoch": when.timestamp(),
                 "market_data_effective_price_source": "ws",
@@ -270,6 +277,9 @@ def test_replay_uses_exact_ws_bbo_costs_and_attributes_discovery_lag():
     assert row["causal_bucket"] == "discovery_late"
     assert row["primary_outcome"]["label"] == "target_first"
     assert row["primary_outcome"]["cost_adjusted_return_pct"] > 0
+    assert row["primary_outcome"]["entry_best_ask_qty"] == 100
+    assert row["primary_outcome"]["exit_best_bid_qty"] == 100
+    assert row["primary_outcome"]["actual_fill_claim"] is False
     assert report["comparison_cost_contract"]["round_trip_cost_bps"] == 23.0
     assert report["exact_ws_bbo_join_coverage_pct"] == 100.0
     assert report["pre_anchor_bbo_coverage_pct"] == 100.0
@@ -366,6 +376,8 @@ def test_bundled_pre_anchor_path_is_scope_checked_and_replayed():
                     "recorded_epoch": (start + timedelta(seconds=offset)).timestamp(),
                     "best_bid": bid,
                     "best_ask": ask,
+                    "best_bid_qty": 100,
+                    "best_ask_qty": 100,
                     "quote_age_ms": 0.0,
                     "source_provenance": "existing_ws_route_scoped_0d_snapshot",
                     "effective_venue": "KRX",
@@ -419,12 +431,16 @@ def test_bundled_pre_anchor_path_decodes_persisted_json_and_legacy_repr():
             "recorded_epoch": start.timestamp(),
             "best_bid": 1000,
             "best_ask": 1001,
+            "best_bid_qty": 100,
+            "best_ask_qty": 100,
             "quote_age_ms": 0.0,
             "source_provenance": "existing_ws_route_scoped_0d_snapshot",
             "effective_venue": "KRX",
             "market_session_bucket": "krx_regular",
             "observed_venue": "KRX",
             "route_scope_status": "exact_0d_route_snapshot",
+            "market_route": "krx_regular",
+            "observed_item": "000001",
             "scanner_promotion_id": "PROM-1",
         }
     ]
@@ -492,6 +508,27 @@ def test_exact_bbo_rejects_reference_epoch_after_event():
 
     assert observation is None
     assert reason == "market_data_effective_bbo:quote_reference_after_event"
+
+
+def test_exact_bbo_rejects_missing_quantity_or_nonfresh_ws_state():
+    observed_at = datetime(2026, 9, 2, 9, 0, tzinfo=KST)
+    missing_quantity = _event("fixture_bbo", observed_at, bid=1000, ask=1001)
+    missing_quantity["fields"].pop("market_data_effective_best_ask_qty")
+
+    observation, reason = mod._executable_ws_bbo(missing_quantity)
+
+    assert observation is None
+    assert reason == (
+        "market_data_effective_bbo:displayed_best_quantity_missing_or_not_fillable"
+    )
+
+    stale = _event("fixture_bbo", observed_at, bid=1000, ask=1001)
+    stale["fields"]["market_data_freshness_state"] = "stale"
+
+    observation, reason = mod._executable_ws_bbo(stale)
+
+    assert observation is None
+    assert reason == "market_data_effective_bbo:fresh_ws_state_unproven"
 
 
 def test_feedback_projection_preserves_bounded_pre_anchor_bundle(tmp_path):

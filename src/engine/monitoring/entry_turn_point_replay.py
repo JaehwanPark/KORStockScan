@@ -80,8 +80,8 @@ METRIC_CONTRACT = {
     ),
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
-        "fresh_existing_ws_bbo_with_explicit_symbol_venue_session_local_time_"
-        "and_no_pre_anchor_imputation"
+        "fresh_existing_ws_bbo_with_nonzero_integer_displayed_best_quantities_"
+        "and_explicit_symbol_venue_session_local_time_and_no_pre_anchor_imputation"
     ),
     "forbidden_uses": FORBIDDEN_USES,
     "runtime_effect": False,
@@ -178,6 +178,12 @@ def _is_ws_provenance(value: Any) -> bool:
     return bool(token and "ws" in token and "rest" not in token)
 
 
+def _boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str]:
     """Extract one fresh existing-WS BBO; REST and mark prices are forbidden."""
 
@@ -201,6 +207,11 @@ def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
             "market_data_effective_price_source",
             "market_data_effective_quote_observed_epoch",
             "market_data_effective_quote_reference_epoch",
+            "market_data_effective_best_bid_qty",
+            "market_data_effective_best_ask_qty",
+            "market_data_effective_best_bid_qty_source_valid",
+            "market_data_effective_best_ask_qty_source_valid",
+            "market_data_freshness_state",
         ),
         (
             "nxt_post_block_ws_0d_bbo",
@@ -208,6 +219,11 @@ def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
             "rising_missed_nxt_post_block_ws_0d_best_ask",
             "rising_missed_nxt_post_block_ws_0d_age_ms",
             "rising_missed_nxt_post_block_price_source",
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
             None,
         ),
@@ -221,6 +237,11 @@ def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
         provenance_key,
         epoch_key,
         reference_epoch_key,
+        bid_qty_key,
+        ask_qty_key,
+        bid_qty_valid_key,
+        ask_qty_valid_key,
+        freshness_state_key,
     ) in candidates:
         bid = _safe_float(fields.get(bid_key))
         ask = _safe_float(fields.get(ask_key))
@@ -239,6 +260,31 @@ def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
         provenance = str(fields.get(provenance_key) or "").strip()
         if not _is_ws_provenance(provenance):
             gaps.append(f"{source}:existing_ws_provenance_unproven")
+            continue
+        if (
+            freshness_state_key
+            and str(fields.get(freshness_state_key) or "").strip().lower()
+            != "fresh_ws"
+        ):
+            gaps.append(f"{source}:fresh_ws_state_unproven")
+            continue
+        bid_qty = _safe_float(fields.get(bid_qty_key)) if bid_qty_key else None
+        ask_qty = _safe_float(fields.get(ask_qty_key)) if ask_qty_key else None
+        if not (
+            bid_qty_key
+            and ask_qty_key
+            and bid_qty_valid_key
+            and ask_qty_valid_key
+            and _boolish(fields.get(bid_qty_valid_key))
+            and _boolish(fields.get(ask_qty_valid_key))
+            and bid_qty is not None
+            and ask_qty is not None
+            and bid_qty >= 1
+            and ask_qty >= 1
+            and bid_qty.is_integer()
+            and ask_qty.is_integer()
+        ):
+            gaps.append(f"{source}:displayed_best_quantity_missing_or_not_fillable")
             continue
         observed_epoch = _safe_float(fields.get(epoch_key)) if epoch_key else None
         reference_epoch = (
@@ -278,6 +324,8 @@ def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
                 "reference_epoch": reference_epoch,
                 "best_bid": bid,
                 "best_ask": ask,
+                "best_bid_qty": int(bid_qty),
+                "best_ask_qty": int(ask_qty),
                 "spread_bps": (ask - bid) / ask * 10_000.0,
                 "quote_age_ms": age_ms,
                 "source": source,
@@ -389,6 +437,43 @@ def _bundled_pre_anchor_ws_bbos(
         ):
             gaps.append("pre_anchor_bundle:lineage_or_scope_mismatch")
             continue
+        if bundle_schema_version == PRE_ANCHOR_BUNDLE_SCHEMA_VERSION:
+            code = _code(row)
+            market_route = str(sample.get("market_route") or "").strip().lower()
+            observed_item = str(sample.get("observed_item") or "").strip().upper()
+            route_scope_status = str(sample.get("route_scope_status") or "").strip()
+            if venue == "KRX":
+                route_identity_valid = bool(
+                    code
+                    and market_route == "krx_regular"
+                    and observed_item == code
+                )
+            elif venue == "NXT":
+                route_identity_valid = bool(
+                    code
+                    and market_route == "nxt_only"
+                    and observed_item == f"{code}_NX"
+                )
+            else:
+                route_identity_valid = bool(
+                    code
+                    and (
+                        (
+                            market_route == "nxt_only"
+                            and observed_item == f"{code}_NX"
+                            and route_scope_status == "exact_0d_route_snapshot"
+                        )
+                        or (
+                            market_route == "krx_nxt_integrated"
+                            and observed_item == f"{code}_AL"
+                            and route_scope_status
+                            == "exact_0d_integrated_route_nxt_only_depth_proven"
+                        )
+                    )
+                )
+            if not route_identity_valid:
+                gaps.append("pre_anchor_bundle:exact_route_identity_invalid")
+                continue
         bid = _safe_float(sample.get("best_bid"))
         ask = _safe_float(sample.get("best_ask"))
         bid_qty = _safe_float(sample.get("best_bid_qty"))
@@ -401,6 +486,16 @@ def _bundled_pre_anchor_ws_bbos(
         route_scope_status = str(sample.get("route_scope_status") or "").strip()
         if bid is None or ask is None or bid <= 0 or ask < bid:
             gaps.append("pre_anchor_bundle:invalid_or_crossed_bbo")
+            continue
+        if (
+            bid_qty is None
+            or ask_qty is None
+            or bid_qty < 1
+            or ask_qty < 1
+            or not bid_qty.is_integer()
+            or not ask_qty.is_integer()
+        ):
+            gaps.append("pre_anchor_bundle:displayed_best_quantity_missing_or_not_fillable")
             continue
         if age_ms is None or age_ms < 0 or age_ms > MAX_QUOTE_AGE_MS:
             gaps.append("pre_anchor_bundle:quote_age_invalid_or_stale")
@@ -437,16 +532,8 @@ def _bundled_pre_anchor_ws_bbos(
                 "event_epoch": event_time.timestamp(),
                 "best_bid": bid,
                 "best_ask": ask,
-                "best_bid_qty": (
-                    int(bid_qty)
-                    if bid_qty is not None and bid_qty >= 0 and bid_qty.is_integer()
-                    else None
-                ),
-                "best_ask_qty": (
-                    int(ask_qty)
-                    if ask_qty is not None and ask_qty >= 0 and ask_qty.is_integer()
-                    else None
-                ),
+                "best_bid_qty": int(bid_qty),
+                "best_ask_qty": int(ask_qty),
                 "spread_bps": (ask - bid) / ask * 10_000.0,
                 "quote_age_ms": age_ms,
                 "source": "entry_turn_pre_anchor_bbo_ring",
@@ -575,13 +662,15 @@ def load_verified_symbol_master(
 
 def _dedupe_observations(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     deduped: list[dict[str, Any]] = []
-    seen: set[tuple[float, float, float]] = set()
+    seen: set[tuple[float, float, float, int, int]] = set()
     for raw in sorted(rows, key=lambda item: float(item["observed_epoch"])):
         item = dict(raw)
         key = (
             float(item["observed_epoch"]),
             float(item["best_bid"]),
             float(item["best_ask"]),
+            int(item["best_bid_qty"]),
+            int(item["best_ask_qty"]),
         )
         if key in seen:
             continue
@@ -730,6 +819,8 @@ def _detect_turns(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "trigger_epoch": trigger_epoch,
                 "entry_best_bid": observation["best_bid"],
                 "entry_best_ask": observation["best_ask"],
+                "entry_best_bid_qty": observation["best_bid_qty"],
+                "entry_best_ask_qty": observation["best_ask_qty"],
                 "entry_spread_bps": round(float(observation["spread_bps"]), 6),
                 "source": observation["source"],
                 "source_provenance": observation["source_provenance"],
@@ -792,6 +883,12 @@ def _scenario_outcome(
             "gross_return_pct": None,
             "cost_adjusted_return_pct": None,
             "elapsed_sec": None,
+            "entry_best_ask_qty": int(turn["entry_best_ask_qty"]),
+            "exit_best_bid_qty": None,
+            "fill_feasibility_basis": (
+                "displayed_best_ask_and_bid_quantity_at_exact_route_bbo"
+            ),
+            "actual_fill_claim": False,
         }
     gross_return_pct = (float(exit_row["best_bid"]) - entry_ask) / entry_ask * 100.0
     return {
@@ -801,6 +898,12 @@ def _scenario_outcome(
         "gross_return_pct": round(gross_return_pct, 8),
         "cost_adjusted_return_pct": round(gross_return_pct - round_trip_cost_pct, 8),
         "elapsed_sec": round(float(exit_row["observed_epoch"]) - entry_epoch, 6),
+        "entry_best_ask_qty": int(turn["entry_best_ask_qty"]),
+        "exit_best_bid_qty": int(exit_row["best_bid_qty"]),
+        "fill_feasibility_basis": (
+            "displayed_best_ask_and_bid_quantity_at_exact_route_bbo"
+        ),
+        "actual_fill_claim": False,
     }
 
 
@@ -1137,6 +1240,7 @@ def build_entry_turn_point_replay(
             current_anchor = {
                 "trigger_epoch": candidate_entry_observation["observed_epoch"],
                 "entry_best_ask": candidate_entry_observation["best_ask"],
+                "entry_best_ask_qty": candidate_entry_observation["best_ask_qty"],
             }
             current_primary_outcome = _scenario_outcome(
                 all_observations,

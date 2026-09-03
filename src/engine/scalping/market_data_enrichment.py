@@ -243,6 +243,33 @@ def _quote_levels(source: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def _displayed_best_quantity(
+    source: dict[str, Any], side: str
+) -> tuple[int, bool, str]:
+    """Return a displayed best-level quantity without missing-to-zero coercion."""
+
+    orderbook_side = _orderbook_side(source.get("orderbook"), f"{side}s")
+    candidates = (
+        (f"best_{side}_qty", source.get(f"best_{side}_qty")),
+        (f"{side}_qty", source.get(f"{side}_qty")),
+        ("orderbook.qty", orderbook_side.get("qty")),
+        ("orderbook.volume", orderbook_side.get("volume")),
+        ("orderbook.quantity", orderbook_side.get("quantity")),
+    )
+    for basis, raw_value in candidates:
+        if raw_value in (None, "", "-"):
+            continue
+        numeric = _safe_float(raw_value, None)
+        valid = bool(
+            not isinstance(raw_value, bool)
+            and numeric is not None
+            and numeric >= 0
+            and float(numeric).is_integer()
+        )
+        return (int(numeric) if valid else 0, valid, basis)
+    return 0, False, "missing"
+
+
 def _quote_usable(levels: dict[str, int]) -> bool:
     curr = levels.get("curr", 0)
     best_ask = levels.get("best_ask", 0)
@@ -505,6 +532,18 @@ def build_market_data_enrichment(
     metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
     ws_levels = _quote_levels(base)
     rest_levels = _quote_levels(rest_orderbook)
+    ws_ask_qty, ws_ask_qty_valid, ws_ask_qty_basis = _displayed_best_quantity(
+        base, "ask"
+    )
+    ws_bid_qty, ws_bid_qty_valid, ws_bid_qty_basis = _displayed_best_quantity(
+        base, "bid"
+    )
+    rest_ask_qty, rest_ask_qty_valid, rest_ask_qty_basis = _displayed_best_quantity(
+        rest_orderbook, "ask"
+    )
+    rest_bid_qty, rest_bid_qty_valid, rest_bid_qty_basis = _displayed_best_quantity(
+        rest_orderbook, "bid"
+    )
     ws_levels_explicit = bool(
         _safe_int(base.get("curr") or base.get("current_price"), 0) > 0
         and _safe_int(base.get("best_ask") or base.get("ask_price"), 0) > 0
@@ -621,6 +660,24 @@ def build_market_data_enrichment(
     else:
         effective_levels = {"best_ask": 0, "best_bid": 0}
         effective_level_basis = effective_source or "none"
+    if effective_source == "ka10004_rest_orderbook":
+        effective_ask_qty = rest_ask_qty
+        effective_bid_qty = rest_bid_qty
+        effective_ask_qty_valid = rest_ask_qty_valid
+        effective_bid_qty_valid = rest_bid_qty_valid
+        effective_qty_basis = f"ask={rest_ask_qty_basis}|bid={rest_bid_qty_basis}"
+    elif effective_source == "ws":
+        effective_ask_qty = ws_ask_qty
+        effective_bid_qty = ws_bid_qty
+        effective_ask_qty_valid = ws_ask_qty_valid
+        effective_bid_qty_valid = ws_bid_qty_valid
+        effective_qty_basis = f"ask={ws_ask_qty_basis}|bid={ws_bid_qty_basis}"
+    else:
+        effective_ask_qty = 0
+        effective_bid_qty = 0
+        effective_ask_qty_valid = False
+        effective_bid_qty_valid = False
+        effective_qty_basis = "not_available_no_effective_quote"
 
     signed_fields = _signed_tape_fields(
         rest_signed_ticks,
@@ -660,6 +717,15 @@ def build_market_data_enrichment(
         ),
         "market_data_effective_best_ask": effective_levels.get("best_ask", 0) or "-",
         "market_data_effective_best_bid": effective_levels.get("best_bid", 0) or "-",
+        "market_data_effective_best_ask_qty": effective_ask_qty,
+        "market_data_effective_best_bid_qty": effective_bid_qty,
+        "market_data_effective_best_ask_qty_source_valid": (
+            effective_ask_qty_valid
+        ),
+        "market_data_effective_best_bid_qty_source_valid": (
+            effective_bid_qty_valid
+        ),
+        "market_data_effective_best_quantity_basis": effective_qty_basis,
         "market_data_effective_quote_level_basis": effective_level_basis,
         "market_data_effective_age_basis": (
             rest_age_basis

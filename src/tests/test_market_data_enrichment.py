@@ -40,6 +40,8 @@ def test_market_data_enrichment_uses_fresh_ws_without_rest():
     assert fields["market_data_enrichment_applied"] is False
     assert fields["market_data_effective_price_source"] == "ws"
     assert fields["market_data_effective_quote_reference_epoch"] == 1000.2
+    assert fields["market_data_effective_best_ask_qty_source_valid"] is False
+    assert fields["market_data_effective_best_bid_qty_source_valid"] is False
     assert enriched["curr"] == 10000
 
 
@@ -62,8 +64,32 @@ def test_market_data_enrichment_normalizes_nested_ws_best_levels():
     )
     assert fields["market_data_effective_best_ask"] == 10010
     assert fields["market_data_effective_best_bid"] == 9990
+    assert fields["market_data_effective_best_ask_qty"] == 120
+    assert fields["market_data_effective_best_bid_qty"] == 140
+    assert fields["market_data_effective_best_ask_qty_source_valid"] is True
+    assert fields["market_data_effective_best_bid_qty_source_valid"] is True
     assert enriched["best_ask"] == 10010
     assert enriched["best_bid"] == 9990
+
+
+def test_market_data_enrichment_rejects_boolean_and_negative_best_quantities():
+    _, fields = build_market_data_enrichment(
+        ws_data={
+            "curr": 10000,
+            "best_ask": 10010,
+            "best_bid": 9990,
+            "best_ask_qty": True,
+            "best_bid_qty": -1,
+            "last_ws_update_ts": 1000.0,
+        },
+        now_ts=1000.1,
+    )
+
+    assert fields["market_data_freshness_state"] == FRESH_WS
+    assert fields["market_data_effective_best_ask_qty"] == 0
+    assert fields["market_data_effective_best_bid_qty"] == 0
+    assert fields["market_data_effective_best_ask_qty_source_valid"] is False
+    assert fields["market_data_effective_best_bid_qty_source_valid"] is False
 
 
 def test_market_data_enrichment_promotes_stale_ws_to_rest_enriched_quote():
