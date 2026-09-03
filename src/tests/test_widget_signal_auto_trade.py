@@ -243,6 +243,56 @@ def _executable_confirmation() -> dict:
     }
 
 
+def _fixed_entry_timing_policy(delay_sec: int):
+    def resolve(**kwargs):
+        return {
+            "mode": "fixed_delay",
+            "delay_sec": delay_sec,
+            "dynamic_confirmation": None,
+            "provenance": {
+                "status": "applied",
+                "policy_hash": "b" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+                "entry_confirmation_mode": "fixed_delay",
+                "executable_confirmation": _executable_confirmation(),
+            },
+        }
+
+    return resolve
+
+
+def _dynamic_entry_timing_policy(**kwargs):
+    return {
+        "mode": "per_signal_dynamic_0_1_3_5",
+        "delay_sec": 0,
+        "dynamic_confirmation": {"checkpoints_sec": [0, 1, 3, 5]},
+        "provenance": {
+            "status": "applied",
+            "policy_hash": "d" * 64,
+            "target_date": kwargs["target_date"].isoformat(),
+            "entry_confirmation_mode": "per_signal_dynamic_0_1_3_5",
+            "executable_confirmation": _executable_confirmation(),
+        },
+    }
+
+
+def _dynamic_step(**kwargs):
+    checkpoint_sec = int(kwargs["checkpoint_sec"])
+    action = "WAIT" if checkpoint_sec == 0 else "ENTER"
+    return {
+        "action": action,
+        "reason": (
+            "await_next_checkpoint"
+            if action == "WAIT"
+            else "first_supportive_checkpoint"
+        ),
+        "selected_delay_sec": None if action == "WAIT" else checkpoint_sec,
+        "next_checkpoint_sec": 1 if action == "WAIT" else None,
+        "checkpoints": {str(checkpoint_sec): {"checkpoint_sec": checkpoint_sec}},
+        "anchor": {"best_bid": 100_000, "item": "999999"},
+    }
+
+
 def _market_weakness_decision(now, *, mode: str):
     if mode == "active":
         reason = "entry_blocked_market_weakness_active"
@@ -646,16 +696,8 @@ def test_widget_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkeyp
     trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
     monkeypatch.setattr(
         engine,
-        "resolve_entry_confirmation_delay",
-        lambda **kwargs: (
-            3,
-            {
-                "status": "applied",
-                "policy_hash": "b" * 64,
-                "target_date": kwargs["target_date"].isoformat(),
-                "executable_confirmation": _executable_confirmation(),
-            },
-        ),
+        "resolve_entry_confirmation_policy",
+        _fixed_entry_timing_policy(3),
     )
 
     armed = trader.run_once(now)
@@ -678,6 +720,36 @@ def test_widget_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkeyp
     )
 
 
+def test_widget_dynamic_confirmation_selects_delay_then_revalidates_owner_guards(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-DYNAMIC")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+    monkeypatch.setattr(
+        engine, "resolve_entry_confirmation_policy", _dynamic_entry_timing_policy
+    )
+    monkeypatch.setattr(engine, "advance_live_dynamic_confirmation", _dynamic_step)
+
+    armed = trader.run_once(now)
+    submitted = trader.run_once(now + timedelta(seconds=1))
+
+    pending = armed["symbols"]["999999"]["pending_entry_confirmation"]
+    assert pending["confirmation_mode"] == "per_signal_dynamic_0_1_3_5"
+    assert pending["checkpoint_sec"] == 1
+    assert gateway.buy_calls == [("999999", 1, "SOR")]
+    assert gateway.liquidity_calls == [("999999", "KRX")]
+    assert submitted["symbols"]["999999"]["entry_confirmation_delay_sec"] == 1
+    assert any(
+        event["event_type"] == "entry_dynamic_confirmation_armed"
+        for event in recorder.events
+    )
+    assert not any(
+        event["event_type"] == "entry_executable_micro_confirmation_passed"
+        for event in recorder.events
+    )
+
+
 def test_widget_selected_delay_blocks_deteriorating_executable_bbo(
     tmp_path, monkeypatch
 ):
@@ -686,16 +758,8 @@ def test_widget_selected_delay_blocks_deteriorating_executable_bbo(
     trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
     monkeypatch.setattr(
         engine,
-        "resolve_entry_confirmation_delay",
-        lambda **kwargs: (
-            3,
-            {
-                "status": "applied",
-                "policy_hash": "b" * 64,
-                "target_date": kwargs["target_date"].isoformat(),
-                "executable_confirmation": _executable_confirmation(),
-            },
-        ),
+        "resolve_entry_confirmation_policy",
+        _fixed_entry_timing_policy(3),
     )
 
     trader.run_once(now)
@@ -737,16 +801,8 @@ def test_widget_discards_entry_confirmation_after_recheck_window(tmp_path, monke
     trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
     monkeypatch.setattr(
         engine,
-        "resolve_entry_confirmation_delay",
-        lambda **kwargs: (
-            3,
-            {
-                "status": "applied",
-                "policy_hash": "b" * 64,
-                "target_date": kwargs["target_date"].isoformat(),
-                "executable_confirmation": _executable_confirmation(),
-            },
-        ),
+        "resolve_entry_confirmation_policy",
+        _fixed_entry_timing_policy(3),
     )
 
     trader.run_once(now)
@@ -766,16 +822,8 @@ def test_widget_discards_malformed_persisted_entry_confirmation(tmp_path, monkey
     trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
     monkeypatch.setattr(
         engine,
-        "resolve_entry_confirmation_delay",
-        lambda **kwargs: (
-            3,
-            {
-                "status": "applied",
-                "policy_hash": "b" * 64,
-                "target_date": kwargs["target_date"].isoformat(),
-                "executable_confirmation": _executable_confirmation(),
-            },
-        ),
+        "resolve_entry_confirmation_policy",
+        _fixed_entry_timing_policy(3),
     )
     trader.run_once(now)
     trader._state["symbols"]["999999"]["pending_entry_confirmation"][

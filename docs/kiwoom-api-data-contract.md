@@ -589,8 +589,10 @@ reactivate it.
   The collection feedback path therefore registers only `0B` and `0D`. It does
   not add order/position type `00`, program type `0w`, or broker type `0F`.
 - The exact-date target preserves plain code as KRX, `_NX` as NXT, and `_AL` as
-  integrated SOR. One route is selected per symbol per date; an `_AL` row remains
-  SOR and is never relabeled as an underlying KRX/NXT event.
+  integrated SOR. Legacy v1/v2 targets selected one route per symbol per date.
+  Target schema v3 preserves every declared route of an active widget/episode
+  owner and rotates only prospective research routes. An `_AL` row remains SOR
+  and is never relabeled as an underlying KRX/NXT event.
 - Registration is bounded by the existing WS item budget and the daily feedback
   budget. Source-only ticks reach only the micro forward collector and are
   suppressed before the common realtime trading event and other strategy
@@ -604,6 +606,34 @@ reactivate it.
   `market_data_subscription_effect=true`, `trading_runtime_effect=false`,
   `trading_decision_effect=false`,
   `actual_order_submitted=false`, and `broker_order_forbidden=true`.
+
+### 2026-09-03 Machine Entry Exact-Route 0B/0D Gate
+
+- Re-verified at `2026-09-03T18:38:00+09:00` against upstream commit
+  `234560d213acd8871ae344b5481aecd2f30287fa`. Inspected
+  `kiwoom/realtime/packets.py`, `kiwoom/realtime/events.py`, the realtime
+  decoders/stream implementation, and
+  `postman/kiwoom-openapi.postman_collection.json`.
+- Official REG `refresh=1` is additive. The machine-entry collector therefore
+  registers the v3 active-owner exact items with only `0B` and `0D`, while
+  retaining the existing WS item budget. Plain, `_NX`, and `_AL` remain
+  different subscription items. `_AL` is the integrated SOR route and is not
+  proof that an individual event executed on KRX or NXT.
+- An exact item already owned by a trading runtime is listed in
+  `protected_runtime_items`; it is not reclassified or resubscribed as
+  observation-only. Other exact items for the same base symbol are stored in a
+  route-isolated buffer and do not enter the common trading tick dispatcher.
+  Reconnect restores trading and observation items separately.
+- The atomic WS dashboard snapshot exports bounded route-specific latest 0B/0D
+  receipts and recent 0B trade/0D depth windows. The separate widget/episode
+  process may read this source only after an exact-date applied entry-timing
+  policy selects its scope. Snapshot absence, stale/crossed BBO, missing causal
+  depth, item/epoch mismatch, or incomplete 0B/0D is a source gap; it is never
+  imputed as support and falls back to full existing owner-guard revalidation
+  at the terminal checkpoint.
+- This gate changes only the timing of an already valid owner signal. It grants
+  no signal creation, price, quantity, target, exit, custody, provider, bot,
+  cap, broker-guard, or hard-safety authority.
 
 ### 2026-08-10 Micro-Reversion 0B Timestamp-Regression Gate
 

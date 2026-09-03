@@ -363,8 +363,12 @@ class KiwoomWSManager:
         self._registered_items_by_code = {}
         self._pinned_unreg_notice_codes = set()
         self._micro_reversion_observation_items_by_code = {}
+        self._micro_reversion_observation_only_items = set()
+        self._micro_reversion_observation_route_data = {}
         self._micro_reversion_observation_only_codes = set()
         self._micro_reversion_observation_notice_codes = set()
+        self._market_data_transport_epoch = 0
+        self._route_realtime_sequence = {}
         # Most subscriptions can be considered live after any quote packet.
         # Scanner entry is stricter: its short-window tape requires a post-REG
         # 0B receipt, not merely a 0D order-book update.
@@ -752,9 +756,7 @@ class KiwoomWSManager:
         quote_source = (
             "0B_inline_best_quote"
             if inline_complete
-            else "partial_inline_best_quote"
-            if inline_partial
-            else "missing_best_quote"
+            else "partial_inline_best_quote" if inline_partial else "missing_best_quote"
         )
 
         if inline_complete:
@@ -1105,15 +1107,25 @@ class KiwoomWSManager:
             desired_item = self._micro_reversion_observation_items_by_code.get(
                 normalized
             )
-            if not desired_item:
+            desired_items = (
+                (desired_item,)
+                if isinstance(desired_item, str)
+                else tuple(desired_item or ())
+            )
+            if not desired_items:
                 return False
             already_observation_only = (
                 normalized in self._micro_reversion_observation_only_codes
+                and all(
+                    item in self._micro_reversion_observation_only_items
+                    for item in desired_items
+                )
             )
             self._micro_reversion_observation_only_codes.add(normalized)
+            self._micro_reversion_observation_only_items.update(desired_items)
         if not already_observation_only:
             self.execute_subscribe(
-                [desired_item],
+                list(desired_items),
                 force=True,
                 source="micro_reversion_collection_feedback_demotion",
                 remove_before_reg=True,
@@ -1828,12 +1840,13 @@ class KiwoomWSManager:
         while history and float((history[0] or {}).get("ts", 0.0) or 0.0) < cutoff:
             history.popleft()
 
-    def _ensure_target_defaults(self, item_code):
-        if item_code not in self.realtime_data:
+    def _ensure_target_defaults(self, item_code, *, store=None):
+        target_store = self.realtime_data if store is None else store
+        if item_code not in target_store:
             history_maxlen = int(
                 getattr(TRADING_RULES, "SCALP_VPW_HISTORY_MAXLEN", 120) or 120
             )
-            self.realtime_data[item_code] = {
+            target_store[item_code] = {
                 "curr": 0,
                 "v_pw": 0,
                 "ask_tot": 0,
@@ -1908,11 +1921,12 @@ class KiwoomWSManager:
                 "strength_momentum_history": deque(maxlen=history_maxlen),
                 "recent_trade_ticks": deque(maxlen=120),
                 "recent_trade_ticks_by_route": {},
+                "recent_depth_ticks_by_route": {},
                 "_first_tick_logged": False,
                 "last_trade_tick": None,
                 "top_of_book_cache": self._get_tob_cache(item_code),
             }
-        return self.realtime_data[item_code]
+        return target_store[item_code]
 
     def _update_micro_estimator_from_orderbook(self, item_code, target, *, now_ts):
         if not _micro_estimator_ws_observation_enabled():
@@ -2034,6 +2048,14 @@ class KiwoomWSManager:
                 )
                 for route_key, rows in route_ticks.items()
             }
+        route_depth = snapshot.get("recent_depth_ticks_by_route")
+        if isinstance(route_depth, dict):
+            snapshot["recent_depth_ticks_by_route"] = {
+                str(route_key): (
+                    list(rows) if isinstance(rows, deque) else list(rows or [])
+                )
+                for route_key, rows in route_depth.items()
+            }
         return snapshot
 
     def _maybe_write_dashboard_snapshot(self):
@@ -2049,7 +2071,28 @@ class KiwoomWSManager:
 
         def _write_snapshot_async():
             try:
-                write_ws_snapshot(self.realtime_data, now_ts=now_ts)
+                # Freeze both views under the same WS lock, then perform JSON
+                # serialization outside the callback-critical section.  Passing
+                # the live dictionaries to the writer allowed a concurrent 0B
+                # or 0D callback to produce a torn exact-route checkpoint (or a
+                # dictionary-size exception), which unnecessarily depleted the
+                # dynamic-confirmation evidence population.
+                with self.lock:
+                    realtime_snapshot = {
+                        str(code): self._snapshot_target(target)
+                        for code, target in self.realtime_data.items()
+                    }
+                    observation_route_snapshot = {
+                        str(item): self._snapshot_target(target)
+                        for item, target in (
+                            self._micro_reversion_observation_route_data.items()
+                        )
+                    }
+                write_ws_snapshot(
+                    realtime_snapshot,
+                    observation_route_data=observation_route_snapshot,
+                    now_ts=now_ts,
+                )
             except Exception as e:
                 log_error(f"[WS] dashboard snapshot write failed: {e}")
             finally:
@@ -2141,7 +2184,9 @@ class KiwoomWSManager:
             except Exception as e:
                 log_error(f"[WS] state event dispatch failed ({event_type}): {e}")
 
-    def _queue_tick_event(self, code, data, *, realtime_type="0B"):
+    def _queue_tick_event(
+        self, code, data, *, realtime_type="0B", observation_only=None
+    ):
         if self._stop_event.is_set():
             return
 
@@ -2151,10 +2196,11 @@ class KiwoomWSManager:
                 code, data, realtime_type=normalized_realtime_type
             )
         normalized_code = self._normalize_code(code)
-        with self.lock:
-            observation_only = (
-                normalized_code in self._micro_reversion_observation_only_codes
-            )
+        if observation_only is None:
+            with self.lock:
+                observation_only = (
+                    normalized_code in self._micro_reversion_observation_only_codes
+                )
         if observation_only:
             return
         if normalized_realtime_type in {"0B", "0D"}:
@@ -2736,6 +2782,8 @@ class KiwoomWSManager:
                 f"env={WS_CONDITION_SEARCH_ENABLED_ENV}"
             )
 
+        self._market_data_transport_epoch += 1
+        self._route_realtime_sequence.clear()
         if self.is_reconnected:
             self._begin_micro_reversion_transport_epoch()
             print(
@@ -2774,20 +2822,22 @@ class KiwoomWSManager:
                 observation_only_codes = set(
                     self._micro_reversion_observation_only_codes
                 )
-                observation_items = [
-                    self._micro_reversion_observation_items_by_code[code]
-                    for code in sorted(observation_only_codes)
-                    if code in self._micro_reversion_observation_items_by_code
+                observation_item_set = set(self._micro_reversion_observation_only_items)
+                observation_items = sorted(observation_item_set)
+                trading_items = [
+                    item
+                    for code in sorted(self.subscribed_codes)
+                    for item in (
+                        tuple(self._registered_items_by_code.get(code) or ()) or (code,)
+                    )
+                    if item not in observation_item_set
                 ]
-                trading_codes = sorted(
-                    set(self.subscribed_codes).difference(observation_only_codes)
-                )
-            if trading_codes:
-                await self._send_reg(trading_codes)
+            if trading_items:
+                await self._send_reg(trading_items)
             if observation_items:
                 await self._send_reg(
                     observation_items,
-                    replace_existing=not bool(trading_codes),
+                    replace_existing=not bool(trading_items),
                     realtime_types=("0B", "0D"),
                     source="micro_reversion_collection_feedback_reconnect",
                 )
@@ -3268,9 +3318,29 @@ class KiwoomWSManager:
                         if item_code not in self.subscribed_codes:
                             continue
                         tick_event_snapshot = None
+                        current_depth_observation = None
+                        normalized_raw_item = (
+                            self._explicit_ws_item(raw_item_code, item_code)
+                            or item_code
+                        )
                         with self.lock:
+                            observation_only_item = bool(
+                                normalized_raw_item
+                                in self._micro_reversion_observation_only_items
+                            )
                             # 1. 초기 데이터 구조 생성
-                            target = self._ensure_target_defaults(item_code)
+                            target = self._ensure_target_defaults(
+                                (
+                                    normalized_raw_item
+                                    if observation_only_item
+                                    else item_code
+                                ),
+                                store=(
+                                    self._micro_reversion_observation_route_data
+                                    if observation_only_item
+                                    else None
+                                ),
+                            )
 
                             # 💡 안전한 파싱 헬퍼 (ValueError 방어막)
                             def safe_int(val, default=0):
@@ -3489,7 +3559,7 @@ class KiwoomWSManager:
                                 )
                                 received_ts = time.time()
                                 quote_resolution = self._resolve_0b_touch_quote(
-                                    item_code,
+                                    normalized_raw_item,
                                     inline_best_ask=inline_best_ask,
                                     inline_best_bid=inline_best_bid,
                                     tick_time=tick_time,
@@ -3571,6 +3641,10 @@ class KiwoomWSManager:
                                     trade_volume if aggressor_side == "SELL" else 0
                                 )
                                 normalized_tick = {
+                                    "item": normalized_raw_item,
+                                    "transport_epoch": int(
+                                        self._market_data_transport_epoch
+                                    ),
                                     "time": tick_time,
                                     "exchange_time_raw": str(values.get("20") or ""),
                                     "exchange_code_9081": str(values.get("9081") or ""),
@@ -3680,7 +3754,7 @@ class KiwoomWSManager:
                                         route_tick_buffers[route_key] = route_buffer
                                     route_buffer.appendleft(normalized_tick)
                                 ORDERBOOK_STABILITY_OBSERVER.record_trade(
-                                    item_code,
+                                    normalized_raw_item,
                                     price=trade_price,
                                     ts=target["last_trade_tick"]["ts"],
                                 )
@@ -3699,11 +3773,17 @@ class KiwoomWSManager:
 
                             # '0D' 주식호가잔량 데이터 파싱 (1~5호가)
                             if real_type == "0D":
+                                current_depth_observation = (
+                                    self._build_micro_reversion_depth_tick(
+                                        raw_item_code, values
+                                    )
+                                )
+                                current_depth_observation["transport_epoch"] = int(
+                                    self._market_data_transport_epoch
+                                )
                                 if self._micro_reversion_depth_capture_requested():
                                     target["last_depth_tick"] = (
-                                        self._build_micro_reversion_depth_tick(
-                                            raw_item_code, values
-                                        )
+                                        current_depth_observation
                                     )
                                 else:
                                     target.pop("last_depth_tick", None)
@@ -3793,7 +3873,7 @@ class KiwoomWSManager:
                                         ],
                                     }
                                 ORDERBOOK_STABILITY_OBSERVER.record_quote(
-                                    item_code,
+                                    normalized_raw_item,
                                     best_bid=best_bid,
                                     best_ask=best_ask,
                                     best_bid_qty=best_bid_qty,
@@ -3802,16 +3882,33 @@ class KiwoomWSManager:
                                     ask_depth_l=ask_depth_l,
                                 )
                                 self._update_tob_cache(
-                                    item_code,
+                                    normalized_raw_item,
                                     best_ask=best_ask,
                                     best_bid=best_bid,
                                     now_ms=int(time.time() * 1000),
                                 )
                                 self._update_micro_estimator_from_orderbook(
-                                    item_code,
+                                    normalized_raw_item,
                                     target,
                                     now_ts=time.time(),
                                 )
+                                route_depth_buffers = target.setdefault(
+                                    "recent_depth_ticks_by_route", {}
+                                )
+                                if isinstance(route_depth_buffers, dict):
+                                    depth_route_key = (
+                                        f"{self._ws_item_market_suffix(raw_item_code) or 'KRX'}"
+                                        f"|{self._ws_item_route(raw_item_code)}"
+                                    )
+                                    depth_buffer = route_depth_buffers.get(
+                                        depth_route_key
+                                    )
+                                    if not isinstance(depth_buffer, deque):
+                                        depth_buffer = deque(maxlen=16)
+                                        route_depth_buffers[depth_route_key] = (
+                                            depth_buffer
+                                        )
+                                    depth_buffer.appendleft(current_depth_observation)
 
                             # '0w' 프로그램 매매 데이터 파싱
                             if real_type == "0w":
@@ -3961,6 +4058,19 @@ class KiwoomWSManager:
                                     route_key, {}
                                 )
                                 if isinstance(route_snapshot, dict):
+                                    sequence_key = (normalized_raw_item, real_type)
+                                    route_sequence = (
+                                        int(
+                                            self._route_realtime_sequence.get(
+                                                sequence_key
+                                            )
+                                            or 0
+                                        )
+                                        + 1
+                                    )
+                                    self._route_realtime_sequence[sequence_key] = (
+                                        route_sequence
+                                    )
                                     realtime_snapshot = {
                                         "realtime_type": real_type,
                                         "observed_epoch": now_update_ts,
@@ -3970,10 +4080,38 @@ class KiwoomWSManager:
                                         "effective_venue": (
                                             self._ws_item_effective_venue(raw_item_code)
                                         ),
+                                        "transport_epoch": int(
+                                            self._market_data_transport_epoch
+                                        ),
+                                        "route_sequence": route_sequence,
                                     }
                                     if real_type == "0B":
-                                        realtime_snapshot["current_price"] = safe_int(
-                                            target.get("curr")
+                                        last_trade = target.get("last_trade_tick")
+                                        last_trade = (
+                                            last_trade
+                                            if isinstance(last_trade, dict)
+                                            else {}
+                                        )
+                                        realtime_snapshot.update(
+                                            {
+                                                "current_price": safe_int(
+                                                    target.get("curr")
+                                                ),
+                                                "trade_price": safe_int(
+                                                    last_trade.get("price")
+                                                ),
+                                                "trade_qty": safe_int(
+                                                    last_trade.get("volume")
+                                                ),
+                                                "aggressor_side": str(
+                                                    last_trade.get("aggressor_side")
+                                                    or "UNKNOWN"
+                                                ),
+                                                "aggressor_quality": str(
+                                                    last_trade.get("aggressor_quality")
+                                                    or ""
+                                                ),
+                                            }
                                         )
                                     elif real_type == "0D":
                                         current_orderbook = target.get("orderbook")
@@ -3998,9 +4136,7 @@ class KiwoomWSManager:
                                             "asks": copy.deepcopy(current_asks[:1]),
                                             "bids": copy.deepcopy(current_bids[:1]),
                                         }
-                                        current_depth_tick = target.get(
-                                            "last_depth_tick"
-                                        )
+                                        current_depth_tick = current_depth_observation
                                         if isinstance(current_depth_tick, dict) and str(
                                             current_depth_tick.get("item") or ""
                                         ) == str(raw_item_code or ""):
@@ -4039,13 +4175,14 @@ class KiwoomWSManager:
                             self._maybe_write_dashboard_snapshot()
 
                             tick_event_snapshot = self._snapshot_target(target)
-                        # Snapshot is completed under the market-data lock; observer
-                        # normalization and enqueue stay outside that critical section.
-                        self._queue_tick_event(
-                            item_code,
-                            tick_event_snapshot,
-                            realtime_type=real_type,
-                        )
+                            # Snapshot is completed under the market-data lock; observer
+                            # normalization and enqueue stay outside that critical section.
+                            self._queue_tick_event(
+                                item_code,
+                                tick_event_snapshot,
+                                realtime_type=real_type,
+                                observation_only=observation_only_item,
+                            )
                 self._flush_deferred_scalp_condition_matches_if_allowed()
 
         except websockets.ConnectionClosed:
@@ -4334,9 +4471,24 @@ class KiwoomWSManager:
                             batch_code_set.intersection(trading_promotion_code_set)
                         )
                         for code in batch_codes:
-                            self._registered_items_by_code[code] = tuple(
+                            incoming_items = tuple(
                                 register_items_by_code.get(code) or ()
                             )
+                            if code in replacement_code_set or remove_before_reg:
+                                registered_items = incoming_items
+                            else:
+                                registered_items = tuple(
+                                    OrderedDict.fromkeys(
+                                        (
+                                            *tuple(
+                                                self._registered_items_by_code.get(code)
+                                                or ()
+                                            ),
+                                            *incoming_items,
+                                        )
+                                    )
+                                )
+                            self._registered_items_by_code[code] = registered_items
                             target = self._ensure_target_defaults(code)
                             if "0w" in requested_realtime_types:
                                 target["program_subscription_requested_at"] = (
@@ -4663,7 +4815,7 @@ class KiwoomWSManager:
             future.add_done_callback(on_complete)
 
     def _normalize_micro_reversion_observation_items(self, items):
-        normalized = OrderedDict()
+        normalized: OrderedDict[str, list[str]] = OrderedDict()
         for raw_item in items or ():
             item = str(raw_item or "").strip().upper()
             code = self._normalize_code(item)
@@ -4671,14 +4823,21 @@ class KiwoomWSManager:
                 len(code) != 6
                 or not code.isdigit()
                 or item not in {code, f"{code}_NX", f"{code}_AL"}
-                or code in normalized
             ):
                 return None
-            normalized[code] = item
-        return dict(normalized)
+            code_items = normalized.setdefault(code, [])
+            if item in code_items:
+                return None
+            code_items.append(item)
+        return {code: tuple(code_items) for code, code_items in normalized.items()}
 
     def _configure_micro_reversion_observation_items(
-        self, items, *, source, protected_runtime_codes=()
+        self,
+        items,
+        *,
+        source,
+        protected_runtime_codes=(),
+        protected_runtime_items=(),
     ):
         new_items_by_code = self._normalize_micro_reversion_observation_items(items)
         if new_items_by_code is None:
@@ -4690,13 +4849,25 @@ class KiwoomWSManager:
         protected_codes = set(
             self._normalize_subscribe_codes(protected_runtime_codes or ())
         )
+        protected_items = {
+            str(item or "").strip().upper()
+            for item in protected_runtime_items or ()
+            if self._explicit_ws_item(item, self._normalize_code(item))
+        }
+        protected_codes.update(self._normalize_subscribe_codes(protected_items))
 
         with self.lock:
-            old_items_by_code = dict(self._micro_reversion_observation_items_by_code)
+            old_items_by_code = {
+                code: ((items,) if isinstance(items, str) else tuple(items or ()))
+                for code, items in self._micro_reversion_observation_items_by_code.items()
+            }
+            old_observation_only_items = set(
+                self._micro_reversion_observation_only_items
+            )
             retired_or_changed = {
                 code
-                for code, old_item in old_items_by_code.items()
-                if new_items_by_code.get(code) != old_item
+                for code, old_items in old_items_by_code.items()
+                if new_items_by_code.get(code) != old_items
             }
             removable_codes = retired_or_changed.intersection(
                 self._micro_reversion_observation_only_codes
@@ -4711,22 +4882,64 @@ class KiwoomWSManager:
 
         with self.lock:
             self._micro_reversion_observation_items_by_code.update(new_items_by_code)
+            desired_items = {
+                item for code_items in new_items_by_code.values() for item in code_items
+            }
+            registered_items = {
+                item
+                for code_items in self._registered_items_by_code.values()
+                for item in tuple(code_items or ())
+            }
+            trading_items = registered_items.difference(
+                self._micro_reversion_observation_only_items
+            )
+            trading_items.update(protected_items)
+            retained_stale_items = {
+                item
+                for item in old_observation_only_items.difference(desired_items)
+                if self._normalize_code(item) not in removable_codes
+            }
+            self._micro_reversion_observation_only_items = (
+                desired_items.difference(trading_items) | retained_stale_items
+            )
             subscribe_items = [
                 item
-                for code, item in new_items_by_code.items()
-                if code not in self.subscribed_codes and code not in protected_codes
+                for code, code_items in new_items_by_code.items()
+                for item in code_items
+                if item not in registered_items and item not in protected_items
             ]
+            desired_codes = set(new_items_by_code)
+            self._micro_reversion_observation_only_codes = {
+                code
+                for code in desired_codes
+                if all(
+                    item in self._micro_reversion_observation_only_items
+                    for item in new_items_by_code[code]
+                )
+                and not any(
+                    item in trading_items
+                    for item in tuple(self._registered_items_by_code.get(code) or ())
+                )
+                and code not in protected_codes
+            }
+            for code in removable_codes:
+                for item in old_items_by_code.get(code) or ():
+                    self._micro_reversion_observation_route_data.pop(item, None)
 
         if subscribe_items:
             self.execute_subscribe(
                 subscribe_items,
+                force=True,
                 source=source,
                 realtime_types=("0B", "0D"),
                 observation_only=True,
+                remove_before_reg=False,
             )
         print(
             "📌 [WS] micro-reversion source-only 관측 집합 반영: "
-            f"requested={len(new_items_by_code)} subscribed_now={len(subscribe_items)} "
+            f"requested_symbols={len(new_items_by_code)} "
+            f"requested_items={sum(len(value) for value in new_items_by_code.values())} "
+            f"subscribed_now={len(subscribe_items)} "
             f"retired={len(retired_or_changed)} "
             f"runtime_protected={len(set(new_items_by_code) & protected_codes)} "
             "trading_runtime_effect=false"
@@ -4761,6 +4974,7 @@ class KiwoomWSManager:
             payload.get("registration_items") or (),
             source=str(payload.get("source") or "micro_reversion_collection_feedback"),
             protected_runtime_codes=payload.get("protected_runtime_codes") or (),
+            protected_runtime_items=payload.get("protected_runtime_items") or (),
         )
 
     def _handle_reg_event(self, payload):

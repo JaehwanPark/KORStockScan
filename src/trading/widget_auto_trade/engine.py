@@ -52,9 +52,11 @@ from src.trading.order.owner_custody_registry import (
     default_order_owner_registry,
 )
 from src.trading.config.machine_entry_timing_policy import (
+    DYNAMIC_MODE,
     ENTRY_CONFIRMATION_MAX_LATE_SEC,
-    resolve_entry_confirmation_delay,
+    resolve_entry_confirmation_policy,
 )
+from src.trading.market.micro_confirmation import advance_live_dynamic_confirmation
 from src.trading.widget_auto_trade.gateway import (
     ExecutionSnapshot,
     KiwoomSharedTokenOrderGateway,
@@ -1101,13 +1103,40 @@ class WidgetSignalAutoTrader:
         delay = value.get("delay_sec")
         provenance = value.get("policy_provenance")
         anchor_snapshot = value.get("anchor_liquidity_snapshot")
+        confirmation_mode = str(value.get("confirmation_mode") or "fixed_delay")
+        checkpoint_sec = value.get("checkpoint_sec")
+        fixed_state_valid = (
+            bool(
+                confirmation_mode == "fixed_delay"
+                and delay in {1, 3, 5}
+                and abs((due_at - armed_at).total_seconds() - delay) <= 0.001
+                and isinstance(anchor_snapshot, dict)
+                and str(anchor_snapshot.get("symbol") or "")
+                and str(anchor_snapshot.get("route") or "") in {"KRX", "NXT"}
+                and _positive_int(anchor_snapshot.get("best_bid")) > 0
+                and _positive_int(anchor_snapshot.get("best_ask")) > 0
+            )
+            if armed_at is not None and due_at is not None
+            else False
+        )
+        dynamic_state_valid = (
+            bool(
+                confirmation_mode == DYNAMIC_MODE
+                and delay == 0
+                and checkpoint_sec in {1, 3, 5}
+                and abs((due_at - armed_at).total_seconds() - checkpoint_sec) <= 0.001
+                and isinstance(value.get("dynamic_checkpoints"), dict)
+                and isinstance(value.get("dynamic_anchor"), dict)
+            )
+            if armed_at is not None and due_at is not None
+            else False
+        )
         return bool(
             armed_at is not None
             and due_at is not None
             and not isinstance(delay, bool)
             and isinstance(delay, int)
-            and delay in {1, 3, 5}
-            and abs((due_at - armed_at).total_seconds() - delay) <= 0.001
+            and (fixed_state_valid or dynamic_state_valid)
             and armed_at.date() == target_date
             and str(value.get("signal_id") or "")
             and str(value.get("confirmation_identity") or "")
@@ -1119,11 +1148,6 @@ class WidgetSignalAutoTrader:
             and provenance.get("target_date") == target_date.isoformat()
             and len(str(provenance.get("policy_hash") or "")) == 64
             and isinstance(provenance.get("executable_confirmation"), dict)
-            and isinstance(anchor_snapshot, dict)
-            and str(anchor_snapshot.get("symbol") or "")
-            and str(anchor_snapshot.get("route") or "") in {"KRX", "NXT"}
-            and _positive_int(anchor_snapshot.get("best_bid")) > 0
-            and _positive_int(anchor_snapshot.get("best_ask")) > 0
         )
 
     def _entry_signal(
@@ -3478,7 +3502,7 @@ class WidgetSignalAutoTrader:
                 timing_policy_provenance = dict(
                     pending_confirmation.get("policy_provenance") or {}
                 )
-                active_delay, active_provenance = resolve_entry_confirmation_delay(
+                active_policy = resolve_entry_confirmation_policy(
                     target_date=now.date(),
                     owner="widget",
                     scope_id=timing_scope_id,
@@ -3486,8 +3510,14 @@ class WidgetSignalAutoTrader:
                     session=timing_session,
                     entry_state=source_state,
                 )
+                active_delay = int(active_policy["delay_sec"])
+                active_provenance = dict(active_policy["provenance"])
+                pending_mode = str(
+                    pending_confirmation.get("confirmation_mode") or "fixed_delay"
+                )
                 if (
                     active_delay != confirmation_delay_sec
+                    or active_policy["mode"] != pending_mode
                     or active_provenance.get("status") != "applied"
                     or active_provenance.get("policy_hash")
                     != timing_policy_provenance.get("policy_hash")
@@ -3504,6 +3534,81 @@ class WidgetSignalAutoTrader:
                         active_policy_status=active_provenance.get("status"),
                     )
                     return
+                if pending_mode == DYNAMIC_MODE:
+                    armed_at = _timestamp(pending_confirmation.get("armed_at"))
+                    checkpoint_sec = int(pending_confirmation["checkpoint_sec"])
+                    if armed_at is None:
+                        symbol_state["pending_entry_confirmation"] = None
+                        self._save()
+                        return
+                    dynamic_step = advance_live_dynamic_confirmation(
+                        now=now,
+                        signal_decision_at=armed_at,
+                        checkpoint_sec=checkpoint_sec,
+                        prior_checkpoints=pending_confirmation.get(
+                            "dynamic_checkpoints"
+                        ),
+                        prior_anchor=pending_confirmation.get("dynamic_anchor"),
+                        symbol=spec.code,
+                        route=route,
+                        owner="widget",
+                        baseline_fill_price=counterfactual_reference_price,
+                        owner_entry_limit_price=counterfactual_reference_price,
+                        owner_target_price=counterfactual_target_price,
+                        round_trip_cost_pct=(
+                            timing_policy_provenance.get("executable_confirmation")
+                            or {}
+                        ).get("round_trip_cost_pct"),
+                        widget_take_profit=True,
+                    )
+                    if dynamic_step["action"] == "WAIT":
+                        next_checkpoint = int(dynamic_step["next_checkpoint_sec"])
+                        pending_confirmation.update(
+                            {
+                                "due_at": (
+                                    armed_at + timedelta(seconds=next_checkpoint)
+                                ).isoformat(),
+                                "checkpoint_sec": next_checkpoint,
+                                "dynamic_checkpoints": dynamic_step["checkpoints"],
+                                "dynamic_anchor": dynamic_step["anchor"],
+                            }
+                        )
+                        symbol_state["pending_entry_confirmation"] = (
+                            pending_confirmation
+                        )
+                        self._save()
+                        self._event(
+                            "entry_dynamic_confirmation_wait",
+                            spec,
+                            now,
+                            signal_id=signal_id,
+                            source_state=source_state,
+                            checkpoint_sec=next_checkpoint,
+                            dynamic_confirmation=dynamic_step,
+                        )
+                        return
+                    symbol_state["pending_entry_confirmation"] = None
+                    if dynamic_step["action"] == "REJECT":
+                        symbol_state[
+                            "last_entry_dynamic_confirmation_block_identity"
+                        ] = confirmation_identity
+                        self._save()
+                        self._record_entry_block_once(
+                            spec=spec,
+                            symbol_state=symbol_state,
+                            signal_id=signal_id,
+                            reason="entry_blocked_dynamic_micro_confirmation",
+                            now=now,
+                            confirmation_identity=confirmation_identity,
+                            source_state=source_state,
+                            dynamic_confirmation=dynamic_step,
+                            actual_order_submitted=False,
+                        )
+                        return
+                    confirmation_delay_sec = int(
+                        dynamic_step.get("selected_delay_sec") or checkpoint_sec
+                    )
+                    timing_policy_provenance["dynamic_runtime_decision"] = dynamic_step
         if (
             symbol_state.get("last_entry_liquidity_block_identity")
             == confirmation_identity
@@ -3511,13 +3616,12 @@ class WidgetSignalAutoTrader:
             == confirmation_identity
             or symbol_state.get("last_entry_executable_micro_block_identity")
             == confirmation_identity
+            or symbol_state.get("last_entry_dynamic_confirmation_block_identity")
+            == confirmation_identity
         ):
             return
         if pending_confirmation is None:
-            (
-                confirmation_delay_sec,
-                timing_policy_provenance,
-            ) = resolve_entry_confirmation_delay(
+            timing_policy = resolve_entry_confirmation_policy(
                 target_date=now.date(),
                 owner="widget",
                 scope_id=timing_scope_id,
@@ -3525,7 +3629,79 @@ class WidgetSignalAutoTrader:
                 session=timing_session,
                 entry_state=source_state,
             )
-            if confirmation_delay_sec > 0:
+            confirmation_delay_sec = int(timing_policy["delay_sec"])
+            timing_policy_provenance = dict(timing_policy["provenance"])
+            if timing_policy["mode"] == DYNAMIC_MODE:
+                dynamic_step = advance_live_dynamic_confirmation(
+                    now=now,
+                    signal_decision_at=now,
+                    checkpoint_sec=0,
+                    prior_checkpoints={},
+                    prior_anchor={},
+                    symbol=spec.code,
+                    route=route,
+                    owner="widget",
+                    baseline_fill_price=counterfactual_reference_price,
+                    owner_entry_limit_price=counterfactual_reference_price,
+                    owner_target_price=counterfactual_target_price,
+                    round_trip_cost_pct=(
+                        timing_policy_provenance.get("executable_confirmation") or {}
+                    ).get("round_trip_cost_pct"),
+                    widget_take_profit=True,
+                )
+                if dynamic_step["action"] == "WAIT":
+                    next_checkpoint = int(dynamic_step["next_checkpoint_sec"])
+                    due_at = now + timedelta(seconds=next_checkpoint)
+                    symbol_state["pending_entry_confirmation"] = {
+                        "signal_id": signal_id,
+                        "confirmation_identity": confirmation_identity,
+                        "source_state": source_state,
+                        "session": timing_session,
+                        "route": route,
+                        "armed_at": now.isoformat(),
+                        "due_at": due_at.isoformat(),
+                        "delay_sec": 0,
+                        "checkpoint_sec": next_checkpoint,
+                        "confirmation_mode": DYNAMIC_MODE,
+                        "policy_provenance": timing_policy_provenance,
+                        "dynamic_checkpoints": dynamic_step["checkpoints"],
+                        "dynamic_anchor": dynamic_step["anchor"],
+                    }
+                    self._save()
+                    self._event(
+                        "entry_dynamic_confirmation_armed",
+                        spec,
+                        now,
+                        signal_id=signal_id,
+                        source_state=source_state,
+                        checkpoint_sec=next_checkpoint,
+                        due_at=due_at.isoformat(),
+                        timing_policy_hash=timing_policy_provenance.get("policy_hash"),
+                        dynamic_confirmation=dynamic_step,
+                    )
+                    return
+                if dynamic_step["action"] == "REJECT":
+                    symbol_state["last_entry_dynamic_confirmation_block_identity"] = (
+                        confirmation_identity
+                    )
+                    self._save()
+                    self._record_entry_block_once(
+                        spec=spec,
+                        symbol_state=symbol_state,
+                        signal_id=signal_id,
+                        reason="entry_blocked_dynamic_micro_confirmation",
+                        now=now,
+                        confirmation_identity=confirmation_identity,
+                        source_state=source_state,
+                        dynamic_confirmation=dynamic_step,
+                        actual_order_submitted=False,
+                    )
+                    return
+                confirmation_delay_sec = int(
+                    dynamic_step.get("selected_delay_sec") or 0
+                )
+                timing_policy_provenance["dynamic_runtime_decision"] = dynamic_step
+            elif confirmation_delay_sec > 0:
                 due_at = now + timedelta(seconds=confirmation_delay_sec)
                 anchor_liquidity = self._entry_liquidity_decision(
                     spec=spec,
@@ -3544,6 +3720,7 @@ class WidgetSignalAutoTrader:
                     "armed_at": now.isoformat(),
                     "due_at": due_at.isoformat(),
                     "delay_sec": confirmation_delay_sec,
+                    "confirmation_mode": "fixed_delay",
                     "policy_provenance": timing_policy_provenance,
                     "anchor_liquidity_snapshot": anchor_snapshot,
                 }
@@ -3594,7 +3771,10 @@ class WidgetSignalAutoTrader:
             **liquidity_decision.event_fields(),
         )
         executable_micro_decision = None
-        if confirmation_delay_sec > 0:
+        if (
+            confirmation_delay_sec > 0
+            and timing_policy_provenance.get("entry_confirmation_mode") != DYNAMIC_MODE
+        ):
             take_profit_bps = (
                 int(entry_policy["take_profit_bps_from_equal_share_average"])
                 if entry_policy is not None

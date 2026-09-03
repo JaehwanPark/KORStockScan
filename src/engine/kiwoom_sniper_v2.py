@@ -6067,12 +6067,20 @@ def _publish_micro_reversion_collection_target_set(
             and str(code or "").strip()[:6].isdigit()
         }
     )
+    protected_items = sorted(
+        {
+            str(item or "").strip().upper()
+            for item in protected_runtime_codes or ()
+            if str(item or "").strip().upper()
+        }
+    )
     event_bus.publish(
         COMMAND_MICRO_REVERSION_OBSERVATION_SET,
         {
             "effective_date": target_date,
             "registration_items": registration_items,
             "protected_runtime_codes": protected_codes,
+            "protected_runtime_items": protected_items,
             "source": "machine_microstructure_gap_collection_feedback",
             "decision_authority": "next_session_market_data_observation_only",
             "runtime_effect": False,

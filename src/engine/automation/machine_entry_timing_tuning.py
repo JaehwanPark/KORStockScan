@@ -27,6 +27,15 @@ from src.trading.config.machine_entry_timing_policy import (
     AUTHORITY,
     CLEAN_BASELINE_DATE,
     DEFAULT_POLICY_DIR,
+    DYNAMIC_MAX_RIGHT_CENSORED_RATE_PCT,
+    DYNAMIC_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS,
+    DYNAMIC_MIN_COMPLETED_OUTCOMES,
+    DYNAMIC_MIN_OBSERVED_DAYS,
+    DYNAMIC_MIN_PAIRED_COMPLETED_COVERAGE_PCT,
+    DYNAMIC_MIN_REPLAY_COVERAGE_PCT,
+    DYNAMIC_MIN_UNIQUE_LIFECYCLES,
+    DYNAMIC_MODE,
+    DYNAMIC_REQUIRED_ROLLING_WINDOWS_DAYS,
     EXECUTABLE_MICRO_CONFIRMATION_MODE,
     MAX_P10_DETERIORATION_PCT,
     MAX_RIGHT_CENSORED_RATE_PCT,
@@ -39,6 +48,7 @@ from src.trading.config.machine_entry_timing_policy import (
     MIN_PAIRED_COMPLETED_COVERAGE_PCT,
     MIN_UNIQUE_LIFECYCLES,
     REQUIRED_ROLLING_WINDOWS_DAYS,
+    FIXED_DELAY_MODE,
     SCHEMA as APPLIED_SCHEMA,
     canonical_sha256,
     policy_hash,
@@ -48,6 +58,7 @@ from src.trading.config.machine_entry_timing_policy import (
 )
 from src.trading.market.micro_confirmation import (
     DYNAMIC_CONFIRMATION_METRIC_CONTRACT,
+    DEFAULT_DYNAMIC_CONFIRMATION_POLICY,
     build_dynamic_micro_confirmation_checkpoints,
     evaluate_dynamic_micro_confirmation,
     modeled_dynamic_target_price,
@@ -58,7 +69,7 @@ from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
-REPORT_SCHEMA = "machine_entry_timing_tuning_report_v2"
+REPORT_SCHEMA = "machine_entry_timing_tuning_report_v3"
 SOURCE_REPORT_SCHEMA = "machine_microstructure_attribution_v1"
 SOURCE_DIR = DATA_DIR / "report" / "machine_microstructure_attribution"
 OUTPUT_DIR = DATA_DIR / "report" / "machine_entry_timing_tuning"
@@ -80,7 +91,8 @@ METRIC_CONTRACT = {
     "decision_authority": AUTHORITY,
     "window_policy": (
         "clean_baseline_exact_owner_scope_symbol_session_state_cumulative_and_"
-        "complete_5d_10d_20d_observed_trading_date_windows"
+        "fixed_complete_5d_10d_20d_or_dynamic_complete_5_source_day_"
+        "observed_trading_date_windows"
     ),
     "sample_floor": {
         "observed_trading_days": MIN_OBSERVED_DAYS,
@@ -91,6 +103,23 @@ METRIC_CONTRACT = {
         "paired_completed_coverage_pct": MIN_PAIRED_COMPLETED_COVERAGE_PCT,
         "delayed_entry_feasibility_rate_pct": (MIN_DELAYED_ENTRY_FEASIBILITY_RATE_PCT),
         "maximum_right_censored_rate_pct": MAX_RIGHT_CENSORED_RATE_PCT,
+        "dynamic_bounded_canary": {
+            "observed_trading_days": DYNAMIC_MIN_OBSERVED_DAYS,
+            "unique_decision_lifecycles": DYNAMIC_MIN_UNIQUE_LIFECYCLES,
+            "completed_outcomes": DYNAMIC_MIN_COMPLETED_OUTCOMES,
+            "dynamic_replay_coverage_pct": DYNAMIC_MIN_REPLAY_COVERAGE_PCT,
+            "paired_completed_coverage_pct": (
+                DYNAMIC_MIN_PAIRED_COMPLETED_COVERAGE_PCT
+            ),
+            "maximum_right_censored_rate_pct": (DYNAMIC_MAX_RIGHT_CENSORED_RATE_PCT),
+            "required_complete_rolling_windows_days": list(
+                DYNAMIC_REQUIRED_ROLLING_WINDOWS_DAYS
+            ),
+            "maximum_latest_observation_lag_trading_days": (
+                DYNAMIC_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS
+            ),
+            "scope_cap": 1,
+        },
     },
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
@@ -1148,6 +1177,34 @@ def _evaluate_dynamic_cohort(
     source_report_dates: set[date] | None = None,
     global_duplicate_anchor_keys: set[tuple[date, str]] | None = None,
 ) -> dict[str, Any]:
+    try:
+        runtime_cost_contract = comparison_cost_contract(
+            _next_trading_date(target_date)
+        )
+    except (OSError, TypeError, ValueError):
+        runtime_cost_contract = None
+    runtime_round_trip_cost_pct = _finite(
+        runtime_cost_contract.get("round_trip_cost_pct")
+        if isinstance(runtime_cost_contract, dict)
+        else None
+    )
+    runtime_cost_contract_sha256 = str(
+        runtime_cost_contract.get("contract_sha256")
+        if isinstance(runtime_cost_contract, dict)
+        else ""
+    )
+    runtime_cost_trade_date = str(
+        runtime_cost_contract.get("trade_date")
+        if isinstance(runtime_cost_contract, dict)
+        else ""
+    )
+    runtime_cost_contract_ready = bool(
+        runtime_round_trip_cost_pct is not None
+        and runtime_round_trip_cost_pct >= 0
+        and runtime_cost_trade_date == _next_trading_date(target_date).isoformat()
+        and len(runtime_cost_contract_sha256) == 64
+        and all(char in "0123456789abcdef" for char in runtime_cost_contract_sha256)
+    )
     source_owner_rows = [
         (source_date, row)
         for source_date, row in cohort_rows
@@ -1191,6 +1248,23 @@ def _evaluate_dynamic_cohort(
         is not None
     ]
     observed_dates = sorted({item["source_date"] for item in observations})
+    latest_observation_date = observed_dates[-1] if observed_dates else None
+    latest_observation_lag_trading_days = (
+        0
+        if latest_observation_date == target_date
+        else (
+            1
+            if latest_observation_date is not None
+            and latest_observation_date < target_date
+            and _next_trading_date(latest_observation_date) == target_date
+            else None
+        )
+    )
+    latest_observation_fresh = bool(
+        latest_observation_lag_trading_days is not None
+        and latest_observation_lag_trading_days
+        <= DYNAMIC_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS
+    )
     first_scope_date = min(
         (source_date for source_date, _ in source_owner_rows), default=target_date
     )
@@ -1328,19 +1402,20 @@ def _evaluate_dynamic_cohort(
             "modeled_candidate_net_profit_krw": window_candidate_profit,
             "positive_and_improved": improved,
         }
-        rolling_ready = rolling_ready and improved
+        if window_days in DYNAMIC_REQUIRED_ROLLING_WINDOWS_DAYS:
+            rolling_ready = rolling_ready and improved
     baseline_p10 = _percentile_10(baseline_values)
     candidate_p10 = _percentile_10(candidate_values)
     ready = bool(
-        len(observed_dates) >= MIN_OBSERVED_DAYS
+        len(observed_dates) >= DYNAMIC_MIN_OBSERVED_DAYS
         and duplicate_anchor_row_count == 0
         and invalid_anchor_identity_count == 0
-        and len(lifecycles) >= MIN_UNIQUE_LIFECYCLES
-        and len(observations) >= MIN_COMPLETED_OUTCOMES
-        and replay_coverage_rate >= MIN_BBO_COMPLETE_RATE_PCT
-        and paired_coverage_rate >= MIN_PAIRED_COMPLETED_COVERAGE_PCT
-        and right_censored_rate <= MAX_RIGHT_CENSORED_RATE_PCT
-        and target_date in observed_dates
+        and len(lifecycles) >= DYNAMIC_MIN_UNIQUE_LIFECYCLES
+        and len(observations) >= DYNAMIC_MIN_COMPLETED_OUTCOMES
+        and replay_coverage_rate >= DYNAMIC_MIN_REPLAY_COVERAGE_PCT
+        and paired_coverage_rate >= DYNAMIC_MIN_PAIRED_COMPLETED_COVERAGE_PCT
+        and right_censored_rate <= DYNAMIC_MAX_RIGHT_CENSORED_RATE_PCT
+        and latest_observation_fresh
         and candidate_ev is not None
         and candidate_ev > 0
         and candidate_notional_weighted_ev is not None
@@ -1359,6 +1434,7 @@ def _evaluate_dynamic_cohort(
         and candidate_p10 is not None
         and candidate_p10 >= baseline_p10 - MAX_P10_DETERIORATION_PCT
         and rolling_ready
+        and runtime_cost_contract_ready
     )
     action_counts = {
         action: sum(item["terminal_action"] == action for item in observations)
@@ -1376,7 +1452,7 @@ def _evaluate_dynamic_cohort(
         )
     }
     return {
-        "schema": "machine_per_signal_dynamic_confirmation_ev_v1",
+        "schema": "machine_per_signal_dynamic_confirmation_ev_v2",
         "decision": (
             "source_only_candidate_ready"
             if ready
@@ -1387,6 +1463,8 @@ def _evaluate_dynamic_cohort(
             observed_dates[-1].isoformat() if observed_dates else None
         ),
         "target_date_in_completed_observations": target_date in observed_dates,
+        "latest_observation_lag_trading_days": (latest_observation_lag_trading_days),
+        "latest_observation_fresh_for_bounded_canary": latest_observation_fresh,
         "source_available_trading_days_since_scope_start": len(rolling_calendar_dates),
         "unique_decision_lifecycles": len(lifecycles),
         "source_owner_signal_row_count": len(source_owner_rows),
@@ -1453,6 +1531,9 @@ def _evaluate_dynamic_cohort(
         "absolute_ev_uplift_pct": round(uplift, 8) if uplift is not None else None,
         "baseline_p10_pct": baseline_p10,
         "candidate_p10_pct": candidate_p10,
+        "runtime_round_trip_cost_pct": runtime_round_trip_cost_pct,
+        "runtime_cost_trade_date": runtime_cost_trade_date or None,
+        "runtime_cost_contract_sha256": runtime_cost_contract_sha256 or None,
         "rolling_windows": rolling,
         "source_only_candidate_ready": ready,
         "runtime_policy_emitted": False,
@@ -2015,7 +2096,7 @@ def build_report(
     )
     dynamic_source_only_winner = (
         None
-        if not target_source_ready
+        if same_stage_owner_guard["mutation_present"] or not target_source_ready
         else max(
             dynamic_ready,
             key=lambda item: (
@@ -2044,16 +2125,58 @@ def build_report(
         if dynamic_source_only_winner is not None
         else None
     )
+    fixed_runtime_candidate = (
+        {
+            "mode": FIXED_DELAY_MODE,
+            "owner": winner["owner"],
+            "scope_id": winner["scope_id"],
+            "symbol": winner["symbol"],
+            "session": winner["session"],
+            "entry_state": winner["entry_state"],
+            "selected": winner["selected"],
+        }
+        if winner is not None
+        else None
+    )
+    dynamic_runtime_candidate = (
+        {
+            "mode": DYNAMIC_MODE,
+            "owner": dynamic_source_only_candidate["owner"],
+            "scope_id": dynamic_source_only_candidate["scope_id"],
+            "symbol": dynamic_source_only_candidate["symbol"],
+            "session": dynamic_source_only_candidate["session"],
+            "entry_state": dynamic_source_only_candidate["entry_state"],
+            "selected": dynamic_source_only_candidate["evaluation"],
+        }
+        if dynamic_source_only_candidate is not None
+        else None
+    )
+    runtime_winner = max(
+        [
+            candidate
+            for candidate in (fixed_runtime_candidate, dynamic_runtime_candidate)
+            if candidate is not None
+        ],
+        key=lambda item: (
+            float(item["selected"]["absolute_ev_uplift_pct"]),
+            # Do not add runtime complexity on an economic tie. Dynamic mode
+            # must win on measured uplift; fixed delay remains the tie-breaker.
+            item["mode"] == FIXED_DELAY_MODE,
+            item["owner"],
+            item["scope_id"],
+        ),
+        default=None,
+    )
     sample_floor_assessment = _report_sample_floor_assessment(
         target_date=target_date,
         reports=reports,
         target_source_ready=target_source_ready,
         cohorts=cohorts,
-        winner=winner,
+        winner=runtime_winner,
     )
     status = (
         "candidate_ready"
-        if winner
+        if runtime_winner
         else (
             "source_quality_blocked"
             if sample_floor_assessment["blocker_class"] == "source_quality"
@@ -2064,8 +2187,12 @@ def build_report(
         "schema": REPORT_SCHEMA,
         "status": status,
         "decision": (
-            "select_one_next_session_entry_confirmation_delay"
-            if winner
+            (
+                "select_one_next_session_dynamic_entry_confirmation"
+                if runtime_winner["mode"] == DYNAMIC_MODE
+                else "select_one_next_session_entry_confirmation_delay"
+            )
+            if runtime_winner
             else "baseline_immediate_entry_carry_forward"
         ),
         "target_date": target_date.isoformat(),
@@ -2077,8 +2204,9 @@ def build_report(
         "target_source_ready": target_source_ready,
         "cohorts": cohorts,
         "winner": winner,
+        "runtime_winner": runtime_winner,
         "per_signal_dynamic_confirmation_source_only": {
-            "schema": "machine_per_signal_dynamic_confirmation_selection_v1",
+            "schema": "machine_per_signal_dynamic_confirmation_selection_v2",
             "decision": (
                 "source_only_candidate_ready"
                 if dynamic_source_only_candidate is not None
@@ -2092,14 +2220,19 @@ def build_report(
             "ready_cohort_count": len(dynamic_ready),
             "selected_source_only_candidate": dynamic_source_only_candidate,
             "metric_contract": DYNAMIC_CONFIRMATION_METRIC_CONTRACT,
-            "runtime_policy_emitted": False,
+            "selected_for_next_preopen_policy": bool(
+                runtime_winner is not None and runtime_winner["mode"] == DYNAMIC_MODE
+            ),
+            "runtime_policy_emitted": bool(
+                runtime_winner is not None and runtime_winner["mode"] == DYNAMIC_MODE
+            ),
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "forbidden_uses": [
-                "machine_entry_timing_policy_applied_v2_generation",
-                "same_day_or_next_session_runtime_activation",
+                "same_day_runtime_activation",
+                "runtime_activation_without_machine_entry_timing_policy_applied_v3",
                 "order_price_quantity_target_exit_or_safety_mutation",
             ],
         },
@@ -2116,9 +2249,10 @@ def build_applied_policy(
     report: dict[str, Any], *, source_report_path: Path | str | None = None
 ) -> dict[str, Any]:
     scopes: dict[str, Any] = {}
-    winner = report.get("winner")
+    winner = report.get("runtime_winner")
     if isinstance(winner, dict) and isinstance(winner.get("selected"), dict):
         selected = winner["selected"]
+        confirmation_mode = str(winner.get("mode") or FIXED_DELAY_MODE)
         key = scope_key(
             owner=winner["owner"],
             scope_id=winner["scope_id"],
@@ -2126,20 +2260,33 @@ def build_applied_policy(
             session=winner["session"],
             entry_state=winner["entry_state"],
         )
-        scopes[key] = {
+        scope_payload = {
             "owner": winner["owner"],
             "scope_id": winner["scope_id"],
             "symbol": winner["symbol"],
             "session": winner["session"],
             "entry_state": winner["entry_state"],
-            "axis": "entry_confirmation_delay_sec",
-            "entry_confirmation_delay_sec": selected["entry_confirmation_delay_sec"],
+            "axis": (
+                "per_signal_dynamic_confirmation"
+                if confirmation_mode == DYNAMIC_MODE
+                else "entry_confirmation_delay_sec"
+            ),
+            "entry_confirmation_mode": confirmation_mode,
+            "entry_confirmation_delay_sec": (
+                0
+                if confirmation_mode == DYNAMIC_MODE
+                else selected["entry_confirmation_delay_sec"]
+            ),
             "evidence": selected,
             "executable_confirmation": {
                 "mode": EXECUTABLE_MICRO_CONFIRMATION_MODE,
                 "supportive_confirmation_only": True,
-                "require_bid_non_deterioration": True,
-                "require_ask_non_deterioration": True,
+                "require_bid_non_deterioration": (
+                    confirmation_mode == FIXED_DELAY_MODE
+                ),
+                "require_ask_non_deterioration": (
+                    confirmation_mode == FIXED_DELAY_MODE
+                ),
                 "require_positive_net_edge_after_costs": True,
                 "broker_receipt_exact": False,
                 "round_trip_cost_pct": selected["runtime_round_trip_cost_pct"],
@@ -2152,6 +2299,22 @@ def build_applied_policy(
             "exit_effect": False,
             "rollback": "next_exact_date_baseline_immediate_on_any_floor_failure",
         }
+        if confirmation_mode == DYNAMIC_MODE:
+            scope_payload["dynamic_confirmation"] = {
+                "mode": DYNAMIC_MODE,
+                "policy_id": DEFAULT_DYNAMIC_CONFIRMATION_POLICY.policy_id,
+                "policy": DEFAULT_DYNAMIC_CONFIRMATION_POLICY.as_dict(),
+                "checkpoints_sec": [0, 1, 3, 5],
+                "source_schema": "machine_entry_confirmation_ws_snapshot_v1",
+                "exact_route_required": True,
+                "source_gap_action": "baseline_owner_guard_revalidation",
+                "source_gap_is_adverse_signal": False,
+                "quantity_effect": False,
+                "price_effect": False,
+                "target_effect": False,
+                "exit_effect": False,
+            }
+        scopes[key] = scope_payload
     resolved_source_report = source_report_path or (
         f"data/report/machine_entry_timing_tuning/"
         f"machine_entry_timing_tuning_{report['target_date']}.json"
@@ -2183,28 +2346,36 @@ def build_applied_policy(
 
 
 def render_markdown(report: dict[str, Any], applied: dict[str, Any]) -> str:
-    winner = report.get("winner")
+    winner = report.get("runtime_winner")
     lines = [
         "# Machine Entry Timing Tuning",
         "",
         f"- Source date: `{report['target_date']}`",
         f"- Effective date: `{report['effective_date']}`",
         f"- Decision: `{report['decision']}`",
-        "- Axis: entry confirmation delay only (`0/1/3/5s`).",
+        "- Axis: one owner scope, fixed delay or per-signal dynamic `0/1/3/5s` confirmation.",
         "- Quantity, order price, target, stop, holding, and exit are unchanged.",
         "",
     ]
     if isinstance(winner, dict):
         selected = winner["selected"]
-        lines.append(
-            "- Selected: "
-            f"`{winner['owner']}:{winner['scope_id']}:{winner['entry_state']}` "
-            f"delay `{selected['entry_confirmation_delay_sec']}s`, EV "
-            f"`{selected['source_quality_adjusted_ev_pct']}`."
-        )
+        if winner.get("mode") == DYNAMIC_MODE:
+            lines.append(
+                "- Selected: "
+                f"`{winner['owner']}:{winner['scope_id']}:{winner['entry_state']}` "
+                "per-signal dynamic confirmation, EV "
+                f"`{selected['source_quality_adjusted_ev_pct']}`."
+            )
+        else:
+            lines.append(
+                "- Selected: "
+                f"`{winner['owner']}:{winner['scope_id']}:{winner['entry_state']}` "
+                f"delay `{selected['entry_confirmation_delay_sec']}s`, EV "
+                f"`{selected['source_quality_adjusted_ev_pct']}`."
+            )
     else:
         lines.append(
-            "- No scope passed all cumulative and 5/10/20-day floors; delay remains `0s`."
+            "- No scope passed its bounded fixed or dynamic floors; entry remains immediate."
         )
     sample_assessment = report.get("sample_floor_assessment") or {}
     lines.append(
@@ -2216,7 +2387,8 @@ def render_markdown(report: dict[str, Any], applied: dict[str, Any]) -> str:
         [
             "- Per-signal dynamic confirmation: "
             f"`{(report.get('per_signal_dynamic_confirmation_source_only') or {}).get('decision')}` "
-            "(source-only; no runtime policy emitted).",
+            f"(selected for exact-date policy: "
+            f"`{(report.get('per_signal_dynamic_confirmation_source_only') or {}).get('selected_for_next_preopen_policy')}`).",
             f"- Applied scope count: `{len(applied['scopes'])}`.",
             "",
         ]
@@ -2262,7 +2434,8 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "status": report["status"],
                     "decision": report["decision"],
-                    "winner": report.get("winner"),
+                    "winner": report.get("runtime_winner"),
+                    "fixed_delay_diagnostic_winner": report.get("winner"),
                     "paths": [str(path) for path in paths] if paths else [],
                 },
                 ensure_ascii=False,

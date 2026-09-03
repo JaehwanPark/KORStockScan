@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from collections import deque
 from datetime import datetime, tzinfo
 from types import SimpleNamespace
 
@@ -82,6 +83,46 @@ def test_widget_dashboard_snapshot_interval_defaults_to_one_second(monkeypatch):
 
     monkeypatch.setenv(kiwoom_websocket.WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC_ENV, "0.01")
     assert kiwoom_websocket._ws_dashboard_snapshot_interval_sec() == 0.25
+
+
+def test_dashboard_snapshot_freezes_main_and_exact_route_views(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    main_target = manager._ensure_target_defaults("005930")
+    main_target["curr"] = 70000
+    route_target = dict(main_target)
+    route_target["curr"] = 70010
+    route_target["recent_trade_ticks"] = deque(
+        [{"price": 70010, "volume": 2}], maxlen=120
+    )
+    manager._micro_reversion_observation_route_data["005930_NX"] = route_target
+    captured = {}
+
+    def _capture(realtime_data, *, observation_route_data, now_ts):
+        captured["main"] = realtime_data
+        captured["routes"] = observation_route_data
+        captured["now_ts"] = now_ts
+
+    class _ImmediateThread:
+        def __init__(self, *, target, name, daemon):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(kiwoom_websocket, "write_ws_snapshot", _capture)
+    monkeypatch.setattr(kiwoom_websocket.threading, "Thread", _ImmediateThread)
+
+    manager._maybe_write_dashboard_snapshot()
+    main_target["curr"] = 1
+    route_target["curr"] = 2
+    route_target["recent_trade_ticks"].append({"price": 2, "volume": 1})
+
+    assert captured["main"]["005930"]["curr"] == 70000
+    assert captured["routes"]["005930_NX"]["curr"] == 70010
+    assert captured["routes"]["005930_NX"]["recent_trade_ticks"] == [
+        {"price": 70010, "volume": 2}
+    ]
+    assert manager._dashboard_snapshot_write_inflight is False
 
 
 def test_pinned_widget_observation_is_limited_to_one_samsung_item(monkeypatch):
@@ -1822,6 +1863,7 @@ def test_micro_collection_demotion_replaces_route_with_source_only_types(monkeyp
     assert captured[0][1]["replacement_codes"] == {"111111"}
     assert captured[0][1]["trading_promotion_codes"] == set()
     assert len(captured) == 1
+    assert manager._micro_reversion_observation_only_items == {"111111_AL"}
 
 
 def test_micro_collection_set_rotation_removes_old_source_only_code(monkeypatch):
@@ -1851,7 +1893,9 @@ def test_micro_collection_set_rotation_removes_old_source_only_code(monkeypatch)
     assert subscribed[0][0] == ["222222_NX"]
     assert subscribed[0][1]["realtime_types"] == ("0B", "0D")
     assert subscribed[0][1]["observation_only"] is True
-    assert manager._micro_reversion_observation_items_by_code == {"222222": "222222_NX"}
+    assert manager._micro_reversion_observation_items_by_code == {
+        "222222": ("222222_NX",)
+    }
 
 
 def test_micro_collection_set_does_not_race_boot_runtime_registration(monkeypatch):
@@ -1869,10 +1913,10 @@ def test_micro_collection_set_does_not_race_boot_runtime_registration(monkeypatc
         protected_runtime_codes=["111111"],
     )
 
-    assert subscribed[0][0] == ["222222_NX"]
+    assert subscribed[0][0] == ["111111_AL", "222222_NX"]
     assert manager._micro_reversion_observation_items_by_code == {
-        "111111": "111111_AL",
-        "222222": "222222_NX",
+        "111111": ("111111_AL",),
+        "222222": ("222222_NX",),
     }
     assert manager.is_micro_reversion_observation_only_subscription("111111") is False
 

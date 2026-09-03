@@ -16,9 +16,11 @@ from src.trading.order.episode_quantity import (
 from src.trading.order.owner_custody_registry import OwnerRegistryError
 from src.trading.order.regular_two_leg_machine import KST, SamsungRegularTwoLegMachine
 from src.trading.config.machine_entry_timing_policy import (
+    DYNAMIC_MODE,
     ENTRY_CONFIRMATION_MAX_LATE_SEC,
-    resolve_entry_confirmation_delay,
+    resolve_entry_confirmation_policy,
 )
+from src.trading.market.micro_confirmation import advance_live_dynamic_confirmation
 from src.trading.samsung_morning_one_share.policy import (
     DEFAULT_POLICY,
     EntryWindow,
@@ -850,7 +852,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             timing_policy_provenance = dict(
                 pending_confirmation.get("policy_provenance") or {}
             )
-            active_delay, active_provenance = resolve_entry_confirmation_delay(
+            active_policy = resolve_entry_confirmation_policy(
                 target_date=now.date(),
                 owner=self.entry_timing_owner,
                 scope_id=self.entry_timing_scope_id,
@@ -858,8 +860,14 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 session=timing_session,
                 entry_state="UNSPECIFIED",
             )
+            active_delay = int(active_policy["delay_sec"])
+            active_provenance = dict(active_policy["provenance"])
+            pending_mode = str(
+                pending_confirmation.get("confirmation_mode") or "fixed_delay"
+            )
             if (
                 active_delay != confirmation_delay_sec
+                or active_policy["mode"] != pending_mode
                 or active_provenance.get("status") != "applied"
                 or active_provenance.get("policy_hash")
                 != timing_policy_provenance.get("policy_hash")
@@ -873,18 +881,139 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 )
                 return self.snapshot()
             signal_decision_at = str(pending_confirmation["armed_at"])
-        else:
-            confirmation_delay_sec, timing_policy_provenance = (
-                resolve_entry_confirmation_delay(
-                    target_date=now.date(),
-                    owner=self.entry_timing_owner,
-                    scope_id=self.entry_timing_scope_id,
+            if pending_mode == DYNAMIC_MODE:
+                armed_at = datetime.fromisoformat(signal_decision_at)
+                checkpoint_sec = int(pending_confirmation["checkpoint_sec"])
+                runtime_cost = (
+                    timing_policy_provenance.get("executable_confirmation") or {}
+                ).get("round_trip_cost_pct")
+                dynamic_step = advance_live_dynamic_confirmation(
+                    now=now,
+                    signal_decision_at=armed_at,
+                    checkpoint_sec=checkpoint_sec,
+                    prior_checkpoints=pending_confirmation.get("dynamic_checkpoints"),
+                    prior_anchor=pending_confirmation.get("dynamic_anchor"),
                     symbol=str(self.policy.symbol),
-                    session=timing_session,
-                    entry_state="UNSPECIFIED",
+                    route=route,
+                    owner="episode",
+                    baseline_fill_price=open_price,
+                    owner_entry_limit_price=max(
+                        int(plan["entry_price"]) for plan in plans
+                    ),
+                    owner_target_price=self.policy.target_price(open_price),
+                    round_trip_cost_pct=runtime_cost,
+                    widget_take_profit=False,
                 )
+                if dynamic_step["action"] == "WAIT":
+                    next_checkpoint = int(dynamic_step["next_checkpoint_sec"])
+                    pending_confirmation.update(
+                        {
+                            "due_at": (
+                                armed_at + timedelta(seconds=next_checkpoint)
+                            ).isoformat(),
+                            "checkpoint_sec": next_checkpoint,
+                            "dynamic_checkpoints": dynamic_step["checkpoints"],
+                            "dynamic_anchor": dynamic_step["anchor"],
+                        }
+                    )
+                    self._state["pending_entry_confirmation"] = pending_confirmation
+                    self._record(
+                        now,
+                        "entry_dynamic_confirmation_wait",
+                        route=route,
+                        signal_bar=str(signal_bar),
+                        checkpoint_sec=next_checkpoint,
+                        dynamic_confirmation=dynamic_step,
+                    )
+                    return self.snapshot()
+                self._state["pending_entry_confirmation"] = None
+                if dynamic_step["action"] == "REJECT":
+                    self._record(
+                        now,
+                        "entry_dynamic_confirmation_rejected",
+                        route=route,
+                        signal_bar=str(signal_bar),
+                        dynamic_confirmation=dynamic_step,
+                    )
+                    return self.snapshot()
+                confirmation_delay_sec = int(
+                    dynamic_step.get("selected_delay_sec") or checkpoint_sec
+                )
+                timing_policy_provenance["dynamic_runtime_decision"] = dynamic_step
+        else:
+            timing_policy = resolve_entry_confirmation_policy(
+                target_date=now.date(),
+                owner=self.entry_timing_owner,
+                scope_id=self.entry_timing_scope_id,
+                symbol=str(self.policy.symbol),
+                session=timing_session,
+                entry_state="UNSPECIFIED",
             )
-            if confirmation_delay_sec > 0:
+            confirmation_delay_sec = int(timing_policy["delay_sec"])
+            timing_policy_provenance = dict(timing_policy["provenance"])
+            if timing_policy["mode"] == DYNAMIC_MODE:
+                runtime_cost = (
+                    timing_policy_provenance.get("executable_confirmation") or {}
+                ).get("round_trip_cost_pct")
+                dynamic_step = advance_live_dynamic_confirmation(
+                    now=now,
+                    signal_decision_at=now,
+                    checkpoint_sec=0,
+                    prior_checkpoints={},
+                    prior_anchor={},
+                    symbol=str(self.policy.symbol),
+                    route=route,
+                    owner="episode",
+                    baseline_fill_price=open_price,
+                    owner_entry_limit_price=max(
+                        int(plan["entry_price"]) for plan in plans
+                    ),
+                    owner_target_price=self.policy.target_price(open_price),
+                    round_trip_cost_pct=runtime_cost,
+                    widget_take_profit=False,
+                )
+                if dynamic_step["action"] == "WAIT":
+                    next_checkpoint = int(dynamic_step["next_checkpoint_sec"])
+                    due_at = now + timedelta(seconds=next_checkpoint)
+                    self._state["pending_entry_confirmation"] = {
+                        "signal_bar": str(signal_bar),
+                        "signal_close": open_price,
+                        "route": route,
+                        "session": timing_session,
+                        "armed_at": signal_decision_at,
+                        "due_at": due_at.isoformat(),
+                        "delay_sec": 0,
+                        "checkpoint_sec": next_checkpoint,
+                        "confirmation_mode": DYNAMIC_MODE,
+                        "policy_provenance": timing_policy_provenance,
+                        "dynamic_checkpoints": dynamic_step["checkpoints"],
+                        "dynamic_anchor": dynamic_step["anchor"],
+                    }
+                    self._record(
+                        now,
+                        "entry_dynamic_confirmation_armed",
+                        route=route,
+                        signal_bar=str(signal_bar),
+                        checkpoint_sec=next_checkpoint,
+                        due_at=due_at.isoformat(),
+                        timing_policy_hash=timing_policy_provenance.get("policy_hash"),
+                        dynamic_confirmation=dynamic_step,
+                    )
+                    return self.snapshot()
+                if dynamic_step["action"] == "REJECT":
+                    self._record(
+                        now,
+                        "entry_dynamic_confirmation_rejected",
+                        route=route,
+                        signal_bar=str(signal_bar),
+                        dynamic_confirmation=dynamic_step,
+                    )
+                    return self.snapshot()
+                confirmation_delay_sec = int(
+                    dynamic_step.get("selected_delay_sec") or 0
+                )
+                timing_policy_provenance["dynamic_runtime_decision"] = dynamic_step
+            elif confirmation_delay_sec > 0:
                 due_at = now + timedelta(seconds=confirmation_delay_sec)
                 anchor_liquidity = self._entry_liquidity_decision(
                     route=route,

@@ -154,6 +154,26 @@ def _executable_confirmation() -> dict:
     }
 
 
+def _fixed_entry_timing_policy(delay_sec: int, calls: list[dict] | None = None):
+    def resolve(**kwargs):
+        if calls is not None:
+            calls.append(kwargs)
+        return {
+            "mode": "fixed_delay",
+            "delay_sec": delay_sec,
+            "dynamic_confirmation": None,
+            "provenance": {
+                "status": "applied",
+                "policy_hash": "a" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+                "entry_confirmation_mode": "fixed_delay",
+                "executable_confirmation": _executable_confirmation(),
+            },
+        }
+
+    return resolve
+
+
 def _machine(tmp_path: Path, gateway: FakeGateway, *, live: bool = True):
     return SamsungMorningOneShareMachine(
         gateway=gateway,
@@ -334,21 +354,9 @@ def test_nxt_entry_confirmation_delay_changes_only_submission_time(
     gateway = FakeGateway()
     calls: list[dict] = []
 
-    def timing_policy(**kwargs):
-        calls.append(kwargs)
-        return (
-            3,
-            {
-                "status": "applied",
-                "policy_hash": "a" * 64,
-                "target_date": kwargs["target_date"].isoformat(),
-                "executable_confirmation": _executable_confirmation(),
-            },
-        )
-
     monkeypatch.setattr(
-        "src.trading.samsung_morning_one_share.machine.resolve_entry_confirmation_delay",
-        timing_policy,
+        "src.trading.samsung_morning_one_share.machine.resolve_entry_confirmation_policy",
+        _fixed_entry_timing_policy(3, calls),
     )
     machine = _machine(tmp_path, gateway)
     armed_at = _at(11, 8, 1)

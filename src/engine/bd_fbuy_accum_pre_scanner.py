@@ -835,8 +835,146 @@ def _ws_snapshot_last_trade_tick(value: Any) -> dict[str, Any]:
     return result
 
 
+def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
+    """Return a bounded exact-route 0B/0D view for separate machine processes."""
+
+    if not isinstance(row, dict):
+        return {}
+    snapshots = row.get("realtime_type_snapshots_by_route")
+    trades = row.get("recent_trade_ticks_by_route")
+    depths = row.get("recent_depth_ticks_by_route")
+    snapshots = snapshots if isinstance(snapshots, dict) else {}
+    trades = trades if isinstance(trades, dict) else {}
+    depths = depths if isinstance(depths, dict) else {}
+    route_keys = sorted(set(snapshots) | set(trades) | set(depths))
+    result: dict[str, Any] = {}
+    for route_key in route_keys:
+        route_snapshot = snapshots.get(route_key)
+        route_snapshot = route_snapshot if isinstance(route_snapshot, dict) else {}
+        types: dict[str, Any] = {}
+        for realtime_type in ("0B", "0D"):
+            source = route_snapshot.get(realtime_type)
+            if not isinstance(source, dict):
+                continue
+            observed_epoch = _safe_float(source.get("observed_epoch"), 0.0)
+            item = str(source.get("item") or "").strip().upper()
+            transport_epoch = source.get("transport_epoch")
+            route_sequence = source.get("route_sequence")
+            if (
+                observed_epoch <= 0
+                or not item
+                or isinstance(transport_epoch, bool)
+                or not isinstance(transport_epoch, int)
+                or transport_epoch <= 0
+                or isinstance(route_sequence, bool)
+                or not isinstance(route_sequence, int)
+                or route_sequence <= 0
+            ):
+                continue
+            normalized = {
+                "realtime_type": realtime_type,
+                "observed_epoch": observed_epoch,
+                "age_ms": _ws_snapshot_age_ms(observed_epoch, now_ts),
+                "item": item,
+                "market_suffix": str(source.get("market_suffix") or ""),
+                "market_route": str(source.get("market_route") or ""),
+                "effective_venue": str(source.get("effective_venue") or ""),
+                "transport_epoch": transport_epoch,
+                "route_sequence": route_sequence,
+            }
+            if realtime_type == "0B":
+                normalized.update(
+                    {
+                        "trade_price": _safe_int(source.get("trade_price")),
+                        "trade_qty": _safe_int(source.get("trade_qty")),
+                        "aggressor_side": str(
+                            source.get("aggressor_side") or "UNKNOWN"
+                        ),
+                        "aggressor_quality": str(source.get("aggressor_quality") or ""),
+                    }
+                )
+            else:
+                orderbook = source.get("orderbook")
+                orderbook = orderbook if isinstance(orderbook, dict) else {}
+                normalized["orderbook"] = {
+                    "asks": list(orderbook.get("asks") or ())[:1],
+                    "bids": list(orderbook.get("bids") or ())[:1],
+                }
+            types[realtime_type] = normalized
+        recent_trades = []
+        for source in list(trades.get(route_key) or ())[:16]:
+            if not isinstance(source, dict):
+                continue
+            received_at_ms = source.get("received_at_ms")
+            transport_epoch = source.get("transport_epoch")
+            if (
+                isinstance(received_at_ms, bool)
+                or not isinstance(received_at_ms, int)
+                or received_at_ms <= 0
+                or isinstance(transport_epoch, bool)
+                or not isinstance(transport_epoch, int)
+                or transport_epoch <= 0
+            ):
+                continue
+            recent_trades.append(
+                {
+                    "item": str(source.get("item") or "").strip().upper(),
+                    "transport_epoch": transport_epoch,
+                    "received_at_ms": received_at_ms,
+                    "price": _safe_int(source.get("price")),
+                    "volume": _safe_int(source.get("volume")),
+                    "best_bid": _safe_int(source.get("best_bid")),
+                    "best_ask": _safe_int(source.get("best_ask")),
+                    "aggressor_side": str(source.get("aggressor_side") or "UNKNOWN"),
+                    "aggressor_quality": str(source.get("aggressor_quality") or ""),
+                }
+            )
+        recent_depth = []
+        for source in list(depths.get(route_key) or ())[:16]:
+            if not isinstance(source, dict):
+                continue
+            received_at_ms = source.get("received_at_ms")
+            transport_epoch = source.get("transport_epoch")
+            asks = source.get("ask_levels")
+            bids = source.get("bid_levels")
+            asks = asks if isinstance(asks, list) else []
+            bids = bids if isinstance(bids, list) else []
+            if (
+                isinstance(received_at_ms, bool)
+                or not isinstance(received_at_ms, int)
+                or received_at_ms <= 0
+                or isinstance(transport_epoch, bool)
+                or not isinstance(transport_epoch, int)
+                or transport_epoch <= 0
+                or not asks
+                or not bids
+            ):
+                continue
+            recent_depth.append(
+                {
+                    "item": str(source.get("item") or "").strip().upper(),
+                    "transport_epoch": transport_epoch,
+                    "received_at_ms": received_at_ms,
+                    "best_ask": _safe_int((asks[0] or {}).get("price")),
+                    "best_ask_qty": _safe_int((asks[0] or {}).get("quantity")),
+                    "best_bid": _safe_int((bids[0] or {}).get("price")),
+                    "best_bid_qty": _safe_int((bids[0] or {}).get("quantity")),
+                }
+            )
+        if types or recent_trades or recent_depth:
+            result[str(route_key)] = {
+                "realtime_types": types,
+                "recent_trades": recent_trades,
+                "recent_depth": recent_depth,
+            }
+    return result
+
+
 def write_ws_snapshot(
-    realtime_data: dict[str, Any], *, now_ts: float | None = None
+    realtime_data: dict[str, Any],
+    *,
+    observation_route_data: dict[str, Any] | None = None,
+    now_ts: float | None = None,
 ) -> Path | None:
     """Persist a read-only WS snapshot for dashboard and source-quality consumers."""
     now_ts = now_ts or time.time()
@@ -900,13 +1038,61 @@ def write_ws_snapshot(
             "last_trade_tick_age_ms": _ws_snapshot_age_ms(
                 last_trade_tick.get("ts"), now_ts
             ),
+            "machine_confirmation_routes": _ws_machine_route_payload(
+                row, now_ts=now_ts
+            ),
         }
+    for raw_item, row in (observation_route_data or {}).items():
+        item = str(raw_item or "").strip().upper()
+        code = item[:-3] if item.endswith(("_NX", "_AL")) else item
+        if len(code) != 6 or not code.isdigit() or not isinstance(row, dict):
+            continue
+        stock = stocks.setdefault(
+            code,
+            {
+                "curr": 0,
+                "last_ws_update_ts": 0.0,
+                "best_bid": 0,
+                "best_ask": 0,
+                "received_types": [],
+                "last_realtime_type_ts": {},
+                "last_ws_item": "",
+                "last_ws_market_suffix": "",
+                "last_ws_market_route": "unknown",
+                "last_realtime_type_item": {},
+                "last_realtime_type_market_suffix": {},
+                "last_realtime_type_market_route": {},
+                "market_session_state": "",
+                "market_session_remaining": "",
+                "last_realtime_type_ages_ms": {},
+                "last_0b_ts": 0.0,
+                "last_0b_age_ms": "not_available_timestamp",
+                "last_trade_tick": {},
+                "last_trade_cum_volume": None,
+                "last_trade_tick_age_ms": "not_available_timestamp",
+                "machine_confirmation_routes": {},
+            },
+        )
+        stock_routes = stock.setdefault("machine_confirmation_routes", {})
+        for route_key, route_payload in _ws_machine_route_payload(
+            row, now_ts=now_ts
+        ).items():
+            stock_routes[route_key] = route_payload
     payload = {
         "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
         "generated_at_epoch": now_ts,
         "generated_at": datetime.fromtimestamp(now_ts).isoformat(timespec="seconds"),
         "decision_authority": "source_quality_only",
         "runtime_effect": False,
+        "machine_confirmation_input_contract": {
+            "schema": "machine_entry_confirmation_ws_snapshot_v1",
+            "decision_authority": "market_data_input_only_no_order_authority",
+            "exact_route_required": True,
+            "causal_past_only": True,
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
         "stocks": stocks,
     }
     try:

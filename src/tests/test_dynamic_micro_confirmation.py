@@ -5,11 +5,87 @@ from datetime import datetime, timedelta
 
 from src.trading.market.micro_confirmation import (
     DYNAMIC_CONFIRMATION_METRIC_CONTRACT,
+    advance_live_dynamic_confirmation,
     build_dynamic_micro_confirmation_checkpoints,
+    build_live_dynamic_confirmation_checkpoint,
     evaluate_dynamic_micro_confirmation,
+    evaluate_live_dynamic_confirmation_progress,
     modeled_dynamic_target_price,
     validate_dynamic_micro_confirmation_replay,
 )
+
+
+def _live_snapshot(now: datetime, *, item: str = "005930_NX") -> dict:
+    now_ms = int(now.timestamp() * 1_000)
+    observed_epoch = now.timestamp()
+    return {
+        "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
+        "machine_confirmation_input_contract": {
+            "schema": "machine_entry_confirmation_ws_snapshot_v1",
+            "decision_authority": "market_data_input_only_no_order_authority",
+            "exact_route_required": True,
+            "causal_past_only": True,
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+        "stocks": {
+            "005930": {
+                "machine_confirmation_routes": {
+                    "_NX|nxt_only": {
+                        "realtime_types": {
+                            "0B": {
+                                "item": item,
+                                "observed_epoch": observed_epoch,
+                                "transport_epoch": 3,
+                                "route_sequence": 11,
+                            },
+                            "0D": {
+                                "item": item,
+                                "observed_epoch": observed_epoch,
+                                "transport_epoch": 3,
+                                "route_sequence": 17,
+                            },
+                        },
+                        "recent_trades": [
+                            {
+                                "item": item,
+                                "transport_epoch": 3,
+                                "received_at_ms": now_ms - 100,
+                                "price": 10_010,
+                                "volume": 50,
+                                "best_bid": 10_000,
+                                "best_ask": 10_010,
+                                "aggressor_side": "BUY",
+                            }
+                        ],
+                        "recent_depth": [
+                            {
+                                "item": item,
+                                "transport_epoch": 3,
+                                "received_at_ms": now_ms,
+                                "best_bid": 10_000,
+                                "best_bid_qty": 100,
+                                "best_ask": 10_010,
+                                "best_ask_qty": 50,
+                            },
+                            {
+                                "item": item,
+                                "transport_epoch": 3,
+                                "received_at_ms": now_ms - 1_000,
+                                "best_bid": 10_000,
+                                "best_bid_qty": 100,
+                                "best_ask": 10_010,
+                                "best_ask_qty": 100,
+                            },
+                        ],
+                    }
+                }
+            }
+        },
+    }
 
 
 def _checkpoint(
@@ -33,6 +109,8 @@ def _checkpoint(
         "best_ask": 10_010,
         "bid_return_bps": bid_return_bps,
         "bid_return_reference": "causal_pre_signal_best_bid",
+        "bid_recovery_from_low_bps": 0.0,
+        "bid_recovery_reference": "lowest_observed_checkpoint_bid",
         "spread_bps": 10.0,
         "quote_age_ms": 50,
         "modeled_target_price": 10_050,
@@ -66,6 +144,90 @@ def test_dynamic_confirmation_enters_at_first_supportive_checkpoint() -> None:
     assert replay["broker_order_forbidden"] is True
     assert replay["metric_contract"] == DYNAMIC_CONFIRMATION_METRIC_CONTRACT
     assert validate_dynamic_micro_confirmation_replay(replay) == (True, None)
+
+
+def test_live_checkpoint_uses_exact_route_causal_0b_0d_and_enters() -> None:
+    now = datetime.fromisoformat("2026-09-03T10:00:00+09:00")
+
+    checkpoint, anchor = build_live_dynamic_confirmation_checkpoint(
+        snapshot=_live_snapshot(now),
+        now=now,
+        signal_decision_at=now,
+        checkpoint_sec=0,
+        symbol="005930",
+        route="NXT",
+        owner="episode",
+        baseline_fill_price=10_010,
+        owner_entry_limit_price=10_010,
+        owner_target_price=10_050,
+        round_trip_cost_pct=0.23,
+        widget_take_profit=False,
+    )
+    decision = evaluate_live_dynamic_confirmation_progress({0: checkpoint})
+
+    assert checkpoint["source_quality_status"] == "eligible"
+    assert checkpoint["same_sequence_epoch"] is True
+    assert checkpoint["aggressive_buy_trade_backed_ratio"] == 1.0
+    assert checkpoint["net_edge_after_cost_bps"] > 0
+    assert anchor["item"] == "005930_NX"
+    assert decision["action"] == "ENTER"
+    assert decision["selected_delay_sec"] == 0
+
+
+def test_live_progress_accepts_rebound_without_requiring_full_anchor_recovery() -> None:
+    first = _checkpoint(0, bid_return_bps=-5.0, trade_backed_ratio=0.2)
+    second = _checkpoint(1, bid_return_bps=-3.0)
+    second["bid_recovery_from_low_bps"] = 2.1
+
+    decision = evaluate_live_dynamic_confirmation_progress({0: first, 1: second})
+
+    assert decision["action"] == "ENTER"
+    assert decision["selected_delay_sec"] == 1
+
+
+def test_live_source_gaps_fall_back_to_owner_guards_instead_of_blocking() -> None:
+    checkpoints = {}
+    for checkpoint_sec in (0, 1, 3, 5):
+        checkpoint = _checkpoint(checkpoint_sec)
+        checkpoint["source_quality_status"] = "source_gap"
+        checkpoints[checkpoint_sec] = checkpoint
+
+    decision = evaluate_live_dynamic_confirmation_progress(checkpoints)
+
+    assert decision["action"] == "BASELINE_REVALIDATE"
+    assert (
+        decision["source_gap_fallback_requires_full_owner_guard_revalidation"] is True
+    )
+
+
+def test_missing_global_snapshot_falls_back_without_waiting_five_seconds(
+    tmp_path,
+) -> None:
+    now = datetime.fromisoformat("2026-09-03T10:00:00+09:00")
+
+    decision = advance_live_dynamic_confirmation(
+        now=now,
+        signal_decision_at=now,
+        checkpoint_sec=0,
+        prior_checkpoints={},
+        prior_anchor={},
+        symbol="005930",
+        route="NXT",
+        owner="episode",
+        baseline_fill_price=10_010,
+        owner_entry_limit_price=10_010,
+        owner_target_price=10_050,
+        round_trip_cost_pct=0.23,
+        widget_take_profit=False,
+        snapshot_path=tmp_path / "missing.json",
+    )
+
+    assert decision["action"] == "BASELINE_REVALIDATE"
+    assert decision["next_checkpoint_sec"] is None
+    assert decision["reason"] == (
+        "global_snapshot_gap_fallback_to_existing_owner_guards"
+    )
+    assert decision["source_status"].startswith("dynamic_ws_snapshot_unreadable:")
 
 
 def test_dynamic_confirmation_rejects_at_first_adverse_checkpoint() -> None:

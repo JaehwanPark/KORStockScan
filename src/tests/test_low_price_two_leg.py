@@ -227,6 +227,56 @@ def _executable_confirmation() -> dict:
     }
 
 
+def _fixed_entry_timing_policy(delay_sec: int):
+    def resolve(**kwargs):
+        return {
+            "mode": "fixed_delay",
+            "delay_sec": delay_sec,
+            "dynamic_confirmation": None,
+            "provenance": {
+                "status": "applied",
+                "policy_hash": "a" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+                "entry_confirmation_mode": "fixed_delay",
+                "executable_confirmation": _executable_confirmation(),
+            },
+        }
+
+    return resolve
+
+
+def _dynamic_entry_timing_policy(**kwargs):
+    return {
+        "mode": "per_signal_dynamic_0_1_3_5",
+        "delay_sec": 0,
+        "dynamic_confirmation": {"checkpoints_sec": [0, 1, 3, 5]},
+        "provenance": {
+            "status": "applied",
+            "policy_hash": "d" * 64,
+            "target_date": kwargs["target_date"].isoformat(),
+            "entry_confirmation_mode": "per_signal_dynamic_0_1_3_5",
+            "executable_confirmation": _executable_confirmation(),
+        },
+    }
+
+
+def _dynamic_step(**kwargs):
+    checkpoint_sec = int(kwargs["checkpoint_sec"])
+    action = "WAIT" if checkpoint_sec == 0 else "ENTER"
+    return {
+        "action": action,
+        "reason": (
+            "await_next_checkpoint"
+            if action == "WAIT"
+            else "first_supportive_checkpoint"
+        ),
+        "selected_delay_sec": None if action == "WAIT" else checkpoint_sec,
+        "next_checkpoint_sec": 1 if action == "WAIT" else None,
+        "checkpoints": {str(checkpoint_sec): {"checkpoint_sec": checkpoint_sec}},
+        "anchor": {"best_bid": 22_650, "item": "005930_AL"},
+    }
+
+
 class FakeGateway:
     def __init__(self, profile_id: str) -> None:
         self.profile_id = profile_id
@@ -1823,16 +1873,8 @@ def test_machine_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkey
     profile = PROFILES["samsung_heavy_midday"]
     gateway = FakeGateway(profile.profile_id)
     monkeypatch.setattr(
-        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_delay",
-        lambda **kwargs: (
-            3,
-            {
-                "status": "applied",
-                "policy_hash": "a" * 64,
-                "target_date": kwargs["target_date"].isoformat(),
-                "executable_confirmation": _executable_confirmation(),
-            },
-        ),
+        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_policy",
+        _fixed_entry_timing_policy(3),
     )
     machine = LowPriceTwoLegMachine(
         profile=profile,
@@ -1861,22 +1903,49 @@ def test_machine_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkey
     )
 
 
+def test_episode_dynamic_confirmation_selects_delay_then_revalidates_owner_guards(
+    tmp_path, monkeypatch
+):
+    profile = PROFILES["samsung_heavy_midday"]
+    gateway = FakeGateway(profile.profile_id)
+    monkeypatch.setattr(
+        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_policy",
+        _dynamic_entry_timing_policy,
+    )
+    monkeypatch.setattr(
+        "src.trading.order.regular_two_leg_machine.advance_live_dynamic_confirmation",
+        _dynamic_step,
+    )
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    first_at = _profile_run_at(profile.profile_id)
+
+    armed = machine.run_once(first_at)
+    submitted = machine.run_once(first_at + timedelta(seconds=1))
+
+    assert armed["pending_entry_confirmation"]["confirmation_mode"] == (
+        "per_signal_dynamic_0_1_3_5"
+    )
+    assert armed["pending_entry_confirmation"]["checkpoint_sec"] == 1
+    assert gateway.buy_calls == [22_650, 22_600]
+    assert gateway.liquidity_calls == ["SOR"]
+    assert submitted["signal_features"]["entry_confirmation_delay_sec"] == 1
+    assert "entry_executable_micro_confirmation" not in submitted["signal_features"]
+
+
 def test_machine_selected_delay_blocks_deteriorating_executable_bbo(
     tmp_path, monkeypatch
 ):
     profile = PROFILES["samsung_heavy_midday"]
     gateway = FakeGateway(profile.profile_id)
     monkeypatch.setattr(
-        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_delay",
-        lambda **kwargs: (
-            3,
-            {
-                "status": "applied",
-                "policy_hash": "a" * 64,
-                "target_date": kwargs["target_date"].isoformat(),
-                "executable_confirmation": _executable_confirmation(),
-            },
-        ),
+        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_policy",
+        _fixed_entry_timing_policy(3),
     )
     machine = LowPriceTwoLegMachine(
         profile=profile,
@@ -1905,16 +1974,8 @@ def test_machine_one_second_delay_survives_six_second_live_poll(tmp_path, monkey
     profile = PROFILES["samsung_heavy_midday"]
     gateway = FakeGateway(profile.profile_id)
     monkeypatch.setattr(
-        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_delay",
-        lambda **kwargs: (
-            1,
-            {
-                "status": "applied",
-                "policy_hash": "a" * 64,
-                "target_date": kwargs["target_date"].isoformat(),
-                "executable_confirmation": _executable_confirmation(),
-            },
-        ),
+        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_policy",
+        _fixed_entry_timing_policy(1),
     )
     machine = LowPriceTwoLegMachine(
         profile=profile,
@@ -1945,16 +2006,8 @@ def test_machine_discards_entry_confirmation_after_recheck_window(
     profile = PROFILES["samsung_heavy_midday"]
     gateway = FakeGateway(profile.profile_id)
     monkeypatch.setattr(
-        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_delay",
-        lambda **kwargs: (
-            3,
-            {
-                "status": "applied",
-                "policy_hash": "a" * 64,
-                "target_date": kwargs["target_date"].isoformat(),
-                "executable_confirmation": _executable_confirmation(),
-            },
-        ),
+        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_policy",
+        _fixed_entry_timing_policy(3),
     )
     machine = LowPriceTwoLegMachine(
         profile=profile,
@@ -1978,16 +2031,8 @@ def test_machine_blocks_malformed_persisted_entry_confirmation(tmp_path, monkeyp
     profile = PROFILES["samsung_heavy_midday"]
     gateway = FakeGateway(profile.profile_id)
     monkeypatch.setattr(
-        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_delay",
-        lambda **kwargs: (
-            3,
-            {
-                "status": "applied",
-                "policy_hash": "a" * 64,
-                "target_date": kwargs["target_date"].isoformat(),
-                "executable_confirmation": _executable_confirmation(),
-            },
-        ),
+        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_policy",
+        _fixed_entry_timing_policy(3),
     )
     machine = LowPriceTwoLegMachine(
         profile=profile,

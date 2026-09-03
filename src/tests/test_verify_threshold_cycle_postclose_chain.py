@@ -394,6 +394,7 @@ def test_machine_entry_timing_postclose_contract_binds_report_and_applied_policy
         "clean_tuning_baseline_date": "2026-06-05",
         "target_source_ready": True,
         "winner": None,
+        "runtime_winner": None,
         "same_stage_owner_guard": {"mutation_present": False},
         "runtime_effect": False,
         "actual_order_submitted": False,
@@ -427,6 +428,59 @@ def test_machine_entry_timing_postclose_contract_binds_report_and_applied_policy
     assert any(
         issue.startswith("applied_policy_invalid:") for issue in invalid["issues"]
     )
+
+
+def test_machine_entry_timing_verifier_uses_v3_runtime_winner_for_scope_count(
+    tmp_path: Path, monkeypatch
+):
+    from src.engine.automation.machine_entry_timing_tuning import REPORT_SCHEMA
+    from src.trading.config import machine_entry_timing_policy as policy_module
+
+    target_date = "2026-08-27"
+    effective_date = "2026-08-28"
+    report_path = tmp_path / f"machine_entry_timing_tuning_{target_date}.json"
+    policy_dir = tmp_path / "policy"
+    report = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "effective_date": effective_date,
+        "target_source_ready": True,
+        # The legacy fixed-delay diagnostic winner may be absent while the
+        # dynamic candidate is the actual v3 runtime winner.
+        "winner": None,
+        "runtime_winner": {
+            "mode": "per_signal_dynamic_0_1_3_5",
+            "owner": "widget",
+            "scope_id": "005930:KRX_REGULAR",
+            "selected": {},
+        },
+        "same_stage_owner_guard": {"mutation_present": False},
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    applied = {
+        "source_report": str(report_path),
+        "scopes": {"widget|005930:KRX_REGULAR|005930|KRX_REGULAR|*": {}},
+    }
+    monkeypatch.setattr(
+        policy_module,
+        "load_applied_policy",
+        lambda **_kwargs: (applied, "ready"),
+    )
+
+    status = mod._machine_entry_timing_postclose_contract_status(
+        report,
+        applied,
+        target_date=target_date,
+        report_path=report_path,
+        policy_dir=policy_dir,
+    )
+
+    assert status["status"] == "pass"
+    assert status["runtime_effect"] is True
+    assert status["baseline_immediate"] is False
 
 
 def _smoothing_journal(sample_floor: int, *, arm_id: str) -> dict:

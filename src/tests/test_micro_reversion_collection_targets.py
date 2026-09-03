@@ -359,7 +359,7 @@ def test_active_owner_symbols_are_not_delayed_by_research_rotation_budget():
     assert observed == {"111111", "222222", "333333", "444444", "555555", "666666"}
 
 
-def test_multi_venue_symbol_rotates_routes_across_trading_days():
+def test_active_multi_venue_symbol_collects_all_exact_routes_each_day():
     gap = {
         "owner": "widget",
         "scope_id": "multi_venue",
@@ -368,17 +368,16 @@ def test_multi_venue_symbol_rotates_routes_across_trading_days():
         "expected_venues": ["KRX", "NXT", "SOR"],
         "gap_class": "micro_symbol_not_observed",
     }
-    venues = set()
     for source_date in ("2026-08-10", "2026-08-11", "2026-08-12"):
         report = _report([gap])
         report["target_date"] = source_date
         payload = build_collection_targets(report, max_symbols=1)
-        venues.add(payload["selected_targets"][0]["expected_venue"])
+        target = payload["selected_targets"][0]
+        assert target["expected_venues"] == ["KRX", "NXT", "SOR"]
+        assert target["registration_items"] == ["111111", "111111_NX", "111111_AL"]
 
-    assert venues == {"KRX", "NXT", "SOR"}
 
-
-def test_symbol_and_venue_round_robins_do_not_phase_lock():
+def test_active_symbol_routes_do_not_compete_for_research_rotation_budget():
     symbols = ("111111", "222222", "333333")
     gaps = [
         {
@@ -391,7 +390,6 @@ def test_symbol_and_venue_round_robins_do_not_phase_lock():
         }
         for symbol in symbols
     ]
-    observed_venues = {symbol: set() for symbol in symbols}
     for source_date in (
         "2026-08-10",
         "2026-08-11",
@@ -407,12 +405,11 @@ def test_symbol_and_venue_round_robins_do_not_phase_lock():
         report["target_date"] = source_date
         payload = build_collection_targets(report, max_symbols=1)
         for selected in payload["selected_targets"]:
-            observed_venues[selected["symbol"]].add(selected["expected_venue"])
+            assert selected["expected_venues"] == ["KRX", "NXT", "SOR"]
+            assert len(selected["registration_items"]) == 3
         assert payload["budget"]["venue_rotation_policy"] == (
             "independent_symbol_phase_after_selection_cohort_cycle"
         )
-
-    assert all(venues == {"KRX", "NXT", "SOR"} for venues in observed_venues.values())
 
 
 def test_single_symbol_budget_keeps_active_owner_ahead_of_prospective_owner():
@@ -478,7 +475,7 @@ def test_active_owner_full_coverage_precedes_prospective_rotation_budget():
     assert payload["budget"]["active_owner_candidate_count"] == 3
     assert payload["budget"]["selected_active_owner_count"] == 3
     assert payload["budget"]["active_owner_overflow_count"] == 0
-    assert payload["budget"]["active_owner_full_coverage"] is True
+    assert payload["budget"]["active_owner_exact_route_full_coverage"] is True
     assert [row["symbol"] for row in payload["overflow_targets"]] == ["444444"]
 
 

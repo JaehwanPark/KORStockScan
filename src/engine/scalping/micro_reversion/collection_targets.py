@@ -22,9 +22,14 @@ from src.utils.market_day import count_krx_trading_days, is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 LEGACY_COLLECTION_TARGET_SCHEMA = "scalp_micro_reversion_collection_targets_v1"
-COLLECTION_TARGET_SCHEMA = "scalp_micro_reversion_collection_targets_v2"
+SYMBOL_ONLY_COLLECTION_TARGET_SCHEMA = "scalp_micro_reversion_collection_targets_v2"
+COLLECTION_TARGET_SCHEMA = "scalp_micro_reversion_collection_targets_v3"
 COLLECTION_TARGET_SCHEMAS = frozenset(
-    {LEGACY_COLLECTION_TARGET_SCHEMA, COLLECTION_TARGET_SCHEMA}
+    {
+        LEGACY_COLLECTION_TARGET_SCHEMA,
+        SYMBOL_ONLY_COLLECTION_TARGET_SCHEMA,
+        COLLECTION_TARGET_SCHEMA,
+    }
 )
 COLLECTION_TARGET_ROOT = (
     DATA_DIR / "runtime" / "scalp_micro_reversion_collection_targets"
@@ -35,6 +40,7 @@ COLLECTION_TARGET_MAX_SYMBOLS_ENV = (
 DEFAULT_COLLECTION_TARGET_MAX_SYMBOLS = 4
 MAX_COLLECTION_TARGET_MAX_SYMBOLS = 8
 MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS = 200
+MAX_COLLECTION_TARGET_ACTIVE_ITEMS = 400
 REPAIRABLE_GAPS = frozenset(
     {
         "micro_date_partition_missing",
@@ -46,15 +52,17 @@ REPAIRABLE_GAPS = frozenset(
 POLICY_SAMPLE_ACCUMULATION = "micro_policy_sample_accumulation"
 COLLECTION_TARGET_METRIC_CONTRACT = {
     "metric_role": (
-        "full_active_owner_collection_coverage_and_bounded_prospective_sample_budget"
+        "full_active_owner_exact_route_collection_coverage_and_bounded_"
+        "prospective_sample_budget"
     ),
     "decision_authority": "next_session_market_data_observation_only",
     "window_policy": (
-        "exact_next_krx_trading_date_all_active_owner_symbols_then_bounded_prospective"
+        "exact_next_krx_trading_date_all_active_owner_symbol_routes_then_"
+        "bounded_prospective"
     ),
     "sample_floor": "not_an_economic_or_policy_promotion_metric",
     "primary_decision_metric": (
-        "all_active_owner_symbol_coverage_before_prospective_policy_samples"
+        "all_active_owner_exact_route_coverage_before_prospective_policy_samples"
     ),
     "source_quality_gate": (
         "exact_source_and_effective_dates_valid_symbol_route_and_source_only_authority"
@@ -153,7 +161,7 @@ def build_collection_targets(
     max_symbols: int | None = None,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Build one exact-date source-only subscription target per selected symbol."""
+    """Build exact-date source-only subscriptions without collapsing owner routes."""
 
     source_date = date.fromisoformat(str(attribution_report["target_date"]))
     if not is_krx_trading_day(source_date):
@@ -341,10 +349,36 @@ def build_collection_targets(
             # same venue forever).  A stable symbol phase also distributes the
             # selected routes without sacrificing deterministic replay.
             venue_phase = rotation_index // selection_cycle_period + int(row["symbol"])
-            venue = venues[venue_phase % len(venues)]
-            row["expected_venue"] = venue
-            row["registration_item"] = _registration_item(row["symbol"], venue)
+            # Every active owner route is required source coverage.  Rotating
+            # one route per symbol silently removed, for example, an NXT
+            # premarket episode whenever the same symbol also had a SOR/KRX
+            # owner.  Prospective research remains bounded to one rotated
+            # route because it has no active execution lineage to repair.
+            selected_venues = (
+                venues if row["active_owner"] else [venues[venue_phase % len(venues)]]
+            )
+            row["expected_venues"] = selected_venues
+            row["registration_items"] = [
+                _registration_item(row["symbol"], venue) for venue in selected_venues
+            ]
+            if len(selected_venues) == 1:
+                row["expected_venue"] = selected_venues[0]
+                row["registration_item"] = row["registration_items"][0]
             row.pop("_gap_priority", None)
+
+    selected_item_count = sum(
+        len(row.get("registration_items") or ()) for row in selected
+    )
+    selected_active_item_count = sum(
+        len(row.get("registration_items") or ())
+        for row in selected
+        if row.get("active_owner") is True
+    )
+    active_candidate_item_count = sum(
+        len(row.get("expected_venues") or ()) for row in selected if row["active_owner"]
+    )
+    if selected_active_item_count > MAX_COLLECTION_TARGET_ACTIVE_ITEMS:
+        raise ValueError("active_owner_collection_target_item_capacity_exceeded")
 
     generated = generated_at or datetime.now(KST)
     return {
@@ -355,7 +389,7 @@ def build_collection_targets(
         "generated_at_kst": generated.astimezone(KST).isoformat(),
         "status": "ready" if selected else "no_repairable_gap",
         "decision": (
-            "active_owner_full_coverage_source_only_collection_ready"
+            "active_owner_exact_route_full_coverage_source_only_collection_ready"
             if selected
             else "no_source_only_collection_feedback_required"
         ),
@@ -372,10 +406,11 @@ def build_collection_targets(
         },
         "budget": {
             # Compatibility field: this is the effective selected-universe
-            # ceiling, not the prospective research budget in schema v2.
+            # ceiling, not the prospective research budget in schemas v2/v3.
             "max_symbols": max(len(active_rows), research_budget),
             "research_symbol_budget": research_budget,
             "selected_symbol_count": len(selected),
+            "selected_registration_item_count": selected_item_count,
             "overflow_symbol_count": len(overflow),
             "rotation_key": effective_key,
             "rotation_index": rotation_index,
@@ -385,21 +420,22 @@ def build_collection_targets(
             ),
             "overflow_rotates_on_next_effective_date": False,
             "coverage_policy": (
-                "all_active_owner_symbols_then_bounded_prospective_rotation"
+                "all_active_owner_symbol_routes_then_bounded_prospective_rotation"
             ),
             "coverage_stage": "exact_date_target_manifest_selection",
             "runtime_registration_receipt_required": True,
             "active_owner_budget_bypass": True,
-            "active_owner_full_coverage": True,
+            "active_owner_exact_route_full_coverage": True,
             "bounded_rotation_condition": (
                 "prospective_only_stable_priority_cohort_and_daily_budget"
             ),
             "active_owner_candidate_count": len(active_rows),
             "selected_active_owner_count": len(active_rows),
+            "active_owner_candidate_item_count": active_candidate_item_count,
+            "selected_active_owner_item_count": selected_active_item_count,
             "active_owner_overflow_count": 0,
             "selected_prospective_owner_count": prospective_budget,
-            "prospective_overflow_count": len(prospective_rows)
-            - prospective_budget,
+            "prospective_overflow_count": len(prospective_rows) - prospective_budget,
             "prospective_reserve_applied": prospective_budget,
         },
         "selected_targets": selected,
@@ -524,7 +560,7 @@ def load_exact_date_collection_targets(
         selected_prospective = -1
         prospective_overflow = -1
     v2_budget_valid = bool(
-        schema == COLLECTION_TARGET_SCHEMA
+        schema == SYMBOL_ONLY_COLLECTION_TARGET_SCHEMA
         and isinstance(selected_targets, list)
         and isinstance(overflow_targets, list)
         and 1 <= research_budget <= MAX_COLLECTION_TARGET_MAX_SYMBOLS
@@ -545,7 +581,48 @@ def load_exact_date_collection_targets(
         and prospective_overflow == len(overflow_targets)
         and declared_max == max(active_candidates, research_budget)
     )
-    if not isinstance(budget, dict) or not (legacy_budget_valid or v2_budget_valid):
+    try:
+        declared_selected_items = int(
+            (budget or {}).get("selected_registration_item_count")
+        )
+        active_candidate_items = int(
+            (budget or {}).get("active_owner_candidate_item_count")
+        )
+        selected_active_items = int(
+            (budget or {}).get("selected_active_owner_item_count")
+        )
+    except (TypeError, ValueError):
+        declared_selected_items = -1
+        active_candidate_items = -1
+        selected_active_items = -1
+    v3_budget_valid = bool(
+        schema == COLLECTION_TARGET_SCHEMA
+        and isinstance(selected_targets, list)
+        and isinstance(overflow_targets, list)
+        and 1 <= research_budget <= MAX_COLLECTION_TARGET_MAX_SYMBOLS
+        and 1 <= declared_max <= MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS
+        and declared_selected == len(selected_targets)
+        and declared_overflow == len(overflow_targets)
+        and len(selected_targets) <= declared_max
+        and 0 <= declared_selected_items <= MAX_COLLECTION_TARGET_ACTIVE_ITEMS
+        and budget.get("coverage_policy")
+        == "all_active_owner_symbol_routes_then_bounded_prospective_rotation"
+        and budget.get("coverage_stage") == "exact_date_target_manifest_selection"
+        and budget.get("runtime_registration_receipt_required") is True
+        and budget.get("active_owner_budget_bypass") is True
+        and budget.get("active_owner_exact_route_full_coverage") is True
+        and active_candidates == selected_active
+        and active_overflow == 0
+        and active_candidate_items == selected_active_items
+        and 0 <= selected_active_items <= declared_selected_items
+        and declared_selected == selected_active + selected_prospective
+        and selected_prospective <= max(0, research_budget - selected_active)
+        and prospective_overflow == len(overflow_targets)
+        and declared_max == max(active_candidates, research_budget)
+    )
+    if not isinstance(budget, dict) or not (
+        legacy_budget_valid or v2_budget_valid or v3_budget_valid
+    ):
         return {
             "status": "invalid_budget_contract",
             "path": str(path),
@@ -561,21 +638,34 @@ def load_exact_date_collection_targets(
                 "path": str(path),
                 "registration_items": [],
             }
-        if schema == COLLECTION_TARGET_SCHEMA and not isinstance(
-            row.get("active_owner"), bool
-        ):
+        if schema in {
+            SYMBOL_ONLY_COLLECTION_TARGET_SCHEMA,
+            COLLECTION_TARGET_SCHEMA,
+        } and not isinstance(row.get("active_owner"), bool):
             return {
                 "status": "invalid_budget_contract",
                 "path": str(path),
                 "registration_items": [],
             }
         symbol = _normalize_symbol(row.get("symbol"))
-        venue = _normalize_venue(row.get("expected_venue"))
-        item = str(row.get("registration_item") or "").strip().upper()
+        if schema == COLLECTION_TARGET_SCHEMA:
+            venues = [
+                _normalize_venue(value) for value in row.get("expected_venues") or ()
+            ]
+            row_items = [
+                str(value or "").strip().upper()
+                for value in row.get("registration_items") or ()
+            ]
+        else:
+            venues = [_normalize_venue(row.get("expected_venue"))]
+            row_items = [str(row.get("registration_item") or "").strip().upper()]
         if (
             not symbol
-            or not venue
-            or item != _registration_item(symbol, venue)
+            or not venues
+            or any(not venue for venue in venues)
+            or len(venues) != len(set(venues))
+            or len(row_items) != len(venues)
+            or row_items != [_registration_item(symbol, venue) for venue in venues]
             or symbol in seen_symbols
             or row.get("trading_target_created") is not False
             or row.get("trading_runtime_effect") is not False
@@ -592,17 +682,32 @@ def load_exact_date_collection_targets(
             }
         seen_symbols.add(symbol)
         selected_active_count += int(row.get("active_owner") is True)
-        items.append(item)
-    if schema == COLLECTION_TARGET_SCHEMA and selected_active_count != selected_active:
+        items.extend(row_items)
+    if len(items) != len(set(items)):
+        return {
+            "status": "invalid_target_contract",
+            "path": str(path),
+            "registration_items": [],
+        }
+    if (
+        schema
+        in {
+            SYMBOL_ONLY_COLLECTION_TARGET_SCHEMA,
+            COLLECTION_TARGET_SCHEMA,
+        }
+        and selected_active_count != selected_active
+    ):
         return {
             "status": "invalid_budget_contract",
             "path": str(path),
             "registration_items": [],
         }
-    if schema == COLLECTION_TARGET_SCHEMA:
+    if schema in {SYMBOL_ONLY_COLLECTION_TARGET_SCHEMA, COLLECTION_TARGET_SCHEMA}:
         overflow_symbols: set[str] = set()
         for row in overflow_targets:
-            symbol = _normalize_symbol(row.get("symbol")) if isinstance(row, dict) else ""
+            symbol = (
+                _normalize_symbol(row.get("symbol")) if isinstance(row, dict) else ""
+            )
             if (
                 not symbol
                 or symbol in seen_symbols
@@ -615,6 +720,12 @@ def load_exact_date_collection_targets(
                     "registration_items": [],
                 }
             overflow_symbols.add(symbol)
+    if schema == COLLECTION_TARGET_SCHEMA and len(items) != declared_selected_items:
+        return {
+            "status": "invalid_budget_contract",
+            "path": str(path),
+            "registration_items": [],
+        }
     return {
         "status": "loaded",
         "path": str(path),

@@ -524,9 +524,11 @@ def _machine_entry_timing_postclose_contract_status(
             or report.get("broker_order_forbidden") is not True
         ):
             issues.append("report_authority_invalid")
-        winner = report.get("winner")
+        if "runtime_winner" not in report:
+            issues.append("report_runtime_winner_contract_missing")
+        runtime_winner = report.get("runtime_winner")
         guard = report.get("same_stage_owner_guard") or {}
-        if winner is not None and guard.get("mutation_present") is not False:
+        if runtime_winner is not None and guard.get("mutation_present") is not False:
             issues.append("winner_same_stage_conflict_invalid")
     expected_policy_path = policy_path(
         date.fromisoformat(effective_date), policy_dir=policy_dir
@@ -551,7 +553,9 @@ def _machine_entry_timing_postclose_contract_status(
             declared_report_path = PROJECT_ROOT / declared_report_path
         if declared_report_path.resolve() != report_path.resolve():
             issues.append("applied_policy_source_report_path_mismatch")
-        expected_scope_count = 1 if isinstance(report.get("winner"), dict) else 0
+        expected_scope_count = (
+            1 if isinstance(report.get("runtime_winner"), dict) else 0
+        )
         if len(applied.get("scopes") or {}) != expected_scope_count:
             issues.append("applied_policy_scope_count_mismatch")
     return {

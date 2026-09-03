@@ -17,6 +17,7 @@ from src.engine.monitoring.widget_comparison_cost import comparison_cost_contrac
 from src.trading.market.micro_confirmation import evaluate_dynamic_micro_confirmation
 from src.trading.config.machine_entry_timing_policy import (
     AUTHORITY,
+    DYNAMIC_MODE,
     EXECUTABLE_MICRO_CONFIRMATION_MODE,
     policy_hash,
     resolve_entry_confirmation_delay,
@@ -214,6 +215,8 @@ def _entry_row(source_date: date, index: int) -> dict:
             "best_ask": 100.0 if checkpoint == 0 else 99.0,
             "bid_return_bps": 0.0,
             "bid_return_reference": "causal_pre_signal_best_bid",
+            "bid_recovery_from_low_bps": 0.0,
+            "bid_recovery_reference": "lowest_observed_checkpoint_bid",
             "spread_bps": (
                 (100.0 - 99.0) / 99.0 * 10_000.0 if checkpoint == 0 else 0.0
             ),
@@ -483,6 +486,8 @@ def test_dynamic_reject_counts_zero_exposure_without_dropping_loss() -> None:
             "best_ask": 100.0 if checkpoint == 0 else 99.0,
             "bid_return_bps": 0.0,
             "bid_return_reference": "causal_pre_signal_best_bid",
+            "bid_recovery_from_low_bps": 0.0,
+            "bid_recovery_reference": "lowest_observed_checkpoint_bid",
             "spread_bps": (
                 (100.0 - 99.0) / 99.0 * 10_000.0 if checkpoint == 0 else 0.0
             ),
@@ -502,8 +507,8 @@ def test_dynamic_reject_counts_zero_exposure_without_dropping_loss() -> None:
             ),
             "owner_price_feasible": True,
             "aggressive_buy_trade_backed_ratio": 0.8,
-            "refill_ratio": 0.1,
-            "downward_reprice_observed": True,
+            "refill_ratio": 1.0,
+            "downward_reprice_observed": False,
         }
         for checkpoint in (0, 1, 3, 5)
     }
@@ -515,7 +520,7 @@ def test_dynamic_reject_counts_zero_exposure_without_dropping_loss() -> None:
     checkpoint_zero_source = row["entry_confirmation_checkpoint_ask_depletion"][
         "checkpoint_reports"
     ]["0"]["horizons"][0]
-    checkpoint_zero_source["downward_reprice_observed"] = True
+    checkpoint_zero_source["refill_ratio"] = 1.0
     checkpoint_zero_source["aggressive_buy_trade_backed_ratio"] = 0.8
     row["dynamic_confirmation_first_hit_outcomes"]["checkpoint_outcomes"]["0"][
         "target_adverse_first_hit"
@@ -722,7 +727,7 @@ def test_dynamic_confirmation_cross_scope_duplicate_is_globally_blocked(
     assert dynamic["selected_source_only_candidate"] is None
 
 
-def test_dynamic_ready_cannot_emit_applied_policy_without_fixed_delay_winner(
+def test_dynamic_ready_emits_one_exact_date_scope_without_fixed_delay_winner(
     tmp_path: Path,
 ) -> None:
     source_dir = tmp_path / "source"
@@ -760,7 +765,76 @@ def test_dynamic_ready_cannot_emit_applied_policy_without_fixed_delay_winner(
     assert report["per_signal_dynamic_confirmation_source_only"]["decision"] == (
         "source_only_candidate_ready"
     )
-    assert applied["scopes"] == {}
+    assert report["decision"] == "select_one_next_session_dynamic_entry_confirmation"
+    assert (
+        report["per_signal_dynamic_confirmation_source_only"]["runtime_policy_emitted"]
+        is True
+    )
+    assert len(applied["scopes"]) == 1
+    applied_scope = next(iter(applied["scopes"].values()))
+    assert applied_scope["entry_confirmation_mode"] == DYNAMIC_MODE
+    assert applied_scope["entry_confirmation_delay_sec"] == 0
+    assert applied_scope["dynamic_confirmation"]["source_gap_action"] == (
+        "baseline_owner_guard_revalidation"
+    )
+
+
+def test_dynamic_policy_accepts_one_source_day_without_a_natural_signal(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    target_date = date(2026, 8, 27)
+    observed_dates = _trading_dates(date(2026, 8, 26), 19)
+    for index, source_date in enumerate(observed_dates, start=1):
+        row = _entry_row(source_date, index)
+        row["classification"] = "recheck_required"
+        payload = {
+            "schema": "machine_microstructure_attribution_v1",
+            "target_date": source_date.isoformat(),
+            "clean_tuning_baseline_date": "2026-06-05",
+            "clean_baseline_allowed": True,
+            "authority": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            "micro_entry_confirmation": {"entry_anchors": [row]},
+        }
+        path = source_dir / f"machine_microstructure_attribution_{source_date}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    target_payload = {
+        "schema": "machine_microstructure_attribution_v1",
+        "target_date": target_date.isoformat(),
+        "clean_tuning_baseline_date": "2026-06-05",
+        "clean_baseline_allowed": True,
+        "authority": {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+        "micro_entry_confirmation": {"entry_anchors": []},
+    }
+    (source_dir / f"machine_microstructure_attribution_{target_date}.json").write_text(
+        json.dumps(target_payload), encoding="utf-8"
+    )
+
+    report = build_report(
+        target_date=target_date,
+        source_dir=source_dir,
+        low_price_candidate_dir=tmp_path / "low-price-candidates",
+        samsung_candidate_dir=tmp_path / "samsung-candidates",
+        widget_policy_dir=tmp_path / "widget-policies",
+    )
+    applied = build_applied_policy(report)
+
+    assert report["decision"] == "select_one_next_session_dynamic_entry_confirmation"
+    assert validate_applied_policy(applied, target_date=date(2026, 8, 28)) == (
+        True,
+        "ready",
+    )
 
 
 def test_dynamic_confirmation_rolling_window_uses_source_available_dates() -> None:
@@ -780,6 +854,50 @@ def test_dynamic_confirmation_rolling_window_uses_source_available_dates() -> No
     assert result["observed_trading_days"] == 20
     assert result["source_available_trading_days_since_scope_start"] == 19
     assert result["rolling_windows"]["20"]["complete"] is False
+    assert result["rolling_windows"]["5"]["complete"] is True
+    assert result["source_only_candidate_ready"] is True
+
+
+def test_dynamic_confirmation_allows_one_source_day_without_a_natural_signal() -> None:
+    target_date = date(2026, 8, 27)
+    observed_dates = _trading_dates(date(2026, 8, 26), 20)
+    source_dates = set(_trading_dates(target_date, 20))
+    cohort_rows = [
+        (source_date, _entry_row(source_date, index))
+        for index, source_date in enumerate(observed_dates, start=1)
+    ]
+
+    result = _evaluate_dynamic_cohort(
+        cohort_rows=cohort_rows,
+        target_date=target_date,
+        source_report_dates=source_dates,
+    )
+
+    assert result["target_date_in_completed_observations"] is False
+    assert result["latest_observation_lag_trading_days"] == 1
+    assert result["latest_observation_fresh_for_bounded_canary"] is True
+    assert result["source_only_candidate_ready"] is True
+
+
+def test_dynamic_confirmation_rejects_two_source_days_without_a_natural_signal() -> (
+    None
+):
+    target_date = date(2026, 8, 27)
+    observed_dates = _trading_dates(date(2026, 8, 25), 20)
+    source_dates = set(_trading_dates(target_date, 20))
+    cohort_rows = [
+        (source_date, _entry_row(source_date, index))
+        for index, source_date in enumerate(observed_dates, start=1)
+    ]
+
+    result = _evaluate_dynamic_cohort(
+        cohort_rows=cohort_rows,
+        target_date=target_date,
+        source_report_dates=source_dates,
+    )
+
+    assert result["latest_observation_lag_trading_days"] is None
+    assert result["latest_observation_fresh_for_bounded_canary"] is False
     assert result["source_only_candidate_ready"] is False
 
 
